@@ -1,8 +1,11 @@
 # ADR-0002: Source-code conventions & architecture patterns
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-06-13 (revised same day after judge review: error kernel relocated to
-  `api/fault`, `store`/`blob` port naming, generated-file lint exemption, `revive` dropped)
+  `api/fault`, `store`/`blob` port naming, generated-file lint exemption, `revive` dropped;
+  accepted 2026-06-13; clarified post-acceptance that a driver folder is per-engine, not
+  per-backend — one `blob/gocloud` adapter spans memory/file/S3, no `blob/memory` folder;
+  and §8 file-count rule: a driver is one file in its own package, not a fan-out of files)
 - **Deciders**: green-0-rabbit
 - **Tags**: conventions, go-idioms, api-design, errors, linting
 - **Realizes**: [FEAT-0000/F25](../feat/0000-feat-v1.md)
@@ -143,12 +146,17 @@ part of the API").
   port interface so they're swappable in the facade.
 
 ### 2. Ports & drivers
-- A port is an interface in its own package; drivers are subpackages
-  (`internal/store/{memory,sqlite}` for the metastore/database layer;
-  `internal/blob/{memory,gocloud}` for the storage layer — `blob.Bucket`, matching the
-  blueprint/F21; `store` and `blob` are deliberately distinct, not `store`/`storage`). The
-  port package owns the interface, the shared types, and the **contract suite**
-  (`<port>contract` test helper).
+- A port is an interface in its own package; drivers are subpackages. A driver folder is
+  warranted only for a **distinct engine** — not for each backend of a library that already
+  spans backends. So `internal/store/{memory,sqlite,slatedb}` (the metastore/database layer:
+  three genuinely different engines) but `internal/blob/gocloud` is a **single** adapter that
+  already provides memory + file + S3 (go-cloud `memblob`/`fileblob`/`s3blob`, by URL) — no
+  `blob/memory` or `blob/file` folder, that would re-wrap what the library hands you. The
+  port (`blob.Bucket`, matching blueprint/F21; `store`/`blob` deliberately distinct, not
+  `store`/`storage`) owns the interface, shared types, and the **contract suite**
+  (`<port>contract` helper) — and the contract suite is what proves the one gocloud adapter's
+  memory backend behaves like its S3 backend, satisfying the "in-memory driver per port" rule
+  without a separate folder.
 - "Accept interfaces, return structs" holds everywhere else: non-port collaborators are
   small interfaces declared by the consumer.
 
@@ -218,8 +226,15 @@ part of the API").
 - Short, lowercase, no-underscore package names; the name is part of the API
   (`store.Store`, not `store.StoreInterface`). No `util`/`common`/`helpers` grab-bags —
   the only shared package is `internal/platform` and it holds **no business logic**.
-- One exported "thing" per file where reasonable; test files alongside; `doc.go` for a
-  package's purpose when non-obvious.
+- **Don't pre-split files.** A package — and especially a **driver** — is a *single file*
+  (`gocloud.go`, `slatedb.go`, `memory.go`) until it genuinely outgrows one; split by
+  responsibility only when the file is actually large, never speculatively. Resist a
+  file-per-type / folder-per-backend reflex. A driver lives in its **own subpackage
+  directory only for dependency isolation** — so its third-party imports (go-cloud, the
+  slatedb client, …) stay out of the port package and don't leak to every consumer — *not*
+  as licence to fan it out into many files. One driver → one directory → one `.go` file
+  (+ its `_test.go`, + embedded assets like `migrations/*.sql` where a driver needs them).
+- `doc.go` only when a package's purpose isn't obvious from its name + the port file.
 
 ## Temporary workarounds
 

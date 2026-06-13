@@ -698,8 +698,9 @@ funcd/
 │   │       ├── worker.go
 │   │       ├── gateway.go
 │   │       └── status.go                 # shared Conditions / Phase types
-│   └── errors/
-│       └── problem.go                    # RFC 9457 application/problem+json
+│   └── fault/                            # error kernel + edge mapping (ADR-0002; stdlib-only, public contract)
+│       ├── fault.go                      # Kind enum, Error+Unwrap, KindOf, Wrapf, NotFoundf/Invalidf/…
+│       └── problem.go                    # RFC 9457 application/problem+json (single status-mapping site)
 │
 ├── cmd/
 │   ├── funcd/
@@ -777,16 +778,15 @@ funcd/
 │   │       ├── containerd/               # containerd + runc curated runtimes (kata shim from V3)
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
-│   ├── storage/                          # STORAGE LAYER (substrate): blob.Bucket port
-│   │   ├── blob.go                       # port: get/put/list/delete/presign
-│   │   └── gocloud/                      # gocloud.dev/blob adapter: s3blob / fileblob / memblob
+│   ├── blob/                             # STORAGE LAYER (substrate): blob.Bucket port (ADR-0002: not "storage", to stay distinct from "store")
+│   │   ├── blob.go                       # port: get/put/list/delete/presign (driver-dep-free)
+│   │   └── gocloud/                      # one-file driver (gocloud.go): memory+file+S3 via go-cloud; own pkg only to keep go-cloud out of blob.go
 │   │
-│   ├── store/                            # DATABASE LAYER (substrate): Store/kvstore port
+│   ├── store/                            # DATABASE LAYER (substrate): Store/kvstore port — DISTINCT engines (no single lib covers all, unlike blob), so sibling drivers are warranted
 │   │   ├── store.go                      # port: CRUD + generations + watch
-│   │   ├── memory/                       # e2e / ephemeral
-│   │   ├── sqlite/                       # single-node production default
-│   │   ├── slatedb/                      # S3-backed driver — on the storage layer (later)
-│   │   └── migrations/
+│   │   ├── memory/                       # one-file driver (memory.go): in-process map
+│   │   ├── sqlite/                       # one-file driver (sqlite.go) + migrations/*.sql (embedded); single-node default
+│   │   └── slatedb/                      # one-file driver (slatedb.go, later); its object backend is memory/file/S3 — no per-backend subfolders
 │   │
 │   ├── services/                         # function-facing services: port + drivers + facade per service
 │   │   ├── kv/                           # on database layer or external (jetstream/redis)
@@ -819,7 +819,7 @@ funcd/
 │   │   └── audit.go
 │   │
 │   ├── platform/                         # tiny shared kernel — zero business logic
-│   │   ├── errors.go
+│   │   │                                  # (error kernel lives in api/fault, not here — ADR-0002)
 │   │   ├── validation.go
 │   │   ├── pagination.go
 │   │   ├── idempotency.go
@@ -915,13 +915,17 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 
 ### Go best practices baked in
 
+> The source-code rulebook is **[ADR-0002](docs/adr/0002-source-code-conventions-and-patterns.md)** — constructor patterns, the `api/fault` error kernel + problem+json mapping, typed enums/IDs (no `any`-leakage), context-first, no globals, `slog`-only, the depguard import graph, and the no-mocks rule. The bullets below are the summary; the ADR is authoritative.
+
 - **Single module**, generated code committed; CI re-runs codegen and fails on diff (`git diff --exit-code`).
 - **Codegen tools pinned** in `go.mod` via the `tool` directive (oapi-codegen, buf) — reproducible generation, no "works on my machine".
-- **Contract tests over mocks**: one conformance suite per port (`Store`, `Blob`, `Bus`, `Gateway`, `Runtime`, and each service port) executed against every driver — the in-memory/file driver is guaranteed to behave like the S3/external one, which is what makes both the e2e-on-library strategy and the storage/database substrate layers trustworthy.
-- **Import discipline**: `api/` imports nothing internal; `features/*` never import each other (they communicate via the bus); `platform/` has no business logic; enforced with `depguard`.
-- **Errors**: RFC 9457 `application/problem+json` on the wire, wrapped sentinel errors (`errors.Is/As`) internally.
+- **Construction**: functional options on the public facade (`funcd.New(WithStore(...))`); explicit deps-structs internally (ADR-0002 §1).
+- **Contract tests over mocks**: one conformance suite per port (`Store`, `Blob`, `Bus`, `Gateway`, `Runtime`, and each service port) executed against every driver — the in-memory/file driver is guaranteed to behave like the S3/external one, which is what makes both the e2e-on-library strategy and the storage/database substrate layers trustworthy. No mock frameworks (depguard-enforced).
+- **Import discipline**: `api/` imports nothing from `internal/`/`pkg/` (it is the bottom contract layer; `api/fault` + `api/types` are stdlib-only, imported *up* by everyone); `features/*` never import each other (they communicate via the bus); `platform/` has no business logic; enforced with `depguard`.
+- **Errors**: one taxonomy in `api/fault` — a `Kind` enum + wrapped `fault.Error` (`errors.Is/As`) internally, mapped once to RFC 9457 `application/problem+json` at the edge (ADR-0002 §3).
+- **Typed API**: typed enums + typed IDs/names at boundaries; no `interface{}`/`map[string]any` in hand-written exported or port signatures (generated files exempt).
 - **Context-first**: every blocking call takes `context.Context`; no package-level singletons; `log/slog` for structured logging, OTel for traces/metrics.
-- **Lint & CI**: `.golangci.yml` (govet, staticcheck, depguard, errcheck, …); pipeline = lint → unit → codegen-drift → integration (per-driver) → e2e (in-memory platform) → e2e (full, Linux VM with containerd).
+- **Lint & CI**: `.golangci.yml` (govet, staticcheck, depguard, errcheck, forbidigo, errorlint, gochecknoglobals/inits, …); pipeline = lint → unit → codegen-drift → integration (per-driver) → e2e (in-memory platform) → e2e (full, Linux VM with containerd).
 
 
 
