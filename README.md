@@ -1,28 +1,28 @@
 # funcd
 
-Single-node, self-hosted Functions-as-a-Service for a home server.
+A lightweight, modular, single-binary serverless platform for Linux — faasd-like,
+Kubernetes-inspired internals, designed for the agent era.
 
-A small Go daemon that runs container-image functions on **one Linux host** via
-[containerd](https://containerd.io) + CNI, and uses [Apache APISIX](https://apisix.apache.org/)
-(standalone mode) as the gateway/data plane. No usage caps, no namespace limits — the only
-constraints are your hardware's.
+- **[blueprint.md](blueprint.md)** — the platform blueprint: purpose, components,
+  architecture, resource model, repository structure. The single architectural reference.
+- **`docs/adr/`** — Architecture Decision Records. Every concrete decision (project setup,
+  ports & drivers, gateway mechanics, …) is captured as an ADR: need, constraints,
+  alternatives, final solution, and the contracts (interfaces, resource definitions,
+  inputs/outputs) an implementer needs. Features are scaffolded and implemented **from
+  ADRs**, gradually — no big-bang implementation.
 
-- **Control plane:** `funcd` — container lifecycle, networking, secrets, manual replicas
-  (`--replicas N`), scale-to-zero with cold-start activation, and it rewrites APISIX's
-  route file on every change.
-- **Data plane:** APISIX (`data_plane` / `config_provider: yaml`) — auth, routing
-  (round-robin across replica IPs), metrics. Hot-reloads routes in ~1s. No etcd.
+## Workflow
 
-All dependencies are Apache-2.0 / MIT. This is a clean-room project; see [SPEC.md](SPEC.md)
-for the full design, milestones, and rationale (including the Go-vs-Rust-vs-JS decision).
+1. **Brainstorm** a topic (component, feature, cross-cutting concern).
+2. **ADR** captures the decision and its contracts.
+3. **Scaffold** from the ADR + blueprint: interfaces, API facades, dependencies — no logic.
+4. **Review gate**: a high-capability model/reviewer validates the scaffold against the ADR.
+5. **Implement** the feature and its tests.
 
 ## Status
 
-Pre-M0 — design phase. See [SPEC.md](SPEC.md) for the design and
-[IMPLEMENTATION.md](IMPLEMENTATION.md) for the component-by-component MVP build plan.
-Isolation roadmap: runc (default) → optional per-function KVM microVMs via the Kata
-Containers shim, Dragonball or Cloud Hypervisor VMM (SPEC §3.7).
+Pre-scaffold — blueprint + ADR phase.
 
 ## License
 
-TBD (your choice — Apache-2.0 or MIT recommended). Copyright © you.
+TBD.

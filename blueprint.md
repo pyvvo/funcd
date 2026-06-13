@@ -41,7 +41,7 @@ In order to make this platform self-contained, we will need to implement the fol
         - We should follow the OpenFunction spec to capture events and invoke the functions. Aws lambda runtime API is also a good source of inspiration.
         - The function should be of kind "serverless", event based (input) and produce response via output or side effects (e.g., storage, event etc.).  Stateful functions will rely on the services provided by the platform (e.g., KV storage, blob storage, graph database, etc.) to store and retrieve state.
     - **Containerization**: A containerization system that allows functions to be packaged and deployed
-    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Chosen path (researched in [SPEC.md §3.7](SPEC.md)): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; gVisor as a middle tier; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). Runtime classes (runc / gvisor / microvm) stay selectable per function behind one sandbox interface.
+    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Chosen path (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; gVisor as a middle tier; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). Runtime classes (runc / gvisor / microvm) stay selectable per function behind one sandbox interface.
 
 - **Services** :
     - **KV Storage**: A key-value storage system that allows functions to store and retrieve data in a fast and efficient manner. We will use existing technologies like etcd, redis, or rocksdb to provide a simple and efficient KV storage for the functions.
@@ -163,7 +163,7 @@ In order to make this platform self-contained, we will need to implement the fol
 
 The platform will be designed as a modular, single-binary application that can be deployed on a Linux machine. The architecture will be inspired by the internal architecture of Kubernetes, with a clear separation of concerns between the different components of the platform.
 
-> The concrete single-node v1 mechanics this blueprint builds on — APISIX standalone rendering, containerd/CNI lifecycle and recovery, scale-to-zero drain/wake ordering, the Kata microVM path, milestones — are specified in [SPEC.md](SPEC.md) and planned in [IMPLEMENTATION.md](IMPLEMENTATION.md). This blueprint defines the target architecture those mechanics slot into; where they disagree, this blueprint wins.
+> This blueprint defines the target architecture. Concrete decisions — repository setup, gateway rendering mechanics, sandbox lifecycle, scale-to-zero ordering, … — are made per topic in ADRs under `docs/adr/`: each ADR captures the need, constraints, alternatives, and the final contract, and is the source of truth for its topic. The blueprint is kept in sync with accepted ADRs; if they ever disagree, the newest accepted ADR wins and the blueprint gets updated.
 
  ### Resources definition (CRD-like)
 
@@ -705,7 +705,7 @@ funcd/
 │   │   └── providers/
 │   │       ├── process/                  # plain OS processes (dev / e2e)
 │   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + runc / gvisor / kata shims (SPEC §3.7)
+│   │       ├── containerd/               # containerd + runc / gvisor / kata shims
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
 │   ├── store/
