@@ -29,6 +29,11 @@ Kubernetes-inspired internals, designed for the agent era.
 
 Pre-scaffold — blueprint + ADR phase.
 
+
+## Useful links
+
+- [Garage Standalone: Your Lightweight S3-Compatible Object Storage Journey](https://medium.com/@kryukz/garage-standalone-your-lightweight-s3-compatible-object-storage-journey-5073bd51b566)
+
 ## License
 
 TBD.
