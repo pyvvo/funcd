@@ -1,5 +1,21 @@
 # funcd — SPEC
 
+> **Status: v1 execution spec — subordinate to [blueprint.md](blueprint.md).**
+> [blueprint.md](blueprint.md) is the platform blueprint (library-first repository structure, CRD-like
+> resources with reconciliation, embedded NATS messaging, internal IAM, augmenting services); this
+> document remains the authoritative *mechanics* reference for the single-node v1 slice: APISIX
+> standalone rendering (§3.4–3.5), containerd/CNI lifecycle and recovery (§3.1, §3.6), scale-to-zero
+> drain/wake ordering (§3.8), the Kata microVM path (§3.7), the function contract (§5), milestones
+> M0–M8 (§7) and the risks list (§8). [IMPLEMENTATION.md](IMPLEMENTATION.md) is keyed to these sections.
+>
+> Where the two documents disagree, the blueprint wins. Superseded here: §4 layout (→ blueprint
+> "Repository structure": `pkg/funcd` facade, feature slices, ports & drivers, `tests/e2e`); §6
+> hand-shaped REST API (→ OpenAPI-first, CRD-like `spec`/`status` apply — §6 stays as the imperative
+> MVP surface); JSON-file state store in §3.6 (→ `store.Store` port: memory / sqlite / slatedb);
+> NATS as an M5 add-on (→ embedded NATS/JetStream as the platform messaging layer, accounts per
+> namespace); file-only secrets (→ `Secret` resource + workload identity); CLI bundled in `cmd/funcd`
+> (→ separate `funcdcli`).
+
 > Single-node, self-hosted Functions-as-a-Service for a homebox.
 > Clean-room design. No usage caps, no namespace limits, no scale-to-zero lock-in.
 > All dependencies Apache-2.0 / MIT. This is your code, with your copyright.

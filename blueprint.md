@@ -41,7 +41,7 @@ In order to make this platform self-contained, we will need to implement the fol
         - We should follow the OpenFunction spec to capture events and invoke the functions. Aws lambda runtime API is also a good source of inspiration.
         - The function should be of kind "serverless", event based (input) and produce response via output or side effects (e.g., storage, event etc.).  Stateful functions will rely on the services provided by the platform (e.g., KV storage, blob storage, graph database, etc.) to store and retrieve state.
     - **Containerization**: A containerization system that allows functions to be packaged and deployed
-    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. We will use existing technologies like kata containers dragonball, firecracker, or cloud hypervisor to provide lightweight isolation for the functions.
+    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Chosen path (researched in [SPEC.md §3.7](SPEC.md)): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; gVisor as a middle tier; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). Runtime classes (runc / gvisor / microvm) stay selectable per function behind one sandbox interface.
 
 - **Services** :
     - **KV Storage**: A key-value storage system that allows functions to store and retrieve data in a fast and efficient manner. We will use existing technologies like etcd, redis, or rocksdb to provide a simple and efficient KV storage for the functions.
@@ -162,6 +162,8 @@ In order to make this platform self-contained, we will need to implement the fol
 ## Architecture
 
 The platform will be designed as a modular, single-binary application that can be deployed on a Linux machine. The architecture will be inspired by the internal architecture of Kubernetes, with a clear separation of concerns between the different components of the platform.
+
+> The concrete single-node v1 mechanics this blueprint builds on — APISIX standalone rendering, containerd/CNI lifecycle and recovery, scale-to-zero drain/wake ordering, the Kata microVM path, milestones — are specified in [SPEC.md](SPEC.md) and planned in [IMPLEMENTATION.md](IMPLEMENTATION.md). This blueprint defines the target architecture those mechanics slot into; where they disagree, this blueprint wins.
 
  ### Resources definition (CRD-like)
 
@@ -334,7 +336,7 @@ Secrets provide a way to store sensitive information for functions and services,
 
 #### Scaling & scale-to-zero
 
-Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by in-flight request concurrency and/or event-queue depth. With `minReplicas: 0`, idle functions are reclaimed after `idleTimeout` and consume zero resources. The first request or event addressed to a scaled-to-zero function is buffered by an **activator** while the controller scales the function back up (cold start). Cold-start latency can be mitigated with pre-warmed sandbox pools and microVM snapshot/restore (e.g., Firecracker snapshots).
+Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by in-flight request concurrency and/or event-queue depth. With `minReplicas: 0`, idle functions are reclaimed after `idleTimeout` and consume zero resources. The first request or event addressed to a scaled-to-zero function is buffered by an **activator** while the controller scales the function back up (cold start). Cold-start latency can be mitigated with pre-warmed sandbox pools and microVM snapshot/restore (e.g., Kata VM templating).
 
 #### Etc..
 
@@ -346,15 +348,110 @@ Like k3s or faasd, funcd ships as a single binary that runs several cooperating 
 - **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore (pluggable: in-memory / sqlite / slatedb), and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
 - **Supervised child processes**: components reused as-is — API gateway (APISIX/Pingap), containerd, OpenBAO, … — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd.
 - **Crash-only design**: on restart, funcd rebuilds its world view from the metastore plus the actual state of sandboxes and routes, then lets the reconciliation loops converge. No state lives only in memory.
+- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists (NATS server, metastore drivers, policy engine, wasm runtime, OTel pipeline); a supervised child process is the fallback only for components with no embeddable form (containerd, APISIX, OpenBAO).
+
+### Platform logging
+
+How the funcd codebase itself logs (info / warn / error) — distinct from function logs, which are tenant telemetry.
+
+- **One API: `log/slog`** (stdlib). No third-party logging API anywhere in the codebase (depguard-enforced); handlers decide rendering: human-readable text in dev, JSON in production.
+- **Built once, injected everywhere**: `internal/observability` constructs the root logger at bootstrap from daemon config (`log.level`, `log.format`, `log.otlp`); the app container hands every component a named child logger — `root.With("component", "controller")`. No package-level globals, so tests can assert on log output with an in-memory handler.
+- **Canonical fields**: `component`, `namespace`, `kind`, `name`, `generation`, `request_id`, `trace_id`, `span_id`, `error` — dashboards and alerts key on these.
+- **Trace correlation**: middleware and control loops carry request-id + OTel span context in `context.Context`; a thin `slog.Handler` decorator lifts `trace_id`/`span_id` from the context into every record, so a log line in victoria-logs links to its trace in victoria-traces. Components use the `*Context` variants (`InfoContext`, …) everywhere.
+- **Level conventions**:
+
+| Level | Meaning | Examples |
+|-------|---------|----------|
+| `Debug` | high-volume internals, off in prod | reconcile diffs, bus message handling, driver chatter |
+| `Info` | state transitions worth a timeline | component started, function deployed, route programmed, scaled 0→1 |
+| `Warn` | degraded but self-healing | retry with backoff, slow driver, stale heartbeat, fallback used |
+| `Error` | an operation failed for good | reconcile gave up after retries, dropped event, recovered panic |
+
+- **Log once at the boundary**: inner layers wrap and return (`fmt.Errorf("render route: %w", err)`); only the outermost owner of the operation (control loop, HTTP middleware) logs it — one failure, one log line.
+- **Runtime level switching**: the root level lives in a `slog.LevelVar`; an admin endpoint (`PUT /v1/admin/log-level`) adjusts global or per-component levels without restart.
+- **Export**: stdout JSON by default (12-factor — journald or any collector picks it up); optionally the `otelslog` bridge ships the same records through OTLP into victoria-logs — same OTel pipeline as function logs, separate stream labels (`source=platform` vs `source=function`).
+- **Child processes**: the supervisor captures stdout/stderr of APISIX / containerd / OpenBAO and re-emits each line through the same slog pipeline (`component=apisix`), so the single-binary deployment has exactly one log stream.
+- **Audit is not ops logging**: security-relevant events (who deployed what, policy decisions) go to the dedicated audit channel (`internal/observability/audit.go`) with its own retention; never interleaved with operational logs.
+
+```go
+// bootstrap (internal/app)
+root := observability.NewLogger(cfg.Log)          // level, format, optional OTLP bridge
+ctrl := controller.New(deps, root.With("component", "controller"))
+
+// inside a reconciler
+log.InfoContext(ctx, "function deployed",
+    "namespace", fn.Namespace, "name", fn.Name, "generation", fn.Generation)
+log.WarnContext(ctx, "route render failed, retrying", "error", err, "attempt", n)
+```
 
 ### Security model
 
 - **API access**: every API-server request is authenticated (static tokens first, OIDC later) and authorized through namespace-scoped RBAC (e.g., admin / developer / viewer roles).
 - **Multi-tenancy boundary**: the namespace — quotas, secrets, routes, and service instances are namespace-scoped and never shared across namespaces.
 - **Function isolation**: each function runs in its own microVM or WASM sandbox; no shared filesystem, PID, or network namespace between functions by default.
-- **Service credentials**: functions never receive long-lived platform credentials; the worker injects short-lived, scoped tokens only for the services declared in the function spec.
+- **Service credentials**: functions never receive long-lived platform credentials; the worker injects short-lived, scoped workload tokens only for the services declared in the function spec — see [Internal IAM](#internal-iam).
 - **Secrets at rest**: encrypted in the metastore (tink / OpenBAO-backed keys), delivered to sandboxes via env vars or tmpfs mounts.
+- **Egress control**: sandbox networking is default-deny for lateral traffic — functions reach other functions only through the gateway and other systems only through the bus or declared services; outbound internet egress is governed by namespace-level policy (allowlists), so a compromised function cannot scan the host or sibling sandboxes.
+- **Artifact trust**: images and wasm modules are pinned by digest when a `Revision` is created, and optionally verified against signatures (sigstore/cosign) before a sandbox starts; a pull-through registry cache keeps deploys working when the upstream registry is down.
 - **Internal traffic**: mTLS between control plane and workers once deployed multi-node.
+
+### Internal IAM
+
+Functions call functions (sync through the gateway, async through events) and call platform services (kv, blob, …). All of these hops need authentication and authorization **without API keys** — everything is internal, so the platform can do better than shared secrets.
+
+**Identity — minted at sandbox creation.** The control plane is the trust root: it creates every sandbox, so identity is injected at birth (the Kubernetes ServiceAccount token-projection idea):
+
+- every workload gets a SPIFFE-style identity: `spiffe://funcd/ns/<namespace>/fn/<function>/rev/<revision>`;
+- the worker mounts a short-lived signed token (minutes, not days) into the sandbox (tmpfs + env var) and rotates it before expiry — nothing to create, store, or revoke manually, which is exactly what kills API keys;
+- tokens are audience-bound (a token minted for the kv service is useless against blob or another function) and carry namespace / function / revision claims;
+- signing keys come from the platform crypto service (tink, OpenBAO-backed later); verification is local in every enforcement point (public key, no network call on the hot path);
+- SPIFFE-compatible naming keeps a clean upgrade path to SPIRE federation in multi-node — without running SPIRE today (embed-first).
+
+**Authorization — one PDP behind a port, PEPs at every hop.**
+
+- the `auth.Authorizer` port is the single decision point (PDP), called in-process by every enforcement point (PEP): API-server middleware (user → platform), service facades (fn → kv/blob/…), gateway & activator (fn → fn sync), bus facade (fn → events);
+- **default deny across namespaces, explicit grants within**: binding a service in `Function.spec.services` *is* the grant for that instance; everything else — fn→fn invoke, cross-namespace event flows, shared services — requires a declarative `Grant` resource, reviewable and reconciled like every other resource.
+
+**Policy engine — OPA, challenged.** OPA embeds fine in Go (the `rego` package is explicitly intended for eval-only embedding), so it fits the embed-first rule. But it is a heavyweight dependency (large dep tree, real binary-size impact) and Rego is a general-purpose datalog — a lot of language for decisions that are 95% "may *principal* do *action* on *resource*?". Layered decision:
+
+1. **Built-in engine (default, zero deps)**: namespace-scoped RBAC for humans + `Grant` evaluation for workloads, default deny. Covers the platform's own needs entirely.
+2. **Embedded policy-language driver (optional)** behind the same `Authorizer` port for conditional, fine-grained policies (attribute matches, time windows, …): [cedar-go](https://github.com/cedar-policy/cedar-go) is the default choice — official Go implementation of a purpose-built, analyzable authz language (RBAC + ABAC), dramatically lighter than OPA. An OPA/Rego driver stays a drop-in alternative when the Rego ecosystem matters to an operator; the port makes the choice reversible.
+3. **Never OPA-as-sidecar**: policy decisions stay in-process — no HTTP hop on the invoke path.
+
+**Bus-level enforcement — accounts, scoped to what they are good at.** Namespaces map to NATS **accounts** — one per namespace (tens to hundreds), never per-function or per-entity. This is the officially supported JetStream multi-tenancy model and it buys three things cheaply: natively isolated subject spaces, per-account JetStream quotas (`max_mem`, `max_file`, `max_streams`, `max_consumers`) that implement namespace quotas for free, and cross-namespace event flows rendered declaratively as account exports/imports from `Grant` resources.
+
+Known limitation, designed around: raw JetStream **API** permissions do not compose. Bucket/stream names are not tokenizable in ACL subjects (no mid-token wildcards, no dots in bucket names — [nats-server#4225](https://github.com/nats-io/nats-server/issues/4225)), so per-entity buckets force a choice between god-like `$JS.API.>` grants and unmaintainable permission lists; and many buckets are themselves costly, since each KV/Object bucket is a stream and streams are the most resource-consuming JetStream asset. funcd therefore **never exposes the JetStream API to functions**:
+
+- functions hold account-scoped credentials for **plain core-NATS subjects only** (`<ns>.<source>.<event>` — fully tokenizable, trivially wildcardable, cheap to permission);
+- KV, blob, and durable consumption go through the platform **service facades**, which hold the privileged JetStream access, own a few pooled buckets per service (maintainer guidance: few buckets, metadata in keys), multiplex tenants via key prefixes (`<namespace>/<binding>/<key>`), create buckets on the fly, and enforce per-request authorization through the in-process PDP. The "privileged facade wrapping JetStream behind a narrow exported API" that raw-NATS users end up hand-building is a first-class platform component here — in-process, audited, with workload identity instead of trial-and-error ACLs;
+- if account-per-namespace ever becomes a scaling concern, the `Bus` port collapses to a single account with subject-prefix permissions derived from workload identity — a driver change, invisible to functions and to the API.
+
+```mermaid
+flowchart LR
+    User["User (CLI / SDK)"]
+    FN["Function instance<br/>workload token<br/>ns / fn / rev"]
+
+    subgraph PEP["Enforcement points (PEP)"]
+        APIp["API server<br/>middleware"]
+        GWp["Gateway / activator<br/>fn → fn (sync)"]
+        SVCp["Service facades<br/>fn → kv · blob · …"]
+        BUSp["Bus facade + NATS accounts<br/>fn → events"]
+    end
+
+    subgraph PDP["Authorizer (PDP, in-process)"]
+        RBAC["1 · built-in: RBAC + Grants<br/>(default deny)"]
+        ENG["2 · optional driver:<br/>cedar-go (default) / OPA"]
+    end
+
+    POL[("RBAC roles · Grant resources ·<br/>service bindings · policies")]
+    AUD["Audit channel"]
+
+    User --> APIp
+    FN --> GWp & SVCp & BUSp
+    APIp & GWp & SVCp & BUSp -- "principal · action · resource" --> PDP
+    PDP --- POL
+    PDP -- "allow / deny (logged)" --> AUD
+```
 
 ### Diagrams
 
@@ -380,7 +477,7 @@ flowchart TB
         subgraph DP["Data plane (worker)"]
             GW["Ingress / API Gateway<br/>APISIX or Pingap"]
             RT["Function runtime<br/>containerd + shims"]
-            VM["microVM sandboxes<br/>kata / firecracker / cloud-hypervisor"]
+            VM["microVM sandboxes<br/>kata shim (Dragonball / Cloud Hypervisor)"]
             WASM["WASM runtime"]
             SVC["Built-in services<br/>KV · blob · graph · vector · crypto ·<br/>workflow · eventing · secrets"]
         end
@@ -468,7 +565,9 @@ A few important things intentionally left open at this stage:
 - **Build pipeline**: the blueprint assumes functions arrive as OCI images / WASM modules; how source code is built and pushed (buildpacks, `ko`, nixpacks, in-platform builder?) is not yet specified.
 - **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation; the rollout mechanics on top are not yet specified.
 - **Multi-node path**: workers registering to the control plane over NATS, node heartbeats, and scheduler placement across nodes.
-- **Quotas & limits**: per-namespace resource quotas and admission-time enforcement.
+- **Quotas & limits**: per-namespace resource quotas and admission-time enforcement (per-account JetStream limits already cover the bus dimension — see [Internal IAM](#internal-iam)).
+- **Backup & disaster recovery**: metastore snapshot/restore and JetStream stream backups; declarative resources keep namespaces re-applyable from manifests (GitOps-style) as a coarse-grained fallback.
+- **Platform upgrades**: single-binary swap with forward-only store schema migrations; control-plane/worker version-skew rules once multi-node.
 
 ## Repository structure
 
@@ -484,7 +583,7 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 | `store.Store` (metastore) | sqlite (file) — slatedb (S3-backed) later | in-memory |
 | `bus.Bus` (messaging) | embedded NATS JetStream, file storage | embedded NATS with memory storage, or pure in-memory bus |
 | `gateway.Gateway` (ingress) | APISIX (rendered standalone config) | embedded Go reverse proxy |
-| `runtime.Runtime` (sandboxes) | containerd + kata / firecracker shims | plain process / wasm |
+| `runtime.Runtime` (sandboxes) | containerd + runc / gvisor / kata shims | plain process / wasm |
 
 - `cmd/funcd` only holds the configuration of external components and driver selection — zero business logic.
 - The e2e harness boots the platform with the `InMemory()` preset: same code paths, no root, no containerd, no network ports beyond an ephemeral listener.
@@ -570,6 +669,7 @@ funcd/
 │   │   ├── eventsources/
 │   │   ├── configs/
 │   │   ├── secrets/
+│   │   ├── grants/
 │   │   └── invocations/
 │   │
 │   ├── controlplane/                     # API server (implements the generated server interface)
@@ -605,7 +705,7 @@ funcd/
 │   │   └── providers/
 │   │       ├── process/                  # plain OS processes (dev / e2e)
 │   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + kata / firecracker shims
+│   │       ├── containerd/               # containerd + runc / gvisor / kata shims (SPEC §3.7)
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
 │   ├── store/
@@ -626,11 +726,11 @@ funcd/
 │   │   └── trigger.go                    # invoke functions, publish, notify
 │   │
 │   ├── auth/
-│   │   ├── authenticator.go              # static tokens → OIDC later
-│   │   ├── authorizer.go                 # namespace-scoped RBAC
-│   │   ├── rbac.go
-│   │   ├── tokens.go                     # short-lived scoped service tokens for sandboxes
-│   │   └── policy/
+│   │   ├── authenticator.go              # request authn: static tokens → OIDC later
+│   │   ├── authorizer.go                 # Authorizer port (PDP) — every PEP calls this
+│   │   ├── rbac.go                       # built-in engine: namespace RBAC + Grants, default deny
+│   │   ├── identity.go                   # workload identity: mint / rotate / verify (SPIFFE-style)
+│   │   └── policy/                       # optional embedded engines: cedar-go (default), opa/rego
 │   │
 │   ├── observability/
 │   │   ├── logger.go                     # slog, structured
@@ -707,6 +807,7 @@ Challenged list — kept, renamed, or removed with reasons:
 | `EventSource` | namespaced | declarative event source/binding (the blueprint's "Event" renamed: an event is a runtime occurrence, not a declarative resource) |
 | `Config` | namespaced | non-sensitive configuration |
 | `Secret` | namespaced | sensitive configuration, encrypted at rest |
+| `Grant` | namespaced | explicit permission edge: fn→fn invoke, fn→service access, cross-namespace event flow (within-namespace service bindings are auto-granted from `Function.spec.services`) — see [Internal IAM](#internal-iam) |
 | `Invocation` | namespaced, read-only | execution record (status, duration, error) with a retention policy — written by the platform, never by users |
 | `RuntimeClass` | cluster | **renamed from draft's `Runtime`** (avoids clashing with the language-runtime concept; mirrors Kubernetes RuntimeClass): process, wasm, microVM flavors |
 | `Worker` | cluster, status-owned | node inventory, capacity, heartbeat |
