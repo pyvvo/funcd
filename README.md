@@ -37,6 +37,22 @@ Each gate has a skill (`.claude/skills/`): **plan** → **decide** → **judge**
 8. **Implementation review** (recommended) — `adr-impl-review` again audits code + tests against
    the ADR and updates the model scorecard.
 
+Your flow is essentially right. Let me lay out the canonical version, overlay your model choices, and fix one timing detail that matters.
+
+## The current workflow (ADR-0000 gates 0–5)
+
+| # | Gate | Skill | Your model | Status moves it makes |
+|---|---|---|---|---|
+| 0 | Scope the version | `roadmap-planner` | — | (sequences ADRs; writes roadmap) |
+| 1–2 | Brainstorm → Draft | [adr](.claude/skills/adr/SKILL.md) | Opus 4.8 MAX | ADR `Draft → Proposed`; feat `idea → adr` |
+| 3 | **Judge gate** (the ADR *document*) | [adr-judge](.claude/skills/adr-judge/SKILL.md) | Opus 4.8 Extra | none — it only reports; **you** then accept |
+| — | **Acceptance** (human call) | — | you | ADR `→ Accepted`; **blueprint + roadmap synced here**; feat `→ accepted` |
+| 4 | **Implement** (ADR + blueprint → working code) | [adr-impl](.claude/skills/adr-impl/SKILL.md) | Sonnet 4.6 medium | ADR `Accepted → Reviewing`; feat `→ reviewing` |
+| 5 | **Review gate** (the *code*) | [adr-impl-review](.claude/skills/adr-impl-review/SKILL.md) | Opus 4.8 Extra | **pass** → ADR `Reviewing → Implemented`, feat `→ implemented`; **else** → report, advances nothing |
+
+**The loop** (exactly as you said): review `changes-requested`/`fail` → ADR stays `Reviewing` → back to gate 4 (`adr-impl`) to fix the `model`-attributed findings → re-review → repeat until the review gate passes and stamps `Implemented`. (`adr`-attributed findings don't loop here — they break out to a *new superseding ADR*.)
+
+
 ## Status
 
 Scaffolded — ADR-0001 (project setup, file structure, Nix dev environment).
