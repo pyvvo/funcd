@@ -1,19 +1,20 @@
-# Scaffold templates (copy-paste shapes)
+# Implementation templates (copy-paste shapes)
 
 Copy the shape that matches what the ADR's *Contracts* section asks for, then rename to the ADR's
-real types. Every body is a **not-implemented stub** that still compiles and lints (see
-`conventions.md` — no `panic`, return `errors.New("not implemented: ADR-NNNN")`). Replace `NNNN`
-with the ADR number throughout. Module path is `github.com/green-0-rabbit/funcd`.
+real types and fill each body with the **real behavior the ADR specifies**. These shapes show the
+*form* (package layout, signatures, error handling); the logic inside is yours to implement so the
+Scenario tests pass (see `conventions.md`). Replace `NNNN` with the ADR number throughout.
+Module path is `github.com/green-0-rabbit/funcd`.
 
 ## Table of contents
 1. Port interface (the abstraction, dependency-light)
 2. One-file driver in its own subpackage
-3. Contract suite stub (one per port)
+3. Contract suite (one per port)
 4. Functional-options facade (`pkg/funcd`)
 5. Internal component (deps-struct constructor)
 6. `api/fault` error usage
 7. Typed IDs / enums
-8. Scenario test skeleton (skipped)
+8. Scenario test (one per ADR Scenario, passing)
 9. `go.mod` dependency & tool edits
 
 ---
@@ -49,7 +50,9 @@ type ID string
 ## 2. One-file driver — `internal/<port>/<driver>/<driver>.go`
 
 One driver = one file in its own subpackage. The subpackage is *only* for keeping this driver's
-third-party deps out of the port package — never an excuse to fan out into several files.
+third-party deps out of the port package — never an excuse to fan out into several files. Implement
+the real behavior: the in-memory driver is the reference the contract suite proves every other
+driver against, so it must actually work.
 
 ```go
 // Package memory is the in-memory driver for the widget port.
@@ -57,51 +60,105 @@ package memory
 
 import (
 	"context"
-	"errors"
+	"sync"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/internal/widget"
 )
 
 // New returns the in-memory widget driver. Driver constructors return the PORT interface
 // (so the facade can swap them), unlike other constructors which return a concrete struct.
-func New() widget.Widget { return &store{} }
+func New() widget.Widget { return &store{items: map[widget.ID]widget.Item{}} }
 
-type store struct{ /* fields added at implementation time */ }
+type store struct {
+	mu    sync.RWMutex
+	items map[widget.ID]widget.Item
+}
 
 func (s *store) Get(ctx context.Context, id widget.ID) (widget.Item, error) {
-	return widget.Item{}, errors.New("not implemented: ADR-NNNN")
+	if err := ctx.Err(); err != nil {
+		return widget.Item{}, fault.Wrapf(err, fault.Unavailable, "widget.Get", "context done")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	it, ok := s.items[id]
+	if !ok {
+		return widget.Item{}, fault.NotFoundf("widget.Get", "no widget with id %q", id)
+	}
+	return it, nil
 }
+
 func (s *store) Put(ctx context.Context, it widget.Item) error {
-	return errors.New("not implemented: ADR-NNNN")
+	if err := ctx.Err(); err != nil {
+		return fault.Wrapf(err, fault.Unavailable, "widget.Put", "context done")
+	}
+	if it.ID == "" {
+		return fault.Invalidf("widget.Put", "id must not be empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items[it.ID] = it
+	return nil
 }
+
 func (s *store) List(ctx context.Context) ([]widget.Item, error) {
-	return nil, errors.New("not implemented: ADR-NNNN")
+	if err := ctx.Err(); err != nil {
+		return nil, fault.Wrapf(err, fault.Unavailable, "widget.List", "context done")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]widget.Item, 0, len(s.items))
+	for _, it := range s.items {
+		out = append(out, it)
+	}
+	return out, nil
 }
 ```
 
 A driver wrapping one library that spans backends (e.g. `gocloud.dev/blob` → memory/file/S3) is
 still ONE file; the backend is chosen by URL/config inside `New`, not by extra files.
 
-## 3. Contract suite stub — `internal/<port>/<port>contract/contract.go`
+## 3. Contract suite — `internal/<port>/<port>contract/contract.go`
 
 One reusable suite per port; every driver's test calls it, proving the in-memory driver behaves like
-the real one. Stub now, fill assertions at implementation.
+the real one. Carry the real assertions the ADR's Contracts imply.
 
 ```go
 // Package widgetcontract is the shared conformance suite for any widget.Widget driver.
 package widgetcontract
 
 import (
+	"context"
 	"testing"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/internal/widget"
 )
 
 // RunContract runs the identical assertions against any driver. newWidget builds a fresh instance.
 func RunContract(t *testing.T, newWidget func(t *testing.T) widget.Widget) {
 	t.Helper()
-	t.Skip("scaffold ADR-NNNN — contract assertions land at implementation")
-	_ = newWidget // referenced so the signature is exercised and drifts loudly
+	ctx := context.Background()
+	w := newWidget(t)
+
+	// missing → NotFound
+	if _, err := w.Get(ctx, "absent"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("Get(absent): want NotFound, got %v", err)
+	}
+	// put then get round-trips
+	want := widget.Item{ID: "a", Name: "alpha"}
+	if err := w.Put(ctx, want); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := w.Get(ctx, "a")
+	if err != nil || got != want {
+		t.Fatalf("Get(a): got (%v, %v), want (%v, nil)", got, err, want)
+	}
+	// list reflects the put
+	items, err := w.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("List: got (%v, %v), want 1 item", items, err)
+	}
 }
 ```
 
@@ -138,7 +195,6 @@ package funcd
 
 import (
 	"context"
-	"errors"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 )
@@ -160,8 +216,14 @@ func New(opts ...Option) (*Platform, error) {
 	return &Platform{cfg: c}, nil
 }
 
-func (p *Platform) Run(ctx context.Context) error      { return errors.New("not implemented: ADR-NNNN") }
-func (p *Platform) Shutdown(ctx context.Context) error { return errors.New("not implemented: ADR-NNNN") }
+// Run starts the platform's subsystems and blocks until ctx is cancelled (implement per the ADR).
+func (p *Platform) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// Shutdown gracefully stops the platform (implement per the ADR).
+func (p *Platform) Shutdown(ctx context.Context) error { return nil }
 ```
 
 ```go
@@ -201,7 +263,8 @@ func New(d Deps) (*Controller, error) {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
-	return errors.New("not implemented: ADR-NNNN")
+	// implement the reconcile logic per the ADR; honor ctx cancellation.
+	return ctx.Err()
 }
 ```
 
@@ -226,7 +289,7 @@ case fault.NotFound:
 }
 ```
 
-If `api/fault` does not exist yet, ADR-0002 is not scaffolded — that is a prerequisite (Step 0).
+If `api/fault` does not exist yet, ADR-0002 is not implemented — that is a prerequisite (Step 0).
 
 ## 7. Typed IDs / enums — `api/types/v1alpha1/{ids.go,enums.go}`
 
@@ -239,7 +302,13 @@ import "github.com/green-0-rabbit/funcd/api/fault"
 type NamespaceName string
 type FunctionName string
 
-func (n NamespaceName) Validate() error { return nil } // real DNS-label rule at implementation
+// Validate enforces the rule the ADR specifies (here: a non-empty name).
+func (n NamespaceName) Validate() error {
+	if n == "" {
+		return fault.Invalidf("NamespaceName.Validate", "must not be empty")
+	}
+	return nil
+}
 
 // Enum — typed constant set with Validate()/String().
 type Phase string
@@ -261,10 +330,10 @@ func (p Phase) Validate() error {
 }
 ```
 
-## 8. Scenario test skeleton (one per ADR Scenario, skipped) — `<pkg>/<thing>_test.go`
+## 8. Scenario test (one per ADR Scenario, passing) — `<pkg>/<thing>_test.go`
 
-Name the test after the scenario so traceability is grep-able. Reference the real signatures so the
-skeleton breaks loudly if the contract drifts — then skip.
+Name the test after the scenario so traceability is grep-able. Exercise the real behavior and assert
+the outcome — the test must pass against the implemented code (no `t.Skip`).
 
 ```go
 package funcd_test
@@ -272,16 +341,15 @@ package funcd_test
 import (
 	"testing"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/pkg/funcd"
 )
 
 // scenario: facade-missing-dep  (ADR-NNNN)
 func TestScenario_FacadeMissingDep(t *testing.T) {
-	t.Skip("scaffold ADR-NNNN — scenario: facade-missing-dep")
-
 	_, err := funcd.New() // no required deps
-	if err == nil {
-		t.Fatal("expected an error when a required dependency is missing")
+	if fault.KindOf(err) != fault.Invalid {
+		t.Fatalf("New() with no deps: want Invalid, got %v", err)
 	}
 }
 ```
@@ -298,4 +366,4 @@ go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.0
 go mod tidy
 ```
 
-Record the resolved versions in the scaffold report. Add only deps the ADR sanctioned.
+Record the resolved versions in the implementation report. Add only deps the ADR sanctioned.

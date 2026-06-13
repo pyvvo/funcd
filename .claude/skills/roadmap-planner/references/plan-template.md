@@ -10,7 +10,7 @@ re-derive them by hand. Prose sections carry the judgment.
 - **Status**: Active (living — update as ADRs are created/accepted/implemented)
 - **Date**: <YYYY-MM-DD>
 - **Realizes**: [FEAT-NNNN (<version> — <name>)](../feat/NNNN-feat-<version>.md)
-- **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-scaffold`
+- **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
 ## Purpose & how to read this
 
@@ -44,7 +44,7 @@ confirm they don't violate the computed tiers.> For each wave add a short "why t
 ### Cross-cutting sequencing notes
 
 <call out the test-harness / logger-root / error-kernel ordering constraints that apply (see
-methodology rule #5), so the plan doesn't contradict the scaffold process.>
+methodology rule #5), so the plan doesn't contradict the implement process.>
 
 ## Design track — what to create + accept ahead
 

@@ -9,7 +9,7 @@
 # funcd — agent working agreement
 
 funcd is in its **design phase**: documents drive the code, gradually, one decision at a
-time. There is no big-bang implementation — every package is scaffolded and implemented
+time. There is no big-bang implementation — every package is implemented
 *from an ADR*. The authoritative process is [ADR-0000](../docs/adr/0000-adr-process.md);
 this file does **not** override it. It exists to make one thing impossible to forget:
 
@@ -38,7 +38,7 @@ flowchart TB
     FEAT["docs/feat/NNNN<br/>what / why · LIVING"]
     ADR["docs/adr/NNNN<br/>how · IMMUTABLE once Accepted"]
     RM["docs/roadmap/<br/>order · LIVING · COMPUTED"]
-    CODE["code<br/>scaffold → implement"]
+    CODE["code<br/>implement → review"]
     BP --> FEAT --> ADR --> CODE
     BP --> ADR
     FEAT --> RM
@@ -57,12 +57,12 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 | plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
-| build | [adr-scaffold](../.claude/skills/adr-scaffold/SKILL.md) | ADR → compiling skeleton (declarations + skipped scenario tests) | code | **feat row → `scaffolded`** |
-| review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* (scaffold/impl) vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: feat row → `scaffolded`/`implemented` and (impl) the ADR `Accepted → Implemented`; non-pass advances nothing; still never edits the *work* (code) |
+| build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
+| review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: ADR `Reviewing → Implemented` + feat row → `implemented` (sole stamper of `Implemented`); non-pass advances nothing (ADR stays `Reviewing`); still never edits the *work* (code) |
 
 `adr-judge` and `adr-impl-review` are different gates: the judge reads the *ADR document* (before
-acceptance); the review reads the *code* (after scaffold/implement) and records a per-model
-quality entry in `docs/reviews/` — see [ADR-0000 gates 5 & 8](../docs/adr/0000-adr-process.md).
+acceptance); the review reads the *code* (after implementation) and records a per-model
+quality entry in `docs/reviews/` — see [ADR-0000 gate 5](../docs/adr/0000-adr-process.md).
 
 ## ⚠️ Cross-document propagation rules
 
@@ -72,8 +72,8 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 |---|---|---|---|---|---|
 | ADR drafted / `Proposed` | — | `idea → adr`, link the ADR | — | reconcile its `P-x` placeholder → real number | — |
 | ADR **Accepted** | sync **iff** it refines/contradicts the blueprint (newest accepted wins) | `→ accepted` | set `Accepted` + date | reconcile number; **re-run analyzer** if a new build dep surfaced | — |
-| ADR **Scaffolded** | — | `→ scaffolded` | — | — | scaffold lands |
-| ADR **Implemented** | — | `→ implemented` | set `Implemented` (final edit — frozen after) | — | impl lands |
+| ADR **Reviewing** (implementation done) | — | `→ reviewing` | set `Accepted → Reviewing` (by `adr-impl`) | — | implementation lands |
+| ADR **Implemented** (review passed) | — | `→ implemented` | set `Reviewing → Implemented` (by the review gate; final edit — frozen after) | — | — |
 | ADR **Superseded** | sync (newest wins) | re-point row to the new ADR | old → `Superseded by ADR-XXXX`; write the new ADR | re-sequence if build order changed | maybe |
 | **feat** feature added / removed / re-scoped | maybe (if architectural intent shifts) | (the edit itself) | draft a new ADR or defer one | **update `plan.json`, re-run `plan_waves.py`, repaste graph/waves/critical-path** | — |
 | **blueprint** architecture change | (the edit itself) | maybe add/adjust feature rows | maybe a new or superseding ADR | maybe re-sequence | — |
@@ -82,7 +82,7 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 ### The two chains worth memorizing
 
 1. **ADR lifecycle → feat tracking row.** Every ADR carries `Realizes: FEAT-NNNN/Fxx`.
-   Each status move (`Proposed`/`Accepted`/scaffolded/implemented) must advance that exact
+   Each status move (`Proposed`/`Accepted`/`Reviewing`/`Implemented`) must advance that exact
    row's status and link the ADR. An ADR that changed status but left its feat row stale is
    a defect. Acceptance additionally syncs the blueprint if the decision refined it.
 2. **feat scope → roadmap.** The roadmap's slate table, graph, waves, and critical path are
@@ -97,8 +97,8 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 
 ## Status vocabularies (keep them in sync with reality)
 
-- **feat row**: `idea → adr → accepted → scaffolded → implemented`.
-- **ADR**: `Draft → Proposed → Accepted → Implemented`; terminal alt: `Superseded by ADR-XXXX`.
+- **feat row**: `idea → adr → accepted → reviewing → implemented`.
+- **ADR**: `Draft → Proposed → Accepted → Reviewing → Implemented`; terminal alt: `Superseded by ADR-XXXX`.
 - The feat row and its ADR's status are two views of the same truth — they must agree.
 
 ## Invariants (must always hold)
@@ -107,8 +107,9 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - Blueprint ⟷ newest Accepted ADR: on conflict the ADR wins and the blueprint is updated.
 - **An `Accepted` ADR is frozen in substance.** Context, Scenarios, Decision, Contracts,
   Alternatives — none of it changes after acceptance. The *only* edits ever allowed are the
-  forward status bump (`Accepted → Implemented`) and the single `Superseded by ADR-XXXX`
-  back-link. To change the decision, write a new superseding ADR — never rewrite history.
+  forward status bumps (`Accepted → Reviewing` by `adr-impl`, then `Reviewing → Implemented`
+  by the review gate) and the single `Superseded by ADR-XXXX` back-link. To change the
+  decision, write a new superseding ADR — never rewrite history.
 - **An `Implemented` ADR is fully frozen — never updated.** Once its status reads
   `Implemented`, the file is closed: no substance, contract, or status edit ever again. The
   one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link. A correction
@@ -127,7 +128,7 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 Hard constraints. They bound *consistency*, not *creativity* — everything not named here
 stays free (see below).
 
-1. **Status moves forward only.** `Draft → Proposed → Accepted → Implemented`. Never walk a
+1. **Status moves forward only.** `Draft → Proposed → Accepted → Reviewing → Implemented`. Never walk a
    status backward, and never delete or renumber an ADR — numbers are sequential and
    permanent. "Undoing" an Accepted/Implemented decision is done by *superseding* it, not by
    editing or removing it.

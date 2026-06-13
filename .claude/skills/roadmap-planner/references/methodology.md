@@ -9,7 +9,7 @@ that feeds it.
 
 - **Design track** — create + judge + accept ADRs. Cheap; ADRs for independent topics draft in
   parallel. The real serialization point is **human acceptance bandwidth**, not drafting.
-- **Build track** — scaffold + implement + validate. Serialized by **hard compile/runtime
+- **Build track** — implement + review. Serialized by **hard compile/runtime
   dependencies** (you can't build the controller before the store *interface* exists).
 
 The plan's job is to keep design **one wave ahead** of build, so build never stalls on an
@@ -42,8 +42,9 @@ violate the computed tiers — a phase can merge adjacent tiers, never reorder t
 ## Realism rule #3 — one ADR = one coherent decision, and it must not straddle build tiers
 
 If an ADR-item bundles features that the tool places in different tiers (e.g. a gateway port in
-tier 1 and its scale-to-zero activator in tier 4), it would be scaffolded early but half-implemented
-much later — which breaks the scaffold→implement model. **Split it.** Conversely, merge items so
+tier 1 and its scale-to-zero activator in tier 4), it would be implemented piecemeal — its port
+early but its behavior much later — which breaks the one-ADR-one-implementation model. **Split it.**
+Conversely, merge items so
 trivial they don't carry a real decision (a single-node scheduler can ride inside the controller
 ADR). The tool reveals straddles: when one item's features clearly belong to different tiers, split
 and re-run.
@@ -60,9 +61,9 @@ working feature, and it identifies which items are *off* the exit path (defer/pa
 Some things everything leans on: the error kernel, the logger root, the test harness. They are easy
 to assume "already there" and thereby plan an impossible early step. Two that bite specifically here:
 
-- **Test harness**: the process wants a skipped test per scenario at scaffold time, but an *e2e*
-  harness (`funcd.InMemory()`) doesn't exist until the facade item is built. So pre-harness items
-  emit **contract/unit skeletons only**; the e2e-harness slice is an explicit deliverable of the
+- **Test harness**: the process wants a passing test per scenario at implementation time, but an
+  *e2e* harness (`funcd.InMemory()`) doesn't exist until the facade item is built. So pre-harness
+  items ship **contract/unit tests only**; the e2e-harness slice is an explicit deliverable of the
   facade item; deferred e2e scenarios attach from then on. Make this a stated constraint, not a
   silent contradiction.
 - **Logger root / error kernel**: a thing that *constructs* the root logger (or defines `api/fault`)
@@ -75,7 +76,7 @@ to assume "already there" and thereby plan an impossible early step. Two that bi
 - ❏ Edges invented, not grounded in the blueprint/ADRs.
 - ❏ Hand-drawn graph contradicts the dependency table (missing real edges, kept redundant ones).
 - ❏ A cycle (unbuildable) hiding in the table.
-- ❏ An ADR-item straddling build tiers (scaffold-now, implement-much-later).
+- ❏ An ADR-item straddling build tiers (port-now, behavior-much-later).
 - ❏ A step that assumes a harness/prerequisite that its own wave hasn't built yet.
 - ❏ "All ADRs done" mistaken for "feature delivered" — no exit-criterion spine.
 - ❏ Ignoring the human-acceptance bottleneck (design not kept a wave ahead).

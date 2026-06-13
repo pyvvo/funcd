@@ -1,8 +1,8 @@
-# Scaffold conventions (distilled from ADR-0001 + ADR-0002)
+# Implementation conventions (distilled from ADR-0001 + ADR-0002)
 
 The authoritative source is [ADR-0002](../../../../docs/adr/0002-source-code-conventions-and-patterns.md);
-read it. This is the checklist + the stub rules that keep a *no-logic* scaffold passing `just lint`.
-If this file and the ADR ever disagree, the ADR wins.
+read it. This is the checklist + the code-shape rules every implementation must satisfy to pass
+`just ci`. If this file and the ADR ever disagree, the ADR wins.
 
 ## The import graph (depguard — getting this wrong fails the build)
 
@@ -45,42 +45,42 @@ Direction to remember: **everything imports *up* into `api/`; nothing imports *d
 - **One file until it outgrows one.** Don't pre-split into file-per-type. Split by responsibility
   only when a file is genuinely large.
 
-## Not-implemented stub rules (so a no-logic scaffold still lints + builds)
+## Lint-clean implementation rules (the linters reject the obvious shortcuts)
 
-These exist because the linters the same project enforces will reject the obvious shortcuts:
+These constraints hold for real code just as they did for skeletons — the same linters enforce them:
 
-- **Never `panic("not implemented")`** — `forbidigo` bans `panic` outside `package main`.
-- **Error-returning func** → `return <zeroes>, errors.New("not implemented: ADR-NNNN")`
-  (stdlib `errors` is fine; import only what the stub uses or the build fails on unused imports).
-- **Value-only func** that the scaffold needs to compile → return the zero value; if that would make
-  a linter complain about an always-same return, prefer giving the method an `error` return in the
-  port (most port methods have one anyway).
-- **`Validate()` stubs** → `return nil` is acceptable for the scaffold (the real rule lands at
-  implementation; the scenario test that checks validation is skipped for now).
-- **Test bodies** → first line `t.Skip("scaffold ADR-NNNN — scenario: <name>")`. The test compiles,
-  references the real signatures (so it breaks loudly if the contract drifts), and is reported skipped.
+- **Never `panic`** outside `package main` — `forbidigo` bans it. Return a typed `api/fault` error
+  instead; surface unexpected states as errors, not panics.
+- **Error-returning func** → implement the behavior and return a real `api/fault` error on failure
+  (`fault.NotFoundf(...)`, `fault.Invalidf(...)`, `fault.Wrapf(...)`), never a bare
+  `errors.New("not implemented")` in the shipped path.
+- **`Validate()`** → implement the real rule the ADR specifies (e.g. the DNS-label check), and the
+  Scenario test that exercises it runs and passes — not skipped.
+- **Test bodies** → exercise the real behavior and assert the outcome; the contract suite carries
+  real assertions every driver runs. Name each test after its `scenario: <name>` for traceability.
 - **Avoid unexported funcs/types nothing references** — `staticcheck`'s `unused` check fails the
-  build on dead unexported code. Scaffold the exported API + skipped tests; add unexported helpers
-  only when something calls them.
-- **`fmt.Print*` is banned** (forbidigo) — scaffolds don't print.
+  build on dead unexported code. Don't leave helpers behind that no live path calls.
+- **`fmt.Print*` is banned** (forbidigo) — log through `log/slog`, never print.
 
 ## go.mod
 
 - Library deps: `go get <module>@<version>` (pin; the project commits `go.sum`).
 - Codegen/lint tools: `go get -tool <module>@<version>` (Go 1.24 `tool` directive — ADR-0001).
-- Record every resolved version in the scaffold report. Never add a dep the ADR didn't sanction;
-  every dep must be Apache-2.0/MIT-compatible (the ADR checked this at acceptance).
+- Record every resolved version in the implementation report. Never add a dep the ADR didn't
+  sanction; every dep must be Apache-2.0/MIT-compatible (the ADR checked this at acceptance).
 
 ## Pre-handoff checklist (run before declaring done)
 
-- [ ] Every file in the ADR's Scaffold plan exists; nothing extra invented.
+- [ ] Every file in the ADR's Implementation plan exists; nothing extra invented.
 - [ ] `just build` passes (or `go build ./...`).
 - [ ] `just lint` passes — depguard import graph, forbidigo (no `any` in APIs, no `panic`, no
       `fmt.Print*`), errorlint, gochecknoglobals/inits all clean. Known-bad fixtures still fail.
-- [ ] `just test` / `go test ./...` passes; every Scenario test is present, named, and **skipped**.
-- [ ] No business logic: bodies are not-implemented stubs or skipped tests.
+- [ ] `just test` / `go test ./...` passes; every Scenario test is present, named, and **passing**
+      (none skipped); the contract suite runs against every driver.
+- [ ] `just ci` exits 0 end-to-end.
+- [ ] Real behavior implemented — no `not implemented` placeholders left in the shipped path.
 - [ ] Code shapes match ADR-0002 (options vs deps-struct, one-file drivers, `api/fault`, typed
       surface, ctx-first, no globals, slog-only).
-- [ ] The ADR's own *Review checklist* items that apply at scaffold time are satisfied.
+- [ ] The ADR's own *Review checklist* items are satisfied.
 - [ ] No local username/paths leaked; module path is `github.com/green-0-rabbit/funcd`.
-- [ ] The realizing `docs/feat/` row is set to `scaffolded`.
+- [ ] The ADR is set to `Reviewing` and the realizing `docs/feat/` row is set to `reviewing`.

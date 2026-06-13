@@ -73,7 +73,7 @@ item(s) that deliver it. A clause with no item is a gap — stop and flag it (th
 is incomplete) rather than papering over it.
 
 Add the cross-cutting sequencing notes (methodology rule #5): the test-harness / logger-root /
-error-kernel ordering, so the plan doesn't silently contradict the scaffold gate.
+error-kernel ordering, so the plan doesn't silently contradict the implement gate.
 
 ## Step 6 — Realism self-audit + finish
 
@@ -90,6 +90,6 @@ placeholders. Then:
 
 ## What this skill does NOT do
 
-It does not create or accept ADRs (that's `/adr`), judge them (`/adr-judge`), or scaffold code
-(`/adr-scaffold`). It sequences them. If planning reveals a missing decision, note it as an item to
+It does not create or accept ADRs (that's `/adr`), judge them (`/adr-judge`), or implement code
+(`/adr-impl`). It sequences them. If planning reveals a missing decision, note it as an item to
 be decided — don't decide it here.
