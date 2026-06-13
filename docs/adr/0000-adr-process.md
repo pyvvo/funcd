@@ -1,7 +1,9 @@
 # ADR-0000: ADR process, template, and workflow gates
 
 - **Status**: Accepted
-- **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer, `docs/feat/`)
+- **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer `docs/feat/`;
+  added the *Scenarios* template section and test skeletons in the scaffold phase; added
+  the validation and optional LLM-judge gates)
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process
 
@@ -45,15 +47,16 @@ feature/component list per version** live in `docs/feat/NNNN-feat-<version>.md`
 
 | Section | Purpose |
 |---|---|
-| Header | status, date, deciders, tags, relates-to/supersedes links |
-| **Context & Need** | the problem, why now, what breaks without a decision |
+| Header | status, date, deciders, tags, realizes (feat row), relates-to/supersedes links |
+| **Context & Need** | the problem, why now, what breaks without a decision — and the **purpose** of the component stated plainly (what it is for, who calls it): purpose is what tells the implementer *what to test* |
+| **Scenarios** | the concrete situations that led to requesting this feature, written Given/When/Then from the user's (or caller's) point of view. Each scenario is observable behavior — no implementation detail — and becomes a named e2e/acceptance test at scaffold time. If a behavior matters and no scenario covers it, the brainstorm isn't done |
 | **Scope** | explicitly in / out — keeps the ADR at one altitude |
 | **Constraints & Decision drivers** | hard requirements (licensing, platforms, blueprint rules) and the criteria used to judge alternatives |
 | **Alternatives considered** | each option with pros/cons and the reason it lost |
 | **Decision** | the final solution, stated plainly |
 | **Temporary workarounds** | accepted stopgaps, each with an explicit exit criterion |
 | **Contracts** | the LLM-handoff heart: Go interfaces, CRD-like resource definitions, and a dependencies & I/O table (what the component consumes — ports, config keys, events, files — and what it exposes) |
-| **Scaffold plan** | machine-actionable: files to create, dependencies to add, commands to run, definition of done |
+| **Scaffold plan** | machine-actionable: files to create, dependencies to add, commands to run, **test skeletons** (contract/unit stubs against the Contracts + one e2e skeleton per Scenario — compiling, marked skipped/failing until implementation), definition of done |
 | **Review checklist** | what the gate reviewer verifies, point by point |
 | **Consequences** | positive / negative / risks accepted |
 | **Open questions** | known unknowns, each with the ADR or milestone where it gets answered |
@@ -66,16 +69,32 @@ review gates catch.
 
 0. **Scope the version**: `docs/feat/NNNN-feat-<version>.md` captures the initial need
    and the high-level feature list (see above). Topics come from this list.
-1. **Brainstorm** a topic; clarify unknowns with the human before drafting.
+1. **Brainstorm** a topic; clarify unknowns with the human before drafting — including
+   the *scenarios* that motivated the feature (they become the ADR's Scenarios section
+   and, later, its e2e tests).
 2. **Draft the ADR** (`Proposed`); human review → `Accepted`. Update the feat doc's
    tracking row (`idea → adr → accepted`).
 3. **Scaffold from the ADR + blueprint**: interfaces, API facades, `go.mod` additions,
-   config stubs — declarations only, no business logic.
+   config stubs — declarations only, no business logic — **plus test skeletons**:
+   contract/unit stubs derived from *Contracts* and one e2e skeleton per *Scenario*,
+   compiling but skipped/failing. The skeletons are the executable form of the ADR; the
+   implementer's job in step 5 is to make them pass and extend them, never to start
+   testing from scratch.
 4. **Review gate**: a high-capability reviewer (e.g. Opus-class / "ultra" code review)
-   validates the scaffold against the ADR's *Review checklist* and *Contracts*. Findings
-   loop back to step 3 (or amend the ADR if the decision itself was wrong).
-5. **Implement** the feature and its tests; ADR moves to `Implemented`, feat row to
-   `implemented`.
+   validates the scaffold against the ADR's *Review checklist*, *Contracts*, and
+   *Scenarios* (every scenario has a named skeleton). Findings loop back to step 3 (or
+   amend the ADR if the decision itself was wrong).
+5. **Implement** the feature, un-skip and complete the test skeletons, extend them as the
+   implementation reveals edge cases.
+6. **Validate**: run the full suite — unit, contract, integration, e2e — and confirm every
+   scenario skeleton from the ADR now passes. Failures loop back to step 5. On green:
+   ADR moves to `Implemented`, feat row to `implemented`.
+7. **LLM judge (optional)**: an independent high-capability model audits the
+   implementation *and* its tests against the ADR — every Scenario covered honestly (no
+   weakened or deleted assertions), Contracts respected, Review checklist still true —
+   and files a short conformance report. Discrepancies either fix the code/tests or, if
+   the decision itself proved wrong, trigger a superseding ADR. The judge reads the ADR
+   and the diff; it does not re-litigate the decision.
 
 ## Consequences
 

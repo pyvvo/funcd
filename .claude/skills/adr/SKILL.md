@@ -26,7 +26,8 @@ ask for one before doing anything else.
    *relate to* it — never silently rewrite it.
 4. Read the relevant section(s) of `blueprint.md` — the architecture the decision must
    slot into. Constraints stated there (library-first, embed-first, single binary,
-   Apache-2.0/MIT-only deps, Makefile-only, import discipline) are inherited, not re-asked.
+   Apache-2.0/MIT-only deps, one task runner — `just`, import discipline) are inherited,
+   not re-asked.
 5. Check `docs/legacy/IMPLEMENTATION.md` for pre-ADR raw material on the topic (gateway
    rendering mechanics, scale-to-zero ordering, lifecycle sequences) worth mining.
 
@@ -46,19 +47,34 @@ descriptions). Iterate with a second batch only if an answer opens a new branch.
 questions decide the ADR's *Decision* section; bad questions ask the user to do the
 research you skipped.
 
+**Capture the scenarios.** Part of the brainstorm — not an afterthought — is collecting
+the concrete situations that led to requesting this feature: who calls it, with what, and
+what observable outcome they expect. Propose the scenarios you can derive (from the feat
+doc, blueprint, and the conversation) and ask the user only for the ones you can't.
+These become the ADR's *Scenarios* section and later its e2e tests, so each must be
+phrased as observable behavior (Given/When/Then), never as implementation steps. A
+feature whose purpose can't be expressed as scenarios isn't understood well enough to
+decide on.
+
 ## Step 2 — Draft the ADR
 
 Write `docs/adr/NNNN-kebab-title.md` with **Status: Draft** and every template section
 from ADR-0000, in order — a section that does not apply says "None" but still appears
 (its absence is what review gates catch):
 
-Header (status, date, deciders, tags, relates-to/supersedes) · Context & Need · Scope
-(in/out) · Constraints & Decision drivers · Alternatives considered · Decision ·
-Temporary workarounds · Contracts · Scaffold plan · Review checklist · Consequences ·
-Open questions · References.
+Header (status, date, deciders, tags, realizes, relates-to/supersedes) · Context & Need ·
+Scenarios · Scope (in/out) · Constraints & Decision drivers · Alternatives considered ·
+Decision · Temporary workarounds · Contracts · Scaffold plan · Review checklist ·
+Consequences · Open questions · References.
 
 Quality bar per section:
 
+- **Context & Need**: states the component's *purpose* plainly — what it is for and who
+  calls it. Purpose is what tells the implementer what to test.
+- **Scenarios**: Given/When/Then, from the caller's point of view, observable outcomes
+  only. Give each a short stable name (`scenario: cold-start-wake`) — the e2e skeleton
+  created at scaffold time carries the same name, so scenario ↔ test traceability is
+  grep-able.
 - **Scope**: one altitude per ADR. If the draft starts deciding a neighboring topic,
   split it out and note it as a follow-up ADR instead.
 - **Alternatives considered**: each option gets honest pros/cons and the concrete reason
@@ -70,7 +86,11 @@ Quality bar per section:
   component consumes (ports, config keys, events, files) and exposes. Write for a
   cold-start reader: no references to "as discussed".
 - **Scaffold plan**: machine-actionable — files to create, `go.mod` additions, commands
-  to run, and a checkable definition of done. No business logic ever belongs in it.
+  to run, **test skeletons** (contract/unit stubs derived from *Contracts*, plus one e2e
+  skeleton per *Scenario*, compiling but skipped/failing until implementation), and a
+  checkable definition of done. The skeletons are the executable form of the ADR — the
+  implementation phase makes them pass and extends them, it never starts testing from
+  scratch. No business logic ever belongs in the plan.
 - **Review checklist**: objective, checkbox-form items the review-gate model can verify
   mechanically against the scaffold.
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,
@@ -99,9 +119,10 @@ Quality bar per section:
 ## Step 5 — Stop
 
 This skill ends at acceptance. Do **not** scaffold, create packages, or touch `go.mod`.
-Close with a handoff note: the ADR number/title, its status, and a one-line pointer that
-the next phase is executing its *Scaffold plan* followed by the high-capability review
-gate against its *Review checklist*.
+Close with a handoff note: the ADR number/title, its status, and a one-line pointer to
+the remaining gates from ADR-0000 — scaffold (incl. test skeletons), review gate,
+implementation, validation run (suite green, scenarios pass), and the optional LLM-judge
+audit of code + tests against the ADR.
 
 ## Project conventions (apply silently throughout)
 

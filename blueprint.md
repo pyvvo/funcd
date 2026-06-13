@@ -41,7 +41,7 @@ In order to make this platform self-contained, we will need to implement the fol
         - We should follow the OpenFunction spec to capture events and invoke the functions. Aws lambda runtime API is also a good source of inspiration.
         - The function should be of kind "serverless", event based (input) and produce response via output or side effects (e.g., storage, event etc.).  Stateful functions will rely on the services provided by the platform (e.g., KV storage, blob storage, graph database, etc.) to store and retrieve state.
     - **Containerization**: A containerization system that allows functions to be packaged and deployed
-    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Chosen path (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; gVisor as a middle tier; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). Runtime classes (runc / gvisor / microvm) stay selectable per function behind one sandbox interface.
+    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Baseline (V1–V2): runc with conservative OCI defaults — no added capabilities, `no_new_privileges`, default seccomp. Strong isolation is scheduled for V3 (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). The gVisor middle tier was dropped (2026-06-13) — for untrusted code the WASM runtime provides isolation by construction instead. Runtime classes (runc / wasm / microvm) stay selectable per function behind one sandbox interface.
 
 - **Services** :
     - **KV Storage**: A key-value storage system that allows functions to store and retrieve data in a fast and efficient manner. We will use existing technologies like etcd, redis, or rocksdb to provide a simple and efficient KV storage for the functions.
@@ -156,6 +156,7 @@ In order to make this platform self-contained, we will need to implement the fol
     - **External providers**: The external providers that provide the necessary resources and services for the execution of the functions and the services, such as the registry, the API gateway, the messaging engine, the monitoring and logging systems, and the S3-compatible storage.
     - **Ingress controller**: An ingress controller that manages the ingress traffic to the functions and the services, and that provides the necessary routing and load balancing capabilities. 
         - **API Gateway**: An API gateway that exposes the functions as HTTP endpoints, MCP, gRPC ... via [Apache APISIX](https://github.com/apache/apisix) or [Pingap](https://github.com/vicanso/pingap), with support for authentication, authorization, rate limiting, and other API management features.
+    - **Network manager (egress control)**: wires each function sandbox's network namespace (veth/bridge — done directly by the runtime driver on a single node; no Kubernetes CNI machinery needed) and enforces egress policy in two layers: **L3/L4** — nftables default-deny for lateral traffic (function → function only through the gateway, platform services only through their facades) and no direct internet route; **L7** — HTTP(S) egress goes through an **egress proxy** (`HTTP_PROXY`/`HTTPS_PROXY` injected into sandboxes, everything else dropped), where every outbound request is captured to the audit channel and allowed/blocked by the in-process PDP against the namespace's `EgressPolicy`. Note: the messaging layer (NATS) is the platform's *internal communication plane* — it does not replace packet networking; sandboxes still need network wiring.
 
 
 
@@ -388,10 +389,10 @@ log.WarnContext(ctx, "route render failed, retrying", "error", err, "attempt", n
 
 - **API access**: every API-server request is authenticated (static tokens first, OIDC later) and authorized through namespace-scoped RBAC (e.g., admin / developer / viewer roles).
 - **Multi-tenancy boundary**: the namespace — quotas, secrets, routes, and service instances are namespace-scoped and never shared across namespaces.
-- **Function isolation**: each function runs in its own microVM or WASM sandbox; no shared filesystem, PID, or network namespace between functions by default.
+- **Function isolation**: each function runs in its own sandbox — runc container with conservative OCI defaults (V1–V2), WASM sandbox, or microVM from V3 (Kata); no shared filesystem, PID, or network namespace between functions by default.
 - **Service credentials**: functions never receive long-lived platform credentials; the worker injects short-lived, scoped workload tokens only for the services declared in the function spec — see [Internal IAM](#internal-iam).
 - **Secrets at rest**: encrypted in the metastore (tink / OpenBAO-backed keys), delivered to sandboxes via env vars or tmpfs mounts.
-- **Egress control**: sandbox networking is default-deny for lateral traffic — functions reach other functions only through the gateway and other systems only through the bus or declared services; outbound internet egress is governed by namespace-level policy (allowlists), so a compromised function cannot scan the host or sibling sandboxes.
+- **Egress control**: sandbox networking is default-deny for lateral traffic — functions reach other functions only through the gateway and other systems only through the bus or declared services; outbound internet egress is governed by the namespace's `EgressPolicy` (domain/CIDR/port allowlists), enforced by the network manager: nftables at L3/L4 plus the egress proxy for L7 capture and audit of HTTP(S). A compromised function cannot scan the host or sibling sandboxes, and every outbound call it makes is observable and blockable.
 - **Artifact trust**: images and wasm modules are pinned by digest when a `Revision` is created, and optionally verified against signatures (sigstore/cosign) before a sandbox starts; a pull-through registry cache keeps deploys working when the upstream registry is down.
 - **Internal traffic**: mTLS between control plane and workers once deployed multi-node.
 
@@ -583,7 +584,7 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 | `store.Store` (metastore) | sqlite (file) — slatedb (S3-backed) later | in-memory |
 | `bus.Bus` (messaging) | embedded NATS JetStream, file storage | embedded NATS with memory storage, or pure in-memory bus |
 | `gateway.Gateway` (ingress) | APISIX (rendered standalone config) | embedded Go reverse proxy |
-| `runtime.Runtime` (sandboxes) | containerd + runc / gvisor / kata shims | plain process / wasm |
+| `runtime.Runtime` (sandboxes) | containerd + runc (kata microVM shim from V3) | plain process / wasm |
 
 - `cmd/funcd` only holds the configuration of external components and driver selection — zero business logic.
 - The e2e harness boots the platform with the `InMemory()` preset: same code paths, no root, no containerd, no network ports beyond an ephemeral listener.
@@ -705,7 +706,7 @@ funcd/
 │   │   └── providers/
 │   │       ├── process/                  # plain OS processes (dev / e2e)
 │   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + runc / gvisor / kata shims
+│   │       ├── containerd/               # containerd + runc (kata microVM shim from V3)
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
 │   ├── store/
@@ -771,7 +772,7 @@ funcd/
 ├── docs/                                 # blueprint, SPEC, ADRs (architecture decision records)
 ├── .github/workflows/ci.yml              # lint → unit → codegen-drift → integration → e2e
 ├── .golangci.yml
-├── Makefile                              # single task runner (Taskfile dropped)
+├── justfile                              # single task runner (just)
 ├── go.mod                                # codegen tools pinned via the `tool` directive
 ├── go.sum
 ├── LICENSE
@@ -789,7 +790,7 @@ funcd/
 - **`api/types/v1` → `v1alpha1`**: matches the manifests (`apiVersion: funcd.io/v1alpha1`); graduate to v1 when the contract stabilizes.
 - **`gateway.proto` dropped**: the gateway is programmed via rendered config (APISIX standalone) or in-process calls (embedded driver); no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
 - **`store/slatedb/` slot added**: the blueprint names slatedb as the S3-backed metastore; sqlite is the pragmatic single-node default, memory for tests — all behind the same `Store` port.
-- **Makefile XOR Taskfile**: two task runners drift apart; keep `Makefile` only.
+- **One task runner only**: two task runners drift apart. `just` chosen (clean recipe syntax, arguments, no `.PHONY` ceremony) — decided in ADR-0001, 2026-06-13.
 - **`internal/eventing/` added**: EventSource resources need runtime machinery (adapters, CloudEvents normalization, sensors, triggers) distinct from their CRUD feature slice.
 - **`internal/version/` + ldflags added**: standard build-info stamping.
 
@@ -808,6 +809,7 @@ Challenged list — kept, renamed, or removed with reasons:
 | `Config` | namespaced | non-sensitive configuration |
 | `Secret` | namespaced | sensitive configuration, encrypted at rest |
 | `Grant` | namespaced | explicit permission edge: fn→fn invoke, fn→service access, cross-namespace event flow (within-namespace service bindings are auto-granted from `Function.spec.services`) — see [Internal IAM](#internal-iam) |
+| `EgressPolicy` | namespaced | outbound allowlist (domains / CIDRs / ports) for function egress; enforced by the network manager + egress proxy — see [Security model](#security-model) |
 | `Invocation` | namespaced, read-only | execution record (status, duration, error) with a retention policy — written by the platform, never by users |
 | `RuntimeClass` | cluster | **renamed from draft's `Runtime`** (avoids clashing with the language-runtime concept; mirrors Kubernetes RuntimeClass): process, wasm, microVM flavors |
 | `Worker` | cluster, status-owned | node inventory, capacity, heartbeat |
