@@ -4,7 +4,9 @@
 - **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer `docs/feat/`;
   added the *Scenarios* template section and test skeletons in the scaffold phase; added
   the validation and optional LLM-judge gates; added the ADR-judge gate that reviews the
-  decision itself before acceptance — see the `adr-judge` skill)
+  decision itself before acceptance — see the `adr-judge` skill; named the skill that runs
+  each gate (`roadmap-planner`, `adr`, `adr-judge`, `adr-scaffold`, `adr-impl-review`) and added
+  the per-model quality scorecard recorded by the work-review gates)
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process
 
@@ -69,7 +71,9 @@ review gates catch.
 ### Workflow gates
 
 0. **Scope the version**: `docs/feat/NNNN-feat-<version>.md` captures the initial need
-   and the high-level feature list (see above). Topics come from this list.
+   and the high-level feature list (see above). The `roadmap-planner` skill then sequences
+   those features' ADRs into a computed delivery plan under `docs/roadmap/` (build waves,
+   critical path, design-track order). Topics come from this list, in that order.
 1. **Brainstorm** a topic; clarify unknowns with the human before drafting — including
    the *scenarios* that motivated the feature (they become the ADR's Scenarios section
    and, later, its e2e tests).
@@ -84,29 +88,44 @@ review gates catch.
    findings loop back to step 2; the human weighs the verdict and makes the call →
    `Accepted`. Update the feat doc's tracking row (`idea → adr → accepted`). Acceptance is
    always the human's decision — the judge advises, it never accepts.
-4. **Scaffold from the ADR + blueprint**: interfaces, API facades, `go.mod` additions,
-   config stubs — declarations only, no business logic — **plus test skeletons**:
-   contract/unit stubs derived from *Contracts* and one e2e skeleton per *Scenario*,
-   compiling but skipped/failing. The skeletons are the executable form of the ADR; the
-   implementer's job in step 6 is to make them pass and extend them, never to start
-   testing from scratch.
-5. **Review gate (the scaffold)**: a high-capability reviewer (e.g. Opus-class / "ultra"
-   code review) validates the scaffold against the ADR's *Review checklist*, *Contracts*,
-   and *Scenarios* (every scenario has a named skeleton) — the same goal-anchored,
-   evidence-cited discipline as the judge gate, pointed at code instead of the document.
-   Findings loop back to step 4 (or back to step 2 with an amended/superseding ADR if the
-   decision itself was wrong).
+4. **Scaffold from the ADR + blueprint** (the `adr-scaffold` skill): interfaces, API
+   facades, `go.mod` additions, config stubs — declarations only, no business logic —
+   **plus test skeletons**: contract/unit stubs derived from *Contracts* and one e2e
+   skeleton per *Scenario*, compiling but skipped/failing. The skeletons are the executable
+   form of the ADR; the implementer's job in step 6 is to make them pass and extend them,
+   never to start testing from scratch. On exit, advance the feat row to `scaffolded`.
+5. **Review gate (the scaffold)** — the `adr-impl-review` skill: it *runs* the verification
+   (build/lint/test, tree-vs-*Repository surface* diff, identity grep) and validates the
+   scaffold against the ADR's *Review checklist*, *Contracts*, *Scenarios* (every scenario
+   has a named skeleton), and the generic phase Definition of Done — the same
+   goal-anchored, evidence-cited discipline as the judge gate, pointed at code. It emits a
+   severity-tiered verdict (Blocker / Major / Minor / ✅ keep) and **records a per-model
+   quality entry** (see below). Findings loop back to step 4 (or to step 2 with a
+   superseding ADR if the decision itself was wrong — and a finding caused by an ADR defect
+   is attributed to the ADR, not the model).
 6. **Implement** the feature, un-skip and complete the test skeletons, extend them as the
    implementation reveals edge cases.
 7. **Validate**: run the full suite — unit, contract, integration, e2e — and confirm every
    scenario skeleton from the ADR now passes. Failures loop back to step 6. On green:
    ADR moves to `Implemented`, feat row to `implemented`.
-8. **LLM judge (optional)**: an independent high-capability model audits the
-   implementation *and* its tests against the ADR — every Scenario covered honestly (no
-   weakened or deleted assertions), Contracts respected, Review checklist still true —
-   and files a short conformance report. Discrepancies either fix the code/tests or, if
-   the decision itself proved wrong, trigger a superseding ADR. The judge reads the ADR
-   and the diff; it does not re-litigate the decision.
+8. **Implementation review (optional but recommended)** — the `adr-impl-review` skill again, in
+   its implementation phase: an independent audit of the implementation *and* its tests
+   against the ADR — every Scenario covered honestly (no weakened or deleted assertions),
+   Contracts respected, Review checklist still true — emitting the same verdict and a
+   model-scorecard entry. Discrepancies fix the code/tests, or trigger a superseding ADR if
+   the decision proved wrong. It reads the ADR and the diff; it does not re-litigate the
+   decision, and it reviews/records but never fixes (that keeps the score honest).
+
+### The model scorecard (a process artifact, not a document layer)
+
+Both work-review gates (5 and 8) take the **name of the model that produced the work**
+(`sonnet-4.6`, `deepseek-v4-pro`, `gpt-5.4-mini`, `claude-opus-4-8`, …) and append a record
+to `docs/reviews/model-ledger.json`, regenerating `docs/reviews/model-scorecard.md` — a
+per-model rollup (reviews, pass rate, avg findings, DoD pass rate) so models are comparable
+at ADR-implementation quality over time. Fairness rule: **only findings attributed to the
+model count against its score**; findings caused by an ADR defect or the environment are
+recorded but excluded. This ledger informs nothing in the four planning layers — it is a
+quality-tracking byproduct, append-only.
 
 ## Consequences
 
@@ -115,6 +134,9 @@ review gates catch.
 - (+) The decision itself gets an independent, goal-anchored review *before* it is frozen
   (the judge gate): inconsistency, bias, and scope creep are caught while the ADR is still
   cheap to change, and genuine strengths are flagged to keep rather than accidentally lost.
+- (+) The work-review gates *run* the verification rather than eyeballing it, and record a
+  per-model scorecard — so "is it done?" is evidence-backed, and model quality at
+  implementing ADRs becomes measurable and comparable instead of anecdotal.
 - (−) Process overhead for trivial choices — mitigated: tiny decisions can be a one-line
   entry in an existing ADR's *Open questions* resolution rather than a new file.
 

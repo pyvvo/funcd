@@ -15,28 +15,33 @@ Kubernetes-inspired internals, designed for the agent era.
 
 ## Workflow
 
-0. **Scope the version** — `docs/feat/` lists what a version must contain, high level.
-1. **Brainstorm** a topic from that list (component, feature, cross-cutting concern).
+Each gate has a skill (`.claude/skills/`): **plan** → **decide** → **judge** → **build** →
+**review**.
+
+0. **Scope & sequence** — `docs/feat/` lists what a version must contain; the
+   **`roadmap-planner`** skill sequences the ADRs into a computed delivery plan
+   (`docs/roadmap/`: build waves, critical path).
+1. **Brainstorm** a topic from that list with the **`adr`** skill (component, feature,
+   cross-cutting concern).
 2. **ADR** captures the decision and its contracts; mark it `Proposed` when ready.
-3. **Judge gate**: the `adr-judge` skill reviews the ADR *itself* against the blueprint,
-   feat row, and related ADRs — flags inconsistency, bias, and scope creep, names the
-   strengths to keep; the human weighs the verdict and accepts. The feat row advances.
-4. **Scaffold** from the ADR + blueprint: interfaces, API facades, dependencies, and
-   test skeletons (one e2e skeleton per ADR scenario) — no logic.
-5. **Review gate**: a high-capability model/reviewer validates the scaffold against the ADR.
+3. **Judge gate** — the **`adr-judge`** skill reviews the ADR *document* against the
+   blueprint, feat row, and related ADRs (inconsistency, bias, scope creep, strengths to
+   keep); the human weighs the verdict and accepts. The feat row advances.
+4. **Scaffold** — the **`adr-scaffold`** skill turns the ADR into a compiling skeleton:
+   interfaces, facades, deps, one skipped test per scenario — no logic.
+5. **Review gate** — the **`adr-impl-review`** skill *runs* the verification (build/lint/test,
+   tree diff) against the ADR + Definition of Done, gives a severity-tiered verdict, and
+   **records a per-model quality scorecard** (`docs/reviews/`).
 6. **Implement** the feature; make the test skeletons pass.
 7. **Validate**: full test suite green — every ADR scenario now passes.
-8. **LLM judge** (optional): an independent model audits code + tests against the ADR.
+8. **Implementation review** (recommended) — `adr-impl-review` again audits code + tests against
+   the ADR and updates the model scorecard.
 
 ## Status
 
-Pre-scaffold — blueprint + ADR phase.
-
-
-## Useful links
-
-- [Garage Standalone: Your Lightweight S3-Compatible Object Storage Journey](https://medium.com/@kryukz/garage-standalone-your-lightweight-s3-compatible-object-storage-journey-5073bd51b566)
+Scaffolded — ADR-0001 (project setup, file structure, Nix dev environment).
+Blueprint + ADR phase, repository skeleton in place, CI bootstrapped.
 
 ## License
 
-TBD.
+[Apache-2.0](LICENSE) — Copyright 2026 The funcd Authors.

@@ -18,7 +18,7 @@ this file does **not** override it. It exists to make one thing impossible to fo
 > session as the change that triggers them.**
 
 This is the gap this file closes: the cross-document dependencies are real but were
-previously implied across four skills and ADR-0000, never stated in one place.
+previously implied across the skills and ADR-0000, never stated in one place.
 
 ## The four document layers (+ code)
 
@@ -54,10 +54,15 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 
 | Order | Skill | Does | Writes | Must also update on exit |
 |---|---|---|---|---|
-| plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
+| plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
-| review | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
-| build | [adr-scaffold](../.claude/skills/adr-scaffold/SKILL.md) | ADR → compiling skeleton | code | **feat row → `scaffolded`** |
+| judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
+| build | [adr-scaffold](../.claude/skills/adr-scaffold/SKILL.md) | ADR → compiling skeleton (declarations + skipped scenario tests) | code | **feat row → `scaffolded`** |
+| review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* (scaffold/impl) vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | nothing — reviews & records, never edits the work (status bumps belong to build/validate) |
+
+`adr-judge` and `adr-impl-review` are different gates: the judge reads the *ADR document* (before
+acceptance); the review reads the *code* (after scaffold/implement) and records a per-model
+quality entry in `docs/reviews/` — see [ADR-0000 gates 5 & 8](../docs/adr/0000-adr-process.md).
 
 ## ⚠️ Cross-document propagation rules
 

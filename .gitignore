@@ -2,4 +2,12 @@
 /funcd
 *.test
 .DS_Store
-conf/apisix.yaml
+.direnv/
+result
+coverage.out
+
+# Editor cruft
+*.swp
+*.swo
+*~
+.vscode/
