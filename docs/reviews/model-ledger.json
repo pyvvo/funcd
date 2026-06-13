@@ -1,0 +1,17 @@
+[
+  {
+    "date": "2026-06-13",
+    "adr": "0001",
+    "phase": "scaffold",
+    "model": "deepseek-v4-pro",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0001-scaffold-deepseek-v4-pro.md",
+    "notes": "Clean pass: just ci exit 0 \u2014 model pre-empted ADR-0001's no-Go-files-vs-green-CI contradiction via _has-packages guard (lint/test no-op while module empty). Tree matches surface, zero .go files, no identity leak, Accepted ADR unchanged, feat F01=scaffolded, golangci-lint config verify exit 0. 3 minors (model, non-defect): ci recipe superset of ADR spec (+tidy/verify); guard vestigial once real pkgs land; v2 default linters also active. DoD 10/11; 1 miss=env (no Nix for fresh-clone shell)."
+  }
+]

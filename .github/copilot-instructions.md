@@ -58,7 +58,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
 | build | [adr-scaffold](../.claude/skills/adr-scaffold/SKILL.md) | ADR → compiling skeleton (declarations + skipped scenario tests) | code | **feat row → `scaffolded`** |
-| review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* (scaffold/impl) vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | nothing — reviews & records, never edits the work (status bumps belong to build/validate) |
+| review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* (scaffold/impl) vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: feat row → `scaffolded`/`implemented` and (impl) the ADR `Accepted → Implemented`; non-pass advances nothing; still never edits the *work* (code) |
 
 `adr-judge` and `adr-impl-review` are different gates: the judge reads the *ADR document* (before
 acceptance); the review reads the *code* (after scaffold/implement) and records a per-model

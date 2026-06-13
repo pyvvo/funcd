@@ -76,6 +76,12 @@ a recommendation. Tie each finding to its evidence (a captured command/exit code
 its attribution. Naming what's *right* matters as much as what's wrong — it tells the builder what
 not to regress.
 
+Save the verdict as a standalone **review report** at
+`docs/reviews/adr-<NNNN>-<phase>-<model>.md` (e.g. `docs/reviews/adr-0001-scaffold-sonnet-4.6.md`).
+The one-line `--notes` in the ledger is the at-a-glance summary; this doc is the full, evidence-cited
+record, and Step 5 links it from the scorecard via `--report`. Keep the path unique (append `-2`,
+`-3`, … if the same model re-reviews the same ADR/phase).
+
 A verdict is one of: **pass** (DoD met, no Blockers/Majors), **changes-requested** (Blockers or
 Majors — loop back), **fail** (fundamentally off the ADR).
 
@@ -91,16 +97,37 @@ python3 .claude/skills/adr-impl-review/scripts/scorecard.py record \
   --blockers <n> --majors <n> --minors <n> \
   --model-attributed <n>   # of those, how many are the MODEL's fault (rest = adr/env) \
   --dod-passed <n> --dod-total <n>   # from the ADR's Review checklist / DoD \
+  --report docs/reviews/adr-<NNNN>-<phase>-<model>.md   # the Step 4 verdict doc \
   --notes "<one line; tag each finding's attribution>"
 ```
 
 `--dod-total` is the count of ADR Review-checklist + DoD items; `--dod-passed` how many hold.
 `--model-attributed` excludes `adr`/`env` findings — that's what keeps the per-model comparison fair.
-The script rewrites `docs/reviews/model-scorecard.md` (per-model rollup + chronological log) — point
-the user at it.
+`--report` is the Step 4 verdict doc; the scorecard links each row to it, so the full review is one
+click from the ledger. The script rewrites `docs/reviews/model-scorecard.md` (per-model rollup +
+chronological log) — point the user at it.
 
-## Step 6 — Close
+## Step 6 — Advance status (only on a `pass`)
 
-Summarize: the verdict, the must-fix Blockers (with attribution), the scorecard entry, and the
-next move (builder fixes `model` findings; `adr` findings trigger a superseding ADR). Offer to apply
-fixes only if asked — keep the review independent of the fix.
+A `pass` means the work is *done and verified*, so the review gate is what advances tracking.
+**Only on a `pass`:**
+
+- **Scaffold pass** → set the realizing `docs/feat/` row to `scaffolded`. **Do not edit the ADR
+  file** — `scaffolded` is a feat-row status, not an ADR status, and an Accepted ADR is immutable.
+- **Implementation pass** → set the feat row to `implemented` **and** bump the ADR file's status
+  `Accepted → Implemented` (add the implemented date). That `Accepted → Implemented` bump is the
+  *one* forward edit an Accepted ADR ever permits — make no other change to the ADR.
+
+Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only and
+idempotent** — if the builder already advanced it (the scaffold gate sets `scaffolded`), confirm and
+leave it; never walk a status backward. On **changes-requested** or **fail**, advance nothing — the
+work isn't done (loop back to the builder for `model` findings, or a superseding ADR for `adr`
+findings); if you find the row was *prematurely* advanced, flag it rather than silently leaving a
+false status. This is status *tracking*, not fixing — you still never edit the *work* (code).
+
+## Step 7 — Close
+
+Summarize: the verdict, the must-fix Blockers (with attribution), the scorecard entry, the status
+you advanced (or why you didn't), and the next move (builder fixes `model` findings; `adr` findings
+trigger a superseding ADR). Offer to apply fixes only if asked — keep the review independent of the
+fix.

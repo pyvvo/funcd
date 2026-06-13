@@ -59,6 +59,10 @@ is how many of those are the model's fault. Keep the split visible in `--notes`.
 
 ## 4. Verdict template
 
+Write the verdict to a standalone file — `docs/reviews/adr-<NNNN>-<phase>-<model>.md` — and link it
+from the ledger with `scorecard.py … --report <that-path>` (the scorecard renders the link per row).
+The `--notes` line is the at-a-glance summary; this doc is the full record. Use this shape:
+
 ```markdown
 ## Verdict: <pass | changes requested | fail> — N blockers, M majors  (ADR-<NNNN> <phase>, model: <name>)
 

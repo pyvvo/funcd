@@ -55,6 +55,13 @@ Read, in this order, and do not skip:
    for the module path, `just` recipes, and `.golangci.yml`.
 4. `references/conventions.md` (in this skill) — the above distilled to a checklist + the
    not-implemented body rules that keep stubs lint-clean.
+5. **Any existing review report for this ADR** — check `docs/reviews/` for a prior
+   `adr-<NNNN>-*.md` report (and its row in `model-ledger.json`). The review gate writes one when it
+   reviews a scaffold; if it returned `changes-requested`, that report is your work list. **Read it
+   and follow it**: fix every open **`model`**-attributed finding (the report tags each finding's
+   attribution), and don't regress anything it marked *Verified correct*. Leave **`adr`**-attributed
+   findings alone — those loop back to a superseding ADR, not the scaffold — and note any **`env`**
+   ones you can't act on. No prior report → this is a first scaffold; proceed normally.
 
 ## Step 2 — Plan the file set (write it down before creating files)
 
@@ -119,7 +126,8 @@ When `just build`/`just lint` fail, distinguish the cause:
 - Grep the changed files for the local username/paths to confirm no identity leak.
 - Close with a short **scaffold report**: files created, deps/tools added (with versions), the
   Scenario→skeleton map, the green `just build`/`just lint`/`test` result, and any ADR gaps you hit.
-  Point to the next gate: the high-capability **review** of this scaffold against the ADR's *Review
+  If you were acting on a prior review report, list which `model` findings you closed. Point to the
+  next gate: the high-capability **review** of this scaffold against the ADR's *Review
   checklist* and *Contracts*, then implementation (making the skipped skeletons pass).
 
 ## When the scaffold is large or multi-package

@@ -17,7 +17,12 @@ Usage:
       --blockers 2 --majors 0 --minors 2 \
       --model-attributed 1 \
       --dod-passed 4 --dod-total 6 \
+      --report docs/reviews/adr-0001-scaffold-sonnet-4.6.md \
       --notes "just ci exit 5 (ADR DoD self-contradiction, not model); flake.lock missing (model)"
+
+The one-line --notes is the at-a-glance summary; --report points at the full,
+evidence-cited verdict doc the reviewer wrote (see references/review-method.md §4).
+The rendered scorecard links each row to its report so the long form is one click away.
 
   scorecard.py render --ledger docs/reviews/model-ledger.json   # rewrite the sibling .md
 """
@@ -89,18 +94,22 @@ def render(ledger: str) -> str:
         "",
         "## Review log (chronological)",
         "",
-        "| Date | ADR | Phase | Model | Verdict | B/M/m | Model-attrib | DoD | Notes |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Date | ADR | Phase | Model | Verdict | B/M/m | Model-attrib | DoD | Report | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
+    base = os.path.dirname(md_path(ledger)) or "."
     for r in records:
         bmm = f"{r.get('blockers',0)}/{r.get('majors',0)}/{r.get('minors',0)}"
         dod = f"{r.get('dod_passed','?')}/{r.get('dod_total','?')}"
         notes = (r.get("notes", "") or "").replace("|", "\\|")
         if len(notes) > 90:
             notes = notes[:87] + "…"
+        report = r.get("report", "") or ""
+        report_cell = f"[report]({os.path.relpath(report, base)})" if report else "—"
         lines.append(
             f"| {r.get('date','')} | {r.get('adr','')} | {r.get('phase','')} | {r['model']} "
-            f"| {r.get('verdict','')} | {bmm} | {r.get('model_attributed',0)} | {dod} | {notes} |"
+            f"| {r.get('verdict','')} | {bmm} | {r.get('model_attributed',0)} | {dod} "
+            f"| {report_cell} | {notes} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -136,6 +145,7 @@ def cmd_record(args) -> None:
         "model_attributed": args.model_attributed,
         "dod_passed": args.dod_passed,
         "dod_total": args.dod_total,
+        "report": args.report,
         "notes": args.notes,
     })
     os.makedirs(os.path.dirname(args.ledger) or ".", exist_ok=True)
@@ -163,6 +173,9 @@ def main() -> None:
                      help="of the findings above, how many are the MODEL's fault (rest = ADR/env)")
     rec.add_argument("--dod-passed", type=int, default=0)
     rec.add_argument("--dod-total", type=int, default=0)
+    rec.add_argument("--report", default="",
+                     help="repo-relative path to the full verdict doc, e.g. "
+                          "docs/reviews/adr-0001-scaffold-<model>.md (linked from the scorecard)")
     rec.add_argument("--notes", default="")
     rec.add_argument("--date", default="", help="override date (default: today)")
     rec.set_defaults(func=cmd_record)
