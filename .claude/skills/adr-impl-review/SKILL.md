@@ -1,13 +1,13 @@
 ---
 name: adr-impl-review
-description: Review the WORK an LLM produced for a funcd ADR — the scaffold or the implementation — against the ADR's Contracts, Scenarios, Review checklist, and Definition of Done, the blueprint, and ADR-0002 conventions. Runs the actual verification (build/lint/test, tree diff, identity grep), produces an evidence-cited, severity-tiered verdict (Blocker/Major/Minor + what's strong to keep), and records a per-model quality entry so models (sonnet-4.6, deepseek-v4-pro, gpt-5.4-mini, …) can be compared at ADR-implementation quality. Use whenever the user wants to review, check, grade, verify, or sign off on work done for an ADR — "review the scaffold", "did the model implement ADR-0002 right", "check the work against the ADR", "is this scaffold done", "grade deepseek's work on ADR-0003", "run the review gate". This is the ADR-0000 review gate (#5 scaffold / #8 implementation) — distinct from `adr-judge`, which reviews the ADR *document* before acceptance; this reviews the *code* after the work is done. It reviews and records; it does not fix (loop fixes back to the builder).
+description: Review the WORK an LLM produced implementing a funcd ADR — against the ADR's Contracts, Scenarios, Review checklist, and Definition of Done, the blueprint, and ADR-0002 conventions. Runs the actual verification (build/lint/test, tree diff, identity grep), produces an evidence-cited, severity-tiered verdict (Blocker/Major/Minor + what's strong to keep), and records a per-model quality entry so models (sonnet-4.6, deepseek-v4-pro, gpt-5.4-mini, …) can be compared at ADR-implementation quality. Use whenever the user wants to review, check, grade, verify, or sign off on work done for an ADR — "review the implementation", "did the model implement ADR-0002 right", "check the work against the ADR", "is this done", "grade deepseek's work on ADR-0003", "run the review gate". This is the ADR-0000 review gate (#5) — distinct from `adr-judge`, which reviews the ADR *document* before acceptance; this reviews the *code* after the implement gate. On a pass it stamps the ADR `Reviewing → Implemented` and the feat row → `implemented`; on changes-requested it loops back to `adr-impl` (the ADR stays `Reviewing`). It reviews and records; it does not fix.
 ---
 
 # ADR work review
 
-Run the ADR-0000 **review gate** on work an LLM produced for an ADR: does the scaffold (gate #5)
-or the implementation (gate #8) actually conform to its ADR — Contracts, Scenarios, Review
-checklist, Definition of Done — and to the blueprint + [ADR-0002](../../../docs/adr/0002-source-code-conventions-and-patterns.md)
+Run the ADR-0000 **review gate** (gate #5) on the work an LLM produced implementing an ADR: does
+the implementation actually conform to its ADR — Contracts, Scenarios, Review checklist,
+Definition of Done — and to the blueprint + [ADR-0002](../../../docs/adr/0002-source-code-conventions-and-patterns.md)
 conventions? Produce an evidence-cited verdict, and record a per-model quality entry so model
 quality at implementing ADRs is tracked and comparable.
 
@@ -17,23 +17,24 @@ asserting "looks good" is how defects ship. The high-value findings come from ac
 `references/review-method.md`.
 
 You **review and record; you do not fix.** A reviewer that also rewrites the work loses
-independence. Hand Blocker/Major findings back to the builder (the `adr-scaffold` skill or the
-implementer); offer to apply fixes only as a separate, explicit step the user asks for.
+independence. Hand Blocker/Major findings back to the builder (the `adr-impl` skill); offer to
+apply fixes only as a separate, explicit step the user asks for.
 
 ## Step 0 — Inputs
 
-1. **Which ADR** (e.g. `0001`) and **which phase**: `scaffold` (no business logic; skeletons skipped)
-   or `implementation` (scenarios pass; logic present). Infer from the work if obvious; ask if not.
+1. **Which ADR** (e.g. `0002`). The work is an implementation — working code with passing scenario
+   tests, produced by the `adr-impl` gate; the ADR should be at status `Reviewing`.
 2. **Which model produced the work** — required (`sonnet-4.6`, `deepseek-v4-pro`, `gpt-5.4-mini`,
    `claude-opus-4-8`, …). The scorecard is keyed on it; if not given, ask before recording.
 
 ## Step 1 — Orient (what "done" means here)
 
 Read, and treat as the bar:
-1. The ADR — especially **Contracts**, **Scenarios**, **Scaffold plan**, **Review checklist**, and
-   **Definition of done**. The ADR's own checklist + DoD are the *specific* bar.
-2. `references/definition-of-done.md` (in this skill) — the *generic* phase DoD (scaffold vs
-   implementation) every ADR's work must also meet, even where the ADR was silent.
+1. The ADR — especially **Contracts**, **Scenarios**, **Implementation plan**, **Review checklist**,
+   and **Definition of done** (ADRs predating the rename title the plan *Scaffold plan* — same
+   section). The ADR's own checklist + DoD are the *specific* bar.
+2. `references/definition-of-done.md` (in this skill) — the *generic* Definition of Done every ADR's
+   implementation must also meet, even where the ADR was silent.
 3. `blueprint.md` (the architecture the work slots into) and `docs/adr/0002-*` (binding code
    conventions). For a feature ADR, also its realized `docs/feat/` row.
 
@@ -43,16 +44,17 @@ Execute the checks in `references/review-method.md` and **capture real output** 
 file:line, command transcripts). At minimum:
 - **Builds/lints/tests**: `just ci` (or `go build/vet/test`, `just lint`) — record exit codes
   verbatim. A green claim without a captured exit 0 is not evidence.
-- **Tree vs ADR**: for a scaffold, diff the produced tree against the ADR's *Repository surface* —
-  nothing missing, nothing unexplained-extra.
+- **Tree vs ADR**: diff the produced tree against the ADR's *Repository surface* — nothing missing,
+  nothing unexplained-extra.
 - **Conventions**: spot-check the ADR-0002 rules that apply (no `any` in APIs, import graph,
   `api/fault`, one-file drivers, no `panic`, slog-only, ctx-first).
-- **Phase rule**: scaffold → no business logic, scenario tests present and **skipped**;
-  implementation → scenario tests **un-skipped and passing**, none weakened or deleted vs the
-  scaffold, business logic present.
-- **Hygiene**: identity grep (no local username/paths), the realized feat row advanced
-  (`scaffolded`/`implemented`), and the **ADR file itself unchanged** if it was Accepted (accepted
-  ADRs are immutable — a diff on it is itself a Blocker).
+- **Behavior rule**: real business logic conforming to the Contracts (no `not implemented` stubs in
+  the shipped path); every Scenario has a named test that is **un-skipped and passing**, none
+  weakened or deleted; `just ci` exits 0.
+- **Hygiene**: identity grep (no local username/paths); the realized feat row at `reviewing` and the
+  ADR at `Reviewing`; and the **ADR's substance unchanged** — the builder's *only* permitted ADR edit
+  is the `Accepted → Reviewing` status bump, so any change to Context/Scenarios/Decision/Contracts is
+  itself a Blocker.
 
 ## Step 3 — Attribute every finding (this is what makes the model score fair)
 
@@ -77,7 +79,8 @@ its attribution. Naming what's *right* matters as much as what's wrong — it te
 not to regress.
 
 Save the verdict as a standalone **review report** at
-`docs/reviews/adr-<NNNN>-<phase>-<model>.md` (e.g. `docs/reviews/adr-0001-scaffold-sonnet-4.6.md`).
+`docs/reviews/adr-<NNNN>-<phase>-<model>.md` (phase is now always `implementation`; e.g.
+`docs/reviews/adr-0002-implementation-sonnet-4.6.md`).
 The one-line `--notes` in the ledger is the at-a-glance summary; this doc is the full, evidence-cited
 record, and Step 5 links it from the scorecard via `--report`. Keep the path unique (append `-2`,
 `-3`, … if the same model re-reviews the same ADR/phase).
@@ -92,7 +95,7 @@ Append the review to the ledger and regenerate the rollup (this is the "judge th
 ```bash
 python3 .claude/skills/adr-impl-review/scripts/scorecard.py record \
   --ledger docs/reviews/model-ledger.json \
-  --adr <NNNN> --phase <scaffold|implementation> --model <model-name> \
+  --adr <NNNN> --phase implementation --model <model-name> \
   --verdict <pass|changes-requested|fail> \
   --blockers <n> --majors <n> --minors <n> \
   --model-attributed <n>   # of those, how many are the MODEL's fault (rest = adr/env) \
@@ -109,21 +112,20 @@ chronological log) — point the user at it.
 
 ## Step 6 — Advance status (only on a `pass`)
 
-A `pass` means the work is *done and verified*, so the review gate is what advances tracking.
-**Only on a `pass`:**
+A `pass` means the work is *done and verified*, so the review gate is the sole authority that
+stamps `Implemented`. **Only on a `pass`:**
 
-- **Scaffold pass** → set the realizing `docs/feat/` row to `scaffolded`. **Do not edit the ADR
-  file** — `scaffolded` is a feat-row status, not an ADR status, and an Accepted ADR is immutable.
-- **Implementation pass** → set the feat row to `implemented` **and** bump the ADR file's status
-  `Accepted → Implemented` (add the implemented date). That `Accepted → Implemented` bump is the
-  *one* forward edit an Accepted ADR ever permits — make no other change to the ADR.
+- Set the realizing `docs/feat/` row `reviewing → implemented`.
+- Bump the ADR file's status `Reviewing → Implemented` (add the implemented date). That
+  `Reviewing → Implemented` bump is the *one* forward edit this gate makes to the ADR — make no
+  other change to it. (The `adr-impl` gate already moved the ADR `Accepted → Reviewing`.)
 
-Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only and
-idempotent** — if the builder already advanced it (the scaffold gate sets `scaffolded`), confirm and
-leave it; never walk a status backward. On **changes-requested** or **fail**, advance nothing — the
-work isn't done (loop back to the builder for `model` findings, or a superseding ADR for `adr`
-findings); if you find the row was *prematurely* advanced, flag it rather than silently leaving a
-false status. This is status *tracking*, not fixing — you still never edit the *work* (code).
+Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only** — never
+walk a status backward. On **changes-requested** or **fail**, advance nothing: the ADR stays
+`Reviewing`, `model` findings loop back to the `adr-impl` gate for rework, `adr` findings to a
+superseding ADR. If you find a status was *prematurely* advanced (e.g. an ADR already `Implemented`
+before any passing review), flag it rather than silently leaving a false status. This is status
+*tracking*, not fixing — you still never edit the *work* (code).
 
 ## Step 7 — Close
 

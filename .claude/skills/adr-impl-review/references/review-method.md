@@ -12,12 +12,12 @@ The findings that matter come from *executing*, not reading. Run these and **pas
 |---|---|---|
 | compiles | `just build` / `go build ./...` | Blocker |
 | lints | `just lint` (the ADR/ADR-0002 linter set) | Blocker (but check empty-module trap, §3) |
-| tests | `just test` / `go test ./...` | scaffold: must be green with scenarios `SKIP`; impl: green, scenarios pass |
+| tests | `just test` / `go test ./...` | green, with every scenario test passing (none skipped) |
 | full gate | `just ci` — capture the **exit code** | the single source of "is it done" |
 | tree | diff produced tree vs the ADR's *Repository surface* | missing file = Blocker; unexplained extra = Major |
 | conventions | grep for `any`/`interface{}` in exported sigs; `panic(` outside main; logging imports ≠ `log/slog`; import-graph violations | ADR-0002 breach = Major/Blocker |
-| phase | scaffold: any real logic? scenario tests skipped? · impl: scenarios un-skipped + passing, none weakened/deleted vs scaffold? | wrong-phase work = Blocker |
-| hygiene | `grep -rn "<local-username>"`; module path; Accepted ADR file unchanged (`git diff` it); feat row advanced | identity leak / mutated Accepted ADR = Blocker |
+| behavior | real logic present (no `not implemented` stubs shipped); scenarios un-skipped + passing, none weakened/deleted | stub-in-shipped-path or skipped scenario = Blocker |
+| hygiene | `grep -rn "<local-username>"`; module path; ADR at `Reviewing` with substance unchanged (`git diff` it); feat row at `reviewing` | identity leak / mutated ADR substance = Blocker |
 
 Empty-module trap worth knowing cold: on a module with **zero `.go` files**, `golangci-lint`,
 `go vet`, and `go test ./...` exit non-zero ("no packages"); only `go build` tolerates it. So a
@@ -27,8 +27,8 @@ not the model's error — see §3.
 ## 2. Severity tiers
 
 - **🔴 Blocker** — the work does not meet the DoD and cannot ship: doesn't compile/lint, a Scenario
-  has no test (scaffold) or fails (impl), a required file is missing, an Accepted ADR was mutated,
-  an identity leak, a weakened/deleted scenario assertion.
+  test is missing or fails, a required file is missing, the ADR's substance was mutated, an identity
+  leak, a weakened/deleted scenario assertion.
 - **🟡 Major** — meets the letter but breaks a real contract/convention or the blueprint; should fix
   before sign-off.
 - **Minor** — nit, polish, non-blocking deviation.
@@ -50,7 +50,7 @@ Every finding gets an owner. Only **`model`** findings count against the model's
 Worked example (real): ADR-0001's checklist demanded both *"no Go source files"* and *"`just ci`
 exits 0"*. On an empty module the linter errors — so `just ci` can't be green. The model that
 produced the empty skeleton followed the ADR faithfully; that Blocker is **`adr`-attributed**.
-Whereas a **missing `flake.lock`** (the scaffold plan said to run `nix flake lock` and it wasn't) is
+Whereas a **missing `flake.lock`** (the implementation plan said to run `nix flake lock` and it wasn't) is
 **`model`-attributed** (or `env`, if Nix was unavailable — judge honestly). Mislabeling the first as
 `model` would unfairly tank that model's score and corrupt every cross-model comparison.
 
@@ -91,5 +91,5 @@ DoD <passed>/<total>. See docs/reviews/model-scorecard.md.
 
 Review and record — don't fix. A reviewer that rewrites the work can't impartially grade it, and the
 model scorecard would measure the reviewer, not the model. Hand `model` findings back to the builder
-(`adr-scaffold` or the implementer); `adr` findings trigger a superseding ADR via `/adr`. Apply
+(`adr-impl`); `adr` findings trigger a superseding ADR via `/adr`. Apply
 fixes only as a separate step the user explicitly asks for, after the verdict is recorded.

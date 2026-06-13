@@ -1,13 +1,13 @@
 ---
 name: adr
-description: Brainstorm a funcd design topic and drive it to a completed ADR (Draft → Proposed → Accepted) in docs/adr/. Use whenever the user wants to decide, design, or brainstorm any funcd component, feature, dependency choice, or cross-cutting concern — "next ADR", "let's decide the store port", "brainstorm the gateway", "which library for X", "create an ADR about Y" — even if they never say the word "ADR". Stops at acceptance; scaffolding and implementation are separate later phases.
+description: Brainstorm a funcd design topic and drive it to a completed ADR (Draft → Proposed → Accepted) in docs/adr/. Use whenever the user wants to decide, design, or brainstorm any funcd component, feature, dependency choice, or cross-cutting concern — "next ADR", "let's decide the store port", "brainstorm the gateway", "which library for X", "create an ADR about Y" — even if they never say the word "ADR". Stops at acceptance; implementation and review are separate later phases.
 ---
 
 # Brainstorm → ADR
 
 Drive one design topic from open question to an **Accepted** ADR. The ADR is the source
 of truth for its topic and must carry enough contract detail that an LLM — given only
-[blueprint.md](../../../blueprint.md) and the ADR — can scaffold interfaces, facades, and
+[blueprint.md](../../../blueprint.md) and the ADR — can implement interfaces, facades, and
 dependencies without inventing anything. That bar shapes every step below.
 
 The topic usually arrives as the skill argument (`/adr store port`). If there is no topic,
@@ -64,7 +64,7 @@ from ADR-0000, in order — a section that does not apply says "None" but still 
 
 Header (status, date, deciders, tags, realizes, relates-to/supersedes) · Context & Need ·
 Scenarios · Scope (in/out) · Constraints & Decision drivers · Alternatives considered ·
-Decision · Temporary workarounds · Contracts · Scaffold plan · Review checklist ·
+Decision · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
 Consequences · Open questions · References.
 
 Quality bar per section:
@@ -72,8 +72,8 @@ Quality bar per section:
 - **Context & Need**: states the component's *purpose* plainly — what it is for and who
   calls it. Purpose is what tells the implementer what to test.
 - **Scenarios**: Given/When/Then, from the caller's point of view, observable outcomes
-  only. Give each a short stable name (`scenario: cold-start-wake`) — the e2e skeleton
-  created at scaffold time carries the same name, so scenario ↔ test traceability is
+  only. Give each a short stable name (`scenario: cold-start-wake`) — the acceptance test
+  written at implementation time carries the same name, so scenario ↔ test traceability is
   grep-able.
 - **Scope**: one altitude per ADR. If the draft starts deciding a neighboring topic,
   split it out and note it as a follow-up ADR instead.
@@ -85,16 +85,17 @@ Quality bar per section:
   CRD-like resource YAML where applicable, and a dependencies & I/O table — what the
   component consumes (ports, config keys, events, files) and exposes. Write for a
   cold-start reader: no references to "as discussed".
-- **Scaffold plan**: machine-actionable — files to create, `go.mod` additions, commands
-  to run, **test skeletons** (contract/unit stubs derived from *Contracts*, plus one e2e
-  skeleton per *Scenario*, compiling but skipped/failing until implementation), and a
-  checkable definition of done. The skeletons are the executable form of the ADR — the
-  implementation phase makes them pass and extends them, it never starts testing from
-  scratch. No business logic ever belongs in the plan.
+- **Implementation plan**: machine-actionable — files to create, `go.mod` additions, commands
+  to run, the **test plan** (contract/unit tests derived from *Contracts*, plus one acceptance
+  test per *Scenario*, each written to pass — the implement gate ends green on `just ci`), and a
+  checkable definition of done. The tests are the executable form of the ADR; the plan lists
+  them so the implementer builds them against the Contracts, never from scratch. No business
+  logic ever belongs in the plan itself. (ADRs predating the rename title this section *Scaffold
+  plan* — same section.)
 - **Review checklist**: objective, checkbox-form items the review-gate model can verify
-  mechanically against the scaffold.
+  mechanically against the implementation.
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,
-  the scaffold PR).
+  the implementation PR).
 
 ## Step 3 — Review to acceptance
 
@@ -122,11 +123,11 @@ Quality bar per section:
 
 ## Step 5 — Stop
 
-This skill ends at acceptance. Do **not** scaffold, create packages, or touch `go.mod`.
+This skill ends at acceptance. Do **not** implement, create packages, or touch `go.mod`.
 Close with a handoff note: the ADR number/title, its status, and a one-line pointer to
-the remaining gates from ADR-0000 — scaffold (incl. test skeletons), review gate,
-implementation, validation run (suite green, scenarios pass), and the optional LLM-judge
-audit of code + tests against the ADR.
+the remaining gates from ADR-0000 — implement (working code + passing scenario tests, via
+`adr-impl`) then the review gate (`adr-impl-review`), which runs the verification and stamps
+the ADR `Implemented` on a pass.
 
 ## Project conventions (apply silently throughout)
 

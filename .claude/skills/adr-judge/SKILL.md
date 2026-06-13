@@ -1,6 +1,6 @@
 ---
 name: adr-judge
-description: Judge / review / critique / red-team a funcd ADR against the platform's actual goals — produces an evidence-cited verdict that flags inconsistency, bias, scope creep, contract bugs, and anything that could break the platform's development, while explicitly naming what is strong and must be kept. Use whenever the user wants an ADR evaluated, audited, stress-tested, or sanity-checked — "judge ADR-0002", "review this ADR", "what do you think of the gateway ADR", "poke holes in it", "is this decision sound", "red-team the store port ADR" — even if they never say the word "judge". This is the ADR-0000 judge gate (#3) — the decision review on the ADR document, run before acceptance — and the same goal-anchored discipline backs the scaffold review gate (#5) and the optional implementation LLM-judge gate (#8). It evaluates and reports; it does not author ADRs (that is the `adr` skill) and it does not scaffold.
+description: Judge / review / critique / red-team a funcd ADR against the platform's actual goals — produces an evidence-cited verdict that flags inconsistency, bias, scope creep, contract bugs, and anything that could break the platform's development, while explicitly naming what is strong and must be kept. Use whenever the user wants an ADR evaluated, audited, stress-tested, or sanity-checked — "judge ADR-0002", "review this ADR", "what do you think of the gateway ADR", "poke holes in it", "is this decision sound", "red-team the store port ADR" — even if they never say the word "judge". This is the ADR-0000 judge gate (#3) — the decision review on the ADR document, run before acceptance — and the same goal-anchored discipline backs the implementation review gate (#5). It evaluates and reports; it does not author ADRs (that is the `adr` skill) and it does not implement.
 ---
 
 # Judge an ADR
@@ -61,17 +61,17 @@ goal? Is it at one altitude (ADR-0000 *Scope*), or is it deciding a neighboring 
 deserves its own ADR? Does it stay inside the active version's scope, or import deferred
 V2/V3 work? Is anything in the feat row's intent left undecided?
 
-**B. Internal consistency.** Do the Decision, Contracts, Scaffold plan, and Review checklist
+**B. Internal consistency.** Do the Decision, Contracts, Implementation plan, and Review checklist
 agree with each other? The highest-value defects live here: a Contracts signature that
 violates a Decision rule, a depguard rule that forbids an import the same ADR's own
-file-placement requires, a scenario with no matching skeleton, a package named one thing in
+file-placement requires, a scenario with no matching test in the plan, a package named one thing in
 prose and another in the file tree. Trace every contract back to a stated rule and every
 rule forward to its contract.
 
 **C. Cross-document consistency.** Against the blueprint, the feat doc, and other ADRs:
 naming, layering, port boundaries, library choices, terminology. A two-letter near-homonym
 for two different concepts (e.g. `store` vs `storage`) is a real defect in a codebase that
-will be LLM-scaffolded — flag it.
+will be LLM-implemented — flag it.
 
 **D. Bias & motivated reasoning.** Audit the *Alternatives considered*: is each rejection
 backed by a concrete reason, or is the losing option strawmanned so the author's preference
@@ -87,8 +87,8 @@ radius, not by how easy they are to spot:
      behind a port when the blueprint says it should be is high-severity.
    - **Contract bugs**: signatures that won't compile, an interface that leaks `any` where
      the ADR bans it, an error/edge mapping that can't actually produce the asserted result.
-   - **LLM-scaffoldability**: can an LLM scaffold from *blueprint + this ADR alone* without
-     inventing? Ambiguity here directly breaks the ADR-0000 scaffold handoff (gate #4).
+   - **LLM-implementability**: can an LLM implement from *blueprint + this ADR alone* without
+     inventing? Ambiguity here directly breaks the ADR-0000 implementation handoff (gate #4).
    - **Missing exit criteria**: a *Temporary workaround* with no exit is undocumented debt.
    - **Security / isolation / multi-tenancy**: for any ADR touching the data plane, sandbox,
      egress, secrets, or identity, hold it against the blueprint's security model — a
@@ -96,7 +96,7 @@ radius, not by how easy they are to spot:
 
 **F. Template & contract completeness.** Every ADR-0000 section present (a missing section,
 not "None", is a gate failure); Scenarios observable Given/When/Then with stable names;
-Scaffold plan machine-actionable with test skeletons; Review checklist mechanically
+Implementation plan machine-actionable with a test plan; Review checklist mechanically
 checkable.
 
 **G. Strengths worth protecting.** Mandatory, not optional. Name what is done well —
@@ -111,7 +111,7 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
 
 - **Severity is about blast radius, not confidence.** Tier every finding:
   - **Blocker** — a contradiction, contract bug, goal/Accepted-ADR conflict, or
-    security-model violation that will break scaffolding or the platform. Must fix before
+    security-model violation that will break the implementation or the platform. Must fix before
     the ADR advances (Draft→Proposed, Proposed→Accepted).
   - **Major** — a real weakness (biased/empty alternative analysis, scope creep, missing
     scenario, reversibility risk) that materially weakens the ADR without strictly blocking.
@@ -120,8 +120,8 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
 - **Separate "wrong" from "I'd have chosen differently."** Only defects (inconsistency,
   contradiction, unjustified claim, goal miss) are Blocker/Major. Pure preference goes to
   Nits, explicitly marked — the judge does **not** re-litigate a decision that is in scope
-  and honestly justified (this mirrors ADR-0000's implementation-judge rule at gate #8:
-  don't reopen a sound decision on taste).
+  and honestly justified (this mirrors the review gate's rule: don't reopen a sound decision
+  on taste).
 - **Don't manufacture findings to look thorough.** If a section is sound, the correct output
   is to say so under Strengths. A short report on a strong ADR is a valid result.
 - **Don't rubber-stamp either.** Before concluding "looks good", confirm you actually traced
@@ -160,7 +160,7 @@ Produce the report in this shape (sections with nothing to say still appear, mar
 
 ## Template & scenario conformance
 <which ADR-0000 sections are missing/thin; whether every Scenario is observable and has a
- named skeleton in the Scaffold plan; whether Contracts are compilable and complete>
+ named test in the Implementation plan; whether Contracts are compilable and complete>
 
 ## Recommendation
 <advance as-is / advance after fixing Blockers / needs another draft / supersede — and the
@@ -174,7 +174,7 @@ the author can jump straight to each finding. Do not paste the whole ADR back.
 
 Present the verdict and link the report location (or render it inline if short). Then **stop**
 — the judge evaluates, it does not edit the ADR it just judged (conflict of interest, and
-ADR-0000 routes findings back to the author/scaffolder, not the reviewer). Offer, as a
+ADR-0000 routes findings back to the author/implementer, not the reviewer). Offer, as a
 separate explicit step, to apply the Blocker/Major fixes *if the user asks* — and if they do,
 that work follows the `adr` skill's rules (Draft is editable; an Accepted ADR is changed only
 by a new superseding ADR, never in place).

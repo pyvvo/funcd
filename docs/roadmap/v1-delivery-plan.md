@@ -3,7 +3,7 @@
 - **Status**: Active (living — update as ADRs are created/accepted/implemented)
 - **Date**: 2026-06-13
 - **Realizes**: [FEAT-0000 (V1 — Agent-ready core)](../feat/0000-feat-v1.md)
-- **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-scaffold`
+- **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
 ## Purpose & how to read this
 
@@ -18,12 +18,12 @@ undecided question.
 vocabulary). Keep them distinct:
 - **Design track** — create + judge + accept ADRs. Cheap, and ADRs for independent topics can be
   drafted in parallel; the real serialization point is *your* review/acceptance bandwidth.
-- **Build track** — scaffold (`/adr-scaffold`) + implement + validate. Serialized by **hard
+- **Build track** — implement (`/adr-impl`) + review (`/adr-impl-review`). Serialized by **hard
   compile/runtime dependencies** (you can't build the controller before the store port exists).
 
 The whole strategy: **keep the design track ~one tier ahead of the build track**, so every time the
-build track finishes a tier, the next tier's ADRs are already Accepted and ready to scaffold. An ADR
-only needs to be Accepted before *its own* feature is scaffolded — not before anything else.
+build track finishes a tier, the next tier's ADRs are already Accepted and ready to implement. An ADR
+only needs to be Accepted before *its own* feature is implemented — not before anything else.
 
 > **ADR numbers here are proposed placeholders** (`P-A … P-T`). The `/adr` skill assigns the real
 > sequential number at creation time, so if you create them in a different order the numbers differ.
@@ -70,7 +70,7 @@ integrative ones (P-M, P-Q) — they each carry real, separable decisions.
 
 **Two deliberate splits** (from review): **P-H → P-H (gateway port, F10) + P-H2 (activator/scale-to-
 zero, F11)** because F10 builds at tier 1 but F11 at tier 4 — one ADR straddling build tiers breaks
-the scaffold→implement model, and the data-plane-ownership decision (gateway) is separable from the
+the one-ADR-one-implementation model, and the data-plane-ownership decision (gateway) is separable from the
 drain/wake decision (scale-to-zero). **P-F → P-F (logger root) + P-F2 (OTel+audit)** because the
 logger root is a real prerequisite of the composition root P-I (it builds the root `*slog.Logger`
 from `internal/observability`), whereas OTel/audit is heavier and off the critical path. Note: the
@@ -175,7 +175,7 @@ capacity-based grouping is fine **iff** it passes `--check-waves`.
 
 | Tier | Items | Gate / why |
 |---|---|---|
-| **0 (done)** | ADR-0001, ADR-0002 | Bootstrap + conventions. **Accepted — need `/adr-scaffold` + implement.** Nothing compiles or is conventional without them. |
+| **0 (done)** | ADR-0001, ADR-0002 | Bootstrap + conventions. **Accepted — need `/adr-impl` + review.** Nothing compiles or is conventional without them. |
 | **1** | P-A · P-D · P-E · P-F · P-F2 · P-G · P-H | Everything that needs only conventions (or, for P-A, only ADR-0002). The big parallel tier — but also the biggest, so sequence within it by capacity; P-A first since tier 2 waits on it. |
 | **2** | P-B · P-C | Both need the types (P-A): codegen generates from the resource model; the store persists typed objects. |
 | **3** | P-I · P-J | Facade wires the tier-1/2 ports + logger root (**and ships the `InMemory()` e2e-harness slice**); controller needs store+bus+types. |
@@ -186,24 +186,23 @@ capacity-based grouping is fine **iff** it passes `--check-waves`.
 
 **Critical path** (longest chain, from the analyzer): `ADR-0002 → P-A → P-C → P-J → P-M → P-Q → P-S → P-T`.
 
-### Test-skeleton sequencing (reconciling with ADR-0000 gate "Scaffold")
+### Test sequencing (reconciling with the ADR-0000 "Implement" gate)
 
-ADR-0000 requires each scaffold to emit a skipped test per Scenario. But the e2e harness
-(`funcd.InMemory()`) does not exist until **P-I (tier 3)**, so a port scaffolded in tiers 1–2 cannot
-emit a *compiling e2e* skeleton — and the depguard graph forbids `tests/e2e/**` from importing
+ADR-0000 requires each implementation to ship a *passing* test per Scenario. But the e2e harness
+(`funcd.InMemory()`) does not exist until **P-I (tier 3)**, so a port implemented in tiers 1–2 cannot
+ship a *passing e2e* test — and the depguard graph forbids `tests/e2e/**` from importing
 `internal/**` anyway. Resolution, applied per tier:
 
-- **Tiers 1–2 (ports, pre-harness)**: emit **contract/unit skeletons only** — port-local, available
-  immediately, skipped. A Scenario that is inherently end-to-end is recorded in the ADR and gets its
-  e2e skeleton deferred to the harness (note it in the scaffold report).
+- **Tiers 1–2 (ports, pre-harness)**: ship **contract/unit tests only** — port-local, available
+  immediately, passing. A Scenario that is inherently end-to-end is recorded in the ADR and its
+  acceptance test is deferred to the harness (note the deferral in the implementation report; the
+  review gate attributes the gap to sequencing, not the model).
 - **Tier 3**: **P-I ships the minimal `InMemory()` e2e-harness slice** as a first-class deliverable.
-  From here, e2e skeletons compile and the deferred Scenario tests from tiers 1–2 are added against
-  the public surface.
+  From here, e2e tests run and the deferred Scenario tests from tiers 1–2 are added against the
+  public surface.
 - **Tier 6**: **P-S** is the full testing strategy — CI lanes, the Linux-VM containerd lane,
-  coverage. Read ADR-0000's "one e2e skeleton per Scenario" as "one *skipped test at the right
-  level* per Scenario; e2e once the harness exists" — ADR-0001 already finesses this for itself; this
-  is the same accommodation made explicit. (A one-line clarification to ADR-0000 / the `adr-scaffold`
-  skill is a sensible follow-up.)
+  coverage. Read ADR-0000's "one passing test per Scenario" as "one passing test *at the right level*
+  per Scenario; the e2e test once the harness exists."
 
 ## Design track — what to create + accept ahead
 
