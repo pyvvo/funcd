@@ -1,11 +1,12 @@
 # ADR-0002: Source-code conventions & architecture patterns
 
-- **Status**: Reviewing
+- **Status**: Implemented
 - **Date**: 2026-06-13 (revised same day after judge review: error kernel relocated to
   `api/fault`, `store`/`blob` port naming, generated-file lint exemption, `revive` dropped;
   accepted 2026-06-13; clarified post-acceptance that a driver folder is per-engine, not
   per-backend — one `blob/gocloud` adapter spans memory/file/S3, no `blob/memory` folder;
-  and §8 file-count rule: a driver is one file in its own package, not a fan-out of files)
+  and §8 file-count rule: a driver is one file in its own package, not a fan-out of files;
+  implemented 2026-06-14 after re-review — `just ci` green, lint-fixture scenarios passing)
 - **Deciders**: green-0-rabbit
 - **Tags**: conventions, go-idioms, api-design, errors, linting
 - **Realizes**: [FEAT-0000/F25](../feat/0000-feat-v1.md)
