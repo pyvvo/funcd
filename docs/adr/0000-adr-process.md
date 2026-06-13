@@ -1,7 +1,7 @@
 # ADR-0000: ADR process, template, and workflow gates
 
 - **Status**: Accepted
-- **Date**: 2026-06-13
+- **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer, `docs/feat/`)
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process
 
@@ -14,6 +14,23 @@ enough contract detail that an LLM — given only the blueprint and one ADR — 
 the corresponding interfaces, facades, and dependencies without inventing anything.
 
 ## Decision
+
+### Feature-version documents (`docs/feat/`) — the layer above ADRs
+
+Before any ADR exists for a topic, the **initial need** and the **high-level
+feature/component list per version** live in `docs/feat/NNNN-feat-<version>.md`
+(e.g. `0000-feat-v1.md`). Rules:
+
+- A feat doc captures **what** a version must contain and **why** — never how. If a
+  sentence describes an interface, a library choice, or a mechanism, it belongs in an
+  ADR, not here.
+- Each feature row maps to the ADR(s) that realize it, with a status:
+  `idea → adr → accepted → scaffolded → implemented`. Feat docs are **living**
+  documents (tracking tables update as work progresses) — unlike ADRs, which are
+  immutable once accepted.
+- Every ADR names the feature(s) it realizes in its header (`Realizes: FEAT-0000/F05`);
+  an ADR for a topic outside the active version's scope is a signal to either amend the
+  feat doc deliberately or defer the ADR.
 
 ### Location, naming, statuses
 
@@ -47,14 +64,18 @@ review gates catch.
 
 ### Workflow gates
 
+0. **Scope the version**: `docs/feat/NNNN-feat-<version>.md` captures the initial need
+   and the high-level feature list (see above). Topics come from this list.
 1. **Brainstorm** a topic; clarify unknowns with the human before drafting.
-2. **Draft the ADR** (`Proposed`); human review → `Accepted`.
+2. **Draft the ADR** (`Proposed`); human review → `Accepted`. Update the feat doc's
+   tracking row (`idea → adr → accepted`).
 3. **Scaffold from the ADR + blueprint**: interfaces, API facades, `go.mod` additions,
    config stubs — declarations only, no business logic.
 4. **Review gate**: a high-capability reviewer (e.g. Opus-class / "ultra" code review)
    validates the scaffold against the ADR's *Review checklist* and *Contracts*. Findings
    loop back to step 3 (or amend the ADR if the decision itself was wrong).
-5. **Implement** the feature and its tests; ADR moves to `Implemented`.
+5. **Implement** the feature and its tests; ADR moves to `Implemented`, feat row to
+   `implemented`.
 
 ## Consequences
 

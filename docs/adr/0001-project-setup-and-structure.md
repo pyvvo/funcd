@@ -4,6 +4,7 @@
 - **Date**: 2026-06-13
 - **Deciders**: green-0-rabbit
 - **Tags**: setup, repo, nix, tooling
+- **Realizes**: [FEAT-0000/F01](../feat/0000-feat-v1.md)
 - **Relates to**: [blueprint.md — Repository structure](../../blueprint.md), ADR-0000
 
 ## Context & Need

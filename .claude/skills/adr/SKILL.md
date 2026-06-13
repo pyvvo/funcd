@@ -17,13 +17,17 @@ ask for one before doing anything else.
 
 1. Read `docs/adr/0000-adr-process.md` — the canonical template, section order, and
    status lifecycle. Do not improvise a different structure.
-2. List `docs/adr/` to find the next sequential number and any related or conflicting
+2. Read the active feature-version document (`docs/feat/`, highest-numbered Active file)
+   and locate the feature row the topic realizes. If the topic is **not** in the active
+   version's scope, say so and let the user choose: amend the feat doc deliberately, or
+   defer the ADR. The ADR header gets a `Realizes: FEAT-NNNN/Fxx` line.
+3. List `docs/adr/` to find the next sequential number and any related or conflicting
    ADRs. If an existing Accepted ADR covers part of the topic, plan to *supersede* or
    *relate to* it — never silently rewrite it.
-3. Read the relevant section(s) of `blueprint.md` — the architecture the decision must
+4. Read the relevant section(s) of `blueprint.md` — the architecture the decision must
    slot into. Constraints stated there (library-first, embed-first, single binary,
    Apache-2.0/MIT-only deps, Makefile-only, import discipline) are inherited, not re-asked.
-4. Check `docs/legacy/IMPLEMENTATION.md` for pre-ADR raw material on the topic (gateway
+5. Check `docs/legacy/IMPLEMENTATION.md` for pre-ADR raw material on the topic (gateway
    rendering mechanics, scale-to-zero ordering, lifecycle sequences) worth mining.
 
 ## Step 1 — Brainstorm
@@ -83,11 +87,14 @@ Quality bar per section:
 3. An Accepted ADR is immutable in substance: later changes happen by writing a new ADR
    that supersedes it (link both ways), never by editing history.
 
-## Step 4 — Sync the blueprint
+## Step 4 — Sync the blueprint and the feat tracking
 
-If the accepted decision refines or contradicts `blueprint.md`, update the blueprint in
-the same session (focused edits, not rewrites). The rule from ADR-0000: the newest
-accepted ADR wins and the blueprint follows.
+- If the accepted decision refines or contradicts `blueprint.md`, update the blueprint in
+  the same session (focused edits, not rewrites). The rule from ADR-0000: the newest
+  accepted ADR wins and the blueprint follows.
+- Update the feature row in the active `docs/feat/` document: link the ADR in the
+  `ADR(s)` column and advance the status (`idea → adr` at draft, `→ accepted` at
+  acceptance).
 
 ## Step 5 — Stop
 
