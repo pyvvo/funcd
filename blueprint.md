@@ -50,14 +50,46 @@ In order to make this platform self-contained, we will need to implement the fol
     - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Baseline (V1–V2): runc with conservative OCI defaults — no added capabilities, `no_new_privileges`, default seccomp. Strong isolation is scheduled for V3 (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). The gVisor middle tier was dropped (2026-06-13) — for untrusted code the WASM runtime provides isolation by construction instead. Runtime classes (runc / wasm / microvm) stay selectable per function behind one sandbox interface.
 
 - **Services** :
-    - **KV Storage**: A key-value storage system that allows functions to store and retrieve data in a fast and efficient manner. We will use existing technologies like etcd, redis, or rocksdb to provide a simple and efficient KV storage for the functions.
-    - **Blob Storage**: A blob storage system that allows functions to store and retrieve large binary objects (blobs) in a fast and efficient manner. We will use existing technologies like minio, ceph, or s3 to provide a simple and efficient blob storage for the functions.
-    - **Graph database**: A graph database that allows functions to store and query graph data, which can be used for tasks like social network analysis, recommendation, and knowledge graphs. We will use existing technologies like neo4j, arangodb, or dgraph to provide a simple and efficient graph database for the functions. (https://github.com/petgraph/petgraph, https://kuzudb.github.io/ ...)
+
+    **Service architecture — two substrate layers + the adapter pattern.** Every service
+    follows the same shape, generalizing the ports & drivers model to the whole platform
+    (the anti-duplication principle, taken from how [Databend](https://github.com/databendlabs/databend)
+    separates a pluggable object store from a pluggable meta-service):
+    - **Adapter pattern everywhere**: a service is a Go *port* (interface) with multiple
+      *drivers*, at minimum one real and one in-memory. A driver wraps an upstream SDK; it
+      never leaks the upstream type past the port. funcd reuses mature SDKs rather than
+      reimplementing — e.g. [`gocloud.dev/blob`](https://github.com/google/go-cloud/tree/master/blob)
+      (Apache-2.0) for object storage, with its `memblob` / `fileblob` / `s3blob` drivers.
+    - **Two shared substrate layers**, consumed by the higher services so the recurring
+      backends (memory, file, S3) are implemented once, not per service:
+      - **Storage layer** (`blob` port) — opaque object bytes; drivers: memory, filesystem,
+        S3-compatible (via `gocloud.dev/blob`). This is the bytes substrate.
+      - **Database layer** (`kvstore` port) — structured/keyed records with watch + atomic
+        ops; drivers: memory, embedded file (sqlite/bbolt), and an S3-backed driver built
+        *on top of the storage layer* (slatedb-style LSM on object storage). This is the
+        records substrate.
+    - **Service = CRD + facade + controller + driver**: a service instance/binding is a
+      `Service` resource (CRD); its controller (built on the general controller framework —
+      see [Controller](#controller)) reconciles desired→actual by driving the upstream
+      through the SDK (create/bind/teardown a bucket, KV namespace, …); the in-process
+      **facade** is what functions actually call, enforcing per-request authorization via
+      the PDP and multiplexing tenants over pooled upstream resources.
+
+    Concrete services (each a port; drivers listed real → in-memory):
+    - **Blob storage** (the storage layer, exposed as a function-facing service): object
+      get/put/list/delete + presign. Drivers via `gocloud.dev/blob`: **S3-compatible**
+      (minio, zot-adjacent, AWS S3, …), **filesystem**, **in-memory**.
+    - **KV storage** (on the database layer): get/put/delete/list/atomic. Drivers: **cloud /
+      external** (JetStream KV, redis), **S3-backed** (storage layer), **file**, **in-memory**.
+    - **Graph database**: store and query graph data. Drivers: **in-process**
+      (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**
+      (neo4j, dgraph). (V3 candidate.)
     - **Cryptography services**: A cryptography service that allows functions to perform cryptographic operations, such as encryption, decryption, signing, and verification. https://github.com/tink-crypto/tink-go
     - **Monitoring and Logging**: A monitoring and logging system that collects metrics, logs, and traces from the functions and the platform itself. We will only be OpenTelemetry compliant, and we will use existing tools like stdout, stderr, and log files, and/or external monitoring systems like victoria-metrics, victoria-logs, victoria-trace, and grafana for visualization and analysis.
     - **Workflow engine**: A workflow engine that allows functions to be composed into complex workflows, with support for conditional branching, parallel execution, and error handling. we could take inspiration from existing workflow engines like temporal, but try to keep it simple and lightweight and rely on message systems like nats.
-    - **Vector database**: A vector database that allows functions to store and retrieve high-dimensional vectors, which can be used for tasks like similarity search, recommendation, and machine learning. We will use existing technologies like pinecone, weaviate, or milvus to provide a simple and efficient vector database for the functions.
-    - **Secrets management**: A secrets management system that allows functions to securely store and retrieve sensitive information, such as API keys, database credentials, and other secrets. We will use existing technologies like [openbao](https://openbao.org/)
+    - **Vector database**: store and query high-dimensional vectors (similarity search, RAG). Drivers: **in-process** (a Go embeddable index) and **external** (pinecone, weaviate, milvus, qdrant).
+    - **Config**: non-sensitive configuration for functions/services, updatable without redeploy. Drivers: **in-memory**, **file**, **S3-backed** (storage layer).
+    - **Secrets management**: securely store and deliver sensitive values (API keys, credentials), encrypted at rest, delivered to sandboxes via env/tmpfs. Drivers: **in-memory** (dev), **S3-backed + envelope encryption** (storage layer), **external** ([OpenBAO](https://openbao.org/)).
     - **Eventing system**: An eventing system that allows functions to be triggered by various events, such as HTTP requests, timers, events, or external events from other systems. We will use existing technologies like nats and inspiration from aws eventbridge.
         - Argo events example :
         ```mermaid
@@ -153,15 +185,14 @@ In order to make this platform self-contained, we will need to implement the fol
 - **Internal components** :
 
     - **API Server**: An API server that exposes the platform's functionality via a RESTful API, with support for authentication, authorization, and other API management features. 
-    - **Controller**: A controller that manages the lifecycle of the functions and the services, including deployment, scaling, and monitoring. The controller will be responsible for ensuring that the desired state of the functions and the services is maintained, and for taking corrective actions when necessary. It will reconcile the desired state of the functions and the services with the actual state.
+    - **Controller**: reconciles desired→actual state for every resource kind. **All controllers are built on one general controller framework** (the Kubernetes controller-runtime pattern: shared informer/watch, work queue, rate-limited retry with backoff, status write-back) — a single engine in `internal/controller`, with each resource kind contributing only its `Reconcile` logic. This is non-negotiable: it is what keeps reconciliation uniform and duplication-free across functions and every service. Example — the **storage** service: managing (CRUD) and binding a bucket to a function via the `Service` CRD is a controller built on the framework whose `Reconcile` drives the upstream through the `gocloud.dev/blob` SDK (create bucket, apply lifecycle, wire the binding); the same shape applies to KV, vector, secrets, config — only the driver SDK changes.
     - **Scheduler**: A scheduler that schedules the execution of the functions based on various factors, such as resource availability, function priority, and other scheduling policies.
     - **Messaging layer**: A messaging layer that allows the internal components of the platform to communicate with each other in a decoupled manner. We will use existing technologies like nats to provide a simple and efficient messaging layer for the internal components of the platform. NATS is embedded in-process (nats-server is a plain Go library): JetStream runs with memory storage for tests and file storage for production; pointing funcd at an external NATS cluster stays a drop-in option for multi-node.
-    - **Metastore**: A metastore that stores the metadata of the functions and the services, such as their configuration (CRD like kubernetes), state, and other information. We will use existing technologies like slatedb to provide a simple and efficient metastore for the platform.
+    - **Metastore**: stores resource metadata (CRD-like specs + status) and watches. Itself behind the `store.Store` port (adapter pattern, same as every service): drivers **in-memory** (tests), **sqlite/file** (single-node default), **slatedb** (S3-backed, on the storage layer). The metastore is the database layer applied to the platform's own control state.
     - **Control plane**: The control plane that manages the overall operation of the platform, including the API server, the controller, the scheduler, and the messaging layer. The control plane will be responsible for ensuring that the platform is running smoothly and efficiently, and for taking corrective actions when necessary.
-    - **Worker**: The worker that executes the functions and the services, and that provides the necessary resources and environment for their execution.
+    - **Worker**: executes functions and provides their runtime environment. The worker **exposes an API** — to the control plane (placement, sandbox lifecycle: `worker.proto`) and a local one to the sandboxes it hosts (the runtime shim calls it for KV/blob/secrets/events/identity). Unlike the public control-plane API, **no SDK is published** for the worker API: it is reached only through the built-in runtime shim, which is shipped and versioned with the platform — there is no third-party client to generate.
     - **External providers**: The external providers that provide the necessary resources and services for the execution of the functions and the services, such as the registry, the API gateway, the messaging engine, the monitoring and logging systems, and the S3-compatible storage.
-    - **Ingress controller**: An ingress controller that manages the ingress traffic to the functions and the services, and that provides the necessary routing and load balancing capabilities. 
-        - **API Gateway**: An API gateway that exposes the functions as HTTP endpoints, MCP, gRPC ... via [Apache APISIX](https://github.com/apache/apisix) or [Pingap](https://github.com/vicanso/pingap), with support for authentication, authorization, rate limiting, and other API management features.
+    - **Ingress controller / API Gateway**: exposes functions as HTTP endpoints (gRPC/MCP later) with routing, auth, rate limiting, and load balancing. **Embedded, not supervised**: built on [Lura](https://github.com/luraproject/lura) (Apache-2.0, the framework behind KrakenD) as an in-process Go library — `gateway.Gateway` port, Lura driver, plus a trivial embedded reverse-proxy driver for dev/e2e. This is a deliberate reversal of the earlier "gateway as a separate process" stance (Apache APISIX, rendered config + hot-reload): embedding the gateway honors the single-binary / embed-first rule, removes the supervised child process and the config-file render/reload loop, and makes the **activator** a direct in-process code path (no healthy upstream → buffer → wake → forward) instead of a YAML round-trip. Trade-off accepted: funcd now owns the request data path (a crash affects routing; APISIX's plugin ecosystem is foregone) — auth and metrics already live in the in-process PDP and the OTel pipeline, and the `Gateway` port keeps an external gateway (APISIX/KrakenD) a driver swap for multi-node. To be formalized in the gateway ADR.
     - **Network manager (egress control)**: wires each function sandbox's network namespace (veth/bridge — done directly by the runtime driver on a single node; no Kubernetes CNI machinery needed) and enforces egress policy in two layers: **L3/L4** — nftables default-deny for lateral traffic (function → function only through the gateway, platform services only through their facades) and no direct internet route; **L4–L7** — all remaining outbound TCP/UDP (HTTP, HTTPS, database connections, any custom protocol) is **transparently redirected** at the netns boundary (nftables `REDIRECT`/`TPROXY` on the sandbox veth — no env vars, no app cooperation, nothing to bypass) into the **egress gateway**: a transparent proxy embedded in the funcd binary (a goroutine server, not a child process) that recovers the original destination (`SO_ORIGINAL_DST`/TPROXY), identifies the calling workload by sandbox source IP, captures every connection to the audit channel, and allows/blocks via the in-process PDP against the namespace's `EgressPolicy`. Fail-closed by construction: if the gateway is down, the redirect has nowhere to deliver and default-deny holds. `HTTP_PROXY` env vars are still injected as a courtesy so well-behaved HTTP clients receive a descriptive 403 instead of a reset connection. Note: the messaging layer (NATS) is the platform's *internal communication plane* — it does not replace packet networking; sandboxes still need network wiring.
         - **One policy, tiered enforcement.** `EgressPolicy` compiles to Cedar and is evaluated by the same `auth.Authorizer` PDP as every other decision (action namespace `egress:*`), at four depths with decreasing request context: (1) **wasm host functions** — the guest cannot do I/O except through host-implemented functions (`wasi:http` pattern), so every outbound request is captured *in-process, pre-encryption, with full URL* — capability-based, zero bypass surface; (2) **runtime-shim layer (default-on for curated runtimes)** — the platform-owned JS/Python runtime containers intercept outbound HTTP at the language-runtime level (Node: undici global dispatcher; Python: `sitecustomize` patching of urllib/requests) and evaluate the same Cedar policies in the function's process: full-URL, pre-TLS capture and descriptive denials for every function, no user opt-in. Still **not** a security boundary — user code can open raw sockets, spawn subprocesses, or ship C extensions — so the gateway below remains the enforcement floor; (3) **egress gateway (enforced, all protocols)** — the node-level transparent proxy, i.e. the "shared sidecar" (ambient-mesh style: one embedded proxy per node; a sidecar co-process *per function* was rejected — N proxies of RAM for zero policy gain on one box). Context per protocol: full URL for plain HTTP; domain via SNI peek for TLS, no MITM (full-path policy would require a per-namespace MITM CA — invasive, breaks pinning, decide in the egress ADR); `host:port` for raw TCP such as databases, where domain-level rules are enabled by the embedded **DNS forwarder** — sandbox DNS is redirected too, so the gateway correlates resolved IPs with domains (Cilium-style DNS-aware policy); (4) **kernel (enforced, candidate)** — seccomp user-space notification on `connect()`, decided by the worker-side PDP with L4 context only.
 
@@ -196,6 +227,10 @@ kind: Function
 metadata:
   name: my-function
   namespace: my-namespace
+  resourceGroup: my-agent-stack   # REQUIRED on every resource — see "Resource groups & tags"
+  tags:                           # optional, free-form key/value (for filtering, cost, ownership)
+    team: research
+    env: prod
 spec:
   runtime: python312            # curated runtime: nodejs22 | python312 | … (no arbitrary images)
   handler: app.handler          # receives a CloudEvent: handler(event, context)
@@ -257,7 +292,7 @@ So we could use the same approach for the other resources, and define their desi
 | 1    | Validate               | YAML/JSON validated, quotas checked                                                             |
 | 2    | Store spec             | Raw manifest stored in the metadata store                                                       |
 | 3    | Deploy request         | User calls `/deploy`                                                                             |
-| 4    | Translate to Vendor RD | The Resource Definition is translated to a vendor-specific format (Apache APISIX, NATS, OpenBAO, etc.) |
+| 4    | Translate to Vendor RD | The Resource Definition is translated to each driver's form (Lura routes, NATS subjects/streams, `gocloud.dev/blob` buckets, OpenBAO paths, etc.) |
 | 5    | Slice into tasks       | The OAM is broken down into logical tasks                                                       |
 | 6    | Schedule & provision   | The scheduler places the tasks; the worker provisions sandboxes and vendor resources            |
 | 7    | Expose                 | Routes and triggers are programmed in the gateway and the eventing system                       |
@@ -300,6 +335,15 @@ sequenceDiagram
 
 Namespaces are a logical grouping of functions and services, similar to Kubernetes namespaces. Each namespace will have its own set of resources, such as functions, services, events, secrets, and configurations. The namespace will provide isolation between different groups of functions and services, and will allow for multi-tenancy on the platform.
 
+#### Resource groups & tags
+
+A second grouping axis *inside* a namespace, modeled on Azure resource groups: every resource that belongs together (an agent and its KV bucket, secrets, routes, event sources) is filed under one **resource group**, so it can be listed, described, and torn down as a unit.
+
+- **`metadata.resourceGroup` is REQUIRED on every resource kind**; **`metadata.tags`** (free-form key/value) is **optional**. Both live in the shared `ObjectMeta` (`api/types/v1alpha1/metadata.go`), so every CRD inherits them by construction and no kind can forget them — admission rejects a resource with no resource group.
+- Hierarchy: `Namespace` (tenancy/isolation/quota boundary) **>** `resourceGroup` (lifecycle/management unit) **>** resources. A resource group is metadata, not a tenancy boundary — it does not grant cross-namespace access.
+- Tags drive filtering and cross-cutting views (ownership, cost, environment) for CLI/API list queries and dashboards; they carry no authorization meaning.
+- CLI: `funcdcli get functions --resource-group my-agent-stack`, `funcdcli delete resource-group my-agent-stack` (cascades), `funcdcli get all -l team=research`.
+
 #### Function
 
 Functions are the core building blocks of the platform. Each function will have its own runtime, handler, and configuration, and will be able to interact with other functions and services within the same namespace. Functions will be triggered by events, such as HTTP requests, timers, or messages from an eventing system, and will be able to access secrets and configurations as needed.
@@ -330,7 +374,7 @@ flowchart LR
     end
     MS -- "change events (via NATS)" --> Watch
     Status --> MS
-    Act -. "provision / converge" .-> Providers["Vendor providers<br/>runtime · APISIX · NATS · OpenBAO · …"]
+    Act -. "provision / converge" .-> Providers["Drivers (adapter pattern)<br/>runtime · gateway (Lura) · blob · kvstore · NATS · OpenBAO · …"]
     Providers -. "observed state" .-> Diff
 ```
 
@@ -353,10 +397,10 @@ Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by 
 Like k3s or faasd, funcd ships as a single binary that runs several cooperating parts:
 
 - **Library-first**: the entire platform is an embeddable Go library (`pkg/funcd`); `cmd/funcd` is a thin shell that parses configuration, selects the drivers (store, bus, gateway, runtime), and calls `funcd.New(...).Run(ctx)`. E2e tests embed the very same library with in-memory drivers — no daemon, no root, no network. See [Repository structure](#repository-structure).
-- **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore (pluggable: in-memory / sqlite / slatedb), and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
-- **Supervised child processes**: components reused as-is — API gateway (APISIX/Pingap), containerd, OpenBAO, … — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd.
+- **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore, the **embedded API gateway (Lura)**, and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
+- **Supervised child processes**: components with no embeddable Go form — **containerd** (always), **OpenBAO** (only if the external secrets driver is chosen) — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd. The list shrank deliberately: embedding Lura removed the API gateway from it.
 - **Crash-only design**: on restart, funcd rebuilds its world view from the metastore plus the actual state of sandboxes and routes, then lets the reconciliation loops converge. No state lives only in memory.
-- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists (NATS server, metastore drivers, policy engine, wasm runtime, OTel pipeline); a supervised child process is the fallback only for components with no embeddable form (containerd, APISIX, OpenBAO).
+- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists — NATS server, store/blob/kvstore drivers, **the API gateway (Lura)**, policy engine (cedar-go), wasm runtime, OTel pipeline; a supervised child process is the fallback only for components with no embeddable form (containerd; OpenBAO when used).
 
 ### Platform logging
 
@@ -378,7 +422,7 @@ How the funcd codebase itself logs (info / warn / error) — distinct from funct
 - **Log once at the boundary**: inner layers wrap and return (`fmt.Errorf("render route: %w", err)`); only the outermost owner of the operation (control loop, HTTP middleware) logs it — one failure, one log line.
 - **Runtime level switching**: the root level lives in a `slog.LevelVar`; an admin endpoint (`PUT /v1/admin/log-level`) adjusts global or per-component levels without restart.
 - **Export**: stdout JSON by default (12-factor — journald or any collector picks it up); optionally the `otelslog` bridge ships the same records through OTLP into victoria-logs — same OTel pipeline as function logs, separate stream labels (`source=platform` vs `source=function`).
-- **Child processes**: the supervisor captures stdout/stderr of APISIX / containerd / OpenBAO and re-emits each line through the same slog pipeline (`component=apisix`), so the single-binary deployment has exactly one log stream.
+- **Child processes**: the supervisor captures stdout/stderr of the remaining supervised processes — containerd, and OpenBAO when the external secrets driver is used — and re-emits each line through the same slog pipeline (`component=containerd`), so the single-binary deployment has exactly one log stream. (The gateway is embedded, so it logs in-process directly.)
 - **Audit is not ops logging**: security-relevant events (who deployed what, policy decisions) go to the dedicated audit channel (`internal/observability/audit.go`) with its own retention; never interleaved with operational logs.
 
 ```go
@@ -394,7 +438,7 @@ log.WarnContext(ctx, "route render failed, retrying", "error", err, "attempt", n
 
 ### Security model
 
-- **API access**: every API-server request is authenticated (static tokens first, OIDC later) and authorized through namespace-scoped RBAC (e.g., admin / developer / viewer roles).
+- **API access**: every API-server request is authenticated (static tokens and **scoped API keys** first, OIDC later) and authorized through namespace-scoped RBAC (e.g., admin / developer / viewer roles). API keys are the credential for non-interactive clients — CI and the **Terraform provider** (see [Control-plane API & IaC](#control-plane-api--iac)) — issued per namespace/role and revocable.
 - **Multi-tenancy boundary**: the namespace — quotas, secrets, routes, and service instances are namespace-scoped and never shared across namespaces.
 - **Function isolation**: each function runs in its own sandbox — runc container with conservative OCI defaults (V1–V2), WASM sandbox, or microVM from V3 (Kata); no shared filesystem, PID, or network namespace between functions by default.
 - **Service credentials**: functions never receive long-lived platform credentials; the worker injects short-lived, scoped workload tokens only for the services declared in the function spec — see [Internal IAM](#internal-iam).
@@ -477,17 +521,19 @@ flowchart TB
         direction TB
         subgraph CP["Control plane"]
             API["API Server<br/>authn/authz · validation · OpenAPI"]
-            Ctrl["Controller(s)<br/>reconciliation loops"]
+            Ctrl["Controller(s)<br/>one framework, loop per kind"]
             Sched["Scheduler"]
+            GW["API Gateway<br/>embedded Lura (+ activator)"]
             Bus["Messaging layer<br/>embedded NATS / JetStream"]
-            Meta["Metastore<br/>slatedb"]
         end
         subgraph DP["Data plane (worker)"]
-            GW["Ingress / API Gateway<br/>APISIX or Pingap"]
-            RT["Function runtime<br/>containerd + shims"]
-            VM["microVM sandboxes<br/>kata shim (Dragonball / Cloud Hypervisor)"]
-            WASM["WASM runtime"]
-            SVC["Built-in services<br/>KV · blob · graph · vector · crypto ·<br/>workflow · eventing · secrets"]
+            NET["Network manager<br/>netns · nftables · egress gateway"]
+            RT["Function runtime<br/>containerd + curated runtimes / wasm"]
+            SVC["Service facades<br/>KV · blob · vector · secrets · config"]
+        end
+        subgraph SUB["Substrate layers (adapter pattern)"]
+            DBL["Database layer<br/>store/kvstore: mem · sqlite · slatedb"]
+            STL["Storage layer<br/>blob: mem · file · s3 (gocloud.dev/blob)"]
         end
     end
 
@@ -495,26 +541,27 @@ flowchart TB
         REG["OCI registry<br/>zot, ghcr, …"]
         S3["S3-compatible storage"]
         OBS["Observability (OTel)<br/>victoria-metrics / logs / traces"]
-        BAO["OpenBAO"]
+        BAO["OpenBAO (optional)"]
     end
 
     CLI -- REST --> API
     Callers --> GW
     Producers --> GW
     GW -- invoke --> RT
-    RT --> VM
-    RT --> WASM
-    API <--> Meta
+    RT -- "egress via" --> NET
+    API <--> DBL
     API <--> Bus
     Bus <--> Ctrl
     Bus <--> Sched
-    Ctrl -- "program routes / triggers" --> GW
-    Ctrl -- "desired state" --> RT
+    Ctrl -- "program routes" --> GW
+    Ctrl -- "desired state / placement" --> RT
     Sched -- placement --> RT
-    VM --> SVC
-    WASM --> SVC
-    SVC --> BAO
-    Meta -- persistence --> S3
+    RT --> SVC
+    SVC --> DBL
+    SVC --> STL
+    SVC -. "external driver" .-> BAO
+    DBL -- "slatedb on" --> STL
+    STL -- persistence --> S3
     RT -- "pull images" --> REG
     Binary -- "metrics · logs · traces" --> OBS
 ```
@@ -588,10 +635,14 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 
 | Port | Production driver | Dev / e2e driver |
 |------|-------------------|------------------|
-| `store.Store` (metastore) | sqlite (file) — slatedb (S3-backed) later | in-memory |
+| `store.Store` (metastore / database layer) | sqlite (file) — slatedb (S3-backed) later | in-memory |
+| `blob.Bucket` (storage layer) | S3-compatible via `gocloud.dev/blob` (`s3blob`) | `memblob` / `fileblob` |
 | `bus.Bus` (messaging) | embedded NATS JetStream, file storage | embedded NATS with memory storage, or pure in-memory bus |
-| `gateway.Gateway` (ingress) | APISIX (rendered standalone config) | embedded Go reverse proxy |
-| `runtime.Runtime` (sandboxes) | containerd + runc (kata microVM shim from V3) | plain process / wasm |
+| `gateway.Gateway` (ingress) | **embedded Lura** (in-process) | embedded Go reverse proxy |
+| `runtime.Runtime` (sandboxes) | containerd + runc curated runtimes (kata microVM shim from V3) | plain process / wasm |
+| service ports (`kvstore`, `vector`, `secrets`, `config`, …) | external SDK or on the storage/database layer | in-memory |
+
+Every service port follows the same two-driver-minimum rule; the recurring memory/file/S3 drivers come from the shared storage and database substrate layers (see [Services](#components)), so they are written once.
 
 - `cmd/funcd` only holds the configuration of external components and driver selection — zero business logic.
 - The e2e harness boots the platform with the `InMemory()` preset: same code paths, no root, no containerd, no network ports beyond an ephemeral listener.
@@ -602,8 +653,9 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 plat, err := funcd.New(
     funcd.WithConfigFile("/etc/funcd/funcd.yaml"),
     funcd.WithStore(sqlite.Open(dataDir)),
+    funcd.WithBlob(s3blob.Open(blobURL)),          // storage layer: s3 | file | mem
     funcd.WithBus(nats.Embedded(nats.FileStorage(dataDir))),
-    funcd.WithGateway(apisix.New(gwCfg)),
+    funcd.WithGateway(lura.New(gwCfg)),            // embedded, in-process
     funcd.WithRuntime(containerd.New(rtCfg)),
 )
 
@@ -629,8 +681,9 @@ funcd/
 │   │       └── runtime.proto             # out-of-tree runtime shim contract
 │   ├── types/
 │   │   └── v1alpha1/                     # CRD-like resource model (matches apiVersion funcd.io/v1alpha1)
-│   │       ├── metadata.go               # TypeMeta, ObjectMeta, labels, owner refs
+│   │       ├── metadata.go               # TypeMeta, ObjectMeta (incl. required resourceGroup + optional tags), owner refs
 │   │       ├── namespace.go
+│   │       ├── resourcegroup.go
 │   │       ├── function.go
 │   │       ├── revision.go
 │   │       ├── route.go
@@ -638,6 +691,8 @@ funcd/
 │   │       ├── eventsource.go
 │   │       ├── config.go
 │   │       ├── secret.go
+│   │       ├── grant.go
+│   │       ├── egresspolicy.go
 │   │       ├── invocation.go
 │   │       ├── runtimeclass.go
 │   │       ├── worker.go
@@ -670,6 +725,7 @@ funcd/
 │   │   ├── feature.go                    # Feature = types + validation + handlers + reconciler
 │   │   ├── registry.go                   # features self-register: API routes + control loops
 │   │   ├── namespaces/
+│   │   ├── resourcegroups/
 │   │   ├── functions/
 │   │   ├── revisions/
 │   │   ├── routes/
@@ -678,6 +734,7 @@ funcd/
 │   │   ├── configs/
 │   │   ├── secrets/
 │   │   ├── grants/
+│   │   ├── egresspolicies/
 │   │   └── invocations/
 │   │
 │   ├── controlplane/                     # API server (implements the generated server interface)
@@ -696,32 +753,47 @@ funcd/
 │   │
 │   ├── gateway/
 │   │   ├── gateway.go                    # Gateway port: ProgramRoutes(desired), health
-│   │   ├── activator.go                  # scale-from-zero request buffering
+│   │   ├── activator.go                  # scale-from-zero request buffering (in-process)
 │   │   ├── embedded/                     # built-in reverse-proxy driver (dev / e2e)
-│   │   └── apisix/
-│   │       ├── exporter.go               # renders apisix.yaml (standalone mode)
-│   │       └── template.go
+│   │   └── lura/                         # embedded Lura driver (production, in-process)
+│   │
+│   ├── network/                          # network manager: netns wiring + egress control
+│   │   ├── netns.go                      # veth/bridge wiring per sandbox (no k8s CNI)
+│   │   ├── nftables.go                   # default-deny lateral + transparent redirect
+│   │   └── egress/                       # transparent egress gateway: TPROXY, SNI peek, DNS-aware
 │   │
 │   ├── worker/                           # node agent
-│   │   ├── worker.go
-│   │   ├── supervisor.go                 # child processes: apisix, containerd, …
+│   │   ├── worker.go                     # exposes worker API (control-plane + sandbox-local); no SDK
+│   │   ├── supervisor.go                 # child processes: containerd, OpenBAO (when used)
 │   │   └── heartbeat.go
 │   │
 │   ├── runtime/
 │   │   ├── runtime.go                    # Runtime port: Create/Start/Stop/Exec/Logs
 │   │   ├── manager.go
+│   │   ├── shim/                         # in-sandbox shim: CloudEvents contract, health, SDK, egress hooks
 │   │   └── providers/
 │   │       ├── process/                  # plain OS processes (dev / e2e)
 │   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + runc (kata microVM shim from V3)
+│   │       ├── containerd/               # containerd + runc curated runtimes (kata shim from V3)
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
-│   ├── store/
-│   │   ├── store.go                      # Store port: CRUD + generations + watch
+│   ├── storage/                          # STORAGE LAYER (substrate): blob.Bucket port
+│   │   ├── blob.go                       # port: get/put/list/delete/presign
+│   │   └── gocloud/                      # gocloud.dev/blob adapter: s3blob / fileblob / memblob
+│   │
+│   ├── store/                            # DATABASE LAYER (substrate): Store/kvstore port
+│   │   ├── store.go                      # port: CRUD + generations + watch
 │   │   ├── memory/                       # e2e / ephemeral
 │   │   ├── sqlite/                       # single-node production default
-│   │   ├── slatedb/                      # S3-backed driver (later)
+│   │   ├── slatedb/                      # S3-backed driver — on the storage layer (later)
 │   │   └── migrations/
+│   │
+│   ├── services/                         # function-facing services: port + drivers + facade per service
+│   │   ├── kv/                           # on database layer or external (jetstream/redis)
+│   │   ├── blob/                         # on storage layer
+│   │   ├── secrets/                      # memory / s3+encryption / openbao
+│   │   ├── config/                       # memory / file / s3
+│   │   └── vector/                       # in-process / external
 │   │
 │   ├── bus/
 │   │   ├── bus.go                        # Bus port: pub/sub + streams
@@ -766,9 +838,8 @@ funcd/
 │   └── contract/                         # conformance suites run against every driver of a port
 │
 ├── configs/
-│   ├── funcd.yaml                        # production example
-│   ├── funcd.dev.yaml
-│   └── apisix.example.yaml
+│   ├── funcd.yaml                        # production example (drivers, gateway, storage, bus)
+│   └── funcd.dev.yaml                    # in-memory / embedded everything
 ├── deploy/
 │   ├── systemd/funcd.service
 │   └── compose.dev.yaml                  # optional local deps: registry, victoria-*, …
@@ -792,10 +863,10 @@ funcd/
 - **e2e moved from `internal/e2e` to `tests/e2e`**: inside `internal/` the tests could cheat and import internals; at `tests/e2e` they exercise only the public library + SDK, which is exactly the contract we want to validate (enforced via golangci-lint `depguard`).
 - **`internal/controller/` added**: the reconciliation engine is the heart of the design (watch → diff → act → status) yet had no home in the draft.
 - **Scheduler promoted out of `worker/`**: scheduling is a control-plane concern (placement decisions); the worker is a node agent that executes placements.
-- **Gateway slimmed**: `proxy.go`, `rate_limit.go`, `auth.go` dropped — rate limiting and edge auth are APISIX features programmed through its config; platform authn/authz lives in `internal/auth`. Added `activator.go` (scale-from-zero) and an `embedded/` driver for dev/e2e.
+- **Gateway embedded (Lura)**: the gateway is an in-process Go library (Lura), not a supervised APISIX. `internal/gateway` holds the `Gateway` port, a `lura/` driver, an `embedded/` reverse-proxy driver for dev/e2e, and `activator.go` (scale-from-zero); edge auth and rate limiting are Lura middleware calling the in-process PDP, not a separate config dialect.
 - **`controlplane/handlers/` removed**: the feature registry exists precisely so each feature registers its own handlers; a central handlers package would duplicate it.
 - **`api/types/v1` → `v1alpha1`**: matches the manifests (`apiVersion: funcd.io/v1alpha1`); graduate to v1 when the contract stabilizes.
-- **`gateway.proto` dropped**: the gateway is programmed via rendered config (APISIX standalone) or in-process calls (embedded driver); no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
+- **`gateway.proto` dropped**: the gateway is embedded (Lura) and programmed by in-process calls; no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
 - **`store/slatedb/` slot added**: the blueprint names slatedb as the S3-backed metastore; sqlite is the pragmatic single-node default, memory for tests — all behind the same `Store` port.
 - **One task runner only**: two task runners drift apart. `just` chosen (clean recipe syntax, arguments, no `.PHONY` ceremony) — decided in ADR-0001, 2026-06-13.
 - **`internal/eventing/` added**: EventSource resources need runtime machinery (adapters, CloudEvents normalization, sensors, triggers) distinct from their CRUD feature slice.
@@ -808,6 +879,7 @@ Challenged list — kept, renamed, or removed with reasons:
 | Kind | Scope | Notes |
 |------|-------|-------|
 | `Namespace` | cluster | tenancy boundary (quotas, RBAC, isolation) |
+| `ResourceGroup` | namespaced | management/lifecycle unit *within* a namespace (Azure-style); referenced by the **required** `metadata.resourceGroup` on every other resource; deleting it cascades. Not a tenancy/auth boundary |
 | `Function` | namespaced | desired state; every spec change stamps a new immutable `Revision` |
 | `Revision` | namespaced | **replaces draft's `Deployment`** — immutable snapshot of a Function (image + config), enabling rollback and canary; "deployment" is an action, not a state |
 | `Route` | namespaced | HTTP exposure: domains, paths, traffic split across Revisions; auto-derived from `Function.triggers`, standalone for advanced cases |
@@ -833,11 +905,19 @@ Removed from the draft list:
 - Client config in `~/.funcd/config.yaml` (contexts: server URL, token, default namespace).
 - The SDK and CLI consume the generated OpenAPI client, so CLI, SDK, and server cannot drift from the spec.
 
+### Control-plane API & IaC
+
+The control-plane REST API is the single front door for *all* clients — `funcdcli`, the Go SDK, CI, and infrastructure-as-code. Because it is OpenAPI-first and resources are declarative `spec`/`status` objects (apply = desired state, the controller reconciles), it maps directly onto a **Terraform provider**:
+
+- a `terraform-provider-funcd` (separate repo/binary) authenticates with a scoped **API key** and CRUD-maps Terraform resources (`funcd_function`, `funcd_service`, `funcd_secret`, `funcd_route`, `funcd_resource_group`, …) onto the same API the CLI uses — no special server surface, the provider is just another OpenAPI client.
+- the declarative model means Terraform's plan/apply lines up with the platform's own apply/reconcile; `status` conditions feed back as resource readiness.
+- this is an outlook deliverable (needs a stabilized API + API-key auth), not a V1 item; it is called out here so the API is designed provider-friendly from the start (stable IDs, list/filter by resource group and tags, idempotent apply).
+
 ### Go best practices baked in
 
 - **Single module**, generated code committed; CI re-runs codegen and fails on diff (`git diff --exit-code`).
 - **Codegen tools pinned** in `go.mod` via the `tool` directive (oapi-codegen, buf) — reproducible generation, no "works on my machine".
-- **Contract tests over mocks**: one conformance suite per port (`Store`, `Bus`, `Gateway`, `Runtime`) executed against every driver — the in-memory driver is guaranteed to behave like the real one, which is what makes the e2e-on-library strategy trustworthy.
+- **Contract tests over mocks**: one conformance suite per port (`Store`, `Blob`, `Bus`, `Gateway`, `Runtime`, and each service port) executed against every driver — the in-memory/file driver is guaranteed to behave like the S3/external one, which is what makes both the e2e-on-library strategy and the storage/database substrate layers trustworthy.
 - **Import discipline**: `api/` imports nothing internal; `features/*` never import each other (they communicate via the bus); `platform/` has no business logic; enforced with `depguard`.
 - **Errors**: RFC 9457 `application/problem+json` on the wire, wrapped sentinel errors (`errors.Is/As`) internally.
 - **Context-first**: every blocking call takes `context.Context`; no package-level singletons; `log/slog` for structured logging, OTel for traces/metrics.
