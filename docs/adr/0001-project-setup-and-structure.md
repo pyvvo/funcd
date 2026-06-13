@@ -1,7 +1,7 @@
 # ADR-0001: Project setup, file structure, and Nix dev environment
 
-- **Status**: Proposed
-- **Date**: 2026-06-13
+- **Status**: Accepted
+- **Date**: 2026-06-13 (accepted 2026-06-13; pre-acceptance fix: flake shell ships `just`, not `gnumake`)
 - **Deciders**: green-0-rabbit
 - **Tags**: setup, repo, nix, tooling
 - **Realizes**: [FEAT-0000/F01](../feat/0000-feat-v1.md)
@@ -160,7 +160,8 @@ Executable by an LLM with repo write access; no business logic anywhere.
 2. `go mod init github.com/green-0-rabbit/funcd`; set `go` to the toolchain the flake provides.
 3. Write `flake.nix` (single devShell, inputs: `nixpkgs` pinned to the current
    `nixos-unstable`; outputs for `aarch64-darwin`, `x86_64-linux`, `aarch64-linux`;
-   shell packages: `go`, `gopls`, `gnumake`, `git`); run `nix flake lock`.
+   shell packages: `go`, `gopls`, `just`, `git` — matching Decision §2, no `gnumake`);
+   run `nix flake lock`.
 4. Write `.envrc` = `use flake`.
 5. `go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
    (record the resolved version in the PR description).
