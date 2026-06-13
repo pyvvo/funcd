@@ -68,7 +68,7 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 | ADR drafted / `Proposed` | — | `idea → adr`, link the ADR | — | reconcile its `P-x` placeholder → real number | — |
 | ADR **Accepted** | sync **iff** it refines/contradicts the blueprint (newest accepted wins) | `→ accepted` | set `Accepted` + date | reconcile number; **re-run analyzer** if a new build dep surfaced | — |
 | ADR **Scaffolded** | — | `→ scaffolded` | — | — | scaffold lands |
-| ADR **Implemented** | — | `→ implemented` | set `Implemented` | — | impl lands |
+| ADR **Implemented** | — | `→ implemented` | set `Implemented` (final edit — frozen after) | — | impl lands |
 | ADR **Superseded** | sync (newest wins) | re-point row to the new ADR | old → `Superseded by ADR-XXXX`; write the new ADR | re-sequence if build order changed | maybe |
 | **feat** feature added / removed / re-scoped | maybe (if architectural intent shifts) | (the edit itself) | draft a new ADR or defer one | **update `plan.json`, re-run `plan_waves.py`, repaste graph/waves/critical-path** | — |
 | **blueprint** architecture change | (the edit itself) | maybe add/adjust feature rows | maybe a new or superseding ADR | maybe re-sequence | — |
@@ -100,7 +100,15 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 
 - Every ADR has a `Realizes: FEAT-NNNN/Fxx` header pointing at a real feat row.
 - Blueprint ⟷ newest Accepted ADR: on conflict the ADR wins and the blueprint is updated.
-- An `Accepted` ADR is never edited in place — supersede it with a new ADR, link both ways.
+- **An `Accepted` ADR is frozen in substance.** Context, Scenarios, Decision, Contracts,
+  Alternatives — none of it changes after acceptance. The *only* edits ever allowed are the
+  forward status bump (`Accepted → Implemented`) and the single `Superseded by ADR-XXXX`
+  back-link. To change the decision, write a new superseding ADR — never rewrite history.
+- **An `Implemented` ADR is fully frozen — never updated.** Once its status reads
+  `Implemented`, the file is closed: no substance, contract, or status edit ever again. The
+  one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link. A correction
+  to an implemented decision is *always* a new superseding ADR (carrying its own feat row and
+  roadmap follow-through), never an in-place edit.
 - Roadmap computed sections ≡ `plan.json` (analyzer output, not hand-drawn); the slate
   table and `plan.json` stay mirrored.
 - Roadmap `P-x` placeholders reconcile to real ADR numbers as ADRs land (track by the
@@ -108,6 +116,45 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - Identity in every repo file: `Deciders: green-0-rabbit`, module
   `github.com/green-0-rabbit/funcd`, author "The funcd Authors". **Never** write the local
   machine username or local filesystem paths into a tracked file — grep before finishing.
+
+## Strict rules — the guardrails that keep the system consistent
+
+Hard constraints. They bound *consistency*, not *creativity* — everything not named here
+stays free (see below).
+
+1. **Status moves forward only.** `Draft → Proposed → Accepted → Implemented`. Never walk a
+   status backward, and never delete or renumber an ADR — numbers are sequential and
+   permanent. "Undoing" an Accepted/Implemented decision is done by *superseding* it, not by
+   editing or removing it.
+2. **No silent override.** A `Draft`/`Proposed` ADR may not contradict an `Accepted` one:
+   either it explicitly supersedes it (status `Superseded by ADR-XXXX`, linked both ways) or
+   it conforms. Newest *Accepted* wins — a Draft never quietly wins over Accepted work.
+3. **One ADR = one topic at one altitude.** If a draft starts deciding a neighboring topic,
+   split it into a follow-up ADR rather than overloading it. Overlapping ADRs that each
+   half-decide a topic are the main source of cross-document contradiction.
+4. **Decide in the right layer.** feat docs hold *what/why* only (never an interface, a
+   library, or a mechanism — those belong in an ADR); the roadmap holds *order* only (it
+   commits to no architecture); the blueprint holds target architecture (per-topic contracts
+   live in ADRs). A "how" sentence in a feat doc, or an architecture call in the roadmap, is
+   a defect.
+5. **Never hand-edit a computed artifact.** The roadmap's graph, waves, and critical path are
+   `plan_waves.py` output; the slate table mirrors `plan.json`. Change `plan.json`, re-run the
+   analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise).
+6. **No orphans, no ghosts.** Every ADR's `Realizes: FEAT-NNNN/Fxx` points at a real row, and
+   every feat row's status equals its ADR's status. One without the other is a defect to fix
+   in the same session.
+7. **Propagate in the same session.** A status, scope, or architecture change is not "done"
+   until its obligations (the propagation table above) are discharged in the same change.
+   Never leave the four layers in a half-updated state.
+
+### What stays free
+
+The rules above constrain consistency, not exploration. You remain free to: brainstorm and
+weigh options; edit `Draft`/`Proposed` ADRs as much as you like (they freeze only at
+acceptance); draft independent ADRs in parallel; choose any Apache-2.0/MIT-compatible library
+on its merits; reorder or parallelize work within a build tier; and restructure the prose of
+living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
+the rules above. The judge advises; it never blocks a sound decision on taste.
 
 ## Before you finish any skill run — propagation checklist
 
