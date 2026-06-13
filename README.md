@@ -17,13 +17,16 @@ Kubernetes-inspired internals, designed for the agent era.
 
 0. **Scope the version** — `docs/feat/` lists what a version must contain, high level.
 1. **Brainstorm** a topic from that list (component, feature, cross-cutting concern).
-2. **ADR** captures the decision and its contracts; the feat tracking row advances.
-3. **Scaffold** from the ADR + blueprint: interfaces, API facades, dependencies, and
+2. **ADR** captures the decision and its contracts; mark it `Proposed` when ready.
+3. **Judge gate**: the `adr-judge` skill reviews the ADR *itself* against the blueprint,
+   feat row, and related ADRs — flags inconsistency, bias, and scope creep, names the
+   strengths to keep; the human weighs the verdict and accepts. The feat row advances.
+4. **Scaffold** from the ADR + blueprint: interfaces, API facades, dependencies, and
    test skeletons (one e2e skeleton per ADR scenario) — no logic.
-4. **Review gate**: a high-capability model/reviewer validates the scaffold against the ADR.
-5. **Implement** the feature; make the test skeletons pass.
-6. **Validate**: full test suite green — every ADR scenario now passes.
-7. **LLM judge** (optional): an independent model audits code + tests against the ADR.
+5. **Review gate**: a high-capability model/reviewer validates the scaffold against the ADR.
+6. **Implement** the feature; make the test skeletons pass.
+7. **Validate**: full test suite green — every ADR scenario now passes.
+8. **LLM judge** (optional): an independent model audits code + tests against the ADR.
 
 ## Status
 

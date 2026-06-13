@@ -3,7 +3,8 @@
 - **Status**: Accepted
 - **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer `docs/feat/`;
   added the *Scenarios* template section and test skeletons in the scaffold phase; added
-  the validation and optional LLM-judge gates)
+  the validation and optional LLM-judge gates; added the ADR-judge gate that reviews the
+  decision itself before acceptance — see the `adr-judge` skill)
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process
 
@@ -72,24 +73,35 @@ review gates catch.
 1. **Brainstorm** a topic; clarify unknowns with the human before drafting — including
    the *scenarios* that motivated the feature (they become the ADR's Scenarios section
    and, later, its e2e tests).
-2. **Draft the ADR** (`Proposed`); human review → `Accepted`. Update the feat doc's
-   tracking row (`idea → adr → accepted`).
-3. **Scaffold from the ADR + blueprint**: interfaces, API facades, `go.mod` additions,
+2. **Draft the ADR**: write every template section; mark `Proposed` once it is ready for
+   review. No code yet — the decision and its *Contracts* must stand on their own.
+3. **Judge gate (the ADR itself)**: before the human accepts, the ADR *document* is judged
+   against the blueprint goal, its feat row, the related/Accepted ADRs, and this template —
+   goal alignment, internal & cross-document consistency, bias in *Alternatives*, contract
+   bugs, scope creep, and the strengths worth keeping. The `adr-judge` skill makes this
+   repeatable: it produces an evidence-cited, severity-tiered verdict (Blocker / Major /
+   Minor / Nit) and names what to keep as-is, not only what is wrong. Blocker/Major
+   findings loop back to step 2; the human weighs the verdict and makes the call →
+   `Accepted`. Update the feat doc's tracking row (`idea → adr → accepted`). Acceptance is
+   always the human's decision — the judge advises, it never accepts.
+4. **Scaffold from the ADR + blueprint**: interfaces, API facades, `go.mod` additions,
    config stubs — declarations only, no business logic — **plus test skeletons**:
    contract/unit stubs derived from *Contracts* and one e2e skeleton per *Scenario*,
    compiling but skipped/failing. The skeletons are the executable form of the ADR; the
-   implementer's job in step 5 is to make them pass and extend them, never to start
+   implementer's job in step 6 is to make them pass and extend them, never to start
    testing from scratch.
-4. **Review gate**: a high-capability reviewer (e.g. Opus-class / "ultra" code review)
-   validates the scaffold against the ADR's *Review checklist*, *Contracts*, and
-   *Scenarios* (every scenario has a named skeleton). Findings loop back to step 3 (or
-   amend the ADR if the decision itself was wrong).
-5. **Implement** the feature, un-skip and complete the test skeletons, extend them as the
+5. **Review gate (the scaffold)**: a high-capability reviewer (e.g. Opus-class / "ultra"
+   code review) validates the scaffold against the ADR's *Review checklist*, *Contracts*,
+   and *Scenarios* (every scenario has a named skeleton) — the same goal-anchored,
+   evidence-cited discipline as the judge gate, pointed at code instead of the document.
+   Findings loop back to step 4 (or back to step 2 with an amended/superseding ADR if the
+   decision itself was wrong).
+6. **Implement** the feature, un-skip and complete the test skeletons, extend them as the
    implementation reveals edge cases.
-6. **Validate**: run the full suite — unit, contract, integration, e2e — and confirm every
-   scenario skeleton from the ADR now passes. Failures loop back to step 5. On green:
+7. **Validate**: run the full suite — unit, contract, integration, e2e — and confirm every
+   scenario skeleton from the ADR now passes. Failures loop back to step 6. On green:
    ADR moves to `Implemented`, feat row to `implemented`.
-7. **LLM judge (optional)**: an independent high-capability model audits the
+8. **LLM judge (optional)**: an independent high-capability model audits the
    implementation *and* its tests against the ADR — every Scenario covered honestly (no
    weakened or deleted assertions), Contracts respected, Review checklist still true —
    and files a short conformance report. Discrepancies either fix the code/tests or, if
@@ -100,6 +112,9 @@ review gates catch.
 
 - (+) Decisions are auditable; scaffolding is reproducible from text; no big-bang code.
 - (+) The review gate has an objective checklist instead of vibes.
+- (+) The decision itself gets an independent, goal-anchored review *before* it is frozen
+  (the judge gate): inconsistency, bias, and scope creep are caught while the ADR is still
+  cheap to change, and genuine strengths are flagged to keep rather than accidentally lost.
 - (−) Process overhead for trivial choices — mitigated: tiny decisions can be a one-line
   entry in an existing ADR's *Open questions* resolution rather than a new file.
 

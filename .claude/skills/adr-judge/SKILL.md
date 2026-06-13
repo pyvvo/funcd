@@ -1,6 +1,6 @@
 ---
 name: adr-judge
-description: Judge / review / critique / red-team a funcd ADR against the platform's actual goals — produces an evidence-cited verdict that flags inconsistency, bias, scope creep, contract bugs, and anything that could break the platform's development, while explicitly naming what is strong and must be kept. Use whenever the user wants an ADR evaluated, audited, stress-tested, or sanity-checked — "judge ADR-0002", "review this ADR", "what do you think of the gateway ADR", "poke holes in it", "is this decision sound", "red-team the store port ADR" — even if they never say the word "judge". This is the ADR-0000 review gate (#4) and the optional LLM-judge gate (#7) made repeatable. It evaluates and reports; it does not author ADRs (that is the `adr` skill) and it does not scaffold.
+description: Judge / review / critique / red-team a funcd ADR against the platform's actual goals — produces an evidence-cited verdict that flags inconsistency, bias, scope creep, contract bugs, and anything that could break the platform's development, while explicitly naming what is strong and must be kept. Use whenever the user wants an ADR evaluated, audited, stress-tested, or sanity-checked — "judge ADR-0002", "review this ADR", "what do you think of the gateway ADR", "poke holes in it", "is this decision sound", "red-team the store port ADR" — even if they never say the word "judge". This is the ADR-0000 judge gate (#3) — the decision review on the ADR document, run before acceptance — and the same goal-anchored discipline backs the scaffold review gate (#5) and the optional implementation LLM-judge gate (#8). It evaluates and reports; it does not author ADRs (that is the `adr` skill) and it does not scaffold.
 ---
 
 # Judge an ADR
@@ -88,7 +88,7 @@ radius, not by how easy they are to spot:
    - **Contract bugs**: signatures that won't compile, an interface that leaks `any` where
      the ADR bans it, an error/edge mapping that can't actually produce the asserted result.
    - **LLM-scaffoldability**: can an LLM scaffold from *blueprint + this ADR alone* without
-     inventing? Ambiguity here directly breaks the ADR-0000 handoff (gate #3).
+     inventing? Ambiguity here directly breaks the ADR-0000 scaffold handoff (gate #4).
    - **Missing exit criteria**: a *Temporary workaround* with no exit is undocumented debt.
    - **Security / isolation / multi-tenancy**: for any ADR touching the data plane, sandbox,
      egress, secrets, or identity, hold it against the blueprint's security model — a
@@ -120,8 +120,8 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
 - **Separate "wrong" from "I'd have chosen differently."** Only defects (inconsistency,
   contradiction, unjustified claim, goal miss) are Blocker/Major. Pure preference goes to
   Nits, explicitly marked — the judge does **not** re-litigate a decision that is in scope
-  and honestly justified (ADR-0000 gate #7: read the ADR and the diff; don't reopen the
-  decision).
+  and honestly justified (this mirrors ADR-0000's implementation-judge rule at gate #8:
+  don't reopen a sound decision on taste).
 - **Don't manufacture findings to look thorough.** If a section is sound, the correct output
   is to say so under Strengths. A short report on a strong ADR is a valid result.
 - **Don't rubber-stamp either.** Before concluding "looks good", confirm you actually traced

@@ -101,10 +101,14 @@ Quality bar per section:
 1. Present the user a short summary: the decision itself, the alternatives that lost and
    why, the workarounds, and anything you flagged as an open question. Link the file —
    don't paste the whole ADR into chat.
-2. Revise on feedback. When the user is satisfied with the content, set
-   **Status: Proposed**; when they explicitly accept, set **Status: Accepted** with the
-   date. Acceptance is the user's call — never self-accept.
-3. An Accepted ADR is immutable in substance: later changes happen by writing a new ADR
+2. When the draft is ready for review, set **Status: Proposed**, then run the **judge gate**
+   (ADR-0000 gate #3): hand the ADR to the `adr-judge` skill for an evidence-cited,
+   severity-tiered verdict — inconsistency, bias, scope creep, contract bugs, and the
+   strengths worth keeping. Loop its Blocker/Major findings back into the draft and revise.
+3. When the user is satisfied (judge findings addressed), set **Status: Accepted** with the
+   date on their explicit go-ahead. Acceptance is the user's call — never self-accept; the
+   judge advises but never accepts.
+4. An Accepted ADR is immutable in substance: later changes happen by writing a new ADR
    that supersedes it (link both ways), never by editing history.
 
 ## Step 4 — Sync the blueprint and the feat tracking
