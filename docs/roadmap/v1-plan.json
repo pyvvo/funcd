@@ -1,0 +1,299 @@
+{
+  "version": "v1",
+  "accepted": [
+    "ADR-0001",
+    "ADR-0002"
+  ],
+  "items": [
+    {
+      "id": "P-A",
+      "title": "resource model + ObjectMeta",
+      "features": [
+        "F03",
+        "F22"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-B",
+      "title": "API surface + codegen",
+      "features": [
+        "F02"
+      ],
+      "depends_on": [
+        "P-A"
+      ]
+    },
+    {
+      "id": "P-C",
+      "title": "store / database port",
+      "features": [
+        "F05",
+        "F21db"
+      ],
+      "depends_on": [
+        "P-A"
+      ]
+    },
+    {
+      "id": "P-D",
+      "title": "blob / storage port",
+      "features": [
+        "F21blob"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-E",
+      "title": "bus / messaging port",
+      "features": [
+        "F06"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-F",
+      "title": "logger root",
+      "features": [
+        "F17a"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-F2",
+      "title": "OTel + audit",
+      "features": [
+        "F17b"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-G",
+      "title": "runtime port",
+      "features": [
+        "F12"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-H",
+      "title": "gateway port",
+      "features": [
+        "F10"
+      ],
+      "depends_on": [
+        "ADR-0002"
+      ]
+    },
+    {
+      "id": "P-H2",
+      "title": "activator / scale-to-zero",
+      "features": [
+        "F11"
+      ],
+      "depends_on": [
+        "P-H",
+        "P-G",
+        "P-J"
+      ]
+    },
+    {
+      "id": "P-I",
+      "title": "facade + lifecycle + harness",
+      "features": [
+        "F04"
+      ],
+      "depends_on": [
+        "P-C",
+        "P-D",
+        "P-E",
+        "P-F",
+        "P-G",
+        "P-H"
+      ]
+    },
+    {
+      "id": "P-J",
+      "title": "controller engine",
+      "features": [
+        "F08"
+      ],
+      "depends_on": [
+        "P-A",
+        "P-C",
+        "P-E"
+      ]
+    },
+    {
+      "id": "P-K",
+      "title": "scheduler",
+      "features": [
+        "F09"
+      ],
+      "depends_on": [
+        "P-J"
+      ]
+    },
+    {
+      "id": "P-L",
+      "title": "API server",
+      "features": [
+        "F07"
+      ],
+      "depends_on": [
+        "P-B",
+        "P-A",
+        "P-C",
+        "P-J"
+      ]
+    },
+    {
+      "id": "P-M",
+      "title": "function contract/lifecycle",
+      "features": [
+        "F13"
+      ],
+      "depends_on": [
+        "P-G",
+        "P-H",
+        "P-A",
+        "P-C",
+        "P-J"
+      ]
+    },
+    {
+      "id": "P-N",
+      "title": "service pattern + KV",
+      "features": [
+        "F14"
+      ],
+      "depends_on": [
+        "P-E",
+        "P-C",
+        "P-J",
+        "P-A"
+      ]
+    },
+    {
+      "id": "P-O",
+      "title": "blob service",
+      "features": [
+        "F23"
+      ],
+      "depends_on": [
+        "P-D",
+        "P-N"
+      ]
+    },
+    {
+      "id": "P-P",
+      "title": "secrets service",
+      "features": [
+        "F15"
+      ],
+      "depends_on": [
+        "P-C",
+        "P-N",
+        "P-G"
+      ]
+    },
+    {
+      "id": "P-Q",
+      "title": "eventing core",
+      "features": [
+        "F16"
+      ],
+      "depends_on": [
+        "P-E",
+        "P-H",
+        "P-G",
+        "P-M",
+        "P-J"
+      ]
+    },
+    {
+      "id": "P-R",
+      "title": "funcdcli + SDK",
+      "features": [
+        "F18"
+      ],
+      "depends_on": [
+        "P-B",
+        "P-L"
+      ]
+    },
+    {
+      "id": "P-S",
+      "title": "testing + full e2e",
+      "features": [
+        "F20"
+      ],
+      "depends_on": [
+        "P-I",
+        "P-Q",
+        "P-H2"
+      ]
+    },
+    {
+      "id": "P-T",
+      "title": "packaging",
+      "features": [
+        "F19"
+      ],
+      "depends_on": [
+        "P-R",
+        "P-S"
+      ]
+    }
+  ],
+  "waves": {
+    "1": [
+      "P-A",
+      "P-D",
+      "P-E",
+      "P-F",
+      "P-F2",
+      "P-G",
+      "P-H"
+    ],
+    "2": [
+      "P-B",
+      "P-C"
+    ],
+    "3": [
+      "P-I",
+      "P-J"
+    ],
+    "4": [
+      "P-H2",
+      "P-K",
+      "P-L",
+      "P-M",
+      "P-N"
+    ],
+    "5": [
+      "P-O",
+      "P-P",
+      "P-Q",
+      "P-R"
+    ],
+    "6": [
+      "P-S"
+    ],
+    "7": [
+      "P-T"
+    ]
+  }
+}
