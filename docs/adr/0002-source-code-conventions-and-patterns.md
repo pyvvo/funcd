@@ -1,6 +1,6 @@
 # ADR-0002: Source-code conventions & architecture patterns
 
-- **Status**: Accepted
+- **Status**: Reviewing
 - **Date**: 2026-06-13 (revised same day after judge review: error kernel relocated to
   `api/fault`, `store`/`blob` port naming, generated-file lint exemption, `revive` dropped;
   accepted 2026-06-13; clarified post-acceptance that a driver folder is per-engine, not

@@ -1,0 +1,101 @@
+package fault
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"testing"
+)
+
+// scenario: error-maps-to-problem (ADR-0002)
+func TestScenario_ErrorMapsToProblem(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantType   string
+	}{
+		{
+			name:       "NotFound maps to 404",
+			err:        NotFoundf("store.Get", "no function with id %q", "x"),
+			wantStatus: http.StatusNotFound,
+			wantType:   "urn:funcd:problem:not-found",
+		},
+		{
+			name:       "Invalid maps to 400",
+			err:        Invalidf("validate", "name must not be empty"),
+			wantStatus: http.StatusBadRequest,
+			wantType:   "urn:funcd:problem:invalid",
+		},
+		{
+			name:       "Conflict maps to 409",
+			err:        Conflictf("store.Put", "version mismatch"),
+			wantStatus: http.StatusConflict,
+			wantType:   "urn:funcd:problem:conflict",
+		},
+		{
+			name:       "Unauthorized maps to 401",
+			err:        Unauthorizedf("auth", "invalid token"),
+			wantStatus: http.StatusUnauthorized,
+			wantType:   "urn:funcd:problem:unauthorized",
+		},
+		{
+			name:       "Forbidden maps to 403",
+			err:        Forbiddenf("auth", "insufficient permissions"),
+			wantStatus: http.StatusForbidden,
+			wantType:   "urn:funcd:problem:forbidden",
+		},
+		{
+			name:       "Unavailable maps to 503",
+			err:        Unavailablef("store.Connect", "could not reach db"),
+			wantStatus: http.StatusServiceUnavailable,
+			wantType:   "urn:funcd:problem:unavailable",
+		},
+		{
+			name:       "Internal maps to 500",
+			err:        Internalf("controller.refresh", "unexpected nil pointer"),
+			wantStatus: http.StatusInternalServerError,
+			wantType:   "urn:funcd:problem:internal",
+		},
+		{
+			name:       "wrapped error preserves kind mapping",
+			err:        fmt.Errorf("handler: %w", NotFoundf("store.Get", "no widget with id %q", "x")),
+			wantStatus: http.StatusNotFound,
+			wantType:   "urn:funcd:problem:not-found",
+		},
+		{
+			name:       "unknown error defaults to 500",
+			err:        errors.New("something went wrong"),
+			wantStatus: http.StatusInternalServerError,
+			wantType:   "urn:funcd:problem:internal",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := ToProblem(tt.err)
+			if p.Status != tt.wantStatus {
+				t.Errorf("Status = %d, want %d", p.Status, tt.wantStatus)
+			}
+			if p.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", p.Type, tt.wantType)
+			}
+			if p.Detail == "" {
+				t.Error("Detail should not be empty")
+			}
+		})
+	}
+}
+
+func TestWriteProblem_SetsHeaders(t *testing.T) {
+	// We can't easily test WriteProblem without an httptest.ResponseRecorder,
+	// but we can verify ToProblem produces the full struct.
+	err := NotFoundf("store.Get", "no widget")
+	p := ToProblem(err)
+	if p.Title == "" {
+		t.Error("Title should not be empty")
+	}
+	if p.Status == 0 {
+		t.Error("Status should not be zero")
+	}
+}

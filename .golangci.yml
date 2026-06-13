@@ -7,6 +7,83 @@ linters:
     - errcheck
     - ineffassign
     - misspell
+    - gochecknoglobals
+    - gochecknoinits
+    - forbidigo
+    - depguard
+    - errorlint
+  settings:
+    depguard:
+      rules:
+        main:
+          list-mode: original
+          files:
+            - $all
+          deny:
+            - pkg: "github.com/golang/mock"
+              desc: "no mock frameworks; use in-memory drivers + contract suites"
+            - pkg: "github.com/stretchr/testify/mock"
+              desc: "no mock frameworks; use in-memory drivers + contract suites"
+        # ADR-0002 §6: log/slog only. A depguard pkg:"log" rule prefix-matches
+        # "log/slog" as well (depguard v2 limitation — no way to exclude a
+        # sub-package prefix). Instead the forbidigo patterns below ban every
+        # stdlib log call (log.Print, log.Fatal, log.Panic), achieving the same
+        # enforcement: importing "log" is harmless if its functions are banned.
+        api-boundary:
+          list-mode: original
+          files:
+            - "api/**"
+          deny:
+            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
+              desc: "api/** must not import internal/*"
+            - pkg: "github.com/green-0-rabbit/funcd/pkg/*"
+              desc: "api/** must not import pkg/*"
+        platform-leaf:
+          list-mode: original
+          files:
+            - "internal/platform/**"
+          deny:
+            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
+              desc: "internal/platform is leaf; must not import other internal packages"
+        e2e-boundary:
+          list-mode: original
+          files:
+            - "tests/e2e/**"
+          deny:
+            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
+              desc: "tests/e2e must only import pkg/** + api/**"
+    forbidigo:
+      forbid:
+        - pattern: "^\\s*panic\\("
+          msg: "do not panic outside of package main; return a typed api/fault error"
+        - pattern: "fmt\\.Print"
+          msg: "use log/slog instead of fmt.Print*"
+        - pattern: "log\\.Print"
+          msg: "use log/slog instead of log.Print*"
+        - pattern: "log\\.Fatal"
+          msg: "use log/slog instead of log.Fatal*"
+        - pattern: "log\\.Panic"
+          msg: "use log/slog instead of log.Panic*"
+        # NOTE: forbidigo inspects identifier/call nodes only — it cannot match the
+        # `interface{}` *type literal* (an `interface\{\}` pattern is dead, never fires).
+        # The modern alias `any` IS an identifier and IS matchable; banning it covers
+        # `any`, `[]any`, `map[string]any`, `...any`. Literal `interface{}` is left to
+        # review + the `any` idiom (ADR-0002 §4: "heuristic, not type-aware"). The
+        # sanctioned `...any` printf-variadic form is re-allowed under exclusions below.
+        - pattern: "\\bany\\b"
+          msg: "do not use 'any' (or interface{}) in exported or port signatures; use a typed struct, typed enum, or json.RawMessage"
+  exclusions:
+    generated: lax
+    rules:
+      # ADR-0002 §3: the `...any` printf-style variadic in api/fault's *f helpers is the
+      # one sanctioned use of `any`. Re-allow exactly that form (matched on the source line).
+      - linters:
+          - forbidigo
+        source: '\.\.\.any'
+      # ADR-0002 §4/§7: committed generated code is not held to the hand-written any-ban.
+      - linters:
+          - forbidigo
+        path: '(^|/)generated/|\.gen\.go$'
 
 run:
   timeout: 5m
@@ -14,3 +91,4 @@ run:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+

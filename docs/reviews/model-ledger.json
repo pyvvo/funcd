@@ -13,5 +13,20 @@
     "dod_total": 11,
     "report": "docs/reviews/adr-0001-scaffold-deepseek-v4-pro.md",
     "notes": "Clean pass: just ci exit 0 \u2014 model pre-empted ADR-0001's no-Go-files-vs-green-CI contradiction via _has-packages guard (lint/test no-op while module empty). Tree matches surface, zero .go files, no identity leak, Accepted ADR unchanged, feat F01=scaffolded, golangci-lint config verify exit 0. 3 minors (model, non-defect): ci recipe superset of ADR spec (+tidy/verify); guard vestigial once real pkgs land; v2 default linters also active. DoD 10/11; 1 miss=env (no Nix for fresh-clone shell)."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0002",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 1,
+    "minors": 1,
+    "model_attributed": 2,
+    "dod_passed": 9,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0002-implementation-deepseek-v4-pro.md",
+    "notes": "changes-requested. B1(model): 3 lint-fixture scenarios absent (cross-feature/any-leak/no-mock) \u2014 tests/ has only .gitkeep; scenarios dropped + DoD item unmet. M1(model): .golangci.yml under-enforces \u2014 no bare-'any' forbidigo pattern, no generated exemption, no slog-only depguard rule (feature-isolation rule deferred=adr). m1(adr): driver-conformance t.Skip + context-cancellation absent, ADR-deferred to store ADR. Keep: api/fault stdlib-only, facade functional-options returns concrete *Platform, just ci exit 0, golangci 0 issues, kernel unit coverage. DoD 9/12. Implementer: deepseek-v4-pro."
   }
 ]
