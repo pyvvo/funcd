@@ -175,7 +175,7 @@ capacity-based grouping is fine **iff** it passes `--check-waves`.
 
 | Tier | Items | Gate / why |
 |---|---|---|
-| **0 (done)** | ADR-0001, ADR-0002 | Bootstrap + conventions. **Accepted — need `/adr-impl` + review.** Nothing compiles or is conventional without them. |
+| **0** | ADR-0001, ADR-0002 | Bootstrap + conventions. **ADR-0001 Implemented; ADR-0002 Accepted — needs `/adr-impl` + review.** Nothing compiles or is conventional without them. |
 | **1** | P-A · P-D · P-E · P-F · P-F2 · P-G · P-H | Everything that needs only conventions (or, for P-A, only ADR-0002). The big parallel tier — but also the biggest, so sequence within it by capacity; P-A first since tier 2 waits on it. |
 | **2** | P-B · P-C | Both need the types (P-A): codegen generates from the resource model; the store persists typed objects. |
 | **3** | P-I · P-J | Facade wires the tier-1/2 ports + logger root (**and ships the `InMemory()` e2e-harness slice**); controller needs store+bus+types. |
