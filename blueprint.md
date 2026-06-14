@@ -874,6 +874,12 @@ funcd/
 
 ### Resource model
 
+> Concretely realized as typed Go in **[ADR-0003](docs/adr/0003-resource-model-and-api-typing.md)**
+> (`api/types/v1alpha1`): the shared `TypeMeta`/`ObjectMeta` envelope (required `resourceGroup`,
+> optional `tags`), the generic `Object` + optional `StatusObject` interfaces and a kind registry,
+> and each kind's `spec`/`status` skeleton — behavioral fields are appended by the owning feature
+> ADRs. ADR-0003 defines all 15 kinds below as typed shells.
+
 Challenged list — kept, renamed, or removed with reasons:
 
 | Kind | Scope | Notes |

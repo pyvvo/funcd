@@ -6,7 +6,7 @@
   ],
   "items": [
     {
-      "id": "P-A",
+      "id": "ADR-0003",
       "title": "resource model + ObjectMeta",
       "features": [
         "F03",
@@ -23,7 +23,7 @@
         "F02"
       ],
       "depends_on": [
-        "P-A"
+        "ADR-0003"
       ]
     },
     {
@@ -34,7 +34,7 @@
         "F21db"
       ],
       "depends_on": [
-        "P-A"
+        "ADR-0003"
       ]
     },
     {
@@ -131,7 +131,7 @@
         "F08"
       ],
       "depends_on": [
-        "P-A",
+        "ADR-0003",
         "P-C",
         "P-E"
       ]
@@ -154,7 +154,7 @@
       ],
       "depends_on": [
         "P-B",
-        "P-A",
+        "ADR-0003",
         "P-C",
         "P-J"
       ]
@@ -168,7 +168,7 @@
       "depends_on": [
         "P-G",
         "P-H",
-        "P-A",
+        "ADR-0003",
         "P-C",
         "P-J"
       ]
@@ -183,7 +183,7 @@
         "P-E",
         "P-C",
         "P-J",
-        "P-A"
+        "ADR-0003"
       ]
     },
     {
@@ -260,7 +260,7 @@
   ],
   "waves": {
     "1": [
-      "P-A",
+      "ADR-0003",
       "P-D",
       "P-E",
       "P-F",
