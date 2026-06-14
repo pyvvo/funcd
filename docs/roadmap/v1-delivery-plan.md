@@ -1,9 +1,9 @@
 # V1 delivery plan — ADR sequencing to ship FEAT-0000
 
-- **Status**: Active (living — update as ADRs are created/accepted/implemented)
-- **Date**: 2026-06-13
-- **Realizes**: [FEAT-0000 (V1 — Agent-ready core)](../feat/0000-feat-v1.md)
-- **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
+* **Status**: Active (living — update as ADRs are created/accepted/implemented)
+* **Date**: 2026-06-13
+* **Realizes**: [FEAT-0000 (V1 — Agent-ready core)](../feat/0000-feat-v1.md)
+* **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
 ## Purpose & how to read this
 
@@ -16,12 +16,13 @@ undecided question.
 
 **Two tracks — the core idea** (this design/build framing is this plan's own lens, not ADR-0000
 vocabulary). Keep them distinct:
-- **Design track** — create + judge + accept ADRs. Cheap, and ADRs for independent topics can be
+
+* **Design track** — create + judge + accept ADRs. Cheap, and ADRs for independent topics can be
   drafted in parallel; the real serialization point is *your* review/acceptance bandwidth.
-- **Build track** — implement (`/adr-impl`) + review (`/adr-impl-review`). Serialized by **hard
+* **Build track** — implement (`/adr-impl`) + review (`/adr-impl-review`). Serialized by **hard
   compile/runtime dependencies** (you can't build the controller before the store port exists).
 
-The whole strategy: **keep the design track ~one tier ahead of the build track**, so every time the
+The whole strategy: **keep the design track \~one tier ahead of the build track**, so every time the
 build track finishes a tier, the next tier's ADRs are already Accepted and ready to implement. An ADR
 only needs to be Accepted before *its own* feature is implemented — not before anything else.
 
@@ -33,11 +34,11 @@ only needs to be Accepted before *its own* feature is implemented — not before
 ## Proposed ADR slate
 
 This table **is** the build-dependency input — the *Build-depends on* column lists plan-item ids and
-is mirrored verbatim in [`v1-plan.json`](v1-plan.json), which the analyzer consumes. Keep the two in
+is mirrored verbatim in `v1-plan.json`, which the analyzer consumes. Keep the two in
 sync; re-run the analyzer (below) after any edit.
 
 | Plan id | Proposed ADR working title | Realizes | Build-depends on (items) |
-|---|---|---|---|
+|----|----|----|----|
 | ADR-0001 ✓ | Project setup, structure, Nix | F01 | — |
 | ADR-0002 ✓ | Source-code conventions (`api/fault`, facade, lint graph) | F25 | ADR-0001 |
 | ADR-0003 | Resource model & API typing (v1alpha1 kinds, `ObjectMeta` w/ resourceGroup+tags, spec/status, typed IDs/enums) | F03, F22 | ADR-0002 |
@@ -50,12 +51,12 @@ sync; re-run the analyzer (below) after any edit.
 | **P-G** | Function runtime port (`runtime.Runtime`: process + containerd/runc curated runtimes; netns wiring + nftables lateral-deny; worker/shim seam) | F12 | ADR-0002 |
 | **P-H** | Gateway port (embedded Lura + dev driver; route programming) | F10 | ADR-0002 |
 | **P-H2** | Activator & scale-to-zero (request buffer + wake; idle reclaim driven by `scaling` spec) | F11 | P-H, P-G, P-J |
-| **P-I** | Platform facade & lifecycle (`pkg/funcd` New/options/presets; composition root; crash-only boot reconcile; **the `InMemory()` e2e-harness slice**) | F04 | P-C, P-D, P-E, P-F, P-G, P-H |
+| **P-I** | Platform facade & lifecycle (`pkg/funcd` New/options/presets; composition root; crash-only boot reconcile; **the** `InMemory()` e2e-harness slice) | F04 | P-C, P-D, P-E, P-F, P-G, P-H |
 | **P-J** | Controller engine & feature-slice pattern (watch→diff→act→status; workqueue/backoff; registry) | F08 | ADR-0003, P-C, P-E |
 | **P-K** | Scheduler (trivial single-node placement behind a pluggable iface) | F09 | P-J |
 | **P-L** | API server (authn: tokens+API keys; namespace RBAC; admission validate/default/quota; problem+json) | F07 | P-B, ADR-0003, P-C, P-J |
 | **P-M** | Function contract, shape & lifecycle (CloudEvents handler; Knative-func shape; source-artifact deploys; shape-validation pipeline; apply→Revision→deploy→invoke→logs; manual replicas) | F13 | P-G, P-H, ADR-0003, P-C, P-J |
-| **P-N** | Service facade pattern + KV service (Service resource reconcile + binding + facade; KV as first instance). *V1 authz is namespace-scoped RBAC only — the `auth.Authorizer` PDP/`Grant` enforcement is stubbed, deferred to V2.* | F14 | P-E, P-C, P-J, ADR-0003 |
+| **P-N** | Service facade pattern + KV service (Service resource reconcile + binding + facade; KV as first instance). *V1 authz is namespace-scoped RBAC only — the* `auth.Authorizer` PDP/`Grant` enforcement is stubbed, deferred to V2. | F14 | P-E, P-C, P-J, ADR-0003 |
 | **P-O** | Blob service (storage layer exposed function-facing, on the service pattern) | F23 | P-D, P-N |
 | **P-P** | Secrets service (Secret resource; encrypted at rest; env/tmpfs delivery; mem + s3-encryption drivers). *Same V1 authz note as P-N — namespace-scoped, no PDP yet.* | F15 | P-C, P-N, P-G |
 | **P-Q** | Eventing core (trigger capture → CloudEvents normalization; HTTP triggers via gateway; timer/cron EventSource) | F16 | P-E, P-H, P-G, P-M, P-J |
@@ -79,8 +80,8 @@ from `internal/observability`), whereas OTel/audit is heavier and off the critic
 
 ## Build dependency graph
 
-`X → Y` = X must be *built* before Y. This graph is **generated from the slate table by
-`plan_waves.py`** (`--mermaid-only`) and mermaid-validated — it cannot drift from the table, and it
+`X → Y` = X must be *built* before Y. This graph is **generated from the slate table by**
+`plan_waves.py` (`--mermaid-only`) and mermaid-validated — it cannot drift from the table, and it
 shows every edge (no hand-pruning). Regenerate it whenever the slate / `v1-plan.json` changes.
 
 ```mermaid
@@ -174,11 +175,11 @@ mode now catches exactly that; the table below is regenerated, not hand-drawn.) 
 capacity-based grouping is fine **iff** it passes `--check-waves`.
 
 | Tier | Items | Gate / why |
-|---|---|---|
+|----|----|----|
 | **0 (done)** | ADR-0001, ADR-0002 | Bootstrap + conventions. **Both Implemented.** Nothing compiles or is conventional without them. |
 | **1** | ADR-0003 · P-D · P-E · P-F · P-F2 · P-G · P-H | Everything that needs only conventions (or, for ADR-0003, only ADR-0002). The big parallel tier — but also the biggest, so sequence within it by capacity; ADR-0003 first since tier 2 waits on it. |
 | **2** | P-B · P-C | Both need the types (ADR-0003): codegen generates from the resource model; the store persists typed objects. |
-| **3** | P-I · P-J | Facade wires the tier-1/2 ports + logger root (**and ships the `InMemory()` e2e-harness slice**); controller needs store+bus+types. |
+| **3** | P-I · P-J | Facade wires the tier-1/2 ports + logger root (**and ships the** `InMemory()` e2e-harness slice); controller needs store+bus+types. |
 | **4** | P-H2 · P-K · P-L · P-M · P-N | Activator needs gateway+runtime+controller; scheduler needs controller; API server needs codegen+store+controller; function-lifecycle (first integrative feature) needs runtime+gateway+store+controller; service-pattern+KV needs bus+store+controller. |
 | **5** | P-O · P-P · P-Q · P-R | blob/secrets services reuse the service pattern (P-N); eventing needs function-lifecycle+gateway+bus; CLI needs the API server. |
 | **6** | P-S | Full testing + CI lanes — needs the harness (P-I), eventing (P-Q), and scale-to-zero (P-H2) to exercise. |
@@ -193,14 +194,14 @@ ADR-0000 requires each implementation to ship a *passing* test per Scenario. But
 ship a *passing e2e* test — and the depguard graph forbids `tests/e2e/**` from importing
 `internal/**` anyway. Resolution, applied per tier:
 
-- **Tiers 1–2 (ports, pre-harness)**: ship **contract/unit tests only** — port-local, available
+* **Tiers 1–2 (ports, pre-harness)**: ship **contract/unit tests only** — port-local, available
   immediately, passing. A Scenario that is inherently end-to-end is recorded in the ADR and its
   acceptance test is deferred to the harness (note the deferral in the implementation report; the
   review gate attributes the gap to sequencing, not the model).
-- **Tier 3**: **P-I ships the minimal `InMemory()` e2e-harness slice** as a first-class deliverable.
+* **Tier 3**: **P-I ships the minimal** `InMemory()` e2e-harness slice as a first-class deliverable.
   From here, e2e tests run and the deferred Scenario tests from tiers 1–2 are added against the
   public surface.
-- **Tier 6**: **P-S** is the full testing strategy — CI lanes, the Linux-VM containerd lane,
+* **Tier 6**: **P-S** is the full testing strategy — CI lanes, the Linux-VM containerd lane,
   coverage. Read ADR-0000's "one passing test per Scenario" as "one passing test *at the right level*
   per Scenario; the e2e test once the harness exists."
 
@@ -209,17 +210,17 @@ ship a *passing e2e* test — and the depguard graph forbids `tests/e2e/**` from
 Stay one tier ahead. Acceptance (judge + your sign-off) is the bottleneck, so **batch the next
 tier's ADR drafting** while the current tier builds:
 
-- **Now** (building tier 0): draft + accept the **tier-1 set** — **ADR-0003 first** (it gates tier 2),
+* **Now** (building tier 0): draft + accept the **tier-1 set** — **ADR-0003 first** (it gates tier 2),
   then **P-D, P-E, P-F, P-F2, P-G, P-H**. All are mutually independent (each needs only conventions,
   ADR-0003 only ADR-0002), so they draft in parallel and are judged as they land. The two big ports
   (runtime P-G, gateway P-H) carry the heaviest decisions (Kata-deferral already settled for P-G;
   the data-plane-ownership reversal for P-H) — give them the most review attention.
-- **While building tier 1**: accept the **tier-2 set** (**P-B, P-C**); and draft **P-S (testing
+* **While building tier 1**: accept the **tier-2 set** (**P-B, P-C**); and draft **P-S (testing
   strategy) early** — even though it builds at tier 6, its conventions shape how every feature writes
   tests, and the P-I harness slice (tier 3) should be designed against them.
-- **While building tier 2**: accept **P-I, P-J** (tier 3), then the tier-4 batch (**P-H2, P-K, P-L,
+* **While building tier 2**: accept **P-I, P-J** (tier 3), then the tier-4 batch (**P-H2, P-K, P-L,
   P-M, P-N**).
-- Continue rolling one tier ahead through P-O…P-T.
+* Continue rolling one tier ahead through P-O…P-T.
 
 ## Critical path & the V1 exit-criterion spine
 
@@ -232,7 +233,7 @@ source artifact whose handler consumes CloudEvents, reads a secret, persists KV,
 HTTP + timer, scales to zero, wakes"):
 
 | Exit-criterion clause | Needs (build) |
-|---|---|
+|----|----|
 | deploy JS/Python from artifact | P-G (runtime/curated) + P-M (shape/artifact/lifecycle) |
 | handler consumes CloudEvents | P-M (contract) + P-Q (normalization) |
 | reads a secret | P-P (secrets) |
@@ -249,28 +250,28 @@ works.
 
 ## Parallelization & sequencing notes
 
-- **Three ports are the big parallel win** (P-C store, P-D blob, P-E bus) — independent after
+* **Three ports are the big parallel win** (P-C store, P-D blob, P-E bus) — independent after
   conventions; accepting them early unblocks the engine tier.
-- **Parallelizable leaves** (per the analyzer — nothing depends on them *and* off the critical path,
+* **Parallelizable leaves** (per the analyzer — nothing depends on them *and* off the critical path,
   so hand to a parallel builder or defer): **P-F2** (OTel/audit), **P-K** (scheduler), **P-O** (blob
   service), **P-P** (secrets). The blob *service* isn't on the exit-criterion path (which uses KV +
   secrets), so it can trail furthest. **P-T (packaging) is a leaf but the terminal sink** — the final
   deliverable, *not* deferrable.
-- **The two riskiest ADRs** are P-M (function contract/shape/lifecycle — it ties runtime+gateway+
+* **The two riskiest ADRs** are P-M (function contract/shape/lifecycle — it ties runtime+gateway+
   types together and has open threads on streaming + the Python ASGI-vs-wrapped shape) and P-H
   (gateway — owns the data-path-ownership reversal). Both are on the critical path. Budget extra
   design + review there.
-- **P-F (logger root) is a hard prerequisite of P-I, not of tier-1 ports.** The composition root
+* **P-F (logger root) is a hard prerequisite of P-I, not of tier-1 ports.** The composition root
   (`internal/app`, in P-I) imports `internal/observability` to build the root `*slog.Logger`; the
   ports only take that stdlib `*slog.Logger` in their `Deps` (no import of P-F). So P-F must land
   before P-I — but it does *not* gate the other tier-1 ports. P-F2 (OTel/audit) is fully off-path.
-- **Worker** (`internal/worker`) and **network manager lateral-deny** fold into P-G (runtime) for
+* **Worker** (`internal/worker`) and **network manager lateral-deny** fold into P-G (runtime) for
   V1 — no separate ADR. Full egress control is V2.
 
 ## Reproducing & maintaining this plan
 
 The dependency table, graph, waves, and critical path are **computed**, not hand-drawn — the input is
-[`v1-plan.json`](v1-plan.json) (mirrors the slate table's *Build-depends on* column):
+`v1-plan.json` (mirrors the slate table's *Build-depends on* column):
 
 ```bash
 python3 .claude/skills/roadmap-planner/scripts/plan_waves.py docs/roadmap/v1-plan.json
@@ -284,11 +285,13 @@ this section originally shipped with.
 
 ## Caveats (living doc)
 
-- Real ADR numbers are assigned by `/adr` at creation; reconcile this table's `P-x` ids to actual
+* Real ADR numbers are assigned by `/adr` at creation; reconcile this table's `P-x` ids to actual
   numbers as ADRs land, and link them.
-- Tiers are dependency floors, not a schedule — within a tier, sequence by review bandwidth.
-- If an ADR, once drafted, reveals a dependency this plan missed, update `v1-plan.json`, re-run the
+* Tiers are dependency floors, not a schedule — within a tier, sequence by review bandwidth.
+* If an ADR, once drafted, reveals a dependency this plan missed, update `v1-plan.json`, re-run the
   analyzer, re-validate the graph (newest accepted ADR still wins for architecture; this plan just
   tracks ordering).
-- V2/V3 (egress enforcement, gVisor/WASM, Kata microVM, IAM, Terraform provider, …) get their own
+* V2/V3 (egress enforcement, gVisor/WASM, Kata microVM, IAM, Terraform provider, …) get their own
   delivery plan when FEAT-0001 is scoped.
+
+
