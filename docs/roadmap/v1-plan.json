@@ -7,7 +7,7 @@
   ],
   "items": [
     {
-      "id": "P-B",
+      "id": "ADR-0004",
       "title": "API surface + codegen",
       "features": [
         "F02"
@@ -143,7 +143,7 @@
         "F07"
       ],
       "depends_on": [
-        "P-B",
+        "ADR-0004",
         "ADR-0003",
         "P-C",
         "P-J"
@@ -220,7 +220,7 @@
         "F18"
       ],
       "depends_on": [
-        "P-B",
+        "ADR-0004",
         "P-L"
       ]
     },
@@ -250,7 +250,7 @@
   ],
   "waves": {
     "1": [
-      "P-B",
+      "ADR-0004",
       "P-C",
       "P-D",
       "P-E",
