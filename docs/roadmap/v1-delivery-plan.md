@@ -1,8 +1,8 @@
 # V1 delivery plan — ADR sequencing to ship FEAT-0000
 
 * **Status**: Active (living — update as ADRs are created/accepted/implemented)
-* **Date**: 2026-06-13 (refreshed 2026-06-14 — ADR-0003 + ADR-0005 implemented → graduated to tier 0; tiers
-  recomputed, critical path now 7 items)
+* **Date**: 2026-06-13 (refreshed 2026-06-14 — ADR-0003 + ADR-0005 implemented → tier 0; **P-C reconciled
+  to ADR-0006 (store/database-layer port), Accepted**; tiers recomputed, critical path still 7 items)
 * **Realizes**: [FEAT-0000 (V1 — Agent-ready core)](../feat/0000-feat-v1.md)
 * **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
@@ -44,7 +44,7 @@ sync; re-run the analyzer (below) after any edit.
 | ADR-0002 ✓ | Source-code conventions (`api/fault`, facade, lint graph) | F25 | ADR-0001 |
 | ADR-0003 ✓ | Resource model & API typing (v1alpha1 kinds, `ObjectMeta` w/ resourceGroup+tags, spec/status, typed IDs/enums) | F03, F22 | ADR-0002 |
 | ADR-0005 ✓ | API surface — code-first via huma (Go types → generated OpenAPI 3.1; SDK client deferred to P-R) | F02 | ADR-0003 |
-| **P-C** | Store / database-layer port (`store.Store`: memory+sqlite, watch, generations, contract suite) | F05, F21(db) | ADR-0003 |
+| **P-C** → [ADR-0006](../adr/0006-store-database-layer-port.md) (Accepted) | Store / database-layer port (`store.Store`: **slatedb** UniFFI/cgo + a pure-Go memory engine; watch, generations, optimistic concurrency, `Encryptor` seam, contract suite) | F05, F21(db) | ADR-0003 |
 | **P-D** | Blob / storage-layer port (`blob.Bucket`: gocloud mem/file/s3, contract suite) | F21(blob) | ADR-0002 |
 | **P-E** | Messaging / bus port (`bus.Bus`: embedded NATS/JetStream + in-mem, accounts/ns, contract suite) | F06 | ADR-0002 |
 | **P-F** | Observability — logger root (slog construction + injection from config) | F17 (logger) | ADR-0002 |
@@ -66,7 +66,8 @@ sync; re-run the analyzer (below) after any edit.
 | **P-T** | Packaging & release (static binary, systemd units, install script, version stamping) | F19 | P-R, P-S |
 
 Beyond the bootstrap, the slate held 22 ADRs (P-F/P-H were each split — see below); **ADR-0003 is now
-built (with ADR-0005), so 20 placeholders remain (P-C…P-T)**. Merge candidates if the count feels heavy: fold **P-K (scheduler)**
+built (with ADR-0005); P-C is reconciled to ADR-0006 (Accepted 2026-06-14, not yet built), so 19
+placeholders remain (P-D…P-T)**. Merge candidates if the count feels heavy: fold **P-K (scheduler)**
 into **P-J (controller)** (single-node placement is trivial); fold **P-O (blob service)** into **P-D
 (blob port)** or **P-N (service pattern)**. Don't over-merge the big integrative ones (P-M, P-Q) —
 they each carry real, separable decisions.
@@ -214,11 +215,11 @@ ship a *passing e2e* test — and the depguard graph forbids `tests/e2e/**` from
 Stay one tier ahead. Acceptance (judge + your sign-off) is the bottleneck, so **batch the next
 tier's ADR drafting** while the current tier builds:
 
-* **Now** (tier 0 done — ADR-0001/0002/0003/0005 built; nothing else in tier 1 is drafted yet): draft + accept
-  the **tier-1 set** — **P-C, P-D, P-E, P-F, P-F2, P-G, P-H**. All are mutually independent
-  (store P-C needs ADR-0003; the rest need only ADR-0002), so they draft in parallel
-  and are judged as they land. **Prioritize the critical-path entries first — P-E (bus) and P-C
-  (store), which both gate the controller P-J** — then the two heavyweight ports **P-G (runtime)** and
+* **Now** (tier 0 done — ADR-0001/0002/0003/0005 built; **P-C/ADR-0006 (store) Accepted → ready to implement**): draft + accept
+  the rest of the **tier-1 set** — **P-D, P-E, P-F, P-F2, P-G, P-H**. All are mutually independent
+  (they need only ADR-0002), so they draft in parallel
+  and are judged as they land. **Prioritize the remaining critical-path entry — P-E (bus), which gates the
+  controller P-J** (P-C/store is now Accepted) — then the two heavyweight ports **P-G (runtime)** and
   **P-H (gateway)** (Kata-deferral already settled for P-G; the data-plane-ownership reversal for
   P-H), which carry the most decision weight and deserve the most review attention.
 * **While building tier 1**: accept the **tier-2 set** (**P-I, P-J**); and draft **P-S (testing
@@ -294,7 +295,7 @@ this section originally shipped with. **When an ADR reaches** `Implemented`, mov
 ## Caveats (living doc)
 
 * Real ADR numbers are assigned by `/adr` at creation; reconcile this table's `P-x` ids to actual
-  numbers as ADRs land, and link them. `P-A` reconciled to **ADR-0003** (now built); `P-B` → **ADR-0004** → **superseded by ADR-0005** (code-first via huma, now built).
+  numbers as ADRs land, and link them. `P-A` reconciled to **ADR-0003** (now built); `P-B` → **ADR-0004** → **superseded by ADR-0005** (code-first via huma, now built); `P-C` → **ADR-0006** (store/database-layer port — slatedb via UniFFI/cgo; **Accepted** 2026-06-14, not yet built — it keeps the `P-C` handle in the computed graph/waves until it graduates to `accepted` at implementation).
 * Tiers are dependency floors, not a schedule — within a tier, sequence by review bandwidth.
 * If an ADR, once drafted, reveals a dependency this plan missed, update `v1-plan.json`, re-run the
   analyzer, re-validate the graph (newest accepted ADR still wins for architecture; this plan just

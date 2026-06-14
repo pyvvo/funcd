@@ -64,10 +64,11 @@ In order to make this platform self-contained, we will need to implement the fol
       backends (memory, file, S3) are implemented once, not per service:
       - **Storage layer** (`blob` port) — opaque object bytes; drivers: memory, filesystem,
         S3-compatible (via `gocloud.dev/blob`). This is the bytes substrate.
-      - **Database layer** (`kvstore` port) — structured/keyed records with watch + atomic
-        ops; drivers: memory, embedded file (sqlite/bbolt), and an S3-backed driver built
-        *on top of the storage layer* (slatedb-style LSM on object storage). This is the
-        records substrate.
+      - **Database layer** (`store`/`kvstore` port) — structured/keyed records with watch +
+        atomic ops; engine: **slatedb** (UniFFI/cgo → the Rust LSM; one library spans the
+        memory/file/**S3** object backend) + a pure-Go **memory** engine for tests, with **bbolt**
+        the documented fallback (ADR-0006, which records the cgo trade-off). This is the records
+        substrate.
     - **Service = CRD + facade + controller + driver**: a service instance/binding is a
       `Service` resource (CRD); its controller (built on the general controller framework —
       see [Controller](#controller)) reconciles desired→actual by driving the upstream
@@ -188,7 +189,7 @@ In order to make this platform self-contained, we will need to implement the fol
     - **Controller**: reconciles desired→actual state for every resource kind. **All controllers are built on one general controller framework** (the Kubernetes controller-runtime pattern: shared informer/watch, work queue, rate-limited retry with backoff, status write-back) — a single engine in `internal/controller`, with each resource kind contributing only its `Reconcile` logic. This is non-negotiable: it is what keeps reconciliation uniform and duplication-free across functions and every service. Example — the **storage** service: managing (CRUD) and binding a bucket to a function via the `Service` CRD is a controller built on the framework whose `Reconcile` drives the upstream through the `gocloud.dev/blob` SDK (create bucket, apply lifecycle, wire the binding); the same shape applies to KV, vector, secrets, config — only the driver SDK changes.
     - **Scheduler**: A scheduler that schedules the execution of the functions based on various factors, such as resource availability, function priority, and other scheduling policies.
     - **Messaging layer**: A messaging layer that allows the internal components of the platform to communicate with each other in a decoupled manner. We will use existing technologies like nats to provide a simple and efficient messaging layer for the internal components of the platform. NATS is embedded in-process (nats-server is a plain Go library): JetStream runs with memory storage for tests and file storage for production; pointing funcd at an external NATS cluster stays a drop-in option for multi-node.
-    - **Metastore**: stores resource metadata (CRD-like specs + status) and watches. Itself behind the `store.Store` port (adapter pattern, same as every service): drivers **in-memory** (tests), **sqlite/file** (single-node default), **slatedb** (S3-backed, on the storage layer). The metastore is the database layer applied to the platform's own control state.
+    - **Metastore**: stores resource metadata (CRD-like specs + status) and watches. Itself behind the `store.Store` port (adapter pattern, same as every service): the engine is **slatedb** (UniFFI/cgo → the Rust LSM, spanning **memory/file/S3** from one library; ADR-0006), with a pure-Go **memory** engine for tests and **bbolt** as the documented fallback. ADR-0006 records the deliberate **cgo** trade-off (see the embed-first rule). The metastore is the database layer applied to the platform's own control state.
     - **Control plane**: The control plane that manages the overall operation of the platform, including the API server, the controller, the scheduler, and the messaging layer. The control plane will be responsible for ensuring that the platform is running smoothly and efficiently, and for taking corrective actions when necessary.
     - **Worker**: executes functions and provides their runtime environment. The worker **exposes an API** — to the control plane (placement, sandbox lifecycle: `worker.proto`) and a local one to the sandboxes it hosts (the runtime shim calls it for KV/blob/secrets/events/identity). Unlike the public control-plane API, **no SDK is published** for the worker API: it is reached only through the built-in runtime shim, which is shipped and versioned with the platform — there is no third-party client to generate.
     - **External providers**: The external providers that provide the necessary resources and services for the execution of the functions and the services, such as the registry, the API gateway, the messaging engine, the monitoring and logging systems, and the S3-compatible storage.
@@ -400,7 +401,7 @@ Like k3s or faasd, funcd ships as a single binary that runs several cooperating 
 - **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore, the **embedded API gateway (Lura)**, and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
 - **Supervised child processes**: components with no embeddable Go form — **containerd** (always), **OpenBAO** (only if the external secrets driver is chosen) — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd. The list shrank deliberately: embedding Lura removed the API gateway from it.
 - **Crash-only design**: on restart, funcd rebuilds its world view from the metastore plus the actual state of sandboxes and routes, then lets the reconciliation loops converge. No state lives only in memory.
-- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists — NATS server, store/blob/kvstore drivers, **the API gateway (Lura)**, policy engine (cedar-go), wasm runtime, OTel pipeline; a supervised child process is the fallback only for components with no embeddable form (containerd; OpenBAO when used).
+- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists — NATS server, store/blob/kvstore drivers, **the API gateway (Lura)**, policy engine (cedar-go), wasm runtime, OTel pipeline; a supervised child process is the fallback only for components with no embeddable form (containerd; OpenBAO when used). **Recorded exception (ADR-0006)**: the metastore engine **slatedb** embeds as a **cgo-linked native library** (UniFFI → the Rust engine) — a deliberate *third* category beyond "pure-Go embed" and "supervised child process", accepted for the engine's maturity. It turns on `CGO_ENABLED=1`; the release static-links the `slatedb_uniffi` archive to keep funcd a **single binary** (no longer a *pure-Go* static one — spike-validated ~24 MB).
 
 ### Platform logging
 
@@ -532,7 +533,7 @@ flowchart TB
             SVC["Service facades<br/>KV · blob · vector · secrets · config"]
         end
         subgraph SUB["Substrate layers (adapter pattern)"]
-            DBL["Database layer<br/>store/kvstore: mem · sqlite · slatedb"]
+            DBL["Database layer<br/>store/kvstore: slatedb (mem/file/s3) · mem · bbolt-fallback"]
             STL["Storage layer<br/>blob: mem · file · s3 (gocloud.dev/blob)"]
         end
     end
@@ -635,7 +636,7 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 
 | Port | Production driver | Dev / e2e driver |
 |------|-------------------|------------------|
-| `store.Store` (metastore / database layer) | sqlite (file) — slatedb (S3-backed) later | in-memory |
+| `store.Store` (metastore / database layer) | **slatedb** (UniFFI/cgo; file or S3 object backend) — bbolt fallback | in-memory (pure-Go) |
 | `blob.Bucket` (storage layer) | S3-compatible via `gocloud.dev/blob` (`s3blob`) | `memblob` / `fileblob` |
 | `bus.Bus` (messaging) | embedded NATS JetStream, file storage | embedded NATS with memory storage, or pure in-memory bus |
 | `gateway.Gateway` (ingress) | **embedded Lura** (in-process) | embedded Go reverse proxy |
@@ -652,7 +653,7 @@ Every service port follows the same two-driver-minimum rule; the recurring memor
 // cmd/funcd — production
 plat, err := funcd.New(
     funcd.WithConfigFile("/etc/funcd/funcd.yaml"),
-    funcd.WithStore(sqlite.Open(dataDir)),
+    funcd.WithStore(slatedb.Open("file://"+dataDir)),  // database layer: slatedb (file/s3/mem) — ADR-0006
     funcd.WithBlob(s3blob.Open(blobURL)),          // storage layer: s3 | file | mem
     funcd.WithBus(nats.Embedded(nats.FileStorage(dataDir))),
     funcd.WithGateway(lura.New(gwCfg)),            // embedded, in-process
@@ -782,8 +783,7 @@ funcd/
 │   ├── store/                            # DATABASE LAYER (substrate): Store/kvstore port — DISTINCT engines (no single lib covers all, unlike blob), so sibling drivers are warranted
 │   │   ├── store.go                      # port: CRUD + generations + watch
 │   │   ├── memory/                       # one-file driver (memory.go): in-process map
-│   │   ├── sqlite/                       # one-file driver (sqlite.go) + migrations/*.sql (embedded); single-node default
-│   │   └── slatedb/                      # one-file driver (slatedb.go, later); its object backend is memory/file/S3 — no per-backend subfolders
+│   │   └── slatedb/                      # one-file driver (slatedb.go): UniFFI/cgo → Rust engine; object backend memory/file/S3 by URL — no per-backend subfolders (ADR-0006). bbolt = documented fallback (one more sibling file if slatedb can't meet the contract)
 │   │
 │   ├── services/                         # function-facing services: port + drivers + facade per service
 │   │   ├── kv/                           # on database layer or external (jetstream/redis)
@@ -831,7 +831,7 @@ funcd/
 │   │   ├── harness/                      # boots funcd.InMemory() per scenario
 │   │   ├── fixtures/
 │   │   └── scenarios/
-│   ├── integration/                      # per-driver: sqlite, embedded NATS, containerd, …
+│   ├── integration/                      # per-driver: slatedb (cgo), embedded NATS, containerd, …
 │   └── contract/                         # conformance suites run against every driver of a port
 │
 ├── configs/
@@ -843,7 +843,7 @@ funcd/
 ├── scripts/
 │   ├── generate.sh                       # openapi + proto codegen (wired to go:generate)
 │   ├── test-e2e.sh
-│   └── build.sh                          # static single binary + version stamping
+│   └── build.sh                          # single binary + version stamping (cgo: static-links slatedb_uniffi — ADR-0006; was pure-Go static)
 ├── docs/                                 # blueprint, SPEC, ADRs (architecture decision records)
 ├── .github/workflows/ci.yml              # lint → unit → codegen-drift → integration → e2e
 ├── .golangci.yml
@@ -864,7 +864,7 @@ funcd/
 - **`controlplane/handlers/` removed**: the feature registry exists precisely so each feature registers its own handlers; a central handlers package would duplicate it.
 - **`api/types/v1` → `v1alpha1`**: matches the manifests (`apiVersion: funcd.io/v1alpha1`); graduate to v1 when the contract stabilizes.
 - **`gateway.proto` dropped**: the gateway is embedded (Lura) and programmed by in-process calls; no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
-- **`store/slatedb/` slot added**: the blueprint names slatedb as the S3-backed metastore; sqlite is the pragmatic single-node default, memory for tests — all behind the same `Store` port.
+- **`store/slatedb/` is the metastore engine (ADR-0006)**: slatedb via UniFFI/cgo spans memory/file/S3 from one library; a pure-Go memory engine serves tests + `InMemory()`; bbolt is the documented fallback — all behind the same `Store` port. (sqlite was dropped, superseded by ADR-0006's single-engine choice; the cgo trade-off is recorded in the embed-first rule.)
 - **One task runner only**: two task runners drift apart. `just` chosen (clean recipe syntax, arguments, no `.PHONY` ceremony) — decided in ADR-0001, 2026-06-13.
 - **`internal/eventing/` added**: EventSource resources need runtime machinery (adapters, CloudEvents normalization, sensors, triggers) distinct from their CRUD feature slice.
 - **`internal/version/` + ldflags added**: standard build-info stamping.
