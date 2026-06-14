@@ -2,20 +2,10 @@
   "version": "v1",
   "accepted": [
     "ADR-0001",
-    "ADR-0002"
+    "ADR-0002",
+    "ADR-0003"
   ],
   "items": [
-    {
-      "id": "ADR-0003",
-      "title": "resource model + ObjectMeta",
-      "features": [
-        "F03",
-        "F22"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
     {
       "id": "P-B",
       "title": "API surface + codegen",
@@ -260,7 +250,8 @@
   ],
   "waves": {
     "1": [
-      "ADR-0003",
+      "P-B",
+      "P-C",
       "P-D",
       "P-E",
       "P-F",
@@ -269,30 +260,26 @@
       "P-H"
     ],
     "2": [
-      "P-B",
-      "P-C"
-    ],
-    "3": [
       "P-I",
       "P-J"
     ],
-    "4": [
+    "3": [
       "P-H2",
       "P-K",
       "P-L",
       "P-M",
       "P-N"
     ],
-    "5": [
+    "4": [
       "P-O",
       "P-P",
       "P-Q",
       "P-R"
     ],
-    "6": [
+    "5": [
       "P-S"
     ],
-    "7": [
+    "6": [
       "P-T"
     ]
   }
