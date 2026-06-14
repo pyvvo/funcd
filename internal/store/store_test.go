@@ -82,3 +82,79 @@ func TestScenario_SecretEncryptedAtRest(t *testing.T) {
 		t.Fatalf("non-encrypting reader should read the un-encrypted Config: %v", err)
 	}
 }
+
+// scenario: input-not-mutated — Create/Update stamp server fields on the returned
+// clone, never on the caller's input object (regression test for metadata aliasing).
+func TestScenario_InputNotMutated(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+
+	in, _ := v1.NewObject(v1.KindConfig)
+	cfg, _ := in.(*v1.Config)
+	cfg.Name = "imm"
+	cfg.Namespace = "default"
+	cfg.ResourceGroup = "rg1"
+	cfg.Spec.Data = map[string]string{"k": "v"}
+
+	created, err := s.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if cfg.UID != "" || cfg.Generation != 0 || cfg.ResourceVersion != "" {
+		t.Fatalf("Create mutated the caller's input: uid=%q gen=%d rv=%q", cfg.UID, cfg.Generation, cfg.ResourceVersion)
+	}
+	cm := created.GetObjectMeta()
+	if cm.UID == "" || cm.ResourceVersion == "" || cm.Generation != 1 {
+		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d", cm.UID, cm.ResourceVersion, cm.Generation)
+	}
+
+	up, _ := v1.NewObject(v1.KindConfig)
+	uc, _ := up.(*v1.Config)
+	uc.Name = "imm"
+	uc.Namespace = "default"
+	uc.ResourceGroup = "rg1"
+	uc.Spec.Data = map[string]string{"k": "v2"}
+	uc.ResourceVersion = cm.ResourceVersion
+	rvIn := uc.ResourceVersion
+	updated, err := s.Update(ctx, uc)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if uc.UID != "" || uc.Generation != 0 || uc.ResourceVersion != rvIn {
+		t.Fatalf("Update mutated the caller's input: uid=%q gen=%d rv=%q (rvIn=%q)", uc.UID, uc.Generation, uc.ResourceVersion, rvIn)
+	}
+	if updated.GetObjectMeta().ResourceVersion == rvIn {
+		t.Fatal("Update did not advance the returned resourceVersion")
+	}
+}
+
+// scenario: generation-bumps-on-spec-change (status-only arm) — a status-only Update
+// on a StatusObject kind (Function: empty spec) must NOT bump generation.
+func TestScenario_GenerationStatusOnlyNoBump(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+
+	in, _ := v1.NewObject(v1.KindFunction)
+	fn, _ := in.(*v1.Function)
+	fn.Name = "f1"
+	fn.Namespace = "default"
+	fn.ResourceGroup = "rg1"
+	created, err := s.Create(ctx, fn)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if g := created.GetObjectMeta().Generation; g != 1 {
+		t.Fatalf("create generation=%d want 1", g)
+	}
+
+	upd, _ := created.(*v1.Function)
+	upd.Status.Phase = "Ready"
+	upd.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue})
+	after, err := s.Update(ctx, upd)
+	if err != nil {
+		t.Fatalf("Update(status): %v", err)
+	}
+	if g := after.GetObjectMeta().Generation; g != 1 {
+		t.Fatalf("status-only update bumped generation to %d, want 1 (unchanged)", g)
+	}
+}

@@ -122,6 +122,12 @@ func WithEncryptor(kinds []v1.Kind, enc Encryptor) Option {
 // isolation. Cross-writer serialization (the resourceVersion compare-and-set)
 // is the store wrapper's job (a write mutex), not the engine's — bbolt happens
 // to be serializable, but the store must not rely on that.
+//
+// View runs read-only operations. It is NOT guaranteed to be a consistent
+// point-in-time snapshot across multiple reads on every engine: the memory engine
+// holds a read lock (so it is), but slatedb does not. Consequently List's collection
+// resourceVersion is best-effort under concurrent writes; a caller needing a strict
+// snapshot re-reads at the returned resourceVersion.
 type Engine interface {
 	View(ctx context.Context, fn func(Txn) error) error
 	Update(ctx context.Context, fn func(Txn) error) error
@@ -252,6 +258,13 @@ func (s *store) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if err := obj.Validate(); err != nil {
 		return nil, err
 	}
+	// Stamp server fields on a clone — GetObjectMeta aliases the caller's struct, so
+	// mutating it would silently inject uid/generation/resourceVersion into the caller's
+	// input. The input is read-only; the returned + published object is the store's.
+	obj, err := cloneObject(obj)
+	if err != nil {
+		return nil, err
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -307,6 +320,12 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if meta.ResourceVersion == "" {
 		return nil, fault.Invalidf("store.Update", "resourceVersion is required for update")
 	}
+	// Stamp on a clone so the caller's input object is never mutated (see Create).
+	obj, err := cloneObject(obj)
+	if err != nil {
+		return nil, err
+	}
+	meta = obj.GetObjectMeta()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -314,8 +333,12 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	bucket := gvk.String()
 	key := keyFor(meta.Namespace, meta.Name)
 
+	// Field policy: Update preserves the store-owned uid + creationTime from the current
+	// stored object and re-stamps generation (on spec change) + resourceVersion; every
+	// other ObjectMeta/spec/status field comes from the caller (last-writer-wins under
+	// the RV precondition).
 	var rev uint64
-	err := s.eng.Update(ctx, func(tx Txn) error {
+	err = s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
 		if gerr != nil {
 			return gerr

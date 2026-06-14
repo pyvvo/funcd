@@ -74,7 +74,8 @@ func testDeleteRemoves(t *testing.T, b blob.Bucket) {
 
 func testListByPrefix(t *testing.T, b blob.Bucket) {
 	ctx := context.Background()
-	for _, k := range []string{"a/1", "a/2", "b/1"} {
+	// insert out of lexical order so the asserted [a/1 a/2] order proves the adapter sorts.
+	for _, k := range []string{"a/2", "b/1", "a/1"} {
 		if err := b.Put(ctx, k, []byte("v")); err != nil {
 			t.Fatalf("Put(%s): %v", k, err)
 		}

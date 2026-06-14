@@ -32,7 +32,7 @@ const defaultExpiry = 15 * time.Minute
 func Open(ctx context.Context, url string) (blob.Bucket, error) {
 	b, err := gcblob.OpenBucket(ctx, url)
 	if err != nil {
-		return nil, fault.Internalf("gocloud.Open", "open bucket %q: %v", url, err)
+		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
 	}
 	return &bucket{b: b}, nil
 }
@@ -83,6 +83,8 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 			return nil, mapErr("blob.List", prefix, err)
 		}
 		if obj.IsDir {
+			// defensive: a flat listing (no delimiter) never sets IsDir, but a future
+			// delimiter mode would — skip pseudo-directory entries.
 			continue
 		}
 		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime})
@@ -92,6 +94,11 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 }
 
 func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOptions) (string, error) {
+	switch opts.Method {
+	case "", blob.SignGet, blob.SignPut, blob.SignDelete:
+	default:
+		return "", fault.Invalidf("blob.SignedURL", "unsupported sign method %q", opts.Method)
+	}
 	method := string(opts.Method)
 	if method == "" {
 		method = string(blob.SignGet)
@@ -109,19 +116,20 @@ func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOption
 
 func (k *bucket) Close() error {
 	if err := k.b.Close(); err != nil {
-		return fault.Internalf("gocloud.Close", "%v", err)
+		return fault.Wrapf(err, fault.Internal, "gocloud.Close", "close bucket")
 	}
 	return nil
 }
 
-// mapErr translates gocloud error codes to api/fault kinds (ADR-0007 §3).
+// mapErr translates gocloud error codes to api/fault kinds (ADR-0007 §3), wrapping
+// the gocloud cause so errors.Is/As can still reach it (fault.Error.Unwrap).
 func mapErr(op, key string, err error) error {
 	switch gcerrors.Code(err) {
 	case gcerrors.NotFound:
-		return fault.NotFoundf(op, "%q not found", key)
+		return fault.Wrapf(err, fault.NotFound, op, "%q not found", key)
 	case gcerrors.Unimplemented:
-		return fault.Unavailablef(op, "operation not supported by this backend: %v", err)
+		return fault.Wrapf(err, fault.Unavailable, op, "operation not supported by this backend")
 	default:
-		return fault.Internalf(op, "%v", err)
+		return fault.Wrapf(err, fault.Internal, op, "%s failed for %q", op, key)
 	}
 }

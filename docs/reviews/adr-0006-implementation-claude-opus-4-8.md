@@ -13,14 +13,16 @@
 ## Verdict: pass — 0 Blockers, 0 Majors, 3 Minors (1 model-attributed)
 
 The implementation conforms to ADR-0006's Contracts, Scenarios, Review checklist, and Definition of
-Done. `just ci` exits 0 (pure-Go lane); the slatedb (cgo) lane exits 0; all 9 scenarios have named,
+Done. `just ci` exits 0 (pure-Go lane — memory engine only); the slatedb (cgo) lane exits 0 against the
+spike-built lib but is **not yet a committed CI lane** (see Errata); all 9 scenarios have named,
 un-skipped, passing tests; conventions hold.
 
 ## Verification (captured)
 - `just ci` → **exit 0** (specgen stable, `go fmt` clean, golangci-lint **0 issues**, `go test ./...`
   ok, `go build`, `go mod verify` → all modules verified, tidy-gate clean).
 - slatedb lane `CGO_ENABLED=1 … go test -tags slatedb ./internal/store/slatedb/...` → **exit 0**
-  (RunContract + crash-recovery against the real Rust engine).
+  (RunContract + crash-recovery against the real Rust engine), run against the **spike-built v0.13.1
+  lib** — this lane is **not yet exercised by committed CI** (see Errata).
 - Scenario→test traceability (all 9): `crud-roundtrip`, `not-found`, `optimistic-concurrency`,
   `generation-bumps-on-spec-change`, `list-by-namespace-and-filter`, `watch-streams-changes`,
   `watch-replays-from-resourceversion` → `storecontract.RunContract` subtests, **run against BOTH
@@ -79,6 +81,22 @@ slatedb file crash-recovery; cgo wired via pinned recipe + memory cgo-free; api/
 no-any + no-globals; only `slatedb.io/slatedb-go` added + tidy; every scenario named/passing + no leak
 + ADR substance unchanged). The M2 coverage nuance lives inside item 4/9 but does not fail it (the
 scenario's core observable is tested and passes).
+
+## Errata (added 2026-06-14 after an independent adversarial re-review)
+A later independent review found that this report's original wording over-stated the slatedb evidence,
+and that ADR-0006's frozen DoD/Review-checklist over-states what the default green path verifies:
+- **The default `just ci` runs only the pure-Go memory lane.** The slatedb engine (funcd's *real*
+  persistent store) is behind the `slatedb` build tag and was proven only against the **spike-built
+  v0.13.1 lib**, not by committed CI. The verdict/verification above are scoped accordingly.
+- **Follow-up (the ADR is frozen, so this is a roadmap erratum, not an in-place edit):** add a committed
+  CI lane that builds `slatedb_uniffi` and runs `go test -tags slatedb ./internal/store/slatedb/...`
+  (now wired as the `slatedb` job in `.github/workflows/ci.yml` + `just test-slatedb`), so the
+  crash-recovery + driver-conformance-parity scenarios for the real engine actually execute on every
+  change. Until that lane runs in the project's CI environment, slatedb is "spike-validated", not
+  "CI-verified".
+- Two **Major code defects** the original self-review missed were also fixed post-review (input-object
+  aliasing in Create/Update; the bus Close goroutine leak) — see the session's fix commits. These are
+  code fixes that conform to the existing (unchanged) ADR contracts.
 
 ## Recommendation
 **Pass.** Advance ADR-0006 `Reviewing → Implemented`; feat F05 `reviewing → implemented`, F21(db)

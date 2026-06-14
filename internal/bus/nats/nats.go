@@ -72,10 +72,19 @@ func Open(ctx context.Context, opts Options) (bus.Bus, error) {
 		return nil, fault.Internalf("nats.Open", "new server: %v", err)
 	}
 	go srv.Start()
-	if !srv.ReadyForConnections(readyTimeout) {
+	ready := make(chan bool, 1)
+	go func() { ready <- srv.ReadyForConnections(readyTimeout) }()
+	select {
+	case ok := <-ready:
+		if !ok {
+			srv.Shutdown()
+			cleanup()
+			return nil, fault.Unavailablef("nats.Open", "server not ready within %s", readyTimeout)
+		}
+	case <-ctx.Done():
 		srv.Shutdown()
 		cleanup()
-		return nil, fault.Unavailablef("nats.Open", "server not ready within %s", readyTimeout)
+		return nil, ctx.Err()
 	}
 	nc, err := nats.Connect(srv.ClientURL())
 	if err != nil {
@@ -90,7 +99,7 @@ func Open(ctx context.Context, opts Options) (bus.Bus, error) {
 		cleanup()
 		return nil, fault.Internalf("nats.Open", "jetstream: %v", err)
 	}
-	return &embedded{srv: srv, nc: nc, js: js, storage: opts.Storage, cleanup: cleanup}, nil
+	return &embedded{srv: srv, nc: nc, js: js, storage: opts.Storage, cleanup: cleanup, subs: map[int]func(){}}, nil
 }
 
 type embedded struct {
@@ -99,6 +108,28 @@ type embedded struct {
 	js      jetstream.JetStream
 	storage Storage
 	cleanup func()
+
+	mu     sync.Mutex     // guards subs/nextID/closed
+	subs   map[int]func() // live subscriptions/consumers -> their stop func
+	nextID int
+	closed bool
+}
+
+// register records a live subscription/consumer's stop func so Close() can stop it
+// (preventing a forwarder-goroutine leak); it returns the deregistration id.
+func (e *embedded) register(stop func()) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	id := e.nextID
+	e.nextID++
+	e.subs[id] = stop
+	return id
+}
+
+func (e *embedded) deregister(id int) {
+	e.mu.Lock()
+	delete(e.subs, id)
+	e.mu.Unlock()
 }
 
 func (e *embedded) streamStorage() jetstream.StorageType {
@@ -138,6 +169,8 @@ func (e *embedded) Subscribe(ctx context.Context, subject bus.Subject) (bus.Subs
 	}
 	out := make(chan bus.Message)
 	done := make(chan struct{})
+	cs := &coreSub{e: e, sub: sub, out: out, done: done}
+	cs.id = e.register(cs.stop) // register before the goroutine so Close can never miss it
 	go func() {
 		defer close(out)
 		for {
@@ -153,7 +186,7 @@ func (e *embedded) Subscribe(ctx context.Context, subject bus.Subject) (bus.Subs
 			}
 		}
 	}()
-	return &coreSub{sub: sub, out: out, done: done}, nil
+	return cs, nil
 }
 
 func (e *embedded) EnsureStream(ctx context.Context, cfg bus.StreamConfig) error {
@@ -190,6 +223,8 @@ func (e *embedded) Consume(ctx context.Context, cfg bus.ConsumeConfig) (bus.Cons
 	}
 	out := make(chan bus.Message)
 	done := make(chan struct{})
+	jc := &jsConsumer{e: e, iter: iter, out: out, done: done}
+	jc.id = e.register(jc.stop)
 	go func() {
 		defer close(out)
 		for {
@@ -205,10 +240,28 @@ func (e *embedded) Consume(ctx context.Context, cfg bus.ConsumeConfig) (bus.Cons
 			}
 		}
 	}()
-	return &jsConsumer{iter: iter, out: out, done: done}, nil
+	return jc, nil
 }
 
 func (e *embedded) Close() error {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return nil // idempotent
+	}
+	e.closed = true
+	stops := make([]func(), 0, len(e.subs))
+	for _, st := range e.subs {
+		stops = append(stops, st)
+	}
+	e.subs = map[int]func(){}
+	e.mu.Unlock()
+	// Stop every live subscription/consumer first so their forwarder goroutines exit
+	// (no leak): nats does not close the user channels on nc.Close, so a parked
+	// forwarder would otherwise block forever.
+	for _, st := range stops {
+		st()
+	}
 	e.nc.Close()
 	e.srv.Shutdown()
 	e.srv.WaitForShutdown()
@@ -217,27 +270,37 @@ func (e *embedded) Close() error {
 }
 
 type coreSub struct {
+	e    *embedded
+	id   int
 	sub  *nats.Subscription
 	out  chan bus.Message
 	done chan struct{}
 	once sync.Once
+	err  error
 }
 
 func (s *coreSub) C() <-chan bus.Message { return s.out }
 
-func (s *coreSub) Unsubscribe() error {
-	var err error
+// stop releases the NATS subscription and signals the forwarder to exit (idempotent).
+func (s *coreSub) stop() {
 	s.once.Do(func() {
-		err = s.sub.Unsubscribe()
+		s.err = s.sub.Unsubscribe()
 		close(s.done)
 	})
-	if err != nil {
-		return mapErr("bus.Unsubscribe", err)
+}
+
+func (s *coreSub) Unsubscribe() error {
+	s.stop()
+	s.e.deregister(s.id)
+	if s.err != nil {
+		return mapErr("bus.Unsubscribe", s.err)
 	}
 	return nil
 }
 
 type jsConsumer struct {
+	e    *embedded
+	id   int
 	iter jetstream.MessagesContext
 	out  chan bus.Message
 	done chan struct{}
@@ -246,11 +309,17 @@ type jsConsumer struct {
 
 func (c *jsConsumer) C() <-chan bus.Message { return c.out }
 
-func (c *jsConsumer) Close() error {
+// stop releases the JetStream iterator and signals the forwarder to exit (idempotent).
+func (c *jsConsumer) stop() {
 	c.once.Do(func() {
 		close(c.done)
 		c.iter.Stop()
 	})
+}
+
+func (c *jsConsumer) Close() error {
+	c.stop()
+	c.e.deregister(c.id)
 	return nil
 }
 
@@ -258,10 +327,10 @@ func (c *jsConsumer) Close() error {
 func mapErr(op string, err error) error {
 	switch {
 	case errors.Is(err, jetstream.ErrStreamNotFound), errors.Is(err, jetstream.ErrConsumerNotFound):
-		return fault.NotFoundf(op, "%v", err)
+		return fault.Wrapf(err, fault.NotFound, op, "not found")
 	case errors.Is(err, nats.ErrTimeout), errors.Is(err, nats.ErrNoServers), errors.Is(err, nats.ErrConnectionClosed):
-		return fault.Unavailablef(op, "%v", err)
+		return fault.Wrapf(err, fault.Unavailable, op, "messaging unavailable")
 	default:
-		return fault.Internalf(op, "%v", err)
+		return fault.Wrapf(err, fault.Internal, op, "operation failed")
 	}
 }

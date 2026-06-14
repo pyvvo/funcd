@@ -2,6 +2,8 @@ package nats_test
 
 import (
 	"context"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +11,50 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/bus/buscontract"
 	natsdriver "github.com/green-0-rabbit/funcd/internal/bus/nats"
 )
+
+// scenario: close-leaks-no-goroutine — ADR-0008 DoD. Close() must reap the per-sub /
+// per-consumer forwarder goroutines even when the caller did NOT Unsubscribe/Close them.
+func TestScenario_NoGoroutineLeakOnClose(t *testing.T) {
+	ctx := context.Background()
+	b, err := natsdriver.Open(ctx, natsdriver.Options{Storage: natsdriver.MemoryStorage})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := b.Subscribe(ctx, "leak.sub"); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := b.EnsureStream(ctx, bus.StreamConfig{Name: "LK", Subjects: []bus.Subject{"leak.>"}}); err != nil {
+		t.Fatalf("ensure stream: %v", err)
+	}
+	if _, err := b.Consume(ctx, bus.ConsumeConfig{Stream: "LK", Durable: "d", Subject: "leak.>"}); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	// Close WITHOUT Unsubscribe/Close on the sub or consumer.
+	if err := b.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// The forwarders must exit promptly; poll their stacks until gone (or fail with a dump).
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if !forwarderGoroutineRunning() {
+			return
+		}
+		if time.Now().After(deadline) {
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			t.Fatalf("forwarder goroutine leaked after Close:\n%s", buf[:n])
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func forwarderGoroutineRunning() bool {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	s := string(buf[:n])
+	return strings.Contains(s, "internal/bus/nats.(*embedded).Subscribe.func") ||
+		strings.Contains(s, "internal/bus/nats.(*embedded).Consume.func")
+}
 
 // scenario: driver-conformance-parity — the embedded-NATS driver passes the
 // identical bus contract against both memory and file JetStream storage.
