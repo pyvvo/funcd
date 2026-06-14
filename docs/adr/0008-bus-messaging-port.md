@@ -1,6 +1,6 @@
 # ADR-0008: Bus / messaging port (`bus.Bus` over embedded NATS + JetStream)
 
-- **Status**: Accepted
+- **Status**: Reviewing
 - **Date**: 2026-06-14 (Accepted 2026-06-14 post-judge: `NewMessage` constructor [M1], Subscription/Consumer no-leak note)
 - **Deciders**: green-0-rabbit
 - **Tags**: bus, messaging, nats, jetstream, embedded, pub-sub, durable, port
