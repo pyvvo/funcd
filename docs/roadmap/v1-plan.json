@@ -3,19 +3,10 @@
   "accepted": [
     "ADR-0001",
     "ADR-0002",
-    "ADR-0003"
+    "ADR-0003",
+    "ADR-0005"
   ],
   "items": [
-    {
-      "id": "ADR-0005",
-      "title": "API surface — code-first (huma)",
-      "features": [
-        "F02"
-      ],
-      "depends_on": [
-        "ADR-0003"
-      ]
-    },
     {
       "id": "P-C",
       "title": "store / database port",
@@ -250,7 +241,6 @@
   ],
   "waves": {
     "1": [
-      "ADR-0005",
       "P-C",
       "P-D",
       "P-E",
