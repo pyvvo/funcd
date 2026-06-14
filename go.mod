@@ -8,6 +8,7 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/stretchr/testify v1.11.1
+	slatedb.io/slatedb-go v0.13.1
 )
 
 require (

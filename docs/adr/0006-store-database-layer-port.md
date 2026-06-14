@@ -1,6 +1,6 @@
 # ADR-0006: Store / database-layer port (`store.Store`, slatedb via UniFFI + cgo)
 
-- **Status**: Accepted
+- **Status**: Reviewing
 - **Date**: 2026-06-14 (revised same day post-judge: "one binary" now requires static-linking
   `slatedb_uniffi` [operator-vs-developer impact + feasibility flagged]; lib build/acquisition pinned for
   deterministic CI; at-rest `Encryptor` seam added for `Secret`; `Engine` batch-isolation clarified;

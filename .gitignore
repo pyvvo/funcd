@@ -12,3 +12,6 @@ coverage.out
 *.swo
 *~
 .vscode/
+
+# slatedb native lib build cache (just slatedb-lib)
+.cache/

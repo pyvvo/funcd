@@ -985,3 +985,5 @@ mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15/go.mod h1:4M5MMXl2kW6fivUT6y
 rsc.io/binaryregexp v0.2.0/go.mod h1:qTv7/COck+e2FymRvadv62gMdZztPaShugOCi3I+8D8=
 rsc.io/quote/v3 v3.1.0/go.mod h1:yEA65RcK8LyAZtP9Kv3t0HmxON59tX3rD+tICJqUlj0=
 rsc.io/sampler v1.3.0/go.mod h1:T1hPZKmBbMNahiBKFy5HrXp6adAjACjK9JXDnKaTXpA=
+slatedb.io/slatedb-go v0.13.1 h1:DgqA3oc6Ojo6i2GtzvY1tBY7Vl0AXOzaj3/Ievi7+34=
+slatedb.io/slatedb-go v0.13.1/go.mod h1:RNLs5UDKEDVO3Dve82yVg7FZvcbzzw4Q2jIlXDdak5o=
