@@ -301,12 +301,15 @@ func (s *store) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	stamped, err := cloneObject(obj)
+	// Return the stamped work object to the caller and publish an INDEPENDENT clone to
+	// watchers, so a caller mutating the returned value cannot corrupt the watch stream
+	// (Event.Object is an interface — a shared pointee would alias the ring + subscribers).
+	published, err := cloneObject(obj)
 	if err != nil {
 		return nil, err
 	}
-	s.publish(rev, Event{Type: Added, Object: stamped})
-	return stamped, nil
+	s.publish(rev, Event{Type: Added, Object: published})
+	return obj, nil
 }
 
 func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
@@ -380,12 +383,13 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	stamped, err := cloneObject(obj)
+	// Independent clone for the watch stream; return the stamped work object (see Create).
+	published, err := cloneObject(obj)
 	if err != nil {
 		return nil, err
 	}
-	s.publish(rev, Event{Type: Modified, Object: stamped})
-	return stamped, nil
+	s.publish(rev, Event{Type: Modified, Object: published})
+	return obj, nil
 }
 
 func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {

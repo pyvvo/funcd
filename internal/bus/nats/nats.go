@@ -116,14 +116,19 @@ type embedded struct {
 }
 
 // register records a live subscription/consumer's stop func so Close() can stop it
-// (preventing a forwarder-goroutine leak); it returns the deregistration id.
-func (e *embedded) register(stop func()) int {
+// (preventing a forwarder-goroutine leak); it returns (id, true). If the bus is already
+// closed it returns (0, false) — the caller must NOT start a forwarder (use-after-Close),
+// else that goroutine would register into a drained map and leak.
+func (e *embedded) register(stop func()) (int, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return 0, false
+	}
 	id := e.nextID
 	e.nextID++
 	e.subs[id] = stop
-	return id
+	return id, true
 }
 
 func (e *embedded) deregister(id int) {
@@ -170,7 +175,12 @@ func (e *embedded) Subscribe(ctx context.Context, subject bus.Subject) (bus.Subs
 	out := make(chan bus.Message)
 	done := make(chan struct{})
 	cs := &coreSub{e: e, sub: sub, out: out, done: done}
-	cs.id = e.register(cs.stop) // register before the goroutine so Close can never miss it
+	id, ok := e.register(cs.stop) // register before the goroutine so Close can never miss it
+	if !ok {
+		_ = sub.Unsubscribe()
+		return nil, fault.Unavailablef("bus.Subscribe", "bus is closed")
+	}
+	cs.id = id
 	go func() {
 		defer close(out)
 		for {
@@ -224,7 +234,12 @@ func (e *embedded) Consume(ctx context.Context, cfg bus.ConsumeConfig) (bus.Cons
 	out := make(chan bus.Message)
 	done := make(chan struct{})
 	jc := &jsConsumer{e: e, iter: iter, out: out, done: done}
-	jc.id = e.register(jc.stop)
+	id, ok := e.register(jc.stop)
+	if !ok {
+		jc.iter.Stop()
+		return nil, fault.Unavailablef("bus.Consume", "bus is closed")
+	}
+	jc.id = id
 	go func() {
 		defer close(out)
 		for {

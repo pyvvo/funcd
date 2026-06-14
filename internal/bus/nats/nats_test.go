@@ -56,6 +56,18 @@ func forwarderGoroutineRunning() bool {
 		strings.Contains(s, "internal/bus/nats.(*embedded).Consume.func")
 }
 
+// scenario: open-respects-context — Open returns an error (not a started server) when the
+// context is already cancelled, exercising the ctx-cancellation path.
+func TestOpenRespectsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b, err := natsdriver.Open(ctx, natsdriver.Options{Storage: natsdriver.MemoryStorage})
+	if err == nil {
+		_ = b.Close()
+		t.Fatal("Open with a cancelled context should return an error")
+	}
+}
+
 // scenario: driver-conformance-parity — the embedded-NATS driver passes the
 // identical bus contract against both memory and file JetStream storage.
 func TestScenario_DriverConformanceParity(t *testing.T) {

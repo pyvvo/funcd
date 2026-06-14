@@ -89,8 +89,15 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 		}
 		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	sortByKey(out)
 	return out, nil
+}
+
+// sortByKey orders attributes by Key. List guarantees sorted output as a port contract,
+// independent of the backend's listing order (gocloud's mem/file backends happen to list
+// lexically, but this keeps the contract true for any backend or a future delimiter mode).
+func sortByKey(items []blob.Attributes) {
+	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 }
 
 func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOptions) (string, error) {
