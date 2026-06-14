@@ -1,7 +1,7 @@
 # ADR-0007: Blob / storage-layer port (`blob.Bucket` over `gocloud.dev/blob`)
 
-- **Status**: Reviewing
-- **Date**: 2026-06-14 (Accepted 2026-06-14 post-judge: typed `SignMethod`, §3 mapping note, encryptor-asymmetry note)
+- **Status**: Implemented
+- **Date**: 2026-06-14 (Accepted + **Implemented 2026-06-14** — review pass, see docs/reviews/adr-0007-implementation-claude-opus-4-8.md; post-judge: typed `SignMethod`, §3 mapping note, encryptor-asymmetry note)
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, storage-layer, gocloud, bytes-substrate, port, presign
 - **Realizes**: [FEAT-0000/F21](../feat/0000-feat-v1.md) (storage layer — the `blob` half; the database
