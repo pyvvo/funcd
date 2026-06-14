@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/store"
@@ -156,5 +157,41 @@ func TestScenario_GenerationStatusOnlyNoBump(t *testing.T) {
 	}
 	if g := after.GetObjectMeta().Generation; g != 1 {
 		t.Fatalf("status-only update bumped generation to %d, want 1 (unchanged)", g)
+	}
+}
+
+// scenario: returned-object-independent-of-watch — mutating the object returned by Create
+// must not corrupt the object delivered on the watch stream (no shared pointee).
+func TestScenario_ReturnedObjectIndependentOfWatch(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	w, err := s.Watch(ctx, v1.KindConfig.GVK(), store.WatchOptions{})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Stop()
+
+	in, _ := v1.NewObject(v1.KindConfig)
+	c, _ := in.(*v1.Config)
+	c.Name = "ind"
+	c.Namespace = "default"
+	c.ResourceGroup = "rg1"
+	c.Spec.Data = map[string]string{"k": "v"}
+	created, err := s.Create(ctx, c)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var ev store.Event
+	select {
+	case ev = <-w.ResultChan():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no watch event received")
+	}
+
+	// Mutate the returned object; the already-delivered watch event must be unaffected.
+	created.(*v1.Config).Spec.Data["k"] = "MUTATED"
+	if got := ev.Object.(*v1.Config).Spec.Data["k"]; got != "v" {
+		t.Fatalf("watch event aliased the returned object: got %q, want v", got)
 	}
 }

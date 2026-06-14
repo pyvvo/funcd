@@ -7,10 +7,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/bus/buscontract"
 	natsdriver "github.com/green-0-rabbit/funcd/internal/bus/nats"
 )
+
+// scenario: subscribe-after-close — Subscribe/Consume on a closed bus fail cleanly with
+// fault.Unavailable (no panic, no forwarder leaked into a drained registry).
+func TestSubscribeAfterCloseIsUnavailable(t *testing.T) {
+	b, err := natsdriver.Open(context.Background(), natsdriver.Options{Storage: natsdriver.MemoryStorage})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := b.Subscribe(context.Background(), "after.close"); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("Subscribe after Close: kind=%v want unavailable", fault.KindOf(err))
+	}
+}
 
 // scenario: close-leaks-no-goroutine — ADR-0008 DoD. Close() must reap the per-sub /
 // per-consumer forwarder goroutines even when the caller did NOT Unsubscribe/Close them.
