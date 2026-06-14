@@ -1,10 +1,11 @@
 # ADR-0003: Resource model & API typing (v1alpha1)
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-14 (revised same day after judge review: added the optional `StatusObject`
   interface for generic status write-back; single-sourced scope on `Kind.Namespaced()` and added
   the shared `validateMeta` TypeMeta-consistency check; registry-completeness test; doc nits;
-  accepted 2026-06-14)
+  accepted 2026-06-14; implemented 2026-06-14 after review — 9/9 scenarios pass, lint 0 issues,
+  build/vet/test green)
 - **Deciders**: green-0-rabbit
 - **Tags**: resource-model, api-types, crd, typing, v1alpha1
 - **Realizes**: [FEAT-0000/F03](../feat/0000-feat-v1.md), [FEAT-0000/F22](../feat/0000-feat-v1.md)

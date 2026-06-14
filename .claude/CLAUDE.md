@@ -162,6 +162,36 @@ on its merits; reorder or parallelize work within a build tier; and restructure 
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
 the rules above. The judge advises; it never blocks a sound decision on taste.
 
+## Known pitfalls (Go dev on this project — learned from ADR-0003 implementation)
+
+### 1. `create_file` may double the `package` declaration
+
+When using a file-creation tool to create a new Go file, the tool sometimes prepends its
+own `package <name>` line even when the content you provide already starts with one. The
+result is a file that begins with `package foo\npackage foo\n`, which produces the
+cryptic compile error `syntax error: non-declaration statement outside function body`.
+
+**Mitigation**: after creating a batch of Go files, run `go build ./...` immediately and
+grep for duplicate `package` lines if it fails. Fix is trivial: remove the duplicate
+`package` line. A quick pre-flight is `grep -rl '^package.*\npackage' --include='*.go' .`
+though that regex is hard to get right; the build-is-the-check.
+
+### 2. `just ci`'s `git diff` gate fails on content changes to tracked files
+
+The `ci` recipe runs `go fmt ./...` then checks `git diff --name-only -- '*.go'`. If any
+**tracked** Go file has uncommitted changes — even pure content changes that `go fmt`
+does not touch (new types, modified constants) — the diff check fails and `just ci` exits 1.
+This is by design (no dirty tracked files in CI), but during an implementation that
+legitimately modifies existing files, `just ci` will *always* fail until you commit.
+
+**Mitigation**: during implementation, verify with the individual sub-checks:
+```bash
+go build ./... && go test ./... && go tool golangci-lint run ./... && go mod verify
+```
+When all four pass individually, the implementation is green — the `git diff` gate is
+satisfied by committing the changed tracked files. After `go fmt ./...` is clean and the
+four checks above pass, the implementation is done; `just ci` will pass after commit.
+
 ## Before you finish any skill run — propagation checklist
 
 - [ ] Did an ADR change status? Update its feat row (and blueprint, if it refined it).

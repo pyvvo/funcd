@@ -50,3 +50,38 @@ func (r RevisionID) Validate() error {
 	}
 	return nil
 }
+
+// ObjectName is a DNS-1123-label-qualified resource name.
+type ObjectName string
+
+// Validate checks the ObjectName against DNS-label rules.
+func (n ObjectName) Validate() error {
+	if n == "" {
+		return fault.Invalidf("ObjectName.Validate", "object name must not be empty")
+	}
+	if !dnsLabel.MatchString(string(n)) {
+		return fault.Invalidf("ObjectName.Validate", "%q is not a valid DNS label", n)
+	}
+	return nil
+}
+
+// ResourceGroupName is a DNS-1123-label-qualified resource group identifier.
+type ResourceGroupName string
+
+// Validate checks the ResourceGroupName against DNS-label rules.
+func (n ResourceGroupName) Validate() error {
+	if n == "" {
+		return fault.Invalidf("ResourceGroupName.Validate", "resource group name must not be empty")
+	}
+	if !dnsLabel.MatchString(string(n)) {
+		return fault.Invalidf("ResourceGroupName.Validate", "%q is not a valid DNS label", n)
+	}
+	return nil
+}
+
+// UID is a server-assigned opaque unique identifier.
+type UID string
+
+// Tags is an optional free-form set of key-value labels on a resource.
+// map[string]string is allowed under ADR-0002: the any-ban targets interface{}/any/map[string]any.
+type Tags map[string]string

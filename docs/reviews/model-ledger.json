@@ -28,5 +28,20 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0002-implementation-deepseek-v4-pro.md",
     "notes": "changes-requested. B1(model): 3 lint-fixture scenarios absent (cross-feature/any-leak/no-mock) \u2014 tests/ has only .gitkeep; scenarios dropped + DoD item unmet. M1(model): .golangci.yml under-enforces \u2014 no bare-'any' forbidigo pattern, no generated exemption, no slog-only depguard rule (feature-isolation rule deferred=adr). m1(adr): driver-conformance t.Skip + context-cancellation absent, ADR-deferred to store ADR. Keep: api/fault stdlib-only, facade functional-options returns concrete *Platform, just ci exit 0, golangci 0 issues, kernel unit coverage. DoD 9/12. Implementer: deepseek-v4-pro."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0003",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0003-implementation-deepseek-v4-pro.md",
+    "notes": "pass: 0 blk/0 maj/1 min (model: dead NamespaceSpec type). All 9 scenarios pass; lint 0; contracts honored; M1/m2 revisions tested. just ci exit1 = uncommitted-files diff gate (process, not model), green on commit."
   }
 ]
