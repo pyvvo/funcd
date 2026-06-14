@@ -1,11 +1,11 @@
 # ADR-0006: Store / database-layer port (`store.Store`, slatedb via UniFFI + cgo)
 
-- **Status**: Reviewing
+- **Status**: Implemented
 - **Date**: 2026-06-14 (revised same day post-judge: "one binary" now requires static-linking
   `slatedb_uniffi` [operator-vs-developer impact + feasibility flagged]; lib build/acquisition pinned for
   deterministic CI; at-rest `Encryptor` seam added for `Secret`; `Engine` batch-isolation clarified;
   slatedb version pinned; **spike-validated 2026-06-14** — build recipe, static-link to a ~24 MB binary,
-  and the required `staticlib` patch all confirmed and recorded in §5; **Accepted 2026-06-14**)
+  and the required `staticlib` patch all confirmed and recorded in §5; **Accepted 2026-06-14**; **Implemented 2026-06-14** — review gate pass, see docs/reviews/adr-0006-implementation-claude-opus-4-8.md)
 - **Deciders**: green-0-rabbit
 - **Tags**: store, metastore, database-layer, slatedb, uniffi, cgo, watch, generations, port
 - **Realizes**: [FEAT-0000/F05](../feat/0000-feat-v1.md), [FEAT-0000/F21](../feat/0000-feat-v1.md) (database layer)

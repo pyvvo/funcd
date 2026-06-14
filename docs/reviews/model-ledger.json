@@ -103,5 +103,20 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro-4.md",
     "notes": "pass: re-review #3's process Blocker (in-place ADR amendment) RATIFIED by decider as a deliberate, documented exception (ADR uncommitted/in-flight; client-deferral is a narrow scope reduction). Code clean: lint 0, 6/6 scenarios pass, api/fault huma-free; only benign tidy-gate (green on commit). 1 model minor (typed bodies). deepseek code clean since review #3."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0006",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 1,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0006-implementation-claude-opus-4-8.md",
+    "notes": "pass; store port+memory+slatedb engines, 9 scenarios green, just ci 0; M1 ci-cgo-vs-cgo-free-memory=adr, M2 watch-Unavailable-untested=model, M3 slatedb-lib-via-equiv-lib=env; SELF-REVIEW (opus impl+review)"
   }
 ]
