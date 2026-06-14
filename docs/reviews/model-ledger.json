@@ -133,5 +133,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0007-implementation-claude-opus-4-8.md",
     "notes": "pass; blob.Bucket port + gocloud driver (mem/file/s3, pure-Go), 6 scenarios green, just ci 0; M1 gocloud-dep-tree-size/s3-untested=env/adr; SELF-REVIEW (opus impl+review)"
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0008",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0008-implementation-claude-opus-4-8.md",
+    "notes": "pass; bus.Bus port + embedded NATS/JetStream driver (mem/file, pure-Go), 7 scenarios green incl crash-recovery, no flakiness, just ci 0; M1 namespace-isolation-thin=adr, M2 nats-dep-tree=env; SELF-REVIEW (opus impl+review)"
   }
 ]

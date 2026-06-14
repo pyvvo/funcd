@@ -1,7 +1,7 @@
 # ADR-0008: Bus / messaging port (`bus.Bus` over embedded NATS + JetStream)
 
-- **Status**: Reviewing
-- **Date**: 2026-06-14 (Accepted 2026-06-14 post-judge: `NewMessage` constructor [M1], Subscription/Consumer no-leak note)
+- **Status**: Implemented
+- **Date**: 2026-06-14 (Accepted + **Implemented 2026-06-14** — review pass, see docs/reviews/adr-0008-implementation-claude-opus-4-8.md; post-judge: `NewMessage` constructor [M1], Subscription/Consumer no-leak note)
 - **Deciders**: green-0-rabbit
 - **Tags**: bus, messaging, nats, jetstream, embedded, pub-sub, durable, port
 - **Realizes**: [FEAT-0000/F06](../feat/0000-feat-v1.md) (messaging layer)

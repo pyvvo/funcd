@@ -5,29 +5,11 @@
     "ADR-0002",
     "ADR-0003",
     "ADR-0005",
-    "ADR-0006"
+    "ADR-0006",
+    "ADR-0007",
+    "ADR-0008"
   ],
   "items": [
-    {
-      "id": "P-D",
-      "title": "blob / storage port",
-      "features": [
-        "F21blob"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
-    {
-      "id": "P-E",
-      "title": "bus / messaging port",
-      "features": [
-        "F06"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
     {
       "id": "P-F",
       "title": "logger root",
@@ -88,8 +70,8 @@
       ],
       "depends_on": [
         "ADR-0006",
-        "P-D",
-        "P-E",
+        "ADR-0007",
+        "ADR-0008",
         "P-F",
         "P-G",
         "P-H"
@@ -104,7 +86,7 @@
       "depends_on": [
         "ADR-0003",
         "ADR-0006",
-        "P-E"
+        "ADR-0008"
       ]
     },
     {
@@ -151,7 +133,7 @@
         "F14"
       ],
       "depends_on": [
-        "P-E",
+        "ADR-0008",
         "ADR-0006",
         "P-J",
         "ADR-0003"
@@ -164,7 +146,7 @@
         "F23"
       ],
       "depends_on": [
-        "P-D",
+        "ADR-0007",
         "P-N"
       ]
     },
@@ -187,7 +169,7 @@
         "F16"
       ],
       "depends_on": [
-        "P-E",
+        "ADR-0008",
         "P-H",
         "P-G",
         "P-M",
@@ -231,34 +213,30 @@
   ],
   "waves": {
     "1": [
-      "P-D",
-      "P-E",
       "P-F",
       "P-F2",
       "P-G",
-      "P-H"
-    ],
-    "2": [
-      "P-I",
+      "P-H",
       "P-J"
     ],
-    "3": [
+    "2": [
       "P-H2",
+      "P-I",
       "P-K",
       "P-L",
       "P-M",
       "P-N"
     ],
-    "4": [
+    "3": [
       "P-O",
       "P-P",
       "P-Q",
       "P-R"
     ],
-    "5": [
+    "4": [
       "P-S"
     ],
-    "6": [
+    "5": [
       "P-T"
     ]
   }
