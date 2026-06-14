@@ -4,20 +4,10 @@
     "ADR-0001",
     "ADR-0002",
     "ADR-0003",
-    "ADR-0005"
+    "ADR-0005",
+    "ADR-0006"
   ],
   "items": [
-    {
-      "id": "P-C",
-      "title": "store / database port",
-      "features": [
-        "F05",
-        "F21db"
-      ],
-      "depends_on": [
-        "ADR-0003"
-      ]
-    },
     {
       "id": "P-D",
       "title": "blob / storage port",
@@ -97,7 +87,7 @@
         "F04"
       ],
       "depends_on": [
-        "P-C",
+        "ADR-0006",
         "P-D",
         "P-E",
         "P-F",
@@ -113,7 +103,7 @@
       ],
       "depends_on": [
         "ADR-0003",
-        "P-C",
+        "ADR-0006",
         "P-E"
       ]
     },
@@ -136,7 +126,7 @@
       "depends_on": [
         "ADR-0005",
         "ADR-0003",
-        "P-C",
+        "ADR-0006",
         "P-J"
       ]
     },
@@ -150,7 +140,7 @@
         "P-G",
         "P-H",
         "ADR-0003",
-        "P-C",
+        "ADR-0006",
         "P-J"
       ]
     },
@@ -162,7 +152,7 @@
       ],
       "depends_on": [
         "P-E",
-        "P-C",
+        "ADR-0006",
         "P-J",
         "ADR-0003"
       ]
@@ -185,7 +175,7 @@
         "F15"
       ],
       "depends_on": [
-        "P-C",
+        "ADR-0006",
         "P-N",
         "P-G"
       ]
@@ -241,7 +231,6 @@
   ],
   "waves": {
     "1": [
-      "P-C",
       "P-D",
       "P-E",
       "P-F",
