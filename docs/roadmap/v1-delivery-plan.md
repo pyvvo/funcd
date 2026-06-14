@@ -46,7 +46,7 @@ sync; re-run the analyzer (below) after any edit.
 | ADR-0005 ✓ | API surface — code-first via huma (Go types → generated OpenAPI 3.1; SDK client deferred to P-R) | F02 | ADR-0003 |
 | [ADR-0006](../adr/0006-store-database-layer-port.md) ✓ | Store / database-layer port (`store.Store`: **slatedb** UniFFI/cgo + a pure-Go memory engine; watch, generations, optimistic concurrency, `Encryptor` seam, contract suite) | F05, F21(db) | ADR-0003 |
 | **P-D** → [ADR-0007](../adr/0007-blob-storage-layer-port.md) (Accepted) | Blob / storage-layer port (`blob.Bucket`: gocloud mem/file/s3, **pure-Go**, contract suite) | F21(blob) | ADR-0002 |
-| **P-E** | Messaging / bus port (`bus.Bus`: embedded NATS/JetStream + in-mem, accounts/ns, contract suite) | F06 | ADR-0002 |
+| **P-E** → [ADR-0008](../adr/0008-bus-messaging-port.md) (Accepted) | Messaging / bus port (`bus.Bus`: embedded NATS/JetStream + in-mem, accounts/ns, contract suite) | F06 | ADR-0002 |
 | **P-F** | Observability — logger root (slog construction + injection from config) | F17 (logger) | ADR-0002 |
 | **P-F2** | Observability — OTel metrics/traces + audit channel | F17 (telemetry) | ADR-0002 |
 | **P-G** | Function runtime port (`runtime.Runtime`: process + containerd/runc curated runtimes; netns wiring + nftables lateral-deny; worker/shim seam) | F12 | ADR-0002 |
@@ -293,7 +293,7 @@ this section originally shipped with. **When an ADR reaches** `Implemented`, mov
 ## Caveats (living doc)
 
 * Real ADR numbers are assigned by `/adr` at creation; reconcile this table's `P-x` ids to actual
-  numbers as ADRs land, and link them. `P-A` reconciled to **ADR-0003** (now built); `P-B` → **ADR-0004** → **superseded by ADR-0005** (code-first via huma, now built); `P-C` → **ADR-0006** (store/database-layer port — slatedb via UniFFI/cgo; **Implemented** 2026-06-14 — built, graduated to tier 0); `P-D` → **ADR-0007** (blob/storage-layer port — gocloud mem/file/s3, pure-Go; **Accepted** 2026-06-14, keeps the `P-D` handle in the graph/waves until implemented).
+  numbers as ADRs land, and link them. `P-A` reconciled to **ADR-0003** (now built); `P-B` → **ADR-0004** → **superseded by ADR-0005** (code-first via huma, now built); `P-C` → **ADR-0006** (store/database-layer port — slatedb via UniFFI/cgo; **Implemented** 2026-06-14 — built, graduated to tier 0); `P-D` → **ADR-0007** (blob/storage-layer port — gocloud mem/file/s3, pure-Go; **Accepted** 2026-06-14, keeps the `P-D` handle in the graph/waves until implemented); `P-E` → **ADR-0008** (bus/messaging port — embedded NATS/JetStream, pure-Go; **Accepted** 2026-06-14, keeps the `P-E` handle until implemented).
 * Tiers are dependency floors, not a schedule — within a tier, sequence by review bandwidth.
 * If an ADR, once drafted, reveals a dependency this plan missed, update `v1-plan.json`, re-run the
   analyzer, re-validate the graph (newest accepted ADR still wins for architecture; this plan just
