@@ -88,5 +88,20 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro-3.md",
     "notes": "re-review #3: code is CLEAN (lint 0, 6/6 scenarios pass, only benign tidy-gate). Blocker is PROCESS not code \u2014 ADR-0005's frozen substance (Scenarios/Decision/Scope/Alternatives) was amended IN PLACE to defer the client, violating the immutability invariant (should be a superseding ADR or an explicitly-owned deliberate amendment). 1 model minor (typed request bodies). deepseek's code is done; the mechanism is the user's call."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0005",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro-4.md",
+    "notes": "pass: re-review #3's process Blocker (in-place ADR amendment) RATIFIED by decider as a deliberate, documented exception (ADR uncommitted/in-flight; client-deferral is a narrow scope reduction). Code clean: lint 0, 6/6 scenarios pass, api/fault huma-free; only benign tidy-gate (green on commit). 1 model minor (typed bodies). deepseek code clean since review #3."
   }
 ]
