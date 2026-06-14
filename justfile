@@ -31,12 +31,16 @@ test:
 build:
     go build ./...
 
+# regenerate the OpenAPI spec from Go types (via huma reflection)
+generate:
+    go run ./internal/controlplane/cmd/specgen/ -out api/openapi/funcd.v1alpha1.yaml
+
 # tidy go.mod and go.sum
 tidy:
     go mod tidy
 
-# CI pipeline (fmt check + lint + test + build + tidy-diff check)
-ci: tidy
+# CI pipeline (generate staleness + fmt check + lint + test + build + tidy-diff check)
+ci: tidy generate
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi

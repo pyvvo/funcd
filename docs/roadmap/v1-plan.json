@@ -7,8 +7,8 @@
   ],
   "items": [
     {
-      "id": "ADR-0004",
-      "title": "API surface + codegen",
+      "id": "ADR-0005",
+      "title": "API surface — code-first (huma)",
       "features": [
         "F02"
       ],
@@ -143,7 +143,7 @@
         "F07"
       ],
       "depends_on": [
-        "ADR-0004",
+        "ADR-0005",
         "ADR-0003",
         "P-C",
         "P-J"
@@ -220,7 +220,7 @@
         "F18"
       ],
       "depends_on": [
-        "ADR-0004",
+        "ADR-0005",
         "P-L"
       ]
     },
@@ -250,7 +250,7 @@
   ],
   "waves": {
     "1": [
-      "ADR-0004",
+      "ADR-0005",
       "P-C",
       "P-D",
       "P-E",

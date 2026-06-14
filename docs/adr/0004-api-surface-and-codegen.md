@@ -1,6 +1,9 @@
 # ADR-0004: API surface & codegen (OpenAPI v1alpha1)
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0005](0005-api-surface-code-first-huma.md)
+- **Superseded**: 2026-06-14 — ADR-0005 inverts the approach to **code-first** (the Go types +
+  typed huma operations are the source; the OpenAPI spec is *generated*, not hand-authored).
+  The hand-authored decision below is retained as the historical record; do not implement it.
 - **Date**: 2026-06-14 (revised same day after judge review: `…List` envelopes are generated not
   bound; `codegen-reproducible` gets a real shell-out test; drift-reach, error-boundary, and a
   `bearerAuth` security-scheme declaration clarified; accepted 2026-06-14)

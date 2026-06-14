@@ -43,5 +43,50 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0003-implementation-deepseek-v4-pro.md",
     "notes": "pass: 0 blk/0 maj/1 min (model: dead NamespaceSpec type). All 9 scenarios pass; lint 0; contracts honored; M1/m2 revisions tested. just ci exit1 = uncommitted-files diff gate (process, not model), green on commit."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0005",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 4,
+    "dod_passed": 6,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro.md",
+    "notes": "changes-requested: just ci fails (forbidigo any x8, unused x1, staticcheck x2 \u2014 all model); missing generated client + 6th scenario (model); stray specgen binary. api/fault huma-free \u2713, spec genuinely 3.1-generated \u2713, 5/6 scenarios pass. No adr/env findings."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0005",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 8,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro-2.md",
+    "notes": "re-review #2: all review-1 MODEL findings FIXED (lint 0, specgen gitignored, client config+6th scenario added). Blocker is ADR-attributed \u2014 oapi-codegen can't read huma's 3.1 spec, so the 'oapi-codegen client' is impossible; loops to a superseding/amending ADR (huma->3.0.3 or defer client to P-R). 1 model minor (map[string]interface{} request bodies dodge forbidigo's interface{} blind spot). tidy-gate red = uncommitted deps (benign, go mod tidy is a no-op)."
+  },
+  {
+    "date": "2026-06-14",
+    "adr": "0005",
+    "phase": "implementation",
+    "model": "deepseek-v4-pro",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 9,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0005-implementation-deepseek-v4-pro-3.md",
+    "notes": "re-review #3: code is CLEAN (lint 0, 6/6 scenarios pass, only benign tidy-gate). Blocker is PROCESS not code \u2014 ADR-0005's frozen substance (Scenarios/Decision/Scope/Alternatives) was amended IN PLACE to defer the client, violating the immutability invariant (should be a superseding ADR or an explicitly-owned deliberate amendment). 1 model minor (typed request bodies). deepseek's code is done; the mechanism is the user's call."
   }
 ]

@@ -669,11 +669,8 @@ plat, err := funcd.New(funcd.InMemory())
 funcd/
 ├── api/                                  # public contracts — the only packages SDK/CLI may depend on
 │   ├── openapi/
-│   │   ├── funcd.v1.yaml                 # REST surface, source of truth (oapi-codegen)
-│   │   └── generated/
-│   │       ├── server.gen.go             # strict server interface
-│   │       ├── types.gen.go
-│   │       └── client.gen.go
+│   │   ├── funcd.v1alpha1.yaml           # GENERATED OpenAPI 3.1 (code-first via huma — ADR-0005)
+│   │   └── generated/                     # (reserved for future generated client — P-R/F18)
 │   ├── proto/
 │   │   └── funcd/v1/
 │   │       ├── controlplane.proto        # worker ⇆ control-plane registration & watch (multi-node)
@@ -924,7 +921,7 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 > The source-code rulebook is **[ADR-0002](docs/adr/0002-source-code-conventions-and-patterns.md)** — constructor patterns, the `api/fault` error kernel + problem+json mapping, typed enums/IDs (no `any`-leakage), context-first, no globals, `slog`-only, the depguard import graph, and the no-mocks rule. The bullets below are the summary; the ADR is authoritative.
 
 - **Single module**, generated code committed; CI re-runs codegen and fails on diff (`git diff --exit-code`).
-- **Codegen tools pinned** in `go.mod` via the `tool` directive (oapi-codegen, buf) — reproducible generation, no "works on my machine". The OpenAPI contract, `x-go-type` binding to `api/types/v1alpha1`, strict-server (chi), and the two-check drift gate are **[ADR-0004](docs/adr/0004-api-surface-and-codegen.md)**.
+- **Codegen tools pinned** in `go.mod` via the `tool` directive (buf) — reproducible generation, no "works on my machine". The API is **code-first via huma** (Go types → generated OpenAPI 3.1, served + committed; chi router; `api/fault` problem+json). The typed Go client is deferred to P-R/F18 — **[ADR-0005](docs/adr/0005-api-surface-code-first-huma.md)** (supersedes ADR-0004).
 - **Construction**: functional options on the public facade (`funcd.New(WithStore(...))`); explicit deps-structs internally (ADR-0002 §1).
 - **Contract tests over mocks**: one conformance suite per port (`Store`, `Blob`, `Bus`, `Gateway`, `Runtime`, and each service port) executed against every driver — the in-memory/file driver is guaranteed to behave like the S3/external one, which is what makes both the e2e-on-library strategy and the storage/database substrate layers trustworthy. No mock frameworks (depguard-enforced).
 - **Import discipline**: `api/` imports nothing from `internal/`/`pkg/` (it is the bottom contract layer; `api/fault` + `api/types` are stdlib-only, imported *up* by everyone); `features/*` never import each other (they communicate via the bus); `platform/` has no business logic; enforced with `depguard`.
