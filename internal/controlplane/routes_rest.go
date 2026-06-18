@@ -528,20 +528,20 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 	})
 }
 
-// ===== Worker (cluster-scoped) =====
+// ===== WorkerNode (cluster-scoped) =====
 
-type createWorkerInput struct{ Body v1.Worker }
-type workerOutput struct{ Body v1.Worker }
-type listWorkerOutput struct{ Body []v1.Worker }
+type createWorkerNodeInput struct{ Body v1.WorkerNode }
+type workerNodeOutput struct{ Body v1.WorkerNode }
+type listWorkerOutput struct{ Body []v1.WorkerNode }
 
 func registerWorker(api huma.API, h Handlers) {
-	base := "/apis/funcd.io/v1alpha1/workers"
+	base := "/apis/funcd.io/v1alpha1/workernodes"
 
 	huma.Register(api, huma.Operation{
-		OperationID: "listWorkers", Method: http.MethodGet, Path: base,
-		Tags: []string{"Worker"},
+		OperationID: "listWorkerNodes", Method: http.MethodGet, Path: base,
+		Tags: []string{"WorkerNode"},
 	}, func(ctx context.Context, _ *struct{}) (*listWorkerOutput, error) {
-		items, err := h.ListWorkers(ctx)
+		items, err := h.ListWorkerNodes(ctx)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -549,46 +549,46 @@ func registerWorker(api huma.API, h Handlers) {
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "createWorker", Method: http.MethodPost, Path: base,
-		Tags: []string{"Worker"},
-	}, func(ctx context.Context, in *createWorkerInput) (*workerOutput, error) {
-		item, err := h.CreateWorker(ctx, in.Body)
+		OperationID: "createWorkerNode", Method: http.MethodPost, Path: base,
+		Tags: []string{"WorkerNode"},
+	}, func(ctx context.Context, in *createWorkerNodeInput) (*workerNodeOutput, error) {
+		item, err := h.CreateWorkerNode(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &workerOutput{Body: item}, nil
+		return &workerNodeOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "getWorker", Method: http.MethodGet, Path: base + "/{name}",
-		Tags: []string{"Worker"},
-	}, func(ctx context.Context, in *clusterScopedGet) (*workerOutput, error) {
-		item, err := h.GetWorker(ctx, in.Name)
+		OperationID: "getWorkerNode", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"WorkerNode"},
+	}, func(ctx context.Context, in *clusterScopedGet) (*workerNodeOutput, error) {
+		item, err := h.GetWorkerNode(ctx, in.Name)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &workerOutput{Body: item}, nil
+		return &workerNodeOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "replaceWorker", Method: http.MethodPut, Path: base + "/{name}",
-		Tags: []string{"Worker"},
+		OperationID: "replaceWorkerNode", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"WorkerNode"},
 	}, func(ctx context.Context, in *struct {
 		Name v1.ObjectName `path:"name"`
-		Body v1.Worker
-	}) (*workerOutput, error) {
-		item, err := h.ReplaceWorker(ctx, in.Name, in.Body)
+		Body v1.WorkerNode
+	}) (*workerNodeOutput, error) {
+		item, err := h.ReplaceWorkerNode(ctx, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &workerOutput{Body: item}, nil
+		return &workerNodeOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "deleteWorker", Method: http.MethodDelete, Path: base + "/{name}",
-		Tags: []string{"Worker"},
+		OperationID: "deleteWorkerNode", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"WorkerNode"},
 	}, func(ctx context.Context, in *clusterScopedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteWorker(ctx, in.Name))
+		return nil, wrapFaultError(h.DeleteWorkerNode(ctx, in.Name))
 	})
 }
 

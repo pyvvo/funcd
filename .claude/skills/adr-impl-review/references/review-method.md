@@ -17,7 +17,7 @@ The findings that matter come from *executing*, not reading. Run these and **pas
 | tree | diff produced tree vs the ADR's *Repository surface* | missing file = Blocker; unexplained extra = Major |
 | conventions | grep for `any`/`interface{}` in exported sigs; `panic(` outside main; logging imports ≠ `log/slog`; import-graph violations | ADR-0002 breach = Major/Blocker |
 | behavior | real logic present (no `not implemented` stubs shipped); scenarios un-skipped + passing, none weakened/deleted | stub-in-shipped-path or skipped scenario = Blocker |
-| hygiene | `grep -rn "<local-username>"`; module path; ADR at `Reviewing` with substance unchanged (`git diff` it); feat row at `reviewing` | identity leak / mutated ADR substance = Blocker |
+| tracking | module path; ADR at `Reviewing` with substance unchanged (`git diff` it); feat row at `reviewing`; **silent** no-dev-machine-leak check (absolute path / local username / personal email) — do NOT write it as a report section, never transcribe the value | identity leak / mutated ADR substance = Blocker |
 
 Empty-module trap worth knowing cold: on a module with **zero `.go` files**, `golangci-lint`,
 `go vet`, and `go test ./...` exit non-zero ("no packages"); only `go build` tolerates it. So a
@@ -74,7 +74,9 @@ The `--notes` line is the at-a-glance summary; this doc is the full record. Use 
 - <finding · attribution · evidence · fix>
 
 ### ✅ Verified correct (keep it)
-- <what was checked and passed — tree, conventions, specific scenarios, hygiene>
+- <what was checked and passed — tree, conventions, specific scenarios>
+  <!-- Do NOT add a Hygiene / identity-grep line here. The no-dev-machine-leak check is silent
+       (pass = say nothing); a leak is a Blocker described generically — never transcribe the value. -->
 
 ### Definition of Done
 <X / Y items hold> (ADR Review-checklist + generic phase DoD). Misses: <which, and attribution>.

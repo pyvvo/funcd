@@ -67,10 +67,18 @@ Scenarios · Scope (in/out) · Constraints & Decision drivers · Alternatives co
 Decision · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
 Consequences · Open questions · References.
 
+**Be concise — the overriding style rule.** An ADR records a *decision* and the contracts to
+implement it, not an essay. Every sentence must change what gets built or how it's judged; if it
+doesn't, cut it. No restating the same point across Decision/Consequences/Constraints, no
+background the reader already has, no hedging or motivational prose, no "precision" that adds
+words but not decisions. Prefer a tight sentence to a paragraph, a table or signature to prose.
+Completeness means *every template section present and every contract specified* — not verbose.
+A bloated ADR is a defect the judge should flag, the same as a missing section.
+
 Quality bar per section:
 
 - **Context & Need**: states the component's *purpose* plainly — what it is for and who
-  calls it. Purpose is what tells the implementer what to test.
+  calls it. Purpose is what tells the implementer what to test. A few sentences, not a history.
 - **Scenarios**: Given/When/Then, from the caller's point of view, observable outcomes
   only. Give each a short stable name (`scenario: cold-start-wake`) — the acceptance test
   written at implementation time carries the same name, so scenario ↔ test traceability is

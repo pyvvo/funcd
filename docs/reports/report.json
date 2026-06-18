@@ -1,0 +1,74 @@
+[
+  {
+    "backend": "memory",
+    "rps": 29309.63535201215,
+    "latency": {
+      "p50": 549755,
+      "p90": 910064,
+      "p99": 991133,
+      "p999": 999240,
+      "max": 1591875
+    },
+    "platformBaselineMB": 38.28125,
+    "perWorkerMB": 54.5625,
+    "idleMB": 0,
+    "coldStart": 228864875,
+    "perFunctionMB": 57.705078125,
+    "maxDensity": 283,
+    "fitsTarget": true,
+    "pooledPerFunctionMB": 20.322265625,
+    "pooledRPS": 6424.759498370375,
+    "pooledLatency": {
+      "p50": 525890,
+      "p90": 905228,
+      "p99": 990579,
+      "p999": 999114,
+      "max": 1285958
+    },
+    "singleDirectRPS": 34484.43964735564,
+    "singleDirectLatency": {
+      "p50": 136082,
+      "p90": 231550,
+      "p99": 253030,
+      "p999": 255178,
+      "max": 255417
+    },
+    "pooledK": 8
+  },
+  {
+    "backend": "file",
+    "rps": 29540.95700058756,
+    "latency": {
+      "p50": 549902,
+      "p90": 910063,
+      "p99": 991099,
+      "p999": 999203,
+      "max": 1349708
+    },
+    "platformBaselineMB": 53.109375,
+    "perWorkerMB": 54.390625,
+    "idleMB": 0,
+    "coldStart": 229175250,
+    "perFunctionMB": 57.775390625,
+    "maxDensity": 282,
+    "fitsTarget": true,
+    "pooledPerFunctionMB": 20.322265625,
+    "pooledRPS": 6424.759498370375,
+    "pooledLatency": {
+      "p50": 525890,
+      "p90": 905228,
+      "p99": 990579,
+      "p999": 999114,
+      "max": 1285958
+    },
+    "singleDirectRPS": 34484.43964735564,
+    "singleDirectLatency": {
+      "p50": 136082,
+      "p90": 231550,
+      "p99": 253030,
+      "p999": 255178,
+      "max": 255417
+    },
+    "pooledK": 8
+  }
+]

@@ -111,12 +111,12 @@ type Handlers interface {
 	ReplaceRuntimeClass(ctx context.Context, name v1.ObjectName, rc v1.RuntimeClass) (v1.RuntimeClass, error)
 	DeleteRuntimeClass(ctx context.Context, name v1.ObjectName) error
 
-	// Worker (cluster-scoped)
-	GetWorker(ctx context.Context, name v1.ObjectName) (v1.Worker, error)
-	CreateWorker(ctx context.Context, w v1.Worker) (v1.Worker, error)
-	ListWorkers(ctx context.Context) ([]v1.Worker, error)
-	ReplaceWorker(ctx context.Context, name v1.ObjectName, w v1.Worker) (v1.Worker, error)
-	DeleteWorker(ctx context.Context, name v1.ObjectName) error
+	// WorkerNode (cluster-scoped)
+	GetWorkerNode(ctx context.Context, name v1.ObjectName) (v1.WorkerNode, error)
+	CreateWorkerNode(ctx context.Context, w v1.WorkerNode) (v1.WorkerNode, error)
+	ListWorkerNodes(ctx context.Context) ([]v1.WorkerNode, error)
+	ReplaceWorkerNode(ctx context.Context, name v1.ObjectName, w v1.WorkerNode) (v1.WorkerNode, error)
+	DeleteWorkerNode(ctx context.Context, name v1.ObjectName) error
 
 	// Gateway (cluster-scoped)
 	GetGateway(ctx context.Context, name v1.ObjectName) (v1.Gateway, error)

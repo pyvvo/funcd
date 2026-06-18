@@ -209,3 +209,56 @@ func firstDiff(a, b string) int {
 	}
 	return -1
 }
+
+// ===== scenario: schema-rejects-invalid-dto =====
+// huma validates the request body against the generated schema BEFORE the handler runs:
+// the DNS-1123 name pattern (ObjectName SchemaProvider) and replicas>=0 (struct tag) are
+// enforced at the edge, returning 422 — proving both validation mechanisms are wired.
+func TestSchemaRejectsInvalidDTO(t *testing.T) {
+	h := controlplane.NewStubHandlers()
+	r := chi.NewRouter()
+	api := controlplane.NewAPI(r, h)
+	ta := humatest.Wrap(t, api)
+	const path = "/apis/funcd.io/v1alpha1/namespaces/my-ns/functions"
+
+	badName := map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "Bad_Name!", "namespace": "my-ns", "resourceGroup": "rg1"},
+		"spec":     map[string]interface{}{"runtime": "nodejs22"},
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", badName); resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad DNS-1123 name: want 422 (schema pattern), got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	negReplicas := map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "ok-name", "namespace": "my-ns", "resourceGroup": "rg1"},
+		"spec":     map[string]interface{}{"runtime": "nodejs22", "replicas": -1},
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", negReplicas); resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("negative replicas: want 422 (schema minimum:0), got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	overCap := map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "ok-name", "namespace": "my-ns", "resourceGroup": "rg1"},
+		"spec":     map[string]interface{}{"runtime": "nodejs22", "replicas": 16},
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", overCap); resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("replicas over cap: want 422 (schema maximum:15), got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	// new schema leaves: a bad runtime (RuntimeName DNS-1123) and a bad handler (handlerPattern).
+	for _, bad := range []struct {
+		what string
+		spec map[string]interface{}
+	}{
+		{"runtime", map[string]interface{}{"runtime": "Bad_Runtime!", "handler": "h"}},
+		{"handler", map[string]interface{}{"runtime": "nodejs22", "handler": "1-bad-handler"}},
+	} {
+		body := map[string]interface{}{
+			"metadata": map[string]interface{}{"name": "ok-name", "namespace": "my-ns", "resourceGroup": "rg1"},
+			"spec":     bad.spec,
+		}
+		if resp := ta.Post(path, "Content-Type: application/json", body); resp.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("bad %s: want 422 (schema), got %d: %s", bad.what, resp.Code, resp.Body.String())
+		}
+	}
+}

@@ -3,6 +3,24 @@
 
 components:
   schemas:
+    ArtifactRef:
+      additionalProperties: false
+      properties:
+        digest:
+          pattern: ^sha256:[a-f0-9]{64}$
+          type: string
+        uri:
+          type: string
+      type: object
+    BlobServiceSpec:
+      additionalProperties: false
+      properties:
+        binding:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - binding
+      type: object
     Condition:
       additionalProperties: false
       properties:
@@ -133,6 +151,19 @@ components:
       type: object
     EventSourceSpec:
       additionalProperties: false
+      properties:
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        timer:
+          $ref: "#/components/schemas/TimerSpec"
+        type:
+          enum:
+            - http
+            - timer
+          type: string
       type: object
     EventSourceStatus:
       additionalProperties: false
@@ -160,12 +191,46 @@ components:
       type: object
     FunctionSpec:
       additionalProperties: false
+      properties:
+        artifact:
+          $ref: "#/components/schemas/ArtifactRef"
+        handler:
+          pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
+        pooling:
+          $ref: "#/components/schemas/Pooling"
+        replicas:
+          format: int64
+          maximum: 15
+          minimum: 0
+          type: integer
+        runtime:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        scaling:
+          $ref: "#/components/schemas/Scaling"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
       type: object
     FunctionStatus:
       additionalProperties: false
       properties:
         Status:
           $ref: "#/components/schemas/Status"
+        currentRevision:
+          type: string
+        replicas:
+          format: int64
+          type: integer
       required:
         - Status
       type: object
@@ -236,6 +301,15 @@ components:
       required:
         - Status
       type: object
+    KVServiceSpec:
+      additionalProperties: false
+      properties:
+        binding:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - binding
+      type: object
     Namespace:
       additionalProperties: false
       properties:
@@ -276,8 +350,14 @@ components:
           format: int64
           type: integer
         name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         namespace:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         ownerReferences:
           items:
@@ -286,6 +366,9 @@ components:
             - array
             - "null"
         resourceGroup:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         resourceVersion:
           type: string
@@ -304,8 +387,14 @@ components:
         kind:
           type: string
         name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         namespace:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
         - kind
@@ -325,6 +414,12 @@ components:
       required:
         - ObjectRef
         - uid
+      type: object
+    Pooling:
+      additionalProperties: false
+      properties:
+        worker:
+          type: string
       type: object
     ResourceGroup:
       additionalProperties: false
@@ -375,11 +470,22 @@ components:
     RevisionSpec:
       additionalProperties: false
       properties:
+        artifact:
+          $ref: "#/components/schemas/ArtifactRef"
         function:
           $ref: "#/components/schemas/ObjectRef"
+        handler:
+          pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
         number:
           format: int64
+          minimum: 1
           type: integer
+        runtime:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
       required:
         - function
         - number
@@ -439,6 +545,7 @@ components:
       additionalProperties: false
       properties:
         handler:
+          pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
       type: object
     RuntimeClassStatus:
@@ -448,6 +555,25 @@ components:
           $ref: "#/components/schemas/Status"
       required:
         - Status
+      type: object
+    Scaling:
+      additionalProperties: false
+      properties:
+        idleTimeout:
+          format: int64
+          maximum: 86400000000000
+          minimum: 0
+          type: integer
+        maxReplicas:
+          format: int64
+          maximum: 15
+          minimum: 0
+          type: integer
+        minReplicas:
+          format: int64
+          maximum: 15
+          minimum: 0
+          type: integer
       type: object
     Secret:
       additionalProperties: false
@@ -472,6 +598,8 @@ components:
             type: string
           type: object
         type:
+          enum:
+            - Opaque
           type: string
       type: object
     Service:
@@ -493,7 +621,14 @@ components:
     ServiceSpec:
       additionalProperties: false
       properties:
+        blob:
+          $ref: "#/components/schemas/BlobServiceSpec"
+        kv:
+          $ref: "#/components/schemas/KVServiceSpec"
         type:
+          enum:
+            - kv
+            - blob
           type: string
       type: object
     ServiceStatus:
@@ -517,7 +652,24 @@ components:
           format: int64
           type: integer
         phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
           type: string
+      type: object
+    TimerSpec:
+      additionalProperties: false
+      properties:
+        interval:
+          format: int64
+          maximum: 86400000000000
+          minimum: 100000000
+          type: integer
       type: object
     TypeMeta:
       additionalProperties: false
@@ -530,7 +682,7 @@ components:
         - apiVersion
         - kind
       type: object
-    Worker:
+    WorkerNode:
       additionalProperties: false
       properties:
         TypeMeta:
@@ -538,12 +690,12 @@ components:
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         status:
-          $ref: "#/components/schemas/WorkerStatus"
+          $ref: "#/components/schemas/WorkerNodeStatus"
       required:
         - TypeMeta
         - metadata
       type: object
-    WorkerStatus:
+    WorkerNodeStatus:
       additionalProperties: false
       properties:
         Status:
@@ -610,6 +762,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -629,6 +784,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -652,6 +810,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -727,6 +888,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -778,11 +942,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -802,11 +972,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -830,11 +1006,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -865,6 +1047,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -916,11 +1101,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -940,11 +1131,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -968,11 +1165,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1003,6 +1206,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1054,11 +1260,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1078,11 +1290,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1106,11 +1324,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1141,6 +1365,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1192,11 +1419,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1216,11 +1449,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1244,11 +1483,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1279,6 +1524,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1330,11 +1578,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1354,11 +1608,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1382,11 +1642,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1417,6 +1683,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1468,11 +1737,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1492,11 +1767,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1520,11 +1801,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1555,6 +1842,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1606,11 +1896,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1630,11 +1926,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1658,11 +1960,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1693,6 +2001,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1744,11 +2055,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1768,11 +2085,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1796,11 +2119,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1831,6 +2160,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1882,11 +2214,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -1906,11 +2244,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -1934,11 +2278,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -1969,6 +2319,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2020,11 +2373,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -2044,11 +2403,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2072,11 +2437,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -2107,6 +2478,9 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2158,11 +2532,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -2182,11 +2562,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2210,11 +2596,17 @@ paths:
           name: namespace
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -2245,6 +2637,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -2264,6 +2659,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2287,6 +2685,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -2362,6 +2763,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -2381,6 +2785,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
@@ -2404,6 +2811,9 @@ paths:
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
@@ -2426,16 +2836,16 @@ paths:
           description: Error
       tags:
         - RuntimeClass
-  /apis/funcd.io/v1alpha1/workers:
+  /apis/funcd.io/v1alpha1/workernodes:
     get:
-      operationId: listWorkers
+      operationId: listWorkerNodes
       responses:
         "200":
           content:
             application/json:
               schema:
                 items:
-                  $ref: "#/components/schemas/Worker"
+                  $ref: "#/components/schemas/WorkerNode"
                 type:
                   - array
                   - "null"
@@ -2447,21 +2857,21 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Worker
+        - WorkerNode
     post:
-      operationId: createWorker
+      operationId: createWorkerNode
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Worker"
+              $ref: "#/components/schemas/WorkerNode"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Worker"
+                $ref: "#/components/schemas/WorkerNode"
           description: OK
         default:
           content:
@@ -2470,15 +2880,18 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Worker
-  /apis/funcd.io/v1alpha1/workers/{name}:
+        - WorkerNode
+  /apis/funcd.io/v1alpha1/workernodes/{name}:
     delete:
-      operationId: deleteWorker
+      operationId: deleteWorkerNode
       parameters:
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "204":
@@ -2490,21 +2903,24 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Worker
+        - WorkerNode
     get:
-      operationId: getWorker
+      operationId: getWorkerNode
       parameters:
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Worker"
+                $ref: "#/components/schemas/WorkerNode"
           description: OK
         default:
           content:
@@ -2513,27 +2929,30 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Worker
+        - WorkerNode
     put:
-      operationId: replaceWorker
+      operationId: replaceWorkerNode
       parameters:
         - in: path
           name: name
           required: true
           schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Worker"
+              $ref: "#/components/schemas/WorkerNode"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Worker"
+                $ref: "#/components/schemas/WorkerNode"
           description: OK
         default:
           content:
@@ -2542,4 +2961,4 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Worker
+        - WorkerNode

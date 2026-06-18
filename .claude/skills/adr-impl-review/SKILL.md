@@ -51,10 +51,15 @@ file:line, command transcripts). At minimum:
 - **Behavior rule**: real business logic conforming to the Contracts (no `not implemented` stubs in
   the shipped path); every Scenario has a named test that is **un-skipped and passing**, none
   weakened or deleted; `just ci` exits 0.
-- **Hygiene**: identity grep (no local username/paths); the realized feat row at `reviewing` and the
-  ADR at `Reviewing`; and the **ADR's substance unchanged** — the builder's *only* permitted ADR edit
-  is the `Accepted → Reviewing` status bump, so any change to Context/Scenarios/Decision/Contracts is
-  itself a Blocker.
+- **Tracking**: the realized feat row at `reviewing`, the ADR at `Reviewing`, and the **ADR's substance
+  unchanged** — the builder's *only* permitted ADR edit is the `Accepted → Reviewing` status bump, so any
+  change to Context/Scenarios/Decision/Contracts is itself a Blocker.
+- **No dev-machine references (verify silently — do NOT write a "Hygiene" section).** Confirm no absolute
+  OS path / local username / personal email leaked into the work (the [CLAUDE.md absolute rule](../../CLAUDE.md)).
+  This is a silent pass/fail check: **the verdict must not contain a Hygiene/identity-grep section at all**, and
+  must **never transcribe the real value or the grep pattern** — that documentation line is itself how the real
+  username has leaked into tracked review docs. If a leak exists, raise it as a Blocker described generically
+  ("an absolute path / the local username leaked in `<file:line>`"); if not, say nothing.
 
 ## Step 3 — Attribute every finding (this is what makes the model score fair)
 

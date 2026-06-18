@@ -341,6 +341,7 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	// other ObjectMeta/spec/status field comes from the caller (last-writer-wins under
 	// the RV precondition).
 	var rev uint64
+	var noop bool
 	err = s.eng.Update(ctx, func(tx Txn) error {
 		raw, found, gerr := tx.Get(bucket, key)
 		if gerr != nil {
@@ -357,11 +358,6 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if curMeta.ResourceVersion != meta.ResourceVersion {
 			return fault.Conflictf("store.Update", "%s %q resourceVersion mismatch", gvk.Kind, meta.Name)
 		}
-		r, nerr := nextRevision(tx)
-		if nerr != nil {
-			return nerr
-		}
-		rev = r
 		gen := curMeta.Generation
 		changed, cerr := specChanged(cur, obj)
 		if cerr != nil {
@@ -373,6 +369,25 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		meta.UID = curMeta.UID
 		meta.Generation = gen
 		meta.CreationTime = curMeta.CreationTime
+		// No-op coalescing (ADR-0047): align the incoming RV to the stored one, then compare.
+		// A byte-identical Update changes nothing — skip the revision bump, the Put, and the
+		// watch event, so a reconcile that observed no change does not self-trigger another
+		// (control-loop quiescence). The compare runs AFTER the RV precondition above, so
+		// optimistic concurrency (the loser of two racing writes hits Conflict) is unaffected.
+		meta.ResourceVersion = curMeta.ResourceVersion
+		same, eqErr := equalContent(cur, obj)
+		if eqErr != nil {
+			return eqErr
+		}
+		if same {
+			noop = true
+			return nil
+		}
+		r, nerr := nextRevision(tx)
+		if nerr != nil {
+			return nerr
+		}
+		rev = r
 		meta.ResourceVersion = strconv.FormatUint(rev, 10)
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
@@ -383,6 +398,11 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if err != nil {
 		return nil, err
 	}
+	if noop {
+		// Nothing changed: no revision advance, no Modified event. `obj` already carries the
+		// stored object's uid/generation/creationTime/resourceVersion (set above) + identical content.
+		return obj, nil
+	}
 	// Independent clone for the watch stream; return the stamped work object (see Create).
 	published, err := cloneObject(obj)
 	if err != nil {
@@ -390,6 +410,23 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	}
 	s.publish(rev, Event{Type: Modified, Object: published})
 	return obj, nil
+}
+
+// equalContent reports whether a and b serialize to identical JSON. json.Marshal sorts map
+// keys, so the compare is order-stable (Tags, Config.Data, labels). Callers align the
+// store-owned fields (uid/generation/creationTime/resourceVersion) before comparing, so only
+// a real spec/status/meta change yields inequality — the basis for no-op-write coalescing (ADR-0047).
+func equalContent(a, b v1.Object) (bool, error) {
+	const op = "store.equalContent"
+	ab, err := json.Marshal(a)
+	if err != nil {
+		return false, fault.Wrapf(err, fault.Internal, op, "marshal stored object")
+	}
+	bb, err := json.Marshal(b)
+	if err != nil {
+		return false, fault.Wrapf(err, fault.Internal, op, "marshal incoming object")
+	}
+	return bytes.Equal(ab, bb), nil
 }
 
 func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {

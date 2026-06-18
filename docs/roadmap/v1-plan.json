@@ -7,237 +7,35 @@
     "ADR-0005",
     "ADR-0006",
     "ADR-0007",
-    "ADR-0008"
+    "ADR-0008",
+    "ADR-0009",
+    "ADR-0010",
+    "ADR-0011",
+    "ADR-0012",
+    "ADR-0013",
+    "ADR-0014",
+    "ADR-0015",
+    "ADR-0016",
+    "ADR-0017",
+    "ADR-0018",
+    "ADR-0019",
+    "ADR-0020",
+    "ADR-0021",
+    "ADR-0022",
+    "ADR-0023",
+    "ADR-0024",
+    "ADR-0025",
+    "ADR-0026",
+    "ADR-0027",
+    "ADR-0028",
+    "ADR-0029",
+    "ADR-0030",
+    "ADR-0031",
+    "ADR-0032",
+    "ADR-0033",
+    "ADR-0049",
+    "ADR-0057"
   ],
-  "items": [
-    {
-      "id": "P-F",
-      "title": "logger root",
-      "features": [
-        "F17a"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
-    {
-      "id": "P-F2",
-      "title": "OTel + audit",
-      "features": [
-        "F17b"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
-    {
-      "id": "P-G",
-      "title": "runtime port",
-      "features": [
-        "F12"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
-    {
-      "id": "P-H",
-      "title": "gateway port",
-      "features": [
-        "F10"
-      ],
-      "depends_on": [
-        "ADR-0002"
-      ]
-    },
-    {
-      "id": "P-H2",
-      "title": "activator / scale-to-zero",
-      "features": [
-        "F11"
-      ],
-      "depends_on": [
-        "P-H",
-        "P-G",
-        "P-J"
-      ]
-    },
-    {
-      "id": "P-I",
-      "title": "facade + lifecycle + harness",
-      "features": [
-        "F04"
-      ],
-      "depends_on": [
-        "ADR-0006",
-        "ADR-0007",
-        "ADR-0008",
-        "P-F",
-        "P-G",
-        "P-H"
-      ]
-    },
-    {
-      "id": "P-J",
-      "title": "controller engine",
-      "features": [
-        "F08"
-      ],
-      "depends_on": [
-        "ADR-0003",
-        "ADR-0006",
-        "ADR-0008"
-      ]
-    },
-    {
-      "id": "P-K",
-      "title": "scheduler",
-      "features": [
-        "F09"
-      ],
-      "depends_on": [
-        "P-J"
-      ]
-    },
-    {
-      "id": "P-L",
-      "title": "API server",
-      "features": [
-        "F07"
-      ],
-      "depends_on": [
-        "ADR-0005",
-        "ADR-0003",
-        "ADR-0006",
-        "P-J"
-      ]
-    },
-    {
-      "id": "P-M",
-      "title": "function contract/lifecycle",
-      "features": [
-        "F13"
-      ],
-      "depends_on": [
-        "P-G",
-        "P-H",
-        "ADR-0003",
-        "ADR-0006",
-        "P-J"
-      ]
-    },
-    {
-      "id": "P-N",
-      "title": "service pattern + KV",
-      "features": [
-        "F14"
-      ],
-      "depends_on": [
-        "ADR-0008",
-        "ADR-0006",
-        "P-J",
-        "ADR-0003"
-      ]
-    },
-    {
-      "id": "P-O",
-      "title": "blob service",
-      "features": [
-        "F23"
-      ],
-      "depends_on": [
-        "ADR-0007",
-        "P-N"
-      ]
-    },
-    {
-      "id": "P-P",
-      "title": "secrets service",
-      "features": [
-        "F15"
-      ],
-      "depends_on": [
-        "ADR-0006",
-        "P-N",
-        "P-G"
-      ]
-    },
-    {
-      "id": "P-Q",
-      "title": "eventing core",
-      "features": [
-        "F16"
-      ],
-      "depends_on": [
-        "ADR-0008",
-        "P-H",
-        "P-G",
-        "P-M",
-        "P-J"
-      ]
-    },
-    {
-      "id": "P-R",
-      "title": "funcdcli + SDK",
-      "features": [
-        "F18"
-      ],
-      "depends_on": [
-        "ADR-0005",
-        "P-L"
-      ]
-    },
-    {
-      "id": "P-S",
-      "title": "testing + full e2e",
-      "features": [
-        "F20"
-      ],
-      "depends_on": [
-        "P-I",
-        "P-Q",
-        "P-H2"
-      ]
-    },
-    {
-      "id": "P-T",
-      "title": "packaging",
-      "features": [
-        "F19"
-      ],
-      "depends_on": [
-        "P-R",
-        "P-S"
-      ]
-    }
-  ],
-  "waves": {
-    "1": [
-      "P-F",
-      "P-F2",
-      "P-G",
-      "P-H",
-      "P-J"
-    ],
-    "2": [
-      "P-H2",
-      "P-I",
-      "P-K",
-      "P-L",
-      "P-M",
-      "P-N"
-    ],
-    "3": [
-      "P-O",
-      "P-P",
-      "P-Q",
-      "P-R"
-    ],
-    "4": [
-      "P-S"
-    ],
-    "5": [
-      "P-T"
-    ]
-  }
+  "items": [],
+  "waves": {}
 }

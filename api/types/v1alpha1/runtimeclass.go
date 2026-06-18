@@ -11,7 +11,7 @@ type RuntimeClass struct {
 
 // RuntimeClassSpec holds the desired state. Behavioral fields owned by F12.
 type RuntimeClassSpec struct {
-	Handler string `json:"handler,omitempty"`
+	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
 }
 
 // RuntimeClassStatus holds the observed state.

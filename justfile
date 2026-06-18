@@ -8,38 +8,156 @@ _has-packages := `go list ./... 2>/dev/null`
 # ---- recipes ----
 
 # default recipe: list all available recipes
+[group('meta')]
 default:
     @just --list
 
 # show this help
+[group('meta')]
 help:
     @just --list
 
 # format Go source files
+[group('go')]
 fmt:
     go fmt ./...
 
 # run the linter (golangci-lint via go tool); no-op when no Go packages exist
+[group('go')]
 lint:
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
 
 # run all tests; no-op when no Go packages exist
+[group('go')]
 test:
     @if [ -n "{{_has-packages}}" ]; then go test ./...; fi
 
+# the Linux integration lane (ADR-0025 L4): real sandbox + the full exit-criterion walk.
+# Linux only — needs a container runtime; excluded from the pure-Go `just ci` gate.
+[group('test')]
+test-integration:
+    go test -tags integration ./...
+
 # compile all packages
+[group('go')]
 build:
     go build ./...
 
+# build + EMBED the curated runtime images (ADR-0054): each is a distroless base carrying its
+# language runtime + the funcd shim as entrypoint (node on distroless/nodejs22; python on the
+# custom distroless 3.14). The artifact is still bind-mounted at deploy (ADR-0032 unchanged).
+#
+# Unlike the old registry-publish flow, this EXPORTS each image to an OCI tar at gzip MAX (-9)
+# and writes it into internal/runtime/embedimg/, OVERWRITING the committed <1 KB placeholders
+# with the real per-arch image. funcd then go:embed's the tar and imports it into its managed
+# containerd at startup — NO registry pull. Release builds are per-arch (ARCH defaults to the
+# host; set ARCH=arm64/amd64 for the matching-arch embed). This recipe needs docker and is NOT
+# run by `just ci` (ci stays green on the tiny placeholders). Compression note: gzip -9 trades
+# build time for the smallest embed; docker save reuses shared base layers (e.g. the cc base
+# across cc-derived images) so a multi-image embed does not pay for the base twice on disk.
+ARCH := `go env GOARCH`
+[group('runtime')]
+build-runtime-images:
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
+    docker save funcd/runtime-nodejs22:latest | gzip -9 > internal/runtime/embedimg/nodejs22.tar
+    docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
+    @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
+
+# regenerate the Node runtime shims from TypeScript (ADR-0037/0044): typecheck + self-test +
+# esbuild bundle → shim/nodejs/shim.mjs (single-tenant, go:embed'd) + pool.mjs (pooled
+# worker_threads). Needs npm on PATH. Both are generated artifacts; rerun after editing src/*.ts.
+[group('runtime')]
+build-shim:
+    cd shim/nodejs && npm ci && npm run typecheck && npm test && npm run build
+
+# check the Python runtime shim (ADR-0049/0050): strict typecheck + lint + tests, for the shim and
+# the example. Runs on Python 3.14 so the subinterpreter pool-host tests (ADR-0050,
+# concurrent.interpreters) run rather than skip. Stdlib-only, go:embed'd — no bundle step. Needs uv.
+[group('runtime')]
+check-shim-python:
+    cd shim/python && uv run --python 3.14 ruff check . && uv run --python 3.14 mypy && uv run --python 3.14 pytest -q
+    cd examples/python/hello-world && uv run --python 3.14 ruff check . && uv run --python 3.14 mypy && uv run --python 3.14 pytest -q
+
+# run the benchmark & sustainability harness (ADR-0040): drive the data plane + sample memory
+# across the memory and file substrate → the RAW report docs/reports/report.{md,json}, plus the
+# separate worker-pool comparison docs/reports/pool-report.{md,json} (ADR-0044: density + throughput,
+# pooled vs per-function). Both feed the authored docs/reports/bench-overview.md (regenerate via the
+# bench-overview skill). Needs node + the shims. Numbers are dev-machine + process-RSS (see caveats).
+[group('runtime')]
+bench:
+    go run ./cmd/funcd bench --out docs/reports --density 8
+
+# --- reproducible Lima bench harness (ADR-0052/0054) on macOS ----------------------------------
+# The containerd cgroup-footprint lane (`funcd bench --containerd`) needs Linux + root (cgroup +
+# netns); on macOS these four recipes run it in a SELF-PROVISIONING Lima VM (scripts/lima.yaml,
+# which installs crun + CNI + the conflist + ip_forward declaratively). funcd is self-contained
+# (ADR-0054): it brings its OWN privately-managed containerd + embedded curated images in a
+# dedicated namespace — no registry/buildah/image-import. Flow: `just lima-up` (needs docker for the
+# image build) → `just lima-bench` → `just lima-report` → `just lima-down`.
+lima_name := "funcd-bench"
+lima_deps := env('HOME') / ".cache/funcd-lima" # mounted read-only at /mnt/funcd-deps (see the yaml)
+
+# build the real curated images + the funcd binary into the mounted deps dir, then boot the
+# self-provisioning Lima VM (crun/CNI/conflist/ip_forward come up via the yaml's provision blocks).
+[group('runtime')]
+lima-up: build-runtime-images
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd ./cmd/funcd
+    limactl start --name {{lima_name}} --tty=false scripts/lima.yaml
+
+# run the containerd footprint lane in the VM (density / duration overridable: `just lima-bench 4 8s`)
+[group('runtime')]
+lima-bench density="8" duration="10s":
+    limactl shell {{lima_name}} -- sudo /mnt/funcd-deps/funcd bench --containerd \
+        --density {{density}} --duration {{duration}} --out /tmp/funcd-bench-out
+
+# fetch the footprint report from the VM into docs/reports/
+[group('runtime')]
+lima-report:
+    mkdir -p docs/reports
+    limactl shell {{lima_name}} -- sudo cat /tmp/funcd-bench-out/footprint-report.md | tee docs/reports/lima-footprint-report.md
+    limactl shell {{lima_name}} -- sudo cat /tmp/funcd-bench-out/footprint-report.json > docs/reports/lima-footprint-report.json
+    @echo "→ docs/reports/lima-footprint-report.{md,json}"
+
+# stop + delete the Lima VM (frees the disk)
+[group('runtime')]
+lima-down:
+    -limactl stop -f {{lima_name}}
+    -limactl delete {{lima_name}}
+
+# run the CLI demo end to end (build → boot → push/apply/get/invoke → teardown).
+# Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: examples/js/hello-world.
+# Needs node + npm + yq on PATH.
+[group('demo')]
+demo:
+    bash scripts/demo/setup.sh
+    bash scripts/demo/journey.sh
+    bash scripts/demo/teardown.sh
+
+# (re-)record the demo GIF + WebM from the tape. Needs vhs + ffmpeg + ttyd (+ node, yq).
+[group('demo')]
+demo-record:
+    vhs docs/demo/cli-demo.tape
+
+# build the version-stamped single binary (ADR-0026) → dist/funcd.
+# Default is the pure-Go dev build; see scripts/build.sh for the cgo/slatedb release path.
+[group('release')]
+release:
+    ./scripts/build.sh
+
 # regenerate the OpenAPI spec from Go types (via huma reflection)
+[group('go')]
 generate:
     go run ./internal/controlplane/cmd/specgen/ -out api/openapi/funcd.v1alpha1.yaml
 
 # tidy go.mod and go.sum
+[group('go')]
 tidy:
     go mod tidy
 
 # CI pipeline (generate staleness + fmt check + lint + test + build + tidy-diff check)
+[group('go')]
 ci: tidy generate
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
@@ -50,6 +168,7 @@ ci: tidy generate
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
 
 # build the slatedb_uniffi native lib (cgo) from pinned source — required for the slatedb engine lane (ADR-0006 §5)
+[group('slatedb')]
 slatedb-lib:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -61,6 +180,7 @@ slatedb-lib:
     echo "built $src/target/release/libslatedb_uniffi.*"
 
 # run the slatedb (cgo) engine lane — run `just slatedb-lib` first. The default `just ci` stays pure-Go.
+[group('slatedb')]
 test-slatedb:
     #!/usr/bin/env bash
     set -euo pipefail

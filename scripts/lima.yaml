@@ -1,0 +1,60 @@
+# Reproducible Lima VM for the funcd containerd footprint lane (ADR-0052/0054/0056), driven by the
+# `lima-up` / `lima-bench` / `lima-report` / `lima-down` just recipes.
+#
+# SELF-PROVISIONING via funcd itself (ADR-0056): the single `provision` block runs `funcd install`,
+# which downloads + SHA-256-verifies crun + containerd + the CNI plugins into /var/lib/funcd/bin +
+# /opt/cni/bin. funcd writes its CNI conflist + enables ip_forward on its own too — but at bench RUN
+# time (in the containerd driver), so neither is provisioned here. (This one command replaces the
+# four hand-written crun/CNI/conflist/ip_forward blocks the harness used to carry.)
+#
+# The locally-built `funcd` binary (which embeds the curated images, ADR-0054) is the only LOCAL
+# dependency: `lima-up` builds it into ~/.cache/funcd-lima, mounted read-only at /mnt/funcd-deps (a
+# `~`-relative mount, so no machine path is committed). Then `sudo funcd bench --containerd` brings
+# up funcd's own privately-managed containerd + the embedded images — no registry / buildah.
+#
+# Native arch (arm64 on Apple Silicon, amd64 on Intel) via vz — the lane needs a real Linux kernel
+# + cgroup v2, which a same-arch VM gives without emulation.
+
+images:
+  - location: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
+    arch: "aarch64"
+  - location: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    arch: "x86_64"
+
+cpus: 4
+memory: "4GiB" # the footprint lane's max-density scales with available RAM
+disk: "20GiB"
+
+# The only host dependency: the locally-built funcd binary. `lima-up` builds it into this dir; the
+# mount is read-only and `~`-relative so nothing machine-specific is committed. No other host
+# sharing — the bench writes its report inside the guest (fetched by `lima-report`).
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: false
+
+provision:
+  # funcd self-provisions its whole runtime (ADR-0056). `funcd install` downloads + SHA-256-verifies
+  # the pinned crun + containerd + CNI plugins (the versions live in funcd, not here) into
+  # /var/lib/funcd/bin + /opt/cni/bin; the bench's driver writes the conflist + enables ip_forward at
+  # run time. We copy funcd onto PATH so the unit install writes is valid, then disable that unit —
+  # this is a bench-only VM (`funcd bench --containerd` on demand, its own throwaway containerd), so
+  # the always-on funcd.service is not wanted here.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      install -m 0755 /mnt/funcd-deps/funcd /usr/local/bin/funcd
+      /usr/local/bin/funcd install
+      systemctl disable --now funcd.service
+
+# A readiness probe so `limactl start` only returns once `funcd install` has laid the runtime down.
+probes:
+  - description: "funcd install laid down crun + containerd + the CNI bridge plugin"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      test -x /var/lib/funcd/bin/crun
+      test -x /var/lib/funcd/bin/containerd
+      test -x /opt/cni/bin/bridge
+    hint: "`funcd install` did not complete; see `limactl shell funcd-bench` and /var/log/cloud-init-output.log"

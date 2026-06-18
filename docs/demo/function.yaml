@@ -1,0 +1,18 @@
+# The function CRD the demo deploys — a complete, applyable manifest
+# (`funcdcli apply -f function.yaml`). The digest is OMITTED: the platform resolves the
+# tag → digest and pins it into the immutable Revision at stamp time (ADR-0035), so the
+# user never types a digest. The journey pushes the bundle to this same `artifact.uri`.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: echo
+  namespace: default
+  resourceGroup: demo
+spec:
+  runtime: nodejs22
+  handler: handle
+  artifact:
+    uri: oci-layout:///tmp/funcd-demo/layout:v1   # the OCI ref (no digest — ADR-0035 pins it)
+  scaling:
+    minReplicas: 1
+  replicas: 1

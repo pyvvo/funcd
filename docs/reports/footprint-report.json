@@ -1,0 +1,17 @@
+{
+  "skipped": false,
+  "perFunctionCgroupMB": 15.6591796875,
+  "perFunctionRSSMB": 60.6064453125,
+  "cgroupOverRSS": 0.2583748247691787,
+  "platformBaselineMB": 45.38671875,
+  "maxDensity": 1043,
+  "fitsTarget": true,
+  "rps": 3117.25710534877,
+  "latency": {
+    "p50": 2507429,
+    "p90": 3725737,
+    "p99": 5030499,
+    "p999": 6474571,
+    "max": 7548339
+  }
+}

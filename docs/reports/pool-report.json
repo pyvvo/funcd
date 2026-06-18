@@ -1,0 +1,12 @@
+{
+  "k": 8,
+  "substrate": "memory",
+  "perFunctionMB": 57.705078125,
+  "pooledMBPerFunction": 20.322265625,
+  "densityGain": 2.839500240269101,
+  "singleDirectRPS": 34484.43964735564,
+  "singleDirectP99": 253030,
+  "pooledRPS": 6424.759498370375,
+  "pooledP99": 990579,
+  "throughputRetained": 0.18630894293400654
+}

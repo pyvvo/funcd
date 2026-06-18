@@ -1,0 +1,16 @@
+{
+  "name": "@funcd/example-hello-world",
+  "private": true,
+  "type": "module",
+  "description": "A funcd function authored in TypeScript against the @funcd/shim-nodejs typed contract, bundled by esbuild to handler.mjs and deployed with funcdcli (ADR-0037 typed-authoring-contract).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "build": "esbuild src/handler.ts --bundle --platform=node --format=esm --target=node22 --outfile=handler.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0"
+  }
+}

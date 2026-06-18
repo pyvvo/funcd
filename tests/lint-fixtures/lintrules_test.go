@@ -72,3 +72,48 @@ func TestScenario_NoMockFramework(t *testing.T) {
 		t.Fatalf("expected a depguard finding for the mock import, got:\n%s", out)
 	}
 }
+
+// scenario: e2e-boundary-rule-fires (ADR-0025) — the tests/e2e black-box boundary is
+// mechanically enforced: a stray internal/ import under tests/e2e/** trips depguard.
+func TestScenario_E2EBoundaryBlocksInternalImport(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	out, err := lintFixture(t, "tests/e2e/boundary-fixture")
+	if err == nil {
+		t.Fatalf("expected golangci-lint to FAIL on the e2e-boundary fixture, but it passed:\n%s", out)
+	}
+	if !strings.Contains(out, "depguard") {
+		t.Fatalf("expected a depguard finding for the internal import, got:\n%s", out)
+	}
+}
+
+// scenario: api-boundary-rule-fires (ADR-0027) — api/** PRODUCTION code must not import
+// internal/*; a stray internal import in a non-test api/ file trips depguard.
+func TestScenario_APIBoundaryBlocksInternalImport(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	out, err := lintFixture(t, "api/lintfixture")
+	if err == nil {
+		t.Fatalf("expected golangci-lint to FAIL on the api-boundary fixture, but it passed:\n%s", out)
+	}
+	if !strings.Contains(out, "depguard") {
+		t.Fatalf("expected a depguard finding for the internal import, got:\n%s", out)
+	}
+}
+
+// scenario: platform-leaf-rule-fires (ADR-0027) — internal/platform/** PRODUCTION code is a
+// leaf; importing another internal package trips depguard.
+func TestScenario_PlatformLeafBlocksOtherInternalImport(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	out, err := lintFixture(t, "internal/platform/lintfixture")
+	if err == nil {
+		t.Fatalf("expected golangci-lint to FAIL on the platform-leaf fixture, but it passed:\n%s", out)
+	}
+	if !strings.Contains(out, "depguard") {
+		t.Fatalf("expected a depguard finding for the internal import, got:\n%s", out)
+	}
+}

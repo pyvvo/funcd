@@ -20,6 +20,21 @@ this file does **not** override it. It exists to make one thing impossible to fo
 This is the gap this file closes: the cross-document dependencies are real but were
 previously implied across the skills and ADR-0000, never stated in one place.
 
+## ⛔ Absolute rule — nothing about the dev machine ever enters the repo
+
+The repository describes the **project**, never the machine it was built on. It is **forbidden** to write
+anything tied to the developer's filesystem or identity — in *any* tracked file, doc, report, ADR, review
+doc, commit message, code, code comment, example, **or even a grep-pattern string**:
+
+- **no** absolute OS paths (`/Users/<user>/…`, `/home/<user>/…`, `C:\Users\…`) — every path is **project-root-relative**;
+- **no** local machine **username**, home-directory name, or personal **email**;
+- the only identity the repo knows is `green-0-rabbit` / `github.com/green-0-rabbit/funcd` / "The funcd Authors".
+
+This is **non-negotiable and binds subagents too** (judge, review, summary — every gate that writes a file). If
+you must *describe* a check, describe it generically ("grepped for the local username / abs-path") — **never
+transcribe the real value**. The single exception: when genuinely operating inside a *separate* sibling project
+or a remote target (e.g. the homebox box), that project's own root is the path origin — still never an OS-absolute prefix.
+
 ## The four document layers (+ code)
 
 | Layer | Path | Answers | Mutability | Source-of-truth rule |
@@ -122,6 +137,17 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - Identity in every repo file: `Deciders: green-0-rabbit`, module
   `github.com/green-0-rabbit/funcd`, author "The funcd Authors". **Never** write the local
   machine username or local filesystem paths into a tracked file — grep before finishing.
+- **Paths are always project-root-relative — never absolute OS paths.** The repository root is
+  your path origin: every path you write into a tracked file, a commit message, a doc, a report,
+  or any generated/committed output must be relative to the project root (e.g. `docs/reviews/…`,
+  `shim/python/src/…`), **never** an absolute working-OS path (`/Users/<user>/…`, `/home/<user>/…`,
+  `C:\Users\…`). The OS-absolute prefix leaks the machine username and is non-portable. This holds
+  even inside example/illustrative strings (e.g. a grep pattern shown in a review doc) — write the
+  *pattern token* generically (`/Users/`, `<user>`), never the real path. The **only** exception:
+  when you are genuinely operating in a *separate project that lives beside the main project* (a
+  sibling repo/sandbox, or a remote target like the homebox box), use **that** project's root as
+  the origin for its own files — still never the OS-absolute prefix. Before finishing any change,
+  grep the touched files for an absolute-path prefix and for the local username, and remove any hit.
 
 ## Strict rules — the guardrails that keep the system consistent
 
@@ -161,6 +187,24 @@ acceptance); draft independent ADRs in parallel; choose any Apache-2.0/MIT-compa
 on its merits; reorder or parallelize work within a build tier; and restructure the prose of
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
 the rules above. The judge advises; it never blocks a sound decision on taste.
+
+## Dev environment — run everything through Nix
+
+The toolchain is pinned by the flake ([flake.nix](../flake.nix) + `flake.lock`) — Go, `just`, and
+(macOS only) Lima. **Always run the project's tooling through the dev shell, never a system-wide
+install.** Enter it once with `nix develop`, or prefix individual commands:
+
+```bash
+nix develop -c just ci
+nix develop -c go test ./...
+nix develop -c just bench-containerd-lima
+```
+
+This guarantees the pinned versions; a binary found on the bare `PATH` is **not** the source of
+truth and may differ. New tooling dependencies are **added to the flake (pinned), not installed on
+the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just bench-containerd-lima`)
+is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
+globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
 ## Known pitfalls (Go dev on this project — learned from ADR-0003 implementation)
 

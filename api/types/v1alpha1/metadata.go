@@ -30,7 +30,7 @@ const (
 	KindEgressPolicy  Kind = "EgressPolicy"
 	KindInvocation    Kind = "Invocation"
 	KindRuntimeClass  Kind = "RuntimeClass"
-	KindWorker        Kind = "Worker"
+	KindWorkerNode    Kind = "WorkerNode"
 	KindGateway       Kind = "Gateway"
 )
 
@@ -40,7 +40,7 @@ func (k Kind) Validate() error {
 	case KindNamespace, KindResourceGroup, KindFunction, KindRevision,
 		KindRoute, KindService, KindEventSource, KindConfig,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
-		KindRuntimeClass, KindWorker, KindGateway:
+		KindRuntimeClass, KindWorkerNode, KindGateway:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -48,10 +48,10 @@ func (k Kind) Validate() error {
 }
 
 // Namespaced reports whether this kind is namespaced. Cluster-scoped kinds:
-// Namespace, RuntimeClass, Worker, Gateway.
+// Namespace, RuntimeClass, WorkerNode, Gateway.
 func (k Kind) Namespaced() bool {
 	switch k {
-	case KindNamespace, KindRuntimeClass, KindWorker, KindGateway:
+	case KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway:
 		return false
 	default:
 		return true
@@ -262,8 +262,8 @@ func NewObject(k Kind) (Object, bool) {
 		rc := &RuntimeClass{}
 		rc.TypeMeta = typeMetaFor(k)
 		return rc, true
-	case KindWorker:
-		w := &Worker{}
+	case KindWorkerNode:
+		w := &WorkerNode{}
 		w.TypeMeta = typeMetaFor(k)
 		return w, true
 	case KindGateway:
@@ -291,7 +291,7 @@ func AllKinds() []Kind {
 		KindEgressPolicy,
 		KindInvocation,
 		KindRuntimeClass,
-		KindWorker,
+		KindWorkerNode,
 		KindGateway,
 	}
 }

@@ -1,0 +1,247 @@
+package e2e_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/green-0-rabbit/funcd/pkg/funcd"
+)
+
+// TestE2EUserJourney walks the platform exactly as an end user would, through the public
+// surface only: the user pushes a source artifact with `funcdcli push` (OCI, ADR-0031),
+// applies a Function manifest with `funcdcli apply`, watches it reconcile to Ready with
+// `funcdcli get`, and invokes it over HTTP on the data plane (ADR-0033) — then does the
+// same for a scale-to-zero function and proves a cold HTTP request wakes it.
+//
+// The "server" is an embedded funcd configured for real execution (the ADR-0014 embed
+// path); the client side is the REAL `funcdcli` binary + plain HTTP — no internal/ import.
+// Node-gated (the process-driver shim runs the JS handler), like the other execution e2e.
+func TestE2EUserJourney(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; skipping the end-user execution journey")
+	}
+	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
+	require.NoError(t, err)
+	if _, serr := os.Stat(shim); serr != nil {
+		t.Skipf("shim not found at %s", shim)
+	}
+
+	// --- the platform the user deploys to (embedded; real execution + OCI artifacts) ---
+	artifactCache := t.TempDir() // platform-side per-digest pull cache (ADR-0031)
+	p, err := funcd.New(
+		funcd.InMemory(),
+		funcd.WithRuntimeShim(node, shim),      // run functions on the process-driver shim (ADR-0030)
+		funcd.WithArtifactStore(artifactCache), // pull artifacts by digest via oras (ADR-0031)
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, p.Addr())
+	require.NotEmpty(t, p.DataPlaneAddr())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("platform Run did not return after cancel")
+		}
+	})
+
+	server := "http://" + p.Addr()
+	dataPlane := "http://" + p.DataPlaneAddr()
+
+	// --- the user's CLI: build the real funcdcli binary and drive it ---
+	cli := buildFuncdcli(t)
+	runCLI := func(args ...string) string {
+		t.Helper()
+		full := append([]string{"--server", server, "--token", funcd.DevToken}, args...)
+		out, cerr := exec.Command(cli, full...).CombinedOutput()
+		require.NoError(t, cerr, "funcdcli %s:\n%s", strings.Join(args, " "), out)
+		return string(out)
+	}
+
+	// 1. the user writes a handler and pushes it as an OCI artifact (no registry — a local layout).
+	bundle := filepath.Join(t.TempDir(), "handler.mjs")
+	require.NoError(t, os.WriteFile(bundle,
+		[]byte("export function handle(_, event) { return { echoed: event }; }\n"), 0o600))
+	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
+
+	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
+	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"),
+		"`funcdcli push` prints <ref>@<digest>, got %q", pushed)
+
+	// 2. the user applies a Function referencing only the ref — NO digest. The platform
+	// resolves the tag → digest and pins it into the Revision at stamp time (ADR-0035).
+	applyFunction(t, runCLI, "echo", layout, "", `"scaling":{"minReplicas":1},"replicas":1`)
+
+	// 3. the user watches it reconcile to Ready via the CLI.
+	requireCLIPhase(t, runCLI, "echo", "Ready")
+
+	// 4. the user invokes it over HTTP — the data plane serves it through the running shim.
+	resp, err := http.Post(dataPlane+"/function/echo", "application/json", strings.NewReader(`{"hello":"world"}`))
+	require.NoError(t, err)
+	body := readClose(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "HTTP invocation reaches the function: %s", body)
+	require.Contains(t, body, "echoed", "the user's handler ran and returned its body")
+
+	// 5. scale-to-zero: a min-replicas-0 function settles Idle, and a cold HTTP request wakes it.
+	applyFunction(t, runCLI, "cold", layout, "", `"scaling":{"minReplicas":0,"idleTimeout":3600000000000},"replicas":0`)
+	require.Eventually(t, func() bool {
+		ph := cliPhase(t, runCLI, "cold")
+		return ph == "Idle" || ph == "Pending"
+	}, 10*time.Second, 100*time.Millisecond, "a scale-to-zero function settles Idle (0 running)")
+
+	wakeResp, err := http.Post(dataPlane+"/function/cold", "application/json", strings.NewReader(`{"wake":true}`))
+	require.NoError(t, err)
+	wakeBody := readClose(t, wakeResp)
+	require.Equal(t, http.StatusOK, wakeResp.StatusCode, "a cold HTTP request wakes the function: %s", wakeBody)
+	require.Contains(t, wakeBody, "echoed")
+}
+
+// TestE2EEventDataContract validates the event-data contract (ADR-0038) through the public
+// surface: a function whose artifact embeds an `eventSchema` (JTD) rejects a wrong-shaped
+// event with 422 *before* the handler runs, and runs normally on a matching one. Node-gated.
+func TestE2EEventDataContract(t *testing.T) {
+	dataPlane, runCLI := execPlatform(t)
+
+	// the user's handler declares its event-data contract (JTD) inline and reads event.data;
+	// pushed as-is (the shim resolves both the handler and the optional eventSchema export).
+	bundle := filepath.Join(t.TempDir(), "handler.mjs")
+	require.NoError(t, os.WriteFile(bundle, []byte(
+		`export const eventSchema = { optionalProperties: { hello: { type: "string" } } };`+"\n"+
+			`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))
+	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
+	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
+	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"), "push prints <ref>@<digest>, got %q", pushed)
+
+	applyFunction(t, runCLI, "contracted", layout, "", `"scaling":{"minReplicas":1},"replicas":1`)
+	requireCLIPhase(t, runCLI, "contracted", "Ready")
+
+	// matching event.data → the handler runs (200).
+	okResp, err := http.Post(dataPlane+"/function/contracted", "application/json",
+		strings.NewReader(`{"data":{"hello":"world"}}`))
+	require.NoError(t, err)
+	okBody := readClose(t, okResp)
+	require.Equal(t, http.StatusOK, okResp.StatusCode, "matching event.data invokes the handler: %s", okBody)
+	require.Contains(t, okBody, "echoed")
+
+	// wrong-shaped event.data → 422, the handler never runs (the contract gate).
+	badResp, err := http.Post(dataPlane+"/function/contracted", "application/json",
+		strings.NewReader(`{"data":{"hello":123}}`))
+	require.NoError(t, err)
+	badBody := readClose(t, badResp)
+	require.Equal(t, http.StatusUnprocessableEntity, badResp.StatusCode,
+		"a contract mismatch is rejected before the handler: %s", badBody)
+	require.Contains(t, badBody, "contract", "the 422 explains the contract violation: %s", badBody)
+}
+
+// execPlatform boots an embedded, real-execution funcd (node-gated process shim + OCI
+// artifacts) and the real funcdcli driver — the shared rig for the execution e2e tests.
+func execPlatform(t *testing.T) (dataPlane string, runCLI func(...string) string) {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH; skipping the execution e2e")
+	}
+	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
+	require.NoError(t, err)
+	if _, serr := os.Stat(shim); serr != nil {
+		t.Skipf("shim not found at %s", shim)
+	}
+	p, err := funcd.New(
+		funcd.InMemory(),
+		funcd.WithRuntimeShim(node, shim),
+		funcd.WithArtifactStore(t.TempDir()),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() { doneCh <- p.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-doneCh:
+		case <-time.After(10 * time.Second):
+			t.Error("platform Run did not return after cancel")
+		}
+	})
+
+	server := "http://" + p.Addr()
+	dataPlane = "http://" + p.DataPlaneAddr()
+	cli := buildFuncdcli(t)
+	runCLI = func(args ...string) string {
+		t.Helper()
+		full := append([]string{"--server", server, "--token", funcd.DevToken}, args...)
+		out, cerr := exec.Command(cli, full...).CombinedOutput()
+		require.NoError(t, cerr, "funcdcli %s:\n%s", strings.Join(args, " "), out)
+		return string(out)
+	}
+	return dataPlane, runCLI
+}
+
+// buildFuncdcli compiles the real CLI binary from this repo and returns its path.
+func buildFuncdcli(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "funcdcli")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/funcdcli")
+	cmd.Dir = filepath.Join("..", "..") // repo root from tests/e2e/
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build funcdcli: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// applyFunction writes a Function manifest and applies it through the CLI.
+func applyFunction(t *testing.T, runCLI func(...string) string, name, ref, digest, scalingJSON string) {
+	t.Helper()
+	manifest := fmt.Sprintf(`{"apiVersion":"funcd.io/v1alpha1","kind":"Function",`+
+		`"metadata":{"name":%q,"namespace":"default","resourceGroup":"rg1"},`+
+		`"spec":{"runtime":"nodejs22","handler":"handle",`+
+		`"artifact":{"uri":%q,"digest":%q},%s}}`, name, ref, digest, scalingJSON)
+	f := filepath.Join(t.TempDir(), name+".json")
+	require.NoError(t, os.WriteFile(f, []byte(manifest), 0o600))
+	out := runCLI("apply", "-f", f)
+	require.Contains(t, out, "applied", "funcdcli apply confirms: %s", out)
+}
+
+// cliPhase reads a function's Status.Phase via `funcdcli get ... -o json`.
+func cliPhase(t *testing.T, runCLI func(...string) string, name string) string {
+	t.Helper()
+	out := runCLI("get", "function", name, "-n", "default", "-o", "json")
+	var obj struct {
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &obj), "parse `funcdcli get -o json`: %s", out)
+	return obj.Status.Phase
+}
+
+func requireCLIPhase(t *testing.T, runCLI func(...string) string, name, want string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return cliPhase(t, runCLI, name) == want },
+		20*time.Second, 100*time.Millisecond, "function %s should reach %s via the CLI", name, want)
+}
+
+func readClose(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(b)
+}

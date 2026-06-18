@@ -113,7 +113,7 @@ func TestScenario_GenericStatusWriteback(t *testing.T) {
 	statusKinds := []Kind{
 		KindNamespace, KindResourceGroup, KindFunction, KindRevision,
 		KindRoute, KindService, KindEventSource, KindInvocation,
-		KindRuntimeClass, KindWorker, KindGateway,
+		KindRuntimeClass, KindWorkerNode, KindGateway,
 	}
 	for _, k := range statusKinds {
 		o, ok := NewObject(k)

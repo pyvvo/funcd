@@ -97,7 +97,11 @@ radius, not by how easy they are to spot:
 **F. Template & contract completeness.** Every ADR-0000 section present (a missing section,
 not "None", is a gate failure); Scenarios observable Given/When/Then with stable names;
 Implementation plan machine-actionable with a test plan; Review checklist mechanically
-checkable.
+checkable. **Also judge concision**: an ADR that restates the same point across sections, pads
+with background the reader has, or adds "precision" that changes no decision is bloated — flag the
+specific redundant passages (Minor, or Major if the bloat obscures the actual decision/contract)
+and name what to cut. Concise ≠ incomplete: every section must still be present and every contract
+specified; the target is *no wasted sentence*, not fewer sections.
 
 **G. Strengths worth protecting.** Mandatory, not optional. Name what is done well —
 especially deliberate, correctly-justified deviations from idiom (the kind a future reviewer

@@ -1,0 +1,11 @@
+{
+  "k": 8,
+  "python": "3.14.5",
+  "soloMBPerFunction": 23.40625,
+  "pooledMBPerFunction": 11.33203125,
+  "densityGain": 2.0654946570148223,
+  "soloRPS": 19666.613332372894,
+  "soloP99": 236167,
+  "pooledRPS": 1582.1263203217372,
+  "pooledP99": 1940201
+}

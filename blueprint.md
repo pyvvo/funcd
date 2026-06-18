@@ -38,16 +38,16 @@ In order to make this platform self-contained, we will need to implement the fol
 
 - **Function** :
     - **Runtime**: A lightweight runtime that can execute serverless functions. This runtime handles function invocation, scaling, and lifecycle management. Decided direction (2026-06-13, to be formalized in its own ADR):
-        - **CloudEvents-only handler contract**: handlers never see raw transport. Every trigger — HTTP request, timer, bus message — is captured by the eventing layer and normalized into a CloudEvents payload consumed by the handler (exact signature per runtime shape below — e.g. Node `handle(context, event)`); for sync HTTP triggers the handler's return value maps back to the HTTP response by convention (Lambda-proxy style; Knative-style: nothing → 204, a CloudEvent, or `{statusCode, headers, body}`). Transport between gateway and sandbox stays plain HTTP — the **runtime shim** inside the container does the normalization, so CloudEvents is a contract property, not a new wire protocol. OpenFunction spec and the AWS Lambda runtime API remain the references. Open point for the contract ADR: response **streaming** (agents stream LLM tokens) needs an explicit escape hatch to the pure request→event→response model.
+        - **CloudEvents-only handler contract**: handlers never see raw transport. Every trigger — HTTP request, timer, bus message — is captured by the eventing layer and normalized into a CloudEvents payload consumed by the handler (exact signature per runtime shape below — e.g. Node `handle(context, event)`); for sync HTTP triggers the handler's return value maps back to the HTTP response by convention (Lambda-proxy style; Knative-style: nothing → 204, a CloudEvent, or `{statusCode, headers, body}`). Transport between gateway and worker stays plain HTTP — the **runtime shim** inside the container does the normalization, so CloudEvents is a contract property, not a new wire protocol. OpenFunction spec and the AWS Lambda runtime API remain the references. Open point for the contract ADR: response **streaming** (agents stream LLM tokens) needs an explicit escape hatch to the pure request→event→response model.
         - **Curated language runtimes, source-artifact deploys**: the platform does not accept arbitrary container images for now. Users deploy code artifacts (JS bundle, Python wheel/zip) into platform-owned, hardened runtime containers (`nodejsXX`, `pythonXYZ`) that embed the runtime shim: it speaks CloudEvents to the platform, hosts the SDK (KV, blob, events, secrets), and intercepts outbound HTTP at the language-runtime level **by default** (Node: undici global dispatcher; Python: `sitecustomize` patching) — see egress tier 2. Arbitrary OCI images and further languages come later behind the same `Runtime` port; WASM remains the path for untrusted code.
-        - **Function shape (Knative-func compatible)**: each curated runtime publishes the *shape* an artifact must conform to, adopted from the [Knative func templates](https://github.com/knative/func/tree/main/docs/function-templates) so existing `func` functions port with no code change. **Node.js**: a single bundled file exporting the configured handler — `handle(context, event)`; in funcd the event is always a CloudEvent. **Python**: a wheel whose entry module exposes a `new()` factory returning a function instance with `handle(...)`, optional lifecycle hooks `start(cfg)` / `stop()`, and health probes `alive()` / `ready()` returning `(bool, str)`. The runtime shim serves `/health/liveness` and `/health/readiness` automatically, delegating to the hooks when present — these also back the platform's readiness gate and scale-to-zero wake checks. Where funcd deliberately differs from Knative func: **no source-tree build** (no buildpacks, no `func.yaml`) — the deliverable *is* the prebuilt artifact (single-file JS bundle, Python wheel), and `func.yaml`'s role is played by the `Function` resource spec.
+        - **Function shape (Knative-func compatible)**: each curated runtime publishes the *shape* an artifact must conform to, adopted from the [Knative func templates](https://github.com/knative/func/tree/main/docs/function-templates) so existing `func` functions port with no code change. **Node.js**: a single bundled file exporting the configured handler — `handle(context, event)`; in funcd the event is always a CloudEvent. **Python** (ADR-0049): a `.py` module exporting `handle(context, event)` (the same contract as Node, the event always a CloudEvent) and an optional `event_schema` (a JTD/RFC 8927 contract validated before the handler) — *not* the original Knative `new()`-factory/lifecycle-hook shape, which the implemented `handle(context, event)` reference shim supersedes for both languages. The runtime shim serves `/health/liveness` and `/health/readiness` automatically — these back the platform's readiness gate and scale-to-zero wake checks. (A richer wheel-packaged, lifecycle-hook Python shape stays a future option behind the same `Runtime` port; the V1 reference shim is the single-module form, parallel to the JS bundle.) Where funcd deliberately differs from Knative func: **no source-tree build** (no buildpacks, no `func.yaml`) — the deliverable *is* the prebuilt artifact (single-file JS bundle, Python wheel), and `func.yaml`'s role is played by the `Function` resource spec.
         - **Shape enforcement (three gates, one validator)**: the shape is validated everywhere it matters, from one shared validator package (single implementation imported by CLI and server — no drift; lives in the public surface so `funcdcli` can use it under the import-discipline rule).
             1. **CLI pre-flight (DX, untrusted)**: `funcdcli` validates the artifact locally before upload — instant, offline feedback. JS: static export analysis (esbuild's parser is an embeddable Go library, MIT) confirming the configured handler is exported; Python: wheel structure (`*.dist-info`, entry module present) + entry-point heuristics. Skippable, and never trusted by the platform: the API can be called without the CLI.
             2. **Admission (authoritative, static)**: the API server runs the same validator when a `Function` is applied; the artifact is pinned by digest in the stamped `Revision`, so what was validated is exactly what ships.
-            3. **Materialization (authoritative, dynamic)**: when the scheduler places the function and the worker boots the sandbox, the runtime shim performs the only fully reliable check — load the artifact, resolve `handle` / `new()`, wire lifecycle and health hooks. On failure the function never becomes ready and no route is programmed; the controller writes a precise `ShapeValid: False` condition into `Function.status` (e.g. "module `app` has no attribute `new`"), surfaced by `funcdcli describe`.
+            3. **Materialization (authoritative, dynamic)**: when the scheduler places the function and the worker node boots the worker, the runtime shim performs the only fully reliable check — load the artifact, resolve `handle` / `new()`, wire lifecycle and health hooks. On failure the function never becomes ready and no route is programmed; the controller writes a precise `ShapeValid: False` condition into `Function.status` (e.g. "module `app` has no attribute `new`"), surfaced by `funcdcli describe`.
         - The function is of kind "serverless": event-based input, response via output event or side effects (storage, events, …). Stateful functions rely on the platform services (KV storage, blob storage, graph database, etc.) to store and retrieve state.
-    - **Containerization**: functions are packaged and deployed from **source artifacts**, not user images: the platform layers the artifact onto the matching runtime base image at deploy time (users never write Dockerfiles or push to registries; the platform uses its OCI registry internally for runtime bases and artifact layers)
-    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Baseline (V1–V2): runc with conservative OCI defaults — no added capabilities, `no_new_privileges`, default seccomp. Strong isolation is scheduled for V3 (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). The gVisor middle tier was dropped (2026-06-13) — for untrusted code the WASM runtime provides isolation by construction instead. Runtime classes (runc / wasm / microvm) stay selectable per function behind one sandbox interface.
+    - **Containerization**: functions are packaged and deployed from **source artifacts**, not user images: the platform layers the artifact onto the matching runtime base image at deploy time (users never write Dockerfiles). **Artifact distribution is OCI (ADR-0031, newest-accepted-wins):** the user is the artifact client — `funcdcli push` packages the source bundle as a digest-addressed OCI artifact to a registry (or a zero-infra **local OCI layout** for single-host dev) and `funcdcli login`/`pull` round it out; the user sets `Function.spec.artifact.uri` (a ref/tag; the digest is **optional**) and the **platform resolves the tag → digest and pins it into the immutable Revision at stamp time** (ADR-0035, Knative-style — no manual digest pinning), then **pulls by that digest** (the digest is the authority — a mutable tag can never swap an already-stamped Revision). The curated **runtime bases** are **embedded in the funcd binary** and imported into funcd's managed containerd at startup (**ADR-0054** — distroless node/python, no registry pull); at deploy funcd still layers the pulled *artifact* onto the curated base (P-V-2) — the *artifact* reaches the platform via this push/pull, while the *runtime base* now ships inside funcd itself. **In V1 (ADR-0032) that layering is a read-only bind-mount of the pulled artifact into the curated base container** (logically base+artifact, no per-deploy image build); a baked per-revision base+layer image is a deferred optimization.
+    - **Security and Isolation**: A security and isolation system that ensures that functions are executed in a secure and isolated environment, preventing unauthorized access to the host system and other functions. Baseline (V1–V2): **crun** (C-based OCI runtime — lower per-worker memory than the Go runc; invoked via containerd's `io.containerd.runc.v2` shim, a drop-in OCI-compatible `BinaryName` swap — ADR-0011) with conservative OCI defaults — no added capabilities, `no_new_privileges`, default seccomp. Strong isolation is scheduled for V3 (researched 2026-06, to be formalized in its own ADR): **Kata Containers** as a standard containerd runtime-v2 shim — one KVM microVM per function with Dragonball as the default VMM and Cloud Hypervisor as fallback; firecracker-containerd rejected (forked containerd, devmapper requirement, maintenance-mode cadence). The gVisor middle tier was dropped (2026-06-13) — for untrusted code the WASM runtime provides isolation by construction instead. Runtime classes (runc / wasm / microvm) stay selectable per function behind one worker interface.
 
 - **Services** :
 
@@ -90,7 +90,7 @@ In order to make this platform self-contained, we will need to implement the fol
     - **Workflow engine**: A workflow engine that allows functions to be composed into complex workflows, with support for conditional branching, parallel execution, and error handling. we could take inspiration from existing workflow engines like temporal, but try to keep it simple and lightweight and rely on message systems like nats.
     - **Vector database**: store and query high-dimensional vectors (similarity search, RAG). Drivers: **in-process** (a Go embeddable index) and **external** (pinecone, weaviate, milvus, qdrant).
     - **Config**: non-sensitive configuration for functions/services, updatable without redeploy. Drivers: **in-memory**, **file**, **S3-backed** (storage layer).
-    - **Secrets management**: securely store and deliver sensitive values (API keys, credentials), encrypted at rest, delivered to sandboxes via env/tmpfs. Drivers: **in-memory** (dev), **S3-backed + envelope encryption** (storage layer), **external** ([OpenBAO](https://openbao.org/)).
+    - **Secrets management**: securely store and deliver sensitive values (API keys, credentials), encrypted at rest, delivered to workers via env/tmpfs. Drivers: **in-memory** (dev), **S3-backed + envelope encryption** (storage layer), **external** ([OpenBAO](https://openbao.org/)).
     - **Eventing system**: An eventing system that allows functions to be triggered by various events, such as HTTP requests, timers, events, or external events from other systems. We will use existing technologies like nats and inspiration from aws eventbridge.
         - Argo events example :
         ```mermaid
@@ -191,11 +191,11 @@ In order to make this platform self-contained, we will need to implement the fol
     - **Messaging layer**: A messaging layer that allows the internal components of the platform to communicate with each other in a decoupled manner. We will use existing technologies like nats to provide a simple and efficient messaging layer for the internal components of the platform. NATS is embedded in-process (nats-server is a plain Go library): JetStream runs with memory storage for tests and file storage for production; pointing funcd at an external NATS cluster stays a drop-in option for multi-node.
     - **Metastore**: stores resource metadata (CRD-like specs + status) and watches. Itself behind the `store.Store` port (adapter pattern, same as every service): the engine is **slatedb** (UniFFI/cgo → the Rust LSM, spanning **memory/file/S3** from one library; ADR-0006), with a pure-Go **memory** engine for tests and **bbolt** as the documented fallback. ADR-0006 records the deliberate **cgo** trade-off (see the embed-first rule). The metastore is the database layer applied to the platform's own control state.
     - **Control plane**: The control plane that manages the overall operation of the platform, including the API server, the controller, the scheduler, and the messaging layer. The control plane will be responsible for ensuring that the platform is running smoothly and efficiently, and for taking corrective actions when necessary.
-    - **Worker**: executes functions and provides their runtime environment. The worker **exposes an API** — to the control plane (placement, sandbox lifecycle: `worker.proto`) and a local one to the sandboxes it hosts (the runtime shim calls it for KV/blob/secrets/events/identity). Unlike the public control-plane API, **no SDK is published** for the worker API: it is reached only through the built-in runtime shim, which is shipped and versioned with the platform — there is no third-party client to generate.
+    - **Worker node**: executes functions and provides their runtime environment. The worker node **exposes an API** — to the control plane (placement, worker lifecycle: `workernode.proto`) and a local one to the workers it hosts (the runtime shim calls it for KV/blob/secrets/events/identity). Unlike the public control-plane API, **no SDK is published** for the worker-node API: it is reached only through the built-in runtime shim, which is shipped and versioned with the platform — there is no third-party client to generate.
     - **External providers**: The external providers that provide the necessary resources and services for the execution of the functions and the services, such as the registry, the API gateway, the messaging engine, the monitoring and logging systems, and the S3-compatible storage.
-    - **Ingress controller / API Gateway**: exposes functions as HTTP endpoints (gRPC/MCP later) with routing, auth, rate limiting, and load balancing. **Embedded, not supervised**: built on [Lura](https://github.com/luraproject/lura) (Apache-2.0, the framework behind KrakenD) as an in-process Go library — `gateway.Gateway` port, Lura driver, plus a trivial embedded reverse-proxy driver for dev/e2e. This is a deliberate reversal of the earlier "gateway as a separate process" stance (Apache APISIX, rendered config + hot-reload): embedding the gateway honors the single-binary / embed-first rule, removes the supervised child process and the config-file render/reload loop, and makes the **activator** a direct in-process code path (no healthy upstream → buffer → wake → forward) instead of a YAML round-trip. Trade-off accepted: funcd now owns the request data path (a crash affects routing; APISIX's plugin ecosystem is foregone) — auth and metrics already live in the in-process PDP and the OTel pipeline, and the `Gateway` port keeps an external gateway (APISIX/KrakenD) a driver swap for multi-node. To be formalized in the gateway ADR.
-    - **Network manager (egress control)**: wires each function sandbox's network namespace (veth/bridge — done directly by the runtime driver on a single node; no Kubernetes CNI machinery needed) and enforces egress policy in two layers: **L3/L4** — nftables default-deny for lateral traffic (function → function only through the gateway, platform services only through their facades) and no direct internet route; **L4–L7** — all remaining outbound TCP/UDP (HTTP, HTTPS, database connections, any custom protocol) is **transparently redirected** at the netns boundary (nftables `REDIRECT`/`TPROXY` on the sandbox veth — no env vars, no app cooperation, nothing to bypass) into the **egress gateway**: a transparent proxy embedded in the funcd binary (a goroutine server, not a child process) that recovers the original destination (`SO_ORIGINAL_DST`/TPROXY), identifies the calling workload by sandbox source IP, captures every connection to the audit channel, and allows/blocks via the in-process PDP against the namespace's `EgressPolicy`. Fail-closed by construction: if the gateway is down, the redirect has nowhere to deliver and default-deny holds. `HTTP_PROXY` env vars are still injected as a courtesy so well-behaved HTTP clients receive a descriptive 403 instead of a reset connection. Note: the messaging layer (NATS) is the platform's *internal communication plane* — it does not replace packet networking; sandboxes still need network wiring.
-        - **One policy, tiered enforcement.** `EgressPolicy` compiles to Cedar and is evaluated by the same `auth.Authorizer` PDP as every other decision (action namespace `egress:*`), at four depths with decreasing request context: (1) **wasm host functions** — the guest cannot do I/O except through host-implemented functions (`wasi:http` pattern), so every outbound request is captured *in-process, pre-encryption, with full URL* — capability-based, zero bypass surface; (2) **runtime-shim layer (default-on for curated runtimes)** — the platform-owned JS/Python runtime containers intercept outbound HTTP at the language-runtime level (Node: undici global dispatcher; Python: `sitecustomize` patching of urllib/requests) and evaluate the same Cedar policies in the function's process: full-URL, pre-TLS capture and descriptive denials for every function, no user opt-in. Still **not** a security boundary — user code can open raw sockets, spawn subprocesses, or ship C extensions — so the gateway below remains the enforcement floor; (3) **egress gateway (enforced, all protocols)** — the node-level transparent proxy, i.e. the "shared sidecar" (ambient-mesh style: one embedded proxy per node; a sidecar co-process *per function* was rejected — N proxies of RAM for zero policy gain on one box). Context per protocol: full URL for plain HTTP; domain via SNI peek for TLS, no MITM (full-path policy would require a per-namespace MITM CA — invasive, breaks pinning, decide in the egress ADR); `host:port` for raw TCP such as databases, where domain-level rules are enabled by the embedded **DNS forwarder** — sandbox DNS is redirected too, so the gateway correlates resolved IPs with domains (Cilium-style DNS-aware policy); (4) **kernel (enforced, candidate)** — seccomp user-space notification on `connect()`, decided by the worker-side PDP with L4 context only.
+    - **Ingress controller / API Gateway**: exposes functions as HTTP endpoints (gRPC/MCP later) with routing, auth, rate limiting, and load balancing. **Embedded, not supervised**, behind the `gateway.Gateway` port. **Primary driver: an in-process `net/http/httputil.ReverseProxy`** (ADR-0013, superseding ADR-0012's Lura-as-production framing) — transparent 1:1 routing to function workers, **streaming-native (SSE / token streaming via `FlushInterval`, WebSocket via native `Upgrade`)** which the agent/MCP workload needs, and dynamic route programming as a map swap. The ingress feature set (auth PEP, rate-limit, LB+health, circuit-break, static files, compression, CORS, timeouts) is built as **composable `net/http` middleware** — the way Caddy/Traefik are built — each owned by its feature (auth→API server/PDP, LB+health→activator). **TLS/automatic-HTTPS via embedded [`certmagic`](https://github.com/caddyserver/certmagic)** (Apache-2.0) returning a `*tls.Config` for funcd's own `http.Server` — no listener handover. The gateway has a **single driver** (the embedded `httputil` proxy); ADR-0029 dropped the unused, streaming-weak Lura driver. An **external-gateway** driver (route programming into an external APISIX/Caddy via its admin API) is the V2 second driver the `gateway.Gateway` port keeps a clean swap. This keeps the single-binary / embed-first rule and makes the **activator** a direct in-process code path (no healthy upstream → buffer → wake → forward) — the reversal of the earlier "gateway as a separate process" stance (APISIX, rendered config + hot-reload). Trade-off accepted: funcd owns the request data path; the `Gateway` port keeps an external gateway or a full embedded-Caddy driver a swap for later.
+    - **Network manager (egress control)**: wires each function worker's network namespace (veth/bridge — done directly by the runtime driver on a single node; no Kubernetes CNI machinery needed) and enforces egress policy in two layers: **L3/L4** — nftables default-deny for lateral traffic (function → function only through the gateway, platform services only through their facades) and no direct internet route; **L4–L7** — all remaining outbound TCP/UDP (HTTP, HTTPS, database connections, any custom protocol) is **transparently redirected** at the netns boundary (nftables `REDIRECT`/`TPROXY` on the worker veth — no env vars, no app cooperation, nothing to bypass) into the **egress gateway**: a transparent proxy embedded in the funcd binary (a goroutine server, not a child process) that recovers the original destination (`SO_ORIGINAL_DST`/TPROXY), identifies the calling workload by worker source IP, captures every connection to the audit channel, and allows/blocks via the in-process PDP against the namespace's `EgressPolicy`. Fail-closed by construction: if the gateway is down, the redirect has nowhere to deliver and default-deny holds. `HTTP_PROXY` env vars are still injected as a courtesy so well-behaved HTTP clients receive a descriptive 403 instead of a reset connection. Note: the messaging layer (NATS) is the platform's *internal communication plane* — it does not replace packet networking; workers still need network wiring.
+        - **One policy, tiered enforcement.** `EgressPolicy` compiles to Cedar and is evaluated by the same `auth.Authorizer` PDP as every other decision (action namespace `egress:*`), at four depths with decreasing request context: (1) **wasm host functions** — the guest cannot do I/O except through host-implemented functions (`wasi:http` pattern), so every outbound request is captured *in-process, pre-encryption, with full URL* — capability-based, zero bypass surface; (2) **runtime-shim layer (default-on for curated runtimes)** — the platform-owned JS/Python runtime containers intercept outbound HTTP at the language-runtime level (Node: undici global dispatcher; Python: `sitecustomize` patching of urllib/requests) and evaluate the same Cedar policies in the function's process: full-URL, pre-TLS capture and descriptive denials for every function, no user opt-in. Still **not** a security boundary — user code can open raw sockets, spawn subprocesses, or ship C extensions — so the gateway below remains the enforcement floor; (3) **egress gateway (enforced, all protocols)** — the node-level transparent proxy, i.e. the "shared sidecar" (ambient-mesh style: one embedded proxy per node; a sidecar co-process *per function* was rejected — N proxies of RAM for zero policy gain on one box). Context per protocol: full URL for plain HTTP; domain via SNI peek for TLS, no MITM (full-path policy would require a per-namespace MITM CA — invasive, breaks pinning, decide in the egress ADR); `host:port` for raw TCP such as databases, where domain-level rules are enabled by the embedded **DNS forwarder** — worker DNS is redirected too, so the gateway correlates resolved IPs with domains (Cilium-style DNS-aware policy); (4) **kernel (enforced, candidate)** — seccomp user-space notification on `connect()`, decided by the worker-node-side PDP with L4 context only.
 
 
 
@@ -203,7 +203,7 @@ In order to make this platform self-contained, we will need to implement the fol
 
 The platform will be designed as a modular, single-binary application that can be deployed on a Linux machine. The architecture will be inspired by the internal architecture of Kubernetes, with a clear separation of concerns between the different components of the platform.
 
-> This blueprint defines the target architecture. Concrete decisions — repository setup, gateway rendering mechanics, sandbox lifecycle, scale-to-zero ordering, … — are made per topic in ADRs under `docs/adr/`: each ADR captures the need, constraints, alternatives, and the final contract, and is the source of truth for its topic. The blueprint is kept in sync with accepted ADRs; if they ever disagree, the newest accepted ADR wins and the blueprint gets updated.
+> This blueprint defines the target architecture. Concrete decisions — repository setup, gateway rendering mechanics, worker lifecycle, scale-to-zero ordering, … — are made per topic in ADRs under `docs/adr/`: each ADR captures the need, constraints, alternatives, and the final contract, and is the source of truth for its topic. The blueprint is kept in sync with accepted ADRs; if they ever disagree, the newest accepted ADR wins and the blueprint gets updated.
 
  ### Resources definition (CRD-like)
 
@@ -293,9 +293,9 @@ So we could use the same approach for the other resources, and define their desi
 | 1    | Validate               | YAML/JSON validated, quotas checked                                                             |
 | 2    | Store spec             | Raw manifest stored in the metadata store                                                       |
 | 3    | Deploy request         | User calls `/deploy`                                                                             |
-| 4    | Translate to Vendor RD | The Resource Definition is translated to each driver's form (Lura routes, NATS subjects/streams, `gocloud.dev/blob` buckets, OpenBAO paths, etc.) |
+| 4    | Translate to Vendor RD | The Resource Definition is translated to each driver's form (gateway routes via httputil, NATS subjects/streams, `gocloud.dev/blob` buckets, OpenBAO paths, etc.) |
 | 5    | Slice into tasks       | The OAM is broken down into logical tasks                                                       |
-| 6    | Schedule & provision   | The scheduler places the tasks; the worker provisions sandboxes and vendor resources            |
+| 6    | Schedule & provision   | The scheduler places the tasks; the worker node provisions workers and vendor resources            |
 | 7    | Expose                 | Routes and triggers are programmed in the gateway and the eventing system                       |
 | n    | Monitor & reconcile    | The controller monitors the function/service and takes corrective actions to maintain desired state |
 
@@ -311,7 +311,7 @@ sequenceDiagram
     participant Bus as Messaging layer (NATS)
     participant Ctrl as Controller
     participant Sched as Scheduler
-    participant W as Worker (runtime)
+    participant W as Worker node (runtime)
     participant GW as Ingress / API Gateway
 
     Dev->>API: apply Function manifest
@@ -324,7 +324,7 @@ sequenceDiagram
     Ctrl->>Ctrl: diff desired vs actual → slice into tasks
     Ctrl->>Sched: request placement
     Sched->>W: place instance(s)
-    W->>W: pull image · create sandbox (microVM / wasm)
+    W->>W: pull image · create worker (microVM / wasm)
     W-->>Ctrl: actual state (running, healthy)
     Ctrl->>GW: translate & program vendor RD (routes, triggers)
     Ctrl->>MS: write back status (phase: Ready)
@@ -375,7 +375,7 @@ flowchart LR
     end
     MS -- "change events (via NATS)" --> Watch
     Status --> MS
-    Act -. "provision / converge" .-> Providers["Drivers (adapter pattern)<br/>runtime · gateway (Lura) · blob · kvstore · NATS · OpenBAO · …"]
+    Act -. "provision / converge" .-> Providers["Drivers (adapter pattern)<br/>runtime · gateway (httputil) · blob · kvstore · NATS · OpenBAO · …"]
     Providers -. "observed state" .-> Diff
 ```
 
@@ -389,7 +389,7 @@ Secrets provide a way to store sensitive information for functions and services,
 
 #### Scaling & scale-to-zero
 
-Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by in-flight request concurrency and/or event-queue depth. With `minReplicas: 0`, idle functions are reclaimed after `idleTimeout` and consume zero resources. The first request or event addressed to a scaled-to-zero function is buffered by an **activator** while the controller scales the function back up (cold start). Cold-start latency can be mitigated with pre-warmed sandbox pools and microVM snapshot/restore (e.g., Kata VM templating).
+Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by in-flight request concurrency and/or event-queue depth. With `minReplicas: 0`, idle functions are reclaimed after `idleTimeout` and consume zero resources. The first request or event addressed to a scaled-to-zero function is buffered by an **activator** while the controller scales the function back up (cold start). Cold-start latency can be mitigated with pre-warmed worker pools and microVM snapshot/restore (e.g., Kata VM templating).
 
 #### Etc..
 
@@ -398,10 +398,10 @@ Functions scale horizontally between `minReplicas` and `maxReplicas`, driven by 
 Like k3s or faasd, funcd ships as a single binary that runs several cooperating parts:
 
 - **Library-first**: the entire platform is an embeddable Go library (`pkg/funcd`); `cmd/funcd` is a thin shell that parses configuration, selects the drivers (store, bus, gateway, runtime), and calls `funcd.New(...).Run(ctx)`. E2e tests embed the very same library with in-memory drivers — no daemon, no root, no network. See [Repository structure](#repository-structure).
-- **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore, the **embedded API gateway (Lura)**, and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
-- **Supervised child processes**: components with no embeddable Go form — **containerd** (always), **OpenBAO** (only if the external secrets driver is chosen) — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd. The list shrank deliberately: embedding Lura removed the API gateway from it.
-- **Crash-only design**: on restart, funcd rebuilds its world view from the metastore plus the actual state of sandboxes and routes, then lets the reconciliation loops converge. No state lives only in memory.
-- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists — NATS server, store/blob/kvstore drivers, **the API gateway (Lura)**, policy engine (cedar-go), wasm runtime, OTel pipeline; a supervised child process is the fallback only for components with no embeddable form (containerd; OpenBAO when used). **Recorded exception (ADR-0006)**: the metastore engine **slatedb** embeds as a **cgo-linked native library** (UniFFI → the Rust engine) — a deliberate *third* category beyond "pure-Go embed" and "supervised child process", accepted for the engine's maturity. It turns on `CGO_ENABLED=1`; the release static-links the `slatedb_uniffi` archive to keep funcd a **single binary** (no longer a *pure-Go* static one — spike-validated ~24 MB).
+- **In-process (goroutines)**: API server, controllers, scheduler, embedded NATS/JetStream, metastore, the **embedded API gateway (httputil)**, and the built-in service facades. They communicate through the messaging layer and well-defined interfaces, so any of them can later be extracted into a standalone process (multi-node) without changing APIs.
+- **Supervised child processes**: components with no embeddable Go form — **containerd** (always), **OpenBAO** (only if the external secrets driver is chosen) — are launched, configured, and supervised by funcd itself (config rendering, health checks, restarts), the same way faasd supervises containerd. The list shrank deliberately: embedding the in-process httputil gateway removed the API gateway from it.
+- **Crash-only design**: on restart, funcd rebuilds its world view from the metastore plus the actual state of workers and routes, then lets the reconciliation loops converge. No state lives only in memory.
+- **Embed-first rule**: a dependency is embedded as a Go library whenever a credible one exists — NATS server, store/blob/kvstore drivers, **the API gateway (httputil)**, policy engine (cedar-go), wasm runtime, OTel pipeline; a supervised child process is the fallback only for components with no embeddable form (containerd; OpenBAO when used). **Recorded exception (ADR-0006)**: the metastore engine **slatedb** embeds as a **cgo-linked native library** (UniFFI → the Rust engine) — a deliberate *third* category beyond "pure-Go embed" and "supervised child process", accepted for the engine's maturity. It turns on `CGO_ENABLED=1`; the release static-links the `slatedb_uniffi` archive to keep funcd a **single binary** (no longer a *pure-Go* static one — spike-validated ~24 MB).
 
 ### Platform logging
 
@@ -441,21 +441,21 @@ log.WarnContext(ctx, "route render failed, retrying", "error", err, "attempt", n
 
 - **API access**: every API-server request is authenticated (static tokens and **scoped API keys** first, OIDC later) and authorized through namespace-scoped RBAC (e.g., admin / developer / viewer roles). API keys are the credential for non-interactive clients — CI and the **Terraform provider** (see [Control-plane API & IaC](#control-plane-api--iac)) — issued per namespace/role and revocable.
 - **Multi-tenancy boundary**: the namespace — quotas, secrets, routes, and service instances are namespace-scoped and never shared across namespaces.
-- **Function isolation**: each function runs in its own sandbox — runc container with conservative OCI defaults (V1–V2), WASM sandbox, or microVM from V3 (Kata); no shared filesystem, PID, or network namespace between functions by default.
-- **Service credentials**: functions never receive long-lived platform credentials; the worker injects short-lived, scoped workload tokens only for the services declared in the function spec — see [Internal IAM](#internal-iam).
-- **Secrets at rest**: encrypted in the metastore (tink / OpenBAO-backed keys), delivered to sandboxes via env vars or tmpfs mounts.
-- **Egress control**: sandbox networking is default-deny for lateral traffic — functions reach other functions only through the gateway and other systems only through the bus or declared services; outbound internet egress is governed by the namespace's `EgressPolicy` (domain/CIDR/port allowlists), enforced by the network manager: nftables at L3/L4 plus the egress proxy for L7 capture and audit of HTTP(S). A compromised function cannot scan the host or sibling sandboxes, and every outbound call it makes is observable and blockable.
-- **Artifact trust**: images and wasm modules are pinned by digest when a `Revision` is created, and optionally verified against signatures (sigstore/cosign) before a sandbox starts; a pull-through registry cache keeps deploys working when the upstream registry is down.
-- **Internal traffic**: mTLS between control plane and workers once deployed multi-node.
+- **Function isolation**: each function runs in its own worker — **crun** OCI container with conservative defaults (V1–V2; ADR-0011), WASM sandbox, or microVM from V3 (Kata); no shared filesystem, PID, or network namespace between functions by default.
+- **Service credentials**: functions never receive long-lived platform credentials; the worker node injects short-lived, scoped workload tokens only for the services declared in the function spec — see [Internal IAM](#internal-iam).
+- **Secrets at rest**: encrypted in the metastore (tink / OpenBAO-backed keys), delivered to workers via env vars or tmpfs mounts.
+- **Egress control**: worker networking is default-deny for lateral traffic — functions reach other functions only through the gateway and other systems only through the bus or declared services; outbound internet egress is governed by the namespace's `EgressPolicy` (domain/CIDR/port allowlists), enforced by the network manager: nftables at L3/L4 plus the egress proxy for L7 capture and audit of HTTP(S). A compromised function cannot scan the host or sibling workers, and every outbound call it makes is observable and blockable.
+- **Artifact trust**: images and wasm modules are pinned by digest when a `Revision` is created, and optionally verified against signatures (sigstore/cosign) before a worker starts; a pull-through registry cache keeps deploys working when the upstream registry is down.
+- **Internal traffic**: mTLS between control plane and worker nodes once deployed multi-node.
 
 ### Internal IAM
 
 Functions call functions (sync through the gateway, async through events) and call platform services (kv, blob, …). All of these hops need authentication and authorization **without API keys** — everything is internal, so the platform can do better than shared secrets.
 
-**Identity — minted at sandbox creation.** The control plane is the trust root: it creates every sandbox, so identity is injected at birth (the Kubernetes ServiceAccount token-projection idea):
+**Identity — minted at worker creation.** The control plane is the trust root: it creates every worker, so identity is injected at birth (the Kubernetes ServiceAccount token-projection idea):
 
 - every workload gets a SPIFFE-style identity: `spiffe://funcd/ns/<namespace>/fn/<function>/rev/<revision>`;
-- the worker mounts a short-lived signed token (minutes, not days) into the sandbox (tmpfs + env var) and rotates it before expiry — nothing to create, store, or revoke manually, which is exactly what kills API keys;
+- the worker node mounts a short-lived signed token (minutes, not days) into the worker (tmpfs + env var) and rotates it before expiry — nothing to create, store, or revoke manually, which is exactly what kills API keys;
 - tokens are audience-bound (a token minted for the kv service is useless against blob or another function) and carry namespace / function / revision claims;
 - signing keys come from the platform crypto service (tink, OpenBAO-backed later); verification is local in every enforcement point (public key, no network call on the hot path);
 - SPIFFE-compatible naming keeps a clean upgrade path to SPIRE federation in multi-node — without running SPIRE today (embed-first).
@@ -524,7 +524,7 @@ flowchart TB
             API["API Server<br/>authn/authz · validation · OpenAPI"]
             Ctrl["Controller(s)<br/>one framework, loop per kind"]
             Sched["Scheduler"]
-            GW["API Gateway<br/>embedded Lura (+ activator)"]
+            GW["API Gateway<br/>embedded httputil (+ activator)"]
             Bus["Messaging layer<br/>embedded NATS / JetStream"]
         end
         subgraph DP["Data plane (worker)"]
@@ -574,7 +574,7 @@ sequenceDiagram
     actor C as Caller
     participant GW as Ingress / API Gateway
     participant Act as Activator
-    participant FN as Function instance (sandbox)
+    participant FN as Function instance (worker)
     participant Ctrl as Controller / Scheduler
 
     rect rgb(235, 245, 235)
@@ -589,12 +589,20 @@ sequenceDiagram
         C->>GW: request
         GW->>Act: no healthy upstream → buffer request
         Act->>Ctrl: scale 0 → 1
-        Ctrl->>FN: create sandbox, start runtime, health check
+        Ctrl->>FN: create worker, start runtime, health check
         FN-->>Act: ready
         Act->>FN: replay buffered request
         FN-->>C: response
     end
 ```
+
+> **V1 wiring (ADR-0033).** In V1 the data plane is a dedicated listener whose handler resolves the function
+> from the request path `/function/<name>` (+ `X-Funcd-Namespace`, default `default`) against the store and
+> serves **every** request through the activator — warm → proxy to the ready upstream now; cold → buffer, wake
+> (`ScaleTo 1`), poll readiness, forward. The same `activator.Wake` primitive backs the **timer** path, so a
+> trigger at a scaled-to-zero function wakes it (ADR-0023 C3) rather than failing. The gateway route table
+> stays the declarative ingress record; it is not the V1 invocation front door (so a warm request takes one
+> in-process activator hop — `touch` on a warm function is harmless, as idle-reclaim skips `MinReplicas≠0`).
 
 #### Resource state machine
 
@@ -603,7 +611,7 @@ stateDiagram-v2
     [*] --> Pending : manifest validated & stored
     Pending --> Deploying : controller picks up, scheduler places
     Deploying --> Ready : instances healthy, routes programmed
-    Deploying --> Failed : pull / sandbox / route error
+    Deploying --> Failed : pull / worker / route error
     Failed --> Deploying : retry with backoff
     Ready --> Degraded : partial failure detected
     Degraded --> Ready : reconciliation repairs
@@ -611,7 +619,7 @@ stateDiagram-v2
     Idle --> Deploying : request / event arrives (scale from zero)
     Ready --> Terminating : delete requested
     Idle --> Terminating : delete requested
-    Terminating --> [*] : sandboxes, routes & vendor resources reclaimed
+    Terminating --> [*] : workers, routes & vendor resources reclaimed
 ```
 
 ### Open design points
@@ -620,10 +628,10 @@ A few important things intentionally left open at this stage:
 
 - **Build pipeline**: largely resolved by the curated-runtime decision — functions arrive as source artifacts (JS bundle, Python wheel) layered onto platform-owned runtime images. Still open: artifact packaging format, dependency resolution (bundled in the artifact vs resolved at deploy), and an optional in-platform builder later.
 - **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation; the rollout mechanics on top are not yet specified.
-- **Multi-node path**: workers registering to the control plane over NATS, node heartbeats, and scheduler placement across nodes.
+- **Multi-node path**: worker nodes registering to the control plane over NATS, node heartbeats, and scheduler placement across nodes.
 - **Quotas & limits**: per-namespace resource quotas and admission-time enforcement (per-account JetStream limits already cover the bus dimension — see [Internal IAM](#internal-iam)).
 - **Backup & disaster recovery**: metastore snapshot/restore and JetStream stream backups; declarative resources keep namespaces re-applyable from manifests (GitOps-style) as a coarse-grained fallback.
-- **Platform upgrades**: single-binary swap with forward-only store schema migrations; control-plane/worker version-skew rules once multi-node.
+- **Platform upgrades**: single-binary swap with forward-only store schema migrations; control-plane/worker-node version-skew rules once multi-node.
 
 ## Repository structure
 
@@ -639,8 +647,8 @@ The hard design constraint: **funcd is a Go library first, a daemon second.**
 | `store.Store` (metastore / database layer) | **slatedb** (UniFFI/cgo; file or S3 object backend) — bbolt fallback | in-memory (pure-Go) |
 | `blob.Bucket` (storage layer) | S3-compatible via `gocloud.dev/blob` (`s3blob`) | `memblob` / `fileblob` |
 | `bus.Bus` (messaging) | embedded NATS JetStream, file storage | embedded NATS with memory storage, or pure in-memory bus |
-| `gateway.Gateway` (ingress) | **embedded Lura** (in-process) | embedded Go reverse proxy |
-| `runtime.Runtime` (sandboxes) | containerd + runc curated runtimes (kata microVM shim from V3) | plain process / wasm |
+| `gateway.Gateway` (ingress) | **embedded httputil** (in-process) | same driver — pure-Go, no infra split (ADR-0029) |
+| `runtime.Runtime` (workers) | containerd + crun curated runtimes (kata microVM shim from V3) | plain process / wasm |
 | service ports (`kvstore`, `vector`, `secrets`, `config`, …) | external SDK or on the storage/database layer | in-memory |
 
 Every service port follows the same two-driver-minimum rule; the recurring memory/file/S3 drivers come from the shared storage and database substrate layers (see [Services](#components)), so they are written once.
@@ -656,7 +664,7 @@ plat, err := funcd.New(
     funcd.WithStore(slatedb.Open("file://"+dataDir)),  // database layer: slatedb (file/s3/mem) — ADR-0006
     funcd.WithBlob(s3blob.Open(blobURL)),          // storage layer: s3 | file | mem
     funcd.WithBus(nats.Embedded(nats.FileStorage(dataDir))),
-    funcd.WithGateway(lura.New(gwCfg)),            // embedded, in-process
+    funcd.WithGateway(embedded.New()),            // embedded httputil, in-process
     funcd.WithRuntime(containerd.New(rtCfg)),
 )
 
@@ -674,8 +682,8 @@ funcd/
 │   │   └── generated/                     # (reserved for future generated client — P-R/F18)
 │   ├── proto/
 │   │   └── funcd/v1/
-│   │       ├── controlplane.proto        # worker ⇆ control-plane registration & watch (multi-node)
-│   │       ├── worker.proto              # placement & sandbox lifecycle (multi-node)
+│   │       ├── controlplane.proto        # worker node ⇆ control-plane registration & watch (multi-node)
+│   │       ├── workernode.proto              # placement & worker lifecycle (multi-node)
 │   │       └── runtime.proto             # out-of-tree runtime shim contract
 │   ├── types/
 │   │   └── v1alpha1/                     # CRD-like resource model (matches apiVersion funcd.io/v1alpha1)
@@ -693,7 +701,7 @@ funcd/
 │   │       ├── egresspolicy.go
 │   │       ├── invocation.go
 │   │       ├── runtimeclass.go
-│   │       ├── worker.go
+│   │       ├── workernode.go
 │   │       ├── gateway.go
 │   │       └── status.go                 # shared Conditions / Phase types
 │   └── fault/                            # error kernel + edge mapping (ADR-0002; stdlib-only, public contract)
@@ -747,33 +755,38 @@ funcd/
 │   │   ├── reconciler.go                 # watch → diff → act → write status
 │   │   └── workqueue.go                  # rate-limited retries with backoff
 │   │
-│   ├── scheduler/
-│   │   └── scheduler.go                  # placement (trivial single-node, pluggable multi-node)
+│   ├── scheduler/                        # placement port (ADR-0017): control-plane, called by the reconciler
+│   │   ├── scheduler.go                  # Scheduler port: Schedule(Request) → Placement
+│   │   ├── singlenode/                   # single-node driver (places on the local worker node); multi-node is V3
+│   │   └── schedulercontract/            # the port guarantee any driver must satisfy
 │   │
 │   ├── gateway/
 │   │   ├── gateway.go                    # Gateway port: ProgramRoutes(desired), health
-│   │   ├── activator.go                  # scale-from-zero request buffering (in-process)
-│   │   ├── embedded/                     # built-in reverse-proxy driver (dev / e2e)
-│   │   └── lura/                         # embedded Lura driver (production, in-process)
+│   │   ├── middleware.go                 # net/http middleware seam: Chain + recover + request-id
+│   │   └── embedded/                     # built-in net/http/httputil reverse-proxy driver (the single driver — ADR-0029)
+│   │
+│   ├── activator/                        # scale-to-zero (ADR-0016): its own package, not under gateway/
+│   │   ├── activator.go                  # cold-start buffer→wake→forward + idle reclaim (in-process)
+│   │   └── storescaler/                  # store-backed Scaler driver: partitioned Phase write-back
 │   │
 │   ├── network/                          # network manager: netns wiring + egress control
-│   │   ├── netns.go                      # veth/bridge wiring per sandbox (no k8s CNI)
+│   │   ├── netns.go                      # veth/bridge wiring per worker (no k8s CNI)
 │   │   ├── nftables.go                   # default-deny lateral + transparent redirect
 │   │   └── egress/                       # transparent egress gateway: TPROXY, SNI peek, DNS-aware
 │   │
-│   ├── worker/                           # node agent
-│   │   ├── worker.go                     # exposes worker API (control-plane + sandbox-local); no SDK
+│   ├── workernode/                       # node agent
+│   │   ├── workernode.go                     # exposes worker-node API (control-plane + worker-local); no SDK
 │   │   ├── supervisor.go                 # child processes: containerd, OpenBAO (when used)
 │   │   └── heartbeat.go
 │   │
 │   ├── runtime/
 │   │   ├── runtime.go                    # Runtime port: Create/Start/Stop/Exec/Logs
 │   │   ├── manager.go
-│   │   ├── shim/                         # in-sandbox shim: CloudEvents contract, health, SDK, egress hooks
+│   │   ├── shim/                         # in-worker shim: CloudEvents contract, health, SDK, egress hooks
 │   │   └── providers/
 │   │       ├── process/                  # plain OS processes (dev / e2e)
 │   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + runc curated runtimes (kata shim from V3)
+│   │       ├── containerd/               # containerd + crun curated runtimes (kata shim from V3)
 │   │       └── external/                 # remote runtimes via runtime.proto
 │   │
 │   ├── blob/                             # STORAGE LAYER (substrate): blob.Bucket port (ADR-0002: not "storage", to stay distinct from "store")
@@ -785,8 +798,10 @@ funcd/
 │   │   ├── memory/                       # one-file driver (memory.go): in-process map
 │   │   └── slatedb/                      # one-file driver (slatedb.go): UniFFI/cgo → Rust engine; object backend memory/file/S3 by URL — no per-backend subfolders (ADR-0006). bbolt = documented fallback (one more sibling file if slatedb can't meet the contract)
 │   │
-│   ├── services/                         # function-facing services: port + drivers + facade per service
-│   │   ├── kv/                           # on database layer or external (jetstream/redis)
+│   ├── kvstore/                          # KV port + drivers (substrate, ADR-0019): memory now; jetstream/db-layer later
+│   ├── services/                         # function-facing services (ADR-0019): one KindService dispatcher + a facade+handler per type
+│   │   ├── dispatcher.go                 # the single KindService reconciler: routes spec.type → TypeHandler (one-reconciler-per-gvk)
+│   │   ├── kv/                           # KV facade (PDP authz + <ns>/<binding>/<key> prefix) + TypeHandler, on internal/kvstore
 │   │   ├── blob/                         # on storage layer
 │   │   ├── secrets/                      # memory / s3+encryption / openbao
 │   │   ├── config/                       # memory / file / s3
@@ -802,12 +817,12 @@ funcd/
 │   │   ├── sensor.go                     # filters, dependency expressions
 │   │   └── trigger.go                    # invoke functions, publish, notify
 │   │
-│   ├── auth/
-│   │   ├── authenticator.go              # request authn: static tokens → OIDC later
-│   │   ├── authorizer.go                 # Authorizer port (PDP) — every PEP calls this
-│   │   ├── rbac.go                       # built-in engine: namespace RBAC + Grants, default deny
-│   │   ├── identity.go                   # workload identity: mint / rotate / verify (SPIFFE-style)
-│   │   └── policy/                       # optional embedded engines: cedar-go (default), opa/rego
+│   ├── auth/                             # authorization kernel (ADR-0018): the PDP every PEP calls
+│   │   ├── authorizer.go                 # Authorizer port (PDP) + Identity/Verb/Role/Decision
+│   │   ├── rbac/                          # built-in namespace-RBAC driver, default-deny (Grants → V2)
+│   │   ├── authcontract/                 # the Authorizer port conformance suite
+│   │   ├── authenticator.go              # workload identity + OIDC → V2 (V1 request authn is the API-server middleware, internal/controlplane)
+│   │   └── policy/                       # optional cedar-go / opa engines behind the port → V2
 │   │
 │   ├── observability/
 │   │   ├── logger.go                     # slog, structured
@@ -827,12 +842,14 @@ funcd/
 │       └── version.go                    # filled by -ldflags at build time
 │
 ├── tests/
-│   ├── e2e/                              # black-box: only pkg/funcd + pkg/sdk imports (depguard-enforced)
-│   │   ├── harness/                      # boots funcd.InMemory() per scenario
-│   │   ├── fixtures/
-│   │   └── scenarios/
-│   ├── integration/                      # per-driver: slatedb (cgo), embedded NATS, containerd, …
-│   └── contract/                         # conformance suites run against every driver of a port
+│   ├── e2e/                              # black-box: only pkg/funcd + pkg/sdk + api imports (depguard e2e-boundary)
+│   │   ├── e2e_test.go                   # ADR-0025 L3b: funcd.InMemory() embed e2e (boot/run-shutdown/multi-instance)
+│   │   ├── contractcoverage_test.go      # ADR-0025 L2 drift guard (walks internal/ for <port>contract suites)
+│   │   ├── boundary-fixture/             # lintfixture: proves the e2e-boundary depguard rule fires
+│   │   └── linux_integration_test.go     # ADR-0025 L4: //go:build linux && integration (deferred walk)
+│   └── lint-fixtures/                    # ADR-0002/0025 runnable lint-rule proofs (any-leak, mock, e2e-boundary)
+# NOTE (ADR-0025): contract suites live at internal/<port>/<port>contract (ADR-0002), NOT a top-level tests/contract;
+# the Linux per-driver lane co-locates in tests/e2e behind `//go:build linux && integration` (containerd precedent).
 │
 ├── configs/
 │   ├── funcd.yaml                        # production example (drivers, gateway, storage, bus)
@@ -859,11 +876,11 @@ funcd/
 - **`pkg/funcd` added**: `internal/` alone cannot be embedded by another module or by black-box tests; the library-first requirement demands a public facade (same pattern as embedding nats-server).
 - **e2e moved from `internal/e2e` to `tests/e2e`**: inside `internal/` the tests could cheat and import internals; at `tests/e2e` they exercise only the public library + SDK, which is exactly the contract we want to validate (enforced via golangci-lint `depguard`).
 - **`internal/controller/` added**: the reconciliation engine is the heart of the design (watch → diff → act → status) yet had no home in the draft.
-- **Scheduler promoted out of `worker/`**: scheduling is a control-plane concern (placement decisions); the worker is a node agent that executes placements.
-- **Gateway embedded (Lura)**: the gateway is an in-process Go library (Lura), not a supervised APISIX. `internal/gateway` holds the `Gateway` port, a `lura/` driver, an `embedded/` reverse-proxy driver for dev/e2e, and `activator.go` (scale-from-zero); edge auth and rate limiting are Lura middleware calling the in-process PDP, not a separate config dialect.
+- **Scheduler promoted out of `workernode/`**: scheduling is a control-plane concern (placement decisions); the worker node is a node agent that executes placements.
+- **Gateway embedded (httputil)**: the gateway is in-process, not a supervised APISIX. `internal/gateway` holds the `Gateway` port, the `embedded/` `net/http/httputil` reverse-proxy driver (streaming-native — ADR-0013; the **single** driver since ADR-0029 dropped the optional Lura driver), and a `middleware.go` seam (`Chain` + recover + request-id; auth/rate-limit/LB are `net/http` middleware owned by their features, calling the in-process PDP — not a separate config dialect). The **activator** (scale-to-zero) is its **own package** `internal/activator` (ADR-0016), backing a route upstream: cold-start buffer→wake→forward plus idle reclaim, emitting a scale intent the controller/P-M reconciles.
 - **`controlplane/handlers/` removed**: the feature registry exists precisely so each feature registers its own handlers; a central handlers package would duplicate it.
 - **`api/types/v1` → `v1alpha1`**: matches the manifests (`apiVersion: funcd.io/v1alpha1`); graduate to v1 when the contract stabilizes.
-- **`gateway.proto` dropped**: the gateway is embedded (Lura) and programmed by in-process calls; no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
+- **`gateway.proto` dropped**: the gateway is embedded (httputil) and programmed by in-process calls; no RPC contract needed. `controlplane`/`worker`/`runtime` protos stay — they are the future multi-node seams.
 - **`store/slatedb/` is the metastore engine (ADR-0006)**: slatedb via UniFFI/cgo spans memory/file/S3 from one library; a pure-Go memory engine serves tests + `InMemory()`; bbolt is the documented fallback — all behind the same `Store` port. (sqlite was dropped, superseded by ADR-0006's single-engine choice; the cgo trade-off is recorded in the embed-first rule.)
 - **One task runner only**: two task runners drift apart. `just` chosen (clean recipe syntax, arguments, no `.PHONY` ceremony) — decided in ADR-0001, 2026-06-13.
 - **`internal/eventing/` added**: EventSource resources need runtime machinery (adapters, CloudEvents normalization, sensors, triggers) distinct from their CRUD feature slice.
@@ -894,7 +911,7 @@ Challenged list — kept, renamed, or removed with reasons:
 | `EgressPolicy` | namespaced | outbound allowlist (domains / CIDRs / ports) for function egress; enforced by the network manager + egress proxy — see [Security model](#security-model) |
 | `Invocation` | namespaced, read-only | execution record (status, duration, error) with a retention policy — written by the platform, never by users |
 | `RuntimeClass` | cluster | **renamed from draft's `Runtime`** (avoids clashing with the language-runtime concept; mirrors Kubernetes RuntimeClass): process, wasm, microVM flavors |
-| `Worker` | cluster, status-owned | node inventory, capacity, heartbeat |
+| `WorkerNode` | cluster, status-owned | node inventory, capacity, heartbeat |
 | `Gateway` | cluster | listeners, TLS, domains of the ingress layer |
 
 Removed from the draft list:

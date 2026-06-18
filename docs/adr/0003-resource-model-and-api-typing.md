@@ -6,6 +6,9 @@
   the shared `validateMeta` TypeMeta-consistency check; registry-completeness test; doc nits;
   accepted 2026-06-14; implemented 2026-06-14 after review — 9/9 scenarios pass, lint 0 issues,
   build/vet/test green)
+- **Superseded in part by**: [ADR-0045](0045-rename-sandbox-to-worker.md) (2026-06-16) — **naming only**: the `Worker`
+  resource kind (a compute node) → `WorkerNode` (+ `KindWorker`→`KindWorkerNode`). The resource model is unchanged; read
+  this ADR for the model, ADR-0045 for the name; "Worker" in this frozen text ≡ "WorkerNode".
 - **Deciders**: green-0-rabbit
 - **Tags**: resource-model, api-types, crd, typing, v1alpha1
 - **Realizes**: [FEAT-0000/F03](../feat/0000-feat-v1.md), [FEAT-0000/F22](../feat/0000-feat-v1.md)

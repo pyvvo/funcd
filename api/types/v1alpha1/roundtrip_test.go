@@ -119,3 +119,43 @@ func TestScenario_JSONRoundtripStable_FullEquality(t *testing.T) {
 		t.Errorf("Phase mismatch: %q vs %q", fn2.Status.Phase, fn.Status.Phase)
 	}
 }
+
+// scenario: json-roundtrip-stable — spec.pooling.worker survives the wire (ADR-0046).
+func TestScenario_PoolingRoundtripAndValidate(t *testing.T) {
+	fn := &Function{
+		TypeMeta:   TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: KindFunction},
+		ObjectMeta: ObjectMeta{Name: "agent", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: FunctionSpec{
+			Runtime:  "nodejs22",
+			Handler:  "h",
+			Artifact: ArtifactRef{URI: "oci://example/app:v1"},
+			Pooling:  Pooling{Worker: "agents"},
+		},
+	}
+	data, err := json.Marshal(fn)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var fn2 Function
+	if err := json.Unmarshal(data, &fn2); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if fn2.Spec.Pooling.Worker != "agents" {
+		t.Errorf("Pooling.Worker mismatch after roundtrip: %q", fn2.Spec.Pooling.Worker)
+	}
+
+	// Validate: empty worker (solo) is valid; a DNS-1123 label is valid; a bad label is rejected.
+	if err := fn.Validate(); err != nil {
+		t.Errorf("a DNS-1123 worker id must validate: %v", err)
+	}
+	solo := *fn
+	solo.Spec.Pooling.Worker = ""
+	if err := solo.Validate(); err != nil {
+		t.Errorf("an empty (solo) worker id must validate: %v", err)
+	}
+	bad := *fn
+	bad.Spec.Pooling.Worker = "Not A Label"
+	if err := bad.Validate(); err == nil {
+		t.Error("a non-DNS-1123 worker id must be rejected by Validate")
+	}
+}

@@ -1,0 +1,11 @@
+PLACEHOLDER — NOT a real OCI image tar (ADR-0054).
+
+This <1 KB committed stand-in exists only so go:embed has a file at compile time and
+embedimg.Tar("python314") returns a non-empty reader (the ADR-0054 non-gated unit test).
+
+The REAL per-arch distroless OCI image tar is built at release/integration time by
+'just build-runtime-images' (docker build -> docker save, gzip -9) and overwrites this
+file before the binary ships. Importing it into the managed containerd (client.Import)
+is the Linux+root integration lane — never exercised by 'just ci'.
+
+See internal/runtime/embedimg/README.md for the placeholder/release pattern.

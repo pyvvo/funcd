@@ -1,0 +1,34 @@
+[Unit]
+Description=funcd — single-binary serverless/agent platform
+Documentation=https://github.com/green-0-rabbit/funcd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=funcd
+Group=funcd
+ExecStart=/usr/local/bin/funcd
+Restart=on-failure
+RestartSec=2
+
+# Writable state — the slatedb file backend writes here (file:///var/lib/funcd, ADR-0006).
+StateDirectory=funcd
+StateDirectoryMode=0750
+
+# Hardening — safe by default (the blueprint security model).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+AmbientCapabilities=
+# The function-sandbox lane (F12/F13) adds CAP_NET_ADMIN here for netns wiring — deferred.
+
+[Install]
+WantedBy=multi-user.target

@@ -9,11 +9,15 @@ type Revision struct {
 	Status     RevisionStatus `json:"status,omitempty"`
 }
 
-// RevisionSpec holds the immutable identity of a revision.
-// Number is the revision sequence number. Behavioral fields owned by F13.
+// RevisionSpec holds the immutable identity + frozen snapshot of a revision.
+// Number is the revision sequence number. The Runtime/Handler/Artifact snapshot
+// (F13/ADR-0020) pins "what was validated ships" — immutable once stamped.
 type RevisionSpec struct {
-	Function ObjectRef `json:"function"`
-	Number   int64     `json:"number"`
+	Function ObjectRef   `json:"function"`
+	Number   int64       `json:"number" minimum:"1"`
+	Runtime  RuntimeName `json:"runtime,omitempty"`
+	Handler  string      `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
+	Artifact ArtifactRef `json:"artifact,omitempty"`
 }
 
 // RevisionStatus holds the observed state.

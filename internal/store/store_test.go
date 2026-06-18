@@ -195,3 +195,90 @@ func TestScenario_ReturnedObjectIndependentOfWatch(t *testing.T) {
 		t.Fatalf("watch event aliased the returned object: got %q, want v", got)
 	}
 }
+
+// scenario: noop-write-coalesced — an Update whose object is byte-identical to the stored one
+// (only the matched resourceVersion) is a no-op: no revision advance and NO Modified event, so a
+// reconcile that observed no change does not self-trigger another (control-loop quiescence, ADR-0047).
+func TestScenario_NoopWriteCoalesced(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	w, err := s.Watch(ctx, v1.KindFunction.GVK(), store.WatchOptions{})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Stop()
+
+	in, _ := v1.NewObject(v1.KindFunction)
+	fn, _ := in.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "q1", "default", "rg1"
+	created, err := s.Create(ctx, fn)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// drain the Create (Added) event
+	select {
+	case <-w.ResultChan():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Added event")
+	}
+	rv0 := created.GetObjectMeta().ResourceVersion
+
+	// Re-Update with the unchanged object: must be a no-op.
+	after, err := s.Update(ctx, created)
+	if err != nil {
+		t.Fatalf("Update(no-op): %v", err)
+	}
+	if rv := after.GetObjectMeta().ResourceVersion; rv != rv0 {
+		t.Fatalf("no-op Update advanced resourceVersion: %s -> %s (want unchanged)", rv0, rv)
+	}
+	select {
+	case ev := <-w.ResultChan():
+		t.Fatalf("no-op Update published a watch event (%s) — must coalesce to nothing", ev.Type)
+	case <-time.After(300 * time.Millisecond):
+		// expected: no event
+	}
+}
+
+// scenario: real-write-still-events — a real change advances the revision and fires exactly one
+// Modified event (ADR-0006 behaviour intact under coalescing).
+func TestScenario_RealWriteStillEvents(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	w, err := s.Watch(ctx, v1.KindFunction.GVK(), store.WatchOptions{})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Stop()
+
+	in, _ := v1.NewObject(v1.KindFunction)
+	fn, _ := in.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "q2", "default", "rg1"
+	created, err := s.Create(ctx, fn)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	select {
+	case <-w.ResultChan(): // Added
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Added event")
+	}
+	rv0 := created.GetObjectMeta().ResourceVersion
+
+	upd, _ := created.(*v1.Function)
+	upd.Status.Phase = "Ready" // a real status change
+	after, err := s.Update(ctx, upd)
+	if err != nil {
+		t.Fatalf("Update(real): %v", err)
+	}
+	if rv := after.GetObjectMeta().ResourceVersion; rv == rv0 {
+		t.Fatalf("real Update did not advance resourceVersion (stayed %s)", rv)
+	}
+	select {
+	case ev := <-w.ResultChan():
+		if ev.Type != store.Modified {
+			t.Fatalf("real Update event type=%s want Modified", ev.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("real Update published no Modified event")
+	}
+}

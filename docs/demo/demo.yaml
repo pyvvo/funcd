@@ -1,0 +1,9 @@
+# Inputs for the funcd CLI demo — scripts/demo/*.sh read these (via yq).
+# SERVER/dataPlane must match the fixed ports in docs/demo/server/main.go.
+demoDir: /tmp/funcd-demo                          # DEMO  — scratch dir (binaries, OCI layout, server pid)
+server: http://127.0.0.1:8080                     # SERVER     — control-plane API (funcdcli --server)
+dataPlane: http://127.0.0.1:8081                  # DATAPLANE  — function-invocation HTTP (curl)
+token: funcd-dev-token                            # TOKEN      — dev bearer token (funcdcli --token)
+function: echo                                    # the function name deployed in the journey
+# the OCI ref pushed + deployed lives in docs/demo/function.yaml (spec.artifact.uri) — the
+# single source; the journey reads it from there (no digest — ADR-0035 pins it).

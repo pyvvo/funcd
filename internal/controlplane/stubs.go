@@ -26,7 +26,7 @@ type StubHandlers struct {
 	egressPolicies map[string]v1.EgressPolicy
 	invocations    map[string]v1.Invocation
 	runtimeClasses map[string]v1.RuntimeClass
-	workers        map[string]v1.Worker
+	workerNodes    map[string]v1.WorkerNode
 	gateways       map[string]v1.Gateway
 }
 
@@ -46,7 +46,7 @@ func NewStubHandlers() *StubHandlers {
 		egressPolicies: make(map[string]v1.EgressPolicy),
 		invocations:    make(map[string]v1.Invocation),
 		runtimeClasses: make(map[string]v1.RuntimeClass),
-		workers:        make(map[string]v1.Worker),
+		workerNodes:    make(map[string]v1.WorkerNode),
 		gateways:       make(map[string]v1.Gateway),
 	}
 }
@@ -781,57 +781,57 @@ func (s *StubHandlers) DeleteRuntimeClass(_ context.Context, name v1.ObjectName)
 	return nil
 }
 
-// ---- Worker (cluster-scoped) ----
+// ---- WorkerNode (cluster-scoped) ----
 
-func (s *StubHandlers) GetWorker(_ context.Context, name v1.ObjectName) (v1.Worker, error) {
+func (s *StubHandlers) GetWorkerNode(_ context.Context, name v1.ObjectName) (v1.WorkerNode, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if v, ok := s.workers[string(name)]; ok {
+	if v, ok := s.workerNodes[string(name)]; ok {
 		return v, nil
 	}
-	return v1.Worker{}, fault.NotFoundf("StubHandlers.GetWorker", "Worker %q not found", name)
+	return v1.WorkerNode{}, fault.NotFoundf("StubHandlers.GetWorkerNode", "WorkerNode %q not found", name)
 }
 
-func (s *StubHandlers) CreateWorker(_ context.Context, wr v1.Worker) (v1.Worker, error) {
+func (s *StubHandlers) CreateWorkerNode(_ context.Context, wr v1.WorkerNode) (v1.WorkerNode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(wr.Name)
-	if _, exists := s.workers[key]; exists {
-		return v1.Worker{}, fault.Conflictf("StubHandlers.CreateWorker", "Worker %q already exists", key)
+	if _, exists := s.workerNodes[key]; exists {
+		return v1.WorkerNode{}, fault.Conflictf("StubHandlers.CreateWorkerNode", "WorkerNode %q already exists", key)
 	}
-	s.workers[key] = wr
+	s.workerNodes[key] = wr
 	return wr, nil
 }
 
-func (s *StubHandlers) ListWorkers(_ context.Context) ([]v1.Worker, error) {
+func (s *StubHandlers) ListWorkerNodes(_ context.Context) ([]v1.WorkerNode, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]v1.Worker, 0, len(s.workers))
-	for _, v := range s.workers {
+	out := make([]v1.WorkerNode, 0, len(s.workerNodes))
+	for _, v := range s.workerNodes {
 		out = append(out, v)
 	}
 	return out, nil
 }
 
-func (s *StubHandlers) ReplaceWorker(_ context.Context, name v1.ObjectName, wr v1.Worker) (v1.Worker, error) {
+func (s *StubHandlers) ReplaceWorkerNode(_ context.Context, name v1.ObjectName, wr v1.WorkerNode) (v1.WorkerNode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
-	if _, exists := s.workers[key]; !exists {
-		return v1.Worker{}, fault.NotFoundf("StubHandlers.ReplaceWorker", "Worker %q not found", key)
+	if _, exists := s.workerNodes[key]; !exists {
+		return v1.WorkerNode{}, fault.NotFoundf("StubHandlers.ReplaceWorkerNode", "WorkerNode %q not found", key)
 	}
-	s.workers[key] = wr
+	s.workerNodes[key] = wr
 	return wr, nil
 }
 
-func (s *StubHandlers) DeleteWorker(_ context.Context, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteWorkerNode(_ context.Context, name v1.ObjectName) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
-	if _, exists := s.workers[key]; !exists {
-		return fault.NotFoundf("StubHandlers.DeleteWorker", "Worker %q not found", key)
+	if _, exists := s.workerNodes[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteWorkerNode", "WorkerNode %q not found", key)
 	}
-	delete(s.workers, key)
+	delete(s.workerNodes, key)
 	return nil
 }
 

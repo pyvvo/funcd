@@ -24,34 +24,64 @@ linters:
               desc: "no mock frameworks; use in-memory drivers + contract suites"
             - pkg: "github.com/stretchr/testify/mock"
               desc: "no mock frameworks; use in-memory drivers + contract suites"
+            - pkg: "github.com/luraproject"
+              desc: "Lura dropped — single embedded httputil gateway driver (ADR-0029)"
         # ADR-0002 §6: log/slog only. A depguard pkg:"log" rule prefix-matches
         # "log/slog" as well (depguard v2 limitation — no way to exclude a
         # sub-package prefix). Instead the forbidigo patterns below ban every
         # stdlib log call (log.Print, log.Fatal, log.Panic), achieving the same
         # enforcement: importing "log" is harmless if its functions are banned.
+        # ADR-0027: "**/" prefix required (depguard matches the ABSOLUTE path); deny `pkg` is a
+        # PREFIX match (no trailing "/*"); "!**/*_test.go" scopes to PRODUCTION code (api/ tests may
+        # integration-test against internal — like client_test.go + every SDK/CLI test). Deny-only,
+        # no `allow` (an allow list constrains the whole permitted set — it rejects stdlib). Proven by
+        # the api-boundary / platform-leaf fixtures.
         api-boundary:
           list-mode: original
           files:
-            - "api/**"
+            - "**/api/**"
+            - "!**/*_test.go"
           deny:
-            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
-              desc: "api/** must not import internal/*"
-            - pkg: "github.com/green-0-rabbit/funcd/pkg/*"
-              desc: "api/** must not import pkg/*"
+            - pkg: "github.com/green-0-rabbit/funcd/internal"
+              desc: "api/** production code must not import internal/*"
+            - pkg: "github.com/green-0-rabbit/funcd/pkg"
+              desc: "api/** production code must not import pkg/*"
         platform-leaf:
           list-mode: original
           files:
-            - "internal/platform/**"
+            - "**/internal/platform/**"
+            - "!**/*_test.go"
           deny:
-            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
-              desc: "internal/platform is leaf; must not import other internal packages"
+            - pkg: "github.com/green-0-rabbit/funcd/internal"
+              desc: "internal/platform is a leaf; must not import other internal packages"
         e2e-boundary:
           list-mode: original
           files:
-            - "tests/e2e/**"
+            # depguard matches files against the ABSOLUTE path → the "**/" prefix is
+            # required (a bare "tests/e2e/**" never matches). Proven by the
+            # e2e-boundary-rule-fires lint fixture (ADR-0025).
+            - "**/tests/e2e/**"
           deny:
-            - pkg: "github.com/green-0-rabbit/funcd/internal/*"
+            # depguard's deny `pkg` is a PREFIX match, not a glob — a trailing "/*"
+            # silently never matches. Bare prefix denies internal + every subpackage.
+            - pkg: "github.com/green-0-rabbit/funcd/internal"
               desc: "tests/e2e must only import pkg/** + api/**"
+        # ADR-0051/0055: gopsutil + fortio are confined to the bench harness. Deny them
+        # EVERYWHERE except internal/bench/** (negated from $all), so an accidental cross-import
+        # into a shipped package fails CI, not just review. cmd/funcd's bench verb (ADR-0055)
+        # imports internal/bench, not the libs directly, so it needs no exception.
+        bench-libs:
+          list-mode: original
+          files:
+            - $all
+            - "!**/internal/bench/**"
+          deny:
+            - pkg: "github.com/shirou/gopsutil"
+              desc: "gopsutil is bench-only (ADR-0051); must not reach the shipped platform"
+            - pkg: "fortio.org/fortio"
+              desc: "fortio is bench-only (ADR-0051); must not reach the shipped platform"
+            - pkg: "fortio.org/log"
+              desc: "fortio/log is bench-only (ADR-0051); must not reach the shipped platform"
     forbidigo:
       forbid:
         - pattern: "^\\s*panic\\("

@@ -1,6 +1,10 @@
 package v1alpha1
 
-import "github.com/green-0-rabbit/funcd/api/fault"
+import (
+	huma "github.com/danielgtaylor/huma/v2"
+
+	"github.com/green-0-rabbit/funcd/api/fault"
+)
 
 // Phase represents the lifecycle phase of a resource per the blueprint resource state
 // machine. Reconciled by ADR-0003 from the ADR-0002 scaffold placeholders.
@@ -27,6 +31,15 @@ func (p Phase) Validate() error {
 	default:
 		return fault.Invalidf("Phase.Validate", "unknown phase %q", p)
 	}
+}
+
+// Schema carries Phase's enum constraint into the generated OpenAPI (huma SchemaProvider) —
+// the same closed set Validate() enforces, declared once from the Phase consts.
+func (Phase) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(
+		string(PhasePending), string(PhaseDeploying), string(PhaseReady), string(PhaseIdle),
+		string(PhaseDegraded), string(PhaseFailed), string(PhaseTerminating),
+	)
 }
 
 // IsTerminal reports whether the phase is terminal (no further transitions expected).

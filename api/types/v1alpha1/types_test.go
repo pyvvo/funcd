@@ -155,7 +155,7 @@ func TestPhase_IsTerminal(t *testing.T) {
 }
 
 func TestKind_Namespaced(t *testing.T) {
-	clusterKinds := []Kind{KindNamespace, KindRuntimeClass, KindWorker, KindGateway}
+	clusterKinds := []Kind{KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway}
 	namespacedKinds := []Kind{
 		KindResourceGroup, KindFunction, KindRevision, KindRoute,
 		KindService, KindEventSource, KindConfig, KindSecret,

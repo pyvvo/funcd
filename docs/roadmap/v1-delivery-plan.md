@@ -1,8 +1,13 @@
 # V1 delivery plan — ADR sequencing to ship FEAT-0000
 
 * **Status**: Active (living — update as ADRs are created/accepted/implemented)
-* **Date**: 2026-06-13 (refreshed 2026-06-14 — ADR-0003/0005 + **ADR-0006/0007/0008 (store/blob/bus)
-  implemented → tier 0**; P-C/P-D/P-E graduated; tiers recomputed, critical path now 6 items)
+* **Date**: 2026-06-13 (refreshed 2026-06-19 — **V1 is feature-complete**: the **secret-injection last mile**
+  (**ADR-0057**, formerly placeholder P-W) is **Implemented** and graduates to tier-0, closing the final
+  exit-criterion clause — a deployed handler now **reads a secret** (a Function declares `spec.secrets`; the
+  reconciler resolves them via ADR-0022's PDP-authorized Resolver into the worker env). → **34 ADRs built**
+  (0001–0033 + 0049 + 0057, less the superseded 0004). **The V1 build slate is COMPLETE**: every
+  exit-criterion clause is delivered and Implemented; **no build item remains**. **P-Z (.deb/.rpm) deferred
+  to V2.**)
 * **Realizes**: [FEAT-0000 (V1 — Agent-ready core)](../feat/0000-feat-v1.md)
 * **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
@@ -10,81 +15,59 @@
 
 FEAT-0000 lists 24 features (numbering runs F01–F23 + F25; **F24 is unused** — a gap, not a missing
 row); this file sequences the **ADRs** that realize them so V1 becomes implementable without
-dead-ends or stalls. It is a *plan*, not a decision — it commits to no architecture (that is the
-ADRs' job). It answers three questions: in what order must things be built, what can run in
-parallel, and which ADRs must be created+accepted ahead of time so a build step never waits on an
-undecided question.
+dead-ends or stalls. It is a *plan*, not a decision — it commits to no architecture (that is the ADRs' job).
 
-**Two tracks — the core idea** (this design/build framing is this plan's own lens, not ADR-0000
-vocabulary). Keep them distinct:
+**Two tracks.** *Design track* — create + judge + accept ADRs (serialized by review bandwidth). *Build
+track* — implement + review (serialized by hard compile/runtime deps). The whole original slate (P-A…P-T) +
+the control-plane keystone (P-U) + the depguard fix (P-Y) + the gateway cleanup (ADR-0029) + the runtime
+lane (function execution, OCI artifacts, curated images + crun, data-plane wake, **plus the Python
+runtime** — ADR-0049) + the **secret-injection last mile** (**ADR-0057**) are now **built**. **The build
+track is complete — no item remains.**
 
-* **Design track** — create + judge + accept ADRs. Cheap, and ADRs for independent topics can be
-  drafted in parallel; the real serialization point is *your* review/acceptance bandwidth.
-* **Build track** — implement (`/adr-impl`) + review (`/adr-impl-review`). Serialized by **hard
-  compile/runtime dependencies** (you can't build the controller before the store port exists).
-
-The whole strategy: **keep the design track \~one tier ahead of the build track**, so every time the
-build track finishes a tier, the next tier's ADRs are already Accepted and ready to implement. An ADR
-only needs to be Accepted before *its own* feature is implemented — not before anything else.
-
-> **ADR numbers here are proposed placeholders** (`P-F … P-T` remain unassigned). The `/adr` skill
-> assigns the real sequential number at creation time, so if you create them in a different order the
-> numbers differ. The stable identifiers are the **feature codes** (`F0x`) — track by those.
-> `ADR-0001`/`ADR-0002`/`ADR-0003`/`ADR-0005`/`ADR-0006`/`ADR-0007`/`ADR-0008` are real and **Implemented** (tier 0, built).
+> **The V1 build slate is COMPLETE.** `ADR-0001`–`ADR-0033` + `ADR-0049` + `ADR-0057` (less the superseded
+> `ADR-0004`) are **Implemented** (tier 0) — including the runtime lane: **ADR-0030** (function execution /
+> shim), **ADR-0031** (oras OCI artifacts), **ADR-0032** (curated images + crun), **ADR-0033** (data-plane
+> wake), **ADR-0049** (Python runtime shim + image), and the final **ADR-0057** (secret-injection last
+> mile). **Every exit-criterion clause is delivered and Implemented — V1 is feature-complete.** **`P-Z` → V2.**
 
 ## Proposed ADR slate
 
-This table **is** the build-dependency input — the *Build-depends on* column lists plan-item ids and
-is mirrored verbatim in `v1-plan.json`, which the analyzer consumes. Keep the two in
-sync; re-run the analyzer (below) after any edit.
+This table **is** the build-dependency input — the *Build-depends on* column is mirrored verbatim in
+`v1-plan.json`, which the analyzer consumes. **All slate items are now tier-0 (built)**; there is no
+remaining actionable row.
 
-| Plan id | Proposed ADR working title | Realizes | Build-depends on (items) |
+**Tier 0 — built (34 ADRs, all Implemented):** ADR-0001…ADR-0029 + the runtime lane **ADR-0030…ADR-0033** +
+the Python runtime **ADR-0049** + the secret last-mile **ADR-0057**.
+(0001 setup · 0002 conventions · 0003 resource model · 0005 huma API · 0006 store · 0007 blob · 0008 bus ·
+0009 logger · 0010 OTel · 0011 runtime/crun · 0012→0013 gateway · 0014 facade · 0015 controller ·
+0016 activator · 0017 scheduler · 0018 API server · 0019 service+KV · 0020 function · 0021 blob service ·
+0022 secrets · 0023 eventing · 0024 CLI/SDK · 0025 testing · 0026 packaging · 0027 depguard fix ·
+0028 control-plane wiring · 0029 single gateway driver · **0030 function execution / shim** ·
+**0031 oras OCI artifact distribution** · **0032 curated images + crun sandboxing** ·
+**0033 trigger-driven wake + data-plane serving** · **0049 Python runtime shim + image** ·
+**0057 secret-injection last mile**.)
+
+> **Built runtime-lane ADRs** (graduated from placeholders): **P-V-1 = ADR-0030** (function execution — the
+> runtime-shim HTTP contract + Node reference shim), **P-V-A = ADR-0031** (OCI artifact distribution via
+> [`oras-go`](https://github.com/oras-project/oras-go) — `funcdcli` push + platform pull, content-addressed,
+> local OCI layout for dev), **P-V-2 = ADR-0032** (curated runtime images + containerd/crun sandboxing — the
+> L4 walk), **P-X = ADR-0033** (gateway data plane + activator as the route upstream so HTTP/timer triggers
+> wake a scaled-to-zero function), **P-V-3 = ADR-0049** (Python runtime shim + image — the `new()`/`handle()`
+> shape behind the *same* shim contract, the optional second runtime).
+
+**Remaining — none. The build track is complete.** The former last item graduated:
+
+| Plan id | Built as | Realizes | Build-depended on |
 |----|----|----|----|
-| ADR-0001 ✓ | Project setup, structure, Nix | F01 | — |
-| ADR-0002 ✓ | Source-code conventions (`api/fault`, facade, lint graph) | F25 | ADR-0001 |
-| ADR-0003 ✓ | Resource model & API typing (v1alpha1 kinds, `ObjectMeta` w/ resourceGroup+tags, spec/status, typed IDs/enums) | F03, F22 | ADR-0002 |
-| ADR-0005 ✓ | API surface — code-first via huma (Go types → generated OpenAPI 3.1; SDK client deferred to P-R) | F02 | ADR-0003 |
-| [ADR-0006](../adr/0006-store-database-layer-port.md) ✓ | Store / database-layer port (`store.Store`: **slatedb** UniFFI/cgo + a pure-Go memory engine; watch, generations, optimistic concurrency, `Encryptor` seam, contract suite) | F05, F21(db) | ADR-0003 |
-| [ADR-0007](../adr/0007-blob-storage-layer-port.md) ✓ | Blob / storage-layer port (`blob.Bucket`: gocloud mem/file/s3, **pure-Go**, contract suite) | F21(blob) | ADR-0002 |
-| [ADR-0008](../adr/0008-bus-messaging-port.md) ✓ | Messaging / bus port (`bus.Bus`: embedded NATS/JetStream + in-mem, accounts/ns, contract suite) | F06 | ADR-0002 |
-| **P-F** | Observability — logger root (slog construction + injection from config) | F17 (logger) | ADR-0002 |
-| **P-F2** | Observability — OTel metrics/traces + audit channel | F17 (telemetry) | ADR-0002 |
-| **P-G** | Function runtime port (`runtime.Runtime`: process + containerd/runc curated runtimes; netns wiring + nftables lateral-deny; worker/shim seam) | F12 | ADR-0002 |
-| **P-H** | Gateway port (embedded Lura + dev driver; route programming) | F10 | ADR-0002 |
-| **P-H2** | Activator & scale-to-zero (request buffer + wake; idle reclaim driven by `scaling` spec) | F11 | P-H, P-G, P-J |
-| **P-I** | Platform facade & lifecycle (`pkg/funcd` New/options/presets; composition root; crash-only boot reconcile; **the** `InMemory()` e2e-harness slice) | F04 | ADR-0006, ADR-0007, ADR-0008, P-F, P-G, P-H |
-| **P-J** | Controller engine & feature-slice pattern (watch→diff→act→status; workqueue/backoff; registry) | F08 | ADR-0003, ADR-0006, ADR-0008 |
-| **P-K** | Scheduler (trivial single-node placement behind a pluggable iface) | F09 | P-J |
-| **P-L** | API server (authn: tokens+API keys; namespace RBAC; admission validate/default/quota; problem+json) | F07 | ADR-0005, ADR-0003, ADR-0006, P-J |
-| **P-M** | Function contract, shape & lifecycle (CloudEvents handler; Knative-func shape; source-artifact deploys; shape-validation pipeline; apply→Revision→deploy→invoke→logs; manual replicas) | F13 | P-G, P-H, ADR-0003, ADR-0006, P-J |
-| **P-N** | Service facade pattern + KV service (Service resource reconcile + binding + facade; KV as first instance). *V1 authz is namespace-scoped RBAC only — the* `auth.Authorizer` PDP/`Grant` enforcement is stubbed, deferred to V2. | F14 | ADR-0008, ADR-0006, P-J, ADR-0003 |
-| **P-O** | Blob service (storage layer exposed function-facing, on the service pattern) | F23 | ADR-0007, P-N |
-| **P-P** | Secrets service (Secret resource; encrypted at rest; env/tmpfs delivery; mem + s3-encryption drivers). *Same V1 authz note as P-N — namespace-scoped, no PDP yet.* | F15 | ADR-0006, P-N, P-G |
-| **P-Q** | Eventing core (trigger capture → CloudEvents normalization; HTTP triggers via gateway; timer/cron EventSource) | F16 | ADR-0008, P-H, P-G, P-M, P-J |
-| **P-R** | CLI & SDK (`funcdcli` kubectl-style + Go SDK over generated client) | F18 | ADR-0005, P-L |
-| **P-S** | Testing strategy & e2e harness (contract suites per port; e2e on `funcd.InMemory()`; per-driver + Linux-VM lanes; CI pipeline) | F20 | P-I, P-Q, P-H2 |
-| **P-T** | Packaging & release (static binary, systemd units, install script, version stamping) | F19 | P-R, P-S |
+| ~~P-W~~ → **ADR-0057** ✓ | **Secret injection last-mile** — a Function declares `spec.secrets`; the reconciler resolves them (PDP-authorized, ADR-0022) into the worker env. | F15 | ADR-0022, ADR-0030 |
 
-Beyond the bootstrap, the slate held 22 ADRs (P-F/P-H were each split — see below); **ADR-0003, ADR-0005,
-and ADR-0006/0007/0008 are now built (tier 0); P-C/P-D/P-E graduated, so 17 placeholders remain (P-F…P-T)**. Merge candidates if the count feels heavy: fold **P-K (scheduler)**
-into **P-J (controller)** (single-node placement is trivial); fold **P-O (blob service)** into **ADR-0007
-(blob port)** or **P-N (service pattern)**. Don't over-merge the big integrative ones (P-M, P-Q) —
-they each carry real, separable decisions.
-
-**Two deliberate splits** (from review): **P-H → P-H (gateway port, F10) + P-H2 (activator/scale-to-
-zero, F11)** because F10 builds at tier 1 but F11 at tier 3 — one ADR straddling build tiers breaks
-the one-ADR-one-implementation model, and the data-plane-ownership decision (gateway) is separable from the
-drain/wake decision (scale-to-zero). **P-F → P-F (logger root) + P-F2 (OTel+audit)** because the
-logger root is a real prerequisite of the composition root P-I (it builds the root `*slog.Logger`
-from `internal/observability`), whereas OTel/audit is heavier and off the critical path. Note: the
-*ports* in tier 1 do not depend on P-F — they take a stdlib `*slog.Logger` in their `Deps`; only
-**P-I** imports `internal/observability` to construct it.
+**Deferred to V2 (FEAT-0001):** **P-Z** — distro `.deb`/`.rpm` packaging + a multi-arch release matrix over
+the ADR-0026 `build.sh`/ldflags seam (V1 ships the single binary + systemd unit + install docs).
 
 ## Build dependency graph
 
-`X → Y` = X must be *built* before Y. This graph is **generated from the slate table by**
-`plan_waves.py` (`--mermaid-only`) and mermaid-validated — it cannot drift from the table, and it
-shows every edge (no hand-pruning). Regenerate it whenever the slate / `v1-plan.json` changes.
+`X → Y` = X must be *built* before Y. Generated from the slate by `plan_waves.py` (`--mermaid-only`) and
+mermaid-validated — it cannot drift from the table.
 
 ```mermaid
 flowchart TB
@@ -95,206 +78,110 @@ flowchart TB
     ADR_0006["ADR-0006 ✓"]
     ADR_0007["ADR-0007 ✓"]
     ADR_0008["ADR-0008 ✓"]
-    P_F["P-F · F17a<br/>logger root"]
-    P_F2["P-F2 · F17b<br/>OTel + audit"]
-    P_G["P-G · F12<br/>runtime port"]
-    P_H["P-H · F10<br/>gateway port"]
-    P_H2["P-H2 · F11<br/>activator / scale-to-zero"]
-    P_I["P-I · F04<br/>facade + lifecycle + harness"]
-    P_J["P-J · F08<br/>controller engine"]
-    P_K["P-K · F09<br/>scheduler"]
-    P_L["P-L · F07<br/>API server"]
-    P_M["P-M · F13<br/>function contract/lifecycle"]
-    P_N["P-N · F14<br/>service pattern + KV"]
-    P_O["P-O · F23<br/>blob service"]
-    P_P["P-P · F15<br/>secrets service"]
-    P_Q["P-Q · F16<br/>eventing core"]
-    P_R["P-R · F18<br/>funcdcli + SDK"]
-    P_S["P-S · F20<br/>testing + full e2e"]
-    P_T["P-T · F19<br/>packaging"]
+    ADR_0009["ADR-0009 ✓"]
+    ADR_0010["ADR-0010 ✓"]
+    ADR_0011["ADR-0011 ✓"]
+    ADR_0012["ADR-0012 ✓"]
+    ADR_0013["ADR-0013 ✓"]
+    ADR_0014["ADR-0014 ✓"]
+    ADR_0015["ADR-0015 ✓"]
+    ADR_0016["ADR-0016 ✓"]
+    ADR_0017["ADR-0017 ✓"]
+    ADR_0018["ADR-0018 ✓"]
+    ADR_0019["ADR-0019 ✓"]
+    ADR_0020["ADR-0020 ✓"]
+    ADR_0021["ADR-0021 ✓"]
+    ADR_0022["ADR-0022 ✓"]
+    ADR_0023["ADR-0023 ✓"]
+    ADR_0024["ADR-0024 ✓"]
+    ADR_0025["ADR-0025 ✓"]
+    ADR_0026["ADR-0026 ✓"]
+    ADR_0027["ADR-0027 ✓"]
+    ADR_0028["ADR-0028 ✓"]
+    ADR_0029["ADR-0029 ✓"]
+    ADR_0030["ADR-0030 ✓"]
+    ADR_0031["ADR-0031 ✓"]
+    ADR_0032["ADR-0032 ✓"]
+    ADR_0033["ADR-0033 ✓"]
+    ADR_0049["ADR-0049 ✓"]
+    ADR_0057["ADR-0057 ✓<br/>secret injection last mile (F15)"]
 
-    ADR_0002 --> P_F
-    ADR_0002 --> P_F2
-    ADR_0002 --> P_G
-    ADR_0002 --> P_H
-    P_H --> P_H2
-    P_G --> P_H2
-    P_J --> P_H2
-    ADR_0006 --> P_I
-    ADR_0007 --> P_I
-    ADR_0008 --> P_I
-    P_F --> P_I
-    P_G --> P_I
-    P_H --> P_I
-    ADR_0003 --> P_J
-    ADR_0006 --> P_J
-    ADR_0008 --> P_J
-    P_J --> P_K
-    ADR_0005 --> P_L
-    ADR_0003 --> P_L
-    ADR_0006 --> P_L
-    P_J --> P_L
-    P_G --> P_M
-    P_H --> P_M
-    ADR_0003 --> P_M
-    ADR_0006 --> P_M
-    P_J --> P_M
-    ADR_0008 --> P_N
-    ADR_0006 --> P_N
-    P_J --> P_N
-    ADR_0003 --> P_N
-    ADR_0007 --> P_O
-    P_N --> P_O
-    ADR_0006 --> P_P
-    P_N --> P_P
-    P_G --> P_P
-    ADR_0008 --> P_Q
-    P_H --> P_Q
-    P_G --> P_Q
-    P_M --> P_Q
-    P_J --> P_Q
-    ADR_0005 --> P_R
-    P_L --> P_R
-    P_I --> P_S
-    P_Q --> P_S
-    P_H2 --> P_S
-    P_R --> P_T
-    P_S --> P_T
+    ADR_0022 --> ADR_0057
+    ADR_0030 --> ADR_0057
 ```
+
+All nodes are tier-0 (built); the graph is now a record of the build dependencies, not a pending plan.
+With `v1-plan.json` `items: []`, `plan_waves.py` reports `no items in plan` — the build track is complete.
 
 ## Build waves (computed — `plan_waves.py`)
 
-These are the **computed earliest tiers**: within a tier there are *zero* dependency edges, so every
-item in it is genuinely parallel-safe. (An earlier hand-grouped version of this section was *wrong* —
-it placed dependents in the same wave as their dependencies (P-K with P-J; P-O/P-P with P-N; P-T with
-P-R/P-S), silently contradicting "parallel within a wave". The analyzer's `--check-waves` mode now
-catches exactly that; the table below is regenerated, not hand-drawn.) A coarser capacity-based
-grouping is fine **iff** it passes `--check-waves`.
+Analyzer: `no items in plan` — `items: []`, so there are no waves left to compute. The build track is
+complete; all 34 ADRs are tier-0.
 
 | Tier | Items | Gate / why |
 |----|----|----|
-| **0 (done)** | ADR-0001, ADR-0002, ADR-0003, ADR-0005, ADR-0006, ADR-0007, ADR-0008 | Bootstrap + conventions + resource model + API surface + **store + blob + bus** (the three substrate ports). **All seven Implemented.** Nothing compiles, is conventional, typed, served, persisted, or messaged without them. |
-| **1** | P-F · P-F2 · P-G · P-H · P-J | Tier 1 now includes **P-J (controller)** — its store/bus feeders (ADR-0006/ADR-0008) are built, so it needs only ADR-0003 + the substrate (all tier 0). The rest need only ADR-0002. |
-| **2** | P-H2 · P-I · P-K · P-L · P-M · P-N | Facade wires the tier-1 ports + the `InMemory()` harness; activator/scheduler/API-server/function-lifecycle/service-pattern need the controller (P-J) + runtime/gateway. |
-| **3** | P-O · P-P · P-Q · P-R | blob/secrets services reuse the service pattern (P-N); eventing needs function-lifecycle+gateway+bus; CLI needs the API server. |
-| **4** | P-S | Full testing + CI lanes — needs the harness (P-I), eventing (P-Q), and scale-to-zero (P-H2) to exercise. |
-| **5** | P-T | Packaging — the terminal deliverable; everything must compile and run. |
+| **0 (done)** | ADR-0001 … **ADR-0033** + **ADR-0049** + **ADR-0057** | The whole control plane + the gateway cleanup + the runtime lane (incl. the Python runtime) + the secret-injection last mile. **All 34 Implemented.** |
 
-**Critical path** (longest chain, from the analyzer): `ADR-0002 → P-G → P-M → P-Q → P-S → P-T`
-(6 items — down from 7). With the three substrate ports (store/blob/bus = ADR-0006/0007/0008) built and
-**P-J (controller) graduated to tier 1**, the live spine runs **P-G (runtime) → P-M (function-lifecycle)
-→ P-Q (eventing) → P-S → P-T**. Protect P-G/P-M/P-Q — the riskiest remaining ADRs.
+**Critical path** (historical): `ADR-0022 → ADR-0057` was the last build edge (2 items), now fully built.
+**No remaining items** — V1 is feature-complete.
 
-### Test sequencing (reconciling with the ADR-0000 "Implement" gate)
+### Test sequencing (ADR-0025's taxonomy + a new runtime-gated tier)
 
-ADR-0000 requires each implementation to ship a *passing* test per Scenario. But the e2e harness
-(`funcd.InMemory()`) does not exist until **P-I (tier 2)**, so a port implemented in tier 1 cannot
-ship a *passing e2e* test — and the depguard graph forbids `tests/e2e/**` from importing
-`internal/**` anyway. Resolution, applied per tier:
-
-* **Tier 1 (ports, pre-harness)**: ship **contract/unit tests only** — port-local, available
-  immediately, passing. A Scenario that is inherently end-to-end is recorded in the ADR and its
-  acceptance test is deferred to the harness (note the deferral in the implementation report; the
-  review gate attributes the gap to sequencing, not the model). *(ADR-0003 itself needed no
-  deferral — its scenarios are pure type-model checks, all green now.)*
-* **Tier 2**: **P-I ships the minimal** `InMemory()` e2e-harness slice as a first-class deliverable.
-  From here, e2e tests run and the deferred Scenario tests from tier 1 are added against the
-  public surface.
-* **Tier 5**: **P-S** is the full testing strategy — CI lanes, the Linux-VM containerd lane,
-  coverage. Read ADR-0000's "one passing test per Scenario" as "one passing test *at the right level*
-  per Scenario; the e2e test once the harness exists."
-
-## Design track — what to create + accept ahead
-
-Stay one tier ahead. Acceptance (judge + your sign-off) is the bottleneck, so **batch the next
-tier's ADR drafting** while the current tier builds:
-
-* **Now** (tier 0 done — ADR-0001/0002/0003/0005 **+ ADR-0006/0007/0008 (store/blob/bus)** built): draft + accept
-  the rest of the **tier-1 set** — **P-F, P-F2, P-G, P-H, P-J**. They need only ADR-0002 + the built
-  substrate, so they draft in parallel
-  and are judged as they land. **Prioritize the critical-path entry — P-G (runtime), which feeds P-M → P-Q**;
-  **P-J (controller)** is now tier-1 (store+bus built) — then the gateway **P-H** (Kata-deferral already
-  settled for P-G; the data-plane-ownership reversal for P-H), which carry the most decision weight and
-  deserve the most review attention.
-* **While building tier 1**: accept the **tier-2 set** (**P-H2, P-I, P-K, P-L, P-M, P-N**); and draft **P-S (testing
-  strategy) early** — even though it builds at tier 4, its conventions shape how every feature writes
-  tests, and the P-I harness slice (tier 2) should be designed against them.
-* **While building tier 2**: accept the **tier-3 batch** (**P-O, P-P, P-Q, P-R**).
-* Continue rolling one tier ahead through P-O…P-T.
+ADR-0025's L3b embed e2e is a full deploy→reconcile walk (ADR-0028). ADR-0030 **added a named
+"L3-runtime" tier**: tests gated on a language runtime (`exec.LookPath("node")`) that run real execution when
+node is present and `t.Skip` when absent; the *platform side* (materializer/sandboxSpec/readiness against a
+fake shim) stays pure-Go in `just ci`. The **L4 Linux lane** carries the containerized walk (ADR-0032's crun
+e2e — the Linux-lane deferral).
 
 ## Critical path & the V1 exit-criterion spine
 
-The longest build chain (computed by the analyzer) is
-`ADR-0002 → P-G → P-M → P-Q → P-S → P-T` — 6 items. Protect it: a slip on any of these slips V1.
-With store/blob/bus built, **P-G (runtime)** is the live tier-1 critical feeder, and **P-M
-(function-lifecycle)** and **P-Q (eventing)** are both on the path *and* the riskiest ADRs.
+**Every exit-criterion clause is delivered — V1 is feature-complete.** Map to the
+[exit criterion](../feat/0000-feat-v1.md):
 
-Map to the [FEAT-0000 exit criterion](../feat/0000-feat-v1.md) ("deploy a JS/Python function from a
-source artifact whose handler consumes CloudEvents, reads a secret, persists KV, is invoked over
-HTTP + timer, scales to zero, wakes"):
+| Exit-criterion clause | Delivered by | Remaining |
+|----|----|----|
+| served API + reconcile, all via SDK/CLI | ADR-0028 ✓ + ADR-0018 ✓ + ADR-0024 ✓ | — (done) |
+| deploy JS/Python from a source artifact | ADR-0031 ✓ (oras push/pull) + ADR-0030 ✓ (Node runtime) + ADR-0049 ✓ (Python runtime) | — (done) |
+| handler consumes CloudEvents | ADR-0020 ✓ + ADR-0023 ✓ + ADR-0030 ✓ (shim invokes the handler with the CloudEvent) | — (done) |
+| invoked by a timer | ADR-0023 ✓ (invoker) + ADR-0030 ✓ (the invoke reaches a real handler) | — (done) |
+| invoked over HTTP | ADR-0013 ✓ + ADR-0033 ✓ (gateway data plane → activator → shim) | — (done) |
+| reads a secret | ADR-0022 ✓ + ADR-0057 ✓ (`spec.secrets` → reconciler resolves → worker env) | — (done) |
+| persists KV | ADR-0019 ✓ + ADR-0028 ✓ | in-handler SDK (follow-up; the shim's `context`) |
+| scales to zero / wakes | ADR-0016 ✓ + ADR-0015 ✓ + ADR-0033 ✓ (trigger wakes a zeroed fn) | — (done) |
+| proven on a Linux box | ADR-0025 ✓ (L1–L3) + ADR-0032 ✓ (the L4 containerized crun walk) | — (done) |
 
-| Exit-criterion clause | Needs (build) |
-|----|----|
-| deploy JS/Python from artifact | P-G (runtime/curated) + P-M (shape/artifact/lifecycle) |
-| handler consumes CloudEvents | P-M (contract) + P-Q (normalization) |
-| reads a secret | P-P (secrets) |
-| persists KV | P-N (KV) |
-| invoked over HTTP | P-H (gateway) + P-Q (HTTP trigger) |
-| invoked by timer | P-Q (timer EventSource) |
-| scales to zero / wakes | P-H2 (activator) + P-J + P-G |
-| all via API/CLI, observable | P-L (API) + P-R (CLI) + P-F (logger) |
-| proven | P-S (e2e on `InMemory()` and full Linux-VM lane) |
-
-So the exit criterion is satisfied by the **end of tier 4** (its features span tiers 1–4), **proven
-at tier 5** (P-S), with **tier 6 (P-T packaging)** the final polish — not part of proving the feature
-works.
-
-## Parallelization & sequencing notes
-
-* **The three substrate ports are built** (store ADR-0006, blob ADR-0007, bus ADR-0008) — the engine
-  tier is unblocked. The remaining tier-1 work (**P-F/P-F2/P-G/P-H/P-J**) is independent after the
-  conventions; **P-G (runtime)** is now the critical-path feeder.
-* **Parallelizable leaves** (per the analyzer — nothing depends on them *and* off the critical path,
-  so hand to a parallel builder or defer): **P-F2** (OTel/audit), **P-K** (scheduler), **P-O** (blob
-  service), **P-P** (secrets). The blob *service* isn't on the exit-criterion path (which uses KV +
-  secrets), so it can trail furthest. **P-T (packaging) is a leaf but the terminal sink** — the final
-  deliverable, *not* deferrable.
-* **The two riskiest ADRs** are P-M (function contract/shape/lifecycle — it ties runtime+gateway+
-  types together and has open threads on streaming + the Python ASGI-vs-wrapped shape) and P-H
-  (gateway — owns the data-path-ownership reversal). P-M is on the critical path; P-H is a tier-1
-  feeder of both P-M and P-Q (critical-adjacent). Budget extra design + review on both.
-* **P-F (logger root) is a hard prerequisite of P-I, not of tier-1 ports.** The composition root
-  (`internal/app`, in P-I) imports `internal/observability` to build the root `*slog.Logger`; the
-  ports only take that stdlib `*slog.Logger` in their `Deps` (no import of P-F). So P-F must land
-  before P-I — but it does *not* gate the other tier-1 ports. P-F2 (OTel/audit) is fully off-path.
-* **Worker** (`internal/worker`) and **network manager lateral-deny** fold into P-G (runtime) for
-  V1 — no separate ADR. Full egress control is V2.
+So the V1 walk is complete: deploy + execute (**both Node and Python runtimes**) + consume CloudEvents +
+timer/HTTP wake + read a secret + Linux L4 are all serving. **No exit-criterion work remains** — the only
+non-blocking follow-up is the in-handler KV SDK (the shim's `context`), already serviced server-side.
+The container-e2e proof of the full walk (incl. a handler reading its injected secret) runs in the
+ADR-0034 end-user-journey lane.
 
 ## Reproducing & maintaining this plan
-
-The dependency table, graph, waves, and critical path are **computed**, not hand-drawn — the input is
-`v1-plan.json` (mirrors the slate table's *Build-depends on* column):
 
 ```bash
 python3 .claude/skills/roadmap-planner/scripts/plan_waves.py docs/roadmap/v1-plan.json
 python3 .claude/skills/roadmap-planner/scripts/plan_waves.py docs/roadmap/v1-plan.json --check-waves
 ```
 
-After any edit to the slate/`v1-plan.json`: re-run to refresh tiers + critical path, paste the
-regenerated `--mermaid-only` graph (after mermaid-validating it), and run `--check-waves` if you
-present any coarser grouping. The `--check-waves` mode is what would have caught the false-parallelism
-this section originally shipped with. **When an ADR reaches** `Implemented`, move it from `items` to
-`accepted` in `v1-plan.json` (it pins to tier 0) and re-run — that is what graduated ADR-0003 here.
+When an ADR reaches `Implemented`, move it from `items` to `accepted` in `v1-plan.json` and re-run — that is
+what graduated the runtime-lane **ADR-0030…ADR-0033**, the Python runtime **ADR-0049**, and the final
+secret-injection **ADR-0057** to tier-0 here. With `items: []`, the analyzer now reports `no items in plan`:
+the V1 build track is complete. The next time `items` is non-empty is when V2 (FEAT-0001) is scoped.
 
 ## Caveats (living doc)
 
-* Real ADR numbers are assigned by `/adr` at creation; reconcile this table's `P-x` ids to actual
-  numbers as ADRs land, and link them. `P-A` reconciled to **ADR-0003** (now built); `P-B` → **ADR-0004** → **superseded by ADR-0005** (code-first via huma, now built); `P-C` → **ADR-0006** (store, slatedb/cgo), `P-D` → **ADR-0007** (blob, gocloud), `P-E` → **ADR-0008** (bus, embedded NATS/JetStream) — all three **Implemented 2026-06-14** and graduated to tier 0.
-* Tiers are dependency floors, not a schedule — within a tier, sequence by review bandwidth.
-* If an ADR, once drafted, reveals a dependency this plan missed, update `v1-plan.json`, re-run the
-  analyzer, re-validate the graph (newest accepted ADR still wins for architecture; this plan just
-  tracks ordering).
-* V2/V3 (egress enforcement, gVisor/WASM, Kata microVM, IAM, Terraform provider, …) get their own
-  delivery plan when FEAT-0001 is scoped.
-
-
+* **P-x → ADR map** (all built unless noted): A→0003, B→0004→**0005**, C→0006, D→0007, E→0008, F→0009, F2→0010,
+  G→0011, H→0012→**0013**→**0029** (Lura dropped), I→0014, J→0015, H2→0016, K→0017, L→0018, N→0019, M→0020,
+  O→0021, P→0022, Q→0023, R→0024, S→0025, T→0026, Y→0027, U→0028. **P-V split → P-V-1=ADR-0030 (built) /
+  P-V-A=ADR-0031 (built) / P-V-2=ADR-0032 (built) / P-V-3=ADR-0049 (built)**, **P-X=ADR-0033 (built)**, and
+  **P-W=ADR-0057 (built)** — the secret-injection last mile. **Every plan item is now built; P-Z → V2.**
+* **The runtime lane's design decisions** (from the ADR-0030…ADR-0033 + ADR-0049 builds): the **shim** is a
+  seam (one HTTP contract, run by the process driver in dev and crun in prod) — **both the Node (ADR-0030) and
+  Python (ADR-0049) runtimes sit behind the same contract**; **artifact distribution is OCI via
+  oras-go** (`funcdcli` push + platform pull, content-addressed, local OCI layout for dev — no registry
+  server, no blob-as-artifact-store); execution moves readiness to the shim's `/health/readiness` (refines
+  ADR-0020) and surfaces a per-replica loopback endpoint (refines ADR-0011's `Instance`); the data-plane wake
+  (ADR-0033) mounts the gateway + activator as the route upstream so triggers wake a scaled-to-zero function.
+* Tiers are dependency floors, not a schedule. When FEAT-0001 (V2 — egress enforcement, gVisor/WASM, Kata
+  microVM, IAM/PDP, distro packaging P-Z, multi-node, an external-gateway driver, …) is scoped, the line
+  between "finish V1's walk" and "V2" is drawn there.
