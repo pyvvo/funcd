@@ -1,6 +1,10 @@
 # ADR-0058: Function I/O contracts generated from code types — JSON Schema, eval-free precompiled validation (supersedes ADR-0038)
 
 - **Status**: Accepted
+- **Superseded in part by**: [ADR-0060](0060-contract-validator-generation.md) (2026-06-19) — implementation revealed
+  that Decision 2's *Python: pydantic-core at runtime* is impossible (pydantic-core, a Rust extension, crashes in the
+  ADR-0050 subinterpreter pool). ADR-0060 corrects the **Python runtime validator** to **fastjsonschema** (pure-Python,
+  precompiled at build) and pins the **funcd-owns-compilation** integrity invariant. The rest of this ADR stands.
 - **Date**: 2026-06-19 (**Accepted 2026-06-19** — judged (no Blockers) + iterated with the decider. Settled: JSON Schema
   canonical, **generated** from code types (typia/pydantic), **eval-free precompiled** validation (AJV-standalone /
   pydantic-core), input→422 + output→500, supersedes ADR-0038's hand-written JTD. Decider refinements folded: the
