@@ -22,9 +22,11 @@ type Json = Any
 type Validator = Callable[[Any], list[Any]]
 
 
-class CloudEvent(TypedDict, total=False):
-    """A CloudEvent — the normalized trigger envelope (ADR-0023). All fields optional at the
-    type level so a handler can read what it needs; ``data`` carries the payload."""
+class CloudEvent[T](TypedDict, total=False):
+    """A CloudEvent — the normalized trigger envelope (ADR-0023). Generic in the payload type, so
+    an author writes ``event: CloudEvent[FuncInput]`` and ``event["data"]`` is typed as ``FuncInput``
+    (a TypedDict) — type-checked AND runtime-honest (the runtime value is a plain dict). All fields
+    optional at the type level so a handler can read what it needs."""
 
     id: str
     source: str
@@ -33,7 +35,7 @@ class CloudEvent(TypedDict, total=False):
     time: str
     datacontenttype: str
     subject: str
-    data: Any
+    data: T
 
 
 @runtime_checkable
@@ -52,4 +54,4 @@ class Handler(Protocol):
     exception → 500.
     """
 
-    def __call__(self, context: FunctionContext, event: CloudEvent) -> Any: ...
+    def __call__(self, context: FunctionContext, event: CloudEvent[Any]) -> Any: ...

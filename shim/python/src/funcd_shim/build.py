@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, is_typeddict
 
 import fastjsonschema
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 _CONTRACT = ("FuncInput", "FuncOutput")
 
@@ -64,9 +64,43 @@ def build(source: str) -> BuildResult:
 
 
 def _schema_of(obj: Any) -> dict[str, Any] | None:
+    """Generate the JSON Schema for a contract type — a pydantic ``BaseModel`` OR a ``TypedDict``
+    (read via ``TypeAdapter``, so the author can use the type-honest ``CloudEvent[FuncInput]`` DX) —
+    then normalize it to the funcd profile (records are **closed**: pydantic emits them open)."""
+    schema: dict[str, Any] | None = None
     if isinstance(obj, type) and issubclass(obj, BaseModel):
-        return obj.model_json_schema()
-    return None
+        schema = obj.model_json_schema()
+    elif is_typeddict(obj):
+        schema = TypeAdapter(obj).json_schema()
+    if schema is None:
+        return None
+    return _close_records(schema)
+
+
+def _close_records(node: dict[str, Any]) -> dict[str, Any]:
+    """Set ``additionalProperties: false`` on every record (an object with ``properties`` that does
+    not already pin it) — the funcd profile forbids open records, but pydantic emits them open. A
+    typed map (``additionalProperties`` is a schema) and an already-closed record are left as-is.
+    Recurses through ``$defs``, ``properties``, ``items``, ``additionalProperties``, and unions."""
+    for defs in (node.get("$defs"), node.get("definitions")):
+        if isinstance(defs, dict):
+            for sub in defs.values():
+                if isinstance(sub, dict):
+                    _close_records(sub)
+    for sub in (node.get("properties") or {}).values():
+        if isinstance(sub, dict):
+            _close_records(sub)
+    if isinstance(node.get("items"), dict):
+        _close_records(node["items"])
+    if isinstance(node.get("additionalProperties"), dict):
+        _close_records(node["additionalProperties"])
+    for key in ("oneOf", "anyOf", "allOf"):
+        for sub in node.get(key, []):
+            if isinstance(sub, dict):
+                _close_records(sub)
+    if node.get("type") == "object" and "properties" in node and "additionalProperties" not in node:
+        node["additionalProperties"] = False
+    return node
 
 
 def _validator_source(schema: dict[str, Any], export: str, prefix: str) -> str:

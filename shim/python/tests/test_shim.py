@@ -79,7 +79,7 @@ def get(base: str, path: str) -> int:
         return int(err.code)
 
 
-def _echo(context: FunctionContext, event: CloudEvent) -> dict[str, Any]:
+def _echo(context: FunctionContext, event: CloudEvent[Any]) -> dict[str, Any]:
     return {"echoed": event.get("data")}
 
 
@@ -98,7 +98,7 @@ def test_handler_returns_none_204() -> None:
 
 
 def test_handler_raises_500() -> None:
-    def boom(ctx: FunctionContext, event: CloudEvent) -> Any:
+    def boom(ctx: FunctionContext, event: CloudEvent[Any]) -> Any:
         raise RuntimeError("kaboom")
 
     with serve(boom) as base:
@@ -136,7 +136,7 @@ def test_input_contract_valid_passes() -> None:
 def test_input_contract_mismatch_422_and_handler_not_called() -> None:
     called = {"n": 0}
 
-    def counting(ctx: FunctionContext, event: CloudEvent) -> Any:
+    def counting(ctx: FunctionContext, event: CloudEvent[Any]) -> Any:
         called["n"] += 1
         return {}
 

@@ -10,16 +10,17 @@ ADR-0037), so the platform stays language-blind:
     GET  /health/readiness 200 once the handler resolved
     GET  /health/liveness  200 while up
 
-If the artifact exports ``FuncInput``/``FuncOutput`` pydantic models (ADR-0058, supersedes the
-ADR-0038 JTD ``event_schema``), ``event.data`` is validated before the handler runs (mismatch ->
-422) and the result after (mismatch -> 500); a ``FuncOutput = None`` (void) contract -> 204 on an
-empty result, 500 on a non-empty one. pydantic-core validates — fast, eval-free.
+If the artifact carries a precompiled validator (ADR-0058/0060 — generated at build from the
+author's ``FuncInput``/``FuncOutput`` contract; supersedes the ADR-0038 JTD ``event_schema``),
+``event.data`` is validated before the handler runs (mismatch -> 422) and the result after
+(mismatch -> 500); a void output contract -> 204 on an empty result, 500 on a non-empty one. The
+validator is pure-Python (fastjsonschema), so it behaves identically solo and in the pool.
 
 Env: ``FUNCD_ARTIFACT`` (local .py path, required), ``FUNCD_HANDLER`` (export, default ``handle``);
 ``FUNCD_PORT`` (container: bind ``0.0.0.0:PORT``) else ``FUNCD_PORTFILE`` (process: bind
 ``127.0.0.1:0`` and write the chosen port). Exit 2 = missing artifact; exit 3 = shape-gate failure.
 
-Runtime dependency: pydantic (ADR-0058 — supersedes ADR-0049's stdlib-only stance for the contract).
+Runtime dependency: fastjsonschema (the baked validator imports it); pydantic runs only at build.
 """
 
 from __future__ import annotations
@@ -101,7 +102,7 @@ def make_request_handler(
                 self._send_empty(404)
                 return
             try:
-                event: CloudEvent = json.loads(raw) if raw else CloudEvent()
+                event: CloudEvent[Any] = json.loads(raw) if raw else CloudEvent()
             except (json.JSONDecodeError, ValueError):
                 self._send_text(400, "invalid CloudEvent JSON")
                 return

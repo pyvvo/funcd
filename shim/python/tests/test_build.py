@@ -6,6 +6,7 @@ baked into a runtime artifact the worker loads with NO pydantic (so it runs in a
 from __future__ import annotations
 
 import ast
+import sys
 from typing import Any
 
 from funcd_shim.build import build
@@ -36,6 +37,64 @@ def test_build_emits_schemas_from_the_models() -> None:
     r = build(_SRC)
     assert r.input_schema is not None and r.input_schema["properties"]["qty"]["type"] == "integer"
     assert r.output_schema is not None and r.output_schema["properties"]["accepted"]["type"] == "boolean"
+    # records are CLOSED (funcd profile) — pydantic emits them open, funcd_build closes them, or the
+    # Go gate (contract.Check) would reject the contract as an open record.
+    assert r.input_schema["additionalProperties"] is False
+    assert r.output_schema["additionalProperties"] is False
+
+
+# a TypedDict contract — the type-honest `CloudEvent[FuncInput]` DX. pydantic reads it via
+# TypeAdapter at build, the runtime value is a plain dict (so event["data"]["qty"] is typed AND
+# correct at runtime). No pydantic at runtime.
+_TYPEDDICT_SRC = (
+    "from typing import TypedDict\n"
+    "from funcd_shim import CloudEvent, FunctionContext\n"
+    "\n"
+    "class FuncInput(TypedDict):\n"
+    "    order_id: str\n"
+    "    qty: int\n"
+    "\n"
+    "def handle(ctx: FunctionContext, event: CloudEvent[FuncInput]):\n"
+    "    return {'echoed': event['data']['qty']}\n"
+)
+
+
+def test_typeddict_contract_closed_schema() -> None:
+    r = build(_TYPEDDICT_SRC)
+    assert r.input_schema is not None
+    assert r.input_schema["properties"]["qty"]["type"] == "integer"
+    assert r.input_schema["additionalProperties"] is False, "a TypedDict record is closed too"
+
+
+def test_built_artifact_validates_in_both_compute_modes() -> None:
+    """The SAME built artifact validates identically SOLO (non-pooled) and inside a SUBINTERPRETER
+    (the ADR-0050 pool). The baked validator is pure-Python fastjsonschema, so it must — this is the
+    whole reason we don't use pydantic-core (which crashes a subinterpreter)."""
+    rt = build(_TYPEDDICT_SRC).runtime_source
+
+    # expressed as asserts so a failure RAISES — works the same in-process and across an interpreter
+    # boundary (subinterpreters don't share objects, but a raised exception propagates to the parent).
+    checks = (
+        rt + "\n"
+        "assert __funcd_validate_input({'order_id': 'a', 'qty': 7}) == []\n"
+        "assert __funcd_validate_input({'order_id': 'a', 'qty': 'no'})\n"  # qty not int → errors
+        "assert __funcd_validate_input({'order_id': 'a'})\n"  # missing qty → errors
+        "assert handle(None, {'data': {'order_id': 'a', 'qty': 7}}) == {'echoed': 7}\n"
+    )
+
+    # NON-POOLED (solo): run in this interpreter.
+    exec(compile(checks, "<solo>", "exec"), {})  # noqa: S102 - exercising the generated artifact
+
+    # POOLED (subinterpreter): run the SAME artifact in a fresh subinterpreter (ADR-0050, 3.14+).
+    if sys.version_info < (3, 14):
+        return  # concurrent.interpreters is 3.14+ (the node-pool equivalent is similarly gated)
+    from concurrent import interpreters  # type: ignore[attr-defined]  # 3.14+, runtime-guarded above
+
+    interp = interpreters.create()
+    try:
+        interp.exec(checks)  # raises into the parent if any assert fails inside the subinterpreter
+    finally:
+        interp.close()
 
 
 def test_runtime_artifact_strips_pydantic_and_bakes_validators() -> None:

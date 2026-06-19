@@ -51,7 +51,7 @@ def invoke(body: str) -> dict[str, Any]:
     if _handler is None:  # defensive — init() always runs first
         return {"status": 500, "body": {"error": "handler not loaded"}}
     try:
-        event: CloudEvent = json.loads(body) if body else CloudEvent()
+        event: CloudEvent[Any] = json.loads(body) if body else CloudEvent()
     except (json.JSONDecodeError, ValueError):
         return {"status": 400}
     if _validators.input is not None:
