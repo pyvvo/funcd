@@ -8,7 +8,7 @@
 // resource group is the placement grouping within it. This shim trusts its single-namespace
 // manifest — boundary enforcement is the placement follow-up ADR's job.
 //
-// Bundled (Hono + jtd inlined) to pool.mjs. Env: FUNCD_POOL_MANIFEST (JSON [{name,artifact,handler?}]),
+// Bundled (Hono inlined) to pool.mjs. Env: FUNCD_POOL_MANIFEST (JSON [{name,artifact,handler?}]),
 // FUNCD_PORT | FUNCD_PORTFILE, FUNCD_POOL_MAX_OLD_MB (64), FUNCD_POOL_MAX_YOUNG_MB (16).
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -16,8 +16,8 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
-import { resolveHandler, resolveSchema, validate } from './runtime.ts';
-import type { CloudEvent, FunctionContext, Handler } from './types.ts';
+import { resolveHandler, resolveValidators } from './runtime.ts';
+import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -51,11 +51,11 @@ async function workerMain(): Promise<void> {
   if (!port) return;
 
   let handler: Handler;
-  let schema;
+  let validators: { input?: Validator; output?: Validator };
   try {
     const mod = (await import(pathToFileURL(spec.artifact).href)) as Record<string, unknown>;
     handler = resolveHandler(mod, spec.handler ?? 'handle');
-    schema = resolveSchema(mod);
+    validators = resolveValidators(mod);
   } catch (err) {
     console.error(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)
@@ -65,15 +65,22 @@ async function workerMain(): Promise<void> {
   port.on('message', (req: Req) => {
     void (async () => {
       const event = req.event ?? ({} as CloudEvent);
-      if (schema) {
-        const errors = validate(schema, event.data);
+      if (validators.input) {
+        const errors = validators.input(event.data);
         if (errors.length > 0) {
-          port.postMessage({ id: req.id, status: 422, error: 'event data does not match the contract', details: errors });
+          port.postMessage({ id: req.id, status: 422, error: 'event data does not match the input contract', details: errors });
           return;
         }
       }
       try {
         const result = await handler(ctx, event);
+        if (validators.output) {
+          const errors = validators.output(result === undefined ? null : result);
+          if (errors.length > 0) {
+            port.postMessage({ id: req.id, status: 500, error: 'handler result does not match the output contract', details: errors });
+            return;
+          }
+        }
         if (result === undefined || result === null) {
           port.postMessage({ id: req.id, none: true });
         } else {
@@ -219,7 +226,7 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
     const res = await h.invoke(event);
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
-    if (res.status === 500) return c.json({ error: res.error }, 500);
+    if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);
     if (res.none) return c.body(null, 204);
     return c.json(res.result as Record<string, unknown>);
   });

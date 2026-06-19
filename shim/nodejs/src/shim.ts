@@ -1,32 +1,37 @@
 // funcd Node runtime shim (TypeScript + Hono over node:http). Loads the function artifact,
 // resolves the handle(context, event) export (the authoritative materialization shape-gate),
 // and serves the runtime-shim HTTP contract:
-//   POST /                 CloudEvent -> [optional event-data contract] -> handler -> response
-//                          (object->200 JSON, none->204, throw->500, contract mismatch->422)
+//   POST /                 CloudEvent -> [optional input contract] -> handler -> [optional output contract] -> response
+//                          (object->200 JSON, none/void->204, throw/output-mismatch->500, input-mismatch->422)
 //   GET  /health/readiness 200 once the handler resolved
 //   GET  /health/liveness  200 while up
-// If the artifact exports `eventSchema` (a JTD schema, RFC 8927), event.data is validated
-// against it before the handler runs — the engine ships in the shim, the contract in the artifact.
+// If the bundle carries precompiled validators (ADR-0058, generated at push from the author's
+// FuncInput/FuncOutput types), event.data is validated before the handler runs (mismatch -> 422)
+// and the handler's result after (mismatch -> 500). The validators are eval-free (compiled at
+// push); the shim runs no schema compiler. A `void`/`None` output contract -> 204 (non-empty -> 500).
 // Env: FUNCD_ARTIFACT (local path), FUNCD_HANDLER (export, default "handle"); FUNCD_PORT
 // (container: bind 0.0.0.0:PORT) else FUNCD_PORTFILE (process: bind 127.0.0.1:0 + write the port).
 // Bundled (Hono inlined) to shim.mjs, so the runtime stays a single self-contained file.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { type Schema } from 'jtd';
 import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { resolveHandler, resolveSchema, validate } from './runtime.ts';
-import type { CloudEvent, FunctionContext, Handler } from './types.ts';
+import { resolveHandler, resolveValidators } from './runtime.ts';
+import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 
-export type { CloudEvent, FunctionContext, Handler } from './types.ts';
-export { resolveHandler, resolveSchema } from './runtime.ts';
-export type { EventSchema } from './runtime.ts';
+export type { CloudEvent, FunctionContext, Handler, Json, Validator } from './types.ts';
+export { resolveHandler, resolveValidators } from './runtime.ts';
 
-/** createApp builds the shim's HTTP app (the runtime contract) around a handler. When a
- *  `schema` is given, the event's `data` is validated against it before the handler runs;
- *  a mismatch returns 422 with the JTD errors, so a bad-shaped event never reaches user code. */
-export function createApp(handler: Handler, schema?: Schema): Hono {
+/** createApp builds the shim's HTTP app (the runtime contract) around a handler. The optional
+ *  precompiled validators (ADR-0058) gate the I/O: `input` validates event.data BEFORE the handler
+ *  (mismatch -> 422, handler never called); `output` validates the result AFTER (mismatch -> 500, a
+ *  bad-shaped result never goes out as 200). A `void`/`None` output contract is just an output
+ *  validator that accepts only an empty result, so empty -> 204 and a non-empty return -> 500. */
+export function createApp(
+  handler: Handler,
+  validators: { input?: Validator; output?: Validator } = {},
+): Hono {
   const app = new Hono();
   const ctx: FunctionContext = { log: (...args) => console.log(...args) };
 
@@ -41,14 +46,22 @@ export function createApp(handler: Handler, schema?: Schema): Hono {
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
     }
-    if (schema !== undefined) {
-      const errors = validate(schema, event.data);
+    if (validators.input) {
+      const errors = validators.input(event.data);
       if (errors.length > 0) {
-        return c.json({ error: 'event data does not match the contract', details: errors }, 422);
+        return c.json({ error: 'event data does not match the input contract', details: errors }, 422);
       }
     }
     try {
       const result = await handler(ctx, event);
+      if (validators.output) {
+        // normalize an absent return to null so a `void` validator (accepts empty) and a typed
+        // validator (rejects empty) both see a concrete value.
+        const errors = validators.output(result === undefined ? null : result);
+        if (errors.length > 0) {
+          return c.json({ error: 'handler result does not match the output contract', details: errors }, 500);
+        }
+      }
       if (result === undefined || result === null) return c.body(null, 204);
       return c.json(result as Record<string, unknown>);
     } catch (err) {
@@ -72,18 +85,18 @@ async function main(): Promise<void> {
   }
 
   let handler: Handler;
-  let schema: Schema | undefined;
+  let validators: { input?: Validator; output?: Validator };
   try {
     const mod = (await import(pathToFileURL(artifact).href)) as Record<string, unknown>;
     handler = resolveHandler(mod, handlerName);
-    schema = resolveSchema(mod);
+    validators = resolveValidators(mod);
   } catch (err) {
     console.error(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}`);
     process.exit(3); // materialization shape-gate failure (ADR-0030)
   }
 
   const hostname = fixedPort > 0 ? '0.0.0.0' : '127.0.0.1';
-  serve({ fetch: createApp(handler, schema).fetch, hostname, port: fixedPort }, (info) => {
+  serve({ fetch: createApp(handler, validators).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
     console.log(`funcd-shim: listening on ${hostname}:${info.port}`);
   });
