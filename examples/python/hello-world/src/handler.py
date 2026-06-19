@@ -10,10 +10,8 @@ you), while the type still lets ``CloudEvent[FuncInput]`` give you typed-key aut
 build reads these types to generate a JSON Schema (pydantic, build-time only) and bakes a
 precompiled fastjsonschema validator into the artifact — there is no validator to hand-write here,
 and no pydantic at runtime (so validation also works inside the subinterpreter pool, ADR-0050/0060).
-
-Note: the contract module does **not** use ``from __future__ import annotations`` — the build reads
-the field *types* (not their string forms) to generate the schema, so the annotations must stay
-real. The build re-adds the future-import to the runtime artifact itself.
+``from __future__ import annotations`` is fine in a contract module — the build resolves the field
+types either way (and the runtime artifact always carries the future-import).
 """
 
 from typing import TypedDict

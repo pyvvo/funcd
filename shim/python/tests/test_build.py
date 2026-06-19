@@ -150,3 +150,82 @@ def test_build_no_contract_bakes_nothing() -> None:
     rt = r.runtime_source
     assert "__funcd_validate_input" not in rt and "__funcd_validate_output" not in rt
     assert "def handle" in rt
+
+
+# a top-level DISCRIMINATED UNION contract (FuncOutput = A | B) — pydantic emits anyOf + $ref; the
+# build inlines the refs and rewrites it to the profile's tagged `oneOf` + `discriminator`, with a
+# baked validator that accepts the right branch and rejects a bad tag / extra property.
+_UNION_SRC = (
+    "from typing import TypedDict, Literal\n"
+    "from funcd_shim import CloudEvent, FunctionContext\n"
+    "\n"
+    "class Accepted(TypedDict):\n"
+    "    kind: Literal['accepted']\n"
+    "    id: str\n"
+    "class Rejected(TypedDict):\n"
+    "    kind: Literal['rejected']\n"
+    "    reason: str\n"
+    "FuncOutput = Accepted | Rejected\n"
+    "\n"
+    "def handle(ctx, event):\n"
+    "    return {'kind': 'accepted', 'id': 'x'}\n"
+)
+
+
+def test_build_discriminated_union_output() -> None:
+    r = build(_UNION_SRC)
+    out = r.output_schema
+    assert out is not None
+    assert "anyOf" not in out, "a bare anyOf would be rejected by the gate"
+    assert "$ref" not in repr(out), "refs must be inlined (the profile forbids $ref)"
+    assert isinstance(out.get("oneOf"), list) and len(out["oneOf"]) == 2
+    assert out["discriminator"]["propertyName"] == "kind"
+    for branch in out["oneOf"]:
+        assert branch["additionalProperties"] is False  # branches are closed records
+
+    ns = _exec(r.runtime_source)
+    vout = ns["__funcd_validate_output"]
+    assert vout({"kind": "accepted", "id": "x"}) == []  # right branch
+    assert vout({"kind": "rejected", "reason": "nope"}) == []  # other branch
+    assert vout({"kind": "what"}), "an unknown tag must be rejected"
+    assert vout({"kind": "accepted", "id": "x", "extra": 1}), "an extra property must be rejected"
+
+
+# the contract module uses `from __future__ import annotations` (the project's default style) + a
+# non-builtin field type (Literal) — the build must still resolve the field types to a schema.
+_FUTURE_ANN_SRC = (
+    "from __future__ import annotations\n"
+    "from typing import TypedDict, Literal\n"
+    "from funcd_shim import CloudEvent, FunctionContext\n"
+    "\n"
+    "class FuncInput(TypedDict):\n"
+    "    name: str\n"
+    "    tier: Literal['free', 'pro']\n"
+    "\n"
+    "def handle(ctx, event):\n"
+    "    return {'ok': True}\n"
+)
+
+
+def test_build_resolves_types_under_future_annotations() -> None:
+    r = build(_FUTURE_ANN_SRC)
+    assert r.input_schema is not None, "future-annotations must not defeat schema generation"
+    assert r.input_schema["properties"]["tier"]["enum"] == ["free", "pro"]
+    assert r.input_schema["additionalProperties"] is False
+    ns = _exec(r.runtime_source)
+    assert ns["__funcd_validate_input"]({"name": "a", "tier": "pro"}) == []
+    assert ns["__funcd_validate_input"]({"name": "a", "tier": "enterprise"}), "tier outside the enum"
+
+
+# `FuncInput = Json` (the escape hatch) → the empty schema {} (accepts any JSON).
+def test_build_json_input_is_empty_schema() -> None:
+    src = (
+        "from funcd_shim import CloudEvent, FunctionContext, Json\n"
+        "FuncInput = Json\n"
+        "def handle(ctx, event):\n"
+        "    return None\n"
+    )
+    r = build(src)
+    assert r.input_schema == {}, "Json → the empty schema (any JSON)"
+    ns = _exec(r.runtime_source)
+    assert ns["__funcd_validate_input"]({"anything": [1, 2]}) == []  # accepts any JSON

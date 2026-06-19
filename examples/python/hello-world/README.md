@@ -33,10 +33,9 @@ def handle(context: FunctionContext, event: CloudEvent[FuncInput]) -> FuncOutput
     return {"greeting": f"Hello, {data['name']}."}
 ```
 
-> **Don't put `from __future__ import annotations` in the contract module.** The build reads the
-> *field types* (not their string forms) to generate the schema, so the annotations on
-> `FuncInput`/`FuncOutput` must stay real (concrete types resolvable at import). The build re-adds
-> the future-import to the runtime artifact itself, so this is a build-time authoring rule only.
+The build generates the schema from the contract type, then bakes a runtime validator — so you
+declare a *type*, never a validator, and `from __future__ import annotations` is fine either way
+(the build resolves the field types). The runtime artifact carries the future-import regardless.
 
 ### How the contract is enforced (ADR-0058 / ADR-0060)
 
@@ -62,21 +61,26 @@ At runtime the shim runs those validators around your handler:
 ### Other shapes in the profile
 
 ```python
+type FuncInput = Json                  # accept any JSON value (empty schema {})
+
+class Accepted(TypedDict):             # discriminated union — `kind` is the tag
+    kind: Literal["accepted"]
+    id: str
+class Rejected(TypedDict):
+    kind: Literal["rejected"]
+    reason: str
+FuncOutput = Accepted | Rejected       # generated as a tagged oneOf + discriminator
+
 def handle(context, event) -> None:    # FuncOutput = None  → returns nothing → 204
     ...
-
-# To accept any JSON, simply declare no FuncInput — the input is then unvalidated (the
-# pre-contract behavior). Inside a closed record, a `Json`-typed field is the same escape hatch.
 ```
 
-A pydantic `BaseModel` also works as the contract type, but it *type-lies* at runtime — the handler
-still receives a plain dict, never a model instance — so a `TypedDict` is preferred for honesty.
-
-> **Current Python build limits (vs the JS side):** the build reads the contract type by importing
-> it, so the *top-level* contract must be a `TypedDict` or a `BaseModel` — a module-level union
-> alias (`FuncOutput = A | B`) generates no schema, and `FuncInput = Json` generates no validator
-> (input is simply unvalidated). Discriminated unions and a typed-`{}` `Json` input aren't wired
-> through the Python build yet; closed records and `None`/void are.
+A discriminated union (each branch a closed record sharing a required literal tag) builds to the
+profile's tagged `oneOf` + `discriminator` — the build inlines pydantic's `$ref`s and converts its
+`anyOf` to the form the gate accepts. A pydantic `BaseModel` also works as the contract type, but it
+*type-lies* at runtime — the handler still receives a plain dict, never a model instance — so a
+`TypedDict` is preferred for honesty. The top-level contract must be a type pydantic can read
+(a `TypedDict`/`BaseModel`, a union of those, or `Json`); recursive types are out of profile.
 
 ## Develop
 

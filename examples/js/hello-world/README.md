@@ -58,13 +58,17 @@ optional only so a contract-less function may omit it).
 
 ```ts
 export type FuncInput = Json;                       // accept any JSON value (empty schema {})
+export type FuncOutput =                            // discriminated union — `kind` is the tag
+  | { kind: 'accepted'; id: string }
+  | { kind: 'rejected'; reason: string };
 export type FuncOutput = void;                      // returns nothing → 204
 ```
 
 A `Json` field inside a record works the same way — the field becomes the empty schema `{}` while
-the record stays closed. (Discriminated unions are part of the documented profile, but the current
-TS→schema codegen emits `anyOf`, which the push-time profile gate doesn't yet accept — so a
-top-level union contract isn't wired end-to-end yet. Stick to records / `Json` / `void` for now.)
+the record stays closed. A discriminated union (each branch a closed record sharing a required
+literal tag, here `kind`) is generated as a tagged `oneOf` + `discriminator` and validated
+end-to-end — the build converts the `anyOf` ts-json-schema-generator emits into the form the
+profile gate accepts.
 
 ## Author workflow
 

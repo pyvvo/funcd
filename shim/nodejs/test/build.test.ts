@@ -66,3 +66,47 @@ test('buildContract with no FuncInput/FuncOutput bakes nothing', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// scenario: discriminated-union-contract (Node) — a TS union -> the profile's tagged `oneOf` +
+// `discriminator` (ts-json-schema-generator emits `anyOf`; the build converts it, ADR-0058) and a
+// validator that accepts the right branch and rejects a bad tag / an extra property.
+test('buildContract converts a tagged union to a discriminated oneOf + working validator', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'funcd-build-'));
+  const tsPath = join(dir, 'fn.ts');
+  writeFileSync(
+    tsPath,
+    'export interface FuncInput { qty: number }\n' +
+      'export type FuncOutput =\n' +
+      "  | { kind: 'accepted'; id: string }\n" +
+      "  | { kind: 'rejected'; reason: string };\n" +
+      'export function handle() {}\n',
+  );
+
+  const r = buildContract(tsPath);
+  const out = r.outputSchema as unknown as {
+    anyOf?: unknown;
+    oneOf?: unknown[];
+    discriminator?: { propertyName: string };
+  };
+
+  assert.equal(out.anyOf, undefined, 'no bare anyOf (the gate rejects it)');
+  assert.equal(Array.isArray(out.oneOf), true, 'a oneOf union');
+  assert.equal(out.discriminator?.propertyName, 'kind', 'discriminated on the tag field');
+
+  const vfile = join(process.cwd(), `.tmp-validator-u-${process.pid}.mjs`);
+  writeFileSync(vfile, r.validatorSource as string);
+  try {
+    const mod = (await import(pathToFileURL(vfile).href)) as {
+      __funcdValidateOutput: (d: unknown) => unknown[];
+    };
+    assert.deepEqual(mod.__funcdValidateOutput({ kind: 'accepted', id: 'x' }), [], 'right branch -> []');
+    assert.ok(mod.__funcdValidateOutput({ kind: 'nope' }).length > 0, 'bad tag -> errors');
+    assert.ok(
+      mod.__funcdValidateOutput({ kind: 'accepted', id: 'x', extra: 1 }).length > 0,
+      'extra property -> errors (closed branch)',
+    );
+  } finally {
+    rmSync(vfile, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
