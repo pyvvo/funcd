@@ -14,12 +14,14 @@ by the real build (Node AJV-standalone / Python fastjsonschema). N = 2M (Node) /
 | Runtime | Machine | validator ns/call | reqpath OFF ns | reqpath ON ns | **overhead ns** | overhead % | rps OFF | rps ON |
 |---|---|--:|--:|--:|--:|--:|--:|--:|
 | **Node** | mac arm64 · node 23 | 11.7 | 374.5 | 389.6 | **15.1** | 4.0% | 2.67M | 2.57M |
+| **Node** | Lima aarch64-VM · node 18 | 12.7 | 481.7 | 496.5 | **14.8** | 3.1% | 2.08M | 2.01M |
 | **Node** | homebox amd64 · node 18 | 34.6 | 1495.8 | 1530.2 | **34.4** | 2.3% | 668k | 654k |
 | **Python** | mac arm64 · 3.14 | 558.6 | 1576.3 | 2246.3 | **670.1** | 42.5% | 634k | 445k |
+| **Python** | Lima aarch64-VM · 3.11 | 497.0 | 1443.4 | 1994.7 | **551.3** | 38.2% | 693k | 501k |
 | **Python** | homebox amd64 · 3.12 | 1679.7 | 5061.6 | 7390.4 | **2328.9** | 46.0% | 198k | 135k |
 
-(Lima not included — no VM provisioned at measure time; homebox is the real Linux/amd64 target, the
-meaningful hardware number. The Lima arm64-VM point would fall between mac-native and homebox.)
+(Lima = a Debian aarch64 VM on the mac; homebox = real amd64 Linux hardware, the meaningful target.
+The Lima arm64 point tracks the mac-native one, as expected — it's the same CPU virtualized.)
 
 ## What it means
 
