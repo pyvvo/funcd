@@ -112,17 +112,22 @@ func TestE2EUserJourney(t *testing.T) {
 	require.Contains(t, wakeBody, "echoed")
 }
 
-// TestE2EEventDataContract validates the event-data contract (ADR-0038) through the public
-// surface: a function whose artifact embeds an `eventSchema` (JTD) rejects a wrong-shaped
-// event with 422 *before* the handler runs, and runs normally on a matching one. Node-gated.
+// TestE2EEventDataContract validates the I/O contract (ADR-0058, which superseded the ADR-0038
+// JTD eventSchema) through the public surface: a function whose artifact carries a precompiled
+// input validator (`__funcdValidateInput`, what the push build bakes from FuncInput) rejects a
+// wrong-shaped event with 422 *before* the handler runs, and runs normally on a matching one.
+// Node-gated.
 func TestE2EEventDataContract(t *testing.T) {
 	dataPlane, runCLI := execPlatform(t)
 
-	// the user's handler declares its event-data contract (JTD) inline and reads event.data;
-	// pushed as-is (the shim resolves both the handler and the optional eventSchema export).
+	// the artifact carries a precompiled, eval-free input validator (the shape the push build bakes
+	// from the author's FuncInput type, ADR-0058/0060) + the handler; the shim resolves both and
+	// validates event.data before invoking (mismatch → 422). [] ⇒ valid; non-empty ⇒ errors.
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte(
-		`export const eventSchema = { optionalProperties: { hello: { type: "string" } } };`+"\n"+
+		`export function __funcdValidateInput(data) {`+"\n"+
+			`  return data && data.hello !== undefined && typeof data.hello !== "string"`+"\n"+
+			`    ? [{ message: "hello must be a string" }] : []; }`+"\n"+
 			`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))
 	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
 	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
