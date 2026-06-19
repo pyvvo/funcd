@@ -45,6 +45,11 @@ class FuncOutput(TypedDict):
 
 def handle(context: FunctionContext, event: CloudEvent[FuncInput]) -> FuncOutput:
     """Greet by name."""
-    data = event["data"]  # validated against FuncInput → present & well-shaped
+    # The shim validated event["data"] against FuncInput (422 otherwise), so it is present here.
+    # `assert "data" in event` is the Python parallel of the TS example's `event.data!`: it narrows
+    # the envelope's optional `data` to present, telling the type checker what the runtime
+    # guarantees (the field is optional only so a contract-less function may omit it).
+    assert "data" in event
+    data = event["data"]
     context.log("greeting", data["name"])
     return {"greeting": f"Hello, {data['name']}."}

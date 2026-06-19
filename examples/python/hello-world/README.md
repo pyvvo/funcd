@@ -28,7 +28,8 @@ class FuncOutput(TypedDict):
     greeting: str
 
 def handle(context: FunctionContext, event: CloudEvent[FuncInput]) -> FuncOutput:
-    data = event["data"]               # already validated → present & well-shaped
+    assert "data" in event             # parallel of TS `event.data!` — narrows the optional key
+    data = event["data"]               # already validated → present & well-shaped, typed FuncInput
     return {"greeting": f"Hello, {data['name']}."}
 ```
 
@@ -87,6 +88,22 @@ uv run mypy        # strict typecheck against the funcd_shim Handler contract
 uv run ruff check  # lint
 uv run pytest      # run the unit tests
 ```
+
+**Editor typing.** For `event: CloudEvent[FuncInput]` / `event["data"]: FuncInput` to resolve
+in-editor, Pylance must find the shim source. Pylance resolves imports against the selected
+interpreter plus `python.analysis.extraPaths`; it ignores `pyrightconfig.json`'s `venv` key, and
+it only reads a `pyrightconfig.json` at the **workspace root**. So:
+
+- **Opening this folder as the workspace** (`code examples/python/hello-world`): the local
+  [`pyrightconfig.json`](pyrightconfig.json) path-maps `funcd_shim` to the in-repo shim source
+  (`extraPaths: ["../../../shim/python/src"]`) — the parallel of the TS example's `tsconfig.json`
+  map — and typing just works (no interpreter switch, no `uv sync` needed).
+- **Opening the whole repo**: the nested config is ignored, so add the shim source to your
+  *workspace* settings (`.vscode/settings.json`, which this repo gitignores):
+  `"python.analysis.extraPaths": ["shim/python/src"]`. Then it resolves under any interpreter.
+
+Without either, an interpreter that lacks `funcd_shim` shows `event: Any` (an unresolved import
+collapses the generic `TypedDict` subscript to `Any`).
 
 ## Deploy
 
