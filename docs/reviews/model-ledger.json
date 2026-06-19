@@ -913,5 +913,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0057-implementation-claude-opus-4-8.md",
     "notes": "Secret injection last-mile: spec.secrets \u2192 Reconcile resolve gate (fail-closed, no worker) \u2192 pure workerSpec merge with FUNCD_ prefix guard; no plaintext at rest. 5 scenarios pass -race; no new dep. 1 Minor (pooled-secrets fail-closed guard, conforming \u2014 not a defect, not model-attributed)."
+  },
+  {
+    "date": "2026-06-19",
+    "adr": "0058",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0058-implementation-claude-opus-4-8.md",
+    "notes": "Statically-defined I/O contracts end-to-end (Go gate + Node/Python codegen + precompiled eval-free validators + 422/500/204). Compute-agnostic verified (Python fastjsonschema in a subinterpreter). 2 Minors: typia\u2192ts-json-schema-generator (adr-named-tool, not model fault) + push auto-build follow-up. Go green; Node 21; Python 36."
   }
 ]

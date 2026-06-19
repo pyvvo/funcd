@@ -1,6 +1,12 @@
 # ADR-0058: Function I/O contracts generated from code types — JSON Schema, eval-free precompiled validation (supersedes ADR-0038)
 
-- **Status**: Accepted
+- **Status**: Implemented
+- **Implemented**: 2026-06-19 — review pass (0 blockers/0 majors), see docs/reviews/adr-0058-implementation-claude-opus-4-8.md.
+  Statically-defined I/O contracts end-to-end: the Go profile gate (the def), Node + Python codegen (TS/pydantic →
+  closed JSON Schema) + precompiled eval-free validators (AJV-standalone / fastjsonschema), 422/500/void-204, the
+  `funcdcli push --contract` gate, generic `CloudEvent`/TypedDict DX, JTD retired. Compute-agnostic verified (the
+  Python validator runs in a subinterpreter). 2 Minors (typia→ts-json-schema-generator; push auto-build follow-up).
+  OCI metadata embedding (F30/ADR-0059) is the next v1.1 item.
 - **Superseded in part by**: [ADR-0060](0060-contract-validator-generation.md) (2026-06-19) — implementation revealed
   that Decision 2's *Python: pydantic-core at runtime* is impossible (pydantic-core, a Rust extension, crashes in the
   ADR-0050 subinterpreter pool). ADR-0060 corrects the **Python runtime validator** to **fastjsonschema** (pure-Python,

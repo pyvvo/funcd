@@ -1,7 +1,11 @@
 # ADR-0060: Contract validators are generated from the schema at build, precompiled, funcd-owned — Python via fastjsonschema (amends ADR-0058)
 
-- **Status**: Accepted
-- **Date**: 2026-06-19 (**Accepted 2026-06-19** — judge: no Blockers. Supersedes-in-part confirmed correct (reverses
+- **Status**: Implemented
+- **Date**: 2026-06-19 (**Implemented 2026-06-19** — review pass with ADR-0058, see
+  docs/reviews/adr-0058-implementation-claude-opus-4-8.md: the runtime validator is a precompiled callable baked at
+  build (Node AJV-standalone, Python fastjsonschema), funcd compiles it from the gated schema, and the Python validator
+  runs in a subinterpreter (verified). **Reviewing 2026-06-19** — Node generator uses ts-json-schema-generator (the
+  no-transformer substitute for typia — same TS-type→JSON-Schema job + AJV-standalone). **Accepted 2026-06-19** — judge: no Blockers. Supersedes-in-part confirmed correct (reverses
   only ADR-0058's Python pydantic-core-at-runtime decision; keeps JSON-Schema-canonical / the profile / input-422 /
   output-500 / Node-AJV-standalone); the funcd-owns-compilation integrity invariant is well-formed (validator ≡ gated
   schema by construction); compute-agnostic **verified** (a real fastjsonschema validator runs inside a subinterpreter);
