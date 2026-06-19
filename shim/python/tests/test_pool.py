@@ -23,9 +23,13 @@ SRC = str(Path(__file__).resolve().parents[1] / "src")
 # A REAL fastjsonschema-compiled __funcd_validate_input (what the build bakes) — this proves
 # fastjsonschema's compiled validator runs end-to-end inside the subinterpreter pool (the whole
 # reason we chose it over pydantic-core, which crashes a subinterpreter).
-_VALIDATOR = fastjsonschema.compile_to_code(
-    {"type": "object", "properties": {"hello": {"type": "string"}}, "required": ["hello"], "additionalProperties": False}
-)
+_SCHEMA = {
+    "type": "object",
+    "properties": {"hello": {"type": "string"}},
+    "required": ["hello"],
+    "additionalProperties": False,
+}
+_VALIDATOR = fastjsonschema.compile_to_code(_SCHEMA)
 ECHO = (
     _VALIDATOR + "\n"
     "def __funcd_validate_input(d):\n"
