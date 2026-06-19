@@ -1,7 +1,7 @@
 [project]
 name = "funcd-shim"
 version = "0.1.0"
-description = "funcd Python runtime shim — serves the runtime-shim HTTP contract and validates event.data against a JTD (RFC 8927) event_schema. Stdlib-only, zero runtime dependencies (ADR-0049)."
+description = "funcd Python runtime shim — serves the runtime-shim HTTP contract and validates event.data / the result against the artifact's baked JSON Schema with a pure-Python checker (ADR-0058; the schema is generated from the author's FuncInput/FuncOutput pydantic model at build time). Stdlib-only at runtime, compute-agnostic (solo + subinterpreter pool)."
 authors = [{ name = "The funcd Authors" }]
 requires-python = ">=3.12"
 dependencies = []

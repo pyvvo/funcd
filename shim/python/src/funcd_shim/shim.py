@@ -4,21 +4,22 @@ Loads the function artifact, resolves ``handle(context, event)`` (the materializ
 and serves the runtime-shim HTTP contract — byte-for-byte identical to the Node shim (ADR-0030 §1,
 ADR-0037), so the platform stays language-blind:
 
-    POST /                 CloudEvent -> [optional event_schema validation] -> handler -> response
-                           (dict/list->200 JSON, None->204, raise->500 {error}, bad JSON->400,
-                            contract mismatch->422 {error, details})
+    POST /                 CloudEvent -> [input contract] -> handler -> [output contract] -> response
+                           (dict/list->200 JSON, None/void->204, raise/output-mismatch->500 {error},
+                            bad JSON->400, input-mismatch->422 {error, details})
     GET  /health/readiness 200 once the handler resolved
     GET  /health/liveness  200 while up
 
-If the artifact exports ``event_schema`` (a JTD/RFC 8927 schema), ``event.data`` is validated
-against it before the handler runs (the engine ships in the shim, the contract in the artifact —
-ADR-0038/ADR-0049).
+If the artifact exports ``FuncInput``/``FuncOutput`` pydantic models (ADR-0058, supersedes the
+ADR-0038 JTD ``event_schema``), ``event.data`` is validated before the handler runs (mismatch ->
+422) and the result after (mismatch -> 500); a ``FuncOutput = None`` (void) contract -> 204 on an
+empty result, 500 on a non-empty one. pydantic-core validates — fast, eval-free.
 
 Env: ``FUNCD_ARTIFACT`` (local .py path, required), ``FUNCD_HANDLER`` (export, default ``handle``);
 ``FUNCD_PORT`` (container: bind ``0.0.0.0:PORT``) else ``FUNCD_PORTFILE`` (process: bind
 ``127.0.0.1:0`` and write the chosen port). Exit 2 = missing artifact; exit 3 = shape-gate failure.
 
-Stdlib only — no runtime third-party dependency (ADR-0049).
+Runtime dependency: pydantic (ADR-0058 — supersedes ADR-0049's stdlib-only stance for the contract).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import jtd, runtime
+from . import runtime
 from .types import CloudEvent, FunctionContext, Handler
 
 
@@ -40,11 +41,14 @@ class _Context:
         print(*args, flush=True)
 
 
-def make_request_handler(handler: Handler, schema: jtd.Schema | None) -> type[BaseHTTPRequestHandler]:
+def make_request_handler(
+    handler: Handler, validators: runtime.Validators
+) -> type[BaseHTTPRequestHandler]:
     """Build the ``BaseHTTPRequestHandler`` class that serves the contract around *handler*.
 
-    When *schema* is given, ``event.data`` is validated before the handler runs; a mismatch
-    returns 422 with the JTD errors and the handler is never called.
+    The optional *validators* gate the I/O (ADR-0058): ``input`` validates ``event.data`` before
+    the handler (mismatch → 422, handler never called); ``output`` validates the result after
+    (mismatch → 500, never emitted as 200). A void output contract → 204 on empty / 500 otherwise.
     """
     context: FunctionContext = _Context()
 
@@ -101,12 +105,12 @@ def make_request_handler(handler: Handler, schema: jtd.Schema | None) -> type[Ba
             except (json.JSONDecodeError, ValueError):
                 self._send_text(400, "invalid CloudEvent JSON")
                 return
-            if schema is not None:
-                errors = runtime.validate(schema, event.get("data"))
+            if validators.input is not None:
+                errors = validators.input(event.get("data"))
                 if errors:
                     self._send_json(
                         422,
-                        {"error": "event data does not match the contract", "details": errors},
+                        {"error": "event data does not match the input contract", "details": errors},
                     )
                     return
             try:
@@ -114,6 +118,14 @@ def make_request_handler(handler: Handler, schema: jtd.Schema | None) -> type[Ba
             except Exception as err:  # noqa: BLE001 - user handler errors become 500
                 self._send_json(500, {"error": str(err)})
                 return
+            if validators.output is not None:
+                errors = validators.output(result)
+                if errors:
+                    self._send_json(
+                        500,
+                        {"error": "handler result does not match the output contract", "details": errors},
+                    )
+                    return
             if result is None:
                 self._send_empty(204)
             else:
@@ -137,13 +149,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         module = runtime.load_module(artifact)
         handler = runtime.resolve_handler(module, handler_name)
-        schema = runtime.resolve_schema(module)
+        validators = runtime.resolve_validators(module)
     except runtime.ShapeError as err:
         print(f"funcd-shim: shape error: {err}", file=sys.stderr)
         return 3  # materialization shape-gate failure (ADR-0030 §3)
 
     hostname = "0.0.0.0" if fixed_port > 0 else "127.0.0.1"  # noqa: S104 - container bind is intentional
-    server = ThreadingHTTPServer((hostname, fixed_port), make_request_handler(handler, schema))
+    server = ThreadingHTTPServer((hostname, fixed_port), make_request_handler(handler, validators))
     bound_port = server.server_address[1]
     if port_file:
         with open(port_file, "w", encoding="utf-8") as fh:

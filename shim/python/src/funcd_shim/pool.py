@@ -8,7 +8,7 @@ Reads ``FUNCD_POOL_MANIFEST`` (the SAME ``[{name, artifact, handler}]`` contract
 serves ``POST /function/<name>`` by submitting the request to the named handler's interpreter — with
 the byte-identical wire contract + RFC 8927 event-data validation as the solo shim (ADR-0049) — plus
 ``GET /health/{readiness,liveness}``. Bind: ``FUNCD_PORT`` → ``0.0.0.0:PORT`` (container) else
-``FUNCD_PORTFILE`` → loopback + write the port (process). A member whose handler/``event_schema``
+``FUNCD_PORTFILE`` → loopback + write the port (process). A member whose handler/contract
 fails to load makes the host exit 3 (the shape-gate). Stdlib only — no runtime dependency.
 """
 

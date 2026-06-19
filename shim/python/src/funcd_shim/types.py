@@ -8,7 +8,18 @@ handler signature checked by ``mypy --strict`` — the same contract the shim en
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol, TypedDict, runtime_checkable
+
+#: Json — the explicit "arbitrary JSON value" contract type (ADR-0058). Declare ``FuncInput``/
+#: ``FuncOutput = Json``, or a field ``payload: Json``, when the shape is genuinely unknown; the
+#: generated contract is the empty schema ``{}`` (accepts any JSON). Python has no ``unknown``, so
+#: this aliases ``Any`` — but the named ``Json`` documents the intent (arbitrary JSON).
+type Json = Any
+
+#: A validator (ADR-0058): validates a value against the artifact's baked JSON Schema, returning a
+#: list of errors ([] ⇒ valid). Pure-Python (subinterpreter-safe); the shim runs it.
+type Validator = Callable[[Any], list[Any]]
 
 
 class CloudEvent(TypedDict, total=False):
