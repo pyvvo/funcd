@@ -172,3 +172,30 @@ func TestScenarioCLIPushPullRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "export function handle() {}\n", string(got))
 }
+
+// scenario: out-of-profile-rejected (at push) — `push --contract` gates the generated schema
+// against the funcd profile (ADR-0058/0060) BEFORE packaging; an out-of-profile contract fails
+// and nothing is pushed; an in-profile one passes (the gate fires, ADR-0058 pt1 wired into push).
+func TestScenarioCLIPushGatesContract(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.js")
+	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
+	ref := "oci-layout://" + filepath.Join(dir, "layout") + ":v1"
+
+	inProfile := filepath.Join(dir, "ok.schema.json")
+	require.NoError(t, os.WriteFile(inProfile,
+		[]byte(`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`), 0o600))
+	outOfProfile := filepath.Join(dir, "bad.schema.json")
+	require.NoError(t, os.WriteFile(outOfProfile, // an open record — forbidden by the profile
+		[]byte(`{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":true}`), 0o600))
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--contract", inProfile),
+		"an in-profile contract passes the gate")
+	require.True(t, strings.HasPrefix(strings.TrimSpace(out.String()), ref+"@sha256:"))
+
+	out.Reset()
+	err := execCLI(&out, nil, "push", bundle, ref, "--contract", outOfProfile)
+	require.Error(t, err, "an out-of-profile contract is rejected at push")
+	require.Contains(t, err.Error(), "profile", "the error names the profile violation")
+}

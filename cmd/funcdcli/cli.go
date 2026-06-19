@@ -12,6 +12,7 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/artifact"
+	"github.com/green-0-rabbit/funcd/internal/contract"
 	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
@@ -184,11 +185,25 @@ func (a *cli) deleteCmd() *cobra.Command {
 // cmdPush packages a bundle as an OCI artifact and pushes it, printing "<ref>@<digest>" to put
 // in Function.spec.artifact (ADR-0031). It talks to the registry/layout, not the control plane.
 func (a *cli) pushCmd() *cobra.Command {
-	return &cobra.Command{
+	var contracts []string
+	cmd := &cobra.Command{
 		Use:   "push <file> <ref>",
 		Short: "Package a bundle as an OCI artifact and push it (prints <ref>@<digest>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Gate the build-generated contract schema(s) against the funcd profile (the "def",
+			// ADR-0058/0060) BEFORE packaging — an out-of-profile contract never ships. The schema
+			// is the source of truth (funcd compiled the validator from it); the build emits it and
+			// passes it here with --contract (input and/or output).
+			for _, path := range contracts {
+				schema, rerr := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
+				if rerr != nil {
+					return fault.Invalidf("funcdcli push", "read contract %q: %v", path, rerr)
+				}
+				if cerr := contract.Check(schema); cerr != nil {
+					return fault.Wrapf(cerr, fault.KindOf(cerr), "funcdcli push", "contract %q is outside the funcd profile", path)
+				}
+			}
 			digest, err := artifact.Push(cmd.Context(), args[1], args[0])
 			if err != nil {
 				return err
@@ -196,6 +211,9 @@ func (a *cli) pushCmd() *cobra.Command {
 			return a.writef("%s@%s\n", args[1], digest)
 		},
 	}
+	cmd.Flags().StringSliceVar(&contracts, "contract", nil,
+		"path to a generated contract JSON Schema to gate against the funcd profile before pushing (repeatable: input + output)")
+	return cmd
 }
 
 func (a *cli) pullCmd() *cobra.Command {
