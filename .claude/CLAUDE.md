@@ -188,6 +188,57 @@ on its merits; reorder or parallelize work within a build tier; and restructure 
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
 the rules above. The judge advises; it never blocks a sound decision on taste.
 
+## Backlog — un-scoped ideas live on the GitHub Project, not in the docs
+
+The four document layers hold **committed, version-scoped** work (a feat row, an ADR, a roadmap
+item). Raw future ideas that are **not yet scoped into a version** — cross-cutting "someday"
+features, research spikes, anything deferred past the current version — do **not** belong in the
+docs (they would rot the feat/roadmap with un-decided scope). They go to the project's GitHub
+**Project board #4**:
+
+- **Board**: <https://github.com/users/green-0-rabbit/projects/4/views/1> (`@green-0-rabbit's funcd`).
+- **Add an item** (a draft issue) with the `gh` CLI — needs the `project` token scope (the
+  `green-0-rabbit` token already has it; otherwise `gh auth refresh -s project`):
+
+  ```bash
+  gh project item-create 4 --owner green-0-rabbit \
+    --title "<short idea title>" \
+    --body "<why · key trade-offs · what it depends on · scope-when-picked-up>"
+  ```
+
+- **List first** to avoid duplicates: `gh project item-list 4 --owner green-0-rabbit --format json`.
+
+Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
+the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
+artifact-contract registry, and distro packaging P-Z.)
+
+### A board item's status tracks its ADR lifecycle
+
+When a backlog item is scoped into an ADR, **it stays on the board** (don't close it) and its
+**Status follows the ADR's lifecycle** — the ADR gates move it. A fresh idea sits in **Backlog**;
+through `Draft`/`Proposed` it stays in **Backlog**; then:
+
+- **ADR `Accepted` → move the item to `In Progress`** (done by the `adr` / `adr-batch` accept step).
+- **ADR `Implemented` → move the item to `Done`** (done by the `adr-impl-review` gate, the sole
+  stamper of `Implemented`).
+
+The skill gates carry this as an explicit step. The move (Project #4 — IDs are stable; re-derive
+with `gh project field-list 4 --owner green-0-rabbit` / `item-list` if `item-edit` errors):
+
+```bash
+# Status field PVTSSF_lAHOBMTWh84BbERrzhV3cDE — options:
+#   Backlog=0401eb5a · In Progress=47fc9ee4 · Done=98236657 · Todo=f75ad846
+# Find the item id (match by title/topic):  gh project item-list 4 --owner green-0-rabbit --format json
+gh project item-edit --project-id PVT_kwHOBMTWh84BbERr \
+  --id <PVTI_… item id> \
+  --field-id PVTSSF_lAHOBMTWh84BbERrzhV3cDE \
+  --single-select-option-id <option id>
+```
+
+Only items that **originated on the board** have a ticket to move — a normal roadmap ADR (no
+backlog item) skips this. If unsure whether an ADR maps to a board item, list the board and match
+by topic before editing.
+
 ## Dev environment — run everything through Nix
 
 The toolchain is pinned by the flake ([flake.nix](../flake.nix) + `flake.lock`) — Go, `just`, and

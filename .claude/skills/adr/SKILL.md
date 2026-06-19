@@ -128,6 +128,9 @@ Quality bar per section:
 - Update the feature row in the active `docs/feat/` document: link the ADR in the
   `ADR(s)` column and advance the status (`idea → adr` at draft, `→ accepted` at
   acceptance).
+- **If this ADR was scoped from a Project #4 backlog item, move that item `Backlog → In
+  Progress`** (see CLAUDE.md → *Backlog* for the `gh project item-edit` command + IDs). A
+  normal roadmap ADR with no board item skips this.
 
 ## Step 5 — Stop
 

@@ -124,6 +124,9 @@ stamps `Implemented`. **Only on a `pass`:**
 - Bump the ADR file's status `Reviewing → Implemented` (add the implemented date). That
   `Reviewing → Implemented` bump is the *one* forward edit this gate makes to the ADR — make no
   other change to it. (The `adr-impl` gate already moved the ADR `Accepted → Reviewing`.)
+- **If this ADR was scoped from a Project #4 backlog item, move that item `In Progress → Done`**
+  (see CLAUDE.md → *Backlog* for the `gh project item-edit` command + IDs). This gate is the sole
+  stamper of `Implemented`, so it owns the `→ Done` move. A normal roadmap ADR with no board item skips it.
 
 Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only** — never
 walk a status backward. On **changes-requested** or **fail**, advance nothing: the ADR stays

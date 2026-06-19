@@ -64,6 +64,9 @@ With Blocker/Major findings folded in, **self-accept**:
   it (newest accepted ADR wins); advance the realizing feat row `→ accepted` and link the ADR.
 - Reconcile any roadmap placeholder for this item to its real ADR number (full tier-0 graduation waits
   for Step 6, after `Implemented`).
+- **If this item came from a Project #4 backlog ticket, move it `Backlog → In Progress`** now (see
+  CLAUDE.md → *Backlog* for the `gh project item-edit` command + IDs). The `→ Done` move happens in Step 4
+  when the review gate stamps `Implemented`. A roadmap item with no board ticket skips both moves.
 
 ## Step 4 — Per item: implement + review until green (the `adr-impl` / `adr-impl-review` loop)
 
