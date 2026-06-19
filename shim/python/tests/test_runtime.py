@@ -33,16 +33,17 @@ def test_resolve_handler_not_callable(tmp_path: Path) -> None:
         runtime.resolve_handler(module, "handle")
 
 
-# ---- resolve_validators: the baked __funcd_*_schema (JSON Schema) → I/O validators (ADR-0058).
-# The build generates these from the author's pydantic model; the runtime sees only the dict. ----
+# ---- resolve_validators: the baked __funcd_validate_* callables (ADR-0058). The build compiles
+# these from the schema via fastjsonschema; the runtime just reads the callables, exactly like
+# Node reads __funcdValidate*. ([] ⇒ valid.) ----
 
 _INPUT = (
-    "__funcd_input_schema = {'type': 'object', 'properties': {'hello': {'type': 'string'}}, "
-    "'required': ['hello'], 'additionalProperties': False}\n"
+    "def __funcd_validate_input(d):\n"
+    "    return [] if isinstance(d, dict) and isinstance(d.get('hello'), str) else ['bad input']\n"
 )
 _OUTPUT = (
-    "__funcd_output_schema = {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}, "
-    "'required': ['ok'], 'additionalProperties': False}\n"
+    "def __funcd_validate_output(d):\n"
+    "    return [] if isinstance(d, dict) and isinstance(d.get('ok'), bool) else ['bad output']\n"
 )
 
 
@@ -68,22 +69,12 @@ def test_resolve_validators_output_present(tmp_path: Path) -> None:
     assert v.output({"ok": "nope"}), "a wrong-typed result yields errors"
 
 
-def test_resolve_validators_void_output(tmp_path: Path) -> None:
+def test_resolve_validators_noncallable_ignored(tmp_path: Path) -> None:
+    # a non-callable export is treated as absent (unchecked), mirroring the Node shim — not trusted.
     module = runtime.load_module(
-        _artifact(tmp_path, "__funcd_output_schema = None\ndef handle(ctx, e):\n    return None\n")
+        _artifact(tmp_path, "__funcd_validate_input = 42\ndef handle(ctx, e):\n    return None\n")
     )
-    v = runtime.resolve_validators(module)
-    assert v.output is not None
-    assert v.output(None) == []  # empty is valid
-    assert v.output({"x": 1}), "a non-empty result violates the void contract"
-
-
-def test_resolve_validators_bad_schema_is_shape_error(tmp_path: Path) -> None:
-    module = runtime.load_module(
-        _artifact(tmp_path, "__funcd_input_schema = 42\ndef handle(ctx, e):\n    return None\n")
-    )
-    with pytest.raises(runtime.ShapeError):
-        runtime.resolve_validators(module)
+    assert runtime.resolve_validators(module).input is None
 
 
 def test_load_module_import_error(tmp_path: Path) -> None:
