@@ -1,37 +1,57 @@
-# funcdconfig.yaml — the funcd daemon config for running the examples locally (ADR-0061).
+# funcdconfig.yaml — the funcd daemon config (ADR-0061). This file documents EVERY available key:
+# the values used to run the examples locally are uncommented; the rest are commented out, each
+# showing its built-in default so you can see the whole surface at a glance.
 #
 # Start the daemon against it:   funcd --config examples/funcdconfig.yaml
-# It's OPTIONAL: every key has a built-in default, so `funcd` runs with no config at all. Precedence
-# is flag > env (FUNCD_*) > this file > default — so a FUNCD_* env var still overrides any value here.
+# The file is OPTIONAL — every key has a default, so `funcd` runs with no config at all. Precedence
+# is flag > env (FUNCD_*) > this file > default, so a FUNCD_* env var still overrides any value here.
 #
-# This is a zero-infra DEV config: an in-memory substrate (nothing on disk) + the process runtime
-# (the embedded Node/Python shim), with the control plane and data plane on localhost. For a real
-# deployment use storage.mode: file, runtime.mode: containerd, a real auth.token, and a
-# secrets.encryptionKeyFile.
-apiVersion: funcd.io/v1alpha1
-kind: FuncdConfig
+# As shipped this is a zero-infra DEV config: in-memory substrate (nothing on disk) + the process
+# runtime (the embedded Node/Python shim), control plane + data plane on localhost. For a real
+# deployment, switch storage.mode → file, runtime.mode → containerd, set a real auth.token, and a
+# secrets.encryptionKeyFile (see the commented blocks).
+apiVersion: funcd.io/v1alpha1     # optional envelope (validated only if present)
+kind: FuncdConfig                 # optional
 
+# --- server: the control-plane + data-plane bind addresses (code-only before ADR-0061) ----------
 server:
-  listenAddr: 127.0.0.1:8080      # control-plane API (funcdcli --server http://127.0.0.1:8080)
-  dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress (curl http://127.0.0.1:8081/function/<name>)
+  listenAddr: 127.0.0.1:8080      # control-plane API. default: 0.0.0.0:8080
+  dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress. default: 127.0.0.1:0 (ephemeral)
 
+# --- storage: the blob+bus substrate (ADR-0043) + the data root --------------------------------
 storage:
-  mode: memory                    # ephemeral — nothing persisted (use `file` for a durable deploy)
-  dataDir: /tmp/funcd-demo        # where the process shim + (in file mode) blob/nats live
+  mode: memory                    # file | memory. default: file (memory = ephemeral, nothing on disk)
+  dataDir: /tmp/funcd-demo        # data root (process shim + file-mode blob/nats). default: /var/lib/funcd
 
+# --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
 auth:
-  token: funcd-dev-token          # the control-plane credential (export FUNCD_TOKEN to match)
-  namespaces: [default]
+  token: funcd-dev-token          # control-plane credential. default: a built-in dev token (with a warning)
+  namespaces: [default]           # namespaces the token grants. default: [default]
 
+# --- runtime: the function-execution lane (ADR-0036/0054) --------------------------------------
 runtime:
-  mode: process                   # the embedded shim on the host (use `containerd` for the prod lane)
+  mode: process                   # process | containerd. default: process (embedded shim; containerd = prod lane)
+  # containerd:                   # used only when mode: containerd
+  #   socket: ""                  # external containerd socket. default: "" (funcd manages a private one, ADR-0054)
+  #   root: ""                    # containerd state root. default: <dataDir>/containerd
+  #   snapshotter: overlayfs      # default: overlayfs
+  #   cniBinDir: /opt/cni/bin     # CNI plugin dir. default: /opt/cni/bin
+  #   cniConfDir: ""              # CNI conflist dir. default: <dataDir>/cni
+  #   subnetCIDR: 10.63.0.0/16    # lateral bridge subnet. default: 10.63.0.0/16
+  #   imagePrefix: funcd/runtime- # curated image prefix. default: funcd/runtime-
+  #   imageOverride: {}           # map[runtimeFamily]ref — pull a runtime from a registry instead of the embedded tar
 
-log:
-  format: text                    # human-readable for local dev (json is the prod default)
-  level: info
-
+# --- secrets: at-rest encryption of Secret values (ADR-0022) -----------------------------------
 # secrets:
-#   encryptionKeyFile: /etc/funcd/secret.key   # a 32-byte AES-256 key → Secret values encrypted at rest
+#   encryptionKeyFile: /etc/funcd/secret.key   # path to a 32-byte AES-256 key. default: "" ⇒ Secret values
+#                                              #   are NOT encrypted (a startup warning). Never inline the key.
+
+# --- log: structured logging (ADR-0009) --------------------------------------------------------
+log:
+  format: text                    # json | text. default: json (text is the dev default)
+  level: info                     # debug | info | warn | error. default: info
+
+# --- telemetry: OpenTelemetry export (empty endpoint ⇒ disabled) -------------------------------
 # telemetry:
-#   endpoint: localhost:4317                    # OTLP gRPC collector; empty ⇒ telemetry disabled
-#   insecure: true
+#   endpoint: localhost:4317      # OTLP gRPC collector. default: "" ⇒ telemetry disabled
+#   insecure: true                # plaintext OTLP (no TLS), for a local collector. default: false
