@@ -943,5 +943,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0059-implementation-claude-opus-4-8.md",
     "notes": "F30 OCI contract metadata: Push+contract layer/annotation, Pull-by-mediatype, Inspect (manifest+contract blob only, proven by a counting target), funcdcli inspect + labeled --contract-input/-output. 5/5 scenarios pass; no new dep; four sub-checks green."
+  },
+  {
+    "date": "2026-06-19",
+    "adr": "0061",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0061-implementation-claude-opus-4-8.md",
+    "notes": "funcdconfig.yaml operator config: internal/config leaf (Locate/Load/Resolve, precedence flag>env>file>default), cmd/funcd wiring (addresses/logger/telemetry/store-encryptor), example yaml. 7/7 scenarios pass; headline addr gap closed + proven; ADR-0022 encryptor finally wired; sigs.k8s.io/yaml (MIT+BSD-3). bench RSS flake unrelated (passes on retry)."
   }
 ]

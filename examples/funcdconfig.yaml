@@ -1,0 +1,37 @@
+# funcdconfig.yaml — the funcd daemon config for running the examples locally (ADR-0061).
+#
+# Start the daemon against it:   funcd --config examples/funcdconfig.yaml
+# It's OPTIONAL: every key has a built-in default, so `funcd` runs with no config at all. Precedence
+# is flag > env (FUNCD_*) > this file > default — so a FUNCD_* env var still overrides any value here.
+#
+# This is a zero-infra DEV config: an in-memory substrate (nothing on disk) + the process runtime
+# (the embedded Node/Python shim), with the control plane and data plane on localhost. For a real
+# deployment use storage.mode: file, runtime.mode: containerd, a real auth.token, and a
+# secrets.encryptionKeyFile.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+
+server:
+  listenAddr: 127.0.0.1:8080      # control-plane API (funcdcli --server http://127.0.0.1:8080)
+  dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress (curl http://127.0.0.1:8081/function/<name>)
+
+storage:
+  mode: memory                    # ephemeral — nothing persisted (use `file` for a durable deploy)
+  dataDir: /tmp/funcd-demo        # where the process shim + (in file mode) blob/nats live
+
+auth:
+  token: funcd-dev-token          # the control-plane credential (export FUNCD_TOKEN to match)
+  namespaces: [default]
+
+runtime:
+  mode: process                   # the embedded shim on the host (use `containerd` for the prod lane)
+
+log:
+  format: text                    # human-readable for local dev (json is the prod default)
+  level: info
+
+# secrets:
+#   encryptionKeyFile: /etc/funcd/secret.key   # a 32-byte AES-256 key → Secret values encrypted at rest
+# telemetry:
+#   endpoint: localhost:4317                    # OTLP gRPC collector; empty ⇒ telemetry disabled
+#   insecure: true

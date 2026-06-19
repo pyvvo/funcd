@@ -115,9 +115,14 @@ The deliverable is `src/handler.py` itself. Push it and apply a `Function` with
 `runtime: python312` and `handler: handle`:
 
 ```bash
+funcd --config ../../funcdconfig.yaml &   # start the daemon (zero-infra dev config, ADR-0061)
 funcdcli push src/handler.py
-funcdcli apply -f function.yaml   # spec.runtime: python312, spec.handler: handle
+funcdcli apply -f function.yaml           # spec.runtime: python312, spec.handler: handle
 ```
+
+[`examples/funcdconfig.yaml`](../../funcdconfig.yaml) is the shared daemon config (in-memory
+substrate + process runtime + localhost addresses); it's optional — `funcd` runs with all defaults
+if omitted.
 
 The platform's curated Python image runs the shim, which loads this module, validates each
 event's `data` against the baked `FuncInput` validator, invokes `handle`, validates the result

@@ -33,6 +33,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	gocloud.dev v0.46.0
 	oras.land/oras-go/v2 v2.6.1
+	sigs.k8s.io/yaml v1.6.0
 	slatedb.io/slatedb-go v0.13.1
 )
 

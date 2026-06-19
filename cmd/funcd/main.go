@@ -14,16 +14,19 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
+	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
+	"github.com/green-0-rabbit/funcd/internal/config"
+	"github.com/green-0-rabbit/funcd/internal/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime/containerd"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
 	"github.com/green-0-rabbit/funcd/internal/runtime/process"
+	"github.com/green-0-rabbit/funcd/internal/secrets/aesgcm"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/store/memory"
 	"github.com/green-0-rabbit/funcd/internal/version"
@@ -43,15 +46,24 @@ func main() {
 // `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam).
 func newRootCmd(out io.Writer) *cobra.Command {
 	var memoryOnly bool
+	var configPath string
 	root := &cobra.Command{
 		Use:           "funcd",
 		Short:         "funcd — the single-binary serverless platform daemon",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE:          func(cmd *cobra.Command, _ []string) error { return serve(cmd.Context(), memoryOnly) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var memoryFlag *bool // nil ⇒ --memory not set (config/default decides the substrate)
+			if cmd.Flags().Changed("memory") {
+				memoryFlag = &memoryOnly
+			}
+			return serve(cmd.Context(), configPath, memoryFlag)
+		},
 	}
 	root.Flags().BoolVar(&memoryOnly, "memory", false,
 		"run fully in memory (ephemeral — no disk); default is file-backed/durable (ADR-0043)")
+	root.Flags().StringVar(&configPath, "config", "",
+		"path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml; ADR-0061)")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build identity and exit",
@@ -67,48 +79,44 @@ func newRootCmd(out io.Writer) *cobra.Command {
 	return root
 }
 
-// serve assembles the platform (drivers + execution wiring) and runs it until a signal arrives.
-// memoryOnly selects the substrate: file-backed/durable by default, fully in-memory when set (ADR-0043).
-func serve(parent context.Context, memoryOnly bool) error {
-	// The control-plane credential: a developer token from FUNCD_TOKEN, or the
-	// built-in dev token with a warning (Production() ships no default token — ADR-0028).
-	token := os.Getenv("FUNCD_TOKEN")
-	if token == "" {
-		token = funcd.DevToken
-		slog.Warn("funcd: FUNCD_TOKEN unset — using the built-in dev token (not for production)")
+// serve resolves the operator config (funcdconfig.yaml, ADR-0061; precedence flag > env > file >
+// default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
+// --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate).
+func serve(parent context.Context, configPath string, memoryFlag *bool) error {
+	// Locate + load + resolve funcdconfig.yaml into the effective config.
+	path, err := config.Locate(configPath)
+	if err != nil {
+		return err
 	}
-
-	dataDir := envOr("FUNCD_DATA_DIR", "/var/lib/funcd")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return fmt.Errorf("create data dir %s: %w", dataDir, err)
+	file, err := config.Load(path)
+	if err != nil {
+		return err
 	}
-
-	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with --memory (ADR-0043).
-	substrateOpts, substrate, err := substrateOptions(parent, memoryOnly, dataDir)
+	cfg, err := config.Resolve(file, config.Flags{MemoryOnly: memoryFlag})
 	if err != nil {
 		return err
 	}
 
-	// Production() wires the fixed production drivers + the data-plane listener (ADR-0028/0033).
-	// The store stays the memory driver (slatedb is a build-tag lane, ADR-0026); blob + bus are the
-	// selected substrate; the runtime + execution wiring is selected by FUNCD_RUNTIME (ADR-0036).
-	opts := []funcd.Option{funcd.Production()}
-	opts = append(opts, substrateOpts...)
-	opts = append(opts,
-		funcd.WithStore(store.New(memory.New())),
-		funcd.WithDevAuth(token, "default"),
-		funcd.WithArtifactStore(filepath.Join(dataDir, "artifacts")),
-	)
-	execOpts, closeExec, err := executionOptions(parent, dataDir)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		return fmt.Errorf("create data dir %s: %w", cfg.DataDir, err)
+	}
+
+	// Logger from log.format/level (overrides the preset's logger, ADR-0061 §6).
+	logger, err := buildLogger(cfg)
 	if err != nil {
-		return fmt.Errorf("wire execution: %w", err)
+		return fmt.Errorf("build logger: %w", err)
+	}
+	root := logger.Root()
+
+	opts, closeExec, substrate, err := buildOptions(parent, cfg, root)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		if cerr := closeExec(); cerr != nil {
-			slog.Warn("funcd: closing execution runtime", "error", cerr)
+			root.Warn("funcd: closing execution runtime", "error", cerr)
 		}
 	}()
-	opts = append(opts, execOpts...)
 
 	platform, err := funcd.New(opts...)
 	if err != nil {
@@ -118,13 +126,131 @@ func serve(parent context.Context, memoryOnly bool) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	slog.InfoContext(ctx, "funcd starting",
-		"version", version.Get().Version, "commit", version.Get().Commit, "substrate", substrate)
+	root.InfoContext(ctx, "funcd starting",
+		"version", version.Get().Version, "commit", version.Get().Commit, "substrate", substrate, "config", configSource(path))
 
 	if err := platform.Run(ctx); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
 	return nil
+}
+
+// buildOptions assembles the daemon's []funcd.Option from the resolved config (ADR-0061): the
+// production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
+// bind addresses, the logger, telemetry, and the execution wiring. It returns the options, the
+// execution closer the caller must defer, and the substrate label. The platform owns the drivers.
+func buildOptions(ctx context.Context, cfg config.Resolved, root *slog.Logger) ([]funcd.Option, func() error, string, error) {
+	// Control-plane credential: auth.token / FUNCD_TOKEN, or the built-in dev token + a warning
+	// (Production() ships no default token — ADR-0028).
+	token := cfg.Token
+	if token == "" {
+		token = funcd.DevToken
+		root.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
+	}
+
+	st, err := buildStore(cfg, root)
+	if err != nil {
+		return nil, noopClose, "", err
+	}
+
+	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
+	substrateOpts, substrate, err := substrateOptions(ctx, cfg.StorageMode == "memory", cfg.DataDir)
+	if err != nil {
+		return nil, noopClose, "", err
+	}
+
+	// Production() wires the fixed production drivers + the data-plane listener (ADR-0028/0033); the
+	// store, substrate, addresses, logger, and execution wiring are resolved from the config.
+	opts := []funcd.Option{funcd.Production()}
+	opts = append(opts, substrateOpts...)
+	opts = append(opts,
+		funcd.WithStore(st),
+		funcd.WithDevAuth(token, cfg.Namespaces...),
+		funcd.WithArtifactStore(filepath.Join(cfg.DataDir, "artifacts")),
+		funcd.WithListenAddr(cfg.ListenAddr),
+		funcd.WithDataPlaneAddr(cfg.DataPlaneAddr),
+		funcd.WithLogger(root),
+	)
+	// Telemetry: override the preset's no-op pipeline only when an OTLP endpoint is configured.
+	if cfg.TelemetryEndpoint != "" {
+		tel, terr := observability.NewTelemetry(ctx,
+			observability.TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, Insecure: cfg.TelemetryInsecure})
+		if terr != nil {
+			return nil, noopClose, "", fmt.Errorf("build telemetry: %w", terr)
+		}
+		opts = append(opts, funcd.WithTelemetry(tel))
+	}
+
+	execOpts, closeExec, err := executionOptions(ctx, cfg)
+	if err != nil {
+		return nil, noopClose, "", fmt.Errorf("wire execution: %w", err)
+	}
+	opts = append(opts, execOpts...)
+	return opts, closeExec, substrate, nil
+}
+
+// buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
+func buildLogger(cfg config.Resolved) (*observability.Logger, error) {
+	format := observability.FormatJSON
+	if cfg.LogFormat == "text" {
+		format = observability.FormatText
+	}
+	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.LogLevel)}, os.Stdout)
+}
+
+// parseLevel maps a validated level string to a slog.Level (config already rejected bad values).
+func parseLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
+// when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
+// unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
+func buildStore(cfg config.Resolved, log *slog.Logger) (store.Store, error) {
+	enc, err := secretEncryptor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if enc == nil {
+		log.Warn("funcd: no secrets.encryptionKeyFile — Secret values are NOT encrypted in the durable-store lane (set a 32-byte key file)")
+		return store.New(memory.New()), nil
+	}
+	return store.New(memory.New(), store.WithEncryptor([]v1.Kind{v1.KindSecret}, enc)), nil
+}
+
+// secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
+// 32-byte key file → an AES-256-GCM encryptor; "" ⇒ nil (no encryption); a non-32-byte key ⇒ a
+// fault.Invalid (never silently weak crypto).
+func secretEncryptor(cfg config.Resolved) (store.Encryptor, error) {
+	if cfg.SecretsEncryptionKeyFile == "" {
+		return nil, nil
+	}
+	key, err := os.ReadFile(cfg.SecretsEncryptionKeyFile) //nolint:gosec // operator-supplied key path
+	if err != nil {
+		return nil, fmt.Errorf("read secrets.encryptionKeyFile %s: %w", cfg.SecretsEncryptionKeyFile, err)
+	}
+	enc, err := aesgcm.NewAESEncryptor(key) // validates exactly 32 bytes (AES-256)
+	if err != nil {
+		return nil, fmt.Errorf("secrets encryptor: %w", err)
+	}
+	return enc, nil
+}
+
+// configSource labels where the config came from, for the startup log.
+func configSource(path string) string {
+	if path == "" {
+		return "defaults (no funcdconfig.yaml)"
+	}
+	return path
 }
 
 // substrateOptions builds the blob + bus drivers for the daemon (ADR-0043): in-memory (ephemeral,
@@ -163,21 +289,21 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 // noopClose is the execution closer for the process lane (nothing to tear down).
 func noopClose() error { return nil }
 
-// executionOptions selects the runtime driver + function-execution wiring from
-// FUNCD_RUNTIME (ADR-0036): "containerd" → the containerd/crun worker running curated
-// images; anything else (default) → the process driver running the embedded Node shim. It
-// returns a closer the caller must defer — for containerd mode it stops the ctrmanager-
-// supervised private containerd (ADR-0054); for process mode it is a no-op.
-func executionOptions(ctx context.Context, dataDir string) ([]funcd.Option, func() error, error) {
-	if os.Getenv("FUNCD_RUNTIME") == "containerd" {
+// executionOptions selects the runtime driver + function-execution wiring from the resolved
+// runtime.mode (ADR-0036/0061): "containerd" → the containerd/crun worker running curated images
+// (its lane settings from cfg.Containerd); else (default) → the process driver running the embedded
+// Node shim. It returns a closer the caller must defer — for containerd mode it stops the
+// ctrmanager-supervised private containerd (ADR-0054); for process mode it is a no-op.
+func executionOptions(ctx context.Context, cfg config.Resolved) ([]funcd.Option, func() error, error) {
+	if cfg.RuntimeMode == "containerd" {
+		c := cfg.Containerd
 		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
-		// supervises a PRIVATE containerd and imports the embedded curated images; with
-		// --containerd/FUNCD_CONTAINERD_SOCKET set it returns that external socket and starts no
-		// child. The driver then dials whatever socket Ensure yields.
+		// supervises a PRIVATE containerd and imports the embedded curated images; with an external
+		// socket set it returns that socket and starts no child. The driver dials whatever Ensure yields.
 		mgr, err := ctrmanager.New(ctrmanager.Config{
-			ExternalSocket: os.Getenv("FUNCD_CONTAINERD_SOCKET"),
-			DataRoot:       envOr("FUNCD_CONTAINERD_ROOT", filepath.Join(dataDir, "containerd")),
-			ImageOverride:  imageOverrides(),
+			ExternalSocket: c.Socket,
+			DataRoot:       c.Root,
+			ImageOverride:  c.ImageOverride,
 		})
 		if err != nil {
 			return nil, noopClose, fmt.Errorf("build container manager: %w", err)
@@ -185,21 +311,20 @@ func executionOptions(ctx context.Context, dataDir string) ([]funcd.Option, func
 		socket, err := mgr.Ensure(ctx)
 		if err != nil {
 			_ = mgr.Close()
-			return nil, noopClose, fmt.Errorf("ensure container runtime (private containerd is Linux+root; pass --containerd <socket> otherwise): %w", err)
+			return nil, noopClose, fmt.Errorf("ensure container runtime (private containerd is Linux+root; set runtime.containerd.socket otherwise): %w", err)
 		}
 		cd, err := containerd.New(containerd.Config{
 			Socket:      socket,
-			Snapshotter: envOr("FUNCD_SNAPSHOTTER", "overlayfs"),
-			CNIBinDir:   envOr("FUNCD_CNI_BIN_DIR", "/opt/cni/bin"),
-			CNIConfDir:  envOr("FUNCD_CNI_CONF_DIR", filepath.Join(dataDir, "cni")),
-			SubnetCIDR:  envOr("FUNCD_SUBNET_CIDR", "10.63.0.0/16"),
+			Snapshotter: c.Snapshotter,
+			CNIBinDir:   c.CNIBinDir,
+			CNIConfDir:  c.CNIConfDir,
+			SubnetCIDR:  c.SubnetCIDR,
 		})
 		if err != nil {
 			_ = mgr.Close()
-			return nil, noopClose, fmt.Errorf("containerd runtime (FUNCD_RUNTIME=containerd is Linux-only): %w", err)
+			return nil, noopClose, fmt.Errorf("containerd runtime (runtime.mode: containerd is Linux-only): %w", err)
 		}
-		prefix := envOr("FUNCD_IMAGE_PREFIX", "funcd/runtime-")
-		imageFor := func(rt string) string { return prefix + rt + ":latest" }
+		imageFor := func(rt string) string { return c.ImagePrefix + rt + ":latest" }
 		return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(imageFor)}, mgr.Close, nil
 	}
 
@@ -215,7 +340,7 @@ func executionOptions(ctx context.Context, dataDir string) ([]funcd.Option, func
 		slog.Warn("funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
 		return opts, noopClose, nil
 	}
-	shimPath := filepath.Join(dataDir, "shim.mjs")
+	shimPath := filepath.Join(cfg.DataDir, "shim.mjs")
 	if werr := os.WriteFile(shimPath, shimnode.Shim, 0o600); werr != nil {
 		return nil, noopClose, fmt.Errorf("extract runtime shim to %s: %w", shimPath, werr)
 	}
@@ -234,7 +359,7 @@ func executionOptions(ctx context.Context, dataDir string) ([]funcd.Option, func
 		slog.Info("funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
 		return opts, noopClose, nil
 	}
-	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(dataDir, "shim-python"))
+	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.DataDir, "shim-python"))
 	if perr != nil {
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
@@ -249,26 +374,6 @@ func executionOptions(ctx context.Context, dataDir string) ([]funcd.Option, func
 		slog.Info("funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
-}
-
-// imageOverrides parses FUNCD_IMAGE_OVERRIDE ("runtime=ref,runtime=ref") into the Manager's
-// --image override map (ADR-0054): a listed runtime is pulled from its registry ref instead
-// of imported from the embedded curated tar. Empty/malformed entries are skipped.
-func imageOverrides() map[string]string {
-	raw := os.Getenv("FUNCD_IMAGE_OVERRIDE")
-	if raw == "" {
-		return nil
-	}
-	out := map[string]string{}
-	for _, pair := range strings.Split(raw, ",") {
-		if rt, ref, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && rt != "" && ref != "" {
-			out[rt] = ref
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // pythonAtLeast314 reports whether the interpreter at path is Python ≥3.14 (the floor for the

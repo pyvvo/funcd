@@ -83,12 +83,15 @@ npm run build       # esbuild → handler.mjs (the single self-contained artifac
 `handler.mjs` — the same way the shim itself is bundled. That file is the OCI artifact:
 
 ```bash
+funcd --config ../../funcdconfig.yaml &           # start the daemon (zero-infra dev config, ADR-0061)
 funcdcli push handler.mjs oci-layout:///tmp/funcd-demo/layout:v1
 funcdcli apply -f function.yaml      # no digest — the platform pins it (ADR-0035)
-curl -XPOST <data-plane>/function/hello -d '{"name":"funcd"}'
+curl -XPOST http://127.0.0.1:8081/function/hello -d '{"name":"funcd"}'
 ```
 
-`just demo` runs this whole journey end to end.
+[`examples/funcdconfig.yaml`](../../funcdconfig.yaml) is the shared daemon config (in-memory
+substrate + process runtime + localhost addresses); it's optional — `funcd` runs with all defaults
+if omitted. `just demo` runs this whole journey end to end.
 
 ## Notes
 

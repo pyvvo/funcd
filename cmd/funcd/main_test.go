@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/artifact"
+	"github.com/green-0-rabbit/funcd/internal/config"
 	"github.com/green-0-rabbit/funcd/internal/runtime/process"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/store/memory"
@@ -106,7 +108,7 @@ func TestExecutionOptionsProcessExtractsShim(t *testing.T) {
 	t.Setenv("FUNCD_NODE", node)
 	dir := t.TempDir()
 
-	opts, closeExec, err := executionOptions(context.Background(), dir)
+	opts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: dir, RuntimeMode: "process"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	require.NotEmpty(t, opts, "process mode wires the runtime + shim")
@@ -123,7 +125,7 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	t.Setenv("FUNCD_NODE", "") // no explicit node
 	t.Setenv("PATH", "")       // and none on PATH
 
-	opts, closeExec, err := executionOptions(context.Background(), t.TempDir())
+	opts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: t.TempDir(), RuntimeMode: "process"})
 	require.NoError(t, err, "missing node degrades, never errors")
 	t.Cleanup(func() { _ = closeExec() })
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
@@ -134,9 +136,17 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 // Linux reports "Linux-only" and on Linux-non-root reports "needs root" → executionOptions
 // fails fast either way (no silent no-op).
 func TestExecutionOptionsContainerdMode(t *testing.T) {
-	t.Setenv("FUNCD_RUNTIME", "containerd")
-	t.Setenv("FUNCD_CONTAINERD_SOCKET", "") // force the private-managed path
-	_, closeExec, err := executionOptions(context.Background(), t.TempDir())
+	// runtime.mode: containerd with no external socket forces the private-managed path (ADR-0054).
+	cfg := config.Resolved{
+		RuntimeMode: "containerd",
+		DataDir:     t.TempDir(),
+		Containerd: config.Containerd{
+			Root: filepath.Join(t.TempDir(), "containerd"), Snapshotter: "overlayfs",
+			CNIBinDir: "/opt/cni/bin", CNIConfDir: filepath.Join(t.TempDir(), "cni"),
+			SubnetCIDR: "10.63.0.0/16", ImagePrefix: "funcd/runtime-",
+		},
+	}
+	_, closeExec, err := executionOptions(context.Background(), cfg)
 	if closeExec != nil {
 		t.Cleanup(func() { _ = closeExec() })
 	}
@@ -155,7 +165,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 		t.Skip("node not on PATH")
 	}
 	// Build the platform like cmd/funcd does, but InMemory for ephemeral ports.
-	execOpts, closeExec, err := executionOptions(context.Background(), t.TempDir()) // extracts the embedded shim + WithRuntimeShim
+	execOpts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: t.TempDir(), RuntimeMode: "process"}) // extracts the embedded shim + WithRuntimeShim
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	opts := append([]funcd.Option{funcd.InMemory(), funcd.WithArtifactStore(t.TempDir())}, execOpts...)
@@ -203,4 +213,81 @@ func TestDaemonExecutesFunction(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "invoked over HTTP: %s", body)
 	require.Contains(t, string(body), "echoed")
+}
+
+// scenario: file-sets-addresses — a funcdconfig.yaml sets the (previously code-only) control-plane
+// + data-plane addresses; the assembled platform binds them (the headline ADR-0061 gap closed).
+func TestScenarioFileSetsAddresses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	// loopback + ephemeral port ⇒ deterministic + conflict-free; memory substrate ⇒ zero-infra.
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+
+	loc, err := config.Locate(path)
+	require.NoError(t, err)
+	file, err := config.Load(loc)
+	require.NoError(t, err)
+	cfg, err := config.Resolve(file, config.Flags{})
+	require.NoError(t, err)
+
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	opts, closeExec, _, err := buildOptions(context.Background(), cfg, root)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeExec() })
+
+	p, err := funcd.New(opts...)
+	require.NoError(t, err)
+	// Production's default is 0.0.0.0:8080; the config set 127.0.0.1:0 → a loopback, ephemeral bind.
+	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
+	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
+	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
+}
+
+// scenario: secrets-keyfile-activates-encryption — a 32-byte secrets.encryptionKeyFile wires the
+// store's at-rest encryptor (ADR-0022): the value bytes are ciphertext. No key ⇒ unencrypted (+ a
+// warning); a non-32-byte key ⇒ rejected (never silently weak).
+func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// no key ⇒ nil encryptor (unencrypted); buildStore still succeeds (with a warning).
+	enc, err := secretEncryptor(config.Resolved{})
+	require.NoError(t, err)
+	require.Nil(t, enc, "no keyfile ⇒ no encryptor")
+	_, err = buildStore(config.Resolved{}, root)
+	require.NoError(t, err)
+
+	// a 32-byte key ⇒ an encryptor whose output is ciphertext (Secret value bytes encrypted at rest).
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	keyFile := filepath.Join(t.TempDir(), "secret.key")
+	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
+	enc, err = secretEncryptor(config.Resolved{SecretsEncryptionKeyFile: keyFile})
+	require.NoError(t, err)
+	require.NotNil(t, enc)
+	ct, err := enc.Encrypt(context.Background(), []byte("super-secret-value"))
+	require.NoError(t, err)
+	require.NotEqual(t, []byte("super-secret-value"), ct, "the stored Secret value bytes are ciphertext")
+	_, err = buildStore(config.Resolved{SecretsEncryptionKeyFile: keyFile}, root)
+	require.NoError(t, err, "a valid 32-byte key wires the store encryptor")
+
+	// a non-32-byte key ⇒ an error (never silently weak crypto).
+	badFile := filepath.Join(t.TempDir(), "bad.key")
+	require.NoError(t, os.WriteFile(badFile, []byte("too-short"), 0o600))
+	_, err = buildStore(config.Resolved{SecretsEncryptionKeyFile: badFile}, root)
+	require.Error(t, err, "a non-32-byte key is rejected")
+}
+
+// the shipped example funcdconfig.yaml loads + resolves cleanly (guards it against drifting).
+func TestExampleConfigResolves(t *testing.T) {
+	file, err := config.Load("../../examples/funcdconfig.yaml")
+	require.NoError(t, err)
+	cfg, err := config.Resolve(file, config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "memory", cfg.StorageMode) // file value (no env tier) ⇒ deterministic
+	require.Equal(t, "127.0.0.1:8080", cfg.ListenAddr)
+	require.Equal(t, "text", cfg.LogFormat)
 }
