@@ -2,6 +2,7 @@ package artifact_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,7 +33,7 @@ func TestScenarioCLIPushesArtifact(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
 
-	digest, err := artifact.Push(context.Background(), ref, bundle)
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil)
 	require.NoError(t, err)
 	require.Contains(t, digest, "sha256:", "Push prints a sha256 descriptor digest for spec.artifact.digest")
 }
@@ -45,7 +46,7 @@ func TestScenarioPushPullRoundtrips(t *testing.T) {
 	body := "export function handle(_, e) { return e; }\n"
 	bundle := writeBundle(t, body)
 
-	digest, err := artifact.Push(context.Background(), ref, bundle)
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil)
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
@@ -63,7 +64,7 @@ func TestScenarioPlatformPullsArtifact(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	digest, err := artifact.Push(context.Background(), ref, bundle)
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil)
 	require.NoError(t, err)
 
 	// empty digest is rejected (the digest is the authority).
@@ -89,7 +90,7 @@ func TestScenarioMaterializerSatisfiesADR0030Seam(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	body := "export function handle() {}\n"
 	bundle := writeBundle(t, body)
-	digest, err := artifact.Push(context.Background(), ref, bundle)
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil)
 	require.NoError(t, err)
 
 	m := artifact.NewOrasMaterializer(t.TempDir())
@@ -134,7 +135,7 @@ func TestScenarioResolveTagToDigest(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	pushed, err := artifact.Push(context.Background(), ref, bundle)
+	pushed, err := artifact.Push(context.Background(), ref, bundle, nil)
 	require.NoError(t, err)
 
 	m := artifact.NewOrasMaterializer(t.TempDir())
@@ -144,4 +145,89 @@ func TestScenarioResolveTagToDigest(t *testing.T) {
 
 	_, err = m.Resolve(context.Background(), layoutRef(t, "absent"))
 	require.Error(t, err, "an unknown tag fails to resolve")
+}
+
+const (
+	schemaIn  = `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`
+	schemaOut = `{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`
+)
+
+// scenario: contract-embedded-on-push — a contracted push carries the I/O schemas as OCI metadata;
+// Inspect reads them back as the {input?, output?, dialect} payload (ADR-0059).
+func TestScenarioContractEmbeddedOnPush(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	bundle := writeBundle(t, "export function handle() {}\n")
+	blob, err := artifact.ContractBlob([]byte(schemaIn), []byte(schemaOut))
+	require.NoError(t, err)
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob)
+	require.NoError(t, err)
+
+	got, err := artifact.Inspect(context.Background(), ref, digest)
+	require.NoError(t, err)
+	var payload struct {
+		Input   json.RawMessage `json:"input"`
+		Output  json.RawMessage `json:"output"`
+		Dialect string          `json:"dialect"`
+	}
+	require.NoError(t, json.Unmarshal(got, &payload))
+	require.JSONEq(t, schemaIn, string(payload.Input))
+	require.JSONEq(t, schemaOut, string(payload.Output))
+	require.Equal(t, "https://json-schema.org/draft/2020-12/schema", payload.Dialect)
+}
+
+// scenario: no-contract-no-metadata — a nil-contract push is the unchanged ADR-0031 artifact;
+// Inspect returns fault.NotFound (no contract surface added).
+func TestScenarioNoContractNoMetadata(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	bundle := writeBundle(t, "export function handle() {}\n")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil)
+	require.NoError(t, err)
+
+	_, err = artifact.Inspect(context.Background(), ref, digest)
+	require.Error(t, err)
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "a contract-less artifact → fault.NotFound on inspect")
+}
+
+// scenario: bundle-selected-by-mediatype — with a contract layer present, Pull still materializes
+// the BUNDLE (selected by media type, not by index).
+func TestScenarioBundleSelectedByMediaType(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	body := "export function handle(_, e) { return e; }\n"
+	bundle := writeBundle(t, body)
+	blob, err := artifact.ContractBlob([]byte(schemaIn), nil)
+	require.NoError(t, err)
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob)
+	require.NoError(t, err)
+
+	path, err := artifact.Pull(context.Background(), ref, digest, filepath.Join(t.TempDir(), "out"))
+	require.NoError(t, err)
+	got, err := os.ReadFile(path) //nolint:gosec // path is test-owned
+	require.NoError(t, err)
+	require.Equal(t, body, string(got), "Pull returns the bundle bytes, never the contract layer")
+}
+
+// scenario: contract-digest-pinned — inspecting by the ORIGINAL digest returns the originally
+// deployed contract even after the tag is moved to a different artifact (tamper-evident).
+func TestScenarioContractDigestPinned(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	blobA, err := artifact.ContractBlob([]byte(schemaIn), nil) // has "name"
+	require.NoError(t, err)
+	digestA, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle() {}\n"), blobA)
+	require.NoError(t, err)
+
+	// move tag v1 to a DIFFERENT artifact (different bundle ⇒ different manifest digest).
+	blobB, err := artifact.ContractBlob([]byte(schemaOut), nil) // has "ok"
+	require.NoError(t, err)
+	digestB, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle(_, e) { return e; }\n"), blobB)
+	require.NoError(t, err)
+	require.NotEqual(t, digestA, digestB, "the moved tag points at a new manifest")
+
+	got, err := artifact.Inspect(context.Background(), ref, digestA)
+	require.NoError(t, err)
+	require.Contains(t, string(got), `"name"`, "digest-pinned inspect returns the originally deployed contract")
+	require.NotContains(t, string(got), `"ok"`, "not the contract the tag now points at")
 }

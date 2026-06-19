@@ -928,5 +928,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0058-implementation-claude-opus-4-8.md",
     "notes": "Statically-defined I/O contracts end-to-end (Go gate + Node/Python codegen + precompiled eval-free validators + 422/500/204). Compute-agnostic verified (Python fastjsonschema in a subinterpreter). 2 Minors: typia\u2192ts-json-schema-generator (adr-named-tool, not model fault) + push auto-build follow-up. Go green; Node 21; Python 36."
+  },
+  {
+    "date": "2026-06-19",
+    "adr": "0059",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0059-implementation-claude-opus-4-8.md",
+    "notes": "F30 OCI contract metadata: Push+contract layer/annotation, Pull-by-mediatype, Inspect (manifest+contract blob only, proven by a counting target), funcdcli inspect + labeled --contract-input/-output. 5/5 scenarios pass; no new dep; four sub-checks green."
   }
 ]

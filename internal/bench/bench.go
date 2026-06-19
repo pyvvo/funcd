@@ -161,7 +161,7 @@ func runBackend(ctx context.Context, shimPath, bundle string, backend Backend, c
 		return Report{}, fault.Wrapf(err, fault.Internal, op, "sdk client")
 	}
 	ref := "oci-layout://" + filepath.Join(tmp, "layout") + ":v1"
-	if _, err := artifact.Push(ctx, ref, bundle); err != nil {
+	if _, err := artifact.Push(ctx, ref, bundle, nil); err != nil {
 		return Report{}, fault.Wrapf(err, fault.Internal, op, "push artifact")
 	}
 	dataPlane := "http://" + p.DataPlaneAddr()

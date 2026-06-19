@@ -178,7 +178,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle(_, e) { return { echoed: e }; }\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	_, err = artifact.Push(ctx, ref, bundle)
+	_, err = artifact.Push(ctx, ref, bundle, nil)
 	require.NoError(t, err)
 
 	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))

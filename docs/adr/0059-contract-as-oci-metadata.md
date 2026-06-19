@@ -1,8 +1,11 @@
 # ADR-0059: Function I/O contract as OCI manifest metadata — statically inspectable without running the artifact
 
-- **Status**: Proposed
+- **Status**: Implemented
 - **Date**: 2026-06-19
 - **Deciders**: green-0-rabbit
+- **Judge note (accepted 2026-06-19)**: folded the judge's Major (the keyed `{input?, output?}` blob needs labeled
+  `--contract-input`/`--contract-output` at the CLI, not the prior unlabeled `--contract`) and Minor (a bare-tag
+  inspect resolves the tag; the digest-pinning guarantee is for digest refs). Decision unchanged.
 - **Tags**: runtime, artifact, oci, contract, registry, distribution
 - **Realizes**: [FEAT-0001/F30](../feat/0001-feat-v1.1.md) (contract as OCI manifest metadata) — v1.1.
 - **Refines**: [ADR-0031](0031-oci-artifact-distribution-oras.md) — **additively** extends the OCI function artifact
@@ -144,10 +147,19 @@ func Inspect(ctx context.Context, ref, digest string) (contract []byte, err erro
 func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 ```
 
-### `funcdcli inspect`
+### `funcdcli` (push + inspect)
 
 ```
-funcdcli inspect <ref>[@<digest>]   # prints the input/output JSON Schemas; fetches manifest + contract blob only
+funcdcli push <file> <ref> [--contract-input <schema.json>] [--contract-output <schema.json>]
+    # each schema is gated against the funcd profile (contract.Check, ADR-0058/0060) BEFORE
+    # packaging, then the two are assembled into the {input?, output?, dialect} contract blob passed
+    # to artifact.Push. (Replaces the prior unlabeled repeatable --contract: the blob payload is
+    # KEYED by input/output, so the two schemas must be labeled at the CLI.)
+
+funcdcli inspect <ref>[@<digest>]
+    # prints the input/output JSON Schemas; fetches manifest + contract blob only (never the bundle,
+    # never running). A bare tag is resolved to its current manifest; the digest-pinning guarantee
+    # (inspected contract == deployed contract) holds when a <digest> is supplied.
 ```
 
 ### Dependencies & I/O
@@ -165,7 +177,10 @@ funcdcli inspect <ref>[@<digest>]   # prints the input/output JSON Schemas; fetc
   `application/vnd.funcd.contract.v1+json` blob layer + set the `dev.funcd.contract.v1` manifest annotation (via
   `PackManifestOptions{Layers, ManifestAnnotations}`). Change `Pull` to select the bundle layer by `bundleMediaType`.
   Add `Inspect` (fetch manifest by digest → read the annotation/contract layer → fetch only that blob).
-- **`cmd/funcdcli`** — wire the ADR-0058 build output into `push` (pass the contract bytes); add `funcdcli inspect`.
+- **`cmd/funcdcli`** — replace the unlabeled repeatable `--contract` with `--contract-input` / `--contract-output`
+  (each optional, each gated via `contract.Check`); assemble `{input?, output?, dialect}` and pass it to
+  `artifact.Push`. Add `funcdcli inspect` (manifest + contract blob only). A bare-tag inspect resolves the tag; the
+  pinning guarantee is for digest refs.
 - **Tests (non-gated, `just ci`)** — one per scenario: `contract-embedded-on-push` (annotation + contract layer
   present), `inspect-without-pull` (Inspect fetches manifest + contract blob, asserts the bundle blob is **not**
   fetched — a counting/fake target), `no-contract-no-metadata` (nil contract ⇒ ADR-0031 manifest unchanged),
@@ -184,6 +199,7 @@ the unchanged ADR-0031 artifact; `Pull` selects the bundle by media type; all sc
 - [ ] Contract is a dedicated `application/vnd.funcd.contract.v1+json` blob layer + a `dev.funcd.contract.v1` manifest annotation (not inlined into an annotation string).
 - [ ] `Inspect` fetches the **manifest + contract blob only** — a test asserts the **bundle blob is never fetched**.
 - [ ] `Pull` selects the bundle layer by `bundleMediaType`, robust to the added contract layer.
+- [ ] `push` takes labeled `--contract-input` / `--contract-output`, gates each, and assembles the `{input?, output?, dialect}` blob; a bare-tag inspect resolves the tag (the pinning guarantee is for digest refs).
 - [ ] No-contract push is byte-compatible with the ADR-0031 manifest (backward compatible).
 - [ ] Contract is content-addressed + read by manifest digest (tamper-evident; tag-swap-proof).
 - [ ] `funcdcli inspect` renders the input/output schemas; no new dependency; no `any` in the new surface; no identity/path leak.

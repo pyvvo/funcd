@@ -40,12 +40,58 @@ const (
 	bundleMediaType = "application/vnd.funcd.function.bundle"
 	// ociLayoutScheme marks a local OCI layout ref: oci-layout://<dir>[:<tag>].
 	ociLayoutScheme = "oci-layout://"
+	// contractMediaType is the dedicated contract-blob layer (ADR-0059): the generated I/O JSON
+	// Schema(s), statically inspectable from the manifest without pulling the bundle or running code.
+	contractMediaType = "application/vnd.funcd.contract.v1+json"
+	// contractAnnotation flags the manifest as carrying a contract (value = the contract blob digest).
+	contractAnnotation = "dev.funcd.contract.v1"
+	// contractDialect is the JSON Schema dialect the generated contracts use (ADR-0058 profile).
+	contractDialect = "https://json-schema.org/draft/2020-12/schema"
 )
+
+// ContractBlob assembles the contract-blob payload (ADR-0059): {input?, output?, dialect}. input and
+// output are the generated JSON Schemas (ADR-0058; either may be nil → that side is omitted). Returns
+// (nil, nil) when neither is present, so a contract-less push stays the unchanged ADR-0031 artifact.
+func ContractBlob(input, output []byte) ([]byte, error) {
+	const op = "artifact.ContractBlob"
+	if len(input) == 0 && len(output) == 0 {
+		return nil, nil
+	}
+	payload := struct {
+		Input   json.RawMessage `json:"input,omitempty"`
+		Output  json.RawMessage `json:"output,omitempty"`
+		Dialect string          `json:"dialect"`
+	}{Dialect: contractDialect}
+	if len(input) > 0 {
+		payload.Input = json.RawMessage(input)
+	}
+	if len(output) > 0 {
+		payload.Output = json.RawMessage(output)
+	}
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fault.Internalf(op, "marshal contract blob: %v", err)
+	}
+	return blob, nil
+}
+
+// layerByMediaType returns the first layer with media type mt (false if none) — pull/inspect select
+// a layer by what it IS, not by index, so an added contract layer never shifts the bundle (ADR-0059).
+func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descriptor, bool) {
+	for _, l := range layers {
+		if l.MediaType == mt {
+			return l, true
+		}
+	}
+	return ocispec.Descriptor{}, false
+}
 
 // Push packages file as the §1 OCI artifact and pushes it to ref's target (a local OCI
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
-// rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030).
-func Push(ctx context.Context, ref, file string) (digest string, err error) {
+// rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
+// contract is non-nil (ADR-0059), it adds a content-addressed contract blob layer +
+// the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact.
+func Push(ctx context.Context, ref, file string, contract []byte) (digest string, err error) {
 	const op = "artifact.Push"
 	data, rerr := os.ReadFile(file) //nolint:gosec // file is a user-supplied CLI argument
 	if rerr != nil {
@@ -64,9 +110,16 @@ func Push(ctx context.Context, ref, file string) (digest string, err error) {
 	if perr := target.Push(ctx, layer, bytes.NewReader(data)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
 		return "", fault.Wrapf(perr, fault.Internal, op, "push bundle blob")
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, oras.PackManifestOptions{
-		Layers: []ocispec.Descriptor{layer},
-	})
+	opts := oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}}
+	if len(contract) > 0 {
+		contractLayer := content.NewDescriptorFromBytes(contractMediaType, contract)
+		if perr := target.Push(ctx, contractLayer, bytes.NewReader(contract)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
+			return "", fault.Wrapf(perr, fault.Internal, op, "push contract blob")
+		}
+		opts.Layers = append(opts.Layers, contractLayer)
+		opts.ManifestAnnotations = map[string]string{contractAnnotation: contractLayer.Digest.String()}
+	}
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}
@@ -101,10 +154,12 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
 		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
 	}
-	if len(manifest.Layers) == 0 {
-		return "", fault.Invalidf(op, "artifact %s has no bundle layer", digest)
+	// Select the bundle layer by media type (not Layers[0]) so a contract layer (ADR-0059) never
+	// changes which bytes materialize.
+	layer, ok := layerByMediaType(manifest.Layers, bundleMediaType)
+	if !ok {
+		return "", fault.Invalidf(op, "artifact %s has no bundle layer (media type %s)", digest, bundleMediaType)
 	}
-	layer := manifest.Layers[0]
 	blob, berr := content.FetchAll(ctx, target, layer) // verifies the blob against its descriptor digest
 	if berr != nil {
 		return "", fault.Wrapf(berr, fault.Internal, op, "fetch bundle blob")
@@ -126,6 +181,55 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 		return "", fault.Wrapf(werr, fault.Internal, op, "write bundle")
 	}
 	return path, nil
+}
+
+// Inspect reads a function's I/O contract straight from its OCI manifest (ADR-0059): it fetches the
+// manifest + the small contract blob ONLY — never the bundle layer, never executing code — and
+// returns the raw contract JSON ({input?, output?, dialect}). It resolves by digest when one is
+// supplied (tamper-evident: the inspected contract == the deployed one); a bare tag is resolved to
+// its current manifest. fault.NotFound when the artifact carries no contract.
+func Inspect(ctx context.Context, ref, digest string) (contract []byte, err error) {
+	const op = "artifact.Inspect"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference // no digest given → resolve the tag to its current manifest
+	}
+	if fetchRef == "" {
+		return nil, fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
+	return inspectFrom(ctx, target, fetchRef, digest)
+}
+
+// inspectFrom is Inspect's core over an already-resolved target (the white-box seam the
+// inspect-without-pull invariant test drives with a counting target). It fetches the manifest +
+// contract blob ONLY; wantDigest (if non-empty) pins the manifest.
+func inspectFrom(ctx context.Context, target oras.ReadOnlyTarget, fetchRef, wantDigest string) ([]byte, error) {
+	const op = "artifact.Inspect"
+	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	if ferr != nil {
+		return nil, fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
+	}
+	if wantDigest != "" && manifestDesc.Digest.String() != wantDigest {
+		return nil, fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), wantDigest)
+	}
+	var manifest ocispec.Manifest
+	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
+		return nil, fault.Invalidf(op, "decode manifest: %v", jerr)
+	}
+	contractLayer, ok := layerByMediaType(manifest.Layers, contractMediaType)
+	if !ok {
+		return nil, fault.NotFoundf(op, "artifact %s carries no contract", fetchRef)
+	}
+	// Fetch ONLY the contract blob — the bundle layer is never fetched (the static-inspection invariant).
+	blob, berr := content.FetchAll(ctx, target, contractLayer) // verifies the blob against its descriptor digest
+	if berr != nil {
+		return nil, fault.Wrapf(berr, fault.Internal, op, "fetch contract blob")
+	}
+	return blob, nil
 }
 
 // Login stores registry credentials via oras-go's credential store (the local OCI layout
