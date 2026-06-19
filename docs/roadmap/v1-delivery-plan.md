@@ -61,7 +61,7 @@ the Python runtime **ADR-0049** + the secret last-mile **ADR-0057**.
 |----|----|----|----|
 | ~~P-W~~ → **ADR-0057** ✓ | **Secret injection last-mile** — a Function declares `spec.secrets`; the reconciler resolves them (PDP-authorized, ADR-0022) into the worker env. | F15 | ADR-0022, ADR-0030 |
 
-**Deferred to V2 (FEAT-0001):** **P-Z** — distro `.deb`/`.rpm` packaging + a multi-arch release matrix over
+**Deferred to V2 (FEAT-0002):** **P-Z** — distro `.deb`/`.rpm` packaging + a multi-arch release matrix over
 the ADR-0026 `build.sh`/ldflags seam (V1 ships the single binary + systemd unit + install docs).
 
 ## Build dependency graph
@@ -166,7 +166,8 @@ python3 .claude/skills/roadmap-planner/scripts/plan_waves.py docs/roadmap/v1-pla
 When an ADR reaches `Implemented`, move it from `items` to `accepted` in `v1-plan.json` and re-run — that is
 what graduated the runtime-lane **ADR-0030…ADR-0033**, the Python runtime **ADR-0049**, and the final
 secret-injection **ADR-0057** to tier-0 here. With `items: []`, the analyzer now reports `no items in plan`:
-the V1 build track is complete. The next time `items` is non-empty is when V2 (FEAT-0001) is scoped.
+the V1 build track is complete. The next time `items` is non-empty is when V2 (FEAT-0002) is scoped
+(v1.1 / FEAT-0001 — statically-defined I/O contracts — is tracked in its own feat doc, not this plan).
 
 ## Caveats (living doc)
 
@@ -182,6 +183,6 @@ the V1 build track is complete. The next time `items` is non-empty is when V2 (F
   server, no blob-as-artifact-store); execution moves readiness to the shim's `/health/readiness` (refines
   ADR-0020) and surfaces a per-replica loopback endpoint (refines ADR-0011's `Instance`); the data-plane wake
   (ADR-0033) mounts the gateway + activator as the route upstream so triggers wake a scaled-to-zero function.
-* Tiers are dependency floors, not a schedule. When FEAT-0001 (V2 — egress enforcement, gVisor/WASM, Kata
+* Tiers are dependency floors, not a schedule. When FEAT-0002 (V2 — egress enforcement, gVisor/WASM, Kata
   microVM, IAM/PDP, distro packaging P-Z, multi-node, an external-gateway driver, …) is scoped, the line
   between "finish V1's walk" and "V2" is drawn there.
