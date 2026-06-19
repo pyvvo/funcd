@@ -140,6 +140,14 @@ demo:
 demo-record:
     vhs docs/demo/cli-demo.tape
 
+# launch funcd locally with the example config (examples/funcdconfig.yaml, ADR-0061): a zero-infra
+# dev daemon — in-memory substrate + process runtime, control plane on 127.0.0.1:8080, data plane on
+# :8081. Runs until Ctrl-C. With node / python3 on PATH, pushed functions actually execute — then in
+# another shell `funcdcli push` + `apply` an example (see examples/*/hello-world/README.md).
+[group('example')]
+funcd-example:
+    go run ./cmd/funcd --config examples/funcdconfig.yaml
+
 # build the version-stamped single binary (ADR-0026) → dist/funcd.
 # Default is the pure-Go dev build; see scripts/build.sh for the cgo/slatedb release path.
 [group('release')]
