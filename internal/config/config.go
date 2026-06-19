@@ -10,9 +10,14 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+
+	"github.com/go-playground/validator/v10"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	"sigs.k8s.io/yaml"
@@ -43,8 +48,8 @@ const (
 // File is the decoded funcdconfig.yaml (zero value ⇒ nothing set; all defaults apply). json tags,
 // so sigs.k8s.io/yaml (yaml→json→struct) reuses them.
 type File struct {
-	APIVersion string    `json:"apiVersion,omitempty"`
-	Kind       string    `json:"kind,omitempty"`
+	APIVersion string    `json:"apiVersion,omitempty" validate:"omitempty,eq=funcd.io/v1alpha1"`
+	Kind       string    `json:"kind,omitempty" validate:"omitempty,eq=FuncdConfig"`
 	Server     Server    `json:"server,omitempty"`
 	Storage    Storage   `json:"storage,omitempty"`
 	Auth       Auth      `json:"auth,omitempty"`
@@ -62,7 +67,7 @@ type Server struct {
 
 // Storage selects the blob+bus substrate (ADR-0043) + the data root.
 type Storage struct {
-	Mode    string `json:"mode,omitempty"`
+	Mode    string `json:"mode,omitempty" validate:"omitempty,oneof=file memory"`
 	DataDir string `json:"dataDir,omitempty"`
 }
 
@@ -79,7 +84,7 @@ type Secrets struct {
 
 // Runtime selects the execution lane + (for containerd) its settings.
 type Runtime struct {
-	Mode       string     `json:"mode,omitempty"`
+	Mode       string     `json:"mode,omitempty" validate:"omitempty,oneof=process containerd"`
 	Containerd Containerd `json:"containerd,omitempty"`
 }
 
@@ -97,8 +102,8 @@ type Containerd struct {
 
 // Log is the structured-log format + level.
 type Log struct {
-	Format string `json:"format,omitempty"`
-	Level  string `json:"level,omitempty"`
+	Format string `json:"format,omitempty" validate:"omitempty,oneof=json text"`
+	Level  string `json:"level,omitempty" validate:"omitempty,oneof=debug info warn error"`
 }
 
 // Telemetry configures the OTel pipeline (empty Endpoint ⇒ disabled).
@@ -174,16 +179,12 @@ func Load(path string) (File, error) {
 	return f, nil
 }
 
-// Resolve applies precedence (flag > env > file > default) + defaults + enum validation, reading the
-// FUNCD_* vars internally. A bad enum/value (or a present apiVersion/kind that isn't the expected
-// one) ⇒ fault.Invalid naming the key + the allowed set.
+// Resolve validates the file against its `validate` tags, then applies precedence
+// (flag > env > file > default) + defaults, reading the FUNCD_* vars internally. A bad enum / a
+// present-but-wrong apiVersion/kind ⇒ fault.Invalid naming the key + the allowed set.
 func Resolve(file File, flags Flags) (Resolved, error) {
-	const op = "config.Resolve"
-	if file.APIVersion != "" && file.APIVersion != APIVersion {
-		return Resolved{}, fault.Invalidf(op, "apiVersion %q (want %q)", file.APIVersion, APIVersion)
-	}
-	if file.Kind != "" && file.Kind != Kind {
-		return Resolved{}, fault.Invalidf(op, "kind %q (want %q)", file.Kind, Kind)
+	if err := file.Validate(); err != nil {
+		return Resolved{}, err
 	}
 
 	r := Resolved{
@@ -203,20 +204,13 @@ func Resolve(file File, flags Flags) (Resolved, error) {
 	}
 
 	// storage.mode: flag (--memory) > file > default.
-	mode := firstNonEmpty(file.Storage.Mode, defaultStorageMode)
+	r.StorageMode = firstNonEmpty(file.Storage.Mode, defaultStorageMode)
 	if flags.MemoryOnly != nil && *flags.MemoryOnly {
-		mode = "memory"
+		r.StorageMode = "memory"
 	}
-	if mode != "file" && mode != "memory" {
-		return Resolved{}, fault.Invalidf(op, "storage.mode %q (want file|memory)", mode)
-	}
-	r.StorageMode = mode
 
 	// runtime.mode: env > file > default.
 	r.RuntimeMode = resolveStr("FUNCD_RUNTIME", file.Runtime.Mode, defaultRuntimeMode)
-	if r.RuntimeMode != "process" && r.RuntimeMode != "containerd" {
-		return Resolved{}, fault.Invalidf(op, "runtime.mode %q (want process|containerd)", r.RuntimeMode)
-	}
 
 	// containerd lane: env > file > default; root/cniConfDir are dataDir-derived when unset.
 	c := file.Runtime.Containerd
@@ -231,13 +225,40 @@ func Resolve(file File, flags Flags) (Resolved, error) {
 		ImageOverride: resolveImageOverride(c.ImageOverride),
 	}
 
-	if r.LogFormat != "json" && r.LogFormat != "text" {
-		return Resolved{}, fault.Invalidf(op, "log.format %q (want json|text)", r.LogFormat)
-	}
-	if !validLevel(r.LogLevel) {
-		return Resolved{}, fault.Invalidf(op, "log.level %q (want debug|info|warn|error)", r.LogLevel)
-	}
 	return r, nil
+}
+
+// Validate checks the file's fields against their declared `validate` tags (go-playground/validator,
+// the same lib huma already uses) — the optional apiVersion/kind envelope and the storage/runtime/log
+// enums — returning a fault.Invalid naming the offending key + the allowed set. Unset fields are
+// allowed (`omitempty`); Resolve fills defaults afterward. It is exported so a caller can validate a
+// File directly (the project's resource-`Validate()` convention, ADR-0048).
+func (f File) Validate() error {
+	const op = "config.File.Validate"
+	v := validator.New()
+	// Report json keys ("storage.mode") in errors, not Go field names.
+	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+		name, _, _ := strings.Cut(fld.Tag.Get("json"), ",")
+		if name == "-" {
+			return ""
+		}
+		return name
+	})
+	err := v.Struct(f)
+	if err == nil {
+		return nil
+	}
+	var verrs validator.ValidationErrors
+	if errors.As(err, &verrs) && len(verrs) > 0 {
+		fe := verrs[0]
+		want := fe.Tag()
+		if fe.Param() != "" {
+			want += "=" + fe.Param()
+		}
+		key := strings.TrimPrefix(fe.Namespace(), "File.")
+		return fault.Invalidf(op, "config key %q has invalid value %q (want %s)", key, fmt.Sprint(fe.Value()), want)
+	}
+	return fault.Wrapf(err, fault.Invalid, op, "invalid config")
 }
 
 // resolveImageOverride: FUNCD_IMAGE_OVERRIDE ("rt=ref,rt=ref") parsed > the file map > nil.
@@ -274,15 +295,6 @@ func firstNonEmpty(a, def string) string {
 		return a
 	}
 	return def
-}
-
-func validLevel(l string) bool {
-	switch l {
-	case "debug", "info", "warn", "error":
-		return true
-	default:
-		return false
-	}
 }
 
 func fileExists(path string) bool {

@@ -129,3 +129,24 @@ func TestLocate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", got, "no file found ⇒ zero-config")
 }
+
+// the exported File.Validate() runs the struct's `validate` tags (go-playground/validator): an empty
+// or in-profile file passes; any bad enum / wrong envelope ⇒ fault.Invalid (Resolve calls it too).
+func TestFileValidate(t *testing.T) {
+	require.NoError(t, config.File{
+		APIVersion: config.APIVersion, Kind: config.Kind,
+		Storage: config.Storage{Mode: "memory"}, Runtime: config.Runtime{Mode: "containerd"},
+		Log: config.Log{Format: "text", Level: "debug"},
+	}.Validate())
+	require.NoError(t, config.File{}.Validate(), "an empty file is valid (defaults apply later)")
+	for name, f := range map[string]config.File{
+		"storage.mode": {Storage: config.Storage{Mode: "nope"}},
+		"runtime.mode": {Runtime: config.Runtime{Mode: "vm"}},
+		"log.format":   {Log: config.Log{Format: "yaml"}},
+		"log.level":    {Log: config.Log{Level: "loud"}},
+		"apiVersion":   {APIVersion: "funcd.io/v2"},
+		"kind":         {Kind: "Function"},
+	} {
+		require.Equal(t, fault.Invalid, fault.KindOf(f.Validate()), "bad %s ⇒ fault.Invalid", name)
+	}
+}
