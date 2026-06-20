@@ -25,6 +25,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 
 # --- baked-in project coordinates (verified against the live board) ---------------
 OWNER = "green-0-rabbit"
@@ -123,16 +124,24 @@ def cmd_status(a):
 
 def cmd_create(a):
     gh("project", "item-create", NUMBER, "--owner", OWNER, "--title", a.title, "--body", a.body or "")
-    # Locate the just-created item by EXACT title (robust to item-create's return shape),
-    # then set Status via the project-ITEM id so it never lands in "No Status".
-    matches = [it for it in items() if it.get("title", "") == a.title]
-    if not matches:
-        sys.exit(f"error: created but could not re-locate item titled {a.title!r} to set status")
-    if len(matches) > 1:
-        sys.exit(f"error: created, but {len(matches)} items now share the exact title {a.title!r}; "
-                 "set its status manually with `status`")
-    set_status(matches[0]["id"], a.status)
-    print(f"ok: created [{a.status}] {a.title}  ({matches[0]['id']})")
+    # Locate the just-created item by EXACT title (robust to item-create's return shape), then set
+    # Status via the project-ITEM id so it never lands in "No Status". The board is eventually
+    # consistent — a fresh item is not immediately queryable — so poll briefly before giving up.
+    item = None
+    for _ in range(10):
+        matches = [it for it in items() if it.get("title", "") == a.title]
+        if len(matches) > 1:
+            sys.exit(f"error: created, but {len(matches)} items now share the exact title {a.title!r}; "
+                     "set its status manually with `status`")
+        if matches:
+            item = matches[0]
+            break
+        time.sleep(1)
+    if item is None:
+        sys.exit(f"error: created {a.title!r} but it did not become queryable in time to set status.\n"
+                 f"re-run: driver.py status \"{a.title[:30]}\" \"{a.status}\"")
+    set_status(item["id"], a.status)
+    print(f"ok: created [{a.status}] {a.title}  ({item['id']})")
 
 
 def cmd_refine(a):
