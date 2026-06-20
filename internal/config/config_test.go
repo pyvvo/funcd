@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -172,15 +173,60 @@ func TestScenarioUnknownKeyRejected(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an unknown key is rejected, not ignored")
 }
 
-// the exported Config.Validate() runs the validate tags directly on a Config.
-func TestConfigValidate(t *testing.T) {
-	good, err := config.Load("", config.Flags{})
+// the validator matrix — Config.Validate() is the single value gate (source-agnostic, ADR-0062).
+// For every field carrying a `validate` tag, enumerate its ACCEPTED set (must pass) and
+// representative REJECTED values (must be fault.Invalid), mutating one field off a valid base.
+// This is the parametrized form: each {field, value, valid} is one case (the analog of pytest's
+// @parametrize). It subsumes the old TestConfigValidate (good passes + a bad enum is rejected).
+func TestValidateMatrix(t *testing.T) {
+	base, err := config.Load("", config.Flags{})
 	require.NoError(t, err)
-	require.NoError(t, good.Validate())
 
-	bad := good
-	bad.Runtime.Mode = "vm"
-	require.Equal(t, fault.Invalid, fault.KindOf(bad.Validate()), "a bad runtime.mode ⇒ fault.Invalid")
+	type vc struct {
+		value string
+		valid bool
+	}
+	for _, field := range []struct {
+		name  string
+		set   func(*config.Config, string)
+		cases []vc
+	}{
+		// omitempty,eq — empty is VALID (the envelope is optional), only the exact tag passes.
+		{"apiVersion", func(c *config.Config, v string) { c.APIVersion = v }, []vc{
+			{"", true}, {"funcd.io/v1alpha1", true}, {"funcd.io/v2", false},
+		}},
+		{"kind", func(c *config.Config, v string) { c.Kind = v }, []vc{
+			{"", true}, {"FuncdConfig", true}, {"Function", false},
+		}},
+		// oneof — empty is INVALID (no omitempty): every member passes, everything else fails.
+		{"storage.mode", func(c *config.Config, v string) { c.Storage.Mode = v }, []vc{
+			{"file", true}, {"memory", true}, {"", false}, {"disk", false},
+		}},
+		{"runtime.mode", func(c *config.Config, v string) { c.Runtime.Mode = v }, []vc{
+			{"process", true}, {"containerd", true}, {"", false}, {"vm", false},
+		}},
+		{"log.format", func(c *config.Config, v string) { c.Log.Format = v }, []vc{
+			{"json", true}, {"text", true}, {"xml", false}, {"JSON", false}, {"", false},
+		}},
+		{"log.level", func(c *config.Config, v string) { c.Log.Level = v }, []vc{
+			{"debug", true}, {"info", true}, {"warn", true}, {"error", true},
+			{"loud", false}, {"INFO", false}, {"", false},
+		}},
+	} {
+		for _, c := range field.cases {
+			t.Run(field.name+"="+strconv.Quote(c.value), func(t *testing.T) {
+				cfg := base
+				field.set(&cfg, c.value)
+				err := cfg.Validate()
+				if c.valid {
+					require.NoError(t, err, "%s=%q must be accepted", field.name, c.value)
+				} else {
+					require.Equal(t, fault.Invalid, fault.KindOf(err),
+						"%s=%q must be rejected", field.name, c.value)
+				}
+			})
+		}
+	}
 }
 
 // Locate: an explicit/env path that doesn't exist ⇒ fault.NotFound; none ⇒ "" (zero-config).
