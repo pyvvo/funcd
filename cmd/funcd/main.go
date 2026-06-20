@@ -83,22 +83,18 @@ func newRootCmd(out io.Writer) *cobra.Command {
 // default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
 // --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate).
 func serve(parent context.Context, configPath string, memoryFlag *bool) error {
-	// Locate + load + resolve funcdconfig.yaml into the effective config.
+	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
 		return err
 	}
-	file, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	cfg, err := config.Resolve(file, config.Flags{MemoryOnly: memoryFlag})
+	cfg, err := config.Load(path, config.Flags{MemoryOnly: memoryFlag})
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
-		return fmt.Errorf("create data dir %s: %w", cfg.DataDir, err)
+	if err := os.MkdirAll(cfg.Storage.DataDir, 0o700); err != nil {
+		return fmt.Errorf("create data dir %s: %w", cfg.Storage.DataDir, err)
 	}
 
 	// Logger from log.format/level (overrides the preset's logger, ADR-0061 §6).
@@ -139,10 +135,10 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 // production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
 // bind addresses, the logger, telemetry, and the execution wiring. It returns the options, the
 // execution closer the caller must defer, and the substrate label. The platform owns the drivers.
-func buildOptions(ctx context.Context, cfg config.Resolved, root *slog.Logger) ([]funcd.Option, func() error, string, error) {
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]funcd.Option, func() error, string, error) {
 	// Control-plane credential: auth.token / FUNCD_TOKEN, or the built-in dev token + a warning
 	// (Production() ships no default token — ADR-0028).
-	token := cfg.Token
+	token := cfg.Auth.Token
 	if token == "" {
 		token = funcd.DevToken
 		root.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
@@ -154,7 +150,7 @@ func buildOptions(ctx context.Context, cfg config.Resolved, root *slog.Logger) (
 	}
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
-	substrateOpts, substrate, err := substrateOptions(ctx, cfg.StorageMode == "memory", cfg.DataDir)
+	substrateOpts, substrate, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
 	if err != nil {
 		return nil, noopClose, "", err
 	}
@@ -165,16 +161,16 @@ func buildOptions(ctx context.Context, cfg config.Resolved, root *slog.Logger) (
 	opts = append(opts, substrateOpts...)
 	opts = append(opts,
 		funcd.WithStore(st),
-		funcd.WithDevAuth(token, cfg.Namespaces...),
-		funcd.WithArtifactStore(filepath.Join(cfg.DataDir, "artifacts")),
-		funcd.WithListenAddr(cfg.ListenAddr),
-		funcd.WithDataPlaneAddr(cfg.DataPlaneAddr),
+		funcd.WithDevAuth(token, cfg.Auth.Namespaces...),
+		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
+		funcd.WithListenAddr(cfg.Server.ListenAddr),
+		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithLogger(root),
 	)
 	// Telemetry: override the preset's no-op pipeline only when an OTLP endpoint is configured.
-	if cfg.TelemetryEndpoint != "" {
+	if cfg.Telemetry.Endpoint != "" {
 		tel, terr := observability.NewTelemetry(ctx,
-			observability.TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, Insecure: cfg.TelemetryInsecure})
+			observability.TelemetryConfig{Endpoint: cfg.Telemetry.Endpoint, Insecure: cfg.Telemetry.Insecure})
 		if terr != nil {
 			return nil, noopClose, "", fmt.Errorf("build telemetry: %w", terr)
 		}
@@ -190,12 +186,12 @@ func buildOptions(ctx context.Context, cfg config.Resolved, root *slog.Logger) (
 }
 
 // buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
-func buildLogger(cfg config.Resolved) (*observability.Logger, error) {
+func buildLogger(cfg config.Config) (*observability.Logger, error) {
 	format := observability.FormatJSON
-	if cfg.LogFormat == "text" {
+	if cfg.Log.Format == "text" {
 		format = observability.FormatText
 	}
-	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.LogLevel)}, os.Stdout)
+	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.Log.Level)}, os.Stdout)
 }
 
 // parseLevel maps a validated level string to a slog.Level (config already rejected bad values).
@@ -215,7 +211,7 @@ func parseLevel(level string) slog.Level {
 // buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
-func buildStore(cfg config.Resolved, log *slog.Logger) (store.Store, error) {
+func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {
 		return nil, err
@@ -230,13 +226,13 @@ func buildStore(cfg config.Resolved, log *slog.Logger) (store.Store, error) {
 // secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
 // 32-byte key file → an AES-256-GCM encryptor; "" ⇒ nil (no encryption); a non-32-byte key ⇒ a
 // fault.Invalid (never silently weak crypto).
-func secretEncryptor(cfg config.Resolved) (store.Encryptor, error) {
-	if cfg.SecretsEncryptionKeyFile == "" {
+func secretEncryptor(cfg config.Config) (store.Encryptor, error) {
+	if cfg.Secrets.EncryptionKeyFile == "" {
 		return nil, nil
 	}
-	key, err := os.ReadFile(cfg.SecretsEncryptionKeyFile) //nolint:gosec // operator-supplied key path
+	key, err := os.ReadFile(cfg.Secrets.EncryptionKeyFile) //nolint:gosec // operator-supplied key path
 	if err != nil {
-		return nil, fmt.Errorf("read secrets.encryptionKeyFile %s: %w", cfg.SecretsEncryptionKeyFile, err)
+		return nil, fmt.Errorf("read secrets.encryptionKeyFile %s: %w", cfg.Secrets.EncryptionKeyFile, err)
 	}
 	enc, err := aesgcm.NewAESEncryptor(key) // validates exactly 32 bytes (AES-256)
 	if err != nil {
@@ -291,12 +287,12 @@ func noopClose() error { return nil }
 
 // executionOptions selects the runtime driver + function-execution wiring from the resolved
 // runtime.mode (ADR-0036/0061): "containerd" → the containerd/crun worker running curated images
-// (its lane settings from cfg.Containerd); else (default) → the process driver running the embedded
+// (its lane settings from cfg.Runtime.Containerd); else (default) → the process driver running the embedded
 // Node shim. It returns a closer the caller must defer — for containerd mode it stops the
 // ctrmanager-supervised private containerd (ADR-0054); for process mode it is a no-op.
-func executionOptions(ctx context.Context, cfg config.Resolved) ([]funcd.Option, func() error, error) {
-	if cfg.RuntimeMode == "containerd" {
-		c := cfg.Containerd
+func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, func() error, error) {
+	if cfg.Runtime.Mode == "containerd" {
+		c := cfg.Runtime.Containerd
 		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
 		// supervises a PRIVATE containerd and imports the embedded curated images; with an external
 		// socket set it returns that socket and starts no child. The driver dials whatever Ensure yields.
@@ -340,7 +336,7 @@ func executionOptions(ctx context.Context, cfg config.Resolved) ([]funcd.Option,
 		slog.Warn("funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
 		return opts, noopClose, nil
 	}
-	shimPath := filepath.Join(cfg.DataDir, "shim.mjs")
+	shimPath := filepath.Join(cfg.Storage.DataDir, "shim.mjs")
 	if werr := os.WriteFile(shimPath, shimnode.Shim, 0o600); werr != nil {
 		return nil, noopClose, fmt.Errorf("extract runtime shim to %s: %w", shimPath, werr)
 	}
@@ -359,7 +355,7 @@ func executionOptions(ctx context.Context, cfg config.Resolved) ([]funcd.Option,
 		slog.Info("funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
 		return opts, noopClose, nil
 	}
-	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.DataDir, "shim-python"))
+	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.Storage.DataDir, "shim-python"))
 	if perr != nil {
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}

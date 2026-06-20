@@ -108,7 +108,7 @@ func TestExecutionOptionsProcessExtractsShim(t *testing.T) {
 	t.Setenv("FUNCD_NODE", node)
 	dir := t.TempDir()
 
-	opts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: dir, RuntimeMode: "process"})
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(dir))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	require.NotEmpty(t, opts, "process mode wires the runtime + shim")
@@ -125,7 +125,7 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	t.Setenv("FUNCD_NODE", "") // no explicit node
 	t.Setenv("PATH", "")       // and none on PATH
 
-	opts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: t.TempDir(), RuntimeMode: "process"})
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
 	require.NoError(t, err, "missing node degrades, never errors")
 	t.Cleanup(func() { _ = closeExec() })
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
@@ -137,15 +137,15 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 // fails fast either way (no silent no-op).
 func TestExecutionOptionsContainerdMode(t *testing.T) {
 	// runtime.mode: containerd with no external socket forces the private-managed path (ADR-0054).
-	cfg := config.Resolved{
-		RuntimeMode: "containerd",
-		DataDir:     t.TempDir(),
-		Containerd: config.Containerd{
-			Root: filepath.Join(t.TempDir(), "containerd"), Snapshotter: "overlayfs",
-			CNIBinDir: "/opt/cni/bin", CNIConfDir: filepath.Join(t.TempDir(), "cni"),
-			SubnetCIDR: "10.63.0.0/16", ImagePrefix: "funcd/runtime-",
-		},
-	}
+	var cfg config.Config
+	cfg.Runtime.Mode = "containerd"
+	cfg.Storage.DataDir = t.TempDir()
+	cfg.Runtime.Containerd.Root = filepath.Join(t.TempDir(), "containerd")
+	cfg.Runtime.Containerd.Snapshotter = "overlayfs"
+	cfg.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"
+	cfg.Runtime.Containerd.CNIConfDir = filepath.Join(t.TempDir(), "cni")
+	cfg.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
+	cfg.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
 	_, closeExec, err := executionOptions(context.Background(), cfg)
 	if closeExec != nil {
 		t.Cleanup(func() { _ = closeExec() })
@@ -165,7 +165,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 		t.Skip("node not on PATH")
 	}
 	// Build the platform like cmd/funcd does, but InMemory for ephemeral ports.
-	execOpts, closeExec, err := executionOptions(context.Background(), config.Resolved{DataDir: t.TempDir(), RuntimeMode: "process"}) // extracts the embedded shim + WithRuntimeShim
+	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir())) // extracts the embedded shim + WithRuntimeShim
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	opts := append([]funcd.Option{funcd.InMemory(), funcd.WithArtifactStore(t.TempDir())}, execOpts...)
@@ -227,9 +227,7 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 
 	loc, err := config.Locate(path)
 	require.NoError(t, err)
-	file, err := config.Load(loc)
-	require.NoError(t, err)
-	cfg, err := config.Resolve(file, config.Flags{})
+	cfg, err := config.Load(loc, config.Flags{})
 	require.NoError(t, err)
 
 	root := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -252,10 +250,10 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 	root := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	// no key ⇒ nil encryptor (unencrypted); buildStore still succeeds (with a warning).
-	enc, err := secretEncryptor(config.Resolved{})
+	enc, err := secretEncryptor(config.Config{})
 	require.NoError(t, err)
 	require.Nil(t, enc, "no keyfile ⇒ no encryptor")
-	_, err = buildStore(config.Resolved{}, root)
+	_, err = buildStore(config.Config{}, root)
 	require.NoError(t, err)
 
 	// a 32-byte key ⇒ an encryptor whose output is ciphertext (Secret value bytes encrypted at rest).
@@ -265,29 +263,43 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 	}
 	keyFile := filepath.Join(t.TempDir(), "secret.key")
 	require.NoError(t, os.WriteFile(keyFile, key, 0o600))
-	enc, err = secretEncryptor(config.Resolved{SecretsEncryptionKeyFile: keyFile})
+	enc, err = secretEncryptor(cfgWithKeyFile(keyFile))
 	require.NoError(t, err)
 	require.NotNil(t, enc)
 	ct, err := enc.Encrypt(context.Background(), []byte("super-secret-value"))
 	require.NoError(t, err)
 	require.NotEqual(t, []byte("super-secret-value"), ct, "the stored Secret value bytes are ciphertext")
-	_, err = buildStore(config.Resolved{SecretsEncryptionKeyFile: keyFile}, root)
+	_, err = buildStore(cfgWithKeyFile(keyFile), root)
 	require.NoError(t, err, "a valid 32-byte key wires the store encryptor")
 
 	// a non-32-byte key ⇒ an error (never silently weak crypto).
 	badFile := filepath.Join(t.TempDir(), "bad.key")
 	require.NoError(t, os.WriteFile(badFile, []byte("too-short"), 0o600))
-	_, err = buildStore(config.Resolved{SecretsEncryptionKeyFile: badFile}, root)
+	_, err = buildStore(cfgWithKeyFile(badFile), root)
 	require.Error(t, err, "a non-32-byte key is rejected")
+}
+
+// cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be
+// a flat literal).
+func cfgWithKeyFile(f string) config.Config {
+	var c config.Config
+	c.Secrets.EncryptionKeyFile = f
+	return c
+}
+
+// cfgProcess / cfgContainerd build a minimal Config for the executionOptions tests.
+func cfgProcess(dataDir string) config.Config {
+	var c config.Config
+	c.Storage.DataDir = dataDir
+	c.Runtime.Mode = "process"
+	return c
 }
 
 // the shipped example funcdconfig.yaml loads + resolves cleanly (guards it against drifting).
 func TestExampleConfigResolves(t *testing.T) {
-	file, err := config.Load("../../examples/funcdconfig.yaml")
+	cfg, err := config.Load("../../examples/funcdconfig.yaml", config.Flags{})
 	require.NoError(t, err)
-	cfg, err := config.Resolve(file, config.Flags{})
-	require.NoError(t, err)
-	require.Equal(t, "memory", cfg.StorageMode) // file value (no env tier) ⇒ deterministic
-	require.Equal(t, "127.0.0.1:8080", cfg.ListenAddr)
-	require.Equal(t, "text", cfg.LogFormat)
+	require.Equal(t, "memory", cfg.Storage.Mode) // file value (no env tier set) ⇒ deterministic
+	require.Equal(t, "127.0.0.1:8080", cfg.Server.ListenAddr)
+	require.Equal(t, "text", cfg.Log.Format)
 }

@@ -7,6 +7,7 @@ tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 require (
 	fortio.org/fortio v1.75.2
 	fortio.org/log v1.18.3
+	github.com/caarlos0/env/v11 v11.4.1
 	github.com/containerd/containerd/api v1.11.1
 	github.com/containerd/containerd/v2 v2.3.1
 	github.com/containerd/errdefs v1.0.0

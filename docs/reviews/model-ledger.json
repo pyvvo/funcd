@@ -958,5 +958,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0061-implementation-claude-opus-4-8.md",
     "notes": "funcdconfig.yaml operator config: internal/config leaf (Locate/Load/Resolve, precedence flag>env>file>default), cmd/funcd wiring (addresses/logger/telemetry/store-encryptor), example yaml. 7/7 scenarios pass; headline addr gap closed + proven; ADR-0022 encryptor finally wired; sigs.k8s.io/yaml (MIT+BSD-3). bench RSS flake unrelated (passes on retry)."
+  },
+  {
+    "date": "2026-06-20",
+    "adr": "0062",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0062-implementation-claude-opus-4-8.md",
+    "notes": "Unify config: one Config struct (json/env/validate tags) merged file\u2192env\u2192default via caarlos0/env, validated once on the merged struct (env edge closed \u2014 proven live). Precedence matrix + no-clobber + every-env heavy tests; leaf; MIT zero-dep. Refines ADR-0061; F31 stays implemented."
   }
 ]

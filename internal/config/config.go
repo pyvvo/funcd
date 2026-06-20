@@ -1,12 +1,14 @@
-// Package config is the funcd daemon config file — funcdconfig.yaml (ADR-0061). It LOCATES,
-// LOADS, and RESOLVES the optional operator config into a flat, fully-defaulted Resolved value
-// with precedence flag > env (FUNCD_*) > file > built-in default. It is a leaf: it imports no
-// drivers (only stdlib + sigs.k8s.io/yaml + api/fault); cmd/funcd maps Resolved → []funcd.Option,
-// keeping the pkg/funcd Option surface + presets untouched.
+// Package config is the funcd daemon config — funcdconfig.yaml (ADR-0061, ADR-0062). It is ONE
+// struct populated from file + env + default and validated once:
 //
-// The file is OPTIONAL — every key has a default, so zero-config startup is unchanged. Decoding is
-// strict (sigs.k8s.io/yaml UnmarshalStrict, reusing the repo's json tags): an unknown key is an
-// operator typo and is rejected, not silently dropped.
+//	defaults() → yaml.UnmarshalStrict (file) → env.Parse (FUNCD_* overlay) → --memory flag → Validate
+//
+// precedence flag > env > file > default. A key is defined in one place — a single Config field with
+// three tags: `json` is the yaml key (sigs.k8s.io/yaml maps yaml→json→struct, reusing json tags as in
+// ADR-0061), `env` is the FUNCD_* overlay var (caarlos0/env, which leaves a field untouched when its
+// var is unset — no clobber), `validate` is the rule (go-playground/validator, the lib huma already
+// pulls). Validation runs on the MERGED struct, so a bad value from any source is caught. It is a leaf
+// (no driver imports); cmd/funcd maps Config → []funcd.Option.
 package config
 
 import (
@@ -17,6 +19,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/caarlos0/env/v11"
 	"github.com/go-playground/validator/v10"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
@@ -29,116 +32,76 @@ const (
 	Kind       = "FuncdConfig"
 )
 
-// built-in defaults (the bottom precedence tier; identical to today's preset behavior).
-const (
-	defaultListenAddr    = "0.0.0.0:8080"
-	defaultDataPlaneAddr = "127.0.0.1:0"
-	defaultStorageMode   = "file"
-	defaultDataDir       = "/var/lib/funcd"
-	defaultRuntimeMode   = "process"
-	defaultSnapshotter   = "overlayfs"
-	defaultCNIBinDir     = "/opt/cni/bin"
-	defaultSubnetCIDR    = "10.63.0.0/16"
-	defaultImagePrefix   = "funcd/runtime-"
-	defaultLogFormat     = "json"
-	defaultLogLevel      = "info"
-	defaultNamespace     = "default"
-)
-
-// File is the decoded funcdconfig.yaml (zero value ⇒ nothing set; all defaults apply). json tags,
-// so sigs.k8s.io/yaml (yaml→json→struct) reuses them.
-type File struct {
-	APIVersion string    `json:"apiVersion,omitempty" validate:"omitempty,eq=funcd.io/v1alpha1"`
-	Kind       string    `json:"kind,omitempty" validate:"omitempty,eq=FuncdConfig"`
-	Server     Server    `json:"server,omitempty"`
-	Storage    Storage   `json:"storage,omitempty"`
-	Auth       Auth      `json:"auth,omitempty"`
-	Secrets    Secrets   `json:"secrets,omitempty"`
-	Runtime    Runtime   `json:"runtime,omitempty"`
-	Log        Log       `json:"log,omitempty"`
-	Telemetry  Telemetry `json:"telemetry,omitempty"`
+// Config is the funcd daemon config — the single source of truth (ADR-0062). Each field's tags
+// declare its yaml key (`json`), its FUNCD_* overlay var (`env`), and its validation rule (`validate`).
+type Config struct {
+	APIVersion string `json:"apiVersion,omitempty" validate:"omitempty,eq=funcd.io/v1alpha1"`
+	Kind       string `json:"kind,omitempty" validate:"omitempty,eq=FuncdConfig"`
+	Server     struct {
+		ListenAddr    string `json:"listenAddr,omitempty" env:"FUNCD_LISTEN_ADDR"`
+		DataPlaneAddr string `json:"dataPlaneAddr,omitempty" env:"FUNCD_DATA_PLANE_ADDR"`
+	} `json:"server,omitempty"`
+	Storage struct {
+		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
+		DataDir string `json:"dataDir,omitempty" env:"FUNCD_DATA_DIR"`
+	} `json:"storage,omitempty"`
+	Auth struct {
+		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
+		Namespaces []string `json:"namespaces,omitempty" env:"FUNCD_AUTH_NAMESPACES" envSeparator:","`
+	} `json:"auth,omitempty"`
+	Secrets struct {
+		EncryptionKeyFile string `json:"encryptionKeyFile,omitempty" env:"FUNCD_SECRETS_ENCRYPTION_KEY_FILE"`
+	} `json:"secrets,omitempty"`
+	Runtime struct {
+		Mode       string `json:"mode,omitempty" env:"FUNCD_RUNTIME" validate:"oneof=process containerd"`
+		Containerd struct {
+			Socket        string            `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
+			Root          string            `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
+			Snapshotter   string            `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
+			CNIBinDir     string            `json:"cniBinDir,omitempty" env:"FUNCD_CNI_BIN_DIR"`
+			CNIConfDir    string            `json:"cniConfDir,omitempty" env:"FUNCD_CNI_CONF_DIR"`
+			SubnetCIDR    string            `json:"subnetCIDR,omitempty" env:"FUNCD_SUBNET_CIDR"`
+			ImagePrefix   string            `json:"imagePrefix,omitempty" env:"FUNCD_IMAGE_PREFIX"`
+			ImageOverride map[string]string `json:"imageOverride,omitempty" env:"FUNCD_IMAGE_OVERRIDE" envSeparator:"," envKeyValSeparator:"="`
+		} `json:"containerd,omitempty"`
+	} `json:"runtime,omitempty"`
+	Log struct {
+		Format string `json:"format,omitempty" env:"FUNCD_LOG_FORMAT" validate:"oneof=json text"`
+		Level  string `json:"level,omitempty" env:"FUNCD_LOG_LEVEL" validate:"oneof=debug info warn error"`
+	} `json:"log,omitempty"`
+	Telemetry struct {
+		Endpoint string `json:"endpoint,omitempty" env:"FUNCD_TELEMETRY_ENDPOINT"`
+		Insecure bool   `json:"insecure,omitempty" env:"FUNCD_TELEMETRY_INSECURE"`
+	} `json:"telemetry,omitempty"`
 }
 
-// Server is the control-plane + data-plane bind addresses.
-type Server struct {
-	ListenAddr    string `json:"listenAddr,omitempty"`
-	DataPlaneAddr string `json:"dataPlaneAddr,omitempty"`
-}
+// Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
+type Flags struct{ MemoryOnly *bool }
 
-// Storage selects the blob+bus substrate (ADR-0043) + the data root.
-type Storage struct {
-	Mode    string `json:"mode,omitempty" validate:"omitempty,oneof=file memory"`
-	DataDir string `json:"dataDir,omitempty"`
-}
-
-// Auth is the control-plane dev credential + its namespaces.
-type Auth struct {
-	Token      string   `json:"token,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
-}
-
-// Secrets references the at-rest AES-256 key by file path (never inline, ADR-0022).
-type Secrets struct {
-	EncryptionKeyFile string `json:"encryptionKeyFile,omitempty"`
-}
-
-// Runtime selects the execution lane + (for containerd) its settings.
-type Runtime struct {
-	Mode       string     `json:"mode,omitempty" validate:"omitempty,oneof=process containerd"`
-	Containerd Containerd `json:"containerd,omitempty"`
-}
-
-// Containerd holds the containerd-lane settings (used only when Runtime.Mode == "containerd").
-type Containerd struct {
-	Socket        string            `json:"socket,omitempty"`
-	Root          string            `json:"root,omitempty"`
-	Snapshotter   string            `json:"snapshotter,omitempty"`
-	CNIBinDir     string            `json:"cniBinDir,omitempty"`
-	CNIConfDir    string            `json:"cniConfDir,omitempty"`
-	SubnetCIDR    string            `json:"subnetCIDR,omitempty"`
-	ImagePrefix   string            `json:"imagePrefix,omitempty"`
-	ImageOverride map[string]string `json:"imageOverride,omitempty"`
-}
-
-// Log is the structured-log format + level.
-type Log struct {
-	Format string `json:"format,omitempty" validate:"omitempty,oneof=json text"`
-	Level  string `json:"level,omitempty" validate:"omitempty,oneof=debug info warn error"`
-}
-
-// Telemetry configures the OTel pipeline (empty Endpoint ⇒ disabled).
-type Telemetry struct {
-	Endpoint string `json:"endpoint,omitempty"`
-	Insecure bool   `json:"insecure,omitempty"`
-}
-
-// Flags are the CLI-flag overrides — the top precedence tier. A nil pointer ⇒ "flag not set".
-type Flags struct {
-	MemoryOnly *bool // --memory; non-nil+true ⇒ overrides storage.mode to "memory"
-}
-
-// Resolved is the effective config: precedence applied (flag > env > file > default), every field a
-// concrete value, enums validated. cmd/funcd consumes it; it carries no driver types.
-type Resolved struct {
-	ListenAddr               string
-	DataPlaneAddr            string
-	StorageMode              string // file | memory
-	DataDir                  string
-	Token                    string // "" ⇒ cmd/funcd uses the built-in dev token (+ warn)
-	Namespaces               []string
-	SecretsEncryptionKeyFile string // "" ⇒ no at-rest encryption (warned)
-	RuntimeMode              string // process | containerd
-	Containerd               Containerd
-	LogFormat                string // json | text
-	LogLevel                 string // debug | info | warn | error
-	TelemetryEndpoint        string
-	TelemetryInsecure        bool
+// defaults returns the Config with every built-in default set (the bottom precedence tier; identical
+// to ADR-0061's defaults). The dataDir-relative containerd paths (Root, CNIConfDir) are derived in
+// Load after the merge, when DataDir is final.
+func defaults() Config {
+	var c Config
+	c.Server.ListenAddr = "0.0.0.0:8080"
+	c.Server.DataPlaneAddr = "127.0.0.1:0"
+	c.Storage.Mode = "file"
+	c.Storage.DataDir = "/var/lib/funcd"
+	c.Auth.Namespaces = []string{"default"}
+	c.Runtime.Mode = "process"
+	c.Runtime.Containerd.Snapshotter = "overlayfs"
+	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"
+	c.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
+	c.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
+	c.Log.Format = "json"
+	c.Log.Level = "info"
+	return c
 }
 
 // Locate returns the config file path to load: explicit (--config; must exist → else fault.NotFound)
 // → $FUNCD_CONFIG (must exist) → first existing of ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml →
-// "" (none; zero-config). An explicit/env path that doesn't exist is an error (a typo must not
-// silently fall through to defaults); the implicit search paths may be absent.
+// "" (none; zero-config). An explicit/env path that doesn't exist is an error; the implicit search
+// paths may be absent.
 func Locate(explicit string) (string, error) {
 	const op = "config.Locate"
 	if explicit != "" {
@@ -161,82 +124,49 @@ func Locate(explicit string) (string, error) {
 	return "", nil
 }
 
-// Load strict-decodes the file at path ("" ⇒ a zero File, zero-config). A read/parse error or an
-// unknown key ⇒ fault.Invalid naming the problem.
-func Load(path string) (File, error) {
+// Load builds the effective Config (ADR-0062): defaults() → strict-decode the file at path ("" ⇒
+// skip) → overlay env (caarlos0/env; an unset FUNCD_* var leaves the field untouched) → apply the
+// --memory flag → derive the dataDir-relative containerd defaults → Validate. Any
+// read/parse/unknown-key/enum error ⇒ fault.Invalid. The returned Config is fully populated + valid.
+func Load(path string, flags Flags) (Config, error) {
 	const op = "config.Load"
-	if path == "" {
-		return File{}, nil
+	c := defaults()
+	if path != "" {
+		data, err := os.ReadFile(path) //nolint:gosec // operator-supplied config location
+		if err != nil {
+			return Config{}, fault.Invalidf(op, "read config %q: %v", path, err)
+		}
+		if err := yaml.UnmarshalStrict(data, &c); err != nil { // file overrides defaults; unknown key ⇒ error
+			return Config{}, fault.Invalidf(op, "parse config %q: %v", path, err)
+		}
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is an operator-supplied config location
-	if err != nil {
-		return File{}, fault.Invalidf(op, "read config %q: %v", path, err)
+	if err := env.Parse(&c); err != nil { // env overrides file, only where set (no clobber)
+		return Config{}, fault.Invalidf(op, "parse FUNCD_* env: %v", err)
 	}
-	var f File
-	if err := yaml.UnmarshalStrict(data, &f); err != nil {
-		return File{}, fault.Invalidf(op, "parse config %q: %v", path, err)
+	if flags.MemoryOnly != nil && *flags.MemoryOnly { // the flag tier (top precedence)
+		c.Storage.Mode = "memory"
 	}
-	return f, nil
+	// dataDir-relative containerd defaults — derived after the merge, when DataDir is final.
+	if c.Runtime.Containerd.Root == "" {
+		c.Runtime.Containerd.Root = filepath.Join(c.Storage.DataDir, "containerd")
+	}
+	if c.Runtime.Containerd.CNIConfDir == "" {
+		c.Runtime.Containerd.CNIConfDir = filepath.Join(c.Storage.DataDir, "cni")
+	}
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
 }
 
-// Resolve validates the file against its `validate` tags, then applies precedence
-// (flag > env > file > default) + defaults, reading the FUNCD_* vars internally. A bad enum / a
-// present-but-wrong apiVersion/kind ⇒ fault.Invalid naming the key + the allowed set.
-func Resolve(file File, flags Flags) (Resolved, error) {
-	if err := file.Validate(); err != nil {
-		return Resolved{}, err
-	}
-
-	r := Resolved{
-		ListenAddr:               firstNonEmpty(file.Server.ListenAddr, defaultListenAddr),
-		DataPlaneAddr:            firstNonEmpty(file.Server.DataPlaneAddr, defaultDataPlaneAddr),
-		DataDir:                  resolveStr("FUNCD_DATA_DIR", file.Storage.DataDir, defaultDataDir),
-		Token:                    resolveStr("FUNCD_TOKEN", file.Auth.Token, ""),
-		Namespaces:               file.Auth.Namespaces,
-		SecretsEncryptionKeyFile: file.Secrets.EncryptionKeyFile,
-		LogFormat:                firstNonEmpty(file.Log.Format, defaultLogFormat),
-		LogLevel:                 firstNonEmpty(file.Log.Level, defaultLogLevel),
-		TelemetryEndpoint:        file.Telemetry.Endpoint,
-		TelemetryInsecure:        file.Telemetry.Insecure,
-	}
-	if len(r.Namespaces) == 0 {
-		r.Namespaces = []string{defaultNamespace}
-	}
-
-	// storage.mode: flag (--memory) > file > default.
-	r.StorageMode = firstNonEmpty(file.Storage.Mode, defaultStorageMode)
-	if flags.MemoryOnly != nil && *flags.MemoryOnly {
-		r.StorageMode = "memory"
-	}
-
-	// runtime.mode: env > file > default.
-	r.RuntimeMode = resolveStr("FUNCD_RUNTIME", file.Runtime.Mode, defaultRuntimeMode)
-
-	// containerd lane: env > file > default; root/cniConfDir are dataDir-derived when unset.
-	c := file.Runtime.Containerd
-	r.Containerd = Containerd{
-		Socket:        resolveStr("FUNCD_CONTAINERD_SOCKET", c.Socket, ""),
-		Root:          resolveStr("FUNCD_CONTAINERD_ROOT", c.Root, filepath.Join(r.DataDir, "containerd")),
-		Snapshotter:   resolveStr("FUNCD_SNAPSHOTTER", c.Snapshotter, defaultSnapshotter),
-		CNIBinDir:     resolveStr("FUNCD_CNI_BIN_DIR", c.CNIBinDir, defaultCNIBinDir),
-		CNIConfDir:    resolveStr("FUNCD_CNI_CONF_DIR", c.CNIConfDir, filepath.Join(r.DataDir, "cni")),
-		SubnetCIDR:    resolveStr("FUNCD_SUBNET_CIDR", c.SubnetCIDR, defaultSubnetCIDR),
-		ImagePrefix:   resolveStr("FUNCD_IMAGE_PREFIX", c.ImagePrefix, defaultImagePrefix),
-		ImageOverride: resolveImageOverride(c.ImageOverride),
-	}
-
-	return r, nil
-}
-
-// Validate checks the file's fields against their declared `validate` tags (go-playground/validator,
-// the same lib huma already uses) — the optional apiVersion/kind envelope and the storage/runtime/log
-// enums — returning a fault.Invalid naming the offending key + the allowed set. Unset fields are
-// allowed (`omitempty`); Resolve fills defaults afterward. It is exported so a caller can validate a
-// File directly (the project's resource-`Validate()` convention, ADR-0048).
-func (f File) Validate() error {
-	const op = "config.File.Validate"
+// Validate runs the struct's `validate` tags (go-playground/validator) over the merged values,
+// returning a fault.Invalid naming the offending yaml key + the allowed set. Load calls it on the
+// effective config (so a bad value from the file, a FUNCD_* env, or the flag is all caught — the
+// ADR-0061 env edge is closed); it is exported so a caller can validate a hand-built Config.
+func (c Config) Validate() error {
+	const op = "config.Config.Validate"
 	v := validator.New()
-	// Report json keys ("storage.mode") in errors, not Go field names.
+	// Report yaml keys ("storage.mode") in errors, not Go field names (the json tag is the yaml key).
 	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
 		name, _, _ := strings.Cut(fld.Tag.Get("json"), ",")
 		if name == "-" {
@@ -244,7 +174,7 @@ func (f File) Validate() error {
 		}
 		return name
 	})
-	err := v.Struct(f)
+	err := v.Struct(c)
 	if err == nil {
 		return nil
 	}
@@ -255,46 +185,10 @@ func (f File) Validate() error {
 		if fe.Param() != "" {
 			want += "=" + fe.Param()
 		}
-		key := strings.TrimPrefix(fe.Namespace(), "File.")
+		key := strings.TrimPrefix(fe.Namespace(), "Config.")
 		return fault.Invalidf(op, "config key %q has invalid value %q (want %s)", key, fmt.Sprint(fe.Value()), want)
 	}
 	return fault.Wrapf(err, fault.Invalid, op, "invalid config")
-}
-
-// resolveImageOverride: FUNCD_IMAGE_OVERRIDE ("rt=ref,rt=ref") parsed > the file map > nil.
-func resolveImageOverride(fileMap map[string]string) map[string]string {
-	raw := os.Getenv("FUNCD_IMAGE_OVERRIDE")
-	if raw == "" {
-		if len(fileMap) == 0 {
-			return nil
-		}
-		return fileMap
-	}
-	out := map[string]string{}
-	for _, pair := range strings.Split(raw, ",") {
-		if rt, ref, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && rt != "" && ref != "" {
-			out[rt] = ref
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// resolveStr returns the env var (if set), else the file value (if non-empty), else def.
-func resolveStr(envKey, fileVal, def string) string {
-	if v := os.Getenv(envKey); v != "" {
-		return v
-	}
-	return firstNonEmpty(fileVal, def)
-}
-
-func firstNonEmpty(a, def string) string {
-	if a != "" {
-		return a
-	}
-	return def
 }
 
 func fileExists(path string) bool {

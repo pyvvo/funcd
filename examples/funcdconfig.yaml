@@ -5,6 +5,8 @@
 # Start the daemon against it:   funcd --config examples/funcdconfig.yaml
 # The file is OPTIONAL — every key has a default, so `funcd` runs with no config at all. Precedence
 # is flag > env (FUNCD_*) > this file > default, so a FUNCD_* env var still overrides any value here.
+# EVERY key also has a FUNCD_* env override (ADR-0062): e.g. server.listenAddr ← FUNCD_LISTEN_ADDR,
+# storage.dataDir ← FUNCD_DATA_DIR, log.level ← FUNCD_LOG_LEVEL, runtime.mode ← FUNCD_RUNTIME.
 #
 # As shipped this is a zero-infra DEV config: in-memory substrate (nothing on disk) + the process
 # runtime (the embedded Node/Python shim), control plane + data plane on localhost. For a real

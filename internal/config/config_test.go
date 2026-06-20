@@ -11,142 +11,181 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/config"
 )
 
-// scenario: zero-config-defaults — an empty File + no env + no flags ⇒ every field its built-in default.
+func writeCfg(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
+	return p
+}
+
+// scenario: zero-config-defaults — no file + no env ⇒ every field its built-in default (nested struct).
 func TestScenarioZeroConfigDefaults(t *testing.T) {
-	r, err := config.Resolve(config.File{}, config.Flags{})
+	c, err := config.Load("", config.Flags{})
 	require.NoError(t, err)
-	require.Equal(t, "0.0.0.0:8080", r.ListenAddr)
-	require.Equal(t, "127.0.0.1:0", r.DataPlaneAddr)
-	require.Equal(t, "file", r.StorageMode)
-	require.Equal(t, "/var/lib/funcd", r.DataDir)
-	require.Equal(t, "", r.Token, "empty ⇒ cmd/funcd uses the built-in dev token + warn")
-	require.Equal(t, []string{"default"}, r.Namespaces)
-	require.Equal(t, "", r.SecretsEncryptionKeyFile)
-	require.Equal(t, "process", r.RuntimeMode)
-	require.Equal(t, "overlayfs", r.Containerd.Snapshotter)
-	require.Equal(t, "/opt/cni/bin", r.Containerd.CNIBinDir)
-	require.Equal(t, "10.63.0.0/16", r.Containerd.SubnetCIDR)
-	require.Equal(t, "funcd/runtime-", r.Containerd.ImagePrefix)
-	require.Equal(t, "/var/lib/funcd/containerd", r.Containerd.Root, "dataDir-derived default")
-	require.Equal(t, "/var/lib/funcd/cni", r.Containerd.CNIConfDir, "dataDir-derived default")
-	require.Equal(t, "json", r.LogFormat)
-	require.Equal(t, "info", r.LogLevel)
-	require.Equal(t, "", r.TelemetryEndpoint)
+	require.Equal(t, "0.0.0.0:8080", c.Server.ListenAddr)
+	require.Equal(t, "127.0.0.1:0", c.Server.DataPlaneAddr)
+	require.Equal(t, "file", c.Storage.Mode)
+	require.Equal(t, "/var/lib/funcd", c.Storage.DataDir)
+	require.Equal(t, []string{"default"}, c.Auth.Namespaces)
+	require.Equal(t, "process", c.Runtime.Mode)
+	require.Equal(t, "overlayfs", c.Runtime.Containerd.Snapshotter)
+	require.Equal(t, "/opt/cni/bin", c.Runtime.Containerd.CNIBinDir)
+	require.Equal(t, "10.63.0.0/16", c.Runtime.Containerd.SubnetCIDR)
+	require.Equal(t, "funcd/runtime-", c.Runtime.Containerd.ImagePrefix)
+	require.Equal(t, "/var/lib/funcd/containerd", c.Runtime.Containerd.Root, "dataDir-derived")
+	require.Equal(t, "/var/lib/funcd/cni", c.Runtime.Containerd.CNIConfDir, "dataDir-derived")
+	require.Equal(t, "json", c.Log.Format)
+	require.Equal(t, "info", c.Log.Level)
+	require.Equal(t, "", c.Telemetry.Endpoint)
 }
 
-// scenario: file-sets-addresses (internal half) — the file sets the previously code-only addresses.
-func TestScenarioFileSetsAddresses(t *testing.T) {
-	r, err := config.Resolve(config.File{
-		APIVersion: config.APIVersion,
-		Kind:       config.Kind,
-		Server:     config.Server{ListenAddr: "1.2.3.4:9000", DataPlaneAddr: "127.0.0.1:9001"},
-	}, config.Flags{})
-	require.NoError(t, err)
-	require.Equal(t, "1.2.3.4:9000", r.ListenAddr)
-	require.Equal(t, "127.0.0.1:9001", r.DataPlaneAddr)
+// the full precedence chain flag > env > file > default, on one struct (ADR-0062).
+func TestPrecedence(t *testing.T) {
+	path := writeCfg(t, "storage:\n  mode: file\n  dataDir: /from-file\n")
+
+	t.Run("default", func(t *testing.T) {
+		c, err := config.Load("", config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, "/var/lib/funcd", c.Storage.DataDir)
+	})
+	t.Run("file-over-default", func(t *testing.T) {
+		c, err := config.Load(path, config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, "/from-file", c.Storage.DataDir)
+	})
+	t.Run("env-over-file", func(t *testing.T) {
+		t.Setenv("FUNCD_DATA_DIR", "/from-env")
+		c, err := config.Load(path, config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, "/from-env", c.Storage.DataDir, "env beats file")
+	})
+	t.Run("flag-over-file", func(t *testing.T) {
+		mem := true
+		c, err := config.Load(path, config.Flags{MemoryOnly: &mem})
+		require.NoError(t, err)
+		require.Equal(t, "memory", c.Storage.Mode, "--memory beats the file's storage.mode: file")
+	})
 }
 
-// scenario: env-overrides-file — FUNCD_DATA_DIR wins over storage.dataDir (precedence env > file).
-func TestScenarioEnvOverridesFile(t *testing.T) {
-	t.Setenv("FUNCD_DATA_DIR", "/env/dir")
-	r, err := config.Resolve(config.File{Storage: config.Storage{DataDir: "/file/dir"}}, config.Flags{})
+// no-clobber: an env var overrides ONLY its own key — the file's other values survive (the property
+// the whole approach hinges on: caarlos0/env leaves a field untouched when its var is unset).
+func TestEnvDoesNotClobberFile(t *testing.T) {
+	path := writeCfg(t, "server:\n  listenAddr: \"1.2.3.4:9000\"\nstorage:\n  dataDir: /file-dir\nlog:\n  level: debug\n")
+	t.Setenv("FUNCD_DATA_DIR", "/env-dir") // set only this one env
+	c, err := config.Load(path, config.Flags{})
 	require.NoError(t, err)
-	require.Equal(t, "/env/dir", r.DataDir, "env beats the file value")
+	require.Equal(t, "/env-dir", c.Storage.DataDir, "the env key is overridden")
+	require.Equal(t, "1.2.3.4:9000", c.Server.ListenAddr, "the file's listenAddr is NOT clobbered")
+	require.Equal(t, "debug", c.Log.Level, "the file's log.level is NOT clobbered")
 }
 
-// scenario: partial-file-fills-rest — a file that sets only server: leaves every other group default.
-func TestScenarioPartialFileFillsRest(t *testing.T) {
-	r, err := config.Resolve(config.File{Server: config.Server{ListenAddr: "0.0.0.0:7000"}}, config.Flags{})
-	require.NoError(t, err)
-	require.Equal(t, "0.0.0.0:7000", r.ListenAddr)
-	require.Equal(t, "file", r.StorageMode, "unset groups take their default")
-	require.Equal(t, "process", r.RuntimeMode)
-	require.Equal(t, "json", r.LogFormat)
+// scenario: env-value-validated (the closed edge) — a bad value from an env var is validated, not
+// silently defaulted (the ADR-0061 gap, closed by validating the merged struct).
+func TestScenarioEnvValueValidated(t *testing.T) {
+	t.Setenv("FUNCD_RUNTIME", "bogus")
+	_, err := config.Load("", config.Flags{})
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a bad env-sourced enum is rejected")
 }
 
-// the --memory flag overrides storage.mode (the top precedence tier).
-func TestFlagOverridesStorageMode(t *testing.T) {
-	mem := true
-	r, err := config.Resolve(config.File{Storage: config.Storage{Mode: "file"}}, config.Flags{MemoryOnly: &mem})
-	require.NoError(t, err)
-	require.Equal(t, "memory", r.StorageMode, "--memory beats the file's storage.mode: file")
-}
-
-// scenario: invalid-enum-rejected — a bad enum value ⇒ fault.Invalid naming the allowed set.
-func TestScenarioInvalidEnumRejected(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		file config.File
+// every FUNCD_* env var maps to its field (the env overlay covers the whole surface uniformly).
+func TestEnvVarsMapToFields(t *testing.T) {
+	cases := map[string]struct {
+		val string
+		get func(config.Config) string
 	}{
-		{"storage.mode", config.File{Storage: config.Storage{Mode: "bogus"}}},
-		{"runtime.mode", config.File{Runtime: config.Runtime{Mode: "vm"}}},
-		{"log.format", config.File{Log: config.Log{Format: "xml"}}},
-		{"log.level", config.File{Log: config.Log{Level: "loud"}}},
-		{"apiVersion", config.File{APIVersion: "funcd.io/v2"}},
-		{"kind", config.File{Kind: "Function"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := config.Resolve(tc.file, config.Flags{})
-			require.Error(t, err)
-			require.Equal(t, fault.Invalid, fault.KindOf(err), "a bad %s is fault.Invalid", tc.name)
+		"FUNCD_LISTEN_ADDR":                 {"1.1.1.1:1", func(c config.Config) string { return c.Server.ListenAddr }},
+		"FUNCD_DATA_PLANE_ADDR":             {"2.2.2.2:2", func(c config.Config) string { return c.Server.DataPlaneAddr }},
+		"FUNCD_STORAGE_MODE":                {"memory", func(c config.Config) string { return c.Storage.Mode }},
+		"FUNCD_DATA_DIR":                    {"/d", func(c config.Config) string { return c.Storage.DataDir }},
+		"FUNCD_TOKEN":                       {"tok", func(c config.Config) string { return c.Auth.Token }},
+		"FUNCD_SECRETS_ENCRYPTION_KEY_FILE": {"/k", func(c config.Config) string { return c.Secrets.EncryptionKeyFile }},
+		"FUNCD_RUNTIME":                     {"containerd", func(c config.Config) string { return c.Runtime.Mode }},
+		"FUNCD_CONTAINERD_SOCKET":           {"/s", func(c config.Config) string { return c.Runtime.Containerd.Socket }},
+		"FUNCD_SNAPSHOTTER":                 {"native", func(c config.Config) string { return c.Runtime.Containerd.Snapshotter }},
+		"FUNCD_CNI_BIN_DIR":                 {"/cni", func(c config.Config) string { return c.Runtime.Containerd.CNIBinDir }},
+		"FUNCD_SUBNET_CIDR":                 {"10.0.0.0/8", func(c config.Config) string { return c.Runtime.Containerd.SubnetCIDR }},
+		"FUNCD_IMAGE_PREFIX":                {"my/", func(c config.Config) string { return c.Runtime.Containerd.ImagePrefix }},
+		"FUNCD_LOG_FORMAT":                  {"text", func(c config.Config) string { return c.Log.Format }},
+		"FUNCD_LOG_LEVEL":                   {"warn", func(c config.Config) string { return c.Log.Level }},
+		"FUNCD_TELEMETRY_ENDPOINT":          {"otel:4317", func(c config.Config) string { return c.Telemetry.Endpoint }},
+	}
+	for envName, tc := range cases {
+		t.Run(envName, func(t *testing.T) {
+			t.Setenv(envName, tc.val)
+			c, err := config.Load("", config.Flags{})
+			require.NoError(t, err)
+			require.Equal(t, tc.val, tc.get(c))
 		})
 	}
 }
 
-// scenario: unknown-key-rejected — a misspelled/unknown key ⇒ strict-decode fault.Invalid.
-func TestScenarioUnknownKeyRejected(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good.yaml")
-	require.NoError(t, os.WriteFile(good, []byte("server:\n  listenAddr: \"0.0.0.0:9000\"\n"), 0o600))
-	bad := filepath.Join(dir, "bad.yaml")
-	require.NoError(t, os.WriteFile(bad, []byte("server:\n  listen: \"0.0.0.0:9000\"\n"), 0o600)) // typo: listen
-
-	f, err := config.Load(good)
+// FUNCD_IMAGE_OVERRIDE ("rt=ref,rt=ref") is parsed into the map by the lib (envSeparator/KeyVal).
+func TestImageOverrideEnvParsed(t *testing.T) {
+	t.Setenv("FUNCD_IMAGE_OVERRIDE", "nodejs22=reg/node:1,python314=reg/py:2")
+	c, err := config.Load("", config.Flags{})
 	require.NoError(t, err)
-	require.Equal(t, "0.0.0.0:9000", f.Server.ListenAddr)
+	require.Equal(t, "reg/node:1", c.Runtime.Containerd.ImageOverride["nodejs22"])
+	require.Equal(t, "reg/py:2", c.Runtime.Containerd.ImageOverride["python314"])
+}
 
-	_, err = config.Load(bad)
+// FUNCD_AUTH_NAMESPACES is a comma-separated list (envSeparator).
+func TestNamespacesEnvList(t *testing.T) {
+	t.Setenv("FUNCD_AUTH_NAMESPACES", "a,b,c")
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b", "c"}, c.Auth.Namespaces)
+}
+
+// scenario: invalid-enum-rejected — a bad enum from the file ⇒ fault.Invalid naming the key.
+func TestScenarioInvalidEnumRejected(t *testing.T) {
+	for name, body := range map[string]string{
+		"storage.mode": "storage:\n  mode: bogus\n",
+		"runtime.mode": "runtime:\n  mode: vm\n",
+		"log.format":   "log:\n  format: xml\n",
+		"log.level":    "log:\n  level: loud\n",
+		"apiVersion":   "apiVersion: funcd.io/v2\n",
+		"kind":         "kind: Function\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load(writeCfg(t, body), config.Flags{})
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a bad %s is fault.Invalid", name)
+		})
+	}
+}
+
+// scenario: unknown-key-rejected — a misspelled key ⇒ strict-decode fault.Invalid.
+func TestScenarioUnknownKeyRejected(t *testing.T) {
+	_, err := config.Load(writeCfg(t, "server:\n  listen: \"0.0.0.0:9000\"\n"), config.Flags{}) // typo: listen
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an unknown key is rejected, not ignored")
 }
 
-// Locate: an explicit/env path that doesn't exist is fault.NotFound; no path ⇒ "" (zero-config).
+// the exported Config.Validate() runs the validate tags directly on a Config.
+func TestConfigValidate(t *testing.T) {
+	good, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.NoError(t, good.Validate())
+
+	bad := good
+	bad.Runtime.Mode = "vm"
+	require.Equal(t, fault.Invalid, fault.KindOf(bad.Validate()), "a bad runtime.mode ⇒ fault.Invalid")
+}
+
+// Locate: an explicit/env path that doesn't exist ⇒ fault.NotFound; none ⇒ "" (zero-config).
 func TestLocate(t *testing.T) {
 	_, err := config.Locate(filepath.Join(t.TempDir(), "nope.yaml"))
-	require.Error(t, err)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "an explicit missing path is fault.NotFound")
 
-	present := filepath.Join(t.TempDir(), "funcdconfig.yaml")
-	require.NoError(t, os.WriteFile(present, []byte("{}"), 0o600))
+	present := writeCfg(t, "{}")
 	got, err := config.Locate(present)
 	require.NoError(t, err)
 	require.Equal(t, present, got)
 
-	// no explicit, no FUNCD_CONFIG, cwd has no funcdconfig.yaml ⇒ "" (zero-config). Run from an empty dir.
 	t.Setenv("FUNCD_CONFIG", "")
 	t.Chdir(t.TempDir())
 	got, err = config.Locate("")
 	require.NoError(t, err)
 	require.Equal(t, "", got, "no file found ⇒ zero-config")
-}
-
-// the exported File.Validate() runs the struct's `validate` tags (go-playground/validator): an empty
-// or in-profile file passes; any bad enum / wrong envelope ⇒ fault.Invalid (Resolve calls it too).
-func TestFileValidate(t *testing.T) {
-	require.NoError(t, config.File{
-		APIVersion: config.APIVersion, Kind: config.Kind,
-		Storage: config.Storage{Mode: "memory"}, Runtime: config.Runtime{Mode: "containerd"},
-		Log: config.Log{Format: "text", Level: "debug"},
-	}.Validate())
-	require.NoError(t, config.File{}.Validate(), "an empty file is valid (defaults apply later)")
-	for name, f := range map[string]config.File{
-		"storage.mode": {Storage: config.Storage{Mode: "nope"}},
-		"runtime.mode": {Runtime: config.Runtime{Mode: "vm"}},
-		"log.format":   {Log: config.Log{Format: "yaml"}},
-		"log.level":    {Log: config.Log{Level: "loud"}},
-		"apiVersion":   {APIVersion: "funcd.io/v2"},
-		"kind":         {Kind: "Function"},
-	} {
-		require.Equal(t, fault.Invalid, fault.KindOf(f.Validate()), "bad %s ⇒ fault.Invalid", name)
-	}
 }
