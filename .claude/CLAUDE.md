@@ -197,16 +197,20 @@ docs (they would rot the feat/roadmap with un-decided scope). They go to the pro
 **Project board #4**:
 
 - **Board**: <https://github.com/users/green-0-rabbit/projects/4/views/1> (`@green-0-rabbit's funcd`).
-- **Add an item** (a draft issue) with the `gh` CLI — needs the `project` token scope (the
-  `green-0-rabbit` token already has it; otherwise `gh auth refresh -s project`):
+- **Use the [`/project-management`](skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
+  Its `driver.py` bakes in the project/field/option ids (verified) so there is nothing to discover;
+  it needs the `project` token scope (the `green-0-rabbit` token already has it; otherwise
+  `gh auth refresh -s project`). **List first** to avoid duplicates, then create:
 
   ```bash
-  gh project item-create 4 --owner green-0-rabbit \
+  python3 .claude/skills/project-management/driver.py list
+  python3 .claude/skills/project-management/driver.py create \
     --title "<short idea title>" \
     --body "<why · key trade-offs · what it depends on · scope-when-picked-up>"
   ```
 
-- **List first** to avoid duplicates: `gh project item-list 4 --owner green-0-rabbit --format json`.
+  `create` defaults the item to **Backlog** (never "No Status"). Write a rich body — match the depth
+  of the existing items (`driver.py show "<substring>"`).
 
 Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
 the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
@@ -222,17 +226,13 @@ through `Draft`/`Proposed` it stays in **Backlog**; then:
 - **ADR `Implemented` → move the item to `Done`** (done by the `adr-impl-review` gate, the sole
   stamper of `Implemented`).
 
-The skill gates carry this as an explicit step. The move (Project #4 — IDs are stable; re-derive
-with `gh project field-list 4 --owner green-0-rabbit` / `item-list` if `item-edit` errors):
+The skill gates carry this as an explicit step. Move the card with the
+[`/project-management`](skills/project-management/SKILL.md) skill (it resolves the item by title
+substring — no ids to hand-assemble). The Status options are **Backlog · In Progress · Done**:
 
 ```bash
-# Status field PVTSSF_lAHOBMTWh84BbERrzhV3cDE — options:
-#   Backlog=0401eb5a · In Progress=47fc9ee4 · Done=98236657 · Todo=f75ad846
-# Find the item id (match by title/topic):  gh project item-list 4 --owner green-0-rabbit --format json
-gh project item-edit --project-id PVT_kwHOBMTWh84BbERr \
-  --id <PVTI_… item id> \
-  --field-id PVTSSF_lAHOBMTWh84BbERrzhV3cDE \
-  --single-select-option-id <option id>
+python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"
+python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"
 ```
 
 Only items that **originated on the board** have a ticket to move — a normal roadmap ADR (no
