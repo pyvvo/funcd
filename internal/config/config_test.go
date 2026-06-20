@@ -39,32 +39,42 @@ func TestScenarioZeroConfigDefaults(t *testing.T) {
 	require.Equal(t, "", c.Telemetry.Endpoint)
 }
 
-// the full precedence chain flag > env > file > default, on one struct (ADR-0062).
+// the precedence matrix — flag > env > file > default — parameterized across the tiers (ADR-0062).
+// Each row activates a subset of the source tiers and asserts the highest active one wins.
 func TestPrecedence(t *testing.T) {
-	path := writeCfg(t, "storage:\n  mode: file\n  dataDir: /from-file\n")
+	flag := func(b bool) *bool { return &b }
+	dataDir := func(c config.Config) string { return c.Storage.DataDir }
+	mode := func(c config.Config) string { return c.Storage.Mode }
 
-	t.Run("default", func(t *testing.T) {
-		c, err := config.Load("", config.Flags{})
-		require.NoError(t, err)
-		require.Equal(t, "/var/lib/funcd", c.Storage.DataDir)
-	})
-	t.Run("file-over-default", func(t *testing.T) {
-		c, err := config.Load(path, config.Flags{})
-		require.NoError(t, err)
-		require.Equal(t, "/from-file", c.Storage.DataDir)
-	})
-	t.Run("env-over-file", func(t *testing.T) {
-		t.Setenv("FUNCD_DATA_DIR", "/from-env")
-		c, err := config.Load(path, config.Flags{})
-		require.NoError(t, err)
-		require.Equal(t, "/from-env", c.Storage.DataDir, "env beats file")
-	})
-	t.Run("flag-over-file", func(t *testing.T) {
-		mem := true
-		c, err := config.Load(path, config.Flags{MemoryOnly: &mem})
-		require.NoError(t, err)
-		require.Equal(t, "memory", c.Storage.Mode, "--memory beats the file's storage.mode: file")
-	})
+	for _, tc := range []struct {
+		name string
+		file string            // funcdconfig.yaml body ("" ⇒ no file)
+		env  map[string]string // FUNCD_* vars to set
+		flag *bool             // --memory
+		get  func(config.Config) string
+		want string
+	}{
+		{"default", "", nil, nil, dataDir, "/var/lib/funcd"},
+		{"file > default", "storage:\n  dataDir: /file\n", nil, nil, dataDir, "/file"},
+		{"env > default", "", map[string]string{"FUNCD_DATA_DIR": "/env"}, nil, dataDir, "/env"},
+		{"env > file", "storage:\n  dataDir: /file\n", map[string]string{"FUNCD_DATA_DIR": "/env"}, nil, dataDir, "/env"},
+		{"flag > default", "", nil, flag(true), mode, "memory"},
+		{"flag > file", "storage:\n  mode: file\n", nil, flag(true), mode, "memory"},
+		{"flag > env", "", map[string]string{"FUNCD_STORAGE_MODE": "file"}, flag(true), mode, "memory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			path := ""
+			if tc.file != "" {
+				path = writeCfg(t, tc.file)
+			}
+			c, err := config.Load(path, config.Flags{MemoryOnly: tc.flag})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, tc.get(c), "the highest active source tier wins")
+		})
+	}
 }
 
 // no-clobber: an env var overrides ONLY its own key — the file's other values survive (the property
