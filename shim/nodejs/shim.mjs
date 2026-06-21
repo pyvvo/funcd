@@ -3139,10 +3139,46 @@ function resolveValidators(mod) {
   return { input: pick(mod?.__funcdValidateInput), output: pick(mod?.__funcdValidateOutput) };
 }
 
+// src/invoke.ts
+import http from "node:http";
+function makeInvoke() {
+  return (alias, input) => new Promise((resolve, reject) => {
+    const socketPath = process.env.FUNCD_INVOKE_SOCKET;
+    if (!socketPath) {
+      reject(new Error("context.invoke: worker-node local API socket unavailable (FUNCD_INVOKE_SOCKET unset)"));
+      return;
+    }
+    const body = JSON.stringify(input ?? null);
+    const req = http.request(
+      {
+        socketPath,
+        path: `/invoke/${encodeURIComponent(alias)}`,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) {
+            resolve(text ? JSON.parse(text) : null);
+          } else {
+            reject(new Error(`context.invoke("${alias}") failed: ${status} ${text}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 // src/shim.ts
 function createApp(handler, validators = {}) {
   const app = new Hono2();
-  const ctx = { log: (...args) => console.log(...args) };
+  const ctx = { log: (...args) => console.log(...args), invoke: makeInvoke() };
   app.get("/health/liveness", (c) => c.text("ok"));
   app.get("/health/readiness", (c) => c.text("ready"));
   app.post("/", async (c) => {

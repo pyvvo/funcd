@@ -26,6 +26,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/controlplane"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/dataplane"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
@@ -274,6 +275,10 @@ func (p *Platform) buildControlPlane() error {
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
+		Admissions: []admission.Admission{ // ADR-0064 fn-to-fn link rules on the write path
+			admission.NewLinkValidityAdmission(storeReader{c.store}),
+			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
+		},
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
@@ -382,4 +387,16 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		p.shutdownErr = errors.Join(errs...)
 	})
 	return p.shutdownErr
+}
+
+// storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions
+// (the admission package stays a near-leaf and does not import store).
+type storeReader struct{ s store.Store }
+
+func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
 }

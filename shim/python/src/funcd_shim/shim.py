@@ -41,6 +41,11 @@ class _Context:
     def log(self, *args: object) -> None:
         print(*args, flush=True)
 
+    def invoke(self, alias: str, payload: Any) -> Any:
+        from .invoke import invoke as _invoke
+
+        return _invoke(alias, payload)
+
 
 def make_request_handler(
     handler: Handler, validators: runtime.Validators

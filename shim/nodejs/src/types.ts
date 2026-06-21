@@ -20,6 +20,10 @@ export interface CloudEvent<T = unknown> {
 export interface FunctionContext {
   /** Structured log line → stdout (collected by the platform, ADR-0010). */
   log(...args: unknown[]): void;
+  /** Synchronously invoke a linked function by its spec.links alias (ADR-0064). The input is
+   *  validated against the target's contract by the target's shim; its result is returned. Fails
+   *  closed (rejects) if the caller declares no such link. */
+  invoke<I = unknown, O = unknown>(alias: string, input: I): Promise<O>;
 }
 
 /** A function handler: receives the context + CloudEvent, returns a response (or nothing). */

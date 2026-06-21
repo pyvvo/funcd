@@ -44,6 +44,11 @@ class _Ctx:
     def log(self, *args: object) -> None:
         print(*args, flush=True)
 
+    def invoke(self, alias: str, payload: Any) -> Any:
+        from .invoke import invoke as _invoke
+
+        return _invoke(alias, payload)
+
 
 def invoke(body: str) -> dict[str, Any]:
     """Run one request: parse → optional input validation → handler → optional output validation →

@@ -46,6 +46,10 @@ class FunctionContext(Protocol):
         """Structured log line → stdout (collected by the platform, ADR-0010)."""
         ...
 
+    def invoke(self, alias: str, payload: Any) -> Any:
+        """Synchronously invoke a linked function by its spec.links alias (ADR-0064)."""
+        ...
+
 
 class Handler(Protocol):
     """A function handler: receives the context + CloudEvent, returns a response (or ``None``).

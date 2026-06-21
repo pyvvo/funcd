@@ -16,7 +16,7 @@ import (
 // __main__.py that an `all:` glob would need but that would also drag in __pycache__/*.pyc. Listing
 // the sources by name embeds exactly the shim, nothing machine-generated.
 //
-//go:embed src/funcd_shim/__init__.py src/funcd_shim/__main__.py src/funcd_shim/shim.py src/funcd_shim/pool.py src/funcd_shim/_poolworker.py src/funcd_shim/runtime.py src/funcd_shim/types.py src/funcd_shim/py.typed
+//go:embed src/funcd_shim/__init__.py src/funcd_shim/__main__.py src/funcd_shim/shim.py src/funcd_shim/invoke.py src/funcd_shim/pool.py src/funcd_shim/_poolworker.py src/funcd_shim/runtime.py src/funcd_shim/types.py src/funcd_shim/py.typed
 var shimFS embed.FS
 
 // The entry scripts launch the package: Python prepends a script's own directory to sys.path, so

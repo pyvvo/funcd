@@ -1,7 +1,7 @@
 # ADR-0064: Declarative synchronous function-to-function RPC (links) over a worker-node local API
 
-- **Status**: Accepted
-- **Date**: 2026-06-21 (Accepted 2026-06-21 — post-judge: moved contract validation to the **target's shim**
+- **Status**: Implemented
+- **Date**: 2026-06-21 (Accepted + **Implemented 2026-06-21** — review pass, see docs/reviews/adr-0064-implementation-claude-opus-4-8.md; post-judge: moved contract validation to the **target's shim**
   (the daemon-side `Invoke` forwards via the in-process `Handler.ServeHTTP` and **propagates** the shim's
   422/500 rather than re-validating — the daemon holds no per-function validator) [Major]; named the acyclic
   admission's DFS algorithm; noted the `internal/workernode/` nesting [Minors])

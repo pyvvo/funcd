@@ -53,6 +53,24 @@ type FunctionSpec struct {
 	// stored on the Function (they live only in the worker's env). Resolution is PDP-authorized
 	// (ADR-0022/0018); an unauthorized or missing Secret fails the function closed (not Ready).
 	Secrets []ObjectName `json:"secrets,omitempty"`
+	// Links declares synchronous fn-to-fn RPC dependencies (ADR-0064, F33): each binds a local
+	// alias to a target Function in this namespace, callable from the handler as
+	// context.invoke(alias, input). The alias is the capability — with no matching link, invoke
+	// fails closed. Empty ⇒ no links. Cross-resource validity (target exists, acyclic) is an
+	// admission (ADR-0063); only the structural rules are checked in Validate.
+	Links []FunctionLink `json:"links,omitempty"`
+}
+
+// FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
+// in the same namespace (ADR-0064, F33). The latest-Ready revision of the target is called.
+type FunctionLink struct {
+	// Alias is the local name the handler passes to invoke; a DNS-1123 label, unique within Links.
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	// Target is the name of a Function in this function's namespace.
+	Target ObjectName `json:"target"`
+	// Timeout bounds the synchronous wait (incl. a cold-start wake); int64 ns, 0 ⇒ platform
+	// default, ≤5m.
+	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"300000000000"`
 }
 
 // Pooling is the per-function pooling opt-in (ADR-0046, F28). Named "Pooling" (not
@@ -116,6 +134,21 @@ func (s *FunctionSpec) Validate() error {
 	if s.Scaling.MaxReplicas > 0 && s.Scaling.MinReplicas > s.Scaling.MaxReplicas {
 		return fault.Invalidf(op, "spec.scaling.minReplicas (%d) must not exceed maxReplicas (%d)",
 			s.Scaling.MinReplicas, s.Scaling.MaxReplicas)
+	}
+	// Link structural rules (ADR-0064): alias is a DNS-1123 label, unique within Links; target is a
+	// DNS-1123 label. Cross-resource rules (target exists, no cycle, no self-link) are an admission.
+	seen := make(map[string]bool, len(s.Links))
+	for _, l := range s.Links {
+		if !dnsLabel.MatchString(l.Alias) {
+			return fault.Invalidf(op, "spec.links alias %q is not a valid DNS-1123 label", l.Alias)
+		}
+		if seen[l.Alias] {
+			return fault.Invalidf(op, "spec.links alias %q is duplicated", l.Alias)
+		}
+		seen[l.Alias] = true
+		if !dnsLabel.MatchString(string(l.Target)) {
+			return fault.Invalidf(op, "spec.links[%s].target %q is not a valid Function name", l.Alias, l.Target)
+		}
 	}
 	return nil
 }

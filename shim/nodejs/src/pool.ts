@@ -18,6 +18,7 @@ import { isMainThread, parentPort, Worker, workerData } from 'node:worker_thread
 
 import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
+import { makeInvoke } from './invoke.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -60,7 +61,7 @@ async function workerMain(): Promise<void> {
     console.error(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)
   }
-  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args) };
+  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke() };
 
   port.on('message', (req: Req) => {
     void (async () => {

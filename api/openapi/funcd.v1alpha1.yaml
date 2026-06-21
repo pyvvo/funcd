@@ -189,6 +189,26 @@ components:
         - metadata
         - spec
       type: object
+    FunctionLink:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        target:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        timeout:
+          format: int64
+          maximum: 300000000000
+          minimum: 0
+          type: integer
+      required:
+        - alias
+        - target
+      type: object
     FunctionSpec:
       additionalProperties: false
       properties:
@@ -197,6 +217,12 @@ components:
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
+        links:
+          items:
+            $ref: "#/components/schemas/FunctionLink"
+          type:
+            - array
+            - "null"
         pooling:
           $ref: "#/components/schemas/Pooling"
         replicas:

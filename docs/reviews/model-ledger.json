@@ -988,5 +988,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0063-implementation-claude-opus-4-8.md",
     "notes": "Admission framework (port + two-phase pipeline + validate admission) wired into the write path; behavior parity; judge Major (Old/Identity wiring) proven by a named spy test; matrix tests for validate + Handles. All findings: none."
+  },
+  {
+    "date": "2026-06-21",
+    "adr": "0064",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0064-implementation-claude-opus-4-8.md",
+    "notes": "fn-to-fn links: spec.links + 2 link admissions (consume ADR-0063) + worker-node local API (UDS) + in-process invoker (propagates shim 422/500) + context.invoke in both shims. Matrix tests for link-structural + error-taxonomy. Live per-sandbox UDS provisioning + cross-process e2e deferred to the Linux integration lane (env). Findings: none."
   }
 ]

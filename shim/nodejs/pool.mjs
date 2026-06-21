@@ -3140,6 +3140,42 @@ function resolveValidators(mod) {
   return { input: pick(mod?.__funcdValidateInput), output: pick(mod?.__funcdValidateOutput) };
 }
 
+// src/invoke.ts
+import http from "node:http";
+function makeInvoke() {
+  return (alias, input) => new Promise((resolve, reject) => {
+    const socketPath = process.env.FUNCD_INVOKE_SOCKET;
+    if (!socketPath) {
+      reject(new Error("context.invoke: worker-node local API socket unavailable (FUNCD_INVOKE_SOCKET unset)"));
+      return;
+    }
+    const body = JSON.stringify(input ?? null);
+    const req = http.request(
+      {
+        socketPath,
+        path: `/invoke/${encodeURIComponent(alias)}`,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) {
+            resolve(text ? JSON.parse(text) : null);
+          } else {
+            reject(new Error(`context.invoke("${alias}") failed: ${status} ${text}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 // src/pool.ts
 var maxOldMB = Number(process.env.FUNCD_POOL_MAX_OLD_MB ?? 64);
 var maxYoungMB = Number(process.env.FUNCD_POOL_MAX_YOUNG_MB ?? 16);
@@ -3158,7 +3194,7 @@ async function workerMain() {
     console.error(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}`);
     process.exit(3);
   }
-  const ctx = { log: (...args) => console.log(`[${spec.name}]`, ...args) };
+  const ctx = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke() };
   port.on("message", (req) => {
     void (async () => {
       const event = req.event ?? {};

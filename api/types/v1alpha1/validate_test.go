@@ -108,3 +108,36 @@ func TestEventSourceValidateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestFunctionLinkValidateMatrix is the spec.links structural matrix (ADR-0064): alias is a
+// DNS-1123 label unique within Links, target is a DNS-1123 label. Cross-resource rules
+// (target-exists, acyclic, no self-link) are an admission, not here. Parametrized accept/reject.
+func TestFunctionLinkValidateMatrix(t *testing.T) {
+	link := func(alias, target string) FunctionLink {
+		return FunctionLink{Alias: alias, Target: ObjectName(target)}
+	}
+	for _, tc := range []struct {
+		name  string
+		links []FunctionLink
+		valid bool
+	}{
+		{"no links", nil, true},
+		{"valid single", []FunctionLink{link("payments", "checkout")}, true},
+		{"valid multiple", []FunctionLink{link("payments", "checkout"), link("mail", "mailer")}, true},
+		{"uppercase alias", []FunctionLink{link("Payments", "checkout")}, false},
+		{"empty alias", []FunctionLink{link("", "checkout")}, false},
+		{"underscore alias", []FunctionLink{link("pay_ments", "checkout")}, false},
+		{"duplicate alias", []FunctionLink{link("a", "x"), link("a", "y")}, false},
+		{"bad target", []FunctionLink{link("a", "Bad_Target")}, false},
+		{"empty target", []FunctionLink{link("a", "")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fnWith(FunctionSpec{Links: tc.links}).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed link set must be fault.Invalid")
+			}
+		})
+	}
+}
