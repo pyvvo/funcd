@@ -1,0 +1,19 @@
+# Daemon config for the fn-to-fn link example on real containerd (ADR-0061/0054). Used by the Lima demo
+# (scripts/lima-fn-to-fn.yaml + the `just lima-example-fn-to-fn` recipe): file storage + the containerd
+# runtime + the dev token. It is part of the mounted example bundle — the demo VM runs funcd against it.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces: [default]
+runtime:
+  mode: containerd
+log:
+  format: text
+  level: info

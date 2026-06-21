@@ -1,0 +1,61 @@
+# Thin OVERRIDE of the bench VM (scripts/lima.yaml) for the fn-to-fn link demo (ADR-0064/0058) on REAL
+# containerd. `base:` inherits the image/arch, resources, the `funcd install` provision, and the runtime
+# probe — so this file carries ONLY the demo's deltas and can never drift from the bench VM (bump the
+# Debian image or the resources once, in lima.yaml, and the demo follows). Driven by
+# `just lima-example-fn-to-fn`. Lima merge semantics (verified on 2.1.2): provision + probes APPEND after
+# base's; mounts dedup by mountPoint with the child winning.
+base: lima.yaml
+
+# Override the inherited mount to WRITABLE (same mountPoint ⇒ replaces it): the guest pushes the OCI
+# layout into /mnt/funcd-deps/registry — the exact path the committed manifests' artifact.uri references,
+# so the example YAMLs deploy unchanged.
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+# Appended AFTER the inherited `funcd install` block: deploy the mounted example as the VM boots — extract
+# the bundle, push both functions (with their contracts) into the layout, run funcd (containerd mode) as a
+# unit against the bundle's config, then apply both manifests the kubectl way. funcdcli is used straight
+# from the mount (no PATH install needed).
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/fn-to-fn; reg=/mnt/funcd-deps/registry
+      install -m 0755 /mnt/funcd-deps/funcdcli /usr/local/bin/funcdcli  # the CLI, on PATH like funcd
+      mkdir -p "$d" /var/lib/funcd/data
+      tar xzf /mnt/funcd-deps/fn-to-fn.tgz -C "$d"
+
+      # push each handler + its contract into the mounted layout (the manifests' artifact.uri target)
+      rm -rf "$reg"
+      for fn in greeter front; do
+        funcdcli push "$d/$fn.mjs" "oci-layout://$reg:$fn" \
+          --contract-input "$d/$fn-input.schema.json" --contract-output "$d/$fn-output.schema.json"
+      done
+
+      # run funcd (containerd mode) as a transient unit (journalctl -u funcd-demo), wait for the control
+      # plane to bind (--retry-connrefused), then apply both manifests the kubectl way
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      funcdcli apply -f "$d/greeter.yaml"
+      funcdcli apply -f "$d/front.yaml"
+
+# Appended AFTER the inherited runtime probe: gate `limactl start` on both functions reaching Ready on
+# real containerd sandboxes — so the recipe can invoke immediately, with no readiness polling of its own.
+probes:
+  - description: "greeter + front reconcile to Ready (real containerd sandboxes)"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      phase() { funcdcli get function "$1" -n default -o json 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
+      for i in $(seq 1 40); do
+        [ "$(phase greeter)" = Ready ] && [ "$(phase front)" = Ready ] && exit 0
+        sleep 2
+      done
+      exit 1
+    hint: "functions did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-fn`"
