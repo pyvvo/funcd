@@ -706,9 +706,11 @@ func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
 // workerSpec builds one replica's runtime spec. It is pure: secretEnv is the already-resolved
 // secret env map (ADR-0057), merged into Env with reserved-FUNCD_-key precedence; nil ⇒ none.
 // addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial context.invoke (ADR-0064),
-// provisioning the per-function worker-node local API on demand. No-op when links are off.
+// provisioning the per-function worker-node local API on demand. Only a CALLER (a function that
+// declares spec.links) gets a socket — a linkless function that invokes still fails closed in the
+// shim. No-op when links are off entirely (r.invokeSockets nil).
 func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) {
-	if r.invokeSockets == nil {
+	if r.invokeSockets == nil || len(fn.Spec.Links) == 0 {
 		return
 	}
 	sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name)
@@ -733,8 +735,8 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
 		}}
 		// Bind-mount the per-function local API socket into the sandbox so the shim can dial
-		// context.invoke at the in-container path (ADR-0064); the host path is created by the Manager.
-		if r.invokeSockets != nil {
+		// context.invoke at the in-container path (ADR-0064); only a caller (declares links) gets one.
+		if r.invokeSockets != nil && len(fn.Spec.Links) > 0 {
 			if sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name); err == nil {
 				env["FUNCD_INVOKE_SOCKET"] = containerInvokeSocket
 				mounts = append(mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
