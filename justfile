@@ -88,6 +88,13 @@ check-shim-python:
 bench:
     go run ./cmd/funcd bench --out docs/reports --density 8
 
+# characterize Badger's RSS + throughput limits for the slatedb → pure-Go engine question (an ADR-0006
+# follow-up). Standalone module (bench/badger) — Badger is NOT a funcd dependency. Writes JSON to
+# bench/badger/results/. See bench/badger/FINDINGS.md. Override scale/profile: `just bench-badger 5000000 default`.
+[group('runtime')]
+bench-badger keys="1000000" profile="lowmem":
+    cd bench/badger && go run . -keys {{keys}} -profile {{profile}} -json results/badger-{{keys}}-{{profile}}.json
+
 # --- reproducible Lima bench harness (ADR-0052/0054) on macOS ----------------------------------
 # The containerd cgroup-footprint lane (`funcd bench --containerd`) needs Linux + root (cgroup +
 # netns); on macOS these four recipes run it in a SELF-PROVISIONING Lima VM (scripts/lima.yaml,

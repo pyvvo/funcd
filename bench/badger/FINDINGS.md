@@ -1,0 +1,64 @@
+# Badger bench — findings (1M keys)
+
+Workload: `-keys 1000000 -funcs 1000 -valsize 256`. Run on **native Linux/arm64** (colima container, not
+emulated, GOMAXPROCS=4 — close to the 8-core target) **and** macOS, three profiles. The Linux numbers are
+**authoritative**; macOS is shown only to expose its RSS-retention artifact. Raw: [results/](results/)
+(JSON = macOS; [results/linux-1M.md](results/linux-1M.md) = Linux tables).
+
+## The headline: RSS on Linux (the real target)
+
+| RSS state (1M keys) | lowmem | default | what it is |
+|---|--:|--:|---|
+| **dormant store** (reopened, idle, post-GC) | **39 MiB** | **134 MiB** | the resting cost of *holding* 1M keys |
+| serving working set (post-GC) | 638 MiB | 696 MiB | memtables + caches + buffers, **reclaimable** |
+| peak during bulk-write | 797 MiB | 827 MiB | write working set |
+| export peak (Backup/Stream) | ~1.6 GiB | ~1.6 GiB | **transient** — reclaimed after (→ 362–603 MiB) |
+| on-disk dir | 470 MiB | 2224 MiB | default preallocates 1 GiB value-logs |
+
+Throughput (Linux): bulk-write **0.7–0.93 M/s**, txn-write 0.8 M/s, get 0.27–0.39 M/s, scan 3–9 M/s,
+backup of 1M keys in **~0.45 s**, prefix-scan of one function **sub-ms**, `DropPrefix` **90 ms** (lowmem).
+
+## ⚠️ Why the OS matters (and corrects an earlier read)
+
+A macOS-only run looks alarming: dormant/after-export RSS sits at **1.8–2.1 GiB** and never falls. That is a
+**measurement artifact** — macOS leaves freed mmap arenas resident until memory pressure. On **Linux the same
+workload reclaims them**: after close+reopen the 1M-key store idles at **39–134 MiB**, and the export spike
+falls back to ~0.4–0.6 GiB. Lesson for any future engine bench here: **trust the Linux RSS, not macOS.**
+
+## What it means for funcd
+
+1. **RSS is affordable — the earlier "~1 GiB floor" was the macOS artifact.** On Linux a *dormant* 1M-key
+   store costs **~40–130 MiB** resident; *active* serving is ~640–700 MiB of mostly-reclaimable working set.
+   At funcd's real **metastore** scale (~100 functions × a few resources = thousands of keys) this is single-
+   digit MiB — a non-issue. Even the 1M-key **per-function-KV aggregate ceiling** sits comfortably in the
+   8-core/18 GiB budget.
+
+2. **Throughput is a non-issue** — writes ~0.8 M/s, reads ~0.3 M/s, far above funcd's modest-write assumption.
+
+3. **The prefix-per-function model is validated** — a single function's range scan is sub-ms and its
+   `DropPrefix` wipe is ~90 ms, both **O(function), not O(all)**. The storage-ADR's "functions as key
+   prefixes" layout works exactly as intended (cheap per-tenant scan + GDPR delete).
+
+4. **The export path is a transient ~1.6 GiB spike, then reclaimed** (not the permanent doubling macOS
+   suggested). So an in-process backup is a real-but-temporary memory event to schedule around, not a
+   standing cost — milder than feared, but still the empirical face of the storage-ADR's "you own the
+   durability subsystem": correctness + memory of the export loop is yours to get right.
+
+5. **Profile barely moves steady RSS; its real lever is disk.** lowmem vs default differ little on resident
+   memory, but default **preallocates 1 GiB value-log files** (2.2 GiB on disk for 256 MiB of data) — set
+   `WithValueLogFileSize` small for funcd-sized stores (lowmem → 470 MiB).
+
+### The decision lens (unchanged in shape, softened on memory)
+The RSS worry that would have argued *against* Badger is largely **resolved** by the Linux data — it fits the
+RAM-bound target with room to spare, at both metastore and 1M-key KV scale. What remains is the **non-memory**
+trade the storage ADR already names: Badger gives a near-perfect fit to funcd's existing pure-KV `Engine`
+port (`View`/`Update`/`Txn` ≈ 1:1) plus native TTL/encryption, but its durability/export path is **code you
+own**, whereas SQLite+Litestream keeps durability off-process. Badger now looks like a **viable, low-risk
+drop-in for the metastore** (kills cgo + the S3 coupling, restores the pure-Go static binary); the harder
+SQLite-vs-Badger call is really about *who owns durability* for the broader KV service, not about RAM.
+
+## Caveats
+- GOMAXPROCS=4 here; the target is 8-core — Stream `NumGo`/compaction scale with it.
+- `db.Size()` reads 0 (metrics update on flush); the dir total is the real on-disk figure.
+- Not yet measured: `-sync` (fsync-per-commit) durability cost; 5M/10M-key scaling; concurrent
+  mixed read/write under contention. Easy follow-ups with the existing flags.
