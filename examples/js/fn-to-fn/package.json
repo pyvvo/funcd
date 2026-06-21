@@ -1,0 +1,16 @@
+{
+  "name": "@funcd/example-fn-to-fn",
+  "private": true,
+  "type": "module",
+  "description": "A two-function funcd example (ADR-0064): `front` calls `greeter` via context.invoke over a declared link. Authored in TypeScript against @funcd/shim-nodejs; esbuild bundles BOTH src entry points to greeter.mjs + front.mjs in one build.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "build": "esbuild src/greeter.ts src/front.ts --bundle --platform=node --format=esm --target=node22 --outdir=. --out-extension:.js=.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0"
+  }
+}

@@ -40,6 +40,7 @@ import (
 	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/green-0-rabbit/funcd/internal/workernode/local"
 )
 
 // DevToken is the default control-plane credential token wired by InMemory(). It
@@ -131,6 +132,8 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
+	invokeMgr *local.Manager // per-function worker-node local API broker (ADR-0064)
+
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -213,8 +216,19 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
+	// Worker-node local API (ADR-0064): the per-function fn-to-fn invoke broker. Its Invoker
+	// forwards through the data-plane handler built below, so wire that handler via a holder set
+	// after it exists (the reconciler is constructed before the data plane, which wraps its activator).
+	dpHolder := &local.HandlerHolder{}
+	invokeSockDir, err := os.MkdirTemp("", "funcd-invoke")
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "create invoke socket dir")
+	}
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), p.logger)
+
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
+		InvokeSockets:        p.invokeMgr,
 		Runtime:              c.runtime,
 		Scheduler:            sched,
 		Gateway:              c.gateway,
@@ -295,6 +309,7 @@ func (p *Platform) buildControlPlane() error {
 	// Data plane (ADR-0033): a SEPARATE listener serving function invocations through the
 	// activator (path+store → activator), distinct from the authenticated control plane.
 	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.logger), gateway.Recover, gateway.RequestID)
+	dpHolder.Set(dpHandler) // late-bind the data-plane handler into the worker-node local API invoker (ADR-0064)
 	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
@@ -373,6 +388,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.dataPlaneListener != nil {
 			_ = p.dataPlaneListener.Close() // best-effort; may already be closed by dataPlaneServer.Shutdown
+		}
+		if p.invokeMgr != nil {
+			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
 		}
 		errs := []error{
 			p.cfg.bus.Close(),

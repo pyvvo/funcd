@@ -47,6 +47,16 @@ type ShapeValidator interface {
 	Validate(ctx context.Context, fn *v1.Function) error
 }
 
+// InvokeSocketProvider supplies the per-function worker-node local API socket path (ADR-0064): the
+// reconciler sets it as FUNCD_INVOKE_SOCKET in the worker env so the shim can dial context.invoke.
+// nil ⇒ fn-to-fn links are off (the env var is unset; invoke fails closed in the shim).
+type InvokeSocketProvider interface {
+	SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, error)
+	// Remove stops + deletes the function's local API listener (called from teardown on delete, so
+	// the socket lifecycle tracks the Function resource — controller-driven, not leaked).
+	Remove(ns v1.NamespaceName, name v1.ObjectName)
+}
+
 // Deps configures the Function lifecycle reconciler (internal component, ADR-0002 §1).
 type Deps struct {
 	Store     store.Store
@@ -98,6 +108,10 @@ type Deps struct {
 	// (ADR-0057 Decision 4). Defaulted to the namespace-scoped developer identity when Secrets
 	// is set and this is nil; ignored when Secrets is nil.
 	DeveloperFor func(ns v1.NamespaceName) auth.Identity
+
+	// InvokeSockets provisions the per-function worker-node local API (ADR-0064) and yields the
+	// socket path the reconciler sets as FUNCD_INVOKE_SOCKET. nil ⇒ fn-to-fn links off.
+	InvokeSockets InvokeSocketProvider
 }
 
 // EndpointMode selects how a worker is ADDRESSED (ADR-0032); it is orthogonal to the
@@ -118,6 +132,9 @@ const (
 	containerArtifactDir = "/var/funcd/artifact"
 	// containerShimPort is the fixed port the shim binds inside its netns (ADR-0032).
 	containerShimPort = 8080
+	// containerInvokeSocket is the in-sandbox path the worker-node local API socket is bind-mounted
+	// to in container mode (ADR-0064); the shim dials it via FUNCD_INVOKE_SOCKET.
+	containerInvokeSocket = "/run/funcd/invoke.sock"
 )
 
 // Reconciler is the one controller.Reconciler for KindFunction.
@@ -141,6 +158,9 @@ type Reconciler struct {
 	// identity for the read (defaulted to the namespace-scoped developer when secrets are wired).
 	secrets      SecretResolver
 	developerFor func(ns v1.NamespaceName) auth.Identity
+
+	// invokeSockets provisions the per-function worker-node local API (ADR-0064); nil ⇒ links off.
+	invokeSockets InvokeSocketProvider
 
 	// pooling (ADR-0046/0050): the pure placement policy + per-family pool-host launch commands + cap.
 	// A function pools iff a pool host exists for its runtime family (poolKeyFor); none ⇒ solo.
@@ -202,6 +222,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		httpClient:        &http.Client{Timeout: 2 * time.Second},
 		secrets:           d.Secrets,
 		developerFor:      developerFor,
+		invokeSockets:     d.InvokeSockets,
 		assigner:          pooling.NewAssigner(),
 		poolShimCommand:   d.PoolShimCommand,
 		poolShimsByFamily: d.PoolShimsByFamily,
@@ -443,6 +464,9 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 			return fault.Wrapf(serr, fault.KindOf(serr), "function.teardown", "stop worker")
 		}
 	}
+	if r.invokeSockets != nil {
+		r.invokeSockets.Remove(ns, name) // the local API socket dies with the Function (ADR-0064)
+	}
 	return nil
 }
 
@@ -681,6 +705,20 @@ func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
 
 // workerSpec builds one replica's runtime spec. It is pure: secretEnv is the already-resolved
 // secret env map (ADR-0057), merged into Env with reserved-FUNCD_-key precedence; nil ⇒ none.
+// addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial context.invoke (ADR-0064),
+// provisioning the per-function worker-node local API on demand. No-op when links are off.
+func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) {
+	if r.invokeSockets == nil {
+		return
+	}
+	sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name)
+	if err != nil {
+		r.logger.Warn("could not provision invoke socket", "function", fn.Name, "err", err)
+		return
+	}
+	env["FUNCD_INVOKE_SOCKET"] = sock
+}
+
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
@@ -691,15 +729,26 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_PORT":     strconv.Itoa(containerShimPort),
 		}
 		r.mergeSecretEnv(env, secretEnv)
+		mounts := []runtime.Mount{{
+			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
+		}}
+		// Bind-mount the per-function local API socket into the sandbox so the shim can dial
+		// context.invoke at the in-container path (ADR-0064); the host path is created by the Manager.
+		if r.invokeSockets != nil {
+			if sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name); err == nil {
+				env["FUNCD_INVOKE_SOCKET"] = containerInvokeSocket
+				mounts = append(mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
+			} else {
+				r.logger.Warn("could not provision invoke socket", "function", fn.Name, "err", err)
+			}
+		}
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
 			Name:      fn.Name,
 			Replica:   replica,
 			Image:     r.imageFor(string(fn.Spec.Runtime)),
-			Mounts: []runtime.Mount{{
-				Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
-			}},
-			Env: env,
+			Mounts:    mounts,
+			Env:       env,
 		}
 	}
 	if r.materializer != nil {
@@ -708,6 +757,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_ARTIFACT": artifactPath,
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 		}
+		r.addInvokeSocket(env, fn) // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
