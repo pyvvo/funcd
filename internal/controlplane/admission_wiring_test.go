@@ -25,7 +25,7 @@ type spyAdmission struct {
 	lastSubject   string
 }
 
-func (s *spyAdmission) Name() string          { return "spy" }
+func (s *spyAdmission) Name() string           { return "spy" }
 func (s *spyAdmission) Phase() admission.Phase { return admission.Validating }
 func (s *spyAdmission) Handles(_ v1.GroupVersionKind, _ admission.Operation) bool {
 	return true

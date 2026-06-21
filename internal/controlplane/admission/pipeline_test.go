@@ -19,7 +19,7 @@ type fakeAdmission struct {
 	admit   func(context.Context, admission.Request) (v1.Object, error)
 }
 
-func (f fakeAdmission) Name() string          { return f.name }
+func (f fakeAdmission) Name() string           { return f.name }
 func (f fakeAdmission) Phase() admission.Phase { return f.phase }
 
 func (f fakeAdmission) Handles(g v1.GroupVersionKind, o admission.Operation) bool {

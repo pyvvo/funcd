@@ -24,8 +24,8 @@ type linkValidity struct{ r StoreReader }
 // graph stays acyclic with the applied function (a self-link is a degenerate cycle).
 func NewLinkValidityAdmission(r StoreReader) Admission { return linkValidity{r: r} }
 
-func (linkValidity) Name() string  { return "link-validity" }
-func (linkValidity) Phase() Phase  { return Validating }
+func (linkValidity) Name() string { return "link-validity" }
+func (linkValidity) Phase() Phase { return Validating }
 
 func (linkValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
