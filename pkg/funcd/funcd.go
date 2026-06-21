@@ -82,6 +82,7 @@ type config struct {
 	runtimeShimByFamily map[string][]string // runtime-family prefix → shim cmd (ADR-0049)
 	materializer        function.Materializer
 	artifactDir         string // OCI artifact cache dir (ADR-0031); enables the oras Materializer
+	invokeSocketDir     string // dir for per-function worker-node local API UDS (ADR-0064); empty → a temp dir
 
 	// container execution (ADR-0032): when imageFor is set the reconciler runs functions
 	// in the curated-image containerd worker (shim = image entrypoint, fixed netns port,
@@ -220,9 +221,13 @@ func (p *Platform) buildControlPlane() error {
 	// forwards through the data-plane handler built below, so wire that handler via a holder set
 	// after it exists (the reconciler is constructed before the data plane, which wraps its activator).
 	dpHolder := &local.HandlerHolder{}
-	invokeSockDir, err := os.MkdirTemp("", "funcd-invoke")
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "create invoke socket dir")
+	invokeSockDir := c.invokeSocketDir // config-derived (<dataDir>/invoke); empty ⇒ a temp dir (InMemory/tests)
+	if invokeSockDir == "" {
+		tmp, terr := os.MkdirTemp("", "funcd-invoke")
+		if terr != nil {
+			return fault.Wrapf(terr, fault.Internal, op, "create invoke socket dir")
+		}
+		invokeSockDir = tmp
 	}
 	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), p.logger)
 

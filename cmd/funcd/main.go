@@ -163,6 +163,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 		funcd.WithStore(st),
 		funcd.WithDevAuth(token, cfg.Auth.Namespaces...),
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
+		funcd.WithInvokeSocketDir(filepath.Join(cfg.Storage.DataDir, "invoke")),
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithLogger(root),

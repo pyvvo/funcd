@@ -113,6 +113,13 @@ func WithArtifactStore(dir string) Option {
 	return func(c *config) error { c.artifactDir = dir; return nil }
 }
 
+// WithInvokeSocketDir sets the directory for the per-function worker-node local API sockets
+// (ADR-0064, fn-to-fn invoke). cmd/funcd sets it to <dataDir>/invoke from config; unset
+// (InMemory()/tests) ⇒ a temp dir.
+func WithInvokeSocketDir(dir string) Option {
+	return func(c *config) error { c.invokeSocketDir = dir; return nil }
+}
+
 // WithDataPlaneAddr sets the data-plane (function-invocation) listen address (ADR-0033).
 // Default is 0.0.0.0:8081 (Production); InMemory() uses an ephemeral 127.0.0.1:0.
 func WithDataPlaneAddr(addr string) Option {
