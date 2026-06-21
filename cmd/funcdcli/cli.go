@@ -126,11 +126,11 @@ func (a *cli) applyCmd() *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply a manifest (JSON; - for stdin)",
+		Short: "Apply a manifest (YAML or JSON; - for stdin)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
-				return fault.Invalidf("funcdcli apply", "usage: apply -f <file.json>")
+				return fault.Invalidf("funcdcli apply", "usage: apply -f <file.yaml>")
 			}
 			data, err := readManifest(file)
 			if err != nil {
@@ -155,7 +155,7 @@ func (a *cli) applyCmd() *cobra.Command {
 			return a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (JSON); - for stdin")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON); - for stdin")
 	return cmd
 }
 

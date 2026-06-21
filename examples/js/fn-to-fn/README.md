@@ -53,15 +53,40 @@ spec:
 
 `greeter` is an ordinary Function with no links — it doesn't know it's being called.
 
+## Deploy it (push → apply), the kubectl way
+
+Build the artifacts, push them to an OCI store (a registry, or a **local layout** — no server), then
+`apply` the manifests; the daemon pulls the artifacts by digest and runs them:
+
+```bash
+npm run build                                              # → greeter.mjs + front.mjs
+funcdcli push greeter.mjs oci-layout://./registry:greeter  # prints <ref>@<digest>
+funcdcli push front.mjs   oci-layout://./registry:front
+funcdcli apply -f greeter.yaml                             # the daemon pulls + runs
+funcdcli apply -f front.yaml
+curl -sX POST "$DATA_PLANE/function/front" -d '{"data":{"name":"funcd"}}'
+# → {"via":"front","greeting":"Hello, funcd!"}
+```
+
+`funcdcli apply` accepts **YAML or JSON**; the manifests carry a plain ref (tag), and the daemon
+resolves it to a digest at apply time — so these `.yaml` files are the deployable unit, re-appliable
+like any `kubectl apply -f`.
+
+**On Lima (containerd lane):** push into `~/.cache/funcd-lima/registry`, which the VM mounts read-only
+at `/mnt/funcd-deps/registry` (the path the manifests' `artifact.uri` already references); then
+`funcdcli apply` against the in-VM daemon. Same flow, real sandboxes — the per-function invoke socket
+is bind-mounted into each container at `/run/funcd/invoke.sock`.
+
 ## Launched as a real cross-process test
 
 This example is **executed** end-to-end (it is built from these very sources and run) by
 `pkg/funcd/invoke_e2e_test.go`:
 
-- `TestScenarioHandlerInvokesLinkedFunction` — deploys both functions on the process-shim lane, POSTs
-  to `front` over the data plane, and asserts `greeter`'s reply (`"Hello, funcd!"`) flowed back
-  through `front` — the full broker round-trip (shim → `FUNCD_INVOKE_SOCKET` → local API → resolver →
-  invoker → data plane → `greeter` → back).
+- `TestScenarioHandlerInvokesLinkedFunction` — the **real deploy path**: pushes both handlers to an OCI
+  layout, applies `greeter.yaml` + `front.yaml` (the daemon pulls the artifacts by digest), POSTs to
+  `front` over the data plane, and asserts `greeter`'s reply (`"Hello, funcd!"`) flowed back through
+  `front` — the full broker round-trip (shim → `FUNCD_INVOKE_SOCKET` → local API → resolver → invoker →
+  data plane → `greeter` → back).
 - `TestScenarioUnlinkedAliasDeniedE2E` — a function calling an **undeclared** alias fails closed.
 
 ```bash

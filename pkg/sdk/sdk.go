@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 )
@@ -238,8 +240,10 @@ func decodeObject(kind v1.Kind, body []byte) (v1.Object, error) {
 // DecodeManifest parses a flat JSON resource manifest (apiVersion/kind/metadata/spec)
 // into the concrete v1.Object. An unknown/empty kind is a fault.Invalid, never a panic.
 func DecodeManifest(data []byte) (v1.Object, error) {
+	// sigs.k8s.io/yaml accepts YAML *and* JSON (JSON is valid YAML), so `apply` takes either —
+	// the kubectl-style manifest experience, reusing the api/types json tags.
 	var tm v1.TypeMeta
-	if err := json.Unmarshal(data, &tm); err != nil {
+	if err := yaml.Unmarshal(data, &tm); err != nil {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "parse manifest: %v", err)
 	}
 	if tm.Kind == "" {
@@ -249,7 +253,7 @@ func DecodeManifest(data []byte) (v1.Object, error) {
 	if !ok {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "unknown kind %q", tm.Kind)
 	}
-	if err := json.Unmarshal(data, obj); err != nil {
+	if err := yaml.Unmarshal(data, obj); err != nil {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "decode %s: %v", tm.Kind, err)
 	}
 	return obj, nil
