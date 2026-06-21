@@ -148,12 +148,13 @@ demo-record:
 funcd-example:
     go run ./cmd/funcd --config examples/funcdconfig.yaml
 
-# run the fn-to-fn link example end-to-end (ADR-0064): builds the shim + TS example (greeter + front),
-# then drives the real cross-process broker round-trip (front -> context.invoke("greeter") -> greeter)
-# + the undeclared-alias default-deny case. Needs node on PATH (the tests skip without it).
+# run the fn-to-fn link example end-to-end (ADR-0064/0058): builds the shim + the TS example with its
+# CONTRACT build (generated JSON Schema + baked validators), pushes to an OCI layout, applies the
+# manifests, and drives the real broker round-trip + contract-422 + invoke-propagation + default-deny.
+# Needs node on PATH (the tests skip without it).
 [group('example')]
 example-fn-to-fn: build-shim
-    go test ./pkg/funcd/ -run 'TestScenarioHandlerInvokesLinkedFunction|TestScenarioUnlinkedAliasDeniedE2E' -v
+    go test ./pkg/funcd/ -run 'TestScenario(HandlerInvokesLinkedFunction|ContractRejectsBadInput|InvokePropagatesContract422|UnlinkedAliasDeniedE2E)' -v
 
 # build the version-stamped single binary (ADR-0026) → dist/funcd.
 # Default is the pure-Go dev build; see scripts/build.sh for the cgo/slatedb release path.

@@ -21,18 +21,24 @@ client ──HTTP──▶ front ──context.invoke("greeter")──▶ [worke
 src/greeter.ts   # the callee  — Handler<GreeterInput, GreeterOutput>
 src/front.ts     # the caller  — calls context.invoke<…>("greeter", …); type-only import of greeter's contract
 test/handlers.test.ts
-package.json     # build = esbuild src/greeter.ts src/front.ts --bundle … --outdir=. (TWO entry points → TWO .mjs)
+build.ts         # the CONTRACT build (ADR-0058/0060): per handler → JSON Schema + a baked validator + the .mjs
+package.json     # build = node build.ts
 tsconfig.json    # @funcd/shim-nodejs → ../../../shim/nodejs/src/types.ts (so context.invoke is typed)
 ```
 
-Authored in TypeScript against the `@funcd/shim-nodejs` typed contract; one `esbuild` build bundles
-**both** entry points to `greeter.mjs` + `front.mjs` (the deployed artifacts, git-ignored).
+Each handler declares a typed **`FuncInput`/`FuncOutput`** (ADR-0058). `npm run build` (build.ts)
+does the real contract build: it generates a closed **JSON Schema** from those types, **bakes** an
+eval-free `__funcdValidate*` validator into the `.mjs` (the shim runs it — bad input → **422**, before
+the handler), and writes `<fn>-{input,output}.schema.json` for `funcdcli push --contract-*`. So the
+typed contracts are *enforced*, not decoration — and a fn-to-fn invoke with a bad payload gets the
+target's 422 **propagated back** (see the e2e). `greeter` requires `name`; `front` makes it optional
+so it can forward a payload greeter rejects.
 
 ```bash
 npm install
 npm run typecheck   # both handlers type-checked against the same contract the platform enforces
 npm test            # unit tests (front's invoke is mocked)
-npm run build       # → greeter.mjs + front.mjs
+npm run build       # → greeter.mjs + front.mjs (baked validators) + *-{input,output}.schema.json
 ```
 
 ## The link (on `front`'s Function resource)
@@ -59,13 +65,20 @@ Build the artifacts, push them to an OCI store (a registry, or a **local layout*
 `apply` the manifests; the daemon pulls the artifacts by digest and runs them:
 
 ```bash
-npm run build                                              # → greeter.mjs + front.mjs
-funcdcli push greeter.mjs oci-layout://./registry:greeter  # prints <ref>@<digest>
-funcdcli push front.mjs   oci-layout://./registry:front
+npm run build   # → greeter.mjs + front.mjs (baked validators) + *-{input,output}.schema.json
+
+# push each handler WITH its generated contract (gated against the funcd profile, embedded as OCI metadata)
+funcdcli push greeter.mjs oci-layout://./registry:greeter \
+  --contract-input greeter-input.schema.json --contract-output greeter-output.schema.json
+funcdcli push front.mjs oci-layout://./registry:front \
+  --contract-input front-input.schema.json --contract-output front-output.schema.json
+
 funcdcli apply -f greeter.yaml                             # the daemon pulls + runs
 funcdcli apply -f front.yaml
 curl -sX POST "$DATA_PLANE/function/front" -d '{"data":{"name":"funcd"}}'
 # → {"via":"front","greeting":"Hello, funcd!"}
+curl -sX POST "$DATA_PLANE/function/front" -d '{"data":{}}'    # missing name
+# → fails: greeter's contract rejects it (422) and the invoke propagates that back through front
 ```
 
 `funcdcli apply` accepts **YAML or JSON**; the manifests carry a plain ref (tag), and the daemon

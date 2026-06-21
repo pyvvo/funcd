@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { CloudEvent, FunctionContext } from '@funcd/shim-nodejs';
-import { handle as greeter, type GreeterInput } from '../src/greeter.ts';
-import { handle as front, type FrontInput } from '../src/front.ts';
+import { handle as greeter, type FuncInput as GreeterInput } from '../src/greeter.ts';
+import { handle as front, type FuncInput as FrontInput } from '../src/front.ts';
 
 // The author's unit tests exercise each handler directly. front's call to context.invoke is mocked
 // here — the real brokered round-trip is proven by the e2e (pkg/funcd/invoke_e2e_test.go). The cast
