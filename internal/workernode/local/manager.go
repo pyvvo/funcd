@@ -71,7 +71,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "listen on %q", path)
 	}
-	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker)
+	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.logger)
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
 	go func() { _ = srv.Serve(ln) }()

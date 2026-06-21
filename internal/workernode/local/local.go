@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,9 @@ type Ref struct {
 	Namespace v1.NamespaceName
 	Function  v1.ObjectName
 }
+
+// String renders the ref as "<namespace>/<function>" for logs.
+func (r Ref) String() string { return string(r.Namespace) + "/" + string(r.Function) }
 
 // Resolver maps (caller, alias) → the link target, applying the link-as-grant rule (default-deny):
 // fault.Forbidden when the caller declares no such link. Same-namespace only (V1.1).
@@ -53,11 +57,17 @@ type UpstreamError struct {
 func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %d", e.Status) }
 
 // NewHandler builds the per-sandbox local API handler: POST /invoke/{alias}. caller is the fixed
-// sandbox identity (connection-scoped) — the handler never reads a caller from the request.
-func NewHandler(caller Ref, res Resolver, inv Invoker) http.Handler {
+// sandbox identity (connection-scoped) — the handler never reads a caller from the request. Every
+// invoke is logged through logger (the broker is the audit point): an allowed call at Info, a
+// denial / upstream error at Warn. A nil logger defaults to slog.Default().
+func NewHandler(caller Ref, res Resolver, inv Invoker, logger *slog.Logger) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /invoke/{alias}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.invoke"
+		start := time.Now()
 		alias := r.PathValue("alias")
 		input, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxInvokeBytes))
 		if err != nil {
@@ -66,21 +76,29 @@ func NewHandler(caller Ref, res Resolver, inv Invoker) http.Handler {
 		}
 		target, timeout, err := res.Resolve(r.Context(), caller, alias)
 		if err != nil {
+			logger.Warn("fn-to-fn invoke denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
 			fault.WriteProblem(w, err) // Forbidden (no link) / NotFound (unknown target)
 			return
 		}
 		out, err := inv.Invoke(r.Context(), target, input, timeout)
+		durMs := time.Since(start).Milliseconds()
 		if err != nil {
 			var ue *UpstreamError
 			if errors.As(err, &ue) { // propagate the target shim's status+body verbatim (422/500)
+				logger.Warn("fn-to-fn invoke upstream error", "caller", caller.String(), "alias", alias,
+					"target", target.String(), "status", ue.Status, "durationMs", durMs)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(ue.Status)
 				_, _ = w.Write(ue.Body)
 				return
 			}
+			logger.Warn("fn-to-fn invoke failed", "caller", caller.String(), "alias", alias,
+				"target", target.String(), "durationMs", durMs, "err", err.Error())
 			fault.WriteProblem(w, err) // transport / cold-wake timeout → 503 etc.
 			return
 		}
+		logger.Info("fn-to-fn invoke", "caller", caller.String(), "alias", alias,
+			"target", target.String(), "durationMs", durMs)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
 	})

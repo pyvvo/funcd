@@ -1,7 +1,9 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,7 +68,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, err: tc.resolveErr}
-			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr})
+			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil)
 			rec := post(t, h, "payments", `{}`)
 			require.Equal(t, tc.wantStatus, rec.Code)
 		})
@@ -78,11 +80,33 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 func TestScenarioCallerIdentityFromConnection(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}}
-	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)})
+	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil)
 
 	post(t, h, "payments", `{"caller":"evil/other","sneaky":true}`)
 	require.Equal(t, caller, res.gotCaller, "caller is the fixed sandbox Ref, never the request body")
 	require.Equal(t, "payments", res.gotAlias)
+}
+
+// the broker logs every invoke — an allowed call at Info (caller→target), a denial at Warn.
+func TestInvokeIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	caller := local.Ref{Namespace: "team-a", Function: "a"}
+
+	h := local.NewHandler(caller, &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}},
+		fakeInvoker{out: []byte(`{}`)}, logger)
+	post(t, h, "payments", `{}`)
+	got := buf.String()
+	require.Contains(t, got, "fn-to-fn invoke")
+	require.Contains(t, got, "caller=team-a/a")
+	require.Contains(t, got, "target=team-a/b")
+	require.Contains(t, got, "alias=payments")
+
+	buf.Reset()
+	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, logger)
+	post(t, hDeny, "ghost", `{}`)
+	require.Contains(t, buf.String(), "fn-to-fn invoke denied")
+	require.Contains(t, buf.String(), "level=WARN")
 }
 
 type fakeStore struct{ obj v1.Object }
