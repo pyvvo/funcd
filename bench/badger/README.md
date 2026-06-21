@@ -25,6 +25,8 @@ done
 Key flags: `-keys` (default 1,000,000), `-funcs` (prefixes to spread keys across — models the storage
 ADR's prefix-per-function layout, default 1000 → 1000 keys/function), `-valsize` (default 256B, funcd
 resources are small blobs), `-profile`, `-sync` (fsync each commit), `-keep`/`-dir`, `-json`.
+Concurrency/durability knobs: `-readers`/`-writers`/`-concdur` (mixed-load test), `-hotwriters`/`-hotdur`
+(hot-key contention), `-synccommits` (sync-cost comparison).
 
 ## What it measures
 
@@ -34,6 +36,8 @@ spread across `funcs` function prefixes:
 | group | scenarios |
 |---|---|
 | **serving** | bulk-write (WriteBatch), txn-write (group commit), get (warm/cold/random), full scan (keys / keys+values), prefix-scan (one function), point-delete, merge-operator |
+| **concurrency** | concurrent mixed R/W (throughput scaling), contended hot-key RMW (SSI conflict rate — the case for the single-writer gateway) |
+| **durability** | commit latency, SyncWrites off vs on (the fsync-durable-ack cost) |
 | **per-function** | `DropPrefix` — the per-tenant wipe (funcd's `rm file.db` equivalent) |
 | **export / maintenance** | `Subscribe` (the latency trigger), full `Backup`, parallel `Stream` |
 | **footprint** | steady idle RSS (clean, mid-serving) · idle RSS after the export ops · cold reopen + cold-cache gets · on-disk LSM/vlog/dir size |

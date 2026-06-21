@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -291,6 +293,168 @@ func (r Result) withOps(ops int) Result {
 		r.OpsPerSec = float64(ops) / s
 	}
 	return r
+}
+
+// concurrentMixed runs `readers` get-goroutines + `writers` put-goroutines against the populated DB for
+// `dur` — keys spread across the keyspace (mostly disjoint, so it measures concurrent throughput scaling,
+// the gateway serving many replicas' requests). Conflicts here are rare (single-key Set, no read).
+func concurrentMixed(db *badger.DB, readers, writers int, dur time.Duration, keys, funcs int, val []byte) Result {
+	var reads, writes, retries int64
+	r := measure(fmt.Sprintf("concurrent mixed (%dR/%dW, %s)", readers, writers, dur), 0, func() (string, error) {
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < readers; i++ {
+			wg.Add(1)
+			go func(seed int) {
+				defer wg.Done()
+				g := newRNG(int64(seed))
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					_ = db.View(func(txn *badger.Txn) error {
+						if item, err := txn.Get(keyFor(g.intn(keys), funcs)); err == nil {
+							_ = item.Value(func([]byte) error { return nil })
+						}
+						return nil
+					})
+					atomic.AddInt64(&reads, 1)
+				}
+			}(i*7 + 1)
+		}
+		for i := 0; i < writers; i++ {
+			wg.Add(1)
+			go func(seed int) {
+				defer wg.Done()
+				g := newRNG(int64(seed))
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					for {
+						err := db.Update(func(txn *badger.Txn) error { return txn.Set(keyFor(g.intn(keys), funcs), val) })
+						if err == badger.ErrConflict {
+							atomic.AddInt64(&retries, 1)
+							continue
+						}
+						break
+					}
+					atomic.AddInt64(&writes, 1)
+				}
+			}(i*13 + 3)
+		}
+		time.Sleep(dur)
+		close(stop)
+		wg.Wait()
+		return "", nil
+	})
+	rd, wr := atomic.LoadInt64(&reads), atomic.LoadInt64(&writes)
+	secs := float64(r.Millis) / 1000
+	r.Ops = int(rd + wr)
+	if secs > 0 {
+		r.OpsPerSec = float64(rd+wr) / secs
+		r.Note = fmt.Sprintf("%s reads/s + %s writes/s, %d conflicts",
+			human(int(float64(rd)/secs)), human(int(float64(wr)/secs)), retries)
+	}
+	return r
+}
+
+// contendedHotKey has `writers` goroutines read-modify-write the SAME key in serializable txns — the
+// worst case: every overlapping txn conflicts. It quantifies how badly uncoordinated multi-writer
+// contention degrades (the empirical case FOR the single-writer gateway), via the SSI conflict-retry rate.
+func contendedHotKey(db *badger.DB, writers int, dur time.Duration) Result {
+	var commits, conflicts int64
+	hot := []byte("fn000000/HOT-COUNTER")
+	r := measure(fmt.Sprintf("contended hot-key RMW (%dW, %s)", writers, dur), 0, func() (string, error) {
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < writers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					err := db.Update(func(txn *badger.Txn) error {
+						var cur uint64
+						if item, e := txn.Get(hot); e == nil {
+							_ = item.Value(func(v []byte) error {
+								if len(v) == 8 {
+									cur = binary.BigEndian.Uint64(v)
+								}
+								return nil
+							})
+						}
+						b := make([]byte, 8)
+						binary.BigEndian.PutUint64(b, cur+1)
+						return txn.Set(hot, b)
+					})
+					switch err {
+					case badger.ErrConflict:
+						atomic.AddInt64(&conflicts, 1)
+					case nil:
+						atomic.AddInt64(&commits, 1)
+					}
+				}
+			}()
+		}
+		time.Sleep(dur)
+		close(stop)
+		wg.Wait()
+		return "", nil
+	})
+	secs := float64(r.Millis) / 1000
+	c := atomic.LoadInt64(&commits)
+	r.Ops = int(c)
+	if secs > 0 {
+		r.OpsPerSec = float64(c) / secs
+	}
+	total := c + atomic.LoadInt64(&conflicts)
+	rate := 0.0
+	if total > 0 {
+		rate = 100 * float64(conflicts) / float64(total)
+	}
+	r.Note = fmt.Sprintf("%s commits/s, %s conflict-retries (%.0f%% of attempts) — SSI", human(int(r.OpsPerSec)), human(int(conflicts)), rate)
+	return r
+}
+
+// syncCostCompare opens two fresh DBs — SyncWrites off and on — and times `n` single-key commits on each.
+// The delta is the cost of an fsync-durable ack (funcd's "200 only after the commit is on disk"). Returns
+// both Results so the table shows them side by side.
+func syncCostCompare(baseDir string, n int, val []byte) []Result {
+	var out []Result
+	for _, sync := range []bool{false, true} {
+		d := filepath.Join(baseDir, fmt.Sprintf("synccmp-%v", sync))
+		opts := badger.DefaultOptions(d).WithLoggingLevel(badger.ERROR).
+			WithSyncWrites(sync).WithValueLogFileSize(64 << 20)
+		db, err := badger.Open(opts)
+		if err != nil {
+			out = append(out, Result{Name: fmt.Sprintf("commit latency (sync=%v)", sync), Note: "ERR: " + err.Error()})
+			continue
+		}
+		r := measure(fmt.Sprintf("commit latency (sync=%v)", sync), n, func() (string, error) {
+			for i := 0; i < n; i++ {
+				k := []byte(fmt.Sprintf("k%012d", i))
+				if err := db.Update(func(txn *badger.Txn) error { return txn.Set(k, val) }); err != nil {
+					return "", err
+				}
+			}
+			return "", nil
+		})
+		if n > 0 {
+			r.Note = fmt.Sprintf("%.1f µs/commit", float64(r.Millis)*1000/float64(n))
+		}
+		_ = db.Close()
+		out = append(out, r)
+	}
+	return out
 }
 
 // rename relabels a Result (the reopen phase reuses idleHold under a clearer name).

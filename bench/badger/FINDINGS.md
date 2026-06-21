@@ -48,6 +48,23 @@ falls back to ~0.4–0.6 GiB. Lesson for any future engine bench here: **trust t
    memory, but default **preallocates 1 GiB value-log files** (2.2 GiB on disk for 256 MiB of data) — set
    `WithValueLogFileSize` small for funcd-sized stores (lowmem → 470 MiB).
 
+6. **Concurrency, contention & durability** (Linux 1M — [results/linux-concurrency-and-5M.md](results/linux-concurrency-and-5M.md)):
+   - **Disjoint concurrent load scales** — 8R/4W sustains 400k reads/s + 56k writes/s, **0 conflicts**.
+   - **Same-key contention is brutal under SSI** — 8 writers read-modify-writing **one** key hit an **86%
+     conflict-retry rate** (1.2M wasted attempts in 2 s). This is the hard evidence *for* the storage-ADR's
+     **single-writer gateway**: serialize per-store writes (group commit) and the conflicts vanish; skip
+     that and uncoordinated replicas burn 86% of their work retrying.
+   - **A durable (fsync) ack costs ~136 µs vs 3.7 µs — ~37×** — so a single writer tops out ~7.3k durable
+     commits/s. That is exactly why the ADR's **group commit** is load-bearing: amortizing one fsync over a
+     16–256 batch lifts effective durable throughput to ~120k–1.8M/s. "Ack after commit" is cheap *because*
+     writes are coalesced.
+
+7. **Scaling 1M → 5M holds up where it matters** — the **dormant** store grows only 39 → 91 MiB (table
+   indexes mmap'd, paged cold), prefix-scan/`DropPrefix` stay O(function). What scales is the serving working
+   set (0.6 → 2.3 GiB, reclaimable) and the **export peak (~1.6 → ~5.1 GiB, ~linear)** — at 5M the in-process
+   backup neared the 6 GiB VM ceiling. **The export path, not the dataset, is the RSS scaling limit** — a
+   point in favor of streaming/segmented export (or doing it out-of-process) at large KV scale.
+
 ### The decision lens (unchanged in shape, softened on memory)
 The RSS worry that would have argued *against* Badger is largely **resolved** by the Linux data — it fits the
 RAM-bound target with room to spare, at both metastore and 1M-key KV scale. What remains is the **non-memory**
@@ -60,5 +77,5 @@ SQLite-vs-Badger call is really about *who owns durability* for the broader KV s
 ## Caveats
 - GOMAXPROCS=4 here; the target is 8-core — Stream `NumGo`/compaction scale with it.
 - `db.Size()` reads 0 (metrics update on flush); the dir total is the real on-disk figure.
-- Not yet measured: `-sync` (fsync-per-commit) durability cost; 5M/10M-key scaling; concurrent
-  mixed read/write under contention. Easy follow-ups with the existing flags.
+- 5M export peak (~5.1 GiB) neared the 6 GiB test VM ceiling; 10M would need a larger VM (or
+  out-of-process export) — not yet run.

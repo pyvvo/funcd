@@ -50,6 +50,12 @@ func main() {
 	delops := flag.Int("dels", 100_000, "random point deletes")
 	txnops := flag.Int("txns", 100_000, "extra txn-path writes")
 	txnbatch := flag.Int("txnbatch", 16, "puts per txn-path transaction")
+	readers := flag.Int("readers", 8, "concurrent reader goroutines (mixed-load test)")
+	writers := flag.Int("writers", 4, "concurrent writer goroutines (mixed-load test)")
+	concDur := flag.Duration("concdur", 3*time.Second, "duration of the concurrent mixed-load test")
+	hotWriters := flag.Int("hotwriters", 8, "writer goroutines contending on ONE hot key (SSI test)")
+	hotDur := flag.Duration("hotdur", 2*time.Second, "duration of the hot-key contention test")
+	synccommits := flag.Int("synccommits", 20_000, "single-key commits for the sync-cost comparison")
 	jsonOut := flag.String("json", "", "also write the JSON report to this path")
 	keep := flag.Bool("keep", false, "keep the data dir after the run")
 	sync := flag.Bool("sync", false, "SyncWrites (fsync on every commit)")
@@ -98,8 +104,14 @@ func main() {
 	add(scanAll(db, true))
 	add(prefixScan(db, *funcs/2))
 	add(txnWrite(db, *keys, *txnops, *txnbatch, *funcs, val))
-	add(pointDelete(db, *keys, *delops, *funcs, rnd))
 	add(mergeOp(db, *mergeops))
+
+	// Concurrency — many goroutines on the populated store: mixed read/write throughput scaling, then the
+	// worst-case single-hot-key contention (the SSI conflict rate that argues for the single-writer gateway).
+	add(concurrentMixed(db, *readers, *writers, *concDur, *keys, *funcs, val))
+	add(contendedHotKey(db, *hotWriters, *hotDur))
+
+	add(pointDelete(db, *keys, *delops, *funcs, rnd))
 	add(idleHold(db, 2*time.Second).rename("idle-hold (serving, clean)"))
 
 	// Phase B — the maintenance/export path. Subscribe/backup/stream allocate large pooled off-heap
@@ -128,6 +140,14 @@ func main() {
 		}))
 		add(idleHold(db, 2*time.Second).rename("idle-hold (after reopen)"))
 		add(pointGet(db, "get (cold, random)", *keys, *getops, *funcs, rnd))
+	}
+
+	// Sync-cost: fresh DBs with SyncWrites off vs on, single-key commits — the price of an fsync-durable
+	// ack. On its own dirs so it doesn't perturb the main DB's measurements. Meaningless for inmem.
+	if *profile != "inmem" {
+		for _, r := range syncCostCompare(d, *synccommits, val) {
+			add(r)
+		}
 	}
 
 	finalRSS := processRSSMB()
