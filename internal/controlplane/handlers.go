@@ -10,6 +10,7 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
@@ -19,11 +20,13 @@ import (
 type storeHandlers struct {
 	store store.Store
 	authz auth.Authorizer
+	admit *admission.Pipeline
 }
 
-// NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018).
-func NewStoreHandlers(st store.Store, authz auth.Authorizer) Handlers {
-	return &storeHandlers{store: st, authz: authz}
+// NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018). The admission
+// pipeline (ADR-0063) is the admit step on every write; pass admission.NewPipeline(...).
+func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline) Handlers {
+	return &storeHandlers{store: st, authz: authz, admit: admit}
 }
 
 // --- the six shared helpers (one authz + admission + store path) ---
@@ -65,11 +68,15 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	if err := h.authorize(ctx, auth.VerbCreate, kind, obj.GetObjectMeta().Namespace); err != nil {
 		return nil, err
 	}
-	stampTypeMeta(obj, kind)               // the route's kind owns TypeMeta (k8s-style)
-	if err := obj.Validate(); err != nil { // admission: envelope + resourceGroup-required (ADR-0003)
+	stampTypeMeta(obj, kind) // the route's kind owns TypeMeta (k8s-style)
+	id, _ := middleware.IdentityFrom(ctx)
+	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
+		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,
+	})
+	if err != nil {
 		return nil, err
 	}
-	return h.store.Create(ctx, obj)
+	return h.store.Create(ctx, admitted)
 }
 
 // stampTypeMeta sets the object's apiVersion/kind from the route's kind. The control-plane
@@ -122,21 +129,39 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	if meta.Name != name {
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
 	}
-	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
-	if err := obj.Validate(); err != nil {
-		return nil, err
-	}
-	cur, err := h.store.Get(ctx, kind.GVK(), ns, name)
+	stampTypeMeta(obj, kind)                           // route's kind owns TypeMeta (see createObj)
+	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
 	if err != nil {
 		return nil, err
 	}
-	meta.ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
-	return h.store.Update(ctx, obj)
+	id, _ := middleware.IdentityFrom(ctx)
+	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
+		Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
+	return h.store.Update(ctx, admitted)
 }
 
 func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
+	}
+	// Run the admit step on Delete only when an admission handles it (e.g. ADR-0064 deletion-protection),
+	// so a build with no Delete admission does no extra store fetch.
+	if h.admit.Handles(kind.GVK(), admission.Delete) {
+		old, err := h.store.Get(ctx, kind.GVK(), ns, name)
+		if err != nil {
+			return err
+		}
+		id, _ := middleware.IdentityFrom(ctx)
+		if _, err := h.admit.Admit(ctx, admission.Request{
+			Operation: admission.Delete, GVK: kind.GVK(), Old: old, Identity: id,
+		}); err != nil {
+			return err
+		}
 	}
 	return h.store.Delete(ctx, kind.GVK(), ns, name, "")
 }

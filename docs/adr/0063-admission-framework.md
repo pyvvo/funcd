@@ -1,7 +1,8 @@
 # ADR-0063: Control-plane admission framework (a two-phase admission pipeline)
 
-- **Status**: Accepted
-- **Date**: 2026-06-21 (Accepted 2026-06-21 — post-judge: wired + scenario-tested `Request.Old`/`Identity` so
+- **Status**: Implemented
+- **Date**: 2026-06-21 (Accepted + **Implemented 2026-06-21** — review pass, see
+  docs/reviews/adr-0063-implementation-claude-opus-4-8.md; post-judge: wired + scenario-tested `Request.Old`/`Identity` so
   the F33 consumer gets real values [Major]; `replaceObj` reuses its pre-update `Get` for `Old`; spy-admission
   proof that authz precedes admission; `v1` alias + trimmed one restatement [Minors/Nits]; aligned the package
   path to the blueprint's anticipated `internal/controlplane/admission/`)
