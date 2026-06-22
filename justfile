@@ -160,6 +160,28 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo invokes inside it
     limactl shell {{lima_fn_vm}} -- sudo bash -s < scripts/lima-fn-to-fn-invoke.sh
 
+# the containerd-lane KV example (ADR-0069): a SELF-DEPLOYING VM (scripts/lima-kv.yaml) boots funcd in
+# containerd mode with a DURABLE Badger KV (kvstore.engine: badger), pushes + applies the kv-counter
+# function, and comes up Ready; this recipe then POSTs twice — the handler increments a per-name counter
+# via context.kv (→ worker-node local API → PDP Facade → durable KV), so the count goes 1 then 2 on a real
+# containerd sandbox. The containerd analogue of the process-lane `example-kv`. Needs docker + node.
+lima_kv_vm := lima_name + "-kv"
+[group('example')]
+lima-example-kv: build-runtime-images build-shim
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    ln -sfn ../../../shim/nodejs/node_modules examples/js/kv-counter/node_modules  # esbuild + contract toolchain
+    ( cd examples/js/kv-counter && node --experimental-strip-types build.ts )      # → counter.mjs + I/O schemas
+    tar czf {{lima_deps}}/kv-counter.tgz -C examples/js/kv-counter \
+      counter.mjs counter-input.schema.json counter-output.schema.json counter.yaml funcdconfig.yaml
+    trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_kv_vm}} --tty=false scripts/lima-kv.yaml
+    limactl shell {{lima_kv_vm}} -- sudo bash -s < scripts/lima-kv-invoke.sh
+
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under

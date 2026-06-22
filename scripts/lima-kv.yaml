@@ -1,0 +1,44 @@
+# Thin OVERRIDE of the bench VM (scripts/lima.yaml) for the KV demo (ADR-0069) on REAL containerd. `base:`
+# inherits the image/arch, resources, the `funcd install` provision, and the runtime probe; this file
+# carries only the demo's deltas. Driven by `just lima-example-kv`. Lima merge (2.1.2): provision + probes
+# APPEND after base's; mounts dedup by mountPoint with the child winning.
+base: lima.yaml
+
+# Writable so the guest pushes the OCI layout into /mnt/funcd-deps/registry (the manifest's artifact.uri).
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+# Appended after `funcd install`: extract the bundle, push counter.mjs, run funcd (containerd + durable KV)
+# as a unit, then apply counter.yaml the kubectl way.
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/kv-counter; reg=/mnt/funcd-deps/registry
+      install -m 0755 /mnt/funcd-deps/funcdcli /usr/local/bin/funcdcli
+      mkdir -p "$d" /var/lib/funcd/data
+      tar xzf /mnt/funcd-deps/kv-counter.tgz -C "$d"
+      rm -rf "$reg"
+      funcdcli push "$d/counter.mjs" "oci-layout://$reg:counter" \
+        --contract-input "$d/counter-input.schema.json" \
+        --contract-output "$d/counter-output.schema.json"
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      funcdcli apply -f "$d/counter.yaml"
+
+# Appended after the runtime probe: gate `limactl start` on counter reaching Ready on a real sandbox.
+probes:
+  - description: "counter reconciles to Ready (real containerd sandbox)"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      phase() { funcdcli get function "$1" -n default -o json 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
+      for i in $(seq 1 40); do [ "$(phase counter)" = Ready ] && exit 0; sleep 2; done
+      exit 1
+    hint: "counter did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-kv`"

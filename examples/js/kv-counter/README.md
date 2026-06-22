@@ -23,11 +23,20 @@ await ctx.kv.del('counters', name);                 // DELETE
 const keys = await ctx.kv.list('counters', 'a');    // GET  /kv/counters?prefix=a  (string[])
 ```
 
+## Contract (ADR-0058/0060)
+
+`build.ts` is contract-aware (like `examples/js/fn-to-fn`): from the handler's `FuncInput` /
+`FuncOutput` types it generates the closed JSON Schema, **bakes an eval-free validator** into
+`counter.mjs`, and writes `counter-{input,output}.schema.json`. Those schemas are pushed as OCI
+metadata (`funcdcli push --contract-input/--contract-output`), so a malformed call is rejected (422)
+before the handler runs — KV functions are contract-validated, not just KV-enabled.
+
 ## Run it (executed by the e2e)
 
 This example is **built and run** end-to-end by `pkg/funcd/kv_e2e_test.go`
-(`TestScenarioE2EKVCounterViaContextKV`): it builds `counter.mjs`, pushes it to an OCI layout, applies
-`counter.yaml`, then POSTs twice and asserts the count goes `1 → 2` (KV persisted across invocations).
+(`TestScenarioE2EKVCounterViaContextKV`): it builds `counter.mjs` + its schemas, pushes them to an OCI
+layout (with the contract), applies `counter.yaml`, then POSTs twice and asserts the count goes
+`1 → 2` (KV persisted across invocations).
 
 ```bash
 nix develop -c just example-kv   # build-shim + the KV e2e (needs node on PATH)

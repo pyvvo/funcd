@@ -1,7 +1,6 @@
 package funcd_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
 )
 
 // buildKVExample runs the kv-counter example's esbuild (→ counter.mjs), reusing the shim's node_modules
@@ -52,9 +50,9 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := buildKVExample(t)
 	layout := t.TempDir()
-	ref := "oci-layout://" + layout + ":counter"
-	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "counter.mjs"), nil)
-	require.NoError(t, err)
+	// push WITH the I/O contract (counter-{input,output}.schema.json baked by build.ts) — the kv-counter
+	// function is contract-validated exactly like fn-to-fn, so the artifact carries its schemas.
+	ref, digest := pushExampleFn(t, layout, exDir, "counter")
 
 	root, _ := filepath.Abs(filepath.Join("..", ".."))
 	data, err := os.ReadFile(filepath.Join(root, "examples", "js", "kv-counter", "counter.yaml"))
