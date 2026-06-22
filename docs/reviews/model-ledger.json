@@ -1033,5 +1033,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0069-implementation-claude-opus-4-8.md",
     "notes": "KV data-plane: local-API /kv routes + Facade wiring + context.kv (Node+Python) + kv-counter example + e2e (count 1->2). 4 scenarios + e2e green; both shims pass."
+  },
+  {
+    "date": "2026-06-22",
+    "adr": "0066",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0066-implementation-claude-opus-4-8.md",
+    "notes": "Durable KV driver + gateway + seams; 4 scenarios green; facade wiring delivered via ADR-0069."
   }
 ]

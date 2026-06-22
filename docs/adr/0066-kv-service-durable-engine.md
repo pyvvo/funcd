@@ -1,10 +1,15 @@
 # ADR-0066: KV-service durable engine (Badger) + the durability extension seams
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-22 (judged 2026-06-22 — the judge's Major drove the split: this ADR is now just the
   durable driver + gateway + the `Backup`/`CDC` seams, with the DR/CDC mechanisms in ADR-0067/0068; folded
   the Minors (the `store.Store`-driver alternative; the V2→v1.1 scope note) and the decider's separate-instance
-  clarification; added `OnWrite` to the CDC seam so the outbox can commit atomically. No Blockers.)
+  clarification; added `OnWrite` to the CDC seam so the outbox can commit atomically. No Blockers.
+  **Implemented 2026-06-22** — `internal/kvstore/badger`: the durable `kvstore.KV` driver + greedy-drain
+  group-commit gateway + `DropPrefix` teardown + the `Op`/`OnWrite` `Backup`/`CDC` seams (default-absent);
+  4 scenarios green (kvstorecontract parity, restart-durability, per-store-serialized 0-conflicts,
+  base-driver-no-side-effects). Its deferred facade-selection wiring was delivered by ADR-0069 (the platform
+  constructs the Facade with the config-selected driver). See docs/reviews/adr-0066-implementation-claude-opus-4-8.md.)
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, service, badger, durable, gateway, group-commit, seams
 - **Realizes**: [FEAT-0001/F35](../feat/0001-feat-v1.1.md) (KV-service durable engine + durability seams)
