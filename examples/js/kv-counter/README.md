@@ -17,10 +17,12 @@ client ──HTTP──▶ counter ──context.kv.get/put("counters", name)─
 ## The API
 
 ```ts
-await ctx.kv.put('counters', name, String(count)); // PUT  /kv/counters/<name>
-const cur = await ctx.kv.get('counters', name);     // GET  /kv/counters/<name>  (Uint8Array | null)
-await ctx.kv.del('counters', name);                 // DELETE
-const keys = await ctx.kv.list('counters', 'a');    // GET  /kv/counters?prefix=a  (string[])
+await ctx.kv.put('counters', name, String(count));  // PUT  /kv/counters/<name>
+const s = await ctx.kv.getText('counters', name);   // GET  → string | null   (ADR-0070)
+const o = await ctx.kv.getJSON('counters', name);   // GET  → parsed JSON | null
+const b = await ctx.kv.get('counters', name);        // GET  → Uint8Array | null (raw bytes)
+await ctx.kv.del('counters', name);                  // DELETE
+const keys = await ctx.kv.list('counters', 'a');     // GET  /kv/counters?prefix=a  (string[])
 ```
 
 ## Contract (ADR-0058/0060)

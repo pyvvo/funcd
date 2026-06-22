@@ -58,6 +58,18 @@ class KVClient:
         finally:
             conn.close()
 
+    def get_str(self, binding: str, key: str) -> str | None:
+        """``get`` decoded as UTF-8 text — the common case (a missing key is ``None``). Saves the
+        caller a ``.decode()`` + ``None`` dance; ``put`` already accepts ``str``."""
+        value = self.get(binding, key)
+        return None if value is None else value.decode("utf-8")
+
+    def get_json(self, binding: str, key: str) -> object | None:
+        """``get`` decoded as UTF-8 text then JSON-parsed (a missing key is ``None``). The structured
+        counterpart of ``get_str``; write with ``put(binding, key, json.dumps(value))``."""
+        text = self.get_str(binding, key)
+        return None if text is None else json.loads(text)
+
     def put(self, binding: str, key: str, value: bytes | str) -> None:
         body = value.encode("utf-8") if isinstance(value, str) else value
         conn = _conn()

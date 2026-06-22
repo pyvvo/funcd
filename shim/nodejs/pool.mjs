@@ -3209,6 +3209,18 @@ function makeKV() {
       if (!ok(r)) throw fail("get", r);
       return new Uint8Array(r.body);
     },
+    async getText(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return r.body.toString("utf8");
+    },
+    async getJSON(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return JSON.parse(r.body.toString("utf8"));
+    },
     async put(binding, key, value) {
       const buf = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
       const r = await request("PUT", keyPath(binding, key), buf);

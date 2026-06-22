@@ -13,8 +13,8 @@ export interface FuncOutput {
 
 export async function handle(ctx: FunctionContext, event: CloudEvent<FuncInput>): Promise<FuncOutput> {
   const name = event.data?.name ?? 'world';
-  const cur = await ctx.kv.get('counters', name);
-  const count = (cur ? Number(new TextDecoder().decode(cur)) : 0) + 1;
+  const cur = await ctx.kv.getText('counters', name);
+  const count = Number(cur ?? 0) + 1;
   await ctx.kv.put('counters', name, String(count));
   ctx.log(`kv-counter: ${name} → ${count}`);
   return { name, count };
