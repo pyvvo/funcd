@@ -425,6 +425,131 @@ func contendedHotKey(db *badger.DB, writers int, dur time.Duration) Result {
 	return r
 }
 
+// singleWriterGateway implements + measures the storage-ADR's design: ALL writes to a store go through ONE
+// serializing writer with group commit (queued ops coalesced into one txn). It is the SOLUTION to the
+// contended-hot-key problem — because there are never two concurrent txns on the store, write-write
+// conflicts are 0 by construction, and group commit amortizes the per-commit cost across the batch.
+// `hot`=true sends every client to the SAME key (the direct contrast to contendedHotKey's 86% conflicts);
+// false spreads writes across the keyspace (the realistic gateway load — is the single writer a bottleneck?).
+func singleWriterGateway(db *badger.DB, clients int, dur time.Duration, batchMax int, hot bool, keys, funcs int, val []byte) Result {
+	type req struct {
+		key  []byte
+		done chan struct{}
+	}
+	reqs := make(chan req, clients*2)
+	var served, txns, batchSum int64
+	writerStop := make(chan struct{})
+	writerDone := make(chan struct{})
+
+	// THE single writer — owns the store's write path. Group commit by GREEDY DRAIN: block for one req,
+	// then non-blockingly pull whatever else is queued (up to batchMax) into the same txn, and commit
+	// immediately. No fixed timer — the batch self-tunes to load, and throughput is bounded by commit
+	// latency, not an artificial wait. (A timer-based flush throttles to 1/period and is the classic
+	// group-commit footgun.)
+	go func() {
+		defer close(writerDone)
+		batch := make([]req, 0, batchMax)
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			_ = db.Update(func(txn *badger.Txn) error {
+				for _, r := range batch {
+					if e := txn.Set(r.key, val); e != nil {
+						return e
+					}
+				}
+				return nil
+			})
+			atomic.AddInt64(&txns, 1)
+			atomic.AddInt64(&batchSum, int64(len(batch)))
+			atomic.AddInt64(&served, int64(len(batch)))
+			for _, r := range batch {
+				close(r.done)
+			}
+			batch = batch[:0]
+		}
+		for {
+			select {
+			case r := <-reqs:
+				batch = append(batch, r)
+			case <-writerStop:
+				for { // drain anything still queued, then exit
+					select {
+					case r := <-reqs:
+						batch = append(batch, r)
+						if len(batch) >= batchMax {
+							flush()
+						}
+					default:
+						flush()
+						return
+					}
+				}
+			}
+			for draining := true; draining && len(batch) < batchMax; { // greedily coalesce what's queued now
+				select {
+				case r := <-reqs:
+					batch = append(batch, r)
+				default:
+					draining = false
+				}
+			}
+			flush()
+		}
+	}()
+
+	label := "single-writer gateway (spread)"
+	hotKey := []byte("fn000000/GW-HOT")
+	if hot {
+		label = "single-writer gateway (hot key)"
+	}
+	r := measure(label, 0, func() (string, error) {
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for c := 0; c < clients; c++ {
+			wg.Add(1)
+			go func(seed int) {
+				defer wg.Done()
+				g := newRNG(int64(seed))
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					k := hotKey
+					if !hot {
+						k = keyFor(g.intn(keys), funcs)
+					}
+					d := make(chan struct{})
+					reqs <- req{k, d} // the writer is alive until writerStop (after wg.Wait), so this always completes
+					<-d
+				}
+			}(c*5 + 1)
+		}
+		time.Sleep(dur)
+		close(stop)
+		wg.Wait()        // clients finish their in-flight op, then exit
+		close(writerStop) // only now stop the writer
+		<-writerDone
+		return "", nil
+	})
+	secs := float64(r.Millis) / 1000
+	sv, tx := atomic.LoadInt64(&served), atomic.LoadInt64(&txns)
+	avg := 0.0
+	if tx > 0 {
+		avg = float64(batchSum) / float64(tx)
+	}
+	r.Ops = int(sv)
+	if secs > 0 {
+		r.OpsPerSec = float64(sv) / secs
+		r.Note = fmt.Sprintf("%s ops/s served via %s txns/s (avg batch %.0f) — 0 conflicts (serialized)",
+			human(int(float64(sv)/secs)), human(int(float64(tx)/secs)), avg)
+	}
+	return r
+}
+
 // syncCostCompare opens two fresh DBs — SyncWrites off and on — and times `n` single-key commits on each.
 // The delta is the cost of an fsync-durable ack (funcd's "200 only after the commit is on disk"). Returns
 // both Results so the table shows them side by side.

@@ -50,10 +50,14 @@ falls back to ~0.4–0.6 GiB. Lesson for any future engine bench here: **trust t
 
 6. **Concurrency, contention & durability** (Linux 1M — [results/linux-concurrency-and-5M.md](results/linux-concurrency-and-5M.md)):
    - **Disjoint concurrent load scales** — 8R/4W sustains 400k reads/s + 56k writes/s, **0 conflicts**.
-   - **Same-key contention is brutal under SSI** — 8 writers read-modify-writing **one** key hit an **86%
-     conflict-retry rate** (1.2M wasted attempts in 2 s). This is the hard evidence *for* the storage-ADR's
-     **single-writer gateway**: serialize per-store writes (group commit) and the conflicts vanish; skip
-     that and uncoordinated replicas burn 86% of their work retrying.
+   - **Same-key contention is brutal under SSI** — 8 writers read-modify-writing **one** key hit an **~85%
+     conflict-retry rate** (the *problem*). **A single-writer gateway, built and benched, is the fix**: routing
+     those same writes through one serializing writer with greedy-drain group commit drove **conflicts to 0
+     and useful throughput to 1.8M ops/s** (coalesced into 53k txns/s, avg batch 34) — **~25× the uncoordinated
+     path's useful commits**, because serialization turns contention into batching. On spread keys the single
+     writer still served 477k ops/s — **not a bottleneck**. (NB: a *timer-based* flush throttles to ~1/period
+     — the bench exposed that footgun in a first cut; greedy-drain is the correct pattern. Throughput here is
+     macOS; conflicts=0 is by construction/OS-independent.)
    - **A durable (fsync) ack costs ~136 µs vs 3.7 µs — ~37×** — so a single writer tops out ~7.3k durable
      commits/s. That is exactly why the ADR's **group commit** is load-bearing: amortizing one fsync over a
      16–256 batch lifts effective durable throughput to ~120k–1.8M/s. "Ack after commit" is cheap *because*

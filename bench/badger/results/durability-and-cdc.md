@@ -1,4 +1,25 @@
-# Badger bench — durability & robust CDC (proven, not asserted)
+# Badger bench — durability, robust CDC & the single-writer gateway (proven, not asserted)
+
+## Single-writer gateway (the contention fix, measured)
+
+The contended-hot-key test shows the *problem*; this is the *solution*, built and run on the same load
+(`singleWriterGateway` — one serializing writer, greedy-drain group commit):
+
+| same hot-key load | conflicts | useful throughput |
+|---|--:|--:|
+| uncoordinated `db.Update` per client (the problem) | **~85% retries** | 72k commits/s |
+| **single-writer gateway** (hot key) | **0** | **1.8M ops/s** → 53k txns/s (avg batch 34) |
+| single-writer gateway (spread keys, realistic) | **0** | 477k ops/s → 15k txns/s |
+
+The gateway eliminates conflicts *and* is ~25× more useful throughput on the hot key — serialization turns
+contention into batching. The single writer is not a bottleneck (477k ops/s spread). A first cut used a
+2 ms flush *timer* and throttled to ~7k ops/s — the bench caught that footgun; **greedy drain** (commit
+immediately, coalescing whatever queued during the last commit — no fixed timer) is the correct pattern.
+Conflicts=0 is by construction (no concurrent txns); throughput numbers are macOS.
+
+---
+
+
 
 Run: `go run . -durability -keys 200000 -cdcn 100000`. These are **correctness proofs** (verified outcomes),
 which are OS-independent; absolute RSS is macOS here (see the perf caveats). Each row is a `VERIFIED ✓`/`LOST`

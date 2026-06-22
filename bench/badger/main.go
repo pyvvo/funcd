@@ -55,6 +55,9 @@ func main() {
 	concDur := flag.Duration("concdur", 3*time.Second, "duration of the concurrent mixed-load test")
 	hotWriters := flag.Int("hotwriters", 8, "writer goroutines contending on ONE hot key (SSI test)")
 	hotDur := flag.Duration("hotdur", 2*time.Second, "duration of the hot-key contention test")
+	gwClients := flag.Int("gwclients", 16, "client goroutines feeding the single-writer gateway")
+	gwDur := flag.Duration("gwdur", 2*time.Second, "duration of the single-writer-gateway test")
+	gwBatch := flag.Int("gwbatch", 64, "max group-commit batch size for the gateway")
 	synccommits := flag.Int("synccommits", 20_000, "single-key commits for the sync-cost comparison")
 	jsonOut := flag.String("json", "", "also write the JSON report to this path")
 	keep := flag.Bool("keep", false, "keep the data dir after the run")
@@ -141,7 +144,10 @@ func main() {
 	// Concurrency — many goroutines on the populated store: mixed read/write throughput scaling, then the
 	// worst-case single-hot-key contention (the SSI conflict rate that argues for the single-writer gateway).
 	add(concurrentMixed(db, *readers, *writers, *concDur, *keys, *funcs, val))
-	add(contendedHotKey(db, *hotWriters, *hotDur))
+	add(contendedHotKey(db, *hotWriters, *hotDur)) // the PROBLEM: uncoordinated writers → conflicts
+	// the SOLUTION: route those same writes through one serializing gateway with group commit
+	add(singleWriterGateway(db, *gwClients, *gwDur, *gwBatch, true, *keys, *funcs, val))  // hot key (direct contrast)
+	add(singleWriterGateway(db, *gwClients, *gwDur, *gwBatch, false, *keys, *funcs, val)) // spread (realistic load)
 
 	add(pointDelete(db, *keys, *delops, *funcs, rnd))
 	add(idleHold(db, 2*time.Second).rename("idle-hold (serving, clean)"))
