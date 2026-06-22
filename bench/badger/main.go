@@ -59,6 +59,8 @@ func main() {
 	jsonOut := flag.String("json", "", "also write the JSON report to this path")
 	keep := flag.Bool("keep", false, "keep the data dir after the run")
 	sync := flag.Bool("sync", false, "SyncWrites (fsync on every commit)")
+	durability := flag.Bool("durability", false, "run the durability proof suite (incremental backup, restore round-trip, Subscribe-lossiness, transactional-outbox CDC) instead of the perf run")
+	cdcn := flag.Int("cdcn", 200_000, "changes for the transactional-outbox CDC proof")
 	flag.Parse()
 
 	d := *dir
@@ -92,8 +94,38 @@ func main() {
 	var results []Result
 	add := func(r Result) {
 		results = append(results, r)
-		fmt.Printf("  %-30s %10s ops %7dms  RSS %.0f→%.0f (peak %.0f)  %s\n",
+		fmt.Printf("  %-44s %10s ops %7dms  RSS %.0f→%.0f (peak %.0f)  %s\n",
 			r.Name, human(r.Ops), r.Millis, r.RSSBeforeMB, r.RSSAfterMB, r.RSSPeakMB, r.Note)
+	}
+
+	// Durability proof suite — prove (not assert) the incremental-backup + restore + robust-CDC story.
+	if *durability {
+		add(bulkWrite(db, *keys, *funcs, val))
+		for _, r := range incrementalBackup(db, val) {
+			add(r)
+		}
+		for _, r := range restoreRoundtrip(db, d) {
+			add(r)
+		}
+		add(subscribeLossiness(db, val))
+		for _, r := range outboxCDC(d, *cdcn, val) {
+			add(r)
+		}
+		finalRSS := processRSSMB()
+		if err := db.Close(); err != nil {
+			fatal(err)
+		}
+		rep := Report{
+			Profile: *profile, Keys: *keys, Funcs: *funcs, ValueBytes: *valsize,
+			GOMAXPROCS: gomaxprocs(), RunPeakRSS: round(runPeak.stopAndPeakMB()), FinalRSSMB: round(finalRSS), Results: results,
+		}
+		rep.printTable()
+		if *jsonOut != "" {
+			if err := rep.writeJSON(*jsonOut); err != nil {
+				fatal(err)
+			}
+		}
+		return
 	}
 
 	// Phase A — normal "serving" ops (writes, reads, scans, deletes). The steady idle RSS measured at

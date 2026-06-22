@@ -40,7 +40,10 @@ spread across `funcs` function prefixes:
 | **durability** | commit latency, SyncWrites off vs on (the fsync-durable-ack cost) |
 | **per-function** | `DropPrefix` — the per-tenant wipe (funcd's `rm file.db` equivalent) |
 | **export / maintenance** | `Subscribe` (the latency trigger), full `Backup`, parallel `Stream` |
+| **durability proofs** (`-durability`) | incremental `Backup(since)` ships only the delta, `db.Load` restore round-trip, `Subscribe` lossiness, transactional-outbox CDC surviving a killed consumer (zero loss) |
 | **footprint** | steady idle RSS (clean, mid-serving) · idle RSS after the export ops · cold reopen + cold-cache gets · on-disk LSM/vlog/dir size |
+
+Run the durability proofs (verified outcomes, fast): `nix develop ../.. -c go run . -durability -cdcn 100000`.
 
 ### The three profiles
 - **lowmem** — tuned per the [Badger memory-usage guide](https://dgraph-io.github.io/badger/quickstart.html#memory-usage):

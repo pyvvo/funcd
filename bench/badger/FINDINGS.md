@@ -65,6 +65,17 @@ falls back to ~0.4–0.6 GiB. Lesson for any future engine bench here: **trust t
    backup neared the 6 GiB VM ceiling. **The export path, not the dataset, is the RSS scaling limit** — a
    point in favor of streaming/segmented export (or doing it out-of-process) at large KV scale.
 
+8. **Durability & CDC are now proven, not asserted** ([results/durability-and-cdc.md](results/durability-and-cdc.md)):
+   - **Incremental backup ships only the delta** — after a 50k-key delta, `Backup(w, cursor)` emitted 25% of
+     the full backup's bytes. (RSS nuance: it shrinks data *materialized*, but each export run still spins the
+     parallel buffer pool — the full re-baseline is the one spike, capped by lowering `Stream.NumGo`.)
+   - **Restore works** — `db.Load` reconstructed 250,000/250,000 keys into a fresh DB. The durable path is real.
+   - **`Subscribe` is lossy** — proven: writes during a subscriber-down gap are never delivered. It's a latency
+     trigger, not a durable feed.
+   - **Robust CDC survives a killed consumer** — a transactional outbox (the change-log entry written in the
+     same txn as the data, consumer tailing from a durable cursor) was killed mid-stream and resumed with
+     **zero loss, zero dup** (100k/100k). Cost: ~2× write amplification. Design in the linked doc.
+
 ### The decision lens (unchanged in shape, softened on memory)
 The RSS worry that would have argued *against* Badger is largely **resolved** by the Linux data — it fits the
 RAM-bound target with room to spare, at both metastore and 1M-key KV scale. What remains is the **non-memory**
