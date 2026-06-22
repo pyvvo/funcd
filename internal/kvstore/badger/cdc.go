@@ -28,11 +28,11 @@ type cdc struct {
 }
 
 const (
-	cdcSeqKey       = Reserved + "cdc_seq"          // GetSequence lease counter (reserved, never listed)
-	cdcLogPrefix    = Reserved + "cdc/"             // _cdc/<020d seq> outbox entries, seq-ordered
+	cdcSeqKey       = Reserved + "cdc_seq"            // GetSequence lease counter (reserved, never listed)
+	cdcLogPrefix    = Reserved + "cdc/"               // _cdc/<020d seq> outbox entries, seq-ordered
 	cdcCursorKey    = Reserved + "cdc_cursor/default" // the single-consumer durable cursor
-	cdcSeqBandwidth = 100                            // lease 100 seqs per persisted write (gaps on crash are fine)
-	cdcPollInterval = 200 * time.Millisecond        // tail wake cadence when the log is drained
+	cdcSeqBandwidth = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
+	cdcPollInterval = 200 * time.Millisecond          // tail wake cadence when the log is drained
 )
 
 // CDCConfig configures the opt-in change-feed (ADR-0068). Subject is the bus subject to publish to (the

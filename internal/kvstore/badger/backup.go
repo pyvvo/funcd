@@ -31,7 +31,7 @@ type backup struct {
 }
 
 const (
-	defaultChunkBytes = 64 << 20            // 64 MiB
+	defaultChunkBytes = 64 << 20 // 64 MiB
 	backupCursorKey   = Reserved + "backup/cursor"
 	manifestKey       = "manifest.json"
 )
