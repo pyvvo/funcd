@@ -1,0 +1,8 @@
+{
+  "include": ["src", "tests"],
+  "extraPaths": ["../../../shim/python/src"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "standard"
+}

@@ -1,0 +1,16 @@
+# kv-counter (Python) — increments a per-name counter in the KV binding "py-counters" via context.kv
+# (ADR-0069). The Python sibling of examples/js/kv-counter; runs on the curated python314 runtime image.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: pycounter
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: python314
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:pycounter   # funcdcli push counter.py (built from src/counter.py)
+  replicas: 1
+  scaling:
+    minReplicas: 1

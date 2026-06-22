@@ -1,0 +1,44 @@
+[project]
+name = "funcd-example-kv-counter"
+version = "0.1.0"
+description = "A funcd function authored in Python that uses durable KV via context.kv, with a typed I/O contract (ADR-0069/0058)."
+authors = [{ name = "The funcd Authors" }]
+requires-python = ">=3.12"
+# funcd-shim is the typed authoring contract (CloudEvent/FunctionContext/KVClient). At deploy time the
+# artifact is the built counter.py (handler + baked validator); this dependency is for local typecheck +
+# tests + the contract build only.
+dependencies = ["funcd-shim"]
+
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+# the push-time contract build (funcd_shim.build) reads FuncInput/FuncOutput via pydantic.
+build = ["pydantic>=2.13.4"]
+
+[tool.uv.sources]
+funcd-shim = { path = "../../../shim/python", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]

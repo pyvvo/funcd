@@ -10,8 +10,8 @@ mounts:
     mountPoint: "/mnt/funcd-deps"
     writable: true
 
-# Appended after `funcd install`: extract the bundle, push counter.mjs, run funcd (containerd + durable KV)
-# as a unit, then apply counter.yaml the kubectl way.
+# Appended after `funcd install`: extract the bundle, push BOTH contract-validated artifacts (JS counter.mjs
+# + Python py/counter.py), run funcd (containerd + durable KV) as a unit, then apply both manifests.
 provision:
   - mode: system
     script: |
@@ -25,20 +25,26 @@ provision:
       funcdcli push "$d/counter.mjs" "oci-layout://$reg:counter" \
         --contract-input "$d/counter-input.schema.json" \
         --contract-output "$d/counter-output.schema.json"
+      funcdcli push "$d/py/counter.py" "oci-layout://$reg:pycounter" \
+        --contract-input "$d/py/counter-input.schema.json" \
+        --contract-output "$d/py/counter-output.schema.json"
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
       funcdcli apply -f "$d/counter.yaml"
+      funcdcli apply -f "$d/py/counter.yaml"
 
-# Appended after the runtime probe: gate `limactl start` on counter reaching Ready on a real sandbox.
+# Appended after the runtime probe: gate `limactl start` on BOTH counters reaching Ready on a real sandbox.
 probes:
-  - description: "counter reconciles to Ready (real containerd sandbox)"
+  - description: "counter + pycounter reconcile to Ready (real containerd sandbox)"
     script: |
       #!/bin/bash
       set -eu -o pipefail
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       phase() { funcdcli get function "$1" -n default -o json 2>/dev/null \
         | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
-      for i in $(seq 1 40); do [ "$(phase counter)" = Ready ] && exit 0; sleep 2; done
+      for i in $(seq 1 60); do
+        [ "$(phase counter)" = Ready ] && [ "$(phase pycounter)" = Ready ] && exit 0; sleep 2
+      done
       exit 1
-    hint: "counter did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-kv`"
+    hint: "counter/pycounter did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-kv`"
