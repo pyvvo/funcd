@@ -9,7 +9,7 @@ import (
 )
 
 // scenario: driver-conformance-parity (memory side) — the pure-Go in-memory
-// engine passes the identical store contract as the real (slatedb) engine.
+// engine passes the identical store contract as the real (badger) engine.
 func TestScenario_DriverConformanceParity(t *testing.T) {
 	storecontract.RunContract(t, func(t *testing.T) store.Store {
 		return store.New(memory.New())

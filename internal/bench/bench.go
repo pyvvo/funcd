@@ -22,7 +22,7 @@ import (
 )
 
 // Backend selects the durable substrate compared by the bench. The store is memory in both
-// (the file store = slatedb/cgo, out of scope, ADR-0040); only the blob + JetStream bus move.
+// (the file store = badger (ADR-0065), out of scope, ADR-0040); only the blob + JetStream bus move.
 type Backend string
 
 const (
