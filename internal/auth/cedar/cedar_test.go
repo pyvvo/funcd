@@ -165,3 +165,44 @@ func TestScenarioEntitiesFromResources(t *testing.T) {
 	strangerRead := authorize(t, d, fnPrincipal("default", "reporting"), auth.ActionKVRead, tableResource("default", "orders", "customers"))
 	require.False(t, strangerRead.Allowed, "non-owner read denied (principal != resource.owner)")
 }
+
+// scenario: scoped-policies — a Policy can grant at a whole namespace or a whole resourceGroup
+// without naming each store, because the provider materializes namespace/resourceGroup as entity
+// attributes (ADR-0074). The grant must NOT leak to a resource in a different resourceGroup.
+// (Store-level scoping via `resource in KVStore::"…"` is covered by TestScenarioCedarPermitsRead —
+// the KVTable-in-KVStore parent; namespace/resourceGroup need no extra entity types, just the attrs.)
+func TestScenarioScopedPolicies(t *testing.T) {
+	t.Parallel()
+	// orders is in rg1 (newMeta); add billing in rg2 — both in "default".
+	m := newMeta()
+	m.stores["default/billing"] = &v1.KVStore{
+		ObjectMeta: v1.ObjectMeta{Name: "billing", Namespace: "default", ResourceGroup: "rg2"},
+		Spec:       v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "invoices"}}},
+	}
+
+	// resourceGroup-scoped: grant read on everything in rg1 — orders qualifies, billing (rg2) does not.
+	rgPol := v1.Policy{
+		ObjectMeta: v1.ObjectMeta{Name: "rg1-read", Namespace: "default"},
+		Spec:       v1.PolicySpec{Cedar: `permit(principal, action == Action::"kv::read", resource) when { resource.resourceGroup == "rg1" };`},
+	}
+	drg := newDriver(t, m, fixedPolicies{policies: []v1.Policy{rgPol}, rev: "1"})
+
+	inRG := authorize(t, drg, fnPrincipal("default", "reporting"), auth.ActionKVRead, tableResource("default", "orders", "public"))
+	require.True(t, inRG.Allowed, "resourceGroup-scoped read permits a table in rg1: %s", inRG.Reason)
+	outRG := authorize(t, drg, fnPrincipal("default", "reporting"), auth.ActionKVRead, tableResource("default", "billing", "invoices"))
+	require.False(t, outRG.Allowed, "the rg1-scoped grant does NOT reach billing (rg2) — no leak across resourceGroups")
+
+	// namespace-scoped: grant read on everything in "default" — both stores qualify.
+	nsPol := v1.Policy{
+		ObjectMeta: v1.ObjectMeta{Name: "default-ns-read", Namespace: "default"},
+		Spec:       v1.PolicySpec{Cedar: `permit(principal, action == Action::"kv::read", resource) when { resource.namespace == "default" };`},
+	}
+	dns := newDriver(t, m, fixedPolicies{policies: []v1.Policy{nsPol}, rev: "1"})
+	for _, r := range []*auth.EntityRef{
+		tableResource("default", "orders", "public"),
+		tableResource("default", "billing", "invoices"),
+	} {
+		dec := authorize(t, dns, fnPrincipal("default", "reporting"), auth.ActionKVRead, r)
+		require.True(t, dec.Allowed, "namespace-scoped read permits %s/%s: %s", r.Name, r.Path, dec.Reason)
+	}
+}
