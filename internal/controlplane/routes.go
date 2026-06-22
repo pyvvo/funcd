@@ -26,6 +26,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerRuntimeClass(api, h)
 	registerWorker(api, h)
 	registerGateway(api, h)
+	registerKVStore(api, h)
 }
 
 // ---- shared input types ----

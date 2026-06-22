@@ -115,6 +115,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Gateway:
 		o.TypeMeta = tm
+	case *v1.KVStore:
+		o.TypeMeta = tm
 	}
 }
 
@@ -584,6 +586,48 @@ func (h *storeHandlers) ReplaceGrant(ctx context.Context, ns v1.NamespaceName, n
 
 func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindGrant, ns, name)
+}
+
+// --- KVStore (namespaced) — ADR-0072 ---
+
+func (h *storeHandlers) GetKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error) {
+	o, err := h.getObj(ctx, v1.KindKVStore, ns, name)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) CreateKVStore(ctx context.Context, ks v1.KVStore) (v1.KVStore, error) {
+	o, err := h.createObj(ctx, v1.KindKVStore, &ks)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error) {
+	objs, err := h.listObj(ctx, v1.KindKVStore, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.KVStore, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.KVStore)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
+	o, err := h.replaceObj(ctx, v1.KindKVStore, ns, name, &ks)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindKVStore, ns, name)
 }
 
 // --- EgressPolicy (namespaced) ---

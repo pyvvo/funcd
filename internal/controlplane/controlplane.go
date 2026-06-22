@@ -124,6 +124,13 @@ type Handlers interface {
 	ListGateways(ctx context.Context) ([]v1.Gateway, error)
 	ReplaceGateway(ctx context.Context, name v1.ObjectName, gw v1.Gateway) (v1.Gateway, error)
 	DeleteGateway(ctx context.Context, name v1.ObjectName) error
+
+	// KVStore (namespaced) — ADR-0072
+	GetKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error)
+	CreateKVStore(ctx context.Context, ks v1.KVStore) (v1.KVStore, error)
+	ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error)
+	ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error)
+	DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 }
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.

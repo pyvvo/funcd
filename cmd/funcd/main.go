@@ -177,6 +177,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	opts = append(opts,
 		funcd.WithStore(st),
 		funcd.WithKVStore(kvDriver),
+		funcd.WithKVStoreQuota(cfg.Kvstore.MaxStoresPerNamespace),
 		funcd.WithDevAuth(token, cfg.Auth.Namespaces...),
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
 		funcd.WithInvokeSocketDir(filepath.Join(cfg.Storage.DataDir, "invoke")),

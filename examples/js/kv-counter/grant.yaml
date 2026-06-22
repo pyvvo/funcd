@@ -1,0 +1,14 @@
+# The rw Grant binding the counter function's "counters" alias to the counters KVStore (ADR-0072).
+# Default-deny: without this Grant, context.kv on "counters" is Forbidden. rw makes counter the store's
+# single writer/owner.
+apiVersion: funcd.io/v1alpha1
+kind: Grant
+metadata:
+  name: counter-counters
+  namespace: default
+  resourceGroup: rg1
+spec:
+  function: counter
+  binding: counters
+  store: counters
+  mode: rw

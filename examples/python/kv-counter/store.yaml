@@ -1,0 +1,9 @@
+# The owned KVStore the Python kv-counter writes to (ADR-0072). Deletion-protected (referenced by the
+# rw Grant below) and quota-bounded; per-op caps default (1 MiB value / 1 KiB key).
+apiVersion: funcd.io/v1alpha1
+kind: KVStore
+metadata:
+  name: py-counters
+  namespace: default
+  resourceGroup: rg1
+spec: {}

@@ -87,7 +87,15 @@ In order to make this platform self-contained, we will need to implement the fol
       `blob` port, with restore) and **CDC** (ADR-0068: a durable transactional-outbox change-feed → the `bus`
       port). **Functions reach KV** via `context.kv.{get,put,del,list}` over the per-sandbox worker-node local API
       (HTTP-over-UDS, connection-scoped identity), routed to the PDP-authorized `Facade` (ADR-0069 — the same
-      channel as `context.invoke`, ADR-0064). Cross-node replication (NATS-lattice) is FEAT-0002.
+      channel as `context.invoke`, ADR-0064). The shim KV client also offers typed read accessors
+      (`getText`/`getJSON`, `get_str`/`get_json`) over `get` (ADR-0070). **KV is a declarative resource**
+      (ADR-0072): a namespaced **`KVStore`** CRD (name + per-op caps: `maxValueBytes`/`maxKeyBytes`) reached
+      only through an explicit **`Grant`** (the now-defined `GrantSpec`: function → binding → store → mode) —
+      **default-deny**, no implicit/default store (only config + secrets are implicit). Ownership is
+      **one writer (the single `rw` Grant) + N readers**; a reconciler does Ready + grant-count + Delete →
+      `DropPrefix`, and admissions enforce store-count quota, single-writer, and deletion-protection (on
+      referencing Grants **and** non-empty data). V1.1 KV is **same-namespace** (cross-namespace sharing and
+      the typed-record/Avro/index engine are deferred). Cross-node replication (NATS-lattice) is FEAT-0002.
     - **Graph database**: store and query graph data. Drivers: **in-process**
       (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**
       (neo4j, dgraph). (V3 candidate.)

@@ -1,0 +1,14 @@
+# The rw Grant binding the pycounter function's "py-counters" alias to the py-counters KVStore
+# (ADR-0072). Default-deny: without this Grant, context.kv on "py-counters" is Forbidden. rw makes
+# pycounter the store's single writer/owner.
+apiVersion: funcd.io/v1alpha1
+kind: Grant
+metadata:
+  name: pycounter-py-counters
+  namespace: default
+  resourceGroup: rg1
+spec:
+  function: pycounter
+  binding: py-counters
+  store: py-counters
+  mode: rw

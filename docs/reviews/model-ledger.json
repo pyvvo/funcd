@@ -1108,5 +1108,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0071-implementation-claude-opus-4-8.md",
     "notes": "python314 image repaired to run contract-validated functions: fastjsonschema==2.21.2 + bookworm base pin (glibc) + dynamic ldd lib-closure; verified via docker import probe + just lima-example-kv (both nodejs22+python314 Ready, 1->2). Base-drift breakage was pre-existing."
+  },
+  {
+    "date": "2026-06-22",
+    "adr": "0072",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0072-implementation-claude-opus-4-8.md",
+    "notes": "KV as a declarative resource: KVStore CRD + Grant-as-binding (filled GrantSpec) + single-writer (rw Grant); grant-required facade (default-deny/caps/mode, caller fn threaded) replacing the KindService PDP check; 3 admissions (quota/single-writer/deletion-protection on grants+data); reconciler Ready+DropPrefix; examples migrated; verified independently green, no new dep."
   }
 ]

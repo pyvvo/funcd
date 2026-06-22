@@ -8,62 +8,120 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
 	"github.com/green-0-rabbit/funcd/internal/kvstore/memory"
 	"github.com/green-0-rabbit/funcd/internal/services/kv"
 )
 
-func newFacade(t *testing.T) *kv.Facade {
+// fakeBinder is a static Binder: a map of (function, binding) → Binding, default-deny on a miss.
+type fakeBinder struct {
+	m map[string]kv.Binding
+}
+
+func bkey(fn v1.ObjectName, binding string) string { return string(fn) + "/" + binding }
+
+func (b fakeBinder) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, binding string) (kv.Binding, error) {
+	if bd, ok := b.m[bkey(fn, binding)]; ok {
+		return bd, nil
+	}
+	return kv.Binding{}, fault.Forbiddenf("fakeBinder", "no grant for %s/%s", fn, binding)
+}
+
+func newFacade(t *testing.T, b fakeBinder) *kv.Facade {
 	t.Helper()
-	f, err := kv.NewFacade(kv.FacadeDeps{KV: memory.New(), Authorizer: rbac.New()})
+	f, err := kv.NewFacade(kv.FacadeDeps{KV: memory.New(), Binder: b})
 	require.NoError(t, err)
 	return f
 }
 
-func dev(ns v1.NamespaceName) auth.Identity {
-	return auth.Identity{Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{ns}}
-}
-
-// scenario: facade-prefixes-by-namespace-and-binding — same key in two namespaces is independent.
-func TestScenarioFacadePrefixesByNamespaceAndBinding(t *testing.T) {
+// scenario: grant-binds-function-to-store — an rw Grant for binding "counters" → store S; a put then
+// reads back (prefixed by <ns>/<S>/), proving the binding resolves to the granted store.
+func TestScenarioGrantBindsFunctionToStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := newFacade(t)
+	b := fakeBinder{m: map[string]kv.Binding{
+		bkey("counter", "counters"): {Store: "s", Mode: v1.KVModeRW, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+	}}
+	f := newFacade(t, b)
 
-	require.NoError(t, f.Put(ctx, dev("team-a"), "team-a", "cache", "k", []byte("a-val")))
-	require.NoError(t, f.Put(ctx, dev("team-b"), "team-b", "cache", "k", []byte("b-val")))
-
-	va, found, err := f.Get(ctx, dev("team-a"), "team-a", "cache", "k")
+	require.NoError(t, f.Put(ctx, "default", "counter", "counters", "alice", []byte("1")))
+	v, found, err := f.Get(ctx, "default", "counter", "counters", "alice")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, []byte("a-val"), va, "team-a sees its own value, not team-b's")
+	require.Equal(t, []byte("1"), v)
 
-	vb, _, err := f.Get(ctx, dev("team-b"), "team-b", "cache", "k")
+	keys, err := f.List(ctx, "default", "counter", "counters", "")
 	require.NoError(t, err)
-	require.Equal(t, []byte("b-val"), vb)
-
-	// List returns the caller's key space (tenant prefix stripped).
-	keys, err := f.List(ctx, dev("team-a"), "team-a", "cache", "")
-	require.NoError(t, err)
-	require.Equal(t, []string{"k"}, keys, "returned keys are stripped of <ns>/<binding>/")
+	require.Equal(t, []string{"alice"}, keys, "keys are stripped of <ns>/<store>/")
 }
 
-// scenario: facade-authorizes-each-access — an identity not permitted in the namespace is denied.
-func TestScenarioFacadeAuthorizesEachAccess(t *testing.T) {
+// scenario: ungranted-access-denied — a function with no Grant for a binding is Forbidden on every verb.
+func TestScenarioUngrantedAccessDenied(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := newFacade(t)
+	f := newFacade(t, fakeBinder{m: map[string]kv.Binding{}}) // no grants
 
-	// A developer scoped to team-a accessing team-b → Forbidden, before any store touch.
-	err := f.Put(ctx, dev("team-a"), "team-b", "cache", "k", []byte("x"))
-	require.Error(t, err)
-	require.Equal(t, fault.Forbidden, fault.KindOf(err))
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", "fn", "b", "k", []byte("v"))))
+	_, _, gerr := f.Get(ctx, "default", "fn", "b", "k")
+	require.Equal(t, fault.Forbidden, fault.KindOf(gerr))
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", "fn", "b", "k")))
+	_, lerr := f.List(ctx, "default", "fn", "b", "")
+	require.Equal(t, fault.Forbidden, fault.KindOf(lerr))
+}
 
-	_, _, err = f.Get(ctx, dev("team-a"), "team-b", "cache", "k")
-	require.Equal(t, fault.Forbidden, fault.KindOf(err))
+// scenario: reader-grant-allows-get-not-put — an ro Grant permits get/list but Forbids put/del.
+func TestScenarioReaderGrantAllowsGetNotPut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := fakeBinder{m: map[string]kv.Binding{
+		bkey("reader", "shared"): {Store: "s", Mode: v1.KVModeRO, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+	}}
+	f := newFacade(t, b)
 
-	// A viewer may read but not write in its own namespace.
-	viewer := auth.Identity{Subject: "obs", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}}
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, viewer, "team-a", "cache", "k", []byte("x"))))
+	// a get/list succeeds (no value yet, but not Forbidden)
+	_, found, err := f.Get(ctx, "default", "reader", "shared", "k")
+	require.NoError(t, err)
+	require.False(t, found)
+	_, err = f.List(ctx, "default", "reader", "shared", "")
+	require.NoError(t, err)
+
+	// a put/del is Forbidden (read sharing without write)
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, "default", "reader", "shared", "k", []byte("v"))))
+	require.Equal(t, fault.Forbidden, fault.KindOf(f.Delete(ctx, "default", "reader", "shared", "k")))
+}
+
+// scenario: value-over-cap-rejected — a put exceeding the store's maxValueBytes (or over-long key) is
+// Invalid, before the write reaches the driver.
+func TestScenarioValueOverCapRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := fakeBinder{m: map[string]kv.Binding{
+		bkey("fn", "small"): {Store: "s", Mode: v1.KVModeRW, MaxValueBytes: 4, MaxKeyBytes: 3},
+	}}
+	f := newFacade(t, b)
+
+	require.NoError(t, f.Put(ctx, "default", "fn", "small", "ok", []byte("abcd")), "at the cap is allowed")
+	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "ok", []byte("abcde"))), "over value cap ⇒ Invalid")
+	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "abcd", []byte("x"))), "over key cap ⇒ Invalid")
+}
+
+// scenario: store-scoped-prefix-isolation — two functions granted DIFFERENT stores under the SAME
+// binding alias do not collide (the prefix is the store, not the alias).
+func TestScenarioStoreScopedPrefixIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := fakeBinder{m: map[string]kv.Binding{
+		bkey("fa", "kv"): {Store: "store-a", Mode: v1.KVModeRW, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+		bkey("fb", "kv"): {Store: "store-b", Mode: v1.KVModeRW, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+	}}
+	f := newFacade(t, b)
+
+	require.NoError(t, f.Put(ctx, "default", "fa", "kv", "k", []byte("a-val")))
+	require.NoError(t, f.Put(ctx, "default", "fb", "kv", "k", []byte("b-val")))
+
+	va, _, err := f.Get(ctx, "default", "fa", "kv", "k")
+	require.NoError(t, err)
+	require.Equal(t, []byte("a-val"), va)
+	vb, _, err := f.Get(ctx, "default", "fb", "kv", "k")
+	require.NoError(t, err)
+	require.Equal(t, []byte("b-val"), vb, "each store's key space is independent")
 }

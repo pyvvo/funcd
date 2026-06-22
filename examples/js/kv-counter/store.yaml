@@ -1,0 +1,9 @@
+# The owned KVStore the kv-counter function writes to (ADR-0072). Deletion-protected (referenced by
+# the rw Grant below) and quota-bounded; per-op caps default (1 MiB value / 1 KiB key).
+apiVersion: funcd.io/v1alpha1
+kind: KVStore
+metadata:
+  name: counters
+  namespace: default
+  resourceGroup: rg1
+spec: {}

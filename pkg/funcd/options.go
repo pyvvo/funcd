@@ -31,6 +31,12 @@ func WithKVStore(kv kvstore.KV) Option {
 	return func(c *config) error { c.kvStore = kv; return nil }
 }
 
+// WithKVStoreQuota sets the per-namespace KVStore count cap enforced at admission (ADR-0072,
+// kvstore.maxStoresPerNamespace). 0 ⇒ the default (100); a negative value disables the quota.
+func WithKVStoreQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.kvMaxStoresPerNamespace = maxPerNamespace; return nil }
+}
+
 // WithBlob injects the blob (storage layer) port.
 func WithBlob(b blob.Bucket) Option {
 	return func(c *config) error { c.blob = b; return nil }

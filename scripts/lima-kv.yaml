@@ -31,8 +31,14 @@ provision:
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      # ADR-0072: apply each owned KVStore first (so the Grant's referenced-store check passes), then
+      # the function, then its rw Grant (default-deny — without the Grant, context.kv is Forbidden).
+      funcdcli apply -f "$d/store.yaml"
+      funcdcli apply -f "$d/py/store.yaml"
       funcdcli apply -f "$d/counter.yaml"
       funcdcli apply -f "$d/py/counter.yaml"
+      funcdcli apply -f "$d/grant.yaml"
+      funcdcli apply -f "$d/py/grant.yaml"
 
 # Appended after the runtime probe: gate `limactl start` on BOTH counters reaching Ready on a real sandbox.
 probes:

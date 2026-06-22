@@ -334,6 +334,71 @@ func registerGrant(api huma.API, h Handlers) {
 	})
 }
 
+// ===== KVStore (namespaced) — ADR-0072 =====
+
+type createKVStoreInput struct{ Body v1.KVStore }
+type kvStoreOutput struct{ Body v1.KVStore }
+type listKVStoreOutput struct{ Body []v1.KVStore }
+
+func registerKVStore(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listKVStores", Method: http.MethodGet, Path: base,
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedList) (*listKVStoreOutput, error) {
+		items, err := h.ListKVStores(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listKVStoreOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createKVStore", Method: http.MethodPost, Path: base,
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *createKVStoreInput) (*kvStoreOutput, error) {
+		item, err := h.CreateKVStore(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getKVStore", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedGet) (*kvStoreOutput, error) {
+		item, err := h.GetKVStore(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceKVStore", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.KVStore
+	}) (*kvStoreOutput, error) {
+		item, err := h.ReplaceKVStore(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteKVStore", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteKVStore(ctx, in.Namespace, in.Name))
+	})
+}
+
 // ===== EgressPolicy (namespaced) =====
 
 type createEgressPolicyInput struct{ Body v1.EgressPolicy }

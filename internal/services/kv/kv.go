@@ -1,7 +1,10 @@
-// Package kv is the KV service (ADR-0019): the function-facing Facade (PDP-authorized,
-// <namespace>/<binding>/<key> prefixed, results prefix-stripped) over the kvstore.KV
-// port, plus the KV services.TypeHandler the Service dispatcher routes type:kv to. It is
-// the first instance of the service facade pattern (blob/secrets copy this shape).
+// Package kv is the KV service (ADR-0019/0072): the function-facing Facade (grant-gated,
+// <namespace>/<store>/<key> prefixed, results prefix-stripped) over the kvstore.KV port, plus the
+// KV services.TypeHandler the Service dispatcher routes type:kv to, and the KindKVStore reconciler.
+//
+// ADR-0072 makes KV a declarative, owned resource: the facade resolves a caller's (function, binding)
+// to a Grant (default-deny) — this Grant gate REPLACES the per-call KindService PDP check the facade
+// did under ADR-0019. It enforces mode (rw for put/del), per-op caps, and a store-scoped key prefix.
 package kv
 
 import (
@@ -11,94 +14,116 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	"github.com/green-0-rabbit/funcd/internal/services"
 )
 
-// FacadeDeps configures the KV facade (the PEP).
+// FacadeDeps configures the KV facade (the PEP). The Binder (ADR-0072) is the grant gate; it replaces
+// the per-call KindService PDP check (ADR-0019) — control-plane CRUD of KVStore/Grant is still PDP-gated.
 type FacadeDeps struct {
-	KV         kvstore.KV
-	Authorizer auth.Authorizer
-	Logger     *slog.Logger
+	KV     kvstore.KV
+	Binder Binder
+	Logger *slog.Logger
 }
 
-// Facade is what a function calls: PDP-authorized + namespace/binding-prefixed KV.
+// Facade is what a function calls: grant-gated + namespace/store-prefixed KV (ADR-0072).
 type Facade struct {
 	kv     kvstore.KV
-	authz  auth.Authorizer
+	binder Binder
 	logger *slog.Logger
 }
 
-// NewFacade builds the KV facade. KV + Authorizer are required.
+// NewFacade builds the KV facade. KV + Binder are required.
 func NewFacade(d FacadeDeps) (*Facade, error) {
 	if d.KV == nil {
 		return nil, fault.Invalidf("services.kv.NewFacade", "kv is required")
 	}
-	if d.Authorizer == nil {
-		return nil, fault.Invalidf("services.kv.NewFacade", "authorizer is required")
+	if d.Binder == nil {
+		return nil, fault.Invalidf("services.kv.NewFacade", "binder is required")
 	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Facade{kv: d.KV, authz: d.Authorizer, logger: logger.With("component", "services.kv")}, nil
+	return &Facade{kv: d.KV, binder: d.Binder, logger: logger.With("component", "services.kv")}, nil
 }
 
-func (f *Facade) authorize(ctx context.Context, id auth.Identity, verb auth.Verb, ns v1.NamespaceName) error {
-	dec, err := f.authz.Authorize(ctx, auth.Request{Identity: id, Verb: verb, Kind: v1.KindService, Namespace: ns})
+// storeKey is the on-disk key for a (resolved store, key): "<ns>/<store>/<key>" (ADR-0072) — the key
+// is namespaced by the GRANTED store, not the raw binding alias.
+func storeKey(ns v1.NamespaceName, store v1.ObjectName, key string) string {
+	return string(ns) + "/" + string(store) + "/" + key
+}
+
+func storePrefix(ns v1.NamespaceName, store v1.ObjectName) string {
+	return string(ns) + "/" + string(store) + "/"
+}
+
+// resolveRead resolves a Grant for a read (get/list): any mode is accepted.
+func (f *Facade) resolveRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string) (Binding, error) {
+	return f.binder.Resolve(ctx, ns, fn, binding)
+}
+
+// resolveWrite resolves a Grant for a write (put/del): the mode must be rw, else Forbidden.
+func (f *Facade) resolveWrite(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string) (Binding, error) {
+	b, err := f.binder.Resolve(ctx, ns, fn, binding)
 	if err != nil {
-		return fault.Wrapf(err, fault.Internal, "services.kv.authz", "authorize")
+		return Binding{}, err
 	}
-	if !dec.Allowed {
-		return fault.Forbiddenf("services.kv.authz", "kv %s in %q denied: %s", verb, ns, dec.Reason)
+	if b.Mode != v1.KVModeRW {
+		return Binding{}, fault.Forbiddenf("services.kv.write", "binding %q is read-only (ro Grant); writes require rw", binding)
 	}
-	return nil
+	return b, nil
 }
 
-func tenantKey(ns v1.NamespaceName, binding, key string) string {
-	return string(ns) + "/" + binding + "/" + key
-}
-
-// Get returns the value for the binding's key (PDP-authorized).
-func (f *Facade) Get(ctx context.Context, id auth.Identity, ns v1.NamespaceName, binding, key string) ([]byte, bool, error) {
-	if err := f.authorize(ctx, id, auth.VerbGet, ns); err != nil {
+// Get returns the value for the binding's key, gated by the caller's Grant (any mode).
+func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) ([]byte, bool, error) {
+	b, err := f.resolveRead(ctx, ns, fn, binding)
+	if err != nil {
 		return nil, false, err
 	}
-	return f.kv.Get(ctx, tenantKey(ns, binding, key))
+	return f.kv.Get(ctx, storeKey(ns, b.Store, key))
 }
 
-// Put stores value under the binding's key (PDP-authorized).
-func (f *Facade) Put(ctx context.Context, id auth.Identity, ns v1.NamespaceName, binding, key string, value []byte) error {
-	if err := f.authorize(ctx, id, auth.VerbUpdate, ns); err != nil {
+// Put stores value under the binding's key (requires an rw Grant; per-op caps enforced first).
+func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, value []byte) error {
+	b, err := f.resolveWrite(ctx, ns, fn, binding)
+	if err != nil {
 		return err
 	}
-	return f.kv.Put(ctx, tenantKey(ns, binding, key), value)
+	if int64(len(value)) > b.MaxValueBytes {
+		return fault.Invalidf("services.kv.put", "value (%d bytes) exceeds the store cap (%d bytes)", len(value), b.MaxValueBytes)
+	}
+	if len(key) > b.MaxKeyBytes {
+		return fault.Invalidf("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
+	}
+	return f.kv.Put(ctx, storeKey(ns, b.Store, key), value)
 }
 
-// Delete removes the binding's key (PDP-authorized).
-func (f *Facade) Delete(ctx context.Context, id auth.Identity, ns v1.NamespaceName, binding, key string) error {
-	if err := f.authorize(ctx, id, auth.VerbDelete, ns); err != nil {
+// Delete removes the binding's key (requires an rw Grant).
+func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) error {
+	b, err := f.resolveWrite(ctx, ns, fn, binding)
+	if err != nil {
 		return err
 	}
-	return f.kv.Delete(ctx, tenantKey(ns, binding, key))
+	return f.kv.Delete(ctx, storeKey(ns, b.Store, key))
 }
 
-// List returns the binding's keys under prefix, with the <ns>/<binding>/ tenant prefix
-// stripped so the caller only sees its own key space.
-func (f *Facade) List(ctx context.Context, id auth.Identity, ns v1.NamespaceName, binding, prefix string) ([]string, error) {
-	if err := f.authorize(ctx, id, auth.VerbList, ns); err != nil {
+// List returns the binding's keys under prefix (gated by the caller's Grant, any mode), with the
+// <ns>/<store>/ store prefix stripped so the caller only sees its own key space.
+func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, prefix string) ([]string, error) {
+	b, err := f.resolveRead(ctx, ns, fn, binding)
+	if err != nil {
 		return nil, err
 	}
-	tenantPrefix := string(ns) + "/" + binding + "/"
-	keys, err := f.kv.List(ctx, tenantPrefix+prefix)
+	sp := storePrefix(ns, b.Store)
+	keys, err := f.kv.List(ctx, sp+prefix)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]string, len(keys))
 	for i, k := range keys {
-		out[i] = strings.TrimPrefix(k, tenantPrefix)
+		out[i] = strings.TrimPrefix(k, sp)
 	}
 	return out, nil
 }

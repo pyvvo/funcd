@@ -181,12 +181,15 @@ lima-example-kv: build-runtime-images build-shim
     ( cd examples/python/kv-counter && uv run --group build python build.py )
     # Stage both functions into one bundle — py/ subdir keeps the shared schema-file basenames from colliding.
     stage="$(mktemp -d)"
+    # ADR-0072: each kv-counter now carries an owned KVStore + an rw Grant (default-deny).
     cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter-input.schema.json \
        examples/js/kv-counter/counter-output.schema.json examples/js/kv-counter/counter.yaml \
+       examples/js/kv-counter/store.yaml examples/js/kv-counter/grant.yaml \
        examples/js/kv-counter/funcdconfig.yaml "$stage/"
     mkdir -p "$stage/py"
     cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter-input.schema.json \
-       examples/python/kv-counter/counter-output.schema.json examples/python/kv-counter/counter.yaml "$stage/py/"
+       examples/python/kv-counter/counter-output.schema.json examples/python/kv-counter/counter.yaml \
+       examples/python/kv-counter/store.yaml examples/python/kv-counter/grant.yaml "$stage/py/"
     tar czf {{lima_deps}}/kv-counter.tgz -C "$stage" .
     rm -rf "$stage"
     trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT

@@ -50,6 +50,9 @@ type Config struct {
 		// badger (durable, at <Storage.DataDir>/kv). DataDir overrides the default location.
 		Engine  string `json:"engine,omitempty" env:"FUNCD_KVSTORE_ENGINE" validate:"omitempty,oneof=memory badger"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_KVSTORE_DATA_DIR"`
+		// MaxStoresPerNamespace is the per-namespace KVStore count cap enforced at admission (ADR-0072);
+		// 0 ⇒ the default (100); a negative value disables the quota.
+		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
 		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
 		// Enabled without a Target ⇒ fault.Invalid at startup. Interval/Rebaseline are Go durations ("30s").
 		Backup struct {

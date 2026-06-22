@@ -9,26 +9,29 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
 )
 
-// fakeAuthz is a PDP stub: allow=true permits, allow=false denies (→ the Facade returns Forbidden → 403).
-type fakeAuthz struct{ allow bool }
+// fakeBinder is a static Binder: it grants "fn" the binding "b" → store "s" at the given mode, and
+// denies everything else (default-deny).
+type fakeBinder struct{ mode v1.KVMode }
 
-func (f fakeAuthz) Authorize(_ context.Context, _ auth.Request) (auth.Decision, error) {
-	return auth.Decision{Allowed: f.allow, Reason: "test"}, nil
+func (b fakeBinder) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, binding string) (kvsvc.Binding, error) {
+	if fn == "fn" && binding == "b" {
+		return kvsvc.Binding{Store: "s", Mode: b.mode, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024}, nil
+	}
+	return kvsvc.Binding{}, fault.Forbiddenf("fakeBinder", "no grant for %s/%s", fn, binding)
 }
 
-// kvHandler builds a worker-node local API handler for caller ns/fn, backed by a Facade over kvDriver +
-// authz. (res/inv are nil — the KV tests never hit /invoke.)
-func kvHandler(t *testing.T, ns v1.NamespaceName, kvDriver kvsvc.FacadeDeps, authz auth.Authorizer) http.Handler {
+// kvHandler builds a worker-node local API handler for caller ns/"fn", backed by a Facade over a fresh
+// memory driver + the given Binder.
+func kvHandler(t *testing.T, ns v1.NamespaceName, binder kvsvc.Binder) http.Handler {
 	t.Helper()
-	kvDriver.Authorizer = authz
-	f, err := kvsvc.NewFacade(kvDriver)
+	f, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: kvmemory.New(), Binder: binder})
 	require.NoError(t, err)
 	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, f, nil)
 }
@@ -46,9 +49,9 @@ func do(t *testing.T, h http.Handler, method, path, body string) *httptest.Respo
 	return rec
 }
 
-// scenario: kv-put-get-roundtrip — a function puts a value and reads it back over the local API.
+// scenario: kv-put-get-roundtrip — a granted (rw) function puts a value and reads it back over the local API.
 func TestScenarioKVPutGetRoundtrip(t *testing.T) {
-	h := kvHandler(t, "default", kvsvc.FacadeDeps{KV: kvmemory.New()}, fakeAuthz{allow: true})
+	h := kvHandler(t, "default", fakeBinder{mode: v1.KVModeRW})
 
 	require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/count", "42").Code)
 	rec := do(t, h, http.MethodGet, "/kv/b/count", "")
@@ -59,34 +62,24 @@ func TestScenarioKVPutGetRoundtrip(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/kv/b/absent", "").Code)
 }
 
-// scenario: kv-tenancy-isolation — two functions in different namespaces both write key "k" to binding
-// "b"; each reads only its own value (the Facade's <namespace>/<binding>/ tenant prefix).
-func TestScenarioKVTenancyIsolation(t *testing.T) {
-	driver := kvmemory.New() // shared engine; isolation is by tenant prefix, not by instance
-	ha := kvHandler(t, "team-a", kvsvc.FacadeDeps{KV: driver}, fakeAuthz{allow: true})
-	hb := kvHandler(t, "team-b", kvsvc.FacadeDeps{KV: driver}, fakeAuthz{allow: true})
-
-	require.Equal(t, http.StatusNoContent, do(t, ha, http.MethodPut, "/kv/b/k", "a-value").Code)
-	require.Equal(t, http.StatusNoContent, do(t, hb, http.MethodPut, "/kv/b/k", "b-value").Code)
-
-	require.Equal(t, "a-value", do(t, ha, http.MethodGet, "/kv/b/k", "").Body.String())
-	require.Equal(t, "b-value", do(t, hb, http.MethodGet, "/kv/b/k", "").Body.String(), "each namespace sees only its own value")
-
-	// each lists only its own key
-	require.JSONEq(t, `["k"]`, do(t, ha, http.MethodGet, "/kv/b", "").Body.String())
-	require.JSONEq(t, `["k"]`, do(t, hb, http.MethodGet, "/kv/b", "").Body.String())
+// scenario: ungranted-access-denied (local API) — a binding with no Grant returns 403 (default-deny).
+func TestScenarioKVUngrantedDenied(t *testing.T) {
+	h := kvHandler(t, "default", fakeBinder{mode: v1.KVModeRW})
+	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodGet, "/kv/ungranted/k", "").Code)
+	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodPut, "/kv/ungranted/k", "v").Code)
 }
 
-// scenario: kv-authz-denied — a PDP denial returns 403 (RFC 9457), the Facade having refused.
-func TestScenarioKVAuthzDenied(t *testing.T) {
-	h := kvHandler(t, "default", kvsvc.FacadeDeps{KV: kvmemory.New()}, fakeAuthz{allow: false})
-	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodGet, "/kv/b/k", "").Code)
-	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodPut, "/kv/b/k", "v").Code)
+// scenario: reader-grant-allows-get-not-put (local API) — an ro grant: get 404 (allowed, empty), put 403.
+func TestScenarioKVReaderGrantAllowsGetNotPut(t *testing.T) {
+	h := kvHandler(t, "default", fakeBinder{mode: v1.KVModeRO})
+	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/kv/b/k", "").Code, "ro get is allowed (key absent ⇒ 404)")
+	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodPut, "/kv/b/k", "v").Code, "ro put ⇒ 403")
+	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodDelete, "/kv/b/k", "").Code, "ro delete ⇒ 403")
 }
 
-// scenario: kv-list-prefix — list returns exactly the binding's keys under the prefix, tenant-stripped.
+// scenario: kv-list-prefix — list returns exactly the binding's keys under the prefix, store-stripped.
 func TestScenarioKVListPrefix(t *testing.T) {
-	h := kvHandler(t, "default", kvsvc.FacadeDeps{KV: kvmemory.New()}, fakeAuthz{allow: true})
+	h := kvHandler(t, "default", fakeBinder{mode: v1.KVModeRW})
 	for _, k := range []string{"user/1", "user/2", "session/x"} {
 		require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/"+k, "v").Code)
 	}

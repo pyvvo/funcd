@@ -28,6 +28,7 @@ type StubHandlers struct {
 	runtimeClasses map[string]v1.RuntimeClass
 	workerNodes    map[string]v1.WorkerNode
 	gateways       map[string]v1.Gateway
+	kvstores       map[string]v1.KVStore
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -48,6 +49,7 @@ func NewStubHandlers() *StubHandlers {
 		runtimeClasses: make(map[string]v1.RuntimeClass),
 		workerNodes:    make(map[string]v1.WorkerNode),
 		gateways:       make(map[string]v1.Gateway),
+		kvstores:       make(map[string]v1.KVStore),
 	}
 }
 
@@ -556,6 +558,62 @@ func (s *StubHandlers) DeleteSecret(_ context.Context, ns v1.NamespaceName, name
 		return fault.NotFoundf("StubHandlers.DeleteSecret", "Secret %s not found", key)
 	}
 	delete(s.secrets, key)
+	return nil
+}
+
+// ---- KVStore (ADR-0072) ----
+
+func (s *StubHandlers) GetKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.kvstores[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.KVStore{}, fault.NotFoundf("StubHandlers.GetKVStore", "KVStore %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateKVStore(_ context.Context, ks v1.KVStore) (v1.KVStore, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ks.Namespace, ks.Name)
+	if _, exists := s.kvstores[key]; exists {
+		return v1.KVStore{}, fault.Conflictf("StubHandlers.CreateKVStore", "KVStore %s already exists", key)
+	}
+	s.kvstores[key] = ks
+	return ks, nil
+}
+
+func (s *StubHandlers) ListKVStores(_ context.Context, ns v1.NamespaceName) ([]v1.KVStore, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.KVStore, 0)
+	for _, v := range s.kvstores {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.kvstores[key]; !exists {
+		return v1.KVStore{}, fault.NotFoundf("StubHandlers.ReplaceKVStore", "KVStore %s not found", key)
+	}
+	s.kvstores[key] = ks
+	return ks, nil
+}
+
+func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.kvstores[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteKVStore", "KVStore %s not found", key)
+	}
+	delete(s.kvstores, key)
 	return nil
 }
 

@@ -56,18 +56,23 @@ const (
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
 	defaultLocalNode     = "local"
 	shutdownTimeout      = 15 * time.Second
+	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
+	defaultKVStoresPerNamespace = 100
 )
 
 // config holds the injected world — validated by validate() before New returns.
 type config struct {
-	store     store.Store
-	kvStore   kvstore.KV // the function-facing KV driver (ADR-0066/0069); nil ⇒ in-memory default
-	blob      blob.Bucket
-	bus       bus.Bus
-	runtime   runtime.Runtime
-	gateway   gateway.Gateway
-	logger    *slog.Logger
-	telemetry *observability.Telemetry
+	store   store.Store
+	kvStore kvstore.KV // the function-facing KV driver (ADR-0066/0069); nil ⇒ in-memory default
+	// kvMaxStoresPerNamespace is the per-namespace KVStore count cap at admission (ADR-0072); 0 ⇒
+	// the default (100); negative disables the quota.
+	kvMaxStoresPerNamespace int
+	blob                    blob.Bucket
+	bus                     bus.Bus
+	runtime                 runtime.Runtime
+	gateway                 gateway.Gateway
+	logger                  *slog.Logger
+	telemetry               *observability.Telemetry
 
 	// control plane (ADR-0028)
 	listenAddr  string
@@ -192,6 +197,11 @@ func (p *Platform) buildControlPlane() error {
 	if c.dataPlaneAddr == "" {
 		c.dataPlaneAddr = defaultDataPlaneAddr
 	}
+	// KVStore per-namespace count quota (ADR-0072): 0 ⇒ the default (100); negative disables it.
+	kvMaxStores := c.kvMaxStoresPerNamespace
+	if kvMaxStores == 0 {
+		kvMaxStores = defaultKVStoresPerNamespace
+	}
 
 	sched, err := singlenode.New(c.localNode)
 	if err != nil {
@@ -233,12 +243,18 @@ func (p *Platform) buildControlPlane() error {
 		}
 		invokeSockDir = tmp
 	}
-	// KV service (ADR-0069): the durable driver (config-selected, ADR-0066) behind the PDP-authorized
+	// KV service (ADR-0069/0072): the durable driver (config-selected, ADR-0066) behind the grant-gated
 	// Facade, reached by functions through the worker-node local API's /kv routes. Defaults to in-memory.
+	// The Binder resolves a caller's (function, binding) to a Grant over the metastore (default-deny) —
+	// the Grant gate replaces the per-call KindService PDP check (ADR-0072).
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
 	}
-	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Authorizer: c.authorizer, Logger: p.logger})
+	kvBinder, err := kvsvc.NewBinder(metaReader{c.store})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binder")
+	}
+	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Binder: kvBinder, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
@@ -300,6 +316,14 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
+	// KVStore reconciler (ADR-0072): Ready + grantRefs; on delete, reclaim the store prefix via the
+	// driver's DropPrefix (type-asserted — a driver without it gets a no-op).
+	dropper, _ := c.kvStore.(kvsvc.PrefixDropper)
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: dropper, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
+	}
+	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
 	p.controller = ctrl
 
 	handler, err := controlplane.NewServer(controlplane.Deps{
@@ -307,9 +331,15 @@ func (p *Platform) buildControlPlane() error {
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
-		Admissions: []admission.Admission{ // ADR-0064 fn-to-fn link rules on the write path
+		Admissions: []admission.Admission{
+			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
 			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
+			// ADR-0072 KV resource rules: store-count quota, grant-validity (single-writer),
+			// KVStore deletion-protection (referencing Grants + non-empty data).
+			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
+			admission.NewGrantValidityAdmission(storeReader{c.store}),
+			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
 		},
 	})
 	if err != nil {
@@ -428,8 +458,8 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 	return p.shutdownErr
 }
 
-// storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions
-// (the admission package stays a near-leaf and does not import store).
+// storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions and the
+// ADR-0072 KV admissions (the admission package stays a near-leaf and does not import store).
 type storeReader struct{ s store.Store }
 
 func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
@@ -438,4 +468,32 @@ func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Na
 		return nil, err
 	}
 	return res.Items, nil
+}
+
+// metaReader adapts store.Store to kvsvc.MetaReader for the ADR-0072 KV Binder (the kv package stays
+// near-leaf and does not import store).
+type metaReader struct{ s store.Store }
+
+func (r metaReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
+}
+
+func (r metaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):
+// HasAny reports whether any key exists under the store's prefix.
+type kvProber struct{ kv kvstore.KV }
+
+func (p kvProber) HasAny(ctx context.Context, prefix string) (bool, error) {
+	keys, err := p.kv.List(ctx, prefix)
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
 }

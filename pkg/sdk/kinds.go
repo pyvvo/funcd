@@ -38,6 +38,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindRuntimeClass:  {"runtimeclasses", false},
 	v1.KindWorkerNode:    {"workers", false},
 	v1.KindGateway:       {"gateways", false},
+	v1.KindKVStore:       {"kvstores", true},
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.
