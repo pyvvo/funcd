@@ -1,9 +1,13 @@
 # ADR-0065: Metastore engine — Badger (pure-Go) behind `store.Engine`, superseding slatedb/cgo
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-22 (judged 2026-06-22 — folded the judge's fixes: NUL key-separator (not `/`, matching
   slatedb) + corrected the parity claim; precise "default build was already CGO_ENABLED=0 but memory-only"
-  framing; named `storecontract.RunContract` + the RV-counter persistence in the test plan. No Blockers.)
+  framing; named `storecontract.RunContract` + the RV-counter persistence in the test plan. No Blockers.
+  **Implemented 2026-06-22** — `internal/store/badger` driver (passes `storecontract` + durable-restart +
+  RV-conflict), `buildStore` wired to Badger for file mode, slatedb removed (driver/dep/build-tag/recipes/
+  cgo release path); `CGO_ENABLED=0 go build ./...` green, lint clean, `go mod verify` ok; review pass — see
+  docs/reviews/adr-0065-implementation-claude-opus-4-8.md.)
 - **Deciders**: green-0-rabbit
 - **Tags**: store, metastore, database-layer, badger, pure-go, engine, port, supersedes-0006
 - **Realizes**: [FEAT-0001/F34](../feat/0001-feat-v1.1.md) (pure-Go metastore engine)

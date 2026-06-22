@@ -1,9 +1,8 @@
 #!/bin/sh
 # build.sh — build the funcd single binary with version stamping (ADR-0026).
 #
-# Default: the pure-Go dev build (CGO_ENABLED=0; memory store + process runtime) —
-# the same artifact CI builds. The RELEASE build static-links the slatedb engine
-# (cgo, ADR-0006) — documented at the bottom; run `just slatedb-lib` first.
+# The funcd binary is a pure-Go static build (CGO_ENABLED=0) for BOTH dev and release —
+# ADR-0065 made the metastore engine pure-Go Badger, so there is no cgo lane anymore.
 #
 # Override any of VERSION / COMMIT / DATE / OUT / CGO_ENABLED via the environment.
 set -eu
@@ -24,15 +23,10 @@ CGO_ENABLED="${CGO_ENABLED:-0}" go build -ldflags "${LDFLAGS}" -o "${OUT}" ./cmd
 echo "built ${OUT}"
 "${OUT}" version || echo "  (version: ${VERSION})"
 
-# --- Release build (slatedb engine, ADR-0006) -------------------------------
-# The single-binary release static-links the slatedb_uniffi native archive (cgo),
-# so it is no longer a pure-Go static binary (~24 MB). Build it with:
-#
-#   just slatedb-lib                                   # build the native .a (cgo source)
-#   CGO_ENABLED=1 go build -tags slatedb \
-#       -ldflags "${LDFLAGS}" -o "${OUT}" ./cmd/funcd
-#
-# See ADR-0006 (metastore engine) for the slatedb static-link rationale.
+# --- Release build: pure-Go static (ADR-0065) -------------------------------
+# The release IS the default build above: CGO_ENABLED=0, a pure-Go static binary.
+# ADR-0065 replaced ADR-0006's slatedb/cgo metastore engine with pure-Go Badger, so
+# there is no native archive to static-link and no `-tags slatedb` lane anymore.
 #
 # --- Self-contained runtime release (ADR-0054) ------------------------------
 # A SELF-CONTAINED release is PER-ARCH: the funcd binary embeds the matching-arch

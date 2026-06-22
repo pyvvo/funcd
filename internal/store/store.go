@@ -3,7 +3,7 @@
 //
 // The store SEMANTICS (resourceVersion minting, generation bumping, optimistic
 // concurrency, in-process watch, filtering, at-rest encryption) live here ONCE,
-// over a minimal key/value Engine seam. Engines (memory, slatedb, bbolt) are
+// over a minimal key/value Engine seam. Engines (memory, badger) are
 // thin and swappable; New wraps any Engine with these semantics.
 package store
 
@@ -114,7 +114,7 @@ func WithEncryptor(kinds []v1.Kind, enc Encryptor) Option {
 	}
 }
 
-// Engine is the minimal key/value seam the store is built on. memory + slatedb
+// Engine is the minimal key/value seam the store is built on. memory + badger
 // implement it; bbolt is the documented fallback.
 //
 // Update is an ATOMIC WRITE-BATCH (all-or-nothing), NOT a serializable

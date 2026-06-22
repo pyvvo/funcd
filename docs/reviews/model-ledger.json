@@ -1003,5 +1003,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0064-implementation-claude-opus-4-8.md",
     "notes": "fn-to-fn links: spec.links + 2 link admissions (consume ADR-0063) + worker-node local API (UDS) + in-process invoker (propagates shim 422/500) + context.invoke in both shims. Matrix tests for link-structural + error-taxonomy. Live per-sandbox UDS provisioning + cross-process e2e deferred to the Linux integration lane (env). Findings: none."
+  },
+  {
+    "date": "2026-06-22",
+    "adr": "0065",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0065-implementation-claude-opus-4-8.md",
+    "notes": "Badger metastore engine; storecontract parity + durable-restart + RV-conflict green; slatedb/cgo removed; CGO_ENABLED=0 build + lint + mod verify clean. e2e deferred to batch end phase."
   }
 ]

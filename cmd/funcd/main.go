@@ -28,6 +28,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/runtime/process"
 	"github.com/green-0-rabbit/funcd/internal/secrets/aesgcm"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	badgerstore "github.com/green-0-rabbit/funcd/internal/store/badger"
 	"github.com/green-0-rabbit/funcd/internal/store/memory"
 	"github.com/green-0-rabbit/funcd/internal/version"
 	"github.com/green-0-rabbit/funcd/pkg/funcd"
@@ -217,11 +218,21 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if enc == nil {
+	var opts []store.Option
+	if enc != nil {
+		opts = append(opts, store.WithEncryptor([]v1.Kind{v1.KindSecret}, enc))
+	} else if cfg.Storage.Mode != "memory" {
 		log.Warn("funcd: no secrets.encryptionKeyFile — Secret values are NOT encrypted in the durable-store lane (set a 32-byte key file)")
-		return store.New(memory.New()), nil
 	}
-	return store.New(memory.New(), store.WithEncryptor([]v1.Kind{v1.KindSecret}, enc)), nil
+	// memory = ephemeral (ADR-0043); file = durable pure-Go Badger metastore at <dataDir>/store (ADR-0065).
+	if cfg.Storage.Mode == "memory" {
+		return store.New(memory.New(), opts...), nil
+	}
+	eng, err := badgerstore.Open(filepath.Join(cfg.Storage.DataDir, "store"))
+	if err != nil {
+		return nil, err
+	}
+	return store.New(eng, opts...), nil
 }
 
 // secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a

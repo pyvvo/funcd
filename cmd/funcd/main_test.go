@@ -253,7 +253,7 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 	enc, err := secretEncryptor(config.Config{})
 	require.NoError(t, err)
 	require.Nil(t, enc, "no keyfile ⇒ no encryptor")
-	_, err = buildStore(config.Config{}, root)
+	_, err = buildStore(memCfg(), root)
 	require.NoError(t, err)
 
 	// a 32-byte key ⇒ an encryptor whose output is ciphertext (Secret value bytes encrypted at rest).
@@ -280,10 +280,19 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 }
 
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be
-// a flat literal).
+// a flat literal). Memory mode keeps this encryptor-wiring test engine-agnostic — buildStore must not
+// open a real Badger directory (ADR-0065) for a test that only checks encryptor selection.
 func cfgWithKeyFile(f string) config.Config {
 	var c config.Config
+	c.Storage.Mode = "memory"
 	c.Secrets.EncryptionKeyFile = f
+	return c
+}
+
+// memCfg is a minimal memory-mode Config (so buildStore uses the in-memory engine, not a Badger dir).
+func memCfg() config.Config {
+	var c config.Config
+	c.Storage.Mode = "memory"
 	return c
 }
 

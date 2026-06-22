@@ -191,7 +191,7 @@ example-fn-to-fn: build-shim
     go test ./pkg/funcd/ -run 'TestScenario(HandlerInvokesLinkedFunction|ContractRejectsBadInput|InvokePropagatesContract422|UnlinkedAliasDeniedE2E)' -v
 
 # build the version-stamped single binary (ADR-0026) → dist/funcd.
-# Default is the pure-Go dev build; see scripts/build.sh for the cgo/slatedb release path.
+# Pure-Go static (CGO_ENABLED=0) — ADR-0065 made the metastore engine pure-Go Badger (no cgo lane).
 [group('release')]
 release:
     ./scripts/build.sh
@@ -216,25 +216,3 @@ ci: tidy generate
     go build ./...
     go mod verify
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
-
-# build the slatedb_uniffi native lib (cgo) from pinned source — required for the slatedb engine lane (ADR-0006 §5)
-[group('slatedb')]
-slatedb-lib:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src=".cache/slatedb"
-    if [ ! -d "$src" ]; then
-      git clone --depth 1 --branch bindings/go/v0.13.1 https://github.com/slatedb/slatedb "$src"
-    fi
-    cargo build --release --manifest-path "$src/Cargo.toml" -p slatedb-uniffi
-    echo "built $src/target/release/libslatedb_uniffi.*"
-
-# run the slatedb (cgo) engine lane — run `just slatedb-lib` first. The default `just ci` stays pure-Go.
-[group('slatedb')]
-test-slatedb:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    lib="$(pwd)/.cache/slatedb/target/release"
-    if [ ! -d "$lib" ]; then echo "run 'just slatedb-lib' first (native lib not built)"; exit 1; fi
-    CGO_ENABLED=1 CGO_LDFLAGS="-L$lib" DYLD_LIBRARY_PATH="$lib" LD_LIBRARY_PATH="$lib" \
-      go test -tags slatedb ./internal/store/slatedb/...

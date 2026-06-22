@@ -1,6 +1,6 @@
 // Package storecontract is the shared conformance suite for the store port
 // (ADR-0006). RunContract asserts the store SEMANTICS that must hold identically
-// for every Engine — memory and slatedb run it, proving the in-memory fake
+// for every Engine — memory and badger run it, proving the in-memory fake
 // behaves like the real engine (the driver-conformance-parity scenario).
 package storecontract
 

@@ -45,7 +45,7 @@ func TestScenarioPackagingArtifactsPresent(t *testing.T) {
 	require.Contains(t, sc, "internal/version", "build.sh must reference the version package")
 	require.Contains(t, sc, ".Version=", "build.sh must stamp Version via -ldflags -X")
 	require.Contains(t, sc, "-ldflags")
-	require.Contains(t, sc, "slatedb", "build.sh must document the cgo/slatedb release link")
+	require.Contains(t, sc, "CGO_ENABLED", "build.sh must document the pure-Go (CGO_ENABLED=0) build — ADR-0065 removed the cgo/slatedb lane")
 
 	_, err = os.Stat(filepath.Join(root, "docs/install.md"))
 	require.NoError(t, err, "install docs (Debian/RHEL) must exist")

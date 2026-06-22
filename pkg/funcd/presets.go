@@ -65,8 +65,8 @@ func InMemory() Option {
 // Production returns an Option that wires the pure-Go production drivers that do NOT vary by
 // deployment: the embedded reverse-proxy gateway, a JSON logger, and the no-op telemetry
 // pipeline (an OTLP endpoint is supplied via WithTelemetry when configured), plus the public
-// control-plane bind, RBAC, and deliberately NO default credential. The **store** (slatedb,
-// cgo/`-tags slatedb`), **runtime** (containerd, Linux), and **blob + bus** (file vs memory —
+// control-plane bind, RBAC, and deliberately NO default credential. The **store** (badger,
+// pure-Go, ADR-0065), **runtime** (containerd, Linux), and **blob + bus** (file vs memory —
 // the daemon's `--memory` substrate choice, ADR-0043) are deployment-injected via WithStore /
 // WithRuntime / WithBlob / WithBus — so Production() is composed as
 // funcd.New(funcd.Production(), WithBlob(...), WithBus(...), WithStore(...), WithRuntime(...)).

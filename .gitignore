@@ -14,8 +14,15 @@ coverage.out
 *~
 .vscode/
 
-# slatedb native lib build cache (just slatedb-lib)
+# local build/tool cache (lima deps, etc.)
 .cache/
+
+# Badger DB scratch — a stray local data dir if funcd/tests run with a repo-relative data dir
+# (metastore at <dataDir>/store, KV service at <dataDir>/kv — ADR-0065/0066)
+/store/
+/kv/
+cmd/**/store/
+cmd/**/kv/
 
 # build.sh output (ADR-0026)
 /dist/
