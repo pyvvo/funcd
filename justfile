@@ -160,6 +160,24 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo invokes inside it
     limactl shell {{lima_fn_vm}} -- sudo bash -s < scripts/lima-fn-to-fn-invoke.sh
 
+# the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
+# containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read
+# it back — proving the new engine persists control-plane state across a real daemon restart under
+# containerd. Reuses the bench VM (scripts/lima.yaml, which provisions containerd via `funcd install`);
+# the smoke runs inside it (scripts/lima-metastore-smoke.sh). Needs docker (embedded-image build).
+lima_meta_vm := lima_name + "-meta"
+[group('example')]
+lima-example-metastore: build-runtime-images
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    trap 'limactl stop -f {{lima_meta_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_meta_vm}} --tty=false scripts/lima.yaml
+    limactl shell {{lima_meta_vm}} -- sudo bash -s < scripts/lima-metastore-smoke.sh
+
 # run the CLI demo end to end (build → boot → push/apply/get/invoke → teardown).
 # Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: examples/js/hello-world.
 # Needs node + npm + yq on PATH.
