@@ -1123,5 +1123,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0072-implementation-claude-opus-4-8.md",
     "notes": "KV as a declarative resource: KVStore CRD + Grant-as-binding (filled GrantSpec) + single-writer (rw Grant); grant-required facade (default-deny/caps/mode, caller fn threaded) replacing the KindService PDP check; 3 admissions (quota/single-writer/deletion-protection on grants+data); reconciler Ready+DropPrefix; examples migrated; verified independently green, no new dep."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0073",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0073-implementation-claude-opus-4-8.md",
+    "notes": "KV bindings + sub-domains (supersedes 0072): drop Grant (revert GrantSpec to struct{}), Function.spec.kv bindings (clone spec.links), KVStore.spec.tables[] with per-table owner=single-writer; facade default-deny + owner-only writes + table-scoped prefix; admissions binding-validity/owner-exists/deletion-protection(Delete+table-removal)/quota; reconciler table-removal DropPrefix; examples re-migrated (distinct alias/store/table). Verified independently green, no new dep."
   }
 ]

@@ -141,3 +141,36 @@ func TestFunctionLinkValidateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// scenario: binding-validity (structural half) — the spec.kv structural matrix (ADR-0073): alias is a
+// DNS-1123 label unique within KV, table is a DNS-1123 label. Cross-resource rules (the store/table
+// exist) are an admission, not here.
+func TestFunctionKVValidateMatrix(t *testing.T) {
+	bind := func(alias, store, table string) FunctionKV {
+		return FunctionKV{Alias: alias, Store: ObjectName(store), Table: table}
+	}
+	for _, tc := range []struct {
+		name  string
+		kv    []FunctionKV
+		valid bool
+	}{
+		{"no kv", nil, true},
+		{"valid single", []FunctionKV{bind("counters", "counters-kv", "table-counters")}, true},
+		{"valid multiple", []FunctionKV{bind("a", "s1", "t1"), bind("b", "s2", "t2")}, true},
+		{"uppercase alias", []FunctionKV{bind("Counters", "s", "t")}, false},
+		{"empty alias", []FunctionKV{bind("", "s", "t")}, false},
+		{"underscore alias", []FunctionKV{bind("a_b", "s", "t")}, false},
+		{"duplicate alias", []FunctionKV{bind("a", "s1", "t1"), bind("a", "s2", "t2")}, false},
+		{"bad table", []FunctionKV{bind("a", "s", "Bad_Table")}, false},
+		{"empty table", []FunctionKV{bind("a", "s", "")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fnWith(FunctionSpec{KV: tc.kv}).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed kv binding set must be fault.Invalid")
+			}
+		})
+	}
+}

@@ -7,15 +7,15 @@ import (
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 )
 
-// KVProber probes whether a KVStore holds any keys (ADR-0072): the deletion-protection admission
-// uses it to block deleting a store that still holds data. Declared HERE (like StoreReader) so the
-// admission package stays a near-leaf; the wiring adapts the kvstore driver's List to it.
+// KVProber probes whether a KVStore holds any keys (ADR-0072): the deletion-protection admission uses
+// it to block deleting a store that still holds data. Declared HERE (like StoreReader) so the admission
+// package stays a near-leaf; the wiring adapts the kvstore driver's List to it.
 type KVProber interface {
 	// HasAny reports whether any key exists under prefix.
 	HasAny(ctx context.Context, prefix string) (bool, error)
 }
 
-// storePrefix is the on-disk prefix a KVStore owns (ADR-0072): "<ns>/<store>/". The facade prefixes
+// storePrefix is the on-disk prefix a KVStore owns (ADR-0072/0073): "<ns>/<store>/". The facade prefixes
 // every key by it; the deletion-protection probe and the reconciler's DropPrefix use the same shape.
 func storePrefix(ns v1.NamespaceName, store v1.ObjectName) string {
 	return string(ns) + "/" + string(store) + "/"
@@ -61,78 +61,115 @@ func (a kvStoreQuota) Admit(ctx context.Context, req Request) (v1.Object, error)
 	return req.Object, nil
 }
 
-// --- grant-validity (ADR-0072): Create/Update on Grant ----------------------------------------
+// --- kv-binding-validity (ADR-0073): Create/Update on Function --------------------------------
 
-type grantValidity struct{ r StoreReader }
+type kvBindingValidity struct{ r StoreReader }
 
-// NewGrantValidityAdmission returns the Validating admission that enforces ADR-0072's KV Grant rules
-// on Create/Update: the referenced KVStore and subject Function exist in the Grant's namespace, and
-// an rw Grant is the single writer (no OTHER rw Grant references the same store ⇒ Conflict).
-func NewGrantValidityAdmission(r StoreReader) Admission { return grantValidity{r: r} }
+// NewKVBindingValidityAdmission returns the Validating admission that enforces ADR-0073's KV binding
+// rules on a Function Create/Update: every spec.kv entry names a (store, table) that exists in the
+// function's namespace. (Clone of link-validity, scanning spec.kv instead of spec.links.)
+func NewKVBindingValidityAdmission(r StoreReader) Admission { return kvBindingValidity{r: r} }
 
-func (grantValidity) Name() string { return "grant-validity" }
-func (grantValidity) Phase() Phase { return Validating }
+func (kvBindingValidity) Name() string { return "kv-binding-validity" }
+func (kvBindingValidity) Phase() Phase { return Validating }
 
-func (grantValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindGrant.GVK() && (op == Create || op == Update)
+func (kvBindingValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
+	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
 }
 
-func (a grantValidity) Admit(ctx context.Context, req Request) (v1.Object, error) {
-	const op = "admission.grant-validity"
-	g, ok := req.Object.(*v1.Grant)
-	if !ok {
+func (a kvBindingValidity) Admit(ctx context.Context, req Request) (v1.Object, error) {
+	const op = "admission.kv-binding-validity"
+	fn, ok := req.Object.(*v1.Function)
+	if !ok || len(fn.Spec.KV) == 0 {
 		return req.Object, nil
 	}
-	ns := g.Namespace
-
-	// The referenced KVStore must exist in the Grant's namespace.
+	ns := fn.Namespace
 	stores, err := a.r.List(ctx, v1.KindKVStore.GVK(), ns)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "list kvstores in %q", ns)
 	}
-	if !nameExists(stores, g.Spec.Store) {
-		return nil, fault.Invalidf(op, "spec.store %q does not exist in namespace %q", g.Spec.Store, ns)
-	}
-
-	// The subject Function must exist in the Grant's namespace.
-	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), ns)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
-	}
-	if !nameExists(fns, g.Spec.Function) {
-		return nil, fault.Invalidf(op, "spec.function %q does not exist in namespace %q", g.Spec.Function, ns)
-	}
-
-	// Single-writer: at most one rw Grant per store (ADR-0072). A second rw Grant for the same
-	// store ⇒ Conflict. A Grant updating itself does not conflict with its own prior rw row.
-	if g.Spec.Mode == v1.KVModeRW {
-		grants, lerr := a.r.List(ctx, v1.KindGrant.GVK(), ns)
-		if lerr != nil {
-			return nil, fault.Wrapf(lerr, fault.Internal, op, "list grants in %q", ns)
+	tables := map[v1.ObjectName]map[string]bool{} // store name → set of table names
+	for _, o := range stores {
+		ks, ok := o.(*v1.KVStore)
+		if !ok {
+			continue
 		}
-		for _, o := range grants {
-			other, ok := o.(*v1.Grant)
-			if !ok || other.Name == g.Name {
-				continue
-			}
-			if other.Spec.Mode == v1.KVModeRW && other.Spec.Store == g.Spec.Store {
-				return nil, fault.Conflictf(op, "store %q already has an rw Grant (%q); a store has a single writer", g.Spec.Store, other.Name)
-			}
+		set := make(map[string]bool, len(ks.Spec.Tables))
+		for _, tb := range ks.Spec.Tables {
+			set[tb.Name] = true
+		}
+		tables[ks.Name] = set
+	}
+	for _, b := range fn.Spec.KV {
+		set, ok := tables[b.Store]
+		if !ok {
+			return nil, fault.Invalidf(op, "spec.kv[%s].store %q does not exist in namespace %q", b.Alias, b.Store, ns)
+		}
+		if !set[b.Table] {
+			return nil, fault.Invalidf(op, "spec.kv[%s].table %q does not exist in store %q", b.Alias, b.Table, b.Store)
 		}
 	}
 	return req.Object, nil
 }
 
-// --- kvstore-deletion-protection (ADR-0072): Delete on KVStore --------------------------------
+// --- kv-owner-exists (ADR-0073): Create/Update on KVStore -------------------------------------
+
+type kvOwnerExists struct{ r StoreReader }
+
+// NewKVOwnerExistsAdmission returns the Validating admission that enforces ADR-0073's table-owner rule
+// on a KVStore Create/Update: every tables[].owner (when set) is a real Function in the store's
+// namespace. Single-owner-per-table is structural (unique table names in Validate) — this is the
+// owner-EXISTS check, not a "≤1 owner" check.
+func NewKVOwnerExistsAdmission(r StoreReader) Admission { return kvOwnerExists{r: r} }
+
+func (kvOwnerExists) Name() string { return "kv-owner-exists" }
+func (kvOwnerExists) Phase() Phase { return Validating }
+
+func (kvOwnerExists) Handles(gvk v1.GroupVersionKind, op Operation) bool {
+	return gvk == v1.KindKVStore.GVK() && (op == Create || op == Update)
+}
+
+func (a kvOwnerExists) Admit(ctx context.Context, req Request) (v1.Object, error) {
+	const op = "admission.kv-owner-exists"
+	ks, ok := req.Object.(*v1.KVStore)
+	if !ok {
+		return req.Object, nil
+	}
+	// Only list functions if at least one table declares an owner.
+	hasOwner := false
+	for _, tb := range ks.Spec.Tables {
+		if tb.Owner != "" {
+			hasOwner = true
+			break
+		}
+	}
+	if !hasOwner {
+		return req.Object, nil
+	}
+	ns := ks.Namespace
+	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), ns)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
+	}
+	for _, tb := range ks.Spec.Tables {
+		if tb.Owner != "" && !nameExists(fns, tb.Owner) {
+			return nil, fault.Invalidf(op, "spec.tables[%s].owner %q does not exist in namespace %q", tb.Name, tb.Owner, ns)
+		}
+	}
+	return req.Object, nil
+}
+
+// --- kvstore-deletion-protection (ADR-0073): Delete AND Update on KVStore ----------------------
 
 type kvStoreDeletionProtection struct {
 	r StoreReader
 	p KVProber
 }
 
-// NewKVStoreDeletionProtectionAdmission returns the Validating admission that rejects deleting a
-// KVStore that is still referenced by a Grant OR still holds keys (ADR-0072): remove grants /
-// drain first. It reads Request.Old.
+// NewKVStoreDeletionProtectionAdmission returns the Validating admission that protects KVStore data
+// (ADR-0073). On Delete: Conflict if any Function.spec.kv names the store OR it still holds keys. On
+// Update: Conflict if a table removed from spec.tables[] is still named by some Function.spec.kv. (Clone
+// of link-deletion-protection, scanning spec.kv.)
 func NewKVStoreDeletionProtectionAdmission(r StoreReader, p KVProber) Admission {
 	return kvStoreDeletionProtection{r: r, p: p}
 }
@@ -141,10 +178,18 @@ func (kvStoreDeletionProtection) Name() string { return "kvstore-deletion-protec
 func (kvStoreDeletionProtection) Phase() Phase { return Validating }
 
 func (kvStoreDeletionProtection) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindKVStore.GVK() && op == Delete
+	return gvk == v1.KindKVStore.GVK() && (op == Delete || op == Update)
 }
 
 func (a kvStoreDeletionProtection) Admit(ctx context.Context, req Request) (v1.Object, error) {
+	if req.Operation == Update {
+		return a.admitUpdate(ctx, req)
+	}
+	return a.admitDelete(ctx, req)
+}
+
+// admitDelete blocks deleting a store still bound by a Function.spec.kv or still holding keys.
+func (a kvStoreDeletionProtection) admitDelete(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.kvstore-deletion-protection"
 	if req.Old == nil {
 		return nil, nil
@@ -152,14 +197,19 @@ func (a kvStoreDeletionProtection) Admit(ctx context.Context, req Request) (v1.O
 	store := req.Old.GetObjectMeta().Name
 	ns := req.Old.GetObjectMeta().Namespace
 
-	grants, err := a.r.List(ctx, v1.KindGrant.GVK(), ns)
+	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), ns)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list grants in %q", ns)
+		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
 	}
-	for _, o := range grants {
-		g, ok := o.(*v1.Grant)
-		if ok && g.Spec.Store == store {
-			return nil, fault.Conflictf(op, "KVStore %q is referenced by Grant %q; remove grants first", store, g.Name)
+	for _, o := range fns {
+		f, ok := o.(*v1.Function)
+		if !ok {
+			continue
+		}
+		for _, b := range f.Spec.KV {
+			if b.Store == store {
+				return nil, fault.Conflictf(op, "KVStore %q is bound by function %q (alias %q); remove the binding first", store, f.Name, b.Alias)
+			}
 		}
 	}
 
@@ -173,6 +223,57 @@ func (a kvStoreDeletionProtection) Admit(ctx context.Context, req Request) (v1.O
 		}
 	}
 	return req.Old, nil
+}
+
+// admitUpdate blocks removing a table from spec.tables[] while it is still named by some Function.spec.kv.
+func (a kvStoreDeletionProtection) admitUpdate(ctx context.Context, req Request) (v1.Object, error) {
+	const op = "admission.kvstore-deletion-protection"
+	if req.Old == nil {
+		return req.Object, nil
+	}
+	oldKS, ok := req.Old.(*v1.KVStore)
+	if !ok {
+		return req.Object, nil
+	}
+	newKS, ok := req.Object.(*v1.KVStore)
+	if !ok {
+		return req.Object, nil
+	}
+	store := oldKS.Name
+	ns := oldKS.Namespace
+
+	kept := make(map[string]bool, len(newKS.Spec.Tables))
+	for _, tb := range newKS.Spec.Tables {
+		kept[tb.Name] = true
+	}
+	var removed []string
+	for _, tb := range oldKS.Spec.Tables {
+		if !kept[tb.Name] {
+			removed = append(removed, tb.Name)
+		}
+	}
+	if len(removed) == 0 {
+		return req.Object, nil
+	}
+
+	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), ns)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
+	}
+	for _, name := range removed {
+		for _, o := range fns {
+			f, ok := o.(*v1.Function)
+			if !ok {
+				continue
+			}
+			for _, b := range f.Spec.KV {
+				if b.Store == store && b.Table == name {
+					return nil, fault.Conflictf(op, "table %q of KVStore %q is still bound by function %q (alias %q); remove the binding first", name, store, f.Name, b.Alias)
+				}
+			}
+		}
+	}
+	return req.Object, nil
 }
 
 // nameExists reports whether any object in objs has the given name.

@@ -31,11 +31,11 @@ class FuncOutput(TypedDict):
 
 
 def handle(context: FunctionContext, event: CloudEvent[FuncInput]) -> FuncOutput:
-    """Increment the per-name counter in the ``py-counters`` KV binding and return it."""
+    """Increment the per-name counter via the ``pycounters`` KV binding and return it."""
     # The shim validated event["data"] against FuncInput (422 otherwise), so it is present here.
     assert "data" in event
     name = event["data"]["name"]
-    count = int(context.kv.get_str("py-counters", name) or 0) + 1
-    context.kv.put("py-counters", name, str(count))
+    count = int(context.kv.get_str("pycounters", name) or 0) + 1
+    context.kv.put("pycounters", name, str(count))
     context.log("kv-counter", name, count)
     return {"name": name, "count": count}

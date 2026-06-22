@@ -189,6 +189,25 @@ components:
         - metadata
         - spec
       type: object
+    FunctionKV:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        store:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        table:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - store
+        - table
+      type: object
     FunctionLink:
       additionalProperties: false
       properties:
@@ -217,6 +236,12 @@ components:
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
+        kv:
+          items:
+            $ref: "#/components/schemas/FunctionKV"
+          type:
+            - array
+            - "null"
         links:
           items:
             $ref: "#/components/schemas/FunctionLink"
@@ -297,30 +322,6 @@ components:
       type: object
     GrantSpec:
       additionalProperties: false
-      properties:
-        binding:
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-        function:
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-        mode:
-          enum:
-            - ro
-            - rw
-          type: string
-        store:
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-      required:
-        - function
-        - binding
-        - store
-        - mode
       type: object
     Invocation:
       additionalProperties: false
@@ -387,17 +388,40 @@ components:
           format: int64
           minimum: 0
           type: integer
+        tables:
+          items:
+            $ref: "#/components/schemas/KVTable"
+          type:
+            - array
+            - "null"
       type: object
     KVStoreStatus:
       additionalProperties: false
       properties:
         Status:
           $ref: "#/components/schemas/Status"
-        grantRefs:
+        bindings:
+          format: int64
+          type: integer
+        tables:
           format: int64
           type: integer
       required:
         - Status
+      type: object
+    KVTable:
+      additionalProperties: false
+      properties:
+        name:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        owner:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
       type: object
     Namespace:
       additionalProperties: false

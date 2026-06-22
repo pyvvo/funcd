@@ -1,6 +1,8 @@
 # ADR-0072: KV as a declarative resource — KVStore CRD + Grant-as-binding + single-writer ownership
 
-- **Status**: Implemented (2026-06-22)
+- **Status**: Superseded by ADR-0073 (2026-06-22) — the `Grant`-as-KV-binding mechanism is replaced by
+  `Function.spec.kv` bindings + `KVStore.spec.tables[]` sub-domains; authz delegates to the PDP (was: bespoke
+  Grant scan). Implemented 2026-06-22, superseded the same day.
 - **Date**: 2026-06-22 (judged 2026-06-22 — folded the judge's Blocker + 2 Majors: **scoped all grants
   same-namespace for V1.1** (cross-ns `ro` grants contradicted deletion-protection under the single-namespace
   `StoreReader`; cross-ns sharing deferred); spelled out threading the **caller function** from the `Ref`

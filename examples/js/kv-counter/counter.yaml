@@ -1,4 +1,7 @@
-# kv-counter — increments a per-name counter in the KV binding "counters" via context.kv (ADR-0069).
+# kv-counter — increments a per-name counter via the KV binding "counters" (context.kv, ADR-0069).
+# The spec.kv binding (ADR-0073) IS the capability: it maps the alias "counters" to the counters-kv store's
+# "table-counters" table. Default-deny — without it, context.kv on "counters" is Forbidden. The function
+# owns the table (store.yaml), so it may write it.
 apiVersion: funcd.io/v1alpha1
 kind: Function
 metadata:
@@ -13,3 +16,7 @@ spec:
   replicas: 1
   scaling:
     minReplicas: 1
+  kv:
+    - alias: counters         # the in-code handle: ctx.kv.*('counters', …)
+      store: counters-kv      # the KVStore (domain)
+      table: table-counters   # the sub-domain counter owns (single writer)

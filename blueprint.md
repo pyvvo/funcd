@@ -89,13 +89,19 @@ In order to make this platform self-contained, we will need to implement the fol
       (HTTP-over-UDS, connection-scoped identity), routed to the PDP-authorized `Facade` (ADR-0069 — the same
       channel as `context.invoke`, ADR-0064). The shim KV client also offers typed read accessors
       (`getText`/`getJSON`, `get_str`/`get_json`) over `get` (ADR-0070). **KV is a declarative resource**
-      (ADR-0072): a namespaced **`KVStore`** CRD (name + per-op caps: `maxValueBytes`/`maxKeyBytes`) reached
-      only through an explicit **`Grant`** (the now-defined `GrantSpec`: function → binding → store → mode) —
-      **default-deny**, no implicit/default store (only config + secrets are implicit). Ownership is
-      **one writer (the single `rw` Grant) + N readers**; a reconciler does Ready + grant-count + Delete →
-      `DropPrefix`, and admissions enforce store-count quota, single-writer, and deletion-protection (on
-      referencing Grants **and** non-empty data). V1.1 KV is **same-namespace** (cross-namespace sharing and
-      the typed-record/Avro/index engine are deferred). Cross-node replication (NATS-lattice) is FEAT-0002.
+      (ADR-0073, superseding ADR-0072's `Grant` mechanism): a namespaced **`KVStore`** CRD = a **domain** (one
+      Badger prefix, one instance-level gateway, per-op caps `maxValueBytes`/`maxKeyBytes`) holding
+      **sub-domains** — `spec.tables[]`, each with an `owner` = the **single writer** (per-table, the consistency
+      invariant; the typed-record engine attaches schema/indexes here, backlog). Functions **bind** KV on
+      **`Function.spec.kv`** (`alias → store + table`, the wrangler/`spec.links` convention), reached as
+      `context.kv.*('alias', …)`. **Default-deny**: no `spec.kv` entry ⇒ Forbidden (the binding is the
+      capability; only config + secrets are implicit). **Writes require `caller == table.owner`**; **reads** are
+      coarse within the namespace (the V1.1 trust boundary) — **fine-grained per-function authz is delegated to
+      the PDP/Cedar IAM ADR**, where authorization belongs (KV does not hand-roll RBAC; Cedar policies persist as
+      resources in the metastore, entities materialized from existing resources). A reconciler does Ready +
+      Delete/table-removal → `DropPrefix`; admissions enforce store-count quota, binding-validity, owner-exists,
+      and deletion-protection (bindings **and** data). V1.1 KV is **same-namespace**; cross-namespace sharing and
+      the typed engine are deferred. Cross-node replication (NATS-lattice) is FEAT-0002.
     - **Graph database**: store and query graph data. Drivers: **in-process**
       (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**
       (neo4j, dgraph). (V3 candidate.)

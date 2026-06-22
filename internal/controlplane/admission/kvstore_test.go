@@ -14,7 +14,6 @@ import (
 // kvReader is a multi-kind fake StoreReader: it returns the stored objects of the requested kind in ns.
 type kvReader struct {
 	stores []*v1.KVStore
-	grants []*v1.Grant
 	fns    []*v1.Function
 }
 
@@ -25,12 +24,6 @@ func (r kvReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Namespa
 		for _, s := range r.stores {
 			if s.Namespace == ns {
 				out = append(out, s)
-			}
-		}
-	case v1.KindGrant:
-		for _, g := range r.grants {
-			if g.Namespace == ns {
-				out = append(out, g)
 			}
 		}
 	case v1.KindFunction:
@@ -47,23 +40,22 @@ type fakeProber struct{ has bool }
 
 func (p fakeProber) HasAny(_ context.Context, _ string) (bool, error) { return p.has, nil }
 
-func mkStore(name string) *v1.KVStore {
+func mkStore(name string, tables ...v1.KVTable) *v1.KVStore {
 	ks := &v1.KVStore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore}}
 	ks.Name, ks.Namespace, ks.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	ks.Spec.Tables = tables
 	return ks
 }
 
-func mkGrant(name, fn, store string, mode v1.KVMode) *v1.Grant {
-	g := &v1.Grant{TypeMeta: v1.TypeMeta{APIVersion: v1.KindGrant.GVK().APIVersion(), Kind: v1.KindGrant}}
-	g.Name, g.Namespace, g.ResourceGroup = v1.ObjectName(name), "default", "rg1"
-	g.Spec = v1.GrantSpec{Function: v1.ObjectName(fn), Binding: "b", Store: v1.ObjectName(store), Mode: mode}
-	return g
-}
-
-func mkFn(name string) *v1.Function {
+func mkFn(name string, kv ...v1.FunctionKV) *v1.Function {
 	f := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
 	f.Name, f.Namespace, f.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	f.Spec.KV = kv
 	return f
+}
+
+func kvb(alias, store, table string) v1.FunctionKV {
+	return v1.FunctionKV{Alias: alias, Store: v1.ObjectName(store), Table: table}
 }
 
 // scenario: store-count-quota — a namespace at its KVStore cap rejects another Create (Invalid).
@@ -83,65 +75,98 @@ func TestScenarioStoreCountQuota(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// scenario: single-writer-enforced (admission half) — a second rw Grant for a store ⇒ Conflict.
-func TestScenarioSingleWriterEnforcedAdmission(t *testing.T) {
-	gvk := v1.KindGrant.GVK()
-	r := kvReader{
-		stores: []*v1.KVStore{mkStore("s")},
-		fns:    []*v1.Function{mkFn("f1"), mkFn("f2")},
-		grants: []*v1.Grant{mkGrant("g1", "f1", "s", v1.KVModeRW)},
-	}
-	adm := admission.NewGrantValidityAdmission(r)
+// scenario: binding-validity — a Function whose spec.kv names a missing store/table is rejected (Invalid);
+// a fully-resolvable binding is allowed.
+func TestScenarioBindingValidity(t *testing.T) {
+	gvk := v1.KindFunction.GVK()
+	r := kvReader{stores: []*v1.KVStore{mkStore("orders", v1.KVTable{Name: "customers", Owner: "svc"})}}
+	adm := admission.NewKVBindingValidityAdmission(r)
 	require.True(t, adm.Handles(gvk, admission.Create))
 	require.True(t, adm.Handles(gvk, admission.Update))
 
-	// a second rw Grant for s ⇒ Conflict
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkGrant("g2", "f2", "s", v1.KVModeRW)})
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "a store has a single writer")
+	// missing store ⇒ Invalid
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "missing", "customers"))})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing store ⇒ Invalid")
 
-	// a second RO Grant for s ⇒ allowed (read sharing)
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkGrant("g3", "f2", "s", v1.KVModeRO)})
-	require.NoError(t, err)
+	// store present but missing table ⇒ Invalid
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "orders", "missing"))})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing table ⇒ Invalid")
 
-	// updating the SAME rw Grant ⇒ allowed (no self-conflict)
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Object: mkGrant("g1", "f1", "s", v1.KVModeRW)})
-	require.NoError(t, err)
+	// fully resolvable ⇒ allowed
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "orders", "customers"))})
+	require.NoError(t, err, "a resolvable binding is allowed")
 }
 
-// scenario: grant-validity-references — missing store or function ⇒ Invalid.
-func TestScenarioGrantValidityReferences(t *testing.T) {
-	gvk := v1.KindGrant.GVK()
-	r := kvReader{stores: []*v1.KVStore{mkStore("s")}, fns: []*v1.Function{mkFn("f1")}}
-	adm := admission.NewGrantValidityAdmission(r)
+// scenario: owner-exists — a KVStore whose tables[].owner is not a real Function is rejected (Invalid);
+// every owner present ⇒ allowed.
+func TestScenarioOwnerExists(t *testing.T) {
+	gvk := v1.KindKVStore.GVK()
+	r := kvReader{fns: []*v1.Function{mkFn("customers-svc"), mkFn("fulfillment-svc")}}
+	adm := admission.NewKVOwnerExistsAdmission(r)
+	require.True(t, adm.Handles(gvk, admission.Create))
+	require.True(t, adm.Handles(gvk, admission.Update))
 
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkGrant("g", "f1", "missing", v1.KVModeRO)})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "missing store ⇒ Invalid")
+	// an owner that is not a Function ⇒ Invalid
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkStore("orders", v1.KVTable{Name: "customers", Owner: "ghost"})})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a non-existent owner ⇒ Invalid")
 
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkGrant("g", "missing", "s", v1.KVModeRO)})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "missing function ⇒ Invalid")
+	// every owner present ⇒ allowed
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkStore("orders",
+			v1.KVTable{Name: "customers", Owner: "customers-svc"},
+			v1.KVTable{Name: "fulfillment", Owner: "fulfillment-svc"})})
+	require.NoError(t, err, "all owners exist ⇒ allowed")
 
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkGrant("g", "f1", "s", v1.KVModeRW)})
-	require.NoError(t, err, "all refs present ⇒ allowed")
+	// an empty owner (read-only table) is allowed
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkStore("orders", v1.KVTable{Name: "public"})})
+	require.NoError(t, err, "an unowned table is allowed")
 }
 
-// scenario: deletion-protected-by-grants / -by-data — a referenced or non-empty store can't be deleted.
+// scenario: deletion-protected — a store named by some Function.spec.kv or still holding keys can't be
+// deleted (Conflict); a clean store is deletable.
 func TestScenarioKVStoreDeletionProtection(t *testing.T) {
 	gvk := v1.KindKVStore.GVK()
 
-	// referenced by a Grant ⇒ Conflict
-	rGrant := kvReader{grants: []*v1.Grant{mkGrant("g", "f", "s", v1.KVModeRW)}}
-	adm := admission.NewKVStoreDeletionProtectionAdmission(rGrant, fakeProber{has: false})
+	// bound by a Function.spec.kv ⇒ Conflict
+	rBound := kvReader{fns: []*v1.Function{mkFn("svc", kvb("c", "orders", "customers"))}}
+	adm := admission.NewKVStoreDeletionProtectionAdmission(rBound, fakeProber{has: false})
 	require.True(t, adm.Handles(gvk, admission.Delete))
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("s")})
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "a referenced store can't be deleted")
+	require.True(t, adm.Handles(gvk, admission.Update))
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("orders")})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a bound store can't be deleted")
 
-	// no grants but non-empty data ⇒ Conflict
+	// no bindings but non-empty data ⇒ Conflict
 	adm = admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, fakeProber{has: true})
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("s")})
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("orders")})
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a non-empty store can't be deleted")
 
-	// no grants, no data ⇒ allowed
+	// no bindings, no data ⇒ allowed
 	adm = admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, fakeProber{has: false})
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("s")})
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkStore("orders")})
 	require.NoError(t, err, "a clean store is deletable")
+}
+
+// scenario: table-removal-protected-and-reclaimed (admission half) — removing a table from spec.tables[]
+// while it is still bound by some Function.spec.kv is rejected on Update (Conflict); removing an unbound
+// table is allowed.
+func TestScenarioTableRemovalProtected(t *testing.T) {
+	gvk := v1.KindKVStore.GVK()
+	rBound := kvReader{fns: []*v1.Function{mkFn("svc", kvb("c", "orders", "fulfillment"))}}
+	adm := admission.NewKVStoreDeletionProtectionAdmission(rBound, fakeProber{has: false})
+
+	old := mkStore("orders",
+		v1.KVTable{Name: "customers", Owner: "svc"},
+		v1.KVTable{Name: "fulfillment", Owner: "svc"})
+	// the update drops "fulfillment", which is still bound ⇒ Conflict
+	newKS := mkStore("orders", v1.KVTable{Name: "customers", Owner: "svc"})
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: newKS})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "removing a still-bound table ⇒ Conflict")
+
+	// dropping an UNbound table is allowed
+	rUnbound := kvReader{fns: []*v1.Function{mkFn("svc", kvb("c", "orders", "customers"))}}
+	adm2 := admission.NewKVStoreDeletionProtectionAdmission(rUnbound, fakeProber{has: false})
+	_, err = adm2.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: newKS})
+	require.NoError(t, err, "removing an unbound table is allowed")
 }

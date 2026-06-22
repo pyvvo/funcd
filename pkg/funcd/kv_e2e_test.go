@@ -44,10 +44,12 @@ func buildKVExample(t *testing.T) string {
 	return exDir
 }
 
-// scenario (e2e): kv-counter-via-context-kv (ADR-0069) — the REAL path: build the kv-counter handler,
-// push it to an OCI layout, apply it, then POST twice. The handler reads+increments a per-name counter
-// through context.kv (→ worker-node local API UDS → PDP Facade → durable driver), so the count goes 1
-// then 2 across invocations — proving functions can use durable KV end-to-end.
+// scenario (e2e): kv-counter-via-context-kv (ADR-0073) — the REAL path: build the kv-counter handler,
+// push it to an OCI layout, apply it, then POST. The handler reads+increments a per-name counter through
+// context.kv (→ worker-node local API UDS → binding-gated Facade → durable driver). With NO spec.kv
+// binding the call is Forbidden (default-deny); once the function declares spec.kv (and the owned store
+// exists) the count goes 1 then 2 across invocations — proving the binding IS the capability and KV
+// persists end-to-end.
 func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := buildKVExample(t)
@@ -64,10 +66,14 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse counter.yaml")
 	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest}
 
-	// ADR-0072: the function needs an owned KVStore + an rw Grant. Apply the store first (so the Grant
-	// admission's referenced-store check passes), then the function, then the Grant.
-	applyKVStore(t, c, filepath.Join(exYAML, "store.yaml"))
-	applyFnObj(t, c, &fn)
+	// ADR-0073 ordering: owner-exists (KVStore.tables[].owner is a real Function) needs the function to
+	// exist before the store; binding-validity (spec.kv names an existing store/table) needs the store to
+	// exist before the function declares spec.kv. So: apply the function WITHOUT spec.kv (default-deny —
+	// proves unbound is Forbidden), then the store (its owner now exists), then UPDATE the function to add
+	// spec.kv (the store/table now exist) — proving the binding is the capability.
+	unbound := fn
+	unbound.Spec.KV = nil
+	applyFnObj(t, c, &unbound)
 	waitReady(t, c, "counter")
 
 	call := func() (int, []byte) {
@@ -86,22 +92,24 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 		return out.Count, body
 	}
 
-	// scenario (e2e): ungranted-access-denied — with NO Grant yet, context.kv is Forbidden (default-deny):
-	// the handler's kv call fails, so the invocation does not return a 200 count.
+	// scenario (e2e): unbound-access-denied — with NO spec.kv binding, context.kv is Forbidden
+	// (default-deny): the handler's kv call fails, so the invocation does not return a 200 count.
 	count, body := call()
-	require.NotEqual(t, 1, count, "without a Grant, the kv-counter call is denied (default-deny): %s", body)
+	require.NotEqual(t, 1, count, "without a spec.kv binding, the kv-counter call is denied (default-deny): %s", body)
 
-	// Apply the rw Grant — now the function is the store's writer and the counter works.
-	applyGrant(t, c, filepath.Join(exYAML, "grant.yaml"))
+	// Apply the owned store (owner "counter" exists now), then re-apply the function WITH spec.kv.
+	applyKVStore(t, c, filepath.Join(exYAML, "store.yaml"))
+	applyFnObj(t, c, &fn)
+	waitReady(t, c, "counter")
 
-	// scenario (e2e): grant-gated 1→2 — the granted handler increments across invocations.
+	// scenario (e2e): kv-binding-resolves / owner-writes 1→2 — the bound owner increments across invocations.
 	got1, body1 := call()
-	require.Equal(t, 1, got1, "first granted invoke → count 1: %s", body1)
+	require.Equal(t, 1, got1, "first bound invoke → count 1: %s", body1)
 	got2, _ := call()
-	require.Equal(t, 2, got2, "second granted invoke → count 2 (KV persisted across invocations)")
+	require.Equal(t, 2, got2, "second bound invoke → count 2 (KV persisted across invocations)")
 }
 
-// applyKVStore parses a KVStore manifest and applies it through the control-plane client (ADR-0072).
+// applyKVStore parses a KVStore manifest and applies it through the control-plane client (ADR-0073).
 func applyKVStore(t *testing.T, c *sdk.Client, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -109,16 +117,5 @@ func applyKVStore(t *testing.T, c *sdk.Client, path string) {
 	var ks v1.KVStore
 	require.NoError(t, yaml.Unmarshal(data, &ks), "parse %s", path)
 	_, err = c.Apply(context.Background(), &ks)
-	require.NoError(t, err)
-}
-
-// applyGrant parses a Grant manifest and applies it through the control-plane client (ADR-0072).
-func applyGrant(t *testing.T, c *sdk.Client, path string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var g v1.Grant
-	require.NoError(t, yaml.Unmarshal(data, &g), "parse %s", path)
-	_, err = c.Apply(context.Background(), &g)
 	require.NoError(t, err)
 }

@@ -243,18 +243,19 @@ func (p *Platform) buildControlPlane() error {
 		}
 		invokeSockDir = tmp
 	}
-	// KV service (ADR-0069/0072): the durable driver (config-selected, ADR-0066) behind the grant-gated
-	// Facade, reached by functions through the worker-node local API's /kv routes. Defaults to in-memory.
-	// The Binder resolves a caller's (function, binding) to a Grant over the metastore (default-deny) —
-	// the Grant gate replaces the per-call KindService PDP check (ADR-0072).
+	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
+	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
+	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via
+	// the caller's Function.spec.kv over the metastore (default-deny); reads are coarse-allowed for any
+	// bound caller, writes are owner-only (ADR-0073).
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
 	}
-	kvBinder, err := kvsvc.NewBinder(metaReader{c.store})
+	kvResolver, err := kvsvc.NewResolver(metaReader{c.store})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binder")
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binding resolver")
 	}
-	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Binder: kvBinder, Logger: p.logger})
+	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
@@ -316,10 +317,11 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
-	// KVStore reconciler (ADR-0072): Ready + grantRefs; on delete, reclaim the store prefix via the
-	// driver's DropPrefix (type-asserted — a driver without it gets a no-op).
-	dropper, _ := c.kvStore.(kvsvc.PrefixDropper)
-	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: dropper, Logger: p.logger})
+	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
+	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
+	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
+	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
@@ -335,10 +337,13 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
 			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
-			// ADR-0072 KV resource rules: store-count quota, grant-validity (single-writer),
-			// KVStore deletion-protection (referencing Grants + non-empty data).
+			// ADR-0072/0073 KV resource rules: store-count quota; kv-binding-validity (Function.spec.kv
+			// names an existing store/table); kv-owner-exists (KVStore tables[].owner is a real Function);
+			// KVStore deletion-protection (bound by spec.kv or non-empty data on Delete; still-bound table
+			// removal on Update).
 			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
-			admission.NewGrantValidityAdmission(storeReader{c.store}),
+			admission.NewKVBindingValidityAdmission(storeReader{c.store}),
+			admission.NewKVOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
 		},
 	})
@@ -470,17 +475,9 @@ func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Na
 	return res.Items, nil
 }
 
-// metaReader adapts store.Store to kvsvc.MetaReader for the ADR-0072 KV Binder (the kv package stays
-// near-leaf and does not import store).
+// metaReader adapts store.Store to kvsvc.MetaReader for the ADR-0073 KV BindingResolver (the kv package
+// stays near-leaf and does not import store). The resolver reads the caller Function + target KVStore.
 type metaReader struct{ s store.Store }
-
-func (r metaReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
-	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
-	if err != nil {
-		return nil, err
-	}
-	return res.Items, nil
-}
 
 func (r metaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
 	return r.s.Get(ctx, gvk, ns, name)

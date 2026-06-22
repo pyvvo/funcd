@@ -17,7 +17,7 @@ const maxKVBytes = 1 << 20 // 1 MiB
 // KV is the function-facing KV port the worker-node local API routes to — the services/kv.Facade
 // satisfies it. The caller's namespace + function are supplied by the handler (connection-scoped from
 // the sandbox's fixed Ref), NEVER read from the request: a function can only reach its own namespace's
-// KV, and its grant resolution is keyed by its trustworthy fixed function identity (ADR-0072).
+// KV, and its binding resolution is keyed by its trustworthy fixed function identity (ADR-0073).
 type KV interface {
 	Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string) ([]byte, bool, error)
 	Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, value []byte) error
@@ -26,8 +26,8 @@ type KV interface {
 }
 
 // registerKV adds the KV verbs to mux — GET/PUT/DELETE /kv/{binding}/{key...} and GET /kv/{binding} (list,
-// ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0072). Errors are RFC
-// 9457 (the Facade's grant denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500).
+// ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0073). Errors are RFC
+// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500).
 func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function

@@ -59,6 +59,13 @@ type FunctionSpec struct {
 	// fails closed. Empty ⇒ no links. Cross-resource validity (target exists, acyclic) is an
 	// admission (ADR-0063); only the structural rules are checked in Validate.
 	Links []FunctionLink `json:"links,omitempty"`
+	// KV declares this function's KV bindings (ADR-0073, F42): each binds a local alias to a (store,
+	// table) sub-domain in this namespace, reachable from the handler as context.kv.<verb>(alias, …).
+	// The binding IS the capability — with no matching entry, context.kv on that alias is Forbidden
+	// (default-deny). Mirrors spec.links (wrangler-style: naming lives on the consumer). Empty ⇒ no
+	// KV access. Cross-resource validity (the store/table exist) is an admission (ADR-0063); only the
+	// structural rules (alias is a unique DNS-1123 label) are checked in Validate.
+	KV []FunctionKV `json:"kv,omitempty"`
 }
 
 // FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
@@ -71,6 +78,19 @@ type FunctionLink struct {
 	// Timeout bounds the synchronous wait (incl. a cold-start wake); int64 ns, 0 ⇒ platform
 	// default, ≤5m.
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"300000000000"`
+}
+
+// FunctionKV declares one KV binding (ADR-0073, F42): a local alias bound to a (store, table)
+// sub-domain in the same namespace. The handler reaches it as context.kv.<verb>(alias, …); reads are
+// coarse-allowed for any bound same-namespace caller, writes require this function to be the table's
+// owner. Mirrors FunctionLink (the wrangler/spec.links convention).
+type FunctionKV struct {
+	// Alias is the local handle the handler passes to context.kv; a DNS-1123 label, unique within KV.
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	// Store is the name of a KVStore in this function's namespace.
+	Store ObjectName `json:"store"`
+	// Table is a sub-domain (KVStore.spec.tables[].name) of that store; a DNS-1123 label.
+	Table string `json:"table" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
 
 // Pooling is the per-function pooling opt-in (ADR-0046, F28). Named "Pooling" (not
@@ -148,6 +168,21 @@ func (s *FunctionSpec) Validate() error {
 		seen[l.Alias] = true
 		if !dnsLabel.MatchString(string(l.Target)) {
 			return fault.Invalidf(op, "spec.links[%s].target %q is not a valid Function name", l.Alias, l.Target)
+		}
+	}
+	// KV binding structural rules (ADR-0073): alias is a DNS-1123 label, unique within KV; table is a
+	// DNS-1123 label. Cross-resource rules (the store/table exist) are an admission.
+	kvSeen := make(map[string]bool, len(s.KV))
+	for _, b := range s.KV {
+		if !dnsLabel.MatchString(b.Alias) {
+			return fault.Invalidf(op, "spec.kv alias %q is not a valid DNS-1123 label", b.Alias)
+		}
+		if kvSeen[b.Alias] {
+			return fault.Invalidf(op, "spec.kv alias %q is duplicated", b.Alias)
+		}
+		kvSeen[b.Alias] = true
+		if !dnsLabel.MatchString(b.Table) {
+			return fault.Invalidf(op, "spec.kv[%s].table %q is not a valid DNS-1123 label", b.Alias, b.Table)
 		}
 	}
 	return nil

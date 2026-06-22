@@ -1,5 +1,7 @@
 # kv-counter (Python) — increments a per-name counter in the KV binding "py-counters" via context.kv
 # (ADR-0069). The Python sibling of examples/js/kv-counter; runs on the curated python314 runtime image.
+# The spec.kv binding (ADR-0073) maps the alias "pycounters" to the py-counters store's "table-counters"
+# table; the binding IS the capability (default-deny), and pycounter owns the table so it may write it.
 apiVersion: funcd.io/v1alpha1
 kind: Function
 metadata:
@@ -14,3 +16,7 @@ spec:
   replicas: 1
   scaling:
     minReplicas: 1
+  kv:
+    - alias: pycounters       # the in-code handle: context.kv.*('pycounters', …)
+      store: py-counters      # the KVStore (domain)
+      table: table-counters   # the sub-domain pycounter owns (single writer)
