@@ -68,7 +68,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, err: tc.resolveErr}
-			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil)
+			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil)
 			rec := post(t, h, "payments", `{}`)
 			require.Equal(t, tc.wantStatus, rec.Code)
 		})
@@ -80,7 +80,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 func TestScenarioCallerIdentityFromConnection(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}}
-	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil)
+	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil)
 
 	post(t, h, "payments", `{"caller":"evil/other","sneaky":true}`)
 	require.Equal(t, caller, res.gotCaller, "caller is the fixed sandbox Ref, never the request body")
@@ -94,7 +94,7 @@ func TestInvokeIsLogged(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 
 	h := local.NewHandler(caller, &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}},
-		fakeInvoker{out: []byte(`{}`)}, logger)
+		fakeInvoker{out: []byte(`{}`)}, nil, logger)
 	post(t, h, "payments", `{}`)
 	got := buf.String()
 	require.Contains(t, got, "fn-to-fn invoke")
@@ -103,7 +103,7 @@ func TestInvokeIsLogged(t *testing.T) {
 	require.Contains(t, got, "alias=payments")
 
 	buf.Reset()
-	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, logger)
+	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, nil, logger)
 	post(t, hDeny, "ghost", `{}`)
 	require.Contains(t, buf.String(), "fn-to-fn invoke denied")
 	require.Contains(t, buf.String(), "level=WARN")

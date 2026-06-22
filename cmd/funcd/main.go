@@ -22,6 +22,9 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
 	"github.com/green-0-rabbit/funcd/internal/config"
+	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
+	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
 	"github.com/green-0-rabbit/funcd/internal/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime/containerd"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
@@ -149,6 +152,10 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	if err != nil {
 		return nil, noopClose, "", err
 	}
+	kvDriver, err := buildKVStore(cfg)
+	if err != nil {
+		return nil, noopClose, "", err
+	}
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
 	substrateOpts, substrate, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
@@ -162,6 +169,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	opts = append(opts, substrateOpts...)
 	opts = append(opts,
 		funcd.WithStore(st),
+		funcd.WithKVStore(kvDriver),
 		funcd.WithDevAuth(token, cfg.Auth.Namespaces...),
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
 		funcd.WithInvokeSocketDir(filepath.Join(cfg.Storage.DataDir, "invoke")),
@@ -213,6 +221,19 @@ func parseLevel(level string) slog.Level {
 // buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
+// buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
+// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger.
+func buildKVStore(cfg config.Config) (kvstore.KV, error) {
+	if cfg.Kvstore.Engine != "badger" {
+		return kvmemory.New(), nil
+	}
+	dir := cfg.Kvstore.DataDir
+	if dir == "" {
+		dir = filepath.Join(cfg.Storage.DataDir, "kv")
+	}
+	return kvbadger.Open(dir)
+}
+
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {

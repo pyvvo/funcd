@@ -11,8 +11,8 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	bstore "github.com/green-0-rabbit/funcd/internal/store/badger"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	bstore "github.com/green-0-rabbit/funcd/internal/store/badger"
 	"github.com/green-0-rabbit/funcd/internal/store/storecontract"
 )
 

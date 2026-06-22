@@ -45,6 +45,12 @@ type Config struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_DATA_DIR"`
 	} `json:"storage,omitempty"`
+	Kvstore struct {
+		// Engine for the function-facing KV service (ADR-0066/0069): memory (default, ephemeral) or
+		// badger (durable, at <Storage.DataDir>/kv). DataDir overrides the default location.
+		Engine  string `json:"engine,omitempty" env:"FUNCD_KVSTORE_ENGINE" validate:"omitempty,oneof=memory badger"`
+		DataDir string `json:"dataDir,omitempty" env:"FUNCD_KVSTORE_DATA_DIR"`
+	} `json:"kvstore,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
 		Namespaces []string `json:"namespaces,omitempty" env:"FUNCD_AUTH_NAMESPACES" envSeparator:","`

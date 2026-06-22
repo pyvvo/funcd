@@ -8,6 +8,7 @@ package funcd
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,6 +33,8 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/eventing"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
 	"github.com/green-0-rabbit/funcd/internal/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
@@ -58,6 +61,7 @@ const (
 // config holds the injected world — validated by validate() before New returns.
 type config struct {
 	store     store.Store
+	kvStore   kvstore.KV // the function-facing KV driver (ADR-0066/0069); nil ⇒ in-memory default
 	blob      blob.Bucket
 	bus       bus.Bus
 	runtime   runtime.Runtime
@@ -229,7 +233,16 @@ func (p *Platform) buildControlPlane() error {
 		}
 		invokeSockDir = tmp
 	}
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), p.logger)
+	// KV service (ADR-0069): the durable driver (config-selected, ADR-0066) behind the PDP-authorized
+	// Facade, reached by functions through the worker-node local API's /kv routes. Defaults to in-memory.
+	if c.kvStore == nil {
+		c.kvStore = kvmemory.New()
+	}
+	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Authorizer: c.authorizer, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
+	}
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), kvFacade, p.logger)
 
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
@@ -396,6 +409,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.invokeMgr != nil {
 			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
+		}
+		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
+			_ = cl.Close()
 		}
 		errs := []error{
 			p.cfg.bus.Close(),

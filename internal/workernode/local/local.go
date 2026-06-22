@@ -56,15 +56,19 @@ type UpstreamError struct {
 
 func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %d", e.Status) }
 
-// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias}. caller is the fixed
-// sandbox identity (connection-scoped) — the handler never reads a caller from the request. Every
-// invoke is logged through logger (the broker is the audit point): an allowed call at Info, a
-// denial / upstream error at Warn. A nil logger defaults to slog.Default().
-func NewHandler(caller Ref, res Resolver, inv Invoker, logger *slog.Logger) http.Handler {
+// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064) plus, when kv is
+// non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed sandbox
+// identity (connection-scoped) — the handler never reads a caller from the request. Every invoke is logged
+// through logger (the broker is the audit point): an allowed call at Info, a denial / upstream error at
+// Warn. A nil logger defaults to slog.Default().
+func NewHandler(caller Ref, res Resolver, inv Invoker, kv KV, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	mux := http.NewServeMux()
+	if kv != nil {
+		registerKV(mux, caller, kv, logger)
+	}
 	mux.HandleFunc("POST /invoke/{alias}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.invoke"
 		start := time.Now()

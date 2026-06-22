@@ -10,6 +10,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	"github.com/green-0-rabbit/funcd/internal/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/store"
@@ -23,6 +24,11 @@ type Option func(*config) error
 // WithStore injects the metastore (database layer) port.
 func WithStore(s store.Store) Option {
 	return func(c *config) error { c.store = s; return nil }
+}
+
+// WithKVStore injects the function-facing KV driver (ADR-0066/0069). Absent ⇒ the in-memory driver.
+func WithKVStore(kv kvstore.KV) Option {
+	return func(c *config) error { c.kvStore = kv; return nil }
 }
 
 // WithBlob injects the blob (storage layer) port.
