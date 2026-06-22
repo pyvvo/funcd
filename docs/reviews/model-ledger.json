@@ -1063,5 +1063,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0067-implementation-claude-opus-4-8.md",
     "notes": "KV opt-in DR backup: incremental export to blob, chunked, cursor-after-durable-upload, restore parity; default-off + enable-without-target=fault.Invalid; race-free seam wiring; no new dep."
+  },
+  {
+    "date": "2026-06-22",
+    "adr": "0068",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0068-implementation-claude-opus-4-8.md",
+    "notes": "KV opt-in CDC: transactional-outbox _cdc/<seq> in the data txn, durable-cursor tailer to bus.Bus, zero-loss/zero-dup resume, min-cursor retention; default-off + enable-without-sink=fault.Invalid; Subscribe not the feed; no new dep."
   }
 ]

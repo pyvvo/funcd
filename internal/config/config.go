@@ -59,6 +59,13 @@ type Config struct {
 			Rebaseline string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
 			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES"`
 		} `json:"backup,omitempty"`
+		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
+		// without a Sink ⇒ fault.Invalid at startup. Retention is a Go duration ("24h").
+		Cdc struct {
+			Enabled   bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_CDC_ENABLED"`
+			Sink      string `json:"sink,omitempty" env:"FUNCD_KVSTORE_CDC_SINK"`
+			Retention string `json:"retention,omitempty" env:"FUNCD_KVSTORE_CDC_RETENTION"`
+		} `json:"cdc,omitempty"`
 	} `json:"kvstore,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`

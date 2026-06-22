@@ -16,7 +16,6 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/kvstore"
 )
 
 // backup implements the ADR-0066 Backup seam (ADR-0067): version-watermarked incremental export of the KV
@@ -42,18 +41,6 @@ type BackupConfig struct {
 	Interval   time.Duration
 	Rebaseline time.Duration
 	ChunkBytes int
-}
-
-// OpenWithBackup opens the durable KV driver with the opt-in DR backup wired to its instance (ADR-0067),
-// hiding the *badger.DB from the daemon. Start the export loop with RunBackup. A nil bucket ⇒ fault.Invalid.
-func OpenWithBackup(dir string, bucket blob.Bucket, cfg BackupConfig, opts ...Option) (kvstore.KV, Backup, error) {
-	kv, seams, err := OpenWithSeams(dir, func(db *badger.DB) (Backup, error) {
-		return NewBackup(db, bucket, cfg)
-	}, nil, opts...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return kv, seams.Backup, nil
 }
 
 // NewBackup builds the DR backup over an opened KV Badger instance. A nil bucket means DR was enabled

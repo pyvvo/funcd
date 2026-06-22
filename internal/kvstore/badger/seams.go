@@ -3,6 +3,8 @@ package badger
 import (
 	badger "github.com/dgraph-io/badger/v4"
 
+	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 )
 
@@ -48,4 +50,24 @@ func OpenWithSeams(
 		seams.Backup, cfg.backup = b, b
 	}
 	return startDriver(db, cfg), seams, nil
+}
+
+// OpenWithSeamsFor is the daemon-facing opener: it wires the opt-in seams from plain values, hiding the
+// *badger.DB. A non-nil bucket enables DR backup (ADR-0067); a non-nil sink enables CDC (ADR-0068). Start
+// the seams' loops with RunBackup / RunCDC on the returned Seams.
+func OpenWithSeamsFor(
+	dir string,
+	bucket blob.Bucket, bcfg BackupConfig,
+	sink bus.Bus, ccfg CDCConfig,
+	opts ...Option,
+) (kvstore.KV, Seams, error) {
+	var buildBackup func(*badger.DB) (Backup, error)
+	if bucket != nil {
+		buildBackup = func(db *badger.DB) (Backup, error) { return NewBackup(db, bucket, bcfg) }
+	}
+	var buildCDC func(*badger.DB) (CDC, error)
+	if sink != nil {
+		buildCDC = func(db *badger.DB) (CDC, error) { return NewCDC(db, sink, ccfg) }
+	}
+	return OpenWithSeams(dir, buildBackup, buildCDC, opts...)
 }

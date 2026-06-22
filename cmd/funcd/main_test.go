@@ -53,7 +53,7 @@ func TestDaemonSubstrate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			opts, label, err := substrateOptions(context.Background(), tc.memoryOnly, dir)
+			opts, label, _, err := substrateOptions(context.Background(), tc.memoryOnly, dir)
 			require.NoError(t, err)
 			require.Equal(t, tc.label, label)
 

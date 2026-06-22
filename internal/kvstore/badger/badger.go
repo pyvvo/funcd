@@ -320,6 +320,9 @@ func (d *driver) Close() error {
 	d.closeOnce.Do(func() { // idempotent: a double Close must not panic on the gateway/stop channel
 		close(d.stop)
 		d.wg.Wait()
+		if c, ok := d.cdc.(interface{ release() }); ok { // return the CDC seq lease before closing the db
+			c.release()
+		}
 		if err := d.db.Close(); err != nil {
 			d.closeErr = fault.Internalf("kvbadger.Close", "%v", err)
 		}

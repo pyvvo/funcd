@@ -21,7 +21,9 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/blob"
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
+	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
 	"github.com/green-0-rabbit/funcd/internal/config"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
@@ -156,13 +158,14 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	kvDriver, startKV, err := buildKVStore(ctx, cfg, root)
+
+	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
+	// Built before the KV driver so the opt-in KV CDC (ADR-0068) can publish to the same bus.
+	substrateOpts, substrate, theBus, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-
-	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
-	substrateOpts, substrate, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
+	kvDriver, startKV, err := buildKVStore(ctx, cfg, theBus, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -227,10 +230,11 @@ func parseLevel(level string) slog.Level {
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
 // or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger. When
-// kvstore.backup is enabled (ADR-0067), it also opens the DR target and wires the incremental export
-// behind the driver; the returned start func launches the export loop (a no-op otherwise). Enable-without-
-// target ⇒ fault.Invalid at startup.
-func buildKVStore(ctx context.Context, cfg config.Config, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
+// kvstore.backup (ADR-0067) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
+// the driver — DR export to an object-storage target, and a transactional-outbox change-feed to the bus.
+// The returned start func launches their loops (a no-op otherwise). Enable-without-target / enable-without-
+// sink ⇒ fault.Invalid at startup.
+func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
 	noop := func(context.Context) {}
 	if cfg.Kvstore.Engine != "badger" {
 		return kvmemory.New(), noop, nil
@@ -239,28 +243,60 @@ func buildKVStore(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	if dir == "" {
 		dir = filepath.Join(cfg.Storage.DataDir, "kv")
 	}
-	if !cfg.Kvstore.Backup.Enabled {
+	if !cfg.Kvstore.Backup.Enabled && !cfg.Kvstore.Cdc.Enabled {
 		kv, err := kvbadger.Open(dir)
 		return kv, noop, err
 	}
-	if cfg.Kvstore.Backup.Target == "" {
-		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+
+	var bucket blob.Bucket
+	var bcfg kvbadger.BackupConfig
+	if cfg.Kvstore.Backup.Enabled {
+		if cfg.Kvstore.Backup.Target == "" {
+			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+		}
+		b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
+		if err != nil {
+			return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
+		}
+		bucket = b
+		bcfg = kvbadger.BackupConfig{
+			Interval:   parseDurationOr(cfg.Kvstore.Backup.Interval, 30*time.Second),
+			Rebaseline: parseDurationOr(cfg.Kvstore.Backup.Rebaseline, 24*time.Hour),
+			ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
+		}
 	}
-	bucket, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
+
+	var sink bus.Bus
+	var ccfg kvbadger.CDCConfig
+	if cfg.Kvstore.Cdc.Enabled {
+		if cfg.Kvstore.Cdc.Sink == "" {
+			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
+		}
+		if theBus == nil {
+			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
+		}
+		sink = theBus
+		ccfg = kvbadger.CDCConfig{
+			Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
+			Retention: parseDurationOr(cfg.Kvstore.Cdc.Retention, 24*time.Hour),
+		}
+	}
+
+	kv, seams, err := kvbadger.OpenWithSeamsFor(dir, bucket, bcfg, sink, ccfg)
 	if err != nil {
-		return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
-	}
-	bcfg := kvbadger.BackupConfig{
-		Interval:   parseDurationOr(cfg.Kvstore.Backup.Interval, 30*time.Second),
-		Rebaseline: parseDurationOr(cfg.Kvstore.Backup.Rebaseline, 24*time.Hour),
-		ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
-	}
-	kv, backup, err := kvbadger.OpenWithBackup(dir, bucket, bcfg)
-	if err != nil {
-		_ = bucket.Close()
+		if bucket != nil {
+			_ = bucket.Close()
+		}
 		return nil, noop, err
 	}
-	start := func(runCtx context.Context) { go kvbadger.RunBackup(runCtx, backup, logger) }
+	start := func(runCtx context.Context) {
+		if seams.Backup != nil {
+			go kvbadger.RunBackup(runCtx, seams.Backup, logger)
+		}
+		if seams.CDC != nil {
+			go kvbadger.RunCDC(runCtx, seams.CDC, logger)
+		}
+	}
 	return kv, start, nil
 }
 
@@ -326,36 +362,37 @@ func configSource(path string) string {
 }
 
 // substrateOptions builds the blob + bus drivers for the daemon (ADR-0043): in-memory (ephemeral,
-// no disk) when memoryOnly, else file-backed under dataDir (durable). It returns the options plus
-// the active substrate label for the startup log. The platform owns + closes the drivers.
-func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]funcd.Option, string, error) {
+// no disk) when memoryOnly, else file-backed under dataDir (durable). It returns the options, the active
+// substrate label for the startup log, and the bus (so the opt-in KV CDC can publish to it, ADR-0068).
+// The platform owns + closes the drivers.
+func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]funcd.Option, string, bus.Bus, error) {
 	if memoryOnly {
 		bucket, err := gocloud.Open(ctx, "mem://")
 		if err != nil {
-			return nil, "", fmt.Errorf("open in-memory blob: %w", err)
+			return nil, "", nil, fmt.Errorf("open in-memory blob: %w", err)
 		}
 		messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
 		if err != nil {
-			return nil, "", fmt.Errorf("open in-memory bus: %w", err)
+			return nil, "", nil, fmt.Errorf("open in-memory bus: %w", err)
 		}
-		return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "memory", nil
+		return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "memory", messaging, nil
 	}
 	blobDir, natsDir := filepath.Join(dataDir, "blob"), filepath.Join(dataDir, "nats")
 	if err := os.MkdirAll(blobDir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("create blob dir %s: %w", blobDir, err)
+		return nil, "", nil, fmt.Errorf("create blob dir %s: %w", blobDir, err)
 	}
 	if err := os.MkdirAll(natsDir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("create nats dir %s: %w", natsDir, err)
+		return nil, "", nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
 	}
 	bucket, err := gocloud.Open(ctx, "file://"+blobDir)
 	if err != nil {
-		return nil, "", fmt.Errorf("open file blob: %w", err)
+		return nil, "", nil, fmt.Errorf("open file blob: %w", err)
 	}
 	messaging, err := nats.Open(ctx, nats.Options{Storage: nats.FileStorage, StoreDir: natsDir})
 	if err != nil {
-		return nil, "", fmt.Errorf("open file bus: %w", err)
+		return nil, "", nil, fmt.Errorf("open file bus: %w", err)
 	}
-	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", nil
+	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", messaging, nil
 }
 
 // noopClose is the execution closer for the process lane (nothing to tear down).

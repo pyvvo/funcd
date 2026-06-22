@@ -1,6 +1,6 @@
 # ADR-0068: KV opt-in CDC — durable, resumable transactional-outbox change-feed
 
-- **Status**: Accepted
+- **Status**: Implemented (2026-06-22)
 - **Date**: 2026-06-22 (judged 2026-06-22 — aligned the contract to ADR-0066's `CDC` seam: the same-txn
   write-hook is the seam method `OnWrite(txn, key, op)` the driver calls, so the change-log entry commits
   atomically with the data through the interface. No Blockers.)
