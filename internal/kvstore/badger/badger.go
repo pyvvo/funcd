@@ -71,12 +71,14 @@ type writeReq struct {
 }
 
 type driver struct {
-	db     *badger.DB
-	cdc    CDC
-	backup Backup
-	reqs   chan *writeReq
-	stop   chan struct{}
-	wg     sync.WaitGroup
+	db        *badger.DB
+	cdc       CDC
+	backup    Backup
+	reqs      chan *writeReq
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open opens (creating if absent) a durable Badger-backed kvstore.KV at dir, starting the single-writer
@@ -293,10 +295,12 @@ func (d *driver) DropPrefix(prefix string) error {
 }
 
 func (d *driver) Close() error {
-	close(d.stop)
-	d.wg.Wait()
-	if err := d.db.Close(); err != nil {
-		return fault.Internalf("kvbadger.Close", "%v", err)
-	}
-	return nil
+	d.closeOnce.Do(func() { // idempotent: a double Close must not panic on the gateway/stop channel
+		close(d.stop)
+		d.wg.Wait()
+		if err := d.db.Close(); err != nil {
+			d.closeErr = fault.Internalf("kvbadger.Close", "%v", err)
+		}
+	})
+	return d.closeErr
 }

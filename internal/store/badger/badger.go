@@ -37,9 +37,11 @@ func WithSyncWrites(s bool) Option { return func(c *config) { c.sync = s } }
 func WithValueLogGCInterval(d time.Duration) Option { return func(c *config) { c.gcInterval = d } }
 
 type engine struct {
-	db   *badger.DB
-	stop chan struct{}
-	wg   sync.WaitGroup
+	db        *badger.DB
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Open opens (creating if absent) a Badger-backed store.Engine at dir with the RAM-frugal
@@ -112,12 +114,14 @@ func (e *engine) Update(ctx context.Context, fn func(store.Txn) error) error {
 }
 
 func (e *engine) Close() error {
-	close(e.stop)
-	e.wg.Wait()
-	if err := e.db.Close(); err != nil {
-		return fault.Internalf("badger.Close", "%v", err)
-	}
-	return nil
+	e.closeOnce.Do(func() { // idempotent: a double Close (e.g. platform + caller) must not panic
+		close(e.stop)
+		e.wg.Wait()
+		if err := e.db.Close(); err != nil {
+			e.closeErr = fault.Internalf("badger.Close", "%v", err)
+		}
+	})
+	return e.closeErr
 }
 
 type txn struct {
