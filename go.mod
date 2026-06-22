@@ -8,6 +8,7 @@ require (
 	fortio.org/fortio v1.75.2
 	fortio.org/log v1.18.3
 	github.com/caarlos0/env/v11 v11.4.1
+	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/containerd/containerd/api v1.11.1
 	github.com/containerd/containerd/v2 v2.3.1
 	github.com/containerd/errdefs v1.0.0
@@ -327,6 +328,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20250406160420-959f8f3db0fb // indirect
+	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.56.0 // indirect

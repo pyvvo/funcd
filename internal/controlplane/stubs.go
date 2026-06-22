@@ -29,6 +29,7 @@ type StubHandlers struct {
 	workerNodes    map[string]v1.WorkerNode
 	gateways       map[string]v1.Gateway
 	kvstores       map[string]v1.KVStore
+	policies       map[string]v1.Policy
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -50,6 +51,7 @@ func NewStubHandlers() *StubHandlers {
 		workerNodes:    make(map[string]v1.WorkerNode),
 		gateways:       make(map[string]v1.Gateway),
 		kvstores:       make(map[string]v1.KVStore),
+		policies:       make(map[string]v1.Policy),
 	}
 }
 
@@ -614,6 +616,62 @@ func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, nam
 		return fault.NotFoundf("StubHandlers.DeleteKVStore", "KVStore %s not found", key)
 	}
 	delete(s.kvstores, key)
+	return nil
+}
+
+// ---- Policy (ADR-0074) ----
+
+func (s *StubHandlers) GetPolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.policies[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Policy{}, fault.NotFoundf("StubHandlers.GetPolicy", "Policy %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreatePolicy(_ context.Context, pol v1.Policy) (v1.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(pol.Namespace, pol.Name)
+	if _, exists := s.policies[key]; exists {
+		return v1.Policy{}, fault.Conflictf("StubHandlers.CreatePolicy", "Policy %s already exists", key)
+	}
+	s.policies[key] = pol
+	return pol, nil
+}
+
+func (s *StubHandlers) ListPolicies(_ context.Context, ns v1.NamespaceName) ([]v1.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Policy, 0)
+	for _, v := range s.policies {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplacePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.policies[key]; !exists {
+		return v1.Policy{}, fault.NotFoundf("StubHandlers.ReplacePolicy", "Policy %s not found", key)
+	}
+	s.policies[key] = pol
+	return pol, nil
+}
+
+func (s *StubHandlers) DeletePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.policies[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeletePolicy", "Policy %s not found", key)
+	}
+	delete(s.policies, key)
 	return nil
 }
 

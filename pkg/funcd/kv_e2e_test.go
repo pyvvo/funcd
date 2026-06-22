@@ -44,12 +44,13 @@ func buildKVExample(t *testing.T) string {
 	return exDir
 }
 
-// scenario (e2e): kv-counter-via-context-kv (ADR-0073) — the REAL path: build the kv-counter handler,
-// push it to an OCI layout, apply it, then POST. The handler reads+increments a per-name counter through
-// context.kv (→ worker-node local API UDS → binding-gated Facade → durable driver). With NO spec.kv
-// binding the call is Forbidden (default-deny); once the function declares spec.kv (and the owned store
-// exists) the count goes 1 then 2 across invocations — proving the binding IS the capability and KV
-// persists end-to-end.
+// scenario (e2e): kv-counter-via-context-kv (ADR-0073/0074) — the REAL path: build the kv-counter
+// handler, push it to an OCI layout, apply it, then POST. The handler reads+increments a per-name
+// counter through context.kv (→ worker-node local API UDS → PDP-authorized Facade → durable driver).
+// ADR-0074 makes reads DEFAULT-DENY: even with a resolved spec.kv binding AND an owned store, the
+// context.kv.get is Forbidden until a Cedar read Policy permits it. Once policy.yaml is applied the
+// count goes 1 then 2 across invocations — proving authorization is the PDP (a Policy), not the
+// binding, and that the owner-write is the built-in forbid.
 func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := buildKVExample(t)
@@ -102,11 +103,29 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	applyFnObj(t, c, &fn)
 	waitReady(t, c, "counter")
 
-	// scenario (e2e): kv-binding-resolves / owner-writes 1→2 — the bound owner increments across invocations.
+	// scenario (e2e): cedar-default-deny — even WITH a resolved binding + an owned store, the read is
+	// Forbidden until a Cedar read Policy permits it: authorization is the PDP, not the binding (ADR-0074).
+	countNoPolicy, bodyNoPolicy := call()
+	require.NotEqual(t, 1, countNoPolicy, "with a binding but NO read Policy, context.kv.get is Forbidden (default-deny): %s", bodyNoPolicy)
+
+	// scenario (e2e): cedar-permits-read / owner-writes 1→2 — apply the read Policy; now the bound owner
+	// reads (Policy) + writes (built-in owner-forbid) and the count increments across invocations.
+	applyPolicy(t, c, filepath.Join(exYAML, "policy.yaml"))
 	got1, body1 := call()
-	require.Equal(t, 1, got1, "first bound invoke → count 1: %s", body1)
+	require.Equal(t, 1, got1, "with the read Policy applied, first invoke → count 1: %s", body1)
 	got2, _ := call()
-	require.Equal(t, 2, got2, "second bound invoke → count 2 (KV persisted across invocations)")
+	require.Equal(t, 2, got2, "second invoke → count 2 (KV persisted across invocations)")
+}
+
+// applyPolicy parses a Policy manifest and applies it through the control-plane client (ADR-0074).
+func applyPolicy(t *testing.T, c *sdk.Client, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var pol v1.Policy
+	require.NoError(t, yaml.Unmarshal(data, &pol), "parse %s", path)
+	_, err = c.Apply(context.Background(), &pol)
+	require.NoError(t, err)
 }
 
 // applyKVStore parses a KVStore manifest and applies it through the control-plane client (ADR-0073).

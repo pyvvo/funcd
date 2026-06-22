@@ -42,6 +42,10 @@ provision:
       funcdcli apply -f "$d/py/store.yaml"
       funcdcli apply -f "$d/counter.yaml"
       funcdcli apply -f "$d/py/counter.yaml"
+      # ADR-0074: KV reads are default-deny — apply each function's Cedar read Policy so context.kv.get
+      # is permitted (the owner-write is a built-in forbid, no write Policy needed).
+      funcdcli apply -f "$d/policy.yaml"
+      funcdcli apply -f "$d/py/policy.yaml"
 
 # Appended after the runtime probe: gate `limactl start` on BOTH counters reaching Ready on a real sandbox.
 probes:

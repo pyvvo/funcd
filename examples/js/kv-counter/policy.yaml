@@ -1,0 +1,19 @@
+# Cedar read Policy (ADR-0074) granting the counter function kv::read on the counters-kv store. KV
+# reads are DEFAULT-DENY — the binding (spec.kv) is naming; authorization is the PDP. Without this
+# Policy, context.kv.get is Forbidden. The owner-write (counter owns table-counters in store.yaml) is
+# governed by a BUILT-IN forbid(kv::write) unless principal == resource.owner, so no write Policy is
+# needed. The `resource in KVStore::"default/counters-kv"` clause covers every table in the store
+# (the KVTable in KVStore hierarchy).
+apiVersion: funcd.io/v1alpha1
+kind: Policy
+metadata:
+  name: counter-read
+  namespace: default
+  resourceGroup: rg1
+spec:
+  cedar: |
+    permit(
+      principal == Function::"default/counter",
+      action == Action::"kv::read",
+      resource in KVStore::"default/counters-kv"
+    );

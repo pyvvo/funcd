@@ -528,6 +528,28 @@ components:
         - ObjectRef
         - uid
       type: object
+    Policy:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/PolicySpec"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    PolicySpec:
+      additionalProperties: false
+      properties:
+        cedar:
+          type: string
+      required:
+        - cedar
+      type: object
     Pooling:
       additionalProperties: false
       properties:
@@ -2106,6 +2128,165 @@ paths:
           description: Error
       tags:
         - KVStore
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies:
+    get:
+      operationId: listPolicies
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Policy"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    post:
+      operationId: createPolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Policy"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}:
+    delete:
+      operationId: deletePolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    get:
+      operationId: getPolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    put:
+      operationId: replacePolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Policy"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups:
     get:
       operationId: listResourceGroups

@@ -117,6 +117,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.KVStore:
 		o.TypeMeta = tm
+	case *v1.Policy:
+		o.TypeMeta = tm
 	}
 }
 
@@ -628,6 +630,48 @@ func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName,
 
 func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindKVStore, ns, name)
+}
+
+// --- Policy (namespaced) — ADR-0074 ---
+
+func (h *storeHandlers) GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error) {
+	o, err := h.getObj(ctx, v1.KindPolicy, ns, name)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error) {
+	o, err := h.createObj(ctx, v1.KindPolicy, &pol)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) ListPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.Policy, error) {
+	objs, err := h.listObj(ctx, v1.KindPolicy, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Policy, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Policy)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplacePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error) {
+	o, err := h.replaceObj(ctx, v1.KindPolicy, ns, name, &pol)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindPolicy, ns, name)
 }
 
 // --- EgressPolicy (namespaced) ---

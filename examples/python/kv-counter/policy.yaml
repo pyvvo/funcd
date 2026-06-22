@@ -1,0 +1,18 @@
+# Cedar read Policy (ADR-0074) granting the pycounter function kv::read on the py-counters store. KV
+# reads are DEFAULT-DENY — the binding (spec.kv) is naming; authorization is the PDP. Without this
+# Policy, context.kv.get is Forbidden. The owner-write (pycounter owns table-counters in store.yaml)
+# is governed by a BUILT-IN forbid(kv::write) unless principal == resource.owner, so no write Policy
+# is needed. The `resource in KVStore::"default/py-counters"` clause covers every table in the store.
+apiVersion: funcd.io/v1alpha1
+kind: Policy
+metadata:
+  name: pycounter-read
+  namespace: default
+  resourceGroup: rg1
+spec:
+  cedar: |
+    permit(
+      principal == Function::"default/pycounter",
+      action == Action::"kv::read",
+      resource in KVStore::"default/py-counters"
+    );

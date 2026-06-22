@@ -22,6 +22,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/activator/storescaler"
 	"github.com/green-0-rabbit/funcd/internal/artifact"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	cedarauth "github.com/green-0-rabbit/funcd/internal/auth/cedar"
 	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
 	"github.com/green-0-rabbit/funcd/internal/blob"
 	"github.com/green-0-rabbit/funcd/internal/bus"
@@ -255,7 +256,24 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binding resolver")
 	}
-	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Logger: p.logger})
+	// Cedar PDP driver (ADR-0074): the per-object authorization engine the KV facade (PEP) calls for
+	// kv::read/kv::write. Entities are materialized per call from the metastore (principal Function +
+	// resource KVTable + parent KVStore); policies are the v1.Policy resources, compiled + cached
+	// (recompiled on a store-revision change). DEFAULT-DENY — a read needs a permitting Policy; the
+	// owner-write forbid is built in. rbac still decides control-plane CRUD (c.authorizer, unchanged).
+	cedarEntities, err := cedarauth.NewEntityProvider(cedarMetaReader{c.store})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar entity provider")
+	}
+	cedarPDP, err := cedarauth.New(cedarauth.Deps{
+		Entities: cedarEntities,
+		Policies: policySource{c.store},
+		Logger:   p.logger,
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar PDP driver")
+	}
+	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Authorizer: cedarPDP, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
@@ -345,6 +363,9 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewKVBindingValidityAdmission(storeReader{c.store}),
 			admission.NewKVOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
+			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
+			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
+			admission.NewPolicyValidityAdmission(),
 		},
 	})
 	if err != nil {
@@ -481,6 +502,35 @@ type metaReader struct{ s store.Store }
 
 func (r metaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
 	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// cedarMetaReader adapts store.Store to cedarauth.MetaReader (ADR-0074): the cedar EntityProvider
+// reads the caller Function (principal attrs) + the target KVStore (the table's owner + attrs) per
+// Authorize call — only the request-relevant entities, never a full-store rebuild.
+type cedarMetaReader struct{ s store.Store }
+
+func (r cedarMetaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// policySource adapts store.Store to cedarauth.PolicySource (ADR-0074): it lists every v1.Policy
+// (cluster-wide — namespace is encoded in the Cedar entity IDs) and returns the store-wide
+// resourceVersion as the cache revision, so the cedar driver recompiles only on a Policy change.
+type policySource struct{ s store.Store }
+
+func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error) {
+	const op = "funcd.policySource.Policies"
+	res, err := p.s.List(ctx, v1.KindPolicy.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "list policies")
+	}
+	out := make([]v1.Policy, 0, len(res.Items))
+	for _, o := range res.Items {
+		if pol, ok := o.(*v1.Policy); ok {
+			out = append(out, *pol)
+		}
+	}
+	return out, res.ResourceVersion, nil
 }
 
 // kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):

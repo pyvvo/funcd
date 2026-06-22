@@ -33,6 +33,7 @@ const (
 	KindWorkerNode    Kind = "WorkerNode"
 	KindGateway       Kind = "Gateway"
 	KindKVStore       Kind = "KVStore"
+	KindPolicy        Kind = "Policy"
 )
 
 // Validate returns fault.Invalid if the Kind is not one of the known kinds.
@@ -41,7 +42,7 @@ func (k Kind) Validate() error {
 	case KindNamespace, KindResourceGroup, KindFunction, KindRevision,
 		KindRoute, KindService, KindEventSource, KindConfig,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
-		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore:
+		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindPolicy:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -275,6 +276,10 @@ func NewObject(k Kind) (Object, bool) {
 		ks := &KVStore{}
 		ks.TypeMeta = typeMetaFor(k)
 		return ks, true
+	case KindPolicy:
+		pol := &Policy{}
+		pol.TypeMeta = typeMetaFor(k)
+		return pol, true
 	default:
 		return nil, false
 	}
@@ -299,6 +304,7 @@ func AllKinds() []Kind {
 		KindWorkerNode,
 		KindGateway,
 		KindKVStore,
+		KindPolicy,
 	}
 }
 

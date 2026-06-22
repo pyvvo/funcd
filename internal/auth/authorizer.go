@@ -44,11 +44,36 @@ func (v Verb) IsWrite() bool {
 	}
 }
 
+// EntityRef names a typed Cedar entity (ADR-0074): a resource kind + its
+// namespace/name, plus an optional sub-resource Path (e.g. a KVTable within a
+// KVStore). It is the per-object principal/resource the cedar driver evaluates.
+type EntityRef struct {
+	Type      v1.Kind
+	Namespace v1.NamespaceName
+	Name      v1.ObjectName
+	Path      string // optional sub-resource, e.g. a table name; empty for whole-object refs
+}
+
+// Action is a Cedar-namespaced action (ADR-0074), e.g. "kv::read" / "kv::write".
+// A Request that sets Action asks the cedar driver a per-object question; the
+// empty Action routes to the coarse RBAC driver (back-compatible).
+type Action string
+
+const (
+	// ActionKVRead is the Cedar action for a KV get/list (ADR-0074).
+	ActionKVRead Action = "kv::read"
+	// ActionKVWrite is the Cedar action for a KV put/delete (ADR-0074).
+	ActionKVWrite Action = "kv::write"
+)
+
 // Identity is an authenticated principal (resolved by authn from a token / API key).
 type Identity struct {
 	Subject    string
 	Role       Role
 	Namespaces []v1.NamespaceName // namespaces a developer/viewer may act in; ignored for admin
+	// Principal is the Cedar principal (ADR-0074), e.g. Function::"<ns>/<name>", set
+	// connection-scoped from the sandbox Ref (never client-asserted). nil ⇒ RBAC-only.
+	Principal *EntityRef
 }
 
 // Request is one authorization question.
@@ -57,6 +82,11 @@ type Request struct {
 	Verb      Verb
 	Kind      v1.Kind
 	Namespace v1.NamespaceName // empty for cluster-scoped kinds
+	// Action, when set, makes this a Cedar per-object decision (ADR-0074): the routing
+	// authorizer dispatches it to the cedar driver. Empty ⇒ the coarse RBAC form above.
+	Action Action
+	// Resource is the target entity for a Cedar per-object decision (ADR-0074).
+	Resource *EntityRef
 }
 
 // Decision is the PDP's answer; the PEP maps !Allowed to fault.Forbidden.

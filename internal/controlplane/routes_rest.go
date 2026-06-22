@@ -399,6 +399,71 @@ func registerKVStore(api huma.API, h Handlers) {
 	})
 }
 
+// ===== Policy (namespaced) — ADR-0074 =====
+
+type createPolicyInput struct{ Body v1.Policy }
+type policyOutput struct{ Body v1.Policy }
+type listPolicyOutput struct{ Body []v1.Policy }
+
+func registerPolicy(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listPolicies", Method: http.MethodGet, Path: base,
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedList) (*listPolicyOutput, error) {
+		items, err := h.ListPolicies(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listPolicyOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createPolicy", Method: http.MethodPost, Path: base,
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *createPolicyInput) (*policyOutput, error) {
+		item, err := h.CreatePolicy(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getPolicy", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedGet) (*policyOutput, error) {
+		item, err := h.GetPolicy(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replacePolicy", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Policy
+	}) (*policyOutput, error) {
+		item, err := h.ReplacePolicy(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deletePolicy", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeletePolicy(ctx, in.Namespace, in.Name))
+	})
+}
+
 // ===== EgressPolicy (namespaced) =====
 
 type createEgressPolicyInput struct{ Body v1.EgressPolicy }

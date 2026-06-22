@@ -1138,5 +1138,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0073-implementation-claude-opus-4-8.md",
     "notes": "KV bindings + sub-domains (supersedes 0072): drop Grant (revert GrantSpec to struct{}), Function.spec.kv bindings (clone spec.links), KVStore.spec.tables[] with per-table owner=single-writer; facade default-deny + owner-only writes + table-scoped prefix; admissions binding-validity/owner-exists/deletion-protection(Delete+table-removal)/quota; reconciler table-removal DropPrefix; examples re-migrated (distinct alias/store/table). Verified independently green, no new dep."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0074",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0074-implementation-claude-opus-4-8.md",
+    "notes": "Cedar authz spine: cedar-go v1.8.0 (Apache-2.0, pure-Go) as a driver behind auth.Authorizer; per-function principal from the Ref; routing authorizer (Action->cedar, coarse->rbac, authcontract green); cedar driver default-deny + request-relevant entities from metastore + owner entity-ref; Policy CRD + validity admission; KV first PEP (reads default-deny, examples carry a Policy, owner-write built-in forbid). Verified independently green incl. default-deny e2e; one new dep (Apache-2.0)."
   }
 ]
