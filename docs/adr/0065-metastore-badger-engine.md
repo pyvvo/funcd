@@ -232,7 +232,9 @@ Metastore Badger options profile (resident-frugal; values inline for small resou
 - **The metastore is actually durable in the shipped daemon for the first time** — slatedb was build-tagged
   and never wired; `buildStore` was memory-only. Badger fills ADR-0043's file lane for real.
 - **~1:1 port fit** (bench-validated) and a RAM footprint that fits the target.
-- **One engine reusable by the KV-service ADR** — the same pure-Go engine + driver underpin both roles.
+- **The same engine *choice* serves the KV-service ADR** — but as a **separate Badger instance** (its own dir,
+  failure domain, write budget, GC), never a shared DB: the metastore stays a plain local store while the KV
+  service adds its own opt-in DR/CDC, isolated from control-plane state. Shared driver code, independent instances.
 
 **Negative / risks (accepted)**
 - We own **value-log GC** (`RunValueLogGC`) and Badger version bumps — a periodic ticker + the usual dep

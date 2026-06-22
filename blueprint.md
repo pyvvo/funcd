@@ -80,8 +80,12 @@ In order to make this platform self-contained, we will need to implement the fol
     - **Blob storage** (the storage layer, exposed as a function-facing service): object
       get/put/list/delete + presign. Drivers via `gocloud.dev/blob`: **S3-compatible**
       (minio, zot-adjacent, AWS S3, …), **filesystem**, **in-memory**.
-    - **KV storage** (on the database layer): get/put/delete/list/atomic. Drivers: **cloud /
-      external** (JetStream KV, redis), **S3-backed** (storage layer), **file**, **in-memory**.
+    - **KV storage** (`kvstore` port, ADR-0019): get/put/delete/list. Drivers: **durable Badger**
+      (ADR-0066 — a **separate** Badger instance from the metastore; prefix-per-store, single-writer gateway +
+      group commit, `DropPrefix` teardown) and **in-memory** (default). The durable driver exposes two
+      **opt-in, default-off** seams — **DR backup** (ADR-0067: version-watermarked incremental export → the
+      `blob` port, with restore) and **CDC** (ADR-0068: a durable transactional-outbox change-feed → the `bus`
+      port). Cross-node replication (NATS-lattice) is FEAT-0002.
     - **Graph database**: store and query graph data. Drivers: **in-process**
       (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**
       (neo4j, dgraph). (V3 candidate.)
