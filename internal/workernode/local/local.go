@@ -19,6 +19,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/auth"
 )
 
 // maxInvokeBytes caps an invoke request body (a DoS guard on the local API).
@@ -56,14 +57,23 @@ type UpstreamError struct {
 
 func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %d", e.Status) }
 
-// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064) plus, when kv is
-// non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed sandbox
-// identity (connection-scoped) — the handler never reads a caller from the request. Every invoke is logged
-// through logger (the broker is the audit point): an allowed call at Info, a denial / upstream error at
-// Warn. A nil logger defaults to slog.Default().
-func NewHandler(caller Ref, res Resolver, inv Invoker, kv KV, logger *slog.Logger) http.Handler {
+// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064/0075) plus, when
+// kv is non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed
+// sandbox identity (connection-scoped) — the handler never reads a caller from the request. authz is the
+// PDP (ADR-0075): after the Resolver maps the alias→target (naming; unknown alias ⇒ Forbidden), the
+// handler asks it `link::invoke` on the target Function — a deny (a forbid Policy revoking a declared
+// link) ⇒ Forbidden, before forwarding. The caller principal is built from the fixed Ref, never the
+// request. Every invoke is logged through logger (the broker is the audit point): an allowed call at
+// Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default().
+func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	// callerIdentity is connection-scoped: the Cedar principal is the fixed sandbox Ref (ADR-0075),
+	// so a request body can never name a different caller.
+	callerIdentity := auth.Identity{
+		Subject:   caller.String(),
+		Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: caller.Namespace, Name: caller.Function},
 	}
 	mux := http.NewServeMux()
 	if kv != nil {
@@ -83,6 +93,27 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, kv KV, logger *slog.Logge
 			logger.Warn("fn-to-fn invoke denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
 			fault.WriteProblem(w, err) // Forbidden (no link) / NotFound (unknown target)
 			return
+		}
+		// PDP gate (ADR-0075): a declared link is permitted by the built-in unless a forbid Policy
+		// revokes it. The principal is connection-scoped (callerIdentity), the resource is the target.
+		if authz != nil {
+			dec, derr := authz.Authorize(r.Context(), auth.Request{
+				Identity: callerIdentity,
+				Action:   auth.ActionLinkInvoke,
+				Resource: &auth.EntityRef{Type: v1.KindFunction, Namespace: target.Namespace, Name: target.Function},
+			})
+			if derr != nil {
+				logger.Warn("fn-to-fn invoke authz error", "caller", caller.String(), "alias", alias,
+					"target", target.String(), "err", derr.Error())
+				fault.WriteProblem(w, fault.Wrapf(derr, fault.KindOf(derr), op, "authorize link::invoke"))
+				return
+			}
+			if !dec.Allowed {
+				logger.Warn("fn-to-fn invoke denied by policy", "caller", caller.String(), "alias", alias,
+					"target", target.String(), "reason", dec.Reason)
+				fault.WriteProblem(w, fault.Forbiddenf(op, "caller %s is not authorized to invoke %s: %s", caller.String(), target.String(), dec.Reason))
+				return
+			}
 		}
 		out, err := inv.Invoke(r.Context(), target, input, timeout)
 		durMs := time.Since(start).Milliseconds()

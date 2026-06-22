@@ -1153,5 +1153,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0074-implementation-claude-opus-4-8.md",
     "notes": "Cedar authz spine: cedar-go v1.8.0 (Apache-2.0, pure-Go) as a driver behind auth.Authorizer; per-function principal from the Ref; routing authorizer (Action->cedar, coarse->rbac, authcontract green); cedar driver default-deny + request-relevant entities from metastore + owner entity-ref; Policy CRD + validity admission; KV first PEP (reads default-deny, examples carry a Policy, owner-write built-in forbid). Verified independently green incl. default-deny e2e; one new dep (Apache-2.0)."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0075",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 4,
+    "dod_total": 4,
+    "report": "docs/reviews/adr-0075-implementation-claude-opus-4-8.md",
+    "notes": "Cedar invoke authz: extends the ADR-0074 driver with a link::invoke action + Function-as-resource + the principal's links Set; built-in permit preserves ADR-0064 link-as-grant (defense-in-depth), operator Policy forbids govern; NewHandler gains the PDP, calls it after Resolve. No SSRF (two gates), forbid-wins, connection-scoped principal \u2014 verified incl. e2e. Built-in Cedar moved to embedded .cedar files. No new dep."
   }
 ]

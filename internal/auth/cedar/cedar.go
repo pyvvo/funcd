@@ -85,7 +85,7 @@ func (d driver) Authorize(ctx context.Context, req auth.Request) (auth.Decision,
 	if err != nil {
 		return auth.Decision{}, err
 	}
-	rUID, err := resourceTableUID(resource)
+	rUID, err := resourceUID(resource)
 	if err != nil {
 		return auth.Decision{}, err
 	}

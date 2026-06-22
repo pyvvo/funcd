@@ -198,6 +198,50 @@ func TestScenarioInvokePropagatesContract422(t *testing.T) {
 	require.NotContains(t, string(body), "Hello", "greeter never produced a greeting (rejected at the contract)")
 }
 
+// scenario: policy-revokes-invoke (ADR-0075) — front declares the greeter link (so the built-in
+// permit allows the invoke) and the call succeeds; then an operator Policy forbid(link::invoke) on
+// Function::"default/greeter" is applied, REVOKING the declared link without editing front.spec.links
+// — the next invoke is denied (the daemon's PDP gate returns Forbidden, front never reaches greeter).
+func TestScenarioPolicyRevokesInvokeE2E(t *testing.T) {
+	c, dpURL := shimPlatformOCI(t)
+	exDir := buildFnToFnExample(t)
+	layout := t.TempDir()
+	gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
+	fRef, fDig := pushExampleFn(t, layout, exDir, "front")
+	applyFnObj(t, c, loadFn(t, "greeter.yaml", gRef, gDig))
+	applyFnObj(t, c, loadFn(t, "front.yaml", fRef, fDig))
+	waitReady(t, c, "greeter", "front")
+
+	// 1) the declared link invokes (built-in permit, no Policy).
+	resp, err := http.Post(dpURL+"/function/front", "application/json", strings.NewReader(`{"data":{"name":"funcd"}}`))
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a declared link invokes by default: %s", body)
+	require.Contains(t, string(body), "Hello, funcd!", "greeter's reply flowed back")
+
+	// 2) apply a forbid Policy revoking the declared link; the invoke is then denied.
+	revoke := &v1.Policy{
+		ObjectMeta: v1.ObjectMeta{Name: "revoke-greeter", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.PolicySpec{
+			Cedar: `forbid(principal == Function::"default/front", action == Action::"link::invoke", resource == Function::"default/greeter");`,
+		},
+	}
+	_, err = c.Apply(context.Background(), revoke)
+	require.NoError(t, err)
+
+	// The PolicySource recompiles on the store-revision change; the next invoke sees the forbid.
+	require.Eventually(t, func() bool {
+		r, perr := http.Post(dpURL+"/function/front", "application/json", strings.NewReader(`{"data":{"name":"funcd"}}`))
+		if perr != nil {
+			return false
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		return r.StatusCode >= 400 && !strings.Contains(string(b), "Hello, funcd!")
+	}, 10*time.Second, 100*time.Millisecond, "a forbid Policy revokes the declared invoke (Forbidden, greeter never reached)")
+}
+
 // scenario: unlinked-alias-denied (ADR-0064) — front's handler with the link STRIPPED: invoking an
 // undeclared alias fails closed (no link is no grant, default-deny).
 func TestScenarioUnlinkedAliasDeniedE2E(t *testing.T) {

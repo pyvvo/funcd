@@ -30,10 +30,11 @@ const (
 // curated entity types below (the parser handles syntax; this handles the vocabulary). Future
 // actions (link::invoke, egress::send, …) extend this set in their consumer ADRs.
 //
-//nolint:gochecknoglobals // a fixed, effectively-const curated schema (ADR-0074)
+//nolint:gochecknoglobals // a fixed, effectively-const curated schema (ADR-0074/0075)
 var curatedActions = map[auth.Action]bool{
-	auth.ActionKVRead:  true,
-	auth.ActionKVWrite: true,
+	auth.ActionKVRead:     true,
+	auth.ActionKVWrite:    true,
+	auth.ActionLinkInvoke: true, // ADR-0075: fn→fn invoke (Function principal + Function resource)
 }
 
 // curatedEntityTypes is the fixed set of Cedar entity types this driver models (ADR-0074).
@@ -99,7 +100,7 @@ func ValidateCedar(text string) error {
 			return fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
-			return fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write)", sc.Action.Entity.ID)
+			return fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke)", sc.Action.Entity.ID)
 		}
 		for _, et := range []string{sc.Principal.Entity.Type, sc.Resource.Entity.Type} {
 			if et != "" && !KnownEntityType(et) {

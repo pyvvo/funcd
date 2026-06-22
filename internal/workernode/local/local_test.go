@@ -14,6 +14,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
 )
 
@@ -37,6 +38,22 @@ type fakeInvoker struct {
 
 func (f fakeInvoker) Invoke(_ context.Context, _ local.Ref, _ []byte, _ time.Duration) ([]byte, error) {
 	return f.out, f.err
+}
+
+// fakeAuthz records the link::invoke request the handler builds and returns a fixed decision — it
+// stands in for the cedar PDP (ADR-0075) so the handler's gate is tested in isolation.
+type fakeAuthz struct {
+	allowed bool
+	err     error
+	gotReq  auth.Request
+}
+
+func (f *fakeAuthz) Authorize(_ context.Context, req auth.Request) (auth.Decision, error) {
+	f.gotReq = req
+	if f.err != nil {
+		return auth.Decision{}, f.err
+	}
+	return auth.Decision{Allowed: f.allowed, Reason: "fake"}, nil
 }
 
 func post(t *testing.T, h http.Handler, alias, body string) *httptest.ResponseRecorder {
@@ -68,7 +85,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, err: tc.resolveErr}
-			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil)
+			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil, nil)
 			rec := post(t, h, "payments", `{}`)
 			require.Equal(t, tc.wantStatus, rec.Code)
 		})
@@ -80,7 +97,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 func TestScenarioCallerIdentityFromConnection(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}}
-	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil)
+	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil, nil)
 
 	post(t, h, "payments", `{"caller":"evil/other","sneaky":true}`)
 	require.Equal(t, caller, res.gotCaller, "caller is the fixed sandbox Ref, never the request body")
@@ -94,7 +111,7 @@ func TestInvokeIsLogged(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 
 	h := local.NewHandler(caller, &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}},
-		fakeInvoker{out: []byte(`{}`)}, nil, logger)
+		fakeInvoker{out: []byte(`{}`)}, nil, nil, logger)
 	post(t, h, "payments", `{}`)
 	got := buf.String()
 	require.Contains(t, got, "fn-to-fn invoke")
@@ -103,10 +120,54 @@ func TestInvokeIsLogged(t *testing.T) {
 	require.Contains(t, got, "alias=payments")
 
 	buf.Reset()
-	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, nil, logger)
+	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, nil, nil, logger)
 	post(t, hDeny, "ghost", `{}`)
 	require.Contains(t, buf.String(), "fn-to-fn invoke denied")
 	require.Contains(t, buf.String(), "level=WARN")
+}
+
+// scenario: policy-revokes-invoke (ADR-0075) — a declared link resolves (the Resolver allows it), but
+// the PDP denies link::invoke (a forbid Policy revoking the declared link) ⇒ the handler returns
+// Forbidden and never forwards to the Invoker. The invoke principal is connection-scoped (the fixed
+// caller Ref) and the resource is the resolved target Function — never the request body.
+func TestScenarioPolicyRevokesInvoke(t *testing.T) {
+	caller := local.Ref{Namespace: "team-a", Function: "a"}
+	target := local.Ref{Namespace: "team-a", Function: "pricing"}
+	res := &fakeResolver{target: target}
+
+	t.Run("deny → Forbidden, not forwarded", func(t *testing.T) {
+		az := &fakeAuthz{allowed: false}
+		var forwarded bool
+		inv := fakeInvoker{out: []byte(`{}`)}
+		h := local.NewHandler(caller, res, recordingInvoker{inner: inv, hit: &forwarded}, az, nil, nil)
+		rec := post(t, h, "pricing", `{"caller":"evil/other"}`)
+		require.Equal(t, http.StatusForbidden, rec.Code, "a forbid Policy revokes a declared invoke")
+		require.False(t, forwarded, "a denied invoke never reaches the Invoker")
+		// principal is connection-scoped (the fixed Ref), resource is the resolved target.
+		require.Equal(t, auth.ActionLinkInvoke, az.gotReq.Action)
+		require.Equal(t, &auth.EntityRef{Type: v1.KindFunction, Namespace: "team-a", Name: "a"}, az.gotReq.Identity.Principal)
+		require.Equal(t, &auth.EntityRef{Type: v1.KindFunction, Namespace: "team-a", Name: "pricing"}, az.gotReq.Resource)
+	})
+
+	t.Run("permit → forwarded (declared link invokes)", func(t *testing.T) {
+		az := &fakeAuthz{allowed: true}
+		var forwarded bool
+		h := local.NewHandler(caller, res, recordingInvoker{inner: fakeInvoker{out: []byte(`{"ok":1}`)}, hit: &forwarded}, az, nil, nil)
+		rec := post(t, h, "pricing", `{}`)
+		require.Equal(t, http.StatusOK, rec.Code, "a permitted declared link forwards")
+		require.True(t, forwarded, "an allowed invoke reaches the Invoker")
+	})
+}
+
+// recordingInvoker flags whether Invoke was called (to prove a denial short-circuits before forwarding).
+type recordingInvoker struct {
+	inner fakeInvoker
+	hit   *bool
+}
+
+func (r recordingInvoker) Invoke(ctx context.Context, t local.Ref, in []byte, d time.Duration) ([]byte, error) {
+	*r.hit = true
+	return r.inner.Invoke(ctx, t, in, d)
 }
 
 type fakeStore struct{ obj v1.Object }

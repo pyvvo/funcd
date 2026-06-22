@@ -277,7 +277,9 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), kvFacade, p.logger)
+	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
+	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, p.logger)
 
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,

@@ -69,16 +69,29 @@ func resourceTableUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 	return kvTableUID(res.Namespace, res.Name, res.Path), nil
 }
 
-// EntitiesFor builds the request-relevant entity store (ADR-0074): the principal Function, the
-// resource KVTable (with its owner entity-ref + namespace/resourceGroup attrs and its parent
-// KVStore), and that KVStore entity. Only these are resolved — the metastore is read for the
-// caller Function (principal attrs) and the target KVStore (the table's owner + attrs).
+// resourceUID maps a resource EntityRef to its Cedar UID, dispatching on type (ADR-0075): a
+// KVStore-with-Path is a KVTable (KV, ADR-0074); a Function is the invoke target (link::invoke).
+// An unmodeled resource is an Internal fault (a wiring bug).
+func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
+	if res.Type == v1.KindFunction {
+		return functionUID(res.Namespace, res.Name), nil
+	}
+	return resourceTableUID(res)
+}
+
+// EntitiesFor builds the request-relevant entity store (ADR-0074/0075): the principal Function and
+// the resource entity. For KV the resource is the KVTable (with its owner entity-ref +
+// namespace/resourceGroup attrs and its parent KVStore); for invoke (ADR-0075) the resource is the
+// target Function. The principal Function additionally carries a `links` Set attribute (the caller's
+// spec.links targets as Function entity-refs) so the built-in link::invoke permit can self-enforce
+// "declared". Only the request-relevant entities are resolved — never a full-store rebuild.
 func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource auth.EntityRef) (cedartypes.EntityMap, error) {
 	const op = "cedar.EntitiesFor"
 	em := cedartypes.EntityMap{}
 
-	// Principal: the caller Function. Read it for its attributes (namespace/resourceGroup); a missing
-	// caller still yields a bare principal entity so default-deny applies (no permit can match).
+	// Principal: the caller Function. Read it for its attributes (namespace/resourceGroup + the
+	// link::invoke `links` Set); a missing caller still yields a bare principal entity so default-deny
+	// applies (no permit can match).
 	pUID, err := principalUID(principal)
 	if err != nil {
 		return nil, err
@@ -89,16 +102,33 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 	}
 	if fobj, ferr := p.r.Get(ctx, v1.KindFunction.GVK(), principal.Namespace, principal.Name); ferr == nil {
 		if fn, ok := fobj.(*v1.Function); ok {
-			em[pUID] = cedartypes.Entity{
-				UID: pUID,
-				Attributes: cedartypes.NewRecord(cedartypes.RecordMap{
-					"namespace":     cedartypes.String(fn.Namespace),
-					"resourceGroup": cedartypes.String(fn.ResourceGroup),
-				}),
+			attrs := cedartypes.RecordMap{
+				"namespace":     cedartypes.String(fn.Namespace),
+				"resourceGroup": cedartypes.String(fn.ResourceGroup),
 			}
+			// links: the caller's spec.links targets as Function entity-refs (same namespace, ADR-0075),
+			// so the built-in permit's principal.links.contains(resource) compares entities.
+			links := make([]cedartypes.Value, 0, len(fn.Spec.Links))
+			for _, l := range fn.Spec.Links {
+				links = append(links, functionUID(principal.Namespace, l.Target))
+			}
+			attrs["links"] = cedartypes.NewSet(links...)
+			em[pUID] = cedartypes.Entity{UID: pUID, Attributes: cedartypes.NewRecord(attrs)}
 		}
 	} else if fault.KindOf(ferr) != fault.NotFound {
 		return nil, fault.Wrapf(ferr, fault.Internal, op, "get function %q", principal.Name)
+	}
+
+	// Resource: invoke (ADR-0075) addresses a target Function; KV (ADR-0074) addresses a KVTable.
+	if resource.Type == v1.KindFunction {
+		rUID := functionUID(resource.Namespace, resource.Name)
+		// A bare target entity suffices: the built-in permit reads principal.links, not the target's
+		// attrs, so default-deny holds even if the target Function is missing from the store.
+		em[rUID] = cedartypes.Entity{
+			UID:        rUID,
+			Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)}),
+		}
+		return em, nil
 	}
 
 	// Resource: the KVTable + its parent KVStore. Read the store for the table's owner + attrs.

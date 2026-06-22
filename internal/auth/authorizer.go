@@ -64,6 +64,9 @@ const (
 	ActionKVRead Action = "kv::read"
 	// ActionKVWrite is the Cedar action for a KV put/delete (ADR-0074).
 	ActionKVWrite Action = "kv::write"
+	// ActionLinkInvoke is the Cedar action for a synchronous fn→fn invoke (ADR-0075):
+	// principal = the caller Function, resource = the target Function.
+	ActionLinkInvoke Action = "link::invoke"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

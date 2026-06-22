@@ -101,7 +101,7 @@ func TestScenarioCedarPermitsRead(t *testing.T) {
 	t.Parallel()
 	pol := v1.Policy{
 		ObjectMeta: v1.ObjectMeta{Name: "reporting-read", Namespace: "default"},
-		Spec: v1.PolicySpec{Cedar: `permit(principal == Function::"default/reporting", action == Action::"kv::read", resource in KVStore::"default/orders");`},
+		Spec:       v1.PolicySpec{Cedar: `permit(principal == Function::"default/reporting", action == Action::"kv::read", resource in KVStore::"default/orders");`},
 	}
 	d := newDriver(t, newMeta(), fixedPolicies{policies: []v1.Policy{pol}, rev: "1"})
 

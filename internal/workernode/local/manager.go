@@ -13,6 +13,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/auth"
 )
 
 // Manager provisions one per-function worker-node local API listener (ADR-0064), lazily and
@@ -25,7 +26,8 @@ type Manager struct {
 	dir     string
 	store   FunctionStore
 	invoker Invoker
-	kv      KV // the function-facing KV port (ADR-0069); nil ⇒ no /kv routes
+	authz   auth.Authorizer // the invoke PDP (ADR-0075); nil ⇒ no link::invoke gate (link-as-grant only)
+	kv      KV              // the function-facing KV port (ADR-0069); nil ⇒ no /kv routes
 	logger  *slog.Logger
 
 	ctx    context.Context
@@ -42,15 +44,16 @@ type serving struct {
 }
 
 // NewManager builds a Manager serving sockets under dir. invoker is the (possibly late-bound)
-// data-plane forwarder; store backs link resolution; kv (nil-able) is the function-facing KV port
-// (ADR-0069) the per-sandbox handler routes /kv/… to.
-func NewManager(dir string, store FunctionStore, invoker Invoker, kv KV, logger *slog.Logger) *Manager {
+// data-plane forwarder; store backs link resolution; authz (nil-able) is the invoke PDP (ADR-0075)
+// the per-sandbox handler asks link::invoke; kv (nil-able) is the function-facing KV port (ADR-0069)
+// the per-sandbox handler routes /kv/… to.
+func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Authorizer, kv KV, logger *slog.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
-		dir: dir, store: store, invoker: invoker, kv: kv, logger: logger.With("component", "workernode.local"),
+		dir: dir, store: store, invoker: invoker, authz: authz, kv: kv, logger: logger.With("component", "workernode.local"),
 		ctx: ctx, cancel: cancel, active: map[string]*serving{},
 	}
 }
@@ -73,7 +76,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "listen on %q", path)
 	}
-	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.kv, m.logger)
+	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.logger)
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
 	go func() { _ = srv.Serve(ln) }()

@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"sync"
 
@@ -12,14 +13,17 @@ import (
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 )
 
-// builtinKVPolicies are the always-on consistency rules the driver ships (ADR-0074), NOT user
-// Policies. They make kv::write single-writer: a base permit lets any principal write, and the
-// forbid overrides it unless the principal IS the table's owner. Reads have NO built-in permit, so
-// they are DEFAULT-DENY until a user Policy grants kv::read. The `resource has owner` guard keeps an
-// owner-less table read-only (the forbid still fires when there is no owner to match).
-const builtinKVPolicies = `permit(principal, action == Action::"kv::write", resource);
-forbid(principal, action == Action::"kv::write", resource)
-  unless { resource has owner && principal == resource.owner };`
+// The always-on built-in rules the driver ships (NOT user Policies) are authored as Cedar in the
+// `.cedar` files alongside this one and embedded — far more legible/editable than inline Go strings.
+// builtin_kv.cedar: kv::write single-writer (reads default-deny). builtin_invoke.cedar: ADR-0064's
+// link-as-grant preserved as a built-in permit (a declared link grants invoke; defense-in-depth).
+// The two are concatenated into the built-in PolicySet in compile().
+
+//go:embed builtin_kv.cedar
+var builtinKVPolicies string
+
+//go:embed builtin_invoke.cedar
+var builtinInvokePolicies string
 
 // PolicySource supplies the user Policy resources the driver compiles (ADR-0074). The driver
 // compiles the built-in rules + every user Policy into one cached PolicySet, recompiled when the
@@ -67,9 +71,9 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 // stored Policy compiling is an invariant; a compile failure here means corruption.
 func compile(policies []v1.Policy) (*cedar.PolicySet, error) {
 	const op = "cedar.compile"
-	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtinKVPolicies))
+	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtinKVPolicies+"\n"+builtinInvokePolicies))
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in KV policies")
+		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
 	}
 	for i := range policies {
 		p := &policies[i]

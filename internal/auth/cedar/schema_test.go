@@ -42,7 +42,8 @@ func TestCuratedSchemaVocabulary(t *testing.T) {
 	t.Parallel()
 	require.True(t, cedar.KnownAction("kv::read"))
 	require.True(t, cedar.KnownAction("kv::write"))
-	require.False(t, cedar.KnownAction("link::invoke"))
+	require.True(t, cedar.KnownAction("link::invoke")) // ADR-0075 added the invoke action
+	require.False(t, cedar.KnownAction("egress::send"))
 	require.True(t, cedar.KnownEntityType("Function"))
 	require.True(t, cedar.KnownEntityType("KVStore"))
 	require.True(t, cedar.KnownEntityType("KVTable"))
