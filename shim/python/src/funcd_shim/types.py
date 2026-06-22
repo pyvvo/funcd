@@ -9,7 +9,10 @@ handler signature checked by ``mypy --strict`` — the same contract the shim en
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
+
+if TYPE_CHECKING:
+    from .kv import KVClient
 
 #: Json — the explicit "arbitrary JSON value" contract type (ADR-0058). Declare ``FuncInput``/
 #: ``FuncOutput = Json``, or a field ``payload: Json``, when the shape is genuinely unknown; the
@@ -48,6 +51,11 @@ class FunctionContext(Protocol):
 
     def invoke(self, alias: str, payload: Any) -> Any:
         """Synchronously invoke a linked function by its spec.links alias (ADR-0064)."""
+        ...
+
+    @property
+    def kv(self) -> KVClient:
+        """Namespace-scoped key-value storage (ADR-0069): get/put/delete a binding's key, or list keys."""
         ...
 
 

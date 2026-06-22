@@ -1,6 +1,9 @@
 // The funcd function programming model (typed contract). A function module exports
 // `handle(context, event)`; the runtime shim invokes it once per CloudEvent. Authors
 // import these types for a typed handler signature + autocomplete.
+import type { KVClient } from './kv.ts';
+
+export type { KVClient } from './kv.ts';
 
 /** A CloudEvent — the normalized trigger envelope (ADR-0023). */
 export interface CloudEvent<T = unknown> {
@@ -24,6 +27,8 @@ export interface FunctionContext {
    *  validated against the target's contract by the target's shim; its result is returned. Fails
    *  closed (rejects) if the caller declares no such link. */
   invoke<I = unknown, O = unknown>(alias: string, input: I): Promise<O>;
+  /** Namespace-scoped key-value storage (ADR-0069): get/put/del a binding's key, or list keys. */
+  kv: KVClient;
 }
 
 /** A function handler: receives the context + CloudEvent, returns a response (or nothing). */

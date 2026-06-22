@@ -1,10 +1,14 @@
 # ADR-0069: KV data-plane — function-facing KV over the worker-node local API
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-22 (judged 2026-06-22 — reuses the verified worker-node local API (ADR-0064 `NewHandler`),
   the Facade's exact signatures (ADR-0019), and the ADR-0066 driver; folded the identity-granularity point —
   namespace-scoped sandbox identity for v1.1, workload-`Grant` authz deferred to V2 per ADR-0018/0019. No
-  Blockers.)
+  Blockers. **Implemented 2026-06-22** — local-API `/kv` routes + `sandboxIdentity`; the platform constructs +
+  wires + closes the Facade (resolving ADR-0066's facade-selection); `kvstore.engine`/`dataDir` config + the
+  in-memory/Badger driver selection; the local-API socket now provisioned for every function. `context.kv` in
+  BOTH shims (Node + Python). `examples/js/kv-counter` + an in-process KV e2e (count 1→2). 4 scenario tests +
+  e2e green; lint clean; see docs/reviews/adr-0069-implementation-claude-opus-4-8.md.)
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, kv, data-plane, worker-node, local-api, sdk, facade, identity
 - **Realizes**: [FEAT-0001/F38](../feat/0001-feat-v1.1.md) (KV data-plane — functions can call KV)

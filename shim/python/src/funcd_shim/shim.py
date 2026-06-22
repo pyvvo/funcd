@@ -29,10 +29,13 @@ import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import runtime
 from .types import CloudEvent, FunctionContext, Handler
+
+if TYPE_CHECKING:
+    from .kv import KVClient
 
 
 class _Context:
@@ -45,6 +48,12 @@ class _Context:
         from .invoke import invoke as _invoke
 
         return _invoke(alias, payload)
+
+    @property
+    def kv(self) -> KVClient:
+        from .kv import KVClient
+
+        return KVClient()
 
 
 def make_request_handler(

@@ -137,15 +137,15 @@ var rejectBodyUnusable = () => {
   return Promise.reject(newBodyUnusableError());
 };
 var textDecoder = new TextDecoder();
-var consumeBodyDirectOnce = (request) => {
-  if (request[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
-  request[bodyConsumedDirectlyKey] = true;
+var consumeBodyDirectOnce = (request2) => {
+  if (request2[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
+  request2[bodyConsumedDirectlyKey] = true;
 };
 var toArrayBuffer = (buf) => {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 };
-var contentType = (request) => {
-  return (request[headersKey] ||= newHeadersFromIncoming(request[incomingKey])).get("content-type") || "";
+var contentType = (request2) => {
+  return (request2[headersKey] ||= newHeadersFromIncoming(request2[incomingKey])).get("content-type") || "";
 };
 var methodTokenRegExp = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 var normalizeIncomingMethod = (method) => {
@@ -177,37 +177,37 @@ var validateDirectReadMethod = (method) => {
   const normalized = method.toUpperCase();
   if (normalized === "CONNECT" || normalized === "TRACK" || normalized === "TRACE" && method !== "TRACE") return /* @__PURE__ */ new TypeError(`'${method}' HTTP method is unsupported.`);
 };
-var readBodyWithFastPath = (request, method, fromBuffer) => {
-  if (request[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
-  const methodName = request.method;
-  if (methodName === "GET" || methodName === "HEAD") return request[getRequestCache]()[method]();
+var readBodyWithFastPath = (request2, method, fromBuffer) => {
+  if (request2[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
+  const methodName = request2.method;
+  if (methodName === "GET" || methodName === "HEAD") return request2[getRequestCache]()[method]();
   const methodValidationError = validateDirectReadMethod(methodName);
   if (methodValidationError) return Promise.reject(methodValidationError);
-  if (request[requestCache]) {
-    if (methodName !== "TRACE") return request[requestCache][method]();
+  if (request2[requestCache]) {
+    if (methodName !== "TRACE") return request2[requestCache][method]();
   }
-  const alreadyUsedError = consumeBodyDirectOnce(request);
+  const alreadyUsedError = consumeBodyDirectOnce(request2);
   if (alreadyUsedError) return alreadyUsedError;
-  const raw2 = readRawBodyIfAvailable(request);
+  const raw2 = readRawBodyIfAvailable(request2);
   if (raw2) {
-    const result = Promise.resolve(fromBuffer(raw2, request));
-    request[bodyBufferKey] = void 0;
+    const result = Promise.resolve(fromBuffer(raw2, request2));
+    request2[bodyBufferKey] = void 0;
     return result;
   }
-  return readBodyDirect(request).then((buf) => {
-    const result = fromBuffer(buf, request);
-    request[bodyBufferKey] = void 0;
+  return readBodyDirect(request2).then((buf) => {
+    const result = fromBuffer(buf, request2);
+    request2[bodyBufferKey] = void 0;
     return result;
   });
 };
-var readRawBodyIfAvailable = (request) => {
-  const incoming = request[incomingKey];
+var readRawBodyIfAvailable = (request2) => {
+  const incoming = request2[incomingKey];
   if ("rawBody" in incoming && incoming.rawBody instanceof Buffer) return incoming.rawBody;
 };
-var readBodyDirect = (request) => {
-  if (request[bodyBufferKey]) return Promise.resolve(request[bodyBufferKey]);
-  if (request[bodyReadPromiseKey]) return request[bodyReadPromiseKey];
-  const incoming = request[incomingKey];
+var readBodyDirect = (request2) => {
+  if (request2[bodyBufferKey]) return Promise.resolve(request2[bodyBufferKey]);
+  if (request2[bodyReadPromiseKey]) return request2[bodyReadPromiseKey];
+  const incoming = request2[incomingKey];
   if (Readable.isDisturbed(incoming)) return rejectBodyUnusable();
   const promise = new Promise((resolve, reject) => {
     const chunks = [];
@@ -224,7 +224,7 @@ var readBodyDirect = (request) => {
     const onEnd = () => {
       finish(() => {
         const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
-        request[bodyBufferKey] = buffer;
+        request2[bodyBufferKey] = buffer;
         resolve(buffer);
       });
     };
@@ -243,7 +243,7 @@ var readBodyDirect = (request) => {
           reject(incoming.errored);
           return;
         }
-        const reason = request[abortReasonKey];
+        const reason = request2[abortReasonKey];
         if (reason !== void 0) {
           reject(reason instanceof Error ? reason : new Error(String(reason)));
           return;
@@ -256,7 +256,7 @@ var readBodyDirect = (request) => {
       incoming.off("end", onEnd);
       incoming.off("error", onError);
       incoming.off("close", onClose);
-      request[bodyReadPromiseKey] = void 0;
+      request2[bodyReadPromiseKey] = void 0;
     };
     incoming.on("data", onData);
     incoming.on("end", onEnd);
@@ -269,7 +269,7 @@ var readBodyDirect = (request) => {
       else if (incoming.destroyed) onClose();
     });
   });
-  request[bodyReadPromiseKey] = promise;
+  request2[bodyReadPromiseKey] = promise;
   return promise;
 };
 var requestPrototype = {
@@ -319,9 +319,9 @@ var requestPrototype = {
   },
   get body() {
     if (!this[bodyConsumedDirectlyKey]) return this[getRequestCache]().body;
-    const request = this[getRequestCache]();
-    if (!this[bodyLockReaderKey] && request.body) this[bodyLockReaderKey] = request.body.getReader();
-    return request.body;
+    const request2 = this[getRequestCache]();
+    if (!this[bodyLockReaderKey] && request2.body) this[bodyLockReaderKey] = request2.body.getReader();
+    return request2.body;
   },
   get bodyUsed() {
     if (this[bodyConsumedDirectlyKey]) return true;
@@ -363,8 +363,8 @@ Object.defineProperty(requestPrototype, "arrayBuffer", { value: function() {
   return readBodyWithFastPath(this, "arrayBuffer", (buf) => toArrayBuffer(buf));
 } });
 Object.defineProperty(requestPrototype, "blob", { value: function() {
-  return readBodyWithFastPath(this, "blob", (buf, request) => {
-    const type = contentType(request);
+  return readBodyWithFastPath(this, "blob", (buf, request2) => {
+    const type = contentType(request2);
     const init = type ? { headers: { "content-type": type } } : void 0;
     return new Response(buf, init).blob();
   });
@@ -884,12 +884,12 @@ ${responseLines.join("\r\n")}\r
 \r
 `);
 };
-var createUpgradeRequest = (request) => {
-  const protocol = request.socket.encrypted ? "https" : "http";
-  const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? "localhost"}`);
+var createUpgradeRequest = (request2) => {
+  const protocol = request2.socket.encrypted ? "https" : "http";
+  const url = new URL(request2.url ?? "/", `${protocol}://${request2.headers.host ?? "localhost"}`);
   const headers = new Headers();
-  for (const key in request.headers) {
-    const value = request.headers[key];
+  for (const key in request2.headers) {
+    const value = request2.headers[key];
     if (!value) continue;
     headers.append(key, Array.isArray(value) ? value[0] : value);
   }
@@ -898,25 +898,25 @@ var createUpgradeRequest = (request) => {
 var setupWebSocket = (options) => {
   const { server, fetchCallback, wss } = options;
   const waiterMap = /* @__PURE__ */ new Map();
-  wss.on("connection", (ws, request) => {
-    const waiter = waiterMap.get(request);
+  wss.on("connection", (ws, request2) => {
+    const waiter = waiterMap.get(request2);
     if (waiter) {
       waiter.resolve(ws);
-      waiterMap.delete(request);
+      waiterMap.delete(request2);
     }
   });
-  const waitForWebSocket = (request, connectionSymbol) => {
+  const waitForWebSocket = (request2, connectionSymbol) => {
     return new Promise((resolve) => {
-      waiterMap.set(request, {
+      waiterMap.set(request2, {
         resolve,
         connectionSymbol
       });
     });
   };
-  server.on("upgrade", async (request, socket, head) => {
-    if (request.headers.upgrade?.toLowerCase() !== "websocket") return;
+  server.on("upgrade", async (request2, socket, head) => {
+    if (request2.headers.upgrade?.toLowerCase() !== "websocket") return;
     const env = {
-      incoming: request,
+      incoming: request2,
       outgoing: void 0,
       wss,
       [WAIT_FOR_WEBSOCKET_SYMBOL]: waitForWebSocket
@@ -924,7 +924,7 @@ var setupWebSocket = (options) => {
     let status = 400;
     let responseHeaders;
     try {
-      const response = await fetchCallback(createUpgradeRequest(request), env);
+      const response = await fetchCallback(createUpgradeRequest(request2), env);
       if (response instanceof Response) {
         status = response.status;
         responseHeaders = response.headers;
@@ -933,9 +933,9 @@ var setupWebSocket = (options) => {
       if (server.listenerCount("upgrade") === 1) rejectUpgradeRequest(socket, 500);
       return;
     }
-    const waiter = waiterMap.get(request);
+    const waiter = waiterMap.get(request2);
     if (!waiter || waiter.connectionSymbol !== env[CONNECTION_SYMBOL_KEY]) {
-      waiterMap.delete(request);
+      waiterMap.delete(request2);
       if (server.listenerCount("upgrade") === 1) rejectUpgradeRequest(socket, status, responseHeaders);
       return;
     }
@@ -944,8 +944,8 @@ var setupWebSocket = (options) => {
     };
     wss.on("headers", addResponseHeaders);
     try {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
+      wss.handleUpgrade(request2, socket, head, (ws) => {
+        wss.emit("connection", ws, request2);
       });
     } finally {
       wss.off("headers", addResponseHeaders);
@@ -1097,17 +1097,17 @@ var compose = (middleware, onError, onNotFound) => {
 var GET_MATCH_RESULT = /* @__PURE__ */ Symbol();
 
 // node_modules/hono/dist/utils/body.js
-var parseBody = async (request, options = /* @__PURE__ */ Object.create(null)) => {
+var parseBody = async (request2, options = /* @__PURE__ */ Object.create(null)) => {
   const { all = false, dot = false } = options;
-  const headers = request instanceof HonoRequest ? request.raw.headers : request.headers;
+  const headers = request2 instanceof HonoRequest ? request2.raw.headers : request2.headers;
   const contentType2 = headers.get("Content-Type");
   if (contentType2?.startsWith("multipart/form-data") || contentType2?.startsWith("application/x-www-form-urlencoded")) {
-    return parseFormData(request, { all, dot });
+    return parseFormData(request2, { all, dot });
   }
   return {};
 };
-async function parseFormData(request, options) {
-  const formData = await request.formData();
+async function parseFormData(request2, options) {
+  const formData = await request2.formData();
   if (formData) {
     return convertFormDataToBodyData(formData, options);
   }
@@ -1235,8 +1235,8 @@ var tryDecode = (str, decoder) => {
   }
 };
 var tryDecodeURI = (str) => tryDecode(str, decodeURI);
-var getPath = (request) => {
-  const url = request.url;
+var getPath = (request2) => {
+  const url = request2.url;
   const start = url.indexOf("/", url.indexOf(":") + 4);
   let i = start;
   for (; i < url.length; i++) {
@@ -1253,8 +1253,8 @@ var getPath = (request) => {
   }
   return url.slice(start, i);
 };
-var getPathNoStrict = (request) => {
-  const result = getPath(request);
+var getPathNoStrict = (request2) => {
+  const result = getPath(request2);
   return result.length > 1 && result.at(-1) === "/" ? result.slice(0, -1) : result;
 };
 var mergePath = (base, sub, ...rest) => {
@@ -1408,8 +1408,8 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path = "/", matchResult = [[]]) {
-    this.raw = request;
+  constructor(request2, path = "/", matchResult = [[]]) {
+    this.raw = request2;
     this.path = path;
     this.#matchResult = matchResult;
     this.#validatedData = {};
@@ -2332,7 +2332,7 @@ var Hono = class _Hono {
       } else {
         optionHandler = options.optionHandler;
         if (options.replaceRequest === false) {
-          replaceRequest = (request) => request;
+          replaceRequest = (request2) => request2;
         } else {
           replaceRequest = options.replaceRequest;
         }
@@ -2352,10 +2352,10 @@ var Hono = class _Hono {
     replaceRequest ||= (() => {
       const mergedPath = mergePath(this._basePath, path);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
-      return (request) => {
-        const url = new URL(request.url);
-        url.pathname = this.getPath(request).slice(pathPrefixLength) || "/";
-        return new Request(url, request);
+      return (request2) => {
+        const url = new URL(request2.url);
+        url.pathname = this.getPath(request2).slice(pathPrefixLength) || "/";
+        return new Request(url, request2);
       };
     })();
     const handler = async (c, next) => {
@@ -2386,13 +2386,13 @@ var Hono = class _Hono {
     }
     throw err;
   }
-  #dispatch(request, executionCtx, env, method) {
+  #dispatch(request2, executionCtx, env, method) {
     if (method === "HEAD") {
-      return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
+      return (async () => new Response(null, await this.#dispatch(request2, executionCtx, env, "GET")))();
     }
-    const path = this.getPath(request, { env });
+    const path = this.getPath(request2, { env });
     const matchResult = this.router.match(method, path);
-    const c = new Context(request, {
+    const c = new Context(request2, {
       path,
       matchResult,
       env,
@@ -2438,8 +2438,8 @@ var Hono = class _Hono {
    * @returns {Response | Promise<Response>} response of request
    *
    */
-  fetch = (request, ...rest) => {
-    return this.#dispatch(request, rest[1], rest[0], request.method);
+  fetch = (request2, ...rest) => {
+    return this.#dispatch(request2, rest[1], rest[0], request2.method);
   };
   /**
    * `.request()` is a useful method for testing.
@@ -3175,10 +3175,61 @@ function makeInvoke() {
   });
 }
 
+// src/kv.ts
+import http2 from "node:http";
+function request(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const socketPath = process.env.FUNCD_INVOKE_SOCKET;
+    if (!socketPath) {
+      reject(new Error("context.kv: worker-node local API socket unavailable (FUNCD_INVOKE_SOCKET unset)"));
+      return;
+    }
+    const headers = {};
+    if (body) headers["content-length"] = body.byteLength;
+    const req = http2.request({ socketPath, path, method, headers }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+    });
+    req.on("error", reject);
+    if (body) req.end(body);
+    else req.end();
+  });
+}
+var enc = encodeURIComponent;
+var keyPath = (binding, key) => `/kv/${enc(binding)}/${key.split("/").map(enc).join("/")}`;
+var fail = (verb, r) => new Error(`context.kv.${verb} failed: ${r.status} ${r.body.toString("utf8")}`);
+var ok = (r) => r.status >= 200 && r.status < 300;
+function makeKV() {
+  return {
+    async get(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return new Uint8Array(r.body);
+    },
+    async put(binding, key, value) {
+      const buf = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
+      const r = await request("PUT", keyPath(binding, key), buf);
+      if (!ok(r)) throw fail("put", r);
+    },
+    async del(binding, key) {
+      const r = await request("DELETE", keyPath(binding, key));
+      if (!ok(r)) throw fail("del", r);
+    },
+    async list(binding, prefix) {
+      const q = prefix ? `?prefix=${enc(prefix)}` : "";
+      const r = await request("GET", `/kv/${enc(binding)}${q}`);
+      if (!ok(r)) throw fail("list", r);
+      return JSON.parse(r.body.toString("utf8") || "[]");
+    }
+  };
+}
+
 // src/shim.ts
 function createApp(handler, validators = {}) {
   const app = new Hono2();
-  const ctx = { log: (...args) => console.log(...args), invoke: makeInvoke() };
+  const ctx = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
   app.get("/health/liveness", (c) => c.text("ok"));
   app.get("/health/readiness", (c) => c.text("ready"));
   app.post("/", async (c) => {

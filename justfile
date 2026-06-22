@@ -234,3 +234,9 @@ ci: tidy generate
     go build ./...
     go mod verify
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
+# run the KV example end-to-end (ADR-0069): build the shim + the kv-counter example, push it, apply it,
+# and POST twice — the handler increments a per-name counter via context.kv (→ worker-node local API →
+# PDP Facade → durable driver), so the count goes 1 then 2. Needs node on PATH (the test skips without it).
+[group('example')]
+example-kv: build-shim
+    go test ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v

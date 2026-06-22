@@ -20,6 +20,7 @@ import { pathToFileURL } from 'node:url';
 import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
+import { makeKV } from './kv.ts';
 
 export type { CloudEvent, FunctionContext, Handler, Json, Validator } from './types.ts';
 export { resolveHandler, resolveValidators } from './runtime.ts';
@@ -34,7 +35,7 @@ export function createApp(
   validators: { input?: Validator; output?: Validator } = {},
 ): Hono {
   const app = new Hono();
-  const ctx: FunctionContext = { log: (...args) => console.log(...args), invoke: makeInvoke() };
+  const ctx: FunctionContext = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
 
   app.get('/health/liveness', (c) => c.text('ok'));
   app.get('/health/readiness', (c) => c.text('ready'));

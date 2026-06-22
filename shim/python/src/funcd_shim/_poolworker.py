@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .runtime import Validators
 from .types import CloudEvent, Handler
+
+if TYPE_CHECKING:
+    from .kv import KVClient
 
 # Per-interpreter state, set by init() and read by invoke() — isolated to this worker interpreter.
 _handler: Handler | None = None
@@ -48,6 +51,12 @@ class _Ctx:
         from .invoke import invoke as _invoke
 
         return _invoke(alias, payload)
+
+    @property
+    def kv(self) -> KVClient:
+        from .kv import KVClient
+
+        return KVClient()
 
 
 def invoke(body: str) -> dict[str, Any]:

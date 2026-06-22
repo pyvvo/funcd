@@ -1,0 +1,15 @@
+{
+  "name": "@funcd/example-kv-counter",
+  "private": true,
+  "type": "module",
+  "description": "A funcd KV example (ADR-0069): a function that increments a per-name counter via context.kv. Authored in TypeScript against @funcd/shim-nodejs; esbuild bundles src/counter.ts → counter.mjs.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node --experimental-strip-types build.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0"
+  }
+}

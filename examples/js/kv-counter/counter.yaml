@@ -1,0 +1,15 @@
+# kv-counter — increments a per-name counter in the KV binding "counters" via context.kv (ADR-0069).
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: counter
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:counter   # funcdcli push counter.mjs (built from src/counter.ts)
+  replicas: 1
+  scaling:
+    minReplicas: 1
