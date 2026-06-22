@@ -85,7 +85,9 @@ In order to make this platform self-contained, we will need to implement the fol
       group commit, `DropPrefix` teardown) and **in-memory** (default). The durable driver exposes two
       **opt-in, default-off** seams — **DR backup** (ADR-0067: version-watermarked incremental export → the
       `blob` port, with restore) and **CDC** (ADR-0068: a durable transactional-outbox change-feed → the `bus`
-      port). Cross-node replication (NATS-lattice) is FEAT-0002.
+      port). **Functions reach KV** via `context.kv.{get,put,del,list}` over the per-sandbox worker-node local API
+      (HTTP-over-UDS, connection-scoped identity), routed to the PDP-authorized `Facade` (ADR-0069 — the same
+      channel as `context.invoke`, ADR-0064). Cross-node replication (NATS-lattice) is FEAT-0002.
     - **Graph database**: store and query graph data. Drivers: **in-process**
       (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**
       (neo4j, dgraph). (V3 candidate.)
