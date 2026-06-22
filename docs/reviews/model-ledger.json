@@ -1048,5 +1048,20 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0066-implementation-claude-opus-4-8.md",
     "notes": "Durable KV driver + gateway + seams; 4 scenarios green; facade wiring delivered via ADR-0069."
+  },
+  {
+    "date": "2026-06-22",
+    "adr": "0067",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0067-implementation-claude-opus-4-8.md",
+    "notes": "KV opt-in DR backup: incremental export to blob, chunked, cursor-after-durable-upload, restore parity; default-off + enable-without-target=fault.Invalid; race-free seam wiring; no new dep."
   }
 ]

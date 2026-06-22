@@ -15,9 +15,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
@@ -108,7 +110,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 	}
 	root := logger.Root()
 
-	opts, closeExec, substrate, err := buildOptions(parent, cfg, root)
+	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root)
 	if err != nil {
 		return err
 	}
@@ -129,6 +131,8 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 	root.InfoContext(ctx, "funcd starting",
 		"version", version.Get().Version, "commit", version.Get().Commit, "substrate", substrate, "config", configSource(path))
 
+	startKV(ctx) // launch the opt-in KV DR export loop (ADR-0067), if enabled — stops when ctx is cancelled
+
 	if err := platform.Run(ctx); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -139,7 +143,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 // production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
 // bind addresses, the logger, telemetry, and the execution wiring. It returns the options, the
 // execution closer the caller must defer, and the substrate label. The platform owns the drivers.
-func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]funcd.Option, func() error, string, error) {
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]funcd.Option, func() error, func(context.Context), string, error) {
 	// Control-plane credential: auth.token / FUNCD_TOKEN, or the built-in dev token + a warning
 	// (Production() ships no default token — ADR-0028).
 	token := cfg.Auth.Token
@@ -150,17 +154,17 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	st, err := buildStore(cfg, root)
 	if err != nil {
-		return nil, noopClose, "", err
+		return nil, noopClose, nil, "", err
 	}
-	kvDriver, err := buildKVStore(cfg)
+	kvDriver, startKV, err := buildKVStore(ctx, cfg, root)
 	if err != nil {
-		return nil, noopClose, "", err
+		return nil, noopClose, nil, "", err
 	}
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
 	substrateOpts, substrate, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
 	if err != nil {
-		return nil, noopClose, "", err
+		return nil, noopClose, nil, "", err
 	}
 
 	// Production() wires the fixed production drivers + the data-plane listener (ADR-0028/0033); the
@@ -182,17 +186,17 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 		tel, terr := observability.NewTelemetry(ctx,
 			observability.TelemetryConfig{Endpoint: cfg.Telemetry.Endpoint, Insecure: cfg.Telemetry.Insecure})
 		if terr != nil {
-			return nil, noopClose, "", fmt.Errorf("build telemetry: %w", terr)
+			return nil, noopClose, nil, "", fmt.Errorf("build telemetry: %w", terr)
 		}
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
 
 	execOpts, closeExec, err := executionOptions(ctx, cfg)
 	if err != nil {
-		return nil, noopClose, "", fmt.Errorf("wire execution: %w", err)
+		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
 	opts = append(opts, execOpts...)
-	return opts, closeExec, substrate, nil
+	return opts, closeExec, startKV, substrate, nil
 }
 
 // buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
@@ -222,16 +226,55 @@ func parseLevel(level string) slog.Level {
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
-// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger.
-func buildKVStore(cfg config.Config) (kvstore.KV, error) {
+// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger. When
+// kvstore.backup is enabled (ADR-0067), it also opens the DR target and wires the incremental export
+// behind the driver; the returned start func launches the export loop (a no-op otherwise). Enable-without-
+// target ⇒ fault.Invalid at startup.
+func buildKVStore(ctx context.Context, cfg config.Config, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
+	noop := func(context.Context) {}
 	if cfg.Kvstore.Engine != "badger" {
-		return kvmemory.New(), nil
+		return kvmemory.New(), noop, nil
 	}
 	dir := cfg.Kvstore.DataDir
 	if dir == "" {
 		dir = filepath.Join(cfg.Storage.DataDir, "kv")
 	}
-	return kvbadger.Open(dir)
+	if !cfg.Kvstore.Backup.Enabled {
+		kv, err := kvbadger.Open(dir)
+		return kv, noop, err
+	}
+	if cfg.Kvstore.Backup.Target == "" {
+		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+	}
+	bucket, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
+	if err != nil {
+		return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
+	}
+	bcfg := kvbadger.BackupConfig{
+		Interval:   parseDurationOr(cfg.Kvstore.Backup.Interval, 30*time.Second),
+		Rebaseline: parseDurationOr(cfg.Kvstore.Backup.Rebaseline, 24*time.Hour),
+		ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
+	}
+	kv, backup, err := kvbadger.OpenWithBackup(dir, bucket, bcfg)
+	if err != nil {
+		_ = bucket.Close()
+		return nil, noop, err
+	}
+	start := func(runCtx context.Context) { go kvbadger.RunBackup(runCtx, backup, logger) }
+	return kv, start, nil
+}
+
+// parseDurationOr parses a Go duration string, falling back to def on empty or invalid input (config
+// already validated the surface; this is a defensive default for the optional cadence fields).
+func parseDurationOr(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
 }
 
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {

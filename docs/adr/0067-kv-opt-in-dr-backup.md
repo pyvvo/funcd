@@ -1,6 +1,6 @@
 # ADR-0067: KV opt-in DR backup — version-watermarked incremental export to object storage
 
-- **Status**: Accepted
+- **Status**: Implemented (2026-06-22)
 - **Date**: 2026-06-22 (judged 2026-06-22 — folded the fix that `blob.Bucket.Put` is whole-object `[]byte`, so
   segments are **chunked** to `chunkBytes` (default 64 MiB) — neither an incremental nor a re-baseline buffers
   a whole segment in memory on the RAM-bound box. No Blockers.)

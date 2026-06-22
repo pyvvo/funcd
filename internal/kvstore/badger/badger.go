@@ -84,14 +84,29 @@ type driver struct {
 // Open opens (creating if absent) a durable Badger-backed kvstore.KV at dir, starting the single-writer
 // group-commit gateway and the value-log GC. Close drains the gateway, stops GC, and releases the DB.
 func Open(dir string, opts ...Option) (kvstore.KV, error) {
-	const op = "kvbadger.Open"
+	cfg := newConfig(opts)
+	db, err := openDB(dir, cfg.sync)
+	if err != nil {
+		return nil, err
+	}
+	return startDriver(db, cfg), nil
+}
+
+// newConfig applies the options over the defaults (sync on, 5m GC, 256-batch).
+func newConfig(opts []Option) config {
 	cfg := config{sync: true, gcInterval: 5 * time.Minute, batchMax: 256}
 	for _, o := range opts {
 		o(&cfg)
 	}
+	return cfg
+}
+
+// openDB opens the RAM-frugal Badger instance at dir (the single place the tuned options live, so Open and
+// the seam-wiring OpenWithSeams share one db profile).
+func openDB(dir string, sync bool) (*badger.DB, error) {
 	bopts := badger.DefaultOptions(dir).
 		WithLoggingLevel(badger.ERROR).
-		WithSyncWrites(cfg.sync).
+		WithSyncWrites(sync).
 		WithNumMemtables(2).
 		WithMemTableSize(16 << 20).
 		WithNumLevelZeroTables(1).
@@ -104,8 +119,15 @@ func Open(dir string, opts ...Option) (kvstore.KV, error) {
 		WithCompression(options.None)
 	db, err := badger.Open(bopts)
 	if err != nil {
-		return nil, fault.Internalf(op, "open badger at %q: %v", dir, err)
+		return nil, fault.Internalf("kvbadger.Open", "open badger at %q: %v", dir, err)
 	}
+	return db, nil
+}
+
+// startDriver wires the driver over an opened db (seams already set on cfg) and starts the gateway + GC.
+// Seams are attached BEFORE the gateway goroutine starts, so CDC's OnWrite fires on the first write with
+// no attach-after-start race.
+func startDriver(db *badger.DB, cfg config) *driver {
 	d := &driver{db: db, cdc: cfg.cdc, backup: cfg.backup, reqs: make(chan *writeReq), stop: make(chan struct{})}
 	d.wg.Add(1)
 	go d.gateway(cfg.batchMax)
@@ -113,7 +135,7 @@ func Open(dir string, opts ...Option) (kvstore.KV, error) {
 		d.wg.Add(1)
 		go d.gcLoop(cfg.gcInterval)
 	}
-	return d, nil
+	return d
 }
 
 // gateway is THE single writer: it blocks for one request, greedy-drains whatever else is queued (up to

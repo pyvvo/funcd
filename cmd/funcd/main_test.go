@@ -231,7 +231,7 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 	require.NoError(t, err)
 
 	root := slog.New(slog.NewTextHandler(io.Discard, nil))
-	opts, closeExec, _, err := buildOptions(context.Background(), cfg, root)
+	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 

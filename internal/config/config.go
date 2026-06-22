@@ -50,6 +50,15 @@ type Config struct {
 		// badger (durable, at <Storage.DataDir>/kv). DataDir overrides the default location.
 		Engine  string `json:"engine,omitempty" env:"FUNCD_KVSTORE_ENGINE" validate:"omitempty,oneof=memory badger"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_KVSTORE_DATA_DIR"`
+		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
+		// Enabled without a Target ⇒ fault.Invalid at startup. Interval/Rebaseline are Go durations ("30s").
+		Backup struct {
+			Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
+			Target     string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
+			Interval   string `json:"interval,omitempty" env:"FUNCD_KVSTORE_BACKUP_INTERVAL"`
+			Rebaseline string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
+			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES"`
+		} `json:"backup,omitempty"`
 	} `json:"kvstore,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
