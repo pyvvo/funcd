@@ -23,8 +23,8 @@ just lima-example-X  ──►  build artifacts + bundle  ──►  limactl sta
 - **Venom runs HOST-SIDE.** Its `http` steps hit the VM's **forwarded `127.0.0.1` ports** (Lima auto-forwards
   guest `127.0.0.1` → host): data plane `:8081`, control plane `:8080`.
 - **The VM is already deployed + Ready** before Venom runs (the lane's `probes:` gate `limactl start`).
-- Venom is obtained via the **flake's pinned Go toolchain**: `go run github.com/ovh/venom/cmd/venom@v1.3.0`
-  (Venom is not in nixpkgs). A follow-up ADR would pin it as a `buildGoModule` flake input.
+- Venom is the **flake-pinned `venom` binary** (ADR-0077 — `buildGoModule`, v1.3.0; not in nixpkgs); the dev
+  shell puts it on `PATH`. Invoke **`venom`**, never `go run …@version`.
 
 ## The rules (each one cost a containerd run to learn)
 
@@ -39,8 +39,11 @@ just lima-example-X  ──►  build artifacts + bundle  ──►  limactl sta
    host-side. (The data-plane `http` assertion over the forwarded port is fine host-side — only *mutations*
    must be in-VM.)
 3. **`retry`/`delay` IS the wait.** After a mutation that triggers a redeploy, do **not** poll Ready in a
-   script — set a generous `retry`/`delay` on the next `http` step (e.g. `retry: 30`, `delay: 2`) so Venom
-   re-issues until the new revision serves. That is Venom's whole value over bash.
+   script — set a generous `retry`/`delay` on the next step (e.g. `retry: 30`, `delay: 2`) so Venom re-issues
+   until it succeeds. That is Venom's whole value over bash. **`retry` works on `exec` steps too**, not just
+   `http`: for a non-http lane (e.g. metastore — the suite starts the daemon itself), retry the in-VM `exec`
+   that needs the daemon (the `funcdcli apply` / `get`) until it returns `result.code 0` — that is the wait,
+   with no poll loop and no dependency on host port-forwarding.
 4. **Mutate by applying a STATIC fixture, not runtime config surgery.** To unbind/alter a resource, ship a
    static variant YAML (e.g. `counter-unbound.yaml` = `counter.yaml` minus `spec.kv`) and `apply` it — not a
    `python -c` strip at runtime. Declarative, reviewable, bundled with the lane.
@@ -58,8 +61,8 @@ After the lane builds its bundle and `limactl start`s the VM:
 
 ```just
     suite="$(pwd)/e2e/<lane>.venom.yml"
-    ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
-        --var "vm={{lima_<lane>_vm}}" "$suite" )
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_<lane>_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_<lane>.venom.xml"
 ```
 
 The `trap '… limactl stop/delete … ' EXIT` (already in the recipe) tears the VM down regardless of result.
@@ -107,7 +110,7 @@ testcases:
 
 Assertion vocabulary you'll reuse: `ShouldEqual`, `ShouldNotEqual`, `ShouldContainSubstring`,
 `ShouldMatchRegex`, `ShouldBeEmpty`, `result.statuscode`, `result.body`, `result.bodyjson.<path>`,
-`result.code` (exec exit code). Verify any others against `go run …/venom@v1.3.0 run --help` / the docs.
+`result.code` / `result.systemout` (exec exit code / stdout). Verify any others against `venom run --help` / the docs.
 
 ## Steps to add a new lane suite
 
@@ -144,5 +147,6 @@ on EXIT regardless (`trap`); confirm with `limactl list` (no `funcd-*` instance)
 - **Identity / paths**: never write a dev-machine username or an OS-absolute path (`/Users/…`, `/home/…`)
   into the suite, the recipe, or a fixture — inject host paths via `--var`; in-VM `/opt/<lane>/…` paths are
   fine. Grep changed files before finishing.
-- A durable decision to standardise Venom across the lanes (pinning it in the flake, converting
-  `scripts/lima-fn-to-fn-invoke.sh`, …) is an **ADR** (`/adr`), not an ad-hoc change.
+- Venom is standardised + flake-pinned by **ADR-0077**; the **kv, fn-to-fn, and metastore** lanes are
+  converted (`scripts/` keeps only `lima-*.yaml` provisioning). A further cross-cutting change (e.g. CI-gating
+  the lanes, a Venom version bump) is an **ADR** (`/adr`), not an ad-hoc change.

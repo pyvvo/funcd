@@ -222,10 +222,16 @@ lima-example-metastore: build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    # bundle the static fixtures (daemon config + the Config resource) into the mounted deps dir (→ /mnt/funcd-deps)
+    cp e2e/fixtures/metastore-daemon.yaml e2e/fixtures/metastore-config.yaml {{lima_deps}}/
     trap 'limactl stop -f {{lima_meta_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_meta_vm}} --tty=false scripts/lima.yaml
-    limactl shell {{lima_meta_vm}} -- sudo bash -s < scripts/lima-metastore-smoke.sh
+    # the declarative metastore smoke (ADR-0077): an in-VM daemon-lifecycle suite (start → apply → restart →
+    # recover), run via the flake-pinned venom; see e2e/metastore.venom.yml + the venom-e2e skill.
+    suite="$(pwd)/e2e/metastore.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_meta_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_metastore.venom.xml"
 
 # run the CLI demo end to end (build → boot → push/apply/get/invoke → teardown).
 # Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: examples/js/hello-world.

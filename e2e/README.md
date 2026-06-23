@@ -15,6 +15,11 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
   is the capability); a missing name makes greeter's contract reject (422) and that **422 propagates** back
   through front; a bad-typed greeter call hits the **contract gate** (422) before the handler; and only the
   linked caller (front) has an invoke socket.
+- `metastore.venom.yml` — the metastore durability lane (ADR-0065). The **exec-shaped** lane: not data-plane
+  http but a daemon-lifecycle test — start funcd (containerd + file/Badger metastore), apply a `Config`,
+  **restart the daemon**, and prove the `Config` is **recovered** from the durable metastore. Every step is an
+  in-VM `exec` (the suite starts the daemon itself); the **wait is `retry` on the `exec` steps** (no poll
+  loop, no host port-forwarding). Fixtures in `e2e/fixtures/`.
 
 ## Run it
 
