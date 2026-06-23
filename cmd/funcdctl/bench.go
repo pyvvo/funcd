@@ -8,12 +8,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/loadgen"
+	"github.com/green-0-rabbit/funcd/internal/testkit/loadgen"
 )
 
 // benchCmd is the `funcdctl bench` verb (ADR-0053): a client-side load/latency probe against a
 // RUNNING funcd's data plane — the funcd analogue of `nats bench`. It does NOT embed the platform or
-// measure memory (that is funcd-bench, ADR-0040/0052); the load engine (internal/loadgen) is
+// measure memory (that is funcd-bench, ADR-0040/0052); the load engine (internal/testkit/loadgen) is
 // stdlib-only, so funcdctl ships no bench dependency (ADR-0051's confinement).
 func (a *cli) benchCmd() *cobra.Command {
 	var (

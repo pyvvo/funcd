@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/bench"
+	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
 	shimpython "github.com/green-0-rabbit/funcd/shim/python"
 )
@@ -58,7 +58,7 @@ type benchConfig struct {
 // harness folded into the funcd binary. Mode is chosen by mutually-exclusive flags — bare
 // = the in-process embed lane (memory+file substrate, RSS — ADR-0040, the default);
 // --containerd = the cgroup-footprint lane (ADR-0052); --doctor = a component check + guidance
-// (never installs, spins a VM, or ships Lima). It reuses internal/bench unchanged. Status is
+// (never installs, spins a VM, or ships Lima). It reuses internal/testkit/bench unchanged. Status is
 // written to out (the test seam); errors are returned, not os.Exit'd.
 func newBenchCmd(out io.Writer) *cobra.Command {
 	var c benchConfig

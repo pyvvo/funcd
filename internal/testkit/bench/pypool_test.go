@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/bench"
+	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
 	shimpython "github.com/green-0-rabbit/funcd/shim/python"
 )
 
