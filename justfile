@@ -203,8 +203,9 @@ lima-example-kv: build-runtime-images build-shim
       # version-pinned through the flake's Go toolchain (an ADR would pin it as a buildGoModule flake input).
       # Venom writes venom.log + rotated venom.N.log in its CWD, so run it from the scratch dir (outside the
       # repo) with an absolute suite path; --output-dir keeps the JUnit results there too.
-      suite="$(pwd)/e2e/kv-counter.venom.yml"
-      ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} "$suite" )
+      suite="$(pwd)/e2e/kv-counter.venom.yml"; strip="$(pwd)/scripts/lima-kv-strip.sh"
+      ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
+          --var "vm={{lima_kv_vm}}" --var "strip=$strip" "$suite" )
     else
       limactl shell {{lima_kv_vm}} -- sudo bash -s < scripts/lima-kv-invoke.sh
     fi

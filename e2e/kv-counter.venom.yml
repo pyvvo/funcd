@@ -52,11 +52,28 @@ testcases:
         assertions:
           - result.bodyjson.count ShouldEqual 2
 
-  # NOTE (spike finding): the fail-closed NEGATIVE case — strip spec.kv mid-suite, then assert the read
-  # is denied — is deliberately NOT here. It needs a control-plane mutation + a function REDEPLOY between
-  # assertions; driven host-side it is a redeploy race (the running sandbox serves the old binding until
-  # the new revision is Ready, so the read returns 200 inside any fixed retry window). The in-VM bash
-  # lane (scripts/lima-kv-invoke.sh) does this robustly because the strip is co-located with the daemon.
-  # VERDICT for the ADR: Venom owns the ASSERTION phase (above — clean + green); stateful mutation/redeploy
-  # steps stay in the lane's provisioning (bash/lima) or a settle-gated `ssh` executor. The default
-  # `just lima-example-kv` (bash) keeps the full positive+negative coverage; this suite is the assertion spike.
+  # The fail-closed NEGATIVE, HYBRID style: the mutation runs IN the VM (co-located with the daemon, so it
+  # does not race the redeploy the way a host-side funcdcli does), the assertion runs host-side. {{.vm}} and
+  # {{.strip}} are injected by the recipe (--var) so no machine-specific path lives in this tracked file.
+  - name: removing the spec.kv binding denies the read (fail-closed)
+    steps:
+      # strip spec.kv IN the VM (sudo bash -s < the strip script) and wait for the function to reconcile.
+      - type: exec
+        script: |
+          set -eu
+          limactl shell {{.vm}} -- sudo bash -s < {{.strip}}
+        assertions:
+          - result.code ShouldEqual 0
+      # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny.
+      # the denied response is funcd's forbidden problem+json wrapped by the handler; retry across any
+      # residual settling — once settled every read is denied (fail-closed), not 200-with-a-count.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 6
+        delay: 2
+        info: "denied response → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.body ShouldContainSubstring forbidden

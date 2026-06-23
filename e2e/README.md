@@ -30,20 +30,25 @@ A future ADR would pin it as a `buildGoModule` flake input (Venom is not in nixp
 
 ## Spike verdict (what the runs showed)
 
-Run on the real containerd lane (Lima VM), 3 iterations:
+Run on the real containerd lane (Lima VM), 4 iterations:
 
 - ✅ **Venom owns the assertion phase.** The two positive testcases — each counter reads 1→2 with no read
   Policy — pass **green** against the VM's forwarded `127.0.0.1` ports. Port-forwarding works; the
   declarative `http` + `result.bodyjson.count` assertions are clearly better than the bash `curl | python`.
   Tooling is clean: `go run …/venom@v1.3.0` via the pinned Go toolchain, Apache-2.0.
-- ⚠️ **Stateful mutation + redeploy mid-suite is the rough edge.** The fail-closed NEGATIVE (strip
-  `spec.kv`, then assert the read is denied) driven **host-side** is a redeploy race: the running sandbox
-  serves the old binding until the new revision is Ready, so the read returns 200 inside any fixed retry
-  window. The in-VM bash lane does this robustly because the strip is co-located with the daemon. So the
-  mutation step is as awkward in Venom (via `exec`/`ssh` + `limactl shell` nesting) as in bash — Venom's
-  value is the assertions, not orchestrating redeploys.
+- ✅ **Venom can own the fail-closed NEGATIVE too — with the mutation done IN the VM.** The first attempt
+  drove the `spec.kv` strip **host-side** (`funcdcli` over the forwarded port) and raced the redeploy: the
+  running sandbox served the old binding until the new revision was Ready, so the read stayed 200 inside the
+  retry window. The fix was **not** to drop the negative — it was to do the *mutation* co-located with the
+  daemon: a Venom `exec` step runs `limactl shell {{.vm}} -- sudo bash -s < scripts/lima-kv-strip.sh` (the
+  HYBRID — mutate in-VM, assert host-side). With that, the negative is **green**: removing the binding makes
+  the read return funcd's forbidden problem+json (`result.body ShouldContainSubstring forbidden`).
 
-**Recommendation for the ADR**: adopt Venom for the **assertion** phase of each lane; keep
-provisioning/mutation in the lane's bash/Lima provisioning (or a settle-gated `ssh` step). The default
-`just lima-example-kv` (bash) retains the full positive **+** fail-closed coverage; this suite is the
-declarative assertion spike. Pin Venom as a `buildGoModule` flake input (it is not in nixpkgs).
+  So the earlier "mutation is Venom's rough edge" framing was wrong: it was a *host-side execution* artifact,
+  not a Venom limit. Venom expresses the full positive **+** negative suite; the mutation just has to run
+  where the bash version runs it — next to the control plane.
+
+**Recommendation for the ADR**: adopt Venom for the lane's assertions **and** its mutation steps (the latter
+via an `exec`/`ssh` step that runs co-located in the VM, never host-side over a forwarded port). `FUNCD_VENOM=1
+just lima-example-kv` now runs the full positive + fail-closed suite green; the bash invoke remains the
+default until the ADR decides whether to flip it. Pin Venom as a `buildGoModule` flake input (not in nixpkgs).
