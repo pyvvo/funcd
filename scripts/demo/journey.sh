@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The SHOWN part of the demo: drive the real funcdcli + HTTP, narrated. Assumes
+# The SHOWN part of the demo: drive the real funcdctl + HTTP, narrated. Assumes
 # scripts/demo/setup.sh already built the binaries and booted the server. Inputs:
 # docs/demo/demo.yaml; the deployed CRD: docs/demo/function.yaml. Re-record: just demo-record.
 set -euo pipefail
@@ -9,7 +9,7 @@ cfg() { yq "$1" docs/demo/demo.yaml; }
 DEMO="$(cfg .demoDir)"; SERVER="$(cfg .server)"; DATA="$(cfg .dataPlane)"
 TOKEN="$(cfg .token)"; FN="$(cfg .function)"
 LAYOUT_REF="$(yq '.spec.artifact.uri' docs/demo/function.yaml)" # the CRD is the single source
-CLI="$DEMO/bin/funcdcli"
+CLI="$DEMO/bin/funcdctl"
 fc() { "$CLI" --server "$SERVER" --token "$TOKEN" "$@"; }
 say() { printf '\n\033[1;36m❯ %s\033[0m\n' "$*"; }
 
@@ -19,15 +19,15 @@ say "cat src/handler.ts                            # the function, typed against
 cat examples/js/hello-world/src/handler.ts
 sleep 1.4
 
-say "funcdcli push handler.mjs oci-layout://…:v1     # bundle (esbuild) → push the OCI artifact"
+say "funcdctl push handler.mjs oci-layout://…:v1     # bundle (esbuild) → push the OCI artifact"
 fc push examples/js/hello-world/handler.mjs "$LAYOUT_REF"
 sleep 1.4
 
-say "funcdcli apply -f function.yaml                 # deploy — no digest; the platform pins it"
+say "funcdctl apply -f function.yaml                 # deploy — no digest; the platform pins it"
 yq -o=json docs/demo/function.yaml | fc apply -f -
 sleep 1.2
 
-say "funcdcli get function $FN -o json              # reconcile to Ready"
+say "funcdctl get function $FN -o json              # reconcile to Ready"
 until fc get function "$FN" -n default -o json 2>/dev/null | grep -q '"phase": "Ready"'; do sleep 0.2; done
 fc get function "$FN" -n default -o json | grep -E '"name"|"phase"|"currentRevision"'
 sleep 1.4

@@ -49,7 +49,7 @@ the Python runtime **ADR-0049** + the secret last-mile **ADR-0057**.
 
 > **Built runtime-lane ADRs** (graduated from placeholders): **P-V-1 = ADR-0030** (function execution — the
 > runtime-shim HTTP contract + Node reference shim), **P-V-A = ADR-0031** (OCI artifact distribution via
-> [`oras-go`](https://github.com/oras-project/oras-go) — `funcdcli` push + platform pull, content-addressed,
+> [`oras-go`](https://github.com/oras-project/oras-go) — `funcdctl` push + platform pull, content-addressed,
 > local OCI layout for dev), **P-V-2 = ADR-0032** (curated runtime images + containerd/crun sandboxing — the
 > L4 walk), **P-X = ADR-0033** (gateway data plane + activator as the route upstream so HTTP/timer triggers
 > wake a scaled-to-zero function), **P-V-3 = ADR-0049** (Python runtime shim + image — the `new()`/`handle()`
@@ -179,7 +179,7 @@ the V1 build track is complete. The next time `items` is non-empty is when V2 (F
 * **The runtime lane's design decisions** (from the ADR-0030…ADR-0033 + ADR-0049 builds): the **shim** is a
   seam (one HTTP contract, run by the process driver in dev and crun in prod) — **both the Node (ADR-0030) and
   Python (ADR-0049) runtimes sit behind the same contract**; **artifact distribution is OCI via
-  oras-go** (`funcdcli` push + platform pull, content-addressed, local OCI layout for dev — no registry
+  oras-go** (`funcdctl` push + platform pull, content-addressed, local OCI layout for dev — no registry
   server, no blob-as-artifact-store); execution moves readiness to the shim's `/health/readiness` (refines
   ADR-0020) and surfaces a per-replica loopback endpoint (refines ADR-0011's `Instance`); the data-plane wake
   (ADR-0033) mounts the gateway + activator as the route upstream so triggers wake a scaled-to-zero function.

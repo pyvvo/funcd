@@ -12,7 +12,7 @@ spec:
   runtime: nodejs22
   handler: handle
   artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:counter   # funcdcli push counter.mjs (built from src/counter.ts)
+    uri: oci-layout:///mnt/funcd-deps/registry:counter   # funcdctl push counter.mjs (built from src/counter.ts)
   replicas: 1
   scaling:
     minReplicas: 1

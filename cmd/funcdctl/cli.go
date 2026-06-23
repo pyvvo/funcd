@@ -18,7 +18,7 @@ import (
 	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
-// cli holds the funcdcli command state (ADR-0042): where to write, the persistent connection
+// cli holds the funcdctl command state (ADR-0042): where to write, the persistent connection
 // flags, and an optionally injected SDK client (tests mount the real control plane on httptest).
 type cli struct {
 	out    io.Writer
@@ -27,7 +27,7 @@ type cli struct {
 	client *sdk.Client // non-nil → injected (tests); else built from server/token on demand
 }
 
-// newRootCmd builds the funcdcli cobra command tree writing to out (production path).
+// newRootCmd builds the funcdctl cobra command tree writing to out (production path).
 func newRootCmd(out io.Writer) *cobra.Command { return newRootCmdWith(out, nil) }
 
 // newRootCmdWith builds the tree with an optional injected SDK client — the test seam
@@ -35,7 +35,7 @@ func newRootCmd(out io.Writer) *cobra.Command { return newRootCmdWith(out, nil) 
 func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 	a := &cli{out: out, client: client}
 	root := &cobra.Command{
-		Use:           "funcdcli",
+		Use:           "funcdctl",
 		Short:         "funcd control-plane CLI (kubectl-style)",
 		SilenceUsage:  true, // funcd's api/fault error is printed once by main, not cobra's usage dump
 		SilenceErrors: true,
@@ -106,7 +106,7 @@ func (a *cli) describeCmd() *cobra.Command {
 func (a *cli) runGet(ctx context.Context, args []string, c *sdk.Client, ns string, asJSON bool) error {
 	kind, ok := sdk.KindFromToken(args[0])
 	if !ok {
-		return fault.Invalidf("funcdcli get", "unknown kind %q", args[0])
+		return fault.Invalidf("funcdctl get", "unknown kind %q", args[0])
 	}
 	if len(args) >= 2 {
 		obj, err := c.Get(ctx, kind, v1.NamespaceName(ns), v1.ObjectName(args[1]))
@@ -130,7 +130,7 @@ func (a *cli) applyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
-				return fault.Invalidf("funcdcli apply", "usage: apply -f <file.yaml>")
+				return fault.Invalidf("funcdctl apply", "usage: apply -f <file.yaml>")
 			}
 			data, err := readManifest(file)
 			if err != nil {
@@ -142,7 +142,7 @@ func (a *cli) applyCmd() *cobra.Command {
 			}
 			// Pre-flight: the shared api/types validator, offline, before any network call.
 			if verr := obj.Validate(); verr != nil {
-				return fault.Wrapf(verr, fault.KindOf(verr), "funcdcli apply", "manifest is invalid")
+				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid")
 			}
 			c, err := a.sdkClient()
 			if err != nil {
@@ -168,7 +168,7 @@ func (a *cli) deleteCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind, ok := sdk.KindFromToken(args[0])
 			if !ok {
-				return fault.Invalidf("funcdcli delete", "unknown kind %q", args[0])
+				return fault.Invalidf("funcdctl delete", "unknown kind %q", args[0])
 			}
 			c, err := a.sdkClient()
 			if err != nil {
@@ -197,7 +197,7 @@ func (a *cli) pushCmd() *cobra.Command {
 			// ADR-0058/0060) BEFORE packaging — an out-of-profile contract never ships. The schemas
 			// are KEYED (input vs output), so they are labeled flags; both optional. The gated
 			// schemas are assembled into the {input?, output?, dialect} contract blob embedded as OCI
-			// metadata (ADR-0059), readable later via `funcdcli inspect` without pulling the bundle.
+			// metadata (ADR-0059), readable later via `funcdctl inspect` without pulling the bundle.
 			input, ierr := gateContract("--contract-input", inputPath)
 			if ierr != nil {
 				return ierr
@@ -232,10 +232,10 @@ func gateContract(flag, path string) ([]byte, error) {
 	}
 	schema, rerr := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
 	if rerr != nil {
-		return nil, fault.Invalidf("funcdcli push", "read %s %q: %v", flag, path, rerr)
+		return nil, fault.Invalidf("funcdctl push", "read %s %q: %v", flag, path, rerr)
 	}
 	if cerr := contract.Check(schema); cerr != nil {
-		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), "funcdcli push", "%s %q is outside the funcd profile", flag, path)
+		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), "funcdctl push", "%s %q is outside the funcd profile", flag, path)
 	}
 	return schema, nil
 }
@@ -284,7 +284,7 @@ func (a *cli) pullCmd() *cobra.Command {
 			if dir == "" {
 				tmp, err := os.MkdirTemp("", "funcd-pull-*")
 				if err != nil {
-					return fault.Internalf("funcdcli pull", "temp dir: %v", err)
+					return fault.Internalf("funcdctl pull", "temp dir: %v", err)
 				}
 				dir = tmp
 			}
@@ -305,7 +305,7 @@ func (a *cli) loginCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if pass == "" {
-				return fault.Invalidf("funcdcli login", "a password is required (-p)")
+				return fault.Invalidf("funcdctl login", "a password is required (-p)")
 			}
 			if err := artifact.Login(cmd.Context(), args[0], user, pass); err != nil {
 				return err
@@ -337,13 +337,13 @@ func readManifest(path string) ([]byte, error) {
 	if path == "-" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			return nil, fault.Invalidf("funcdcli apply", "read stdin: %v", err)
+			return nil, fault.Invalidf("funcdctl apply", "read stdin: %v", err)
 		}
 		return data, nil
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // operator-supplied manifest path is intentional
 	if err != nil {
-		return nil, fault.Invalidf("funcdcli apply", "read %s: %v", path, err)
+		return nil, fault.Invalidf("funcdctl apply", "read %s: %v", path, err)
 	}
 	return data, nil
 }
@@ -352,7 +352,7 @@ func (a *cli) renderObject(obj v1.Object, asJSON bool) error {
 	if asJSON {
 		b, err := json.MarshalIndent(obj, "", "  ")
 		if err != nil {
-			return fault.Internalf("funcdcli", "marshal: %v", err)
+			return fault.Internalf("funcdctl", "marshal: %v", err)
 		}
 		return a.writef("%s\n", string(b))
 	}
@@ -363,7 +363,7 @@ func (a *cli) renderList(objs []v1.Object, asJSON bool) error {
 	if asJSON {
 		b, err := json.MarshalIndent(objs, "", "  ")
 		if err != nil {
-			return fault.Internalf("funcdcli", "marshal: %v", err)
+			return fault.Internalf("funcdctl", "marshal: %v", err)
 		}
 		return a.writef("%s\n", string(b))
 	}
@@ -382,7 +382,7 @@ func (a *cli) renderList(objs []v1.Object, asJSON bool) error {
 // the sanctioned printf form (ADR-0002 §3 / forbidigo exclusion).
 func (a *cli) writef(format string, args ...any) error {
 	if _, err := fmt.Fprintf(a.out, format, args...); err != nil {
-		return fault.Internalf("funcdcli", "write output: %v", err)
+		return fault.Internalf("funcdctl", "write output: %v", err)
 	}
 	return nil
 }

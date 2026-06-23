@@ -11,7 +11,7 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 )
 
-// scenario: bench-reports-throughput-and-latency — `funcdcli bench --url <live> -d ...` drives the
+// scenario: bench-reports-throughput-and-latency — `funcdctl bench --url <live> -d ...` drives the
 // endpoint and prints throughput + latency.
 func TestScenarioBenchReportsThroughputAndLatency(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

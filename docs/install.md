@@ -43,10 +43,10 @@ The unit runs as the unprivileged `funcd` user, restarts on failure, and ships h
 
 ## 4. Drive it
 
-Use the CLI (built alongside via `go build ./cmd/funcdcli`, ADR-0024):
+Use the CLI (built alongside via `go build ./cmd/funcdctl`, ADR-0024):
 
 ```sh
-funcdcli --server http://localhost:8080 get functions -n default
+funcdctl --server http://localhost:8080 get functions -n default
 ```
 
 ## Uninstall

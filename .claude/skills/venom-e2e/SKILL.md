@@ -33,16 +33,16 @@ just lima-example-X  ──►  build artifacts + bundle  ──►  limactl sta
    on the assertion**, never a hand-rolled poll loop in a `.sh`. If you find yourself writing a helper
    script, stop — fold it into an `exec` step or a static fixture.
 2. **Mutations run IN the VM, co-located with the daemon — never host-side over a forwarded port.** A
-   control-plane mutation (`funcdcli apply`) driven host-side **races the redeploy**: the running sandbox
+   control-plane mutation (`funcdctl apply`) driven host-side **races the redeploy**: the running sandbox
    serves the old state until the new revision is Ready, so the assertion sees the *old* behaviour inside any
-   retry window. Do the mutation via `limactl shell {{.vm}} -- sudo … funcdcli apply …`; keep the assertion
+   retry window. Do the mutation via `limactl shell {{.vm}} -- sudo … funcdctl apply …`; keep the assertion
    host-side. (The data-plane `http` assertion over the forwarded port is fine host-side — only *mutations*
    must be in-VM.)
 3. **`retry`/`delay` IS the wait.** After a mutation that triggers a redeploy, do **not** poll Ready in a
    script — set a generous `retry`/`delay` on the next step (e.g. `retry: 30`, `delay: 2`) so Venom re-issues
    until it succeeds. That is Venom's whole value over bash. **`retry` works on `exec` steps too**, not just
    `http`: for a non-http lane (e.g. metastore — the suite starts the daemon itself), retry the in-VM `exec`
-   that needs the daemon (the `funcdcli apply` / `get`) until it returns `result.code 0` — that is the wait,
+   that needs the daemon (the `funcdctl apply` / `get`) until it returns `result.code 0` — that is the wait,
    with no poll loop and no dependency on host port-forwarding.
 4. **Mutate by applying a STATIC fixture, not runtime config surgery.** To unbind/alter a resource, ship a
    static variant YAML (e.g. `counter-unbound.yaml` = `counter.yaml` minus `spec.kv`) and `apply` it — not a
@@ -93,7 +93,7 @@ testcases:
       - type: exec          # the ONE mutation line, co-located with the daemon
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
-            funcdcli apply -f /opt/<lane>/<static-mutated>.yaml
+            funcdctl apply -f /opt/<lane>/<static-mutated>.yaml
         assertions:
           - result.code ShouldEqual 0
       - type: http          # retry/delay IS the reconcile wait — no poll loop

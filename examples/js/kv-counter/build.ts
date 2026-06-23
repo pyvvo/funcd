@@ -2,7 +2,7 @@
 //   1. generates the closed JSON Schema from FuncInput/FuncOutput (ts-json-schema-generator),
 //   2. compiles a precompiled, eval-free AJV-standalone validator and BAKES it into the bundle as
 //      __funcdValidateInput/__funcdValidateOutput (what the shim runs around the handler),
-//   3. writes counter-{input,output}.schema.json for `funcdcli push --contract-*`.
+//   3. writes counter-{input,output}.schema.json for `funcdctl push --contract-*`.
 // So the kv-counter contract is *enforced* (bad input → 422, bad output → 500), same as fn-to-fn.
 //
 // Run from the example dir with the shim's toolchain resolvable (see package.json `build`).

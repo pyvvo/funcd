@@ -23,7 +23,7 @@ testcases:
       # apply the Config — retry/delay IS the wait: it re-issues until the daemon is up and accepts it.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdcli apply -f /mnt/funcd-deps/metastore-config.yaml
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl apply -f /mnt/funcd-deps/metastore-config.yaml
         retry: 30
         delay: 1
         assertions:
@@ -31,7 +31,7 @@ testcases:
       # read it back from the running daemon — the value must be what we applied.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdcli get config persisted -n default -o json
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl get config persisted -n default -o json
         info: "applied config → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
@@ -49,7 +49,7 @@ testcases:
       # recovered from <dataDir>/store. A persisted value here is the durability proof.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdcli get config persisted -n default -o json
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl get config persisted -n default -o json
         retry: 30
         delay: 1
         info: "recovered config → {{.result.systemout}}"

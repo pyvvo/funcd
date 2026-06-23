@@ -31,7 +31,7 @@ keys = context.kv.list("py-counters", "a")         # GET  /kv/py-counters?prefix
 The two `TypedDict`s `FuncInput` / `FuncOutput` *are* the contract. `build.py` reads them to generate
 the closed JSON Schema, **bakes an eval-free `fastjsonschema` validator** into `counter.py`, and writes
 `counter-{input,output}.schema.json`. Those schemas are pushed as OCI metadata
-(`funcdcli push --contract-input/--contract-output`), so a malformed call is rejected (**422**) before
+(`funcdctl push --contract-input/--contract-output`), so a malformed call is rejected (**422**) before
 the handler runs — KV functions are contract-validated, not just KV-enabled.
 
 ```bash

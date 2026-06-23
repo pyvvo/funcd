@@ -33,7 +33,7 @@ export const handle: Handler<FuncInput, FuncOutput> = (context, event) => {
 
 ### How the contract is enforced (ADR-0058 / ADR-0060)
 
-You supply a *type*, never a validator. At `funcdcli push` the build:
+You supply a *type*, never a validator. At `funcdctl push` the build:
 
 1. generates a closed **JSON Schema** from `FuncInput` / `FuncOutput`
    (`ts-json-schema-generator`, `additionalProperties: false`);
@@ -84,8 +84,8 @@ npm run build       # esbuild → handler.mjs (the single self-contained artifac
 
 ```bash
 funcd --config ../../funcdconfig.yaml &           # start the daemon (zero-infra dev config, ADR-0061)
-funcdcli push handler.mjs oci-layout:///tmp/funcd-demo/layout:v1
-funcdcli apply -f function.yaml      # no digest — the platform pins it (ADR-0035)
+funcdctl push handler.mjs oci-layout:///tmp/funcd-demo/layout:v1
+funcdctl apply -f function.yaml      # no digest — the platform pins it (ADR-0035)
 curl -XPOST http://127.0.0.1:8081/function/hello -d '{"name":"funcd"}'
 ```
 

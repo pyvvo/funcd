@@ -5,8 +5,8 @@ from ``FuncInput``/``FuncOutput`` (pydantic, build-time only), bakes a precompil
 ``fastjsonschema`` validator into the runtime artifact, and writes:
 
   - ``counter.py``                     — the runtime artifact (handler + baked ``__funcd_validate_*``)
-  - ``counter-input.schema.json``      — for ``funcdcli push --contract-input``
-  - ``counter-output.schema.json``     — for ``funcdcli push --contract-output``
+  - ``counter-input.schema.json``      — for ``funcdctl push --contract-input``
+  - ``counter-output.schema.json``     — for ``funcdctl push --contract-output``
 
 So the contract is *enforced* (bad input → 422, bad output → 500), same as the JS sibling and
 ``examples/python/hello-world``. Run from this dir with the shim toolchain resolvable:

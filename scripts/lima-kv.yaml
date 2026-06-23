@@ -18,14 +18,14 @@ provision:
       #!/bin/bash
       set -euo pipefail
       d=/opt/kv-counter; reg=/mnt/funcd-deps/registry
-      install -m 0755 /mnt/funcd-deps/funcdcli /usr/local/bin/funcdcli
+      install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
       mkdir -p "$d" /var/lib/funcd/data
       tar xzf /mnt/funcd-deps/kv-counter.tgz -C "$d"
       rm -rf "$reg"
-      funcdcli push "$d/counter.mjs" "oci-layout://$reg:counter" \
+      funcdctl push "$d/counter.mjs" "oci-layout://$reg:counter" \
         --contract-input "$d/counter-input.schema.json" \
         --contract-output "$d/counter-output.schema.json"
-      funcdcli push "$d/py/counter.py" "oci-layout://$reg:pycounter" \
+      funcdctl push "$d/py/counter.py" "oci-layout://$reg:pycounter" \
         --contract-input "$d/py/counter-input.schema.json" \
         --contract-output "$d/py/counter-output.schema.json"
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
@@ -36,12 +36,12 @@ provision:
       # Break the cycle: apply each function WITHOUT spec.kv, then the owned store (owner now exists),
       # then re-apply the function WITH spec.kv. The binding IS the capability (default-deny).
       strip_kv() { python3 -c 'import sys,yaml;d=yaml.safe_load(open(sys.argv[1]));d["spec"].pop("kv",None);print(yaml.safe_dump(d))' "$1"; }
-      strip_kv "$d/counter.yaml"    | funcdcli apply -f -
-      strip_kv "$d/py/counter.yaml" | funcdcli apply -f -
-      funcdcli apply -f "$d/store.yaml"
-      funcdcli apply -f "$d/py/store.yaml"
-      funcdcli apply -f "$d/counter.yaml"
-      funcdcli apply -f "$d/py/counter.yaml"
+      strip_kv "$d/counter.yaml"    | funcdctl apply -f -
+      strip_kv "$d/py/counter.yaml" | funcdctl apply -f -
+      funcdctl apply -f "$d/store.yaml"
+      funcdctl apply -f "$d/py/store.yaml"
+      funcdctl apply -f "$d/counter.yaml"
+      funcdctl apply -f "$d/py/counter.yaml"
       # ADR-0076: a declared spec.kv binding GRANTS kv::read on its table (built-in permit) — so NO read
       # Policy is applied here; context.kv.get is permitted by the binding alone (owner-write stays a
       # built-in forbid, no write Policy). This lane is the e2e proof that own-table reads need no Policy.
@@ -53,7 +53,7 @@ probes:
       #!/bin/bash
       set -eu -o pipefail
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
-      phase() { funcdcli get function "$1" -n default -o json 2>/dev/null \
+      phase() { funcdctl get function "$1" -n default -o json 2>/dev/null \
         | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
       for i in $(seq 1 60); do
         [ "$(phase counter)" = Ready ] && [ "$(phase pycounter)" = Ready ] && exit 0; sleep 2

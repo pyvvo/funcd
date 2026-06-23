@@ -8,7 +8,7 @@ import "testing"
 //
 // The full exit-criterion walk, on a Linux runner with a container runtime:
 //  1. funcd.New(funcd.Production(), WithBlob(file), WithBus(file), WithRuntime(containerd/crun), WithStore(badger))
-//  2. funcdcli / SDK apply a JS or Python source artifact (no Dockerfile, no registry)
+//  2. funcdctl / SDK apply a JS or Python source artifact (no Dockerfile, no registry)
 //  3. the controller reconciles it to Ready and a gateway route is programmed
 //  4. invoke over HTTP (a CloudEvent) and by a timer EventSource
 //  5. the handler reads a Secret and persists state in the KV service through the SDK

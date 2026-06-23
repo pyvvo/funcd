@@ -1,7 +1,7 @@
 [project]
 name = "funcd-example-hello-world"
 version = "0.1.0"
-description = "A funcd function authored in Python against the funcd_shim typed contract, deployed with funcdcli (ADR-0049)."
+description = "A funcd function authored in Python against the funcd_shim typed contract, deployed with funcdctl (ADR-0049)."
 authors = [{ name = "The funcd Authors" }]
 requires-python = ">=3.12"
 # funcd-shim is the typed authoring contract (Handler/CloudEvent/FunctionContext/Json). At deploy

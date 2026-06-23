@@ -29,7 +29,7 @@ tsconfig.json    # @funcd/shim-nodejs → ../../../shim/nodejs/src/types.ts (so 
 Each handler declares a typed **`FuncInput`/`FuncOutput`** (ADR-0058). `npm run build` (build.ts)
 does the real contract build: it generates a closed **JSON Schema** from those types, **bakes** an
 eval-free `__funcdValidate*` validator into the `.mjs` (the shim runs it — bad input → **422**, before
-the handler), and writes `<fn>-{input,output}.schema.json` for `funcdcli push --contract-*`. So the
+the handler), and writes `<fn>-{input,output}.schema.json` for `funcdctl push --contract-*`. So the
 typed contracts are *enforced*, not decoration — and a fn-to-fn invoke with a bad payload gets the
 target's 422 **propagated back** (see the e2e). `greeter` requires `name`; `front` makes it optional
 so it can forward a payload greeter rejects.
@@ -68,26 +68,26 @@ Build the artifacts, push them to an OCI store (a registry, or a **local layout*
 npm run build   # → greeter.mjs + front.mjs (baked validators) + *-{input,output}.schema.json
 
 # push each handler WITH its generated contract (gated against the funcd profile, embedded as OCI metadata)
-funcdcli push greeter.mjs oci-layout://./registry:greeter \
+funcdctl push greeter.mjs oci-layout://./registry:greeter \
   --contract-input greeter-input.schema.json --contract-output greeter-output.schema.json
-funcdcli push front.mjs oci-layout://./registry:front \
+funcdctl push front.mjs oci-layout://./registry:front \
   --contract-input front-input.schema.json --contract-output front-output.schema.json
 
-funcdcli apply -f greeter.yaml                             # the daemon pulls + runs
-funcdcli apply -f front.yaml
+funcdctl apply -f greeter.yaml                             # the daemon pulls + runs
+funcdctl apply -f front.yaml
 curl -sX POST "$DATA_PLANE/function/front" -d '{"data":{"name":"funcd"}}'
 # → {"via":"front","greeting":"Hello, funcd!"}
 curl -sX POST "$DATA_PLANE/function/front" -d '{"data":{}}'    # missing name
 # → fails: greeter's contract rejects it (422) and the invoke propagates that back through front
 ```
 
-`funcdcli apply` accepts **YAML or JSON**; the manifests carry a plain ref (tag), and the daemon
+`funcdctl apply` accepts **YAML or JSON**; the manifests carry a plain ref (tag), and the daemon
 resolves it to a digest at apply time — so these `.yaml` files are the deployable unit, re-appliable
 like any `kubectl apply -f`.
 
 **On Lima (containerd lane):** push into `~/.cache/funcd-lima/registry`, which the VM mounts read-only
 at `/mnt/funcd-deps/registry` (the path the manifests' `artifact.uri` already references); then
-`funcdcli apply` against the in-VM daemon. Same flow, real sandboxes — the per-function invoke socket
+`funcdctl apply` against the in-VM daemon. Same flow, real sandboxes — the per-function invoke socket
 is bind-mounted into each container at `/run/funcd/invoke.sock`.
 
 ## Launched as a real cross-process test

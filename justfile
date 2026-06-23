@@ -148,7 +148,7 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     mkdir -p {{lima_deps}}
     # the linux binaries + the example bundle the demo VM mounts at /mnt/funcd-deps
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
     ( cd examples/js/fn-to-fn && node --experimental-strip-types build.ts )
     tar czf {{lima_deps}}/fn-to-fn.tgz -C examples/js/fn-to-fn \
       greeter.mjs front.mjs greeter-input.schema.json greeter-output.schema.json \
@@ -176,7 +176,7 @@ lima-example-kv: build-runtime-images build-shim
     set -euo pipefail
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
     # JS kv-counter → counter.mjs + I/O schemas (esbuild + contract toolchain via the shim node_modules)
     ln -sfn ../../../shim/nodejs/node_modules examples/js/kv-counter/node_modules
     ( cd examples/js/kv-counter && node --experimental-strip-types build.ts )
@@ -221,7 +221,7 @@ lima-example-metastore: build-runtime-images
     set -euo pipefail
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdcli ./cmd/funcdcli
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
     # bundle the static fixtures (daemon config + the Config resource) into the mounted deps dir (→ /mnt/funcd-deps)
     cp e2e/fixtures/metastore-daemon.yaml e2e/fixtures/metastore-config.yaml {{lima_deps}}/
     trap 'limactl stop -f {{lima_meta_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true' EXIT
@@ -250,7 +250,7 @@ demo-record:
 # launch funcd locally with the example config (examples/funcdconfig.yaml, ADR-0061): a zero-infra
 # dev daemon — in-memory substrate + process runtime, control plane on 127.0.0.1:8080, data plane on
 # :8081. Runs until Ctrl-C. With node / python3 on PATH, pushed functions actually execute — then in
-# another shell `funcdcli push` + `apply` an example (see examples/*/hello-world/README.md).
+# another shell `funcdctl push` + `apply` an example (see examples/*/hello-world/README.md).
 [group('example')]
 funcd-example:
     go run ./cmd/funcd --config examples/funcdconfig.yaml

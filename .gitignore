@@ -30,7 +30,7 @@ cmd/**/kv/
 # build.sh output (ADR-0026)
 /dist/
 /server
-/funcdcli
+/funcdctl
 /funcd-bench
 
 __pycache__

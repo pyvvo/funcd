@@ -22,7 +22,7 @@ import (
 )
 
 // shimPlatformOCI is the process-shim platform + the oras artifact materializer (ADR-0031), so
-// functions are PULLED from an OCI layout by digest — the real `funcdcli push` → `apply` deploy path.
+// functions are PULLED from an OCI layout by digest — the real `funcdctl push` → `apply` deploy path.
 // Returns an SDK client + the data-plane base URL. Node-gated.
 func shimPlatformOCI(t *testing.T) (*sdk.Client, string) {
 	t.Helper()
@@ -82,7 +82,7 @@ func buildFnToFnExample(t *testing.T) string {
 }
 
 // pushExampleFn pushes a built handler + its generated contract to a local OCI layout — exactly what
-// `funcdcli push <mjs> <ref> --contract-input … --contract-output …` does (gates the schemas against
+// `funcdctl push <mjs> <ref> --contract-input … --contract-output …` does (gates the schemas against
 // the funcd profile, then embeds them as OCI metadata, ADR-0058/0059). Returns the ref + digest.
 func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest string) {
 	t.Helper()

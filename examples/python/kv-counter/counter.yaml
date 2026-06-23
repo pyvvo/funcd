@@ -12,7 +12,7 @@ spec:
   runtime: python314
   handler: handle
   artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:pycounter   # funcdcli push counter.py (built from src/counter.py)
+    uri: oci-layout:///mnt/funcd-deps/registry:pycounter   # funcdctl push counter.py (built from src/counter.py)
   replicas: 1
   scaling:
     minReplicas: 1

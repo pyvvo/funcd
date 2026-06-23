@@ -39,7 +39,7 @@ declare a *type*, never a validator, and `from __future__ import annotations` is
 
 ### How the contract is enforced (ADR-0058 / ADR-0060)
 
-You supply a *type*, never a validator. At `funcdcli push` the build:
+You supply a *type*, never a validator. At `funcdctl push` the build:
 
 1. generates a closed **JSON Schema** from `FuncInput` / `FuncOutput` (pydantic
    `TypeAdapter().json_schema()`, **build-time only** — closing records the profile requires);
@@ -116,8 +116,8 @@ The deliverable is `src/handler.py` itself. Push it and apply a `Function` with
 
 ```bash
 funcd --config ../../funcdconfig.yaml &   # start the daemon (zero-infra dev config, ADR-0061)
-funcdcli push src/handler.py
-funcdcli apply -f function.yaml           # spec.runtime: python312, spec.handler: handle
+funcdctl push src/handler.py
+funcdctl apply -f function.yaml           # spec.runtime: python312, spec.handler: handle
 ```
 
 [`examples/funcdconfig.yaml`](../../funcdconfig.yaml) is the shared daemon config (in-memory

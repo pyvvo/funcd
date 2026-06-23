@@ -1,5 +1,5 @@
 // Package artifact is OCI artifact distribution (ADR-0031): how a function source
-// bundle reaches the platform. funcdcli pushes a bundle as an OCI artifact to a target
+// bundle reaches the platform. funcdctl pushes a bundle as an OCI artifact to a target
 // (a local OCI layout for dev, or a registry for prod) and the platform pulls it by
 // digest. It provides the producer side (Push/Pull/Login/Logout) and the consumer side —
 // an OrasMaterializer that is a driver of ADR-0030's internal/function.Materializer seam.

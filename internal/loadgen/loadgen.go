@@ -1,9 +1,9 @@
 // Package loadgen is a small, stdlib-only client-side HTTP load generator (ADR-0053). It drives a
 // target URL with concurrent workers (closed model) and reports throughput + tail latency — the
-// engine behind `funcdcli bench` (the funcd analogue of `nats bench`).
+// engine behind `funcdctl bench` (the funcd analogue of `nats bench`).
 //
 // It is deliberately HAND-ROLLED on the standard library — net/http + sort + sync — so the shipped
-// funcdcli binary carries no benchmarking dependency: ADR-0051 confines gopsutil/fortio to the
+// funcdctl binary carries no benchmarking dependency: ADR-0051 confines gopsutil/fortio to the
 // funcd-bench harness, and this package keeps that true (it must NEVER import them). It is a client
 // tool, not the funcd-bench embed/memory harness (ADR-0040/0052).
 package loadgen

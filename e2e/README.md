@@ -37,7 +37,7 @@ scratch dir so its `venom.log` lands outside the repo; `*.log` is also gitignore
   **`retry`/`delay`** replace hand-rolled readiness/redeploy polling — so there is **no helper script**: the
   positive testcases are `http` steps; the fail-closed mutation is one inline `exec` line and the *wait* is
   the negative `http` step's `retry`/`delay`.
-- **Mutations run IN the VM, not host-side.** The one `exec` step does `limactl shell {{.vm}} -- sudo … funcdcli
+- **Mutations run IN the VM, not host-side.** The one `exec` step does `limactl shell {{.vm}} -- sudo … funcdctl
   apply -f /opt/kv-counter/counter-unbound.yaml` — co-located with the daemon. An earlier attempt drove the
   apply host-side over the forwarded control-plane port and raced the redeploy (the old sandbox served the
   binding until the new revision was Ready, so the read stayed 200). Co-locating the mutation fixes it; the

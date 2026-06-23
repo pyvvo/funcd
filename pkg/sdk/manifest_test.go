@@ -9,7 +9,7 @@ import (
 	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
-// DecodeManifest accepts YAML (the kubectl-style `funcdcli apply -f fn.yaml`) AND JSON.
+// DecodeManifest accepts YAML (the kubectl-style `funcdctl apply -f fn.yaml`) AND JSON.
 func TestDecodeManifestAcceptsYAMLAndJSON(t *testing.T) {
 	yamlManifest := []byte(`
 apiVersion: funcd.io/v1alpha1

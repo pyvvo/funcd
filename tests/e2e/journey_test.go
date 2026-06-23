@@ -19,13 +19,13 @@ import (
 )
 
 // TestE2EUserJourney walks the platform exactly as an end user would, through the public
-// surface only: the user pushes a source artifact with `funcdcli push` (OCI, ADR-0031),
-// applies a Function manifest with `funcdcli apply`, watches it reconcile to Ready with
-// `funcdcli get`, and invokes it over HTTP on the data plane (ADR-0033) — then does the
+// surface only: the user pushes a source artifact with `funcdctl push` (OCI, ADR-0031),
+// applies a Function manifest with `funcdctl apply`, watches it reconcile to Ready with
+// `funcdctl get`, and invokes it over HTTP on the data plane (ADR-0033) — then does the
 // same for a scale-to-zero function and proves a cold HTTP request wakes it.
 //
 // The "server" is an embedded funcd configured for real execution (the ADR-0014 embed
-// path); the client side is the REAL `funcdcli` binary + plain HTTP — no internal/ import.
+// path); the client side is the REAL `funcdctl` binary + plain HTTP — no internal/ import.
 // Node-gated (the process-driver shim runs the JS handler), like the other execution e2e.
 func TestE2EUserJourney(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -64,13 +64,13 @@ func TestE2EUserJourney(t *testing.T) {
 	server := "http://" + p.Addr()
 	dataPlane := "http://" + p.DataPlaneAddr()
 
-	// --- the user's CLI: build the real funcdcli binary and drive it ---
+	// --- the user's CLI: build the real funcdctl binary and drive it ---
 	cli := buildFuncdcli(t)
 	runCLI := func(args ...string) string {
 		t.Helper()
 		full := append([]string{"--server", server, "--token", funcd.DevToken}, args...)
 		out, cerr := exec.Command(cli, full...).CombinedOutput()
-		require.NoError(t, cerr, "funcdcli %s:\n%s", strings.Join(args, " "), out)
+		require.NoError(t, cerr, "funcdctl %s:\n%s", strings.Join(args, " "), out)
 		return string(out)
 	}
 
@@ -82,7 +82,7 @@ func TestE2EUserJourney(t *testing.T) {
 
 	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
 	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"),
-		"`funcdcli push` prints <ref>@<digest>, got %q", pushed)
+		"`funcdctl push` prints <ref>@<digest>, got %q", pushed)
 
 	// 2. the user applies a Function referencing only the ref — NO digest. The platform
 	// resolves the tag → digest and pins it into the Revision at stamp time (ADR-0035).
@@ -155,7 +155,7 @@ func TestE2EEventDataContract(t *testing.T) {
 }
 
 // execPlatform boots an embedded, real-execution funcd (node-gated process shim + OCI
-// artifacts) and the real funcdcli driver — the shared rig for the execution e2e tests.
+// artifacts) and the real funcdctl driver — the shared rig for the execution e2e tests.
 func execPlatform(t *testing.T) (dataPlane string, runCLI func(...string) string) {
 	t.Helper()
 	node, err := exec.LookPath("node")
@@ -193,7 +193,7 @@ func execPlatform(t *testing.T) (dataPlane string, runCLI func(...string) string
 		t.Helper()
 		full := append([]string{"--server", server, "--token", funcd.DevToken}, args...)
 		out, cerr := exec.Command(cli, full...).CombinedOutput()
-		require.NoError(t, cerr, "funcdcli %s:\n%s", strings.Join(args, " "), out)
+		require.NoError(t, cerr, "funcdctl %s:\n%s", strings.Join(args, " "), out)
 		return string(out)
 	}
 	return dataPlane, runCLI
@@ -202,11 +202,11 @@ func execPlatform(t *testing.T) (dataPlane string, runCLI func(...string) string
 // buildFuncdcli compiles the real CLI binary from this repo and returns its path.
 func buildFuncdcli(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "funcdcli")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/funcdcli")
+	bin := filepath.Join(t.TempDir(), "funcdctl")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/funcdctl")
 	cmd.Dir = filepath.Join("..", "..") // repo root from tests/e2e/
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build funcdcli: %v\n%s", err, out)
+		t.Fatalf("build funcdctl: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -221,10 +221,10 @@ func applyFunction(t *testing.T, runCLI func(...string) string, name, ref, diges
 	f := filepath.Join(t.TempDir(), name+".json")
 	require.NoError(t, os.WriteFile(f, []byte(manifest), 0o600))
 	out := runCLI("apply", "-f", f)
-	require.Contains(t, out, "applied", "funcdcli apply confirms: %s", out)
+	require.Contains(t, out, "applied", "funcdctl apply confirms: %s", out)
 }
 
-// cliPhase reads a function's Status.Phase via `funcdcli get ... -o json`.
+// cliPhase reads a function's Status.Phase via `funcdctl get ... -o json`.
 func cliPhase(t *testing.T, runCLI func(...string) string, name string) string {
 	t.Helper()
 	out := runCLI("get", "function", name, "-n", "default", "-o", "json")
@@ -233,7 +233,7 @@ func cliPhase(t *testing.T, runCLI func(...string) string, name string) string {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(out), &obj), "parse `funcdcli get -o json`: %s", out)
+	require.NoError(t, json.Unmarshal([]byte(out), &obj), "parse `funcdctl get -o json`: %s", out)
 	return obj.Status.Phase
 }
 

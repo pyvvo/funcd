@@ -10,7 +10,7 @@ Runs on the push box (pydantic available), **never** in the worker. For an autho
      ensured (so any leftover annotation referencing a removed class is a string, never evaluated),
      and the precompiled ``__funcd_validate_*`` are injected.
 
-Returns the runtime source + the schemas. The schemas feed ``funcdcli push --contract`` → the Go
+Returns the runtime source + the schemas. The schemas feed ``funcdctl push --contract`` → the Go
 profile gate (``internal/contract``); funcd compiled the validator FROM the gated schema, so the
 runtime enforcement and the advertised schema share one source (the ADR-0060 integrity invariant).
 This module is NOT embedded into the binary (see ``embed.go``) — it never reaches a worker.

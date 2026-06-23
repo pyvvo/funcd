@@ -1,7 +1,7 @@
 """hello-world funcd function authored in Python (ADR-0049), with a typed I/O contract (ADR-0058).
 
 Typed against the ``funcd_shim`` contract, so ``context``, the CloudEvent ``event``, and the
-return type are checked by ``uv run mypy``. ``funcdcli push`` ships this ``.py`` as the artifact;
+return type are checked by ``uv run mypy``. ``funcdctl push`` ships this ``.py`` as the artifact;
 the export name (``handle``) is what ``FUNCD_HANDLER`` resolves.
 
 The I/O contract is the two ``TypedDict``\\s ``FuncInput`` / ``FuncOutput``. A ``TypedDict`` is the

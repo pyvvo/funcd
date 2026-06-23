@@ -30,7 +30,7 @@ export interface FuncOutput {
  * hello-world funcd function. Typed against `Handler<FuncInput, FuncOutput>`, so `context`, the
  * CloudEvent `event`, and the return value are all checked at compile time (`npm run typecheck`)
  * against the *same* contract the platform enforces at runtime. `npm run build` bundles this to
- * `handler.mjs` — the artifact `funcdcli push` ships. The export name (`handle`) is what
+ * `handler.mjs` — the artifact `funcdctl push` ships. The export name (`handle`) is what
  * `FUNCD_HANDLER` resolves.
  */
 export const handle: Handler<FuncInput, FuncOutput> = (context, event) => {

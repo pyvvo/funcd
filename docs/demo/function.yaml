@@ -1,5 +1,5 @@
 # The function CRD the demo deploys — a complete, applyable manifest
-# (`funcdcli apply -f function.yaml`). The digest is OMITTED: the platform resolves the
+# (`funcdctl apply -f function.yaml`). The digest is OMITTED: the platform resolves the
 # tag → digest and pins it into the immutable Revision at stamp time (ADR-0035), so the
 # user never types a digest. The journey pushes the bundle to this same `artifact.uri`.
 apiVersion: funcd.io/v1alpha1

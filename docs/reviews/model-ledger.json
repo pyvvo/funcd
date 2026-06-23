@@ -1213,5 +1213,20 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0077-implementation-claude-opus-4-8.md",
     "notes": "Pin OVH Venom v1.3.0 in the flake (buildGoModule, src+vendorHash, version ldflag) for all systems; switch the kv + fn-to-fn lane recipes off go-run to the pinned venom + echo the results path. Verified: venom version=v1.3.0 from the nix store, flake.lock untouched, both lanes final status PASS on real containerd, 0 go-run occurrences, scripts/ free of per-lane invoke helpers, test-only (no product dep). Ratifies the already-landed suites/skill. metastore-smoke + CI-gating deferred (ADR Open questions)."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0078",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0078-implementation-claude-opus-4-8.md",
+    "notes": "Behavior-preserving CLI rename funcdcli\u2192funcdctl (git mv cmd/ + ~150-ref tracked-only sweep, ADR-filename tokens preserved). Verified: grep gate=0, build/test/lint/mod green (unchanged assertions; bench-smoke flake is env, internal/bench zero diff), kv+metastore Lima lanes PASS on containerd, frozen ADRs untouched (ADR-0024 still 23 funcdcli), pkg/sdk design unchanged, no new dep. First sweep wrongly used --exclude-dir=docs/adr (basename match) \u2192 hard-reset + redone via git ls-files path-exclude."
   }
 ]

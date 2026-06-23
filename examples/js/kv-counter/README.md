@@ -30,7 +30,7 @@ const keys = await ctx.kv.list('counters', 'a');     // GET  /kv/counters?prefix
 `build.ts` is contract-aware (like `examples/js/fn-to-fn`): from the handler's `FuncInput` /
 `FuncOutput` types it generates the closed JSON Schema, **bakes an eval-free validator** into
 `counter.mjs`, and writes `counter-{input,output}.schema.json`. Those schemas are pushed as OCI
-metadata (`funcdcli push --contract-input/--contract-output`), so a malformed call is rejected (422)
+metadata (`funcdctl push --contract-input/--contract-output`), so a malformed call is rejected (422)
 before the handler runs — KV functions are contract-validated, not just KV-enabled.
 
 ## Run it (executed by the e2e)

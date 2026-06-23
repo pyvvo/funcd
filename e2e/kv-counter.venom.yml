@@ -54,7 +54,7 @@ testcases:
           - result.bodyjson.count ShouldEqual 2
 
   # The fail-closed NEGATIVE, HYBRID style: the mutation runs IN the VM (co-located with the daemon, so it
-  # does not race the redeploy the way a host-side funcdcli does), the assertion runs host-side. {{.vm}} is
+  # does not race the redeploy the way a host-side funcdctl does), the assertion runs host-side. {{.vm}} is
   # injected by the recipe (--var) so no machine-specific path lives in this tracked file. No helper script —
   # the apply is one inline exec line; the WAIT is the negative http step's retry/delay (Venom's job).
   - name: removing the spec.kv binding denies the read (fail-closed)
@@ -63,7 +63,7 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
-            funcdcli apply -f /opt/kv-counter/counter-unbound.yaml
+            funcdctl apply -f /opt/kv-counter/counter-unbound.yaml
         assertions:
           - result.code ShouldEqual 0
       # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny. The

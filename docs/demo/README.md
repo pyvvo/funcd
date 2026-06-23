@@ -7,9 +7,9 @@ API, and invoke it over HTTP — all through the public CLI + HTTP surface. A sh
 [WebM](cli-demo.webm) is rendered alongside the GIF (for docs sites / PRs).
 
 ```
-funcdcli push handler.mjs oci-layout://…:v1     # package + push the source artifact (ADR-0031)
-funcdcli apply -f function.yaml                 # deploy, pinned by digest
-funcdcli get function echo -o json              # reconcile to Ready
+funcdctl push handler.mjs oci-layout://…:v1     # package + push the source artifact (ADR-0031)
+funcdctl apply -f function.yaml                 # deploy, pinned by digest
+funcdctl get function echo -o json              # reconcile to Ready
 curl -XPOST :8081/function/echo -d '{…}'        # invoke over the data plane (ADR-0033)
 ```
 

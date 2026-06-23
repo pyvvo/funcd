@@ -11,10 +11,10 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/loadgen"
 )
 
-// benchCmd is the `funcdcli bench` verb (ADR-0053): a client-side load/latency probe against a
+// benchCmd is the `funcdctl bench` verb (ADR-0053): a client-side load/latency probe against a
 // RUNNING funcd's data plane — the funcd analogue of `nats bench`. It does NOT embed the platform or
 // measure memory (that is funcd-bench, ADR-0040/0052); the load engine (internal/loadgen) is
-// stdlib-only, so funcdcli ships no bench dependency (ADR-0051's confinement).
+// stdlib-only, so funcdctl ships no bench dependency (ADR-0051's confinement).
 func (a *cli) benchCmd() *cobra.Command {
 	var (
 		url, function, dataPlane  string
@@ -40,7 +40,7 @@ func (a *cli) benchCmd() *cobra.Command {
 				return err
 			}
 			if res.OK == 0 {
-				return fault.Unavailablef("funcdcli bench", "no request succeeded against %s (%d errors)", target, res.Errors)
+				return fault.Unavailablef("funcdctl bench", "no request succeeded against %s (%d errors)", target, res.Errors)
 			}
 			if asJSON {
 				return a.writeBenchJSON(res)
@@ -64,7 +64,7 @@ func (a *cli) benchCmd() *cobra.Command {
 
 // benchTarget resolves the data-plane endpoint from --url, or from --function + --data-plane.
 func benchTarget(url, function, dataPlane string) (string, error) {
-	const op = "funcdcli bench"
+	const op = "funcdctl bench"
 	if url != "" {
 		return url, nil
 	}
@@ -77,7 +77,7 @@ func benchTarget(url, function, dataPlane string) (string, error) {
 func (a *cli) writeBenchJSON(res loadgen.Result) error {
 	data, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
-		return fault.Wrapf(err, fault.Internal, "funcdcli bench", "marshal json")
+		return fault.Wrapf(err, fault.Internal, "funcdctl bench", "marshal json")
 	}
 	return a.writef("%s\n", data)
 }
