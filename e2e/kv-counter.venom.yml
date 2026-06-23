@@ -1,0 +1,62 @@
+# Venom e2e suite for the KV containerd lane (ADR-0069/0076) — SPIKE evaluating OVH Venom as a
+# declarative replacement for scripts/lima-kv-invoke.sh. Run host-side by `FUNCD_VENOM=1 just
+# lima-example-kv` AFTER the self-deploying Lima VM is Ready; the http steps hit the VM's forwarded
+# 127.0.0.1 ports, the exec step drives the (host) funcdcli against the forwarded control plane.
+#
+# It proves the same two properties as the bash script, but declaratively:
+#   1. binding-as-read-grant — each counter reads 1→2 with NO read Policy (the spec.kv binding grants it).
+#   2. fail-closed — removing the binding makes context.kv.get Forbidden (bound-only, not default-allow).
+name: kv-counter binding-as-read-grant (ADR-0076, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: js-counter reads 1 then 2 with no read Policy (binding grants read)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        assertions:
+          - result.bodyjson.count ShouldEqual 2
+
+  - name: py-counter reads 1 then 2 with no read Policy (binding grants read)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pycounter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pycounter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        assertions:
+          - result.bodyjson.count ShouldEqual 2
+
+  # NOTE (spike finding): the fail-closed NEGATIVE case — strip spec.kv mid-suite, then assert the read
+  # is denied — is deliberately NOT here. It needs a control-plane mutation + a function REDEPLOY between
+  # assertions; driven host-side it is a redeploy race (the running sandbox serves the old binding until
+  # the new revision is Ready, so the read returns 200 inside any fixed retry window). The in-VM bash
+  # lane (scripts/lima-kv-invoke.sh) does this robustly because the strip is co-located with the daemon.
+  # VERDICT for the ADR: Venom owns the ASSERTION phase (above — clean + green); stateful mutation/redeploy
+  # steps stay in the lane's provisioning (bash/lima) or a settle-gated `ssh` executor. The default
+  # `just lima-example-kv` (bash) keeps the full positive+negative coverage; this suite is the assertion spike.

@@ -198,7 +198,16 @@ lima-example-kv: build-runtime-images build-shim
     trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_kv_vm}} --tty=false scripts/lima-kv.yaml
-    limactl shell {{lima_kv_vm}} -- sudo bash -s < scripts/lima-kv-invoke.sh
+    if [ -n "${FUNCD_VENOM:-}" ]; then
+      # SPIKE: declarative e2e via OVH Venom (Apache-2.0), host-side against the forwarded ports —
+      # version-pinned through the flake's Go toolchain (an ADR would pin it as a buildGoModule flake input).
+      # Venom writes venom.log + rotated venom.N.log in its CWD, so run it from the scratch dir (outside the
+      # repo) with an absolute suite path; --output-dir keeps the JUnit results there too.
+      suite="$(pwd)/e2e/kv-counter.venom.yml"
+      ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} "$suite" )
+    else
+      limactl shell {{lima_kv_vm}} -- sudo bash -s < scripts/lima-kv-invoke.sh
+    fi
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read

@@ -17,6 +17,9 @@ coverage.out
 # local build/tool cache (lima deps, etc.)
 .cache/
 
+# tool run logs (e.g. Venom writes venom.log + rotated venom.N.log in CWD — e2e/ spike)
+*.log
+
 # Badger DB scratch — a stray local data dir if funcd/tests run with a repo-relative data dir
 # (metastore at <dataDir>/store, KV service at <dataDir>/kv — ADR-0065/0066)
 /store/
