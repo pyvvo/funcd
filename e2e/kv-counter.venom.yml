@@ -1,11 +1,12 @@
-# Venom e2e suite for the KV containerd lane (ADR-0069/0076) — SPIKE evaluating OVH Venom as a
-# declarative replacement for scripts/lima-kv-invoke.sh. Run host-side by `FUNCD_VENOM=1 just
-# lima-example-kv` AFTER the self-deploying Lima VM is Ready; the http steps hit the VM's forwarded
-# 127.0.0.1 ports, the exec step drives the (host) funcdcli against the forwarded control plane.
+# Venom e2e suite for the KV containerd lane (ADR-0069/0076) — the declarative invoke phase of
+# `just lima-example-kv`, run host-side AFTER the self-deploying Lima VM is Ready (it replaced the bash
+# invoke script). The http steps hit the VM's forwarded 127.0.0.1 ports; the one exec step does the
+# in-VM mutation via `limactl shell` (co-located with the daemon, so it doesn't race the redeploy).
 #
-# It proves the same two properties as the bash script, but declaratively:
+# It proves two properties declaratively:
 #   1. binding-as-read-grant — each counter reads 1→2 with NO read Policy (the spec.kv binding grants it).
-#   2. fail-closed — removing the binding makes context.kv.get Forbidden (bound-only, not default-allow).
+#   2. fail-closed — applying counter-unbound.yaml (no spec.kv) makes context.kv.get Forbidden
+#      (bound-only, not default-allow).
 name: kv-counter binding-as-read-grant (ADR-0076, containerd lane)
 
 vars:
@@ -53,26 +54,27 @@ testcases:
           - result.bodyjson.count ShouldEqual 2
 
   # The fail-closed NEGATIVE, HYBRID style: the mutation runs IN the VM (co-located with the daemon, so it
-  # does not race the redeploy the way a host-side funcdcli does), the assertion runs host-side. {{.vm}} and
-  # {{.strip}} are injected by the recipe (--var) so no machine-specific path lives in this tracked file.
+  # does not race the redeploy the way a host-side funcdcli does), the assertion runs host-side. {{.vm}} is
+  # injected by the recipe (--var) so no machine-specific path lives in this tracked file. No helper script —
+  # the apply is one inline exec line; the WAIT is the negative http step's retry/delay (Venom's job).
   - name: removing the spec.kv binding denies the read (fail-closed)
     steps:
-      # strip spec.kv IN the VM (sudo bash -s < the strip script) and wait for the function to reconcile.
+      # apply the static no-binding config IN the VM (counter-unbound.yaml = counter.yaml minus spec.kv).
       - type: exec
         script: |
-          set -eu
-          limactl shell {{.vm}} -- sudo bash -s < {{.strip}}
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdcli apply -f /opt/kv-counter/counter-unbound.yaml
         assertions:
           - result.code ShouldEqual 0
-      # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny.
-      # the denied response is funcd's forbidden problem+json wrapped by the handler; retry across any
-      # residual settling — once settled every read is denied (fail-closed), not 200-with-a-count.
+      # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny. The
+      # denied response is funcd's forbidden problem+json; retry/delay absorbs the reconcile — once the new
+      # revision is serving, every read is denied (fail-closed), not 200-with-a-count.
       - type: http
         method: POST
         url: "{{.dp}}/function/counter"
         headers: { content-type: application/json }
         body: '{"data":{"name":"venom"}}'
-        retry: 6
+        retry: 30
         delay: 2
         info: "denied response → status {{.result.statuscode}} body {{.result.body}}"
         assertions:

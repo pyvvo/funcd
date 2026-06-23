@@ -187,7 +187,7 @@ lima-example-kv: build-runtime-images build-shim
     # forbid (no write Policy). No policy.yaml is staged — the lane proves reads work with no read Policy.
     cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter-input.schema.json \
        examples/js/kv-counter/counter-output.schema.json examples/js/kv-counter/counter.yaml \
-       examples/js/kv-counter/store.yaml \
+       examples/js/kv-counter/counter-unbound.yaml examples/js/kv-counter/store.yaml \
        examples/js/kv-counter/funcdconfig.yaml "$stage/"
     mkdir -p "$stage/py"
     cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter-input.schema.json \
@@ -198,17 +198,14 @@ lima-example-kv: build-runtime-images build-shim
     trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_kv_vm}} --tty=false scripts/lima-kv.yaml
-    if [ -n "${FUNCD_VENOM:-}" ]; then
-      # SPIKE: declarative e2e via OVH Venom (Apache-2.0), host-side against the forwarded ports —
-      # version-pinned through the flake's Go toolchain (an ADR would pin it as a buildGoModule flake input).
-      # Venom writes venom.log + rotated venom.N.log in its CWD, so run it from the scratch dir (outside the
-      # repo) with an absolute suite path; --output-dir keeps the JUnit results there too.
-      suite="$(pwd)/e2e/kv-counter.venom.yml"; strip="$(pwd)/scripts/lima-kv-strip.sh"
-      ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
-          --var "vm={{lima_kv_vm}}" --var "strip=$strip" "$suite" )
-    else
-      limactl shell {{lima_kv_vm}} -- sudo bash -s < scripts/lima-kv-invoke.sh
-    fi
+    # Declarative e2e via OVH Venom (Apache-2.0): the full positive (each counter reads 1→2 with no read
+    # Policy) + fail-closed negative (apply counter-unbound.yaml in-VM, then assert the read is Forbidden)
+    # suite. Version-pinned through the flake's Go toolchain (an ADR would pin it as a buildGoModule flake
+    # input). Venom writes venom.log in its CWD, so run it from the scratch dir (outside the repo) with
+    # absolute suite/unbind paths; --output-dir keeps the JUnit results there too.
+    suite="$(pwd)/e2e/kv-counter.venom.yml"
+    ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
+        --var "vm={{lima_kv_vm}}" "$suite" )
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read

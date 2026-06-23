@@ -1,54 +1,41 @@
-# e2e — declarative end-to-end suites (Venom spike)
+# e2e — declarative end-to-end suites (Venom)
 
-This directory holds a **spike** evaluating [OVH Venom](https://github.com/ovh/venom) (Apache-2.0) as a
-declarative replacement for the hand-written `scripts/lima-*-invoke.sh` bash scripts. It is **not yet an
-accepted approach** — if the spike proves out, an ADR pins Venom in the flake and converts the lanes.
+This directory holds the declarative e2e suites for the Lima/containerd lanes, written for
+[OVH Venom](https://github.com/ovh/venom) (Apache-2.0). Venom is the **invoke phase** of the lanes: the VM
+self-deploys (Lima provisioning), then Venom drives the assertions. It replaced the hand-written
+`scripts/lima-*-invoke.sh` bash scripts.
 
 ## What's here
 
-- `kv-counter.venom.yml` — the KV containerd lane (ADR-0069/0076) as a Venom suite: each counter reads
-  1→2 with **no read Policy** (binding-as-read-grant), then removing the binding makes the read
-  **Forbidden** (fail-closed). The declarative twin of `scripts/lima-kv-invoke.sh`.
+- `kv-counter.venom.yml` — the KV containerd lane (ADR-0069/0076). Proves two properties declaratively:
+  1. **binding-as-read-grant** — each counter (nodejs22 + python314) reads 1→2 with **no read Policy**.
+  2. **fail-closed** — applying `examples/js/kv-counter/counter-unbound.yaml` (the same config minus
+     `spec.kv`) makes `context.kv.get` **Forbidden** (bound-only, not default-allow).
 
 ## Run it
 
-The suite runs **host-side** against the self-deploying Lima VM's forwarded ports, after the VM is Ready:
-
 ```bash
-FUNCD_VENOM=1 just lima-example-kv     # boots the VM, then runs Venom instead of the bash invoke
+just lima-example-kv     # boots the self-deploying VM, then runs this suite
 ```
 
-Venom is obtained via the flake's pinned Go toolchain (`go run github.com/ovh/venom/cmd/venom@v1.3.0`).
-A future ADR would pin it as a `buildGoModule` flake input (Venom is not in nixpkgs).
+Venom is obtained via the flake's pinned Go toolchain (`go run github.com/ovh/venom/cmd/venom@v1.3.0`); a
+follow-up ADR would pin it as a `buildGoModule` flake input (Venom is not in nixpkgs). Venom runs from the
+scratch dir so its `venom.log` lands outside the repo; `*.log` is also gitignored.
 
-## Why (the spike's thesis)
+## Shape (what the spike settled)
 
-- HTTP assertions (`result.bodyjson.count ShouldEqual 2`) read better than `curl | python -c`.
-- `retry`/`delay` replace hand-rolled readiness/redeploy polling loops.
-- JUnit XML output gives per-lane CI test reporting.
-- Apache-2.0 — within the project's license gate.
+- **HTTP assertions** (`result.bodyjson.count ShouldEqual 2`) read far better than `curl | python -c`, and
+  **`retry`/`delay`** replace hand-rolled readiness/redeploy polling — so there is **no helper script**: the
+  positive testcases are `http` steps; the fail-closed mutation is one inline `exec` line and the *wait* is
+  the negative `http` step's `retry`/`delay`.
+- **Mutations run IN the VM, not host-side.** The one `exec` step does `limactl shell {{.vm}} -- sudo … funcdcli
+  apply -f /opt/kv-counter/counter-unbound.yaml` — co-located with the daemon. An earlier attempt drove the
+  apply host-side over the forwarded control-plane port and raced the redeploy (the old sandbox served the
+  binding until the new revision was Ready, so the read stayed 200). Co-locating the mutation fixes it; the
+  assertion stays host-side over the forwarded data-plane port. So the "mutation is Venom's weak spot" worry
+  was a host-side-execution artifact, not a Venom limit — it expresses the full positive **+** negative suite.
+- **`{{.vm}}`** is injected by the recipe (`--var`) so no machine-specific path lives in this tracked file;
+  the in-VM deploy path (`/opt/kv-counter/…`) is the lane's own convention (see `scripts/lima-kv.yaml`).
 
-## Spike verdict (what the runs showed)
-
-Run on the real containerd lane (Lima VM), 4 iterations:
-
-- ✅ **Venom owns the assertion phase.** The two positive testcases — each counter reads 1→2 with no read
-  Policy — pass **green** against the VM's forwarded `127.0.0.1` ports. Port-forwarding works; the
-  declarative `http` + `result.bodyjson.count` assertions are clearly better than the bash `curl | python`.
-  Tooling is clean: `go run …/venom@v1.3.0` via the pinned Go toolchain, Apache-2.0.
-- ✅ **Venom can own the fail-closed NEGATIVE too — with the mutation done IN the VM.** The first attempt
-  drove the `spec.kv` strip **host-side** (`funcdcli` over the forwarded port) and raced the redeploy: the
-  running sandbox served the old binding until the new revision was Ready, so the read stayed 200 inside the
-  retry window. The fix was **not** to drop the negative — it was to do the *mutation* co-located with the
-  daemon: a Venom `exec` step runs `limactl shell {{.vm}} -- sudo bash -s < scripts/lima-kv-strip.sh` (the
-  HYBRID — mutate in-VM, assert host-side). With that, the negative is **green**: removing the binding makes
-  the read return funcd's forbidden problem+json (`result.body ShouldContainSubstring forbidden`).
-
-  So the earlier "mutation is Venom's rough edge" framing was wrong: it was a *host-side execution* artifact,
-  not a Venom limit. Venom expresses the full positive **+** negative suite; the mutation just has to run
-  where the bash version runs it — next to the control plane.
-
-**Recommendation for the ADR**: adopt Venom for the lane's assertions **and** its mutation steps (the latter
-via an `exec`/`ssh` step that runs co-located in the VM, never host-side over a forwarded port). `FUNCD_VENOM=1
-just lima-example-kv` now runs the full positive + fail-closed suite green; the bash invoke remains the
-default until the ADR decides whether to flip it. Pin Venom as a `buildGoModule` flake input (not in nixpkgs).
+A follow-up ADR would pin Venom in the flake and (optionally) convert the other lanes
+(`scripts/lima-fn-to-fn-invoke.sh`, …) the same way.
