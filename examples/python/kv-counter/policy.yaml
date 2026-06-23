@@ -1,8 +1,11 @@
-# Cedar read Policy (ADR-0074) granting the pycounter function kv::read on the py-counters store. KV
-# reads are DEFAULT-DENY — the binding (spec.kv) is naming; authorization is the PDP. Without this
-# Policy, context.kv.get is Forbidden. The owner-write (pycounter owns table-counters in store.yaml)
-# is governed by a BUILT-IN forbid(kv::write) unless principal == resource.owner, so no write Policy
-# is needed. The `resource in KVStore::"default/py-counters"` clause covers every table in the store.
+# Cedar read Policy (ADR-0074) granting pycounter kv::read — written in the resourceGroup-SCOPED form
+# to demonstrate it end-to-end (the JS example uses the explicit `resource in KVStore::"…"` least-
+# privilege form; this one grants read across resourceGroup rg1). KV reads are DEFAULT-DENY — the
+# binding (spec.kv) is naming; authorization is the PDP. Without a permitting Policy, context.kv.get
+# is Forbidden. The provider materializes `resourceGroup` as an entity attribute, so the when-clause
+# matches every store in rg1 (here py-counters) WITHOUT naming it — a convenience grant at rg
+# granularity, the trade-off vs the JS per-store form. Owner-write (pycounter owns table-counters in
+# store.yaml) stays a BUILT-IN forbid(kv::write) unless principal == resource.owner, so no write Policy.
 apiVersion: funcd.io/v1alpha1
 kind: Policy
 metadata:
@@ -14,5 +17,5 @@ spec:
     permit(
       principal == Function::"default/pycounter",
       action == Action::"kv::read",
-      resource in KVStore::"default/py-counters"
-    );
+      resource
+    ) when { resource.resourceGroup == "rg1" };
