@@ -69,12 +69,12 @@ type Handlers interface {
 	ReplaceEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, es v1.EventSource) (v1.EventSource, error)
 	DeleteEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
-	// Config (namespaced)
-	GetConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Config, error)
-	CreateConfig(ctx context.Context, cfg v1.Config) (v1.Config, error)
-	ListConfigs(ctx context.Context, ns v1.NamespaceName) ([]v1.Config, error)
-	ReplaceConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.Config) (v1.Config, error)
-	DeleteConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	// ConfigMap (namespaced)
+	GetConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error)
+	CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error)
+	ListConfigMaps(ctx context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error)
+	ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error)
+	DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
 	// Secret (namespaced)
 	GetSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Secret, error)

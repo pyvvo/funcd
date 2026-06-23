@@ -18,7 +18,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerRoute(api, h)
 	registerService(api, h)
 	registerEventSource(api, h)
-	registerConfig(api, h)
+	registerConfigMap(api, h)
 	registerSecret(api, h)
 	registerGrant(api, h)
 	registerEgressPolicy(api, h)

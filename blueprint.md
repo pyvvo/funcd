@@ -301,7 +301,7 @@ This specification can be used to define the desired state of the function, and 
 So the Resources definition like function is an high-level Resource definition of :
 - Event
 - Service
-- Config
+- ConfigMap
 - Secret
 
 So we could use the same approach for the other resources, and define their desired state in a CRD-like manner, and the controller will be responsible for ensuring that the actual state of the resources matches the desired state.
@@ -399,7 +399,7 @@ flowchart LR
     Providers -. "observed state" .-> Diff
 ```
 
-#### Config
+#### ConfigMap
 
 Configurations provide a way to store configuration information for functions and services, such as environment variables, command-line arguments, and other configuration parameters. Configurations will be managed by the controller, and will be able to be updated dynamically without requiring a redeployment of the functions or services.
 

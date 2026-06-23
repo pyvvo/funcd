@@ -26,11 +26,11 @@ func newBadgerStore(t *testing.T) store.Store {
 	return s
 }
 
-func mkConfig(t *testing.T, ns, name, rg string, data map[string]string) *v1.Config {
+func mkConfigMap(t *testing.T, ns, name, rg string, data map[string]string) *v1.ConfigMap {
 	t.Helper()
-	obj, ok := v1.NewObject(v1.KindConfig)
+	obj, ok := v1.NewObject(v1.KindConfigMap)
 	require.True(t, ok)
-	c := obj.(*v1.Config)
+	c := obj.(*v1.ConfigMap)
 	c.Name = v1.ObjectName(name)
 	c.Namespace = v1.NamespaceName(ns)
 	c.ResourceGroup = v1.ResourceGroupName(rg)
@@ -53,7 +53,7 @@ func TestScenarioDurableMetastoreSurvivesRestart(t *testing.T) {
 	e1, err := bstore.Open(dir, bstore.WithValueLogGCInterval(0)) // default SyncWrites=true (durable)
 	require.NoError(t, err)
 	s1 := store.New(e1)
-	created, err := s1.Create(ctx, mkConfig(t, "default", "cfg", "rg1", map[string]string{"k": "v"}))
+	created, err := s1.Create(ctx, mkConfigMap(t, "default", "cfg", "rg1", map[string]string{"k": "v"}))
 	require.NoError(t, err)
 	wantRV := created.GetObjectMeta().ResourceVersion
 	require.NotEmpty(t, wantRV)
@@ -65,10 +65,10 @@ func TestScenarioDurableMetastoreSurvivesRestart(t *testing.T) {
 	s2 := store.New(e2)
 	t.Cleanup(func() { _ = s2.Close() })
 
-	got, err := s2.Get(ctx, v1.KindConfig.GVK(), "default", "cfg")
+	got, err := s2.Get(ctx, v1.KindConfigMap.GVK(), "default", "cfg")
 	require.NoError(t, err, "the resource survived the restart")
 	require.Equal(t, wantRV, got.GetObjectMeta().ResourceVersion, "resourceVersion preserved across restart")
-	require.Equal(t, map[string]string{"k": "v"}, got.(*v1.Config).Spec.Data)
+	require.Equal(t, map[string]string{"k": "v"}, got.(*v1.ConfigMap).Spec.Data)
 }
 
 // scenario: optimistic-concurrency-conflict — an Update carrying a stale resourceVersion is
@@ -77,18 +77,18 @@ func TestScenarioOptimisticConcurrencyConflict(t *testing.T) {
 	ctx := context.Background()
 	s := newBadgerStore(t)
 
-	created, err := s.Create(ctx, mkConfig(t, "default", "cfg", "rg1", map[string]string{"k": "v1"}))
+	created, err := s.Create(ctx, mkConfigMap(t, "default", "cfg", "rg1", map[string]string{"k": "v1"}))
 	require.NoError(t, err) // `created` holds the original resourceVersion
 
 	// a concurrent fresh handle (same RV) updates first → bumps the store's RV
-	fresh, err := s.Get(ctx, v1.KindConfig.GVK(), "default", "cfg")
+	fresh, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", "cfg")
 	require.NoError(t, err)
-	fresh.(*v1.Config).Spec.Data = map[string]string{"k": "v2"}
+	fresh.(*v1.ConfigMap).Spec.Data = map[string]string{"k": "v2"}
 	_, err = s.Update(ctx, fresh)
 	require.NoError(t, err)
 
 	// the original handle is now stale → must conflict
-	created.(*v1.Config).Spec.Data = map[string]string{"k": "v3"}
+	created.(*v1.ConfigMap).Spec.Data = map[string]string{"k": "v3"}
 	_, err = s.Update(ctx, created)
 	require.Error(t, err)
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "stale-RV update → fault.Conflict")

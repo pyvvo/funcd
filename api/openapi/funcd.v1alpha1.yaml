@@ -42,7 +42,7 @@ components:
         - type
         - status
       type: object
-    Config:
+    ConfigMap:
       additionalProperties: false
       properties:
         TypeMeta:
@@ -50,13 +50,13 @@ components:
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
-          $ref: "#/components/schemas/ConfigSpec"
+          $ref: "#/components/schemas/ConfigMapSpec"
       required:
         - TypeMeta
         - metadata
         - spec
       type: object
-    ConfigSpec:
+    ConfigMapSpec:
       additionalProperties: false
       properties:
         data:
@@ -1015,9 +1015,9 @@ paths:
           description: Error
       tags:
         - Namespace
-  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configs:
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps:
     get:
-      operationId: listConfigs
+      operationId: listConfigMaps
       parameters:
         - in: path
           name: namespace
@@ -1033,7 +1033,7 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: "#/components/schemas/Config"
+                  $ref: "#/components/schemas/ConfigMap"
                 type:
                   - array
                   - "null"
@@ -1045,21 +1045,21 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - ConfigMap
     post:
-      operationId: createConfig
+      operationId: createConfigMap
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Config"
+              $ref: "#/components/schemas/ConfigMap"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/ConfigMap"
           description: OK
         default:
           content:
@@ -1068,10 +1068,10 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
-  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configs/{name}:
+        - ConfigMap
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps/{name}:
     delete:
-      operationId: deleteConfig
+      operationId: deleteConfigMap
       parameters:
         - in: path
           name: namespace
@@ -1099,9 +1099,9 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - ConfigMap
     get:
-      operationId: getConfig
+      operationId: getConfigMap
       parameters:
         - in: path
           name: namespace
@@ -1124,7 +1124,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/ConfigMap"
           description: OK
         default:
           content:
@@ -1133,9 +1133,9 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - ConfigMap
     put:
-      operationId: replaceConfig
+      operationId: replaceConfigMap
       parameters:
         - in: path
           name: namespace
@@ -1157,14 +1157,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Config"
+              $ref: "#/components/schemas/ConfigMap"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/ConfigMap"
           description: OK
         default:
           content:
@@ -1173,7 +1173,7 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - ConfigMap
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies:
     get:
       operationId: listEgressPolicies

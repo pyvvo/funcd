@@ -30,7 +30,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindRoute:         {"routes", true},
 	v1.KindService:       {"services", true},
 	v1.KindEventSource:   {"eventsources", true},
-	v1.KindConfig:        {"configs", true},
+	v1.KindConfigMap:        {"configmaps", true},
 	v1.KindSecret:        {"secrets", true},
 	v1.KindGrant:         {"grants", true},
 	v1.KindEgressPolicy:  {"egresspolicies", true},

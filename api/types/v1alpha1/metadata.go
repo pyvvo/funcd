@@ -24,7 +24,7 @@ const (
 	KindRoute         Kind = "Route"
 	KindService       Kind = "Service"
 	KindEventSource   Kind = "EventSource"
-	KindConfig        Kind = "Config"
+	KindConfigMap        Kind = "ConfigMap"
 	KindSecret        Kind = "Secret"
 	KindGrant         Kind = "Grant"
 	KindEgressPolicy  Kind = "EgressPolicy"
@@ -40,7 +40,7 @@ const (
 func (k Kind) Validate() error {
 	switch k {
 	case KindNamespace, KindResourceGroup, KindFunction, KindRevision,
-		KindRoute, KindService, KindEventSource, KindConfig,
+		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindPolicy:
 		return nil
@@ -187,7 +187,7 @@ type Object interface {
 
 // StatusObject is the optional extension implemented by kinds with observed state,
 // giving the controller a generic status write-back seam.
-// Config, Secret, Grant, and EgressPolicy do NOT implement it.
+// ConfigMap, Secret, Grant, and EgressPolicy do NOT implement it.
 type StatusObject interface {
 	Object
 	GetStatus() *Status
@@ -240,8 +240,8 @@ func NewObject(k Kind) (Object, bool) {
 		es := &EventSource{}
 		es.TypeMeta = typeMetaFor(k)
 		return es, true
-	case KindConfig:
-		cfg := &Config{}
+	case KindConfigMap:
+		cfg := &ConfigMap{}
 		cfg.TypeMeta = typeMetaFor(k)
 		return cfg, true
 	case KindSecret:
@@ -295,7 +295,7 @@ func AllKinds() []Kind {
 		KindRoute,
 		KindService,
 		KindEventSource,
-		KindConfig,
+		KindConfigMap,
 		KindSecret,
 		KindGrant,
 		KindEgressPolicy,

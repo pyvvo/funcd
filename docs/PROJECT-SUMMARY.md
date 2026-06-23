@@ -73,7 +73,7 @@ internal/   # all components — ports + drivers + the controller/serving engine
   (scale-to-zero), `eventing` (triggers), `function` (the Function reconciler), `services` (the
   KV/blob service facades), `artifact` (OCI push/pull), `observability`, `platform`, `version`.
 
-> **"Where is the config component?"** — There isn't one, by design. **Config is a *resource kind***
+> **"Where is the config component?"** — There isn't one, by design. **ConfigMap is a *resource kind***
 > (data: env vars, flags, runtime params), not a hexagonal port. It is stored + served by the
 > `store` + API and consumed by functions, exactly like `Secret`. Only *capabilities with drivers*
 > live as ports in `internal/`.
@@ -87,7 +87,7 @@ Every resource has a **Kubernetes-like typed spec** (`api/types/v1alpha1`) with 
 controller** runs **one reconcile loop per kind** to drive *actual state → desired state*.
 
 **Resource kinds:** `Namespace`, `ResourceGroup`, `Function`, `Revision`, `Service`, `EventSource`,
-`Invocation`, `Config`, `Secret`, `Gateway`, `Route`, `RuntimeClass`, `Grant`, `EgressPolicy`,
+`Invocation`, `ConfigMap`, `Secret`, `Gateway`, `Route`, `RuntimeClass`, `Grant`, `EgressPolicy`,
 `WorkerNode`.
 
 **Deploy lifecycle:**

@@ -20,7 +20,7 @@ type StubHandlers struct {
 	routes         map[string]v1.Route
 	services       map[string]v1.Service
 	eventSources   map[string]v1.EventSource
-	configs        map[string]v1.Config
+	configMaps        map[string]v1.ConfigMap
 	secrets        map[string]v1.Secret
 	grants         map[string]v1.Grant
 	egressPolicies map[string]v1.EgressPolicy
@@ -42,7 +42,7 @@ func NewStubHandlers() *StubHandlers {
 		routes:         make(map[string]v1.Route),
 		services:       make(map[string]v1.Service),
 		eventSources:   make(map[string]v1.EventSource),
-		configs:        make(map[string]v1.Config),
+		configMaps:        make(map[string]v1.ConfigMap),
 		secrets:        make(map[string]v1.Secret),
 		grants:         make(map[string]v1.Grant),
 		egressPolicies: make(map[string]v1.EgressPolicy),
@@ -226,7 +226,7 @@ func (s *StubHandlers) DeleteFunction(_ context.Context, ns v1.NamespaceName, na
 	return nil
 }
 
-// ---- Revision, Route, Service, EventSource, Config, Secret, Grant, EgressPolicy, Invocation (namespaced) ----
+// ---- Revision, Route, Service, EventSource, ConfigMap, Secret, Grant, EgressPolicy, Invocation (namespaced) ----
 // All namespaced kinds follow the same pattern: map key = "namespace/name".
 
 func (s *StubHandlers) GetRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Revision, error) {
@@ -451,33 +451,33 @@ func (s *StubHandlers) DeleteEventSource(_ context.Context, ns v1.NamespaceName,
 	return nil
 }
 
-// ---- Config ----
+// ---- ConfigMap ----
 
-func (s *StubHandlers) GetConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Config, error) {
+func (s *StubHandlers) GetConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if v, ok := s.configs[nsKey(ns, name)]; ok {
+	if v, ok := s.configMaps[nsKey(ns, name)]; ok {
 		return v, nil
 	}
-	return v1.Config{}, fault.NotFoundf("StubHandlers.GetConfig", "Config %s/%s not found", ns, name)
+	return v1.ConfigMap{}, fault.NotFoundf("StubHandlers.GetConfigMap", "ConfigMap %s/%s not found", ns, name)
 }
 
-func (s *StubHandlers) CreateConfig(_ context.Context, cfg v1.Config) (v1.Config, error) {
+func (s *StubHandlers) CreateConfigMap(_ context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(cfg.Namespace, cfg.Name)
-	if _, exists := s.configs[key]; exists {
-		return v1.Config{}, fault.Conflictf("StubHandlers.CreateConfig", "Config %s already exists", key)
+	if _, exists := s.configMaps[key]; exists {
+		return v1.ConfigMap{}, fault.Conflictf("StubHandlers.CreateConfigMap", "ConfigMap %s already exists", key)
 	}
-	s.configs[key] = cfg
+	s.configMaps[key] = cfg
 	return cfg, nil
 }
 
-func (s *StubHandlers) ListConfigs(_ context.Context, ns v1.NamespaceName) ([]v1.Config, error) {
+func (s *StubHandlers) ListConfigMaps(_ context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]v1.Config, 0)
-	for _, v := range s.configs {
+	out := make([]v1.ConfigMap, 0)
+	for _, v := range s.configMaps {
 		if v.Namespace == ns {
 			out = append(out, v)
 		}
@@ -485,25 +485,25 @@ func (s *StubHandlers) ListConfigs(_ context.Context, ns v1.NamespaceName) ([]v1
 	return out, nil
 }
 
-func (s *StubHandlers) ReplaceConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.Config) (v1.Config, error) {
+func (s *StubHandlers) ReplaceConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
-	if _, exists := s.configs[key]; !exists {
-		return v1.Config{}, fault.NotFoundf("StubHandlers.ReplaceConfig", "Config %s not found", key)
+	if _, exists := s.configMaps[key]; !exists {
+		return v1.ConfigMap{}, fault.NotFoundf("StubHandlers.ReplaceConfigMap", "ConfigMap %s not found", key)
 	}
-	s.configs[key] = cfg
+	s.configMaps[key] = cfg
 	return cfg, nil
 }
 
-func (s *StubHandlers) DeleteConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
-	if _, exists := s.configs[key]; !exists {
-		return fault.NotFoundf("StubHandlers.DeleteConfig", "Config %s not found", key)
+	if _, exists := s.configMaps[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteConfigMap", "ConfigMap %s not found", key)
 	}
-	delete(s.configs, key)
+	delete(s.configMaps, key)
 	return nil
 }
 

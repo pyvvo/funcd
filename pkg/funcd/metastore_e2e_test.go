@@ -15,8 +15,8 @@ import (
 )
 
 // scenario (e2e): durable-metastore-survives-restart — boot funcd with a FILE-mode Badger metastore
-// (ADR-0065), apply a Config over the real control-plane API via the SDK, shut the platform down,
-// reboot against the SAME data dir, and read the Config back. Proves the new engine persists
+// (ADR-0065), apply a ConfigMap over the real control-plane API via the SDK, shut the platform down,
+// reboot against the SAME data dir, and read the ConfigMap back. Proves the new engine persists
 // control-plane state end-to-end (the engine-level test proves the driver; this proves the platform).
 func TestScenarioE2EBadgerMetastorePersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
@@ -45,13 +45,13 @@ func TestScenarioE2EBadgerMetastorePersistsAcrossRestart(t *testing.T) {
 		return addr, stop
 	}
 
-	// boot #1 — apply a Config through the control plane
+	// boot #1 — apply a ConfigMap through the control plane
 	addr1, stop1 := boot()
 	c1, err := sdk.New(addr1, sdk.WithToken(funcd.DevToken))
 	require.NoError(t, err)
-	obj, ok := v1.NewObject(v1.KindConfig)
+	obj, ok := v1.NewObject(v1.KindConfigMap)
 	require.True(t, ok)
-	cc := obj.(*v1.Config)
+	cc := obj.(*v1.ConfigMap)
 	cc.Name, cc.Namespace, cc.ResourceGroup = "persisted", "default", "rg1"
 	cc.Spec.Data = map[string]string{"hello": "metastore"}
 	applied, err := c1.Apply(context.Background(), cc)
@@ -65,8 +65,8 @@ func TestScenarioE2EBadgerMetastorePersistsAcrossRestart(t *testing.T) {
 	defer stop2()
 	c2, err := sdk.New(addr2, sdk.WithToken(funcd.DevToken))
 	require.NoError(t, err)
-	got, err := c2.Get(context.Background(), v1.KindConfig, "default", "persisted")
-	require.NoError(t, err, "the Config survived the platform restart on the durable Badger metastore")
+	got, err := c2.Get(context.Background(), v1.KindConfigMap, "default", "persisted")
+	require.NoError(t, err, "the ConfigMap survived the platform restart on the durable Badger metastore")
 	require.Equal(t, wantRV, got.GetObjectMeta().ResourceVersion, "resourceVersion preserved")
-	require.Equal(t, map[string]string{"hello": "metastore"}, got.(*v1.Config).Spec.Data)
+	require.Equal(t, map[string]string{"hello": "metastore"}, got.(*v1.ConfigMap).Spec.Data)
 }

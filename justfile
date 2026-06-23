@@ -210,7 +210,7 @@ lima-example-kv: build-runtime-images build-shim
     echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
-# containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read
+# containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under
 # containerd. Reuses the bench VM (scripts/lima.yaml, which provisions containerd via `funcd install`);
 # the smoke runs inside it (scripts/lima-metastore-smoke.sh). Needs docker (embedded-image build).
@@ -222,8 +222,8 @@ lima-example-metastore: build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # bundle the static fixtures (daemon config + the Config resource) into the mounted deps dir (→ /mnt/funcd-deps)
-    cp e2e/fixtures/metastore-daemon.yaml e2e/fixtures/metastore-config.yaml {{lima_deps}}/
+    # bundle the static fixtures (daemon config + the ConfigMap resource) into the mounted deps dir (→ /mnt/funcd-deps)
+    cp e2e/fixtures/metastore-daemon.yaml e2e/fixtures/metastore-configmap.yaml {{lima_deps}}/
     trap 'limactl stop -f {{lima_meta_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_meta_vm}} --tty=false scripts/lima.yaml

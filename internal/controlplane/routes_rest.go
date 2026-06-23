@@ -139,68 +139,68 @@ func registerEventSource(api huma.API, h Handlers) {
 	})
 }
 
-// ===== Config (namespaced) =====
+// ===== ConfigMap (namespaced) =====
 
-type createConfigInput struct{ Body v1.Config }
-type configOutput struct{ Body v1.Config }
-type listConfigOutput struct{ Body []v1.Config }
+type createConfigMapInput struct{ Body v1.ConfigMap }
+type configMapOutput struct{ Body v1.ConfigMap }
+type listConfigMapOutput struct{ Body []v1.ConfigMap }
 
-func registerConfig(api huma.API, h Handlers) {
-	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/configs"
+func registerConfigMap(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps"
 
 	huma.Register(api, huma.Operation{
-		OperationID: "listConfigs", Method: http.MethodGet, Path: base,
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *namespacedList) (*listConfigOutput, error) {
-		items, err := h.ListConfigs(ctx, in.Namespace)
+		OperationID: "listConfigMaps", Method: http.MethodGet, Path: base,
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *namespacedList) (*listConfigMapOutput, error) {
+		items, err := h.ListConfigMaps(ctx, in.Namespace)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &listConfigOutput{Body: items}, nil
+		return &listConfigMapOutput{Body: items}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "createConfig", Method: http.MethodPost, Path: base,
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *createConfigInput) (*configOutput, error) {
-		item, err := h.CreateConfig(ctx, in.Body)
+		OperationID: "createConfigMap", Method: http.MethodPost, Path: base,
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *createConfigMapInput) (*configMapOutput, error) {
+		item, err := h.CreateConfigMap(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "getConfig", Method: http.MethodGet, Path: base + "/{name}",
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *namespacedGet) (*configOutput, error) {
-		item, err := h.GetConfig(ctx, in.Namespace, in.Name)
+		OperationID: "getConfigMap", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *namespacedGet) (*configMapOutput, error) {
+		item, err := h.GetConfigMap(ctx, in.Namespace, in.Name)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "replaceConfig", Method: http.MethodPut, Path: base + "/{name}",
-		Tags: []string{"Config"},
+		OperationID: "replaceConfigMap", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *struct {
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
-		Body      v1.Config
-	}) (*configOutput, error) {
-		item, err := h.ReplaceConfig(ctx, in.Namespace, in.Name, in.Body)
+		Body      v1.ConfigMap
+	}) (*configMapOutput, error) {
+		item, err := h.ReplaceConfigMap(ctx, in.Namespace, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "deleteConfig", Method: http.MethodDelete, Path: base + "/{name}",
-		Tags: []string{"Config"},
+		OperationID: "deleteConfigMap", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteConfig(ctx, in.Namespace, in.Name))
+		return nil, wrapFaultError(h.DeleteConfigMap(ctx, in.Namespace, in.Name))
 	})
 }
 

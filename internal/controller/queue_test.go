@@ -10,7 +10,7 @@ import (
 )
 
 func key(name string) Request {
-	return Request{GVK: v1.KindConfig.GVK(), Namespace: "default", Name: v1.ObjectName(name)}
+	return Request{GVK: v1.KindConfigMap.GVK(), Namespace: "default", Name: v1.ObjectName(name)}
 }
 
 // scenario: workqueue-dedup — many adds of the same key collapse to one Get, and a

@@ -89,8 +89,8 @@ func TestScenarioReconcileOnStoreChange(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
 	fr := &fakeReconciler{}
-	createObject(t, st, v1.KindConfig, "obj1")
-	stop := run(t, st, v1.KindConfig.GVK(), fr)
+	createObject(t, st, v1.KindConfigMap, "obj1")
+	stop := run(t, st, v1.KindConfigMap.GVK(), fr)
 	defer stop()
 
 	require.Eventually(t, func() bool { return fr.count() >= 1 },
@@ -103,8 +103,8 @@ func TestScenarioReconcileRetryBackoff(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
 	fr := &fakeReconciler{failUntil: 2} // fail calls 1 and 2, succeed on 3
-	createObject(t, st, v1.KindConfig, "retry")
-	stop := run(t, st, v1.KindConfig.GVK(), fr)
+	createObject(t, st, v1.KindConfigMap, "retry")
+	stop := run(t, st, v1.KindConfigMap.GVK(), fr)
 	defer stop()
 
 	require.Eventually(t, func() bool { return fr.count() >= 3 },
@@ -118,8 +118,8 @@ func TestScenarioReconcileRequeueAfter(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
 	fr := &fakeReconciler{result: controller.Result{RequeueAfter: 30 * time.Millisecond}}
-	createObject(t, st, v1.KindConfig, "requeue")
-	stop := run(t, st, v1.KindConfig.GVK(), fr)
+	createObject(t, st, v1.KindConfigMap, "requeue")
+	stop := run(t, st, v1.KindConfigMap.GVK(), fr)
 	defer stop()
 
 	require.Eventually(t, func() bool { return fr.count() >= 2 },
@@ -160,6 +160,6 @@ func TestScenarioStatusWriteback(t *testing.T) {
 func TestScenarioGracefulShutdown(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
-	stop := run(t, st, v1.KindConfig.GVK(), &fakeReconciler{}) // run() asserts a clean drain within 3s
+	stop := run(t, st, v1.KindConfigMap.GVK(), &fakeReconciler{}) // run() asserts a clean drain within 3s
 	stop()
 }

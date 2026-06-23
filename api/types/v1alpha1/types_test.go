@@ -158,7 +158,7 @@ func TestKind_Namespaced(t *testing.T) {
 	clusterKinds := []Kind{KindNamespace, KindRuntimeClass, KindWorkerNode, KindGateway}
 	namespacedKinds := []Kind{
 		KindResourceGroup, KindFunction, KindRevision, KindRoute,
-		KindService, KindEventSource, KindConfig, KindSecret,
+		KindService, KindEventSource, KindConfigMap, KindSecret,
 		KindGrant, KindEgressPolicy, KindInvocation,
 	}
 	for _, k := range clusterKinds {

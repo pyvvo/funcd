@@ -59,7 +59,7 @@ func (cs Conditions) Get(t ConditionType) (Condition, bool) {
 }
 
 // Status is the shared status base embedded by kinds with observed state.
-// Pure-data/policy kinds (Config, Secret, Grant, EgressPolicy) do not have status.
+// Pure-data/policy kinds (ConfigMap, Secret, Grant, EgressPolicy) do not have status.
 type Status struct {
 	Phase              Phase      `json:"phase,omitempty"`
 	ObservedGeneration int64      `json:"observedGeneration,omitempty"`

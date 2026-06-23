@@ -1228,5 +1228,20 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0078-implementation-claude-opus-4-8.md",
     "notes": "Behavior-preserving CLI rename funcdcli\u2192funcdctl (git mv cmd/ + ~150-ref tracked-only sweep, ADR-filename tokens preserved). Verified: grep gate=0, build/test/lint/mod green (unchanged assertions; bench-smoke flake is env, internal/bench zero diff), kv+metastore Lima lanes PASS on containerd, frozen ADRs untouched (ADR-0024 still 23 funcdcli), pkg/sdk design unchanged, no new dep. First sweep wrongly used --exclude-dir=docs/adr (basename match) \u2192 hard-reset + redone via git ls-files path-exclude."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0079",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0079-implementation-claude-opus-4-8.md",
+    "notes": "Resource kind Config\u2192ConfigMap (k8s-style, disambiguates from daemon FuncdConfig). QUALIFIED-symbol rename (judge Blocker: a blanket \\bConfig\\b would corrupt ~139 tokens/7 types + internal/config) \u2014 bare Config scoped to api/types/v1alpha1, v1.Config/KindConfig elsewhere, explicit control-plane handler/DTO/Tags/REST-path renames (huma.Config intact). OpenAPI regenerated (/configmaps, deterministic), pkg/sdk plural. Verified: gate=0, internal/config+FuncdConfig+tls.Config untouched, build/test/lint/mod green, metastore lane PASS (ConfigMap recovers across restart). Behavior-preserving, zero new deps."
   }
 ]
