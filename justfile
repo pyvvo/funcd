@@ -160,8 +160,8 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo via the declarative
     # Venom suite (host-side against the forwarded ports; see e2e/fn-to-fn.venom.yml + the venom-e2e skill).
     suite="$(pwd)/e2e/fn-to-fn.venom.yml"
-    ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
-        --var "vm={{lima_fn_vm}}" "$suite" )
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_fn_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_fn-to-fn.venom.xml"
 
 # the containerd-lane KV example (ADR-0069): a SELF-DEPLOYING VM (scripts/lima-kv.yaml) boots funcd in
 # containerd mode with a DURABLE Badger KV (kvstore.engine: badger), pushes + applies BOTH kv-counter
@@ -201,14 +201,13 @@ lima-example-kv: build-runtime-images build-shim
     trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_kv_vm}} --tty=false scripts/lima-kv.yaml
-    # Declarative e2e via OVH Venom (Apache-2.0): the full positive (each counter reads 1→2 with no read
-    # Policy) + fail-closed negative (apply counter-unbound.yaml in-VM, then assert the read is Forbidden)
-    # suite. Version-pinned through the flake's Go toolchain (an ADR would pin it as a buildGoModule flake
-    # input). Venom writes venom.log in its CWD, so run it from the scratch dir (outside the repo) with
-    # absolute suite/unbind paths; --output-dir keeps the JUnit results there too.
+    # Declarative e2e via OVH Venom (Apache-2.0, flake-pinned — ADR-0077): the full positive (each counter
+    # reads 1→2 with no read Policy) + fail-closed negative (apply counter-unbound.yaml in-VM, then assert the
+    # read is Forbidden) suite. Venom writes venom.log in its CWD, so run it from the scratch dir (outside the
+    # repo) with an absolute suite path; --output-dir keeps the JUnit results there too.
     suite="$(pwd)/e2e/kv-counter.venom.yml"
-    ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
-        --var "vm={{lima_kv_vm}}" "$suite" )
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_kv_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a Config, RESTART the daemon, and read

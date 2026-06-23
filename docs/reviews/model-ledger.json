@@ -1198,5 +1198,20 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0076-implementation-claude-opus-4-8.md",
     "notes": "Binding-as-read-grant: a declared spec.kv binding grants kv::read via a built-in permit (read-side mirror of ADR-0075 link-as-grant). Bound-only (unbound stays default-deny, NOT default-allow), per-table, read-only (kvBindings feeds no write rule; owner-write unchanged). No PEP/schema/port change, zero new deps. Verified: build/test/lint/mod green, 3 new scenarios + all prior pass, Lima containerd lane proves reads 1\u21922 with NO Policy. Lone finding was an env git-add-all staging slip (stray nodejs22.tar), unstaged \u2014 0 model-attributed."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0077",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0077-implementation-claude-opus-4-8.md",
+    "notes": "Pin OVH Venom v1.3.0 in the flake (buildGoModule, src+vendorHash, version ldflag) for all systems; switch the kv + fn-to-fn lane recipes off go-run to the pinned venom + echo the results path. Verified: venom version=v1.3.0 from the nix store, flake.lock untouched, both lanes final status PASS on real containerd, 0 go-run occurrences, scripts/ free of per-lane invoke helpers, test-only (no product dep). Ratifies the already-landed suites/skill. metastore-smoke + CI-gating deferred (ADR Open questions)."
   }
 ]

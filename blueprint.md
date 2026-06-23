@@ -870,6 +870,12 @@ funcd/
 # NOTE (ADR-0025): contract suites live at internal/<port>/<port>contract (ADR-0002), NOT a top-level tests/contract;
 # the Linux per-driver lane co-locates in tests/e2e behind `//go:build linux && integration` (containerd precedent).
 │
+├── e2e/                                  # declarative containerd-lane e2e (ADR-0077): OVH Venom YAML suites that
+│   │                                     #   assert the `just lima-example-*` lanes on a real self-deploying VM.
+│   │                                     #   DISTINCT from tests/e2e (the Go funcd.InMemory() embed tests above).
+│   ├── kv-counter.venom.yml              #   the KV lane (ADR-0069/0076) · fn-to-fn.venom.yml — the link lane (ADR-0064/0058)
+│   └── README.md                         #   authoring playbook = the venom-e2e skill (.claude/skills/venom-e2e)
+│
 ├── configs/
 │   ├── funcd.yaml                        # production example (drivers, gateway, storage, bus)
 │   └── funcd.dev.yaml                    # in-memory / embedded everything
