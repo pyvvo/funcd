@@ -11,6 +11,10 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
   1. **binding-as-read-grant** — each counter (nodejs22 + python314) reads 1→2 with **no read Policy**.
   2. **fail-closed** — applying `examples/js/kv-counter/counter-unbound.yaml` (the same config minus
      `spec.kv`) makes `context.kv.get` **Forbidden** (bound-only, not default-allow).
+- `fn-to-fn.venom.yml` — the fn-to-fn link lane (ADR-0064/0058). Proves: front invokes greeter (the link
+  is the capability); a missing name makes greeter's contract reject (422) and that **422 propagates** back
+  through front; a bad-typed greeter call hits the **contract gate** (422) before the handler; and only the
+  linked caller (front) has an invoke socket.
 
 ## Run it
 

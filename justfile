@@ -157,8 +157,11 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     trap 'limactl stop -f {{lima_fn_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true
     limactl start --name {{lima_fn_vm}} --tty=false scripts/lima-fn-to-fn.yaml
-    # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo invokes inside it
-    limactl shell {{lima_fn_vm}} -- sudo bash -s < scripts/lima-fn-to-fn-invoke.sh
+    # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo via the declarative
+    # Venom suite (host-side against the forwarded ports; see e2e/fn-to-fn.venom.yml + the venom-e2e skill).
+    suite="$(pwd)/e2e/fn-to-fn.venom.yml"
+    ( cd {{lima_deps}} && go run github.com/ovh/venom/cmd/venom@v1.3.0 run --output-dir {{lima_deps}} \
+        --var "vm={{lima_fn_vm}}" "$suite" )
 
 # the containerd-lane KV example (ADR-0069): a SELF-DEPLOYING VM (scripts/lima-kv.yaml) boots funcd in
 # containerd mode with a DURABLE Badger KV (kvstore.engine: badger), pushes + applies BOTH kv-counter

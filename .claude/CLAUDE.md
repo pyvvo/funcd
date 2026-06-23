@@ -287,6 +287,21 @@ When all four pass individually, the implementation is green — the `git diff` 
 satisfied by committing the changed tracked files. After `go fmt ./...` is clean and the
 four checks above pass, the implementation is done; `just ci` will pass after commit.
 
+### 3. The containerd Lima lanes need colima (Docker) running — start it if a lane fails early
+
+The `just lima-example-*` lanes (KV, fn-to-fn, …) and `build-runtime-images` build the embedded
+runtime images with `docker build`, so they require **colima to be running** (it provides the
+Docker daemon on macOS — a *separate host daemon* from the flake-pinned Lima). If colima is
+stopped, the lane fails **early in `build-runtime-images`** with a Docker-socket connection error
+(`failed to connect to the docker API … : no such file or directory`) — *before* the VM ever
+boots or the Venom suite runs. This is environmental, **not** a code/test/suite defect; don't
+chase it in the lane's YAML.
+
+**Mitigation**: `colima start`, confirm `docker info` responds (and `docker context show` is
+`colima`), then re-run the lane. colima can stop/die mid-session (sleep, resource pressure); when
+a containerd lane suddenly fails at the image-build step, check colima **first**. Keep it running;
+don't stop it mid-session. (The Venom e2e suites themselves are covered by the `venom-e2e` skill.)
+
 ## Before you finish any skill run — propagation checklist
 
 - [ ] Did an ADR change status? Update its feat row (and blueprint, if it refined it).
