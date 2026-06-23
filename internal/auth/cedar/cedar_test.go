@@ -50,8 +50,17 @@ func newOrders() *v1.KVStore {
 func newMeta() fakeMeta {
 	return fakeMeta{
 		fns: map[string]*v1.Function{
-			"default/reporting":     {ObjectMeta: v1.ObjectMeta{Name: "reporting", Namespace: "default", ResourceGroup: "rg1"}},
+			// reporting has NO spec.kv binding — it exercises the cross-binding Policy path + default-deny.
+			"default/reporting": {ObjectMeta: v1.ObjectMeta{Name: "reporting", Namespace: "default", ResourceGroup: "rg1"}},
+			// customers-svc owns orders/customers (newOrders) but declares no binding — keeps the owner-attribute
+			// test isolated from binding-as-read-grant.
 			"default/customers-svc": {ObjectMeta: v1.ObjectMeta{Name: "customers-svc", Namespace: "default", ResourceGroup: "rg1"}},
+			// analytics is a CONSUMER: it BINDS orders/customers (spec.kv) but does NOT own it — exercises
+			// binding-as-read-grant (read via binding) and write-unaffected (a binding never grants write).
+			"default/analytics": {
+				ObjectMeta: v1.ObjectMeta{Name: "analytics", Namespace: "default", ResourceGroup: "rg1"},
+				Spec:       v1.FunctionSpec{KV: []v1.FunctionKV{{Alias: "cust", Store: "orders", Table: "customers"}}},
+			},
 		},
 		stores: map[string]*v1.KVStore{"default/orders": newOrders()},
 	}
@@ -205,4 +214,49 @@ func TestScenarioScopedPolicies(t *testing.T) {
 		dec := authorize(t, dns, fnPrincipal("default", "reporting"), auth.ActionKVRead, r)
 		require.True(t, dec.Allowed, "namespace-scoped read permits %s/%s: %s", r.Name, r.Path, dec.Reason)
 	}
+}
+
+// scenario: binding-grants-read — a declared spec.kv binding grants kv::read on that table with NO
+// Policy (ADR-0076 binding-as-read-grant, the read-side mirror of link-as-grant). analytics binds
+// orders/customers (it does not own it) and reads it; a function with no binding to the table is
+// default-deny (unbound-read-denied). The built-in permit(kv::read) when principal.kvBindings.contains.
+func TestScenarioBindingGrantsRead(t *testing.T) {
+	t.Parallel()
+	d := newDriver(t, newMeta(), fixedPolicies{rev: "0"}) // NO user policies — the binding alone grants read
+
+	bound := authorize(t, d, fnPrincipal("default", "analytics"), auth.ActionKVRead, tableResource("default", "orders", "customers"))
+	require.True(t, bound.Allowed, "analytics reads orders/customers via its spec.kv binding, no Policy needed: %s", bound.Reason)
+
+	// unbound-read-denied: reporting binds nothing → its kvBindings does not contain the table → default-deny.
+	unbound := authorize(t, d, fnPrincipal("default", "reporting"), auth.ActionKVRead, tableResource("default", "orders", "customers"))
+	require.False(t, unbound.Allowed, "reporting has no binding to orders/customers ⇒ kv::read default-deny (not default-allow)")
+
+	// a bound function reading a DIFFERENT, unbound table is still denied (the grant is per-table, not per-store).
+	otherTable := authorize(t, d, fnPrincipal("default", "analytics"), auth.ActionKVRead, tableResource("default", "orders", "public"))
+	require.False(t, otherTable.Allowed, "the binding grants read on orders/customers only — orders/public (unbound) stays default-deny")
+}
+
+// scenario: policy-revokes-read — a forbid Policy overrides the binding grant (operator revoke without
+// editing the caller's spec.kv; forbid wins in Cedar).
+func TestScenarioPolicyRevokesRead(t *testing.T) {
+	t.Parallel()
+	pol := v1.Policy{
+		ObjectMeta: v1.ObjectMeta{Name: "revoke-analytics", Namespace: "default"},
+		Spec:       v1.PolicySpec{Cedar: `forbid(principal == Function::"default/analytics", action == Action::"kv::read", resource);`},
+	}
+	d := newDriver(t, newMeta(), fixedPolicies{policies: []v1.Policy{pol}, rev: "1"})
+
+	dec := authorize(t, d, fnPrincipal("default", "analytics"), auth.ActionKVRead, tableResource("default", "orders", "customers"))
+	require.False(t, dec.Allowed, "a forbid Policy revokes the binding's read (forbid wins), without editing spec.kv")
+}
+
+// scenario: write-unaffected — a binding grants READ only; a bound non-owner write is still Forbidden by
+// the owner-write built-in (ADR-0074). The kvBindings Set feeds the kv::read permit, never kv::write.
+func TestScenarioBindingDoesNotGrantWrite(t *testing.T) {
+	t.Parallel()
+	d := newDriver(t, newMeta(), fixedPolicies{rev: "0"})
+
+	// analytics binds orders/customers (so it can READ) but customers-svc owns it — analytics may NOT write.
+	w := authorize(t, d, fnPrincipal("default", "analytics"), auth.ActionKVWrite, tableResource("default", "orders", "customers"))
+	require.False(t, w.Allowed, "a spec.kv binding grants read, never write — the owner-write forbid still denies a non-owner write")
 }

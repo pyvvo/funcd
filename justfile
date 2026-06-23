@@ -182,16 +182,17 @@ lima-example-kv: build-runtime-images build-shim
     # Stage both functions into one bundle — py/ subdir keeps the shared schema-file basenames from colliding.
     stage="$(mktemp -d)"
     # ADR-0073: each kv-counter declares its KV binding on the Function (spec.kv) + an owned KVStore with
-    # a per-table owner (default-deny — no grant.yaml). ADR-0074: a Cedar read Policy (policy.yaml) grants
-    # kv::read (reads are default-deny); the owner-write is a built-in forbid (no write Policy).
+    # a per-table owner (default-deny — no grant.yaml). ADR-0076: a declared spec.kv binding GRANTS kv::read
+    # on its table (built-in permit), so own-table reads need NO read Policy; the owner-write is a built-in
+    # forbid (no write Policy). No policy.yaml is staged — the lane proves reads work with no read Policy.
     cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter-input.schema.json \
        examples/js/kv-counter/counter-output.schema.json examples/js/kv-counter/counter.yaml \
-       examples/js/kv-counter/store.yaml examples/js/kv-counter/policy.yaml \
+       examples/js/kv-counter/store.yaml \
        examples/js/kv-counter/funcdconfig.yaml "$stage/"
     mkdir -p "$stage/py"
     cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter-input.schema.json \
        examples/python/kv-counter/counter-output.schema.json examples/python/kv-counter/counter.yaml \
-       examples/python/kv-counter/store.yaml examples/python/kv-counter/policy.yaml "$stage/py/"
+       examples/python/kv-counter/store.yaml "$stage/py/"
     tar czf {{lima_deps}}/kv-counter.tgz -C "$stage" .
     rm -rf "$stage"
     trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT

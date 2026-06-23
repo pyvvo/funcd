@@ -42,10 +42,9 @@ provision:
       funcdcli apply -f "$d/py/store.yaml"
       funcdcli apply -f "$d/counter.yaml"
       funcdcli apply -f "$d/py/counter.yaml"
-      # ADR-0074: KV reads are default-deny — apply each function's Cedar read Policy so context.kv.get
-      # is permitted (the owner-write is a built-in forbid, no write Policy needed).
-      funcdcli apply -f "$d/policy.yaml"
-      funcdcli apply -f "$d/py/policy.yaml"
+      # ADR-0076: a declared spec.kv binding GRANTS kv::read on its table (built-in permit) — so NO read
+      # Policy is applied here; context.kv.get is permitted by the binding alone (owner-write stays a
+      # built-in forbid, no write Policy). This lane is the e2e proof that own-table reads need no Policy.
 
 # Appended after the runtime probe: gate `limactl start` on BOTH counters reaching Ready on a real sandbox.
 probes:

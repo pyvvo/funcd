@@ -15,12 +15,16 @@ import (
 
 // The always-on built-in rules the driver ships (NOT user Policies) are authored as Cedar in the
 // `.cedar` files alongside this one and embedded — far more legible/editable than inline Go strings.
-// builtin_kv.cedar: kv::write single-writer (reads default-deny). builtin_invoke.cedar: ADR-0064's
-// link-as-grant preserved as a built-in permit (a declared link grants invoke; defense-in-depth).
-// The two are concatenated into the built-in PolicySet in compile().
+// builtin_kv.cedar: kv::write single-writer. builtin_kv_read.cedar (ADR-0076): a declared spec.kv
+// binding grants kv::read (the read-side link-as-grant; unbound reads stay default-deny).
+// builtin_invoke.cedar: ADR-0064's link-as-grant preserved as a built-in permit (a declared link
+// grants invoke; defense-in-depth). All are concatenated into the built-in PolicySet in compile().
 
 //go:embed builtin_kv.cedar
 var builtinKVPolicies string
+
+//go:embed builtin_kv_read.cedar
+var builtinKVReadPolicies string
 
 //go:embed builtin_invoke.cedar
 var builtinInvokePolicies string
@@ -71,7 +75,7 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 // stored Policy compiling is an invariant; a compile failure here means corruption.
 func compile(policies []v1.Policy) (*cedar.PolicySet, error) {
 	const op = "cedar.compile"
-	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtinKVPolicies+"\n"+builtinInvokePolicies))
+	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtinKVPolicies+"\n"+builtinKVReadPolicies+"\n"+builtinInvokePolicies))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
 	}

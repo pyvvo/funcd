@@ -1168,5 +1168,35 @@
     "dod_total": 4,
     "report": "docs/reviews/adr-0075-implementation-claude-opus-4-8.md",
     "notes": "Cedar invoke authz: extends the ADR-0074 driver with a link::invoke action + Function-as-resource + the principal's links Set; built-in permit preserves ADR-0064 link-as-grant (defense-in-depth), operator Policy forbids govern; NewHandler gains the PDP, calls it after Resolve. No SSRF (two gates), forbid-wins, connection-scoped principal \u2014 verified incl. e2e. Built-in Cedar moved to embedded .cedar files. No new dep."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0076",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0076-implementation-claude-opus-4-8.md",
+    "notes": "ADR-0076 logic correct+complete: built-in permit(kv::read) when kvBindings.contains(resource), per-table, read-only; all 3 new scenarios + e2e pass; no PEP/schema/port/dep change; F45 added, F43 stale-fix valid (ADR-0074 Implemented), blueprint synced. 1 Major [env]: 51MB internal/runtime/embedimg/nodejs22.tar accidentally staged, outside ADR surface \u2014 unstage before landing. 0 model-attributed."
+  },
+  {
+    "date": "2026-06-23",
+    "adr": "0076",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0076-implementation-claude-opus-4-8.md",
+    "notes": "Binding-as-read-grant: a declared spec.kv binding grants kv::read via a built-in permit (read-side mirror of ADR-0075 link-as-grant). Bound-only (unbound stays default-deny, NOT default-allow), per-table, read-only (kvBindings feeds no write rule; owner-write unchanged). No PEP/schema/port change, zero new deps. Verified: build/test/lint/mod green, 3 new scenarios + all prior pass, Lima containerd lane proves reads 1\u21922 with NO Policy. Lone finding was an env git-add-all staging slip (stray nodejs22.tar), unstaged \u2014 0 model-attributed."
   }
 ]

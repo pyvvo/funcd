@@ -103,28 +103,29 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	applyFnObj(t, c, &fn)
 	waitReady(t, c, "counter")
 
-	// scenario (e2e): cedar-default-deny — even WITH a resolved binding + an owned store, the read is
-	// Forbidden until a Cedar read Policy permits it: authorization is the PDP, not the binding (ADR-0074).
-	countNoPolicy, bodyNoPolicy := call()
-	require.NotEqual(t, 1, countNoPolicy, "with a binding but NO read Policy, context.kv.get is Forbidden (default-deny): %s", bodyNoPolicy)
-
-	// scenario (e2e): cedar-permits-read / owner-writes 1→2 — apply the read Policy; now the bound owner
-	// reads (Policy) + writes (built-in owner-forbid) and the count increments across invocations.
-	applyPolicy(t, c, filepath.Join(exYAML, "policy.yaml"))
+	// scenario (e2e): binding-grants-read / owner-writes 1→2 — with the spec.kv binding applied and NO read
+	// Policy, the read is now PERMITTED by the binding (ADR-0076 binding-as-read-grant); the bound owner
+	// reads (binding) + writes (built-in owner-forbid) and the count increments across invocations.
 	got1, body1 := call()
-	require.Equal(t, 1, got1, "with the read Policy applied, first invoke → count 1: %s", body1)
+	require.Equal(t, 1, got1, "with the spec.kv binding and NO Policy, first invoke → count 1 (the binding grants read): %s", body1)
 	got2, _ := call()
-	require.Equal(t, 2, got2, "second invoke → count 2 (KV persisted across invocations)")
+	require.Equal(t, 2, got2, "second invoke → count 2 (KV persisted; binding grants read, owner writes)")
+
+	// scenario (e2e): policy-revokes-read — a forbid Policy overrides the binding grant (operator revoke,
+	// without editing spec.kv; forbid wins), so the next read is Forbidden and the invocation is rejected.
+	applyPolicyObj(t, c, &v1.Policy{
+		TypeMeta:   v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: "Policy"},
+		ObjectMeta: v1.ObjectMeta{Name: "revoke-counter-read", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.PolicySpec{Cedar: `forbid(principal == Function::"default/counter", action == Action::"kv::read", resource);`},
+	})
+	revoked, revokedBody := call()
+	require.NotEqual(t, 3, revoked, "a forbid Policy revokes the binding's read (forbid wins) — the invocation is rejected: %s", revokedBody)
 }
 
-// applyPolicy parses a Policy manifest and applies it through the control-plane client (ADR-0074).
-func applyPolicy(t *testing.T, c *sdk.Client, path string) {
+// applyPolicyObj applies a Policy object through the control-plane client (ADR-0074/0076).
+func applyPolicyObj(t *testing.T, c *sdk.Client, pol *v1.Policy) {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	var pol v1.Policy
-	require.NoError(t, yaml.Unmarshal(data, &pol), "parse %s", path)
-	_, err = c.Apply(context.Background(), &pol)
+	_, err := c.Apply(context.Background(), pol)
 	require.NoError(t, err)
 }
 

@@ -84,7 +84,9 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 // namespace/resourceGroup attrs and its parent KVStore); for invoke (ADR-0075) the resource is the
 // target Function. The principal Function additionally carries a `links` Set attribute (the caller's
 // spec.links targets as Function entity-refs) so the built-in link::invoke permit can self-enforce
-// "declared". Only the request-relevant entities are resolved — never a full-store rebuild.
+// "declared", and a `kvBindings` Set (the caller's spec.kv tables as KVTable entity-refs) so the
+// built-in kv::read permit (ADR-0076) grants read on a bound table. Only the request-relevant entities
+// are resolved — never a full-store rebuild.
 func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource auth.EntityRef) (cedartypes.EntityMap, error) {
 	const op = "cedar.EntitiesFor"
 	em := cedartypes.EntityMap{}
@@ -113,6 +115,14 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 				links = append(links, functionUID(principal.Namespace, l.Target))
 			}
 			attrs["links"] = cedartypes.NewSet(links...)
+			// kvBindings: the caller's spec.kv tables as KVTable entity-refs (same namespace, ADR-0076),
+			// so the built-in permit's principal.kvBindings.contains(resource) grants kv::read on a bound
+			// table. Per-table (not per-store): a binding grants read on that one table only.
+			kvBindings := make([]cedartypes.Value, 0, len(fn.Spec.KV))
+			for _, b := range fn.Spec.KV {
+				kvBindings = append(kvBindings, kvTableUID(principal.Namespace, b.Store, b.Table))
+			}
+			attrs["kvBindings"] = cedartypes.NewSet(kvBindings...)
 			em[pUID] = cedartypes.Entity{UID: pUID, Attributes: cedartypes.NewRecord(attrs)}
 		}
 	} else if fault.KindOf(ferr) != fault.NotFound {
