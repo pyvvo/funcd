@@ -428,7 +428,7 @@ Like k3s or faasd, funcd ships as a single binary that runs several cooperating 
 How the funcd codebase itself logs (info / warn / error) — distinct from function logs, which are tenant telemetry.
 
 - **One API: `log/slog`** (stdlib). No third-party logging API anywhere in the codebase (depguard-enforced); handlers decide rendering: human-readable text in dev, JSON in production.
-- **Built once, injected everywhere**: `internal/observability` constructs the root logger at bootstrap from daemon config (`log.level`, `log.format`, `log.otlp`); the app container hands every component a named child logger — `root.With("component", "controller")`. No package-level globals, so tests can assert on log output with an in-memory handler.
+- **Built once, injected everywhere**: `internal/platform/observability` constructs the root logger at bootstrap from daemon config (`log.level`, `log.format`, `log.otlp`); the app container hands every component a named child logger — `root.With("component", "controller")`. No package-level globals, so tests can assert on log output with an in-memory handler.
 - **Canonical fields**: `component`, `namespace`, `kind`, `name`, `generation`, `request_id`, `trace_id`, `span_id`, `error` — dashboards and alerts key on these.
 - **Trace correlation**: middleware and control loops carry request-id + OTel span context in `context.Context`; a thin `slog.Handler` decorator lifts `trace_id`/`span_id` from the context into every record, so a log line in victoria-logs links to its trace in victoria-traces. Components use the `*Context` variants (`InfoContext`, …) everywhere.
 - **Level conventions**:
@@ -444,7 +444,7 @@ How the funcd codebase itself logs (info / warn / error) — distinct from funct
 - **Runtime level switching**: the root level lives in a `slog.LevelVar`; an admin endpoint (`PUT /v1/admin/log-level`) adjusts global or per-component levels without restart.
 - **Export**: stdout JSON by default (12-factor — journald or any collector picks it up); optionally the `otelslog` bridge ships the same records through OTLP into victoria-logs — same OTel pipeline as function logs, separate stream labels (`source=platform` vs `source=function`).
 - **Child processes**: the supervisor captures stdout/stderr of the remaining supervised processes — containerd, and OpenBAO when the external secrets driver is used — and re-emits each line through the same slog pipeline (`component=containerd`), so the single-binary deployment has exactly one log stream. (The gateway is embedded, so it logs in-process directly.)
-- **Audit is not ops logging**: security-relevant events (who deployed what, policy decisions) go to the dedicated audit channel (`internal/observability/audit.go`) with its own retention; never interleaved with operational logs.
+- **Audit is not ops logging**: security-relevant events (who deployed what, policy decisions) go to the dedicated audit channel (`internal/platform/observability/audit.go`) with its own retention; never interleaved with operational logs.
 
 ```go
 // bootstrap (internal/app)
@@ -843,22 +843,13 @@ funcd/
 │   │   ├── authenticator.go              # workload identity + OIDC → V2 (V1 request authn is the API-server middleware, internal/controlplane)
 │   │   └── policy/                       # optional cedar-go / opa engines behind the port → V2
 │   │
-│   ├── observability/
-│   │   ├── logger.go                     # slog, structured
-│   │   ├── metrics.go                    # OTel
-│   │   ├── tracing.go                    # OTel
-│   │   └── audit.go
-│   │
-│   ├── platform/                         # tiny shared kernel — zero business logic
-│   │   │                                  # (error kernel lives in api/fault, not here — ADR-0002)
-│   │   ├── validation.go
-│   │   ├── pagination.go
-│   │   ├── idempotency.go
-│   │   ├── retry.go
-│   │   └── clock.go
-│   │
-│   └── version/
-│       └── version.go                    # filled by -ldflags at build time
+│   └── platform/                         # shared kernel — zero business logic (LEAF: imports no internal/, ADR-0002 depguard)
+│       │                                  # (error kernel lives in api/fault, not here)
+│       ├── clock/                         # testable clock abstraction
+│       ├── config/                        # daemon config (FuncdConfig): schema + validation + env overrides
+│       ├── lintfixture/                   # ADR-0002 lint-rule test fixtures
+│       ├── observability/                 # slog root + OTel metrics/tracing + audit (logger/metrics/tracing/audit.go)
+│       └── version/                       # version.go — filled by -ldflags at build time
 │
 ├── tests/
 │   ├── e2e/                              # black-box: only pkg/funcd + pkg/sdk + api imports (depguard e2e-boundary)
@@ -909,7 +900,7 @@ funcd/
 - **`store/badger/` is the metastore engine (ADR-0065)**: pure-Go embedded LSM on a local file store; a pure-Go memory engine serves tests + `InMemory()` — both behind the same `Store` port (RV/generation/watch/keying unchanged from ADR-0006). ADR-0065 superseded ADR-0006's slatedb/cgo engine: pure-Go, no cgo, no object-store dependency, restoring the static single binary. (Object-storage backup/DR/CDC are opt-in concerns of the per-function KV-service work, tracked separately.)
 - **One task runner only**: two task runners drift apart. `just` chosen (clean recipe syntax, arguments, no `.PHONY` ceremony) — decided in ADR-0001, 2026-06-13.
 - **`internal/eventing/` added**: EventSource resources need runtime machinery (adapters, CloudEvents normalization, sensors, triggers) distinct from their CRUD feature slice.
-- **`internal/version/` + ldflags added**: standard build-info stamping.
+- **`internal/platform/version/` + ldflags added**: standard build-info stamping.
 
 ### Resource model
 

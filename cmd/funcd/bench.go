@@ -420,7 +420,7 @@ func logf(out io.Writer, format string, a ...any) {
 // imageOverrides parses FUNCD_IMAGE_OVERRIDE ("runtime=ref,runtime=ref") into the Manager's
 // --image override map (ADR-0054) for the bench --containerd lane: a listed runtime is pulled from
 // its registry ref instead of imported from the embedded curated tar. Empty/malformed entries are
-// skipped. (The daemon resolves the same env via internal/config; the bench is its own harness.)
+// skipped. (The daemon resolves the same env via internal/platform/config; the bench is its own harness.)
 func imageOverrides() map[string]string {
 	raw := os.Getenv("FUNCD_IMAGE_OVERRIDE")
 	if raw == "" {

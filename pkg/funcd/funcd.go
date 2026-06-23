@@ -36,7 +36,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
-	"github.com/green-0-rabbit/funcd/internal/observability"
+	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
 	"github.com/green-0-rabbit/funcd/internal/secrets"

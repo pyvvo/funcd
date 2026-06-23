@@ -143,7 +143,7 @@ stateDiagram-v2
 | [**Controller**](../internal/controller/controller.go) | One reconcile framework, one loop per kind, default-deny on drift. | V1 |
 | [**WorkerNode**](../api/types/v1alpha1/workernode.go) | The multi-node compute-node identity (a node that schedules workers; many may run on one machine, K3s-style). Renamed from `Worker` by ADR-0045. | V2 (registration/heartbeat) |
 | [**Worker pooling**](../internal/pooling/pooling.go) | Per-function opt-in (`spec.pooling.worker`) to co-locate same-namespace, same-runtime functions as handlers in one `worker_threads` pool worker — amortizing the runtime baseline (~2.8× density). Keyed by (namespace, runtime, worker-id); per-pool scale-to-zero; cap guard. | V1 (Node; ADR-0044/0046) |
-| [**Observability**](../internal/observability/telemetry.go) | OTLP-native logging/telemetry + audit channel — see [Observability](#observability). | V1 (stdout JSON; file/S3 exporters planned) |
+| [**Observability**](../internal/platform/observability/telemetry.go) | OTLP-native logging/telemetry + audit channel — see [Observability](#observability). | V1 (stdout JSON; file/S3 exporters planned) |
 | [**Grant**](../api/types/v1alpha1/grant.go) / [**EgressPolicy**](../api/types/v1alpha1/egresspolicy.go) | Authorization grants and egress policy — see [Security](#security). | Grant: modeled (enforcement V2) · EgressPolicy: modeled (enforcement V2) |
 
 ---
