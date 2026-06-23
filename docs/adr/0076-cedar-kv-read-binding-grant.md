@@ -1,6 +1,6 @@
 # ADR-0076: Cedar KV read authorization — `spec.kv` binding-as-read-grant (a built-in permit)
 
-- **Status**: Accepted (2026-06-23)
+- **Status**: Implemented (2026-06-23)
 - **Date**: 2026-06-23 (judged 2026-06-23 — sound read-side mirror of ADR-0075's link-as-grant, no Blockers;
   folded 1 Major (unify the Cedar expression to `principal.kvBindings.contains(resource)` everywhere — the
   `resource in …` phrasings were wrong: `kvBindings` is a `Set`, not an entity-hierarchy parent) + minors
