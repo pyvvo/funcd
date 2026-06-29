@@ -1,14 +1,17 @@
-# Venom e2e for the funclog Path B containerd lane (ADR-0081) — the declarative invoke + capture-assert
-# phase of `just lima-example-funclog`, run host-side AFTER the self-deploying Lima VM is Ready.
+# Venom e2e for the funclog containerd lane (ADR-0081 capture + ADR-0084 read) — the declarative
+# invoke + capture-assert + read-assert phase of `just lima-example-funclog`, run host-side AFTER the
+# self-deploying Lima VM is Ready.
 #
-# It proves the producer (runtime-shim console/logging capture) + transport (UDS) + pipeline end to end
-# on REAL containerd, for BOTH languages:
+# It proves the whole log loop end to end on REAL containerd, for BOTH languages:
 #   1. each log-burst invoke returns emitted >= 100 (the function ran and emitted the burst);
 #   2. funcd captured those logs as OTLP-JSON-Lines under <dataDir>/blob/logs/<ns>/<fn>/ — >= 100
-#      "processing item" records per language (asserted by an in-VM read of the blob, co-located with
-#      the daemon so it doesn't race the data path). The funclog age-flusher seals the segment within
-#      ~10s, so the capture assertions retry.
-name: funclog Path B capture (ADR-0081, containerd lane)
+#      records per language (asserted by an in-VM read of the blob, co-located with the daemon so it
+#      doesn't race the data path). The funclog age-flusher seals the segment within ~10s, so the
+#      capture assertions retry;
+#   3. the ADR-0084 read path closes the loop: `funcdctl logs <fn> -n default` (the thin pure-Go reader
+#      over the raw OTLP-JSONL tail, served on the RBAC-scoped control-plane route) returns >= 100 lines
+#      per language — proving capture → persist → READ works on real containerd, not just bytes in blob.
+name: funclog capture + read (ADR-0081/0084, containerd lane)
 
 vars:
   dp: http://127.0.0.1:8081 # funcd data plane, forwarded from the Lima guest
@@ -64,3 +67,44 @@ testcases:
         assertions:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring PYCAPTURED"
+
+  - name: funcdctl logs returns the JS burst (ADR-0084 read path, >=100 lines)
+    steps:
+      - type: exec
+        # The F54 reader serves the raw OTLP-JSONL tail over the control-plane logs route; one printed
+        # line per record. Markers JSREADOK/JSREADFEW are disjoint so the success substring can't match
+        # the too-few output.
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; c=$(funcdctl logs log-burst -n default --limit 1000 2>/dev/null | wc -l); [ "$c" -ge 100 ] && echo "JSREADOK $c" || echo "JSREADFEW $c"'
+        retry: 15
+        delay: 2
+        info: "JS funcdctl logs → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSREADOK"
+
+  - name: funcdctl logs returns the Python burst (ADR-0084 read path, >=100 lines)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; c=$(funcdctl logs pylog-burst -n default --limit 1000 2>/dev/null | wc -l); [ "$c" -ge 100 ] && echo "PYREADOK $c" || echo "PYREADFEW $c"'
+        retry: 15
+        delay: 2
+        info: "Python funcdctl logs → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring PYREADOK"
+
+  - name: funcdctl logs --severity filters to warn+ (the read path applies filters)
+    steps:
+      - type: exec
+        # The JS burst emits WARN ("slow item") + ERROR ("item failed") among the INFO; a warn+ filter
+        # must return fewer lines than the unfiltered read but still some (the filter is honored, not ignored).
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; w=$(funcdctl logs log-burst -n default --severity warn --limit 1000 2>/dev/null | wc -l); a=$(funcdctl logs log-burst -n default --limit 1000 2>/dev/null | wc -l); [ "$w" -ge 1 ] && [ "$w" -lt "$a" ] && echo "JSFILTEROK $w/$a" || echo "JSFILTERBAD $w/$a"'
+        retry: 10
+        delay: 2
+        info: "JS severity filter → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSFILTEROK"
