@@ -1303,5 +1303,35 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0084-implementation-claude-opus-4-8.md",
     "notes": "F54 log read path: 8/8 scenarios green (reader+endpoint+SDK+funcdctl logs), tenant scoping proven (403/200/operator-all), DecodeJSONL additive (F53 green), OpenAPI regenerated, lint 0, no new deps; 3 minors are ADR-documented follow-ons; 1 env bench flake (py shim) unrelated."
+  },
+  {
+    "date": "2026-06-30",
+    "adr": "0080",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 4,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0080-implementation-claude-opus-4-8.md",
+    "notes": "F47 S3 frontend: 12 scenarios green via real AWS SDK; security verified (cannot-forge-peer 403, owner-only, cross-ns denied); Cedar PEP per op over blob.Bucket; CGO-free. MPL-2.0 transitive deps = decider-accepted license exception; 4 minors are ADR-deferred follow-ons."
+  },
+  {
+    "date": "2026-06-30",
+    "adr": "0085",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0080-implementation-claude-opus-4-8.md",
+    "notes": "In-platform S3 identity: per-fn HMAC keypair via in-process auth.IAMService + s3api.New; signs-as-self/cannot-forge-peer(403)/deterministic-across-restart green; keypair injected into sandbox env. Implemented with ADR-0080/F47 slice 3."
   }
 ]

@@ -1,9 +1,14 @@
 # ADR-0080: S3-protocol frontend on the blob substrate
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-24 (Accepted 2026-06-29 after judge pass — folded M1 new-Bucket-kind plumbing, M2 schema.go
   curated-vocabulary edits + S3Identity principal, M3 connection→identity trust anchor, m4 s3::write base-permit;
-  reframed as a **built-in provider** per the blueprint provider model)
+  reframed as a **built-in provider** per the blueprint provider model. **Reviewing → Implemented 2026-06-30** —
+  review **pass** (DoD 10/10), see docs/reviews/adr-0080-implementation-claude-opus-4-8.md; built in 3 slices
+  [Bucket CRD → Cedar s3 binding-as-grant → s3gateway over blob.Bucket via versitygw], 12 scenarios green via the
+  real AWS SDK client, security verified [cannot-forge-peer 403], CGO-free. In-platform identity per the
+  superseding ADR-0085. One decider-accepted license exception: versitygw's transitive MPL-2.0 deps from its
+  unused Vault backend.)
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, blob, s3, gateway, lakehouse, duckdb, ducklake, cedar, authz
 - **Realizes**: FEAT-0003/F47

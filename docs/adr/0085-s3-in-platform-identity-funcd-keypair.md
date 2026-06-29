@@ -7,7 +7,10 @@
   [`iam` lists the full 6-method `auth.IAMService` incl. `Shutdown()`; entry point corrected to
   `s3api.New` + `ServeMultiPort([]string{listenAddr})`/`ShutDown()` — funcd owns the bind addr + lifecycle, not the
   `net.Listener` object] + the Minor [`Account.UserID` is `int`; identity is carried by `Access`] + Nits. Clean
-  partial supersession of ADR-0080 §AuthN + entry point only.)
+  partial supersession of ADR-0080 §AuthN + entry point only. **Reviewing → Implemented 2026-06-30** — review
+  **pass** (DoD 7/7), see docs/reviews/adr-0080-implementation-claude-opus-4-8.md; `internal/blob/s3gateway/iam.go`
+  [HMAC per-fn keypair + the full 6-method in-process `auth.IAMService` via `s3api.New`] + the worker-env injection;
+  signs-as-self / cannot-forge-peer [403] / deterministic-across-restart green.)
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, blob, s3, identity, authn, sigv4, cedar, lakehouse
 - **Realizes**: [FEAT-0003/F47](../feat/0003-feat-data-platform.md)
