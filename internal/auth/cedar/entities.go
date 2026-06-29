@@ -51,13 +51,33 @@ func kvTableUID(ns v1.NamespaceName, store v1.ObjectName, table string) cedartyp
 	return cedartypes.NewEntityUID(entityTypeKVTable, cedartypes.String(string(ns)+"/"+string(store)+"/"+table))
 }
 
-// principalUID maps a principal EntityRef to its Cedar UID. Only Function principals are modeled
-// for KV (ADR-0074); an unmodeled type is an Internal fault (a wiring bug).
+func bucketUID(ns v1.NamespaceName, bucket v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeBucket, cedartypes.String(string(ns)+"/"+string(bucket)))
+}
+
+// blobPrefixUID is the BlobPrefix UID for a (bucket, prefix) sub-domain (ADR-0080). It mirrors
+// kvTableUID's shape exactly so a `blobBindings` member and the resource UID are byte-identical and
+// `principal.blobBindings.contains(resource)` matches.
+func blobPrefixUID(ns v1.NamespaceName, bucket v1.ObjectName, prefix string) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeBlobPrefix, cedartypes.String(string(ns)+"/"+string(bucket)+"/"+prefix))
+}
+
+func s3IdentityUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeS3Identity, cedartypes.String(string(ns)+"/"+string(name)))
+}
+
+// principalUID maps a principal EntityRef to its Cedar UID. A Function is the in-platform,
+// connection-scoped principal (KV/invoke/blob); an S3Identity is the external SigV4 principal
+// (ADR-0080). Any other type is an Internal fault (a wiring bug).
 func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
-	if p.Type != v1.KindFunction {
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function)", p.Type)
+	switch p.Type {
+	case v1.KindFunction:
+		return functionUID(p.Namespace, p.Name), nil
+	case v1.KindS3Identity:
+		return s3IdentityUID(p.Namespace, p.Name), nil
+	default:
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, S3Identity)", p.Type)
 	}
-	return functionUID(p.Namespace, p.Name), nil
 }
 
 // resourceTableUID maps a resource EntityRef (a KVStore name + a table Path) to its KVTable UID
@@ -69,14 +89,29 @@ func resourceTableUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 	return kvTableUID(res.Namespace, res.Name, res.Path), nil
 }
 
-// resourceUID maps a resource EntityRef to its Cedar UID, dispatching on type (ADR-0075): a
-// KVStore-with-Path is a KVTable (KV, ADR-0074); a Function is the invoke target (link::invoke).
-// An unmodeled resource is an Internal fault (a wiring bug).
-func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
-	if res.Type == v1.KindFunction {
-		return functionUID(res.Namespace, res.Name), nil
+// resourceBlobPrefixUID maps a resource EntityRef (a Bucket name + a prefix Path) to its BlobPrefix
+// UID (ADR-0080). The blob PEP addresses a prefix as {Type: KindBucket, Name: bucket, Path: prefix} —
+// the exact KVTable shape so the materialized UID matches the principal's blobBindings member.
+func resourceBlobPrefixUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
+	if res.Type != v1.KindBucket || res.Path == "" {
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.resourceBlobPrefixUID", "resource must be a Bucket with a prefix Path (got %q path=%q)", res.Type, res.Path)
 	}
-	return resourceTableUID(res)
+	return blobPrefixUID(res.Namespace, res.Name, res.Path), nil
+}
+
+// resourceUID maps a resource EntityRef to its Cedar UID, dispatching on type (ADR-0075/0080): a
+// KVStore-with-Path is a KVTable (KV, ADR-0074); a Bucket-with-Path is a BlobPrefix (S3, ADR-0080);
+// a Function is the invoke target (link::invoke). An unmodeled resource is an Internal fault (a
+// wiring bug).
+func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
+	switch res.Type {
+	case v1.KindFunction:
+		return functionUID(res.Namespace, res.Name), nil
+	case v1.KindBucket:
+		return resourceBlobPrefixUID(res)
+	default:
+		return resourceTableUID(res)
+	}
 }
 
 // EntitiesFor builds the request-relevant entity store (ADR-0074/0075): the principal Function and
@@ -123,13 +158,23 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 				kvBindings = append(kvBindings, kvTableUID(principal.Namespace, b.Store, b.Table))
 			}
 			attrs["kvBindings"] = cedartypes.NewSet(kvBindings...)
+			// blobBindings: the caller's spec.blob (bucket, prefix) as BlobPrefix entity-refs (same
+			// namespace, ADR-0080), so the built-in permit's principal.blobBindings.contains(resource)
+			// grants s3::read on a bound prefix. Per-prefix (not per-bucket): a binding grants read on
+			// that one (bucket, prefix) only — the exact KV per-table model.
+			blobBindings := make([]cedartypes.Value, 0, len(fn.Spec.Blob))
+			for _, b := range fn.Spec.Blob {
+				blobBindings = append(blobBindings, blobPrefixUID(principal.Namespace, b.Bucket, b.Prefix))
+			}
+			attrs["blobBindings"] = cedartypes.NewSet(blobBindings...)
 			em[pUID] = cedartypes.Entity{UID: pUID, Attributes: cedartypes.NewRecord(attrs)}
 		}
 	} else if fault.KindOf(ferr) != fault.NotFound {
 		return nil, fault.Wrapf(ferr, fault.Internal, op, "get function %q", principal.Name)
 	}
 
-	// Resource: invoke (ADR-0075) addresses a target Function; KV (ADR-0074) addresses a KVTable.
+	// Resource: invoke (ADR-0075) addresses a target Function; KV (ADR-0074) addresses a KVTable;
+	// S3 (ADR-0080) addresses a BlobPrefix (a Bucket name + a prefix Path).
 	if resource.Type == v1.KindFunction {
 		rUID := functionUID(resource.Namespace, resource.Name)
 		// A bare target entity suffices: the built-in permit reads principal.links, not the target's
@@ -139,6 +184,9 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 			Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)}),
 		}
 		return em, nil
+	}
+	if resource.Type == v1.KindBucket {
+		return p.bucketEntities(ctx, em, resource)
 	}
 
 	// Resource: the KVTable + its parent KVStore. Read the store for the table's owner + attrs.
@@ -185,6 +233,59 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 		UID:        tUID,
 		Parents:    cedartypes.NewEntityUIDSet(sUID),
 		Attributes: cedartypes.NewRecord(tableAttrs),
+	}
+	return em, nil
+}
+
+// bucketEntities materializes the resource BlobPrefix + its parent Bucket (ADR-0080) — the exact
+// KVTable/KVStore mirror. The BlobPrefix carries its `owner` (a Function entity-REFERENCE) read from
+// the Bucket CRD's spec.prefixes[].owner, so the write owner-forbid compares `principal == resource.
+// owner`; an owner-less prefix carries no owner attr (so `resource has owner` is false → read-only).
+func (p metaEntityProvider) bucketEntities(ctx context.Context, em cedartypes.EntityMap, resource auth.EntityRef) (cedartypes.EntityMap, error) {
+	const op = "cedar.EntitiesFor"
+	pfxUID, err := resourceBlobPrefixUID(resource)
+	if err != nil {
+		return nil, err
+	}
+	bUID := bucketUID(resource.Namespace, resource.Name)
+
+	bobj, berr := p.r.Get(ctx, v1.KindBucket.GVK(), resource.Namespace, resource.Name)
+	if berr != nil {
+		if fault.KindOf(berr) == fault.NotFound {
+			// A dangling resource: emit bare entities so the request is evaluable (default-deny;
+			// the built-in owner-forbid has no owner to match ⇒ writes denied too).
+			em[bUID] = cedartypes.Entity{UID: bUID}
+			em[pfxUID] = cedartypes.Entity{UID: pfxUID, Parents: cedartypes.NewEntityUIDSet(bUID)}
+			return em, nil
+		}
+		return nil, fault.Wrapf(berr, fault.Internal, op, "get bucket %q", resource.Name)
+	}
+	bkt, ok := bobj.(*v1.Bucket)
+	if !ok {
+		return nil, fault.Internalf(op, "object %q is not a Bucket", resource.Name)
+	}
+
+	bucketAttrs := cedartypes.RecordMap{
+		"namespace":     cedartypes.String(bkt.Namespace),
+		"resourceGroup": cedartypes.String(bkt.ResourceGroup),
+	}
+	em[bUID] = cedartypes.Entity{UID: bUID, Attributes: cedartypes.NewRecord(bucketAttrs)}
+
+	prefixAttrs := cedartypes.RecordMap{
+		"namespace":     cedartypes.String(bkt.Namespace),
+		"resourceGroup": cedartypes.String(bkt.ResourceGroup),
+	}
+	// owner is a Function entity-REFERENCE so `principal == resource.owner` compares entities.
+	for _, pfx := range bkt.Spec.Prefixes {
+		if pfx.Name == resource.Path && pfx.Owner != "" {
+			prefixAttrs["owner"] = functionUID(bkt.Namespace, pfx.Owner)
+			break
+		}
+	}
+	em[pfxUID] = cedartypes.Entity{
+		UID:        pfxUID,
+		Parents:    cedartypes.NewEntityUIDSet(bUID),
+		Attributes: cedartypes.NewRecord(prefixAttrs),
 	}
 	return em, nil
 }

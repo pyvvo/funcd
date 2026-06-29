@@ -35,6 +35,11 @@ const (
 	KindKVStore       Kind = "KVStore"
 	KindBucket        Kind = "Bucket"
 	KindPolicy        Kind = "Policy"
+	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
+	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
+	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
+	// from Kind.Validate's known-CRUD set by design.
+	KindS3Identity Kind = "S3Identity"
 )
 
 // Validate returns fault.Invalid if the Kind is not one of the known kinds.

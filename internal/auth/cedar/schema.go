@@ -23,6 +23,10 @@ const (
 	entityTypeFunction = "Function"
 	entityTypeKVStore  = "KVStore"
 	entityTypeKVTable  = "KVTable"
+	// ADR-0080 (S3 frontend): the blob data domain + sub-domain + the external SigV4 principal.
+	entityTypeBucket     = "Bucket"     // the blob domain (the KVStore parallel)
+	entityTypeBlobPrefix = "BlobPrefix" // a sub-domain carrying owner (the KVTable parallel)
+	entityTypeS3Identity = "S3Identity" // the external SigV4 principal only (not an in-platform Function)
 )
 
 // curatedActions is the fixed set of Cedar actions this driver recognizes (ADR-0074). cedar-go's
@@ -35,15 +39,20 @@ var curatedActions = map[auth.Action]bool{
 	auth.ActionKVRead:     true,
 	auth.ActionKVWrite:    true,
 	auth.ActionLinkInvoke: true, // ADR-0075: fn→fn invoke (Function principal + Function resource)
+	auth.ActionS3Read:     true, // ADR-0080: S3 read over the blob substrate (BlobPrefix resource)
+	auth.ActionS3Write:    true, // ADR-0080: S3 write over the blob substrate (single-writer = prefix owner)
 }
 
 // curatedEntityTypes is the fixed set of Cedar entity types this driver models (ADR-0074).
 //
 //nolint:gochecknoglobals // a fixed, effectively-const curated schema (ADR-0074)
 var curatedEntityTypes = map[string]bool{
-	entityTypeFunction: true,
-	entityTypeKVStore:  true,
-	entityTypeKVTable:  true,
+	entityTypeFunction:   true,
+	entityTypeKVStore:    true,
+	entityTypeKVTable:    true,
+	entityTypeBucket:     true, // ADR-0080
+	entityTypeBlobPrefix: true, // ADR-0080
+	entityTypeS3Identity: true, // ADR-0080
 }
 
 // KnownAction reports whether action is in the curated schema (ADR-0074).
@@ -100,11 +109,11 @@ func ValidateCedar(text string) error {
 			return fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
-			return fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke)", sc.Action.Entity.ID)
+			return fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke, s3::read, s3::write)", sc.Action.Entity.ID)
 		}
 		for _, et := range []string{sc.Principal.Entity.Type, sc.Resource.Entity.Type} {
 			if et != "" && !KnownEntityType(et) {
-				return fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable)", et)
+				return fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable, Bucket, BlobPrefix, S3Identity)", et)
 			}
 		}
 	}

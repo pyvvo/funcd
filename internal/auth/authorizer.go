@@ -67,6 +67,12 @@ const (
 	// ActionLinkInvoke is the Cedar action for a synchronous fn→fn invoke (ADR-0075):
 	// principal = the caller Function, resource = the target Function.
 	ActionLinkInvoke Action = "link::invoke"
+	// ActionS3Read is the Cedar action for an S3 get/list/head over the blob substrate (ADR-0080):
+	// a declared spec.blob binding grants it (binding-as-read-grant). Resource = a BlobPrefix.
+	ActionS3Read Action = "s3::read"
+	// ActionS3Write is the Cedar action for an S3 put/delete over the blob substrate (ADR-0080):
+	// single-writer — permitted only when the principal IS the prefix owner. Resource = a BlobPrefix.
+	ActionS3Write Action = "s3::write"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).
