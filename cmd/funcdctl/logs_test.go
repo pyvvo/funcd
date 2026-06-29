@@ -36,7 +36,7 @@ func TestScenarioFuncdctlLogsPrints(t *testing.T) {
 	base := time.Date(2026, 6, 29, 10, 30, 0, 0, time.UTC).UnixNano()
 	rows := []compact.Row{
 		{TimeUnixNano: base, SeverityText: "INFO", SeverityNumber: 9, Body: "first", Namespace: "team-a", Function: "fn", Replica: "0", Source: "console"},
-		{TimeUnixNano: base + 1, SeverityText: "WARN", SeverityNumber: 13, Body: "second", Namespace: "team-a", Function: "fn", Replica: "0", Source: "console"},
+		{TimeUnixNano: base + 1, SeverityText: "WARN", SeverityNumber: 13, Body: "second", Namespace: "team-a", Function: "fn", Replica: "0", Source: "console", AttrsJSON: `{"i":"80","batch":"default"}`},
 	}
 	var buf bytes.Buffer
 	w := parquet.NewGenericWriter[compact.Row](&buf)
@@ -70,4 +70,18 @@ func TestScenarioFuncdctlLogsPrints(t *testing.T) {
 	require.Contains(t, got, "second")
 	// Oldest-first (tail order): "first" prints before "second".
 	require.Less(t, strings.Index(got, "first"), strings.Index(got, "second"))
+
+	// -o wide appends source + the structured attrs inline as key=value (the JSON content, as text).
+	var wide bytes.Buffer
+	require.NoError(t, execCLI(&wide, c, "logs", "fn", "-n", "team-a", "-o", "wide"))
+	wstr := wide.String()
+	require.Contains(t, wstr, "source=console")
+	require.Contains(t, wstr, "i=80")
+	require.Contains(t, wstr, "batch=default")
+
+	// -o json emits one JSON record per line (the full Line DTO).
+	var js bytes.Buffer
+	require.NoError(t, execCLI(&js, c, "logs", "fn", "-n", "team-a", "-o", "json"))
+	require.Contains(t, js.String(), `"severityNumber":13`)
+	require.Contains(t, js.String(), `"body":"second"`)
 }
