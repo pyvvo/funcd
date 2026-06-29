@@ -42,7 +42,7 @@ func TestScenarioPackagingArtifactsPresent(t *testing.T) {
 	script, err := os.ReadFile(filepath.Join(root, "scripts/build.sh"))
 	require.NoError(t, err, "build script must exist")
 	sc := string(script)
-	require.Contains(t, sc, "internal/version", "build.sh must reference the version package")
+	require.Contains(t, sc, "internal/platform/version", "build.sh must reference the version package")
 	require.Contains(t, sc, ".Version=", "build.sh must stamp Version via -ldflags -X")
 	require.Contains(t, sc, "-ldflags")
 	require.Contains(t, sc, "CGO_ENABLED", "build.sh must document the pure-Go (CGO_ENABLED=0) build — ADR-0065 removed the cgo/slatedb lane")
