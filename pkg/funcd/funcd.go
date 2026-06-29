@@ -37,6 +37,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
 	"github.com/green-0-rabbit/funcd/internal/secrets"
@@ -129,8 +130,9 @@ func (c *config) validate() error {
 
 // Platform is the assembled funcd runtime — the composition root built by New.
 type Platform struct {
-	cfg    *config
-	logger *slog.Logger
+	cfg       *config
+	logger    *slog.Logger
+	providers *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller *controller.Controller
 	eventing   *eventing.Source
@@ -173,7 +175,12 @@ func New(opts ...Option) (*Platform, error) {
 		cfg.logger = lg.Root()
 	}
 
-	p := &Platform{cfg: cfg, logger: cfg.logger}
+	pc, err := providerCatalog()
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, "funcd.New", "build provider catalog")
+	}
+
+	p := &Platform{cfg: cfg, logger: cfg.logger, providers: pc}
 	if err := p.buildControlPlane(); err != nil {
 		return nil, err
 	}
@@ -408,6 +415,7 @@ func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 // lifecycle (ADR-0028).
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
+	p.logProviders(ctx)
 
 	var wg sync.WaitGroup
 	wg.Add(3)

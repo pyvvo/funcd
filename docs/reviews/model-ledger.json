@@ -1243,5 +1243,20 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0079-implementation-claude-opus-4-8.md",
     "notes": "Resource kind Config\u2192ConfigMap (k8s-style, disambiguates from daemon FuncdConfig). QUALIFIED-symbol rename (judge Blocker: a blanket \\bConfig\\b would corrupt ~139 tokens/7 types + internal/config) \u2014 bare Config scoped to api/types/v1alpha1, v1.Config/KindConfig elsewhere, explicit control-plane handler/DTO/Tags/REST-path renames (huma.Config intact). OpenAPI regenerated (/configmaps, deterministic), pkg/sdk plural. Verified: gate=0, internal/config+FuncdConfig+tls.Config untouched, build/test/lint/mod green, metastore lane PASS (ConfigMap recovers across restart). Behavior-preserving, zero new deps."
+  },
+  {
+    "date": "2026-06-29",
+    "adr": "0082",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0082-implementation-claude-opus-4-8.md",
+    "notes": "provider model catalog: leaf internal/provider (Kind/Descriptor/Catalog) + composition-root wiring + startup log; behavior-preserving (no provider pkg edited, full suite green); catalog matches blueprint (bus excluded). One env-attributed pre-existing fix (artifacts_test.go stale path from 811dfb1)."
   }
 ]
