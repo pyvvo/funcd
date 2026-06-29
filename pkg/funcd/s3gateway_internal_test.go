@@ -37,7 +37,7 @@ func TestScenarioS3GatewayDisabledByDefault(t *testing.T) {
 // default is the contrast above.
 func TestScenarioS3GatewayEnabledOpensListener(t *testing.T) {
 	addr := freeLoopbackAddr(t)
-	p, err := New(InMemory(), WithS3Gateway(addr, 0, "", t.TempDir()))
+	p, err := New(InMemory(), WithS3Gateway(addr, "", 0, "", t.TempDir()))
 	if err != nil {
 		t.Fatalf("New(InMemory, WithS3Gateway): %v", err)
 	}

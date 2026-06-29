@@ -101,8 +101,13 @@ type Config struct {
 	// S3Gateway is the opt-in S3-protocol frontend over the blob substrate (ADR-0080/0085).
 	// Disabled by default ⇒ no listener, no IAM, no keypair injection.
 	S3Gateway struct {
-		Enabled          bool   `json:"enabled,omitempty" env:"FUNCD_S3GATEWAY_ENABLED"`
-		ListenAddr       string `json:"listenAddr,omitempty" env:"FUNCD_S3GATEWAY_LISTEN_ADDR"`
+		Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_S3GATEWAY_ENABLED"`
+		ListenAddr string `json:"listenAddr,omitempty" env:"FUNCD_S3GATEWAY_LISTEN_ADDR"`
+		// Endpoint is the sandbox-facing S3 URL injected into a spec.blob worker's AWS_ENDPOINT_URL_S3
+		// (ADR-0085). Empty ⇒ derived as http://<ListenAddr>. Under containerd a worker is in its own
+		// netns, so this MUST be a node address the sandbox can reach (the CNI bridge gateway IP, e.g.
+		// http://10.63.0.1:9000), NOT a 127.0.0.1 ListenAddr.
+		Endpoint         string `json:"endpoint,omitempty" env:"FUNCD_S3GATEWAY_ENDPOINT"`
 		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES"`
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`

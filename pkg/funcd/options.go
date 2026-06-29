@@ -89,10 +89,11 @@ func WithoutLogCompaction() Option {
 // maxUploadBytes (0 ⇒ 1 GiB) caps a single buffered object; masterSecretFile (empty ⇒
 // generate+persist 0600 under dataDir/s3gateway/master.key) supplies the node master.
 // Without this option no listener, IAM, or keypair injection exists.
-func WithS3Gateway(listenAddr string, maxUploadBytes int64, masterSecretFile, dataDir string) Option {
+func WithS3Gateway(listenAddr, endpoint string, maxUploadBytes int64, masterSecretFile, dataDir string) Option {
 	return func(c *config) error {
 		c.s3gwEnabled = true
 		c.s3gwListenAddr = listenAddr
+		c.s3gwEndpoint = endpoint
 		c.s3gwMaxUploadBytes = maxUploadBytes
 		c.s3gwMasterFile = masterSecretFile
 		c.s3gwDataDir = dataDir

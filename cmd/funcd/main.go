@@ -25,11 +25,12 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
-	"github.com/green-0-rabbit/funcd/internal/platform/config"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/green-0-rabbit/funcd/internal/platform/config"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/green-0-rabbit/funcd/internal/platform/version"
 	"github.com/green-0-rabbit/funcd/internal/runtime/containerd"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
 	"github.com/green-0-rabbit/funcd/internal/runtime/process"
@@ -37,7 +38,6 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/store"
 	badgerstore "github.com/green-0-rabbit/funcd/internal/store/badger"
 	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/internal/platform/version"
 	"github.com/green-0-rabbit/funcd/pkg/funcd"
 	shimnode "github.com/green-0-rabbit/funcd/shim/nodejs"
 	shimpython "github.com/green-0-rabbit/funcd/shim/python"
@@ -198,7 +198,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate.
 	if cfg.S3Gateway.Enabled {
 		opts = append(opts, funcd.WithS3Gateway(
-			cfg.S3Gateway.ListenAddr, cfg.S3Gateway.MaxUploadBytes,
+			cfg.S3Gateway.ListenAddr, cfg.S3Gateway.Endpoint, cfg.S3Gateway.MaxUploadBytes,
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
 	}
 

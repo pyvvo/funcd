@@ -127,6 +127,9 @@ type Deps struct {
 type S3GatewayInjection struct {
 	Enabled    bool
 	ListenAddr string
+	// Endpoint is the sandbox-facing S3 URL (ADR-0085): the node address a netns'd worker can reach —
+	// the CNI bridge gateway IP under containerd. Empty ⇒ derived as http://<ListenAddr> (loopback dev).
+	Endpoint string
 	// Derive returns the deterministic per-(ns, fn) SigV4 keypair (s3gateway.DeriveKeypair,
 	// bound to the node master secret). Required when Enabled.
 	Derive func(ns, fn string) (access, secret string)
@@ -757,7 +760,13 @@ func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
 	env["AWS_ACCESS_KEY_ID"] = access
 	env["AWS_SECRET_ACCESS_KEY"] = secret
 	env["AWS_REGION"] = "us-east-1"
-	env["AWS_ENDPOINT_URL_S3"] = "http://" + r.s3Gateway.ListenAddr
+	// The sandbox-facing endpoint: Endpoint when set (the node address a netns'd worker can reach —
+	// the CNI bridge gateway IP under containerd), else derive from the bind ListenAddr (loopback dev).
+	endpoint := r.s3Gateway.Endpoint
+	if endpoint == "" {
+		endpoint = "http://" + r.s3Gateway.ListenAddr
+	}
+	env["AWS_ENDPOINT_URL_S3"] = endpoint
 }
 
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv map[string]string) runtime.WorkerSpec {
