@@ -1,0 +1,66 @@
+# Venom e2e for the funclog Path B containerd lane (ADR-0081) — the declarative invoke + capture-assert
+# phase of `just lima-example-funclog`, run host-side AFTER the self-deploying Lima VM is Ready.
+#
+# It proves the producer (runtime-shim console/logging capture) + transport (UDS) + pipeline end to end
+# on REAL containerd, for BOTH languages:
+#   1. each log-burst invoke returns emitted >= 100 (the function ran and emitted the burst);
+#   2. funcd captured those logs as OTLP-JSON-Lines under <dataDir>/blob/logs/<ns>/<fn>/ — >= 100
+#      "processing item" records per language (asserted by an in-VM read of the blob, co-located with
+#      the daemon so it doesn't race the data path). The funclog age-flusher seals the segment within
+#      ~10s, so the capture assertions retry.
+name: funclog Path B capture (ADR-0081, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081 # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: js log-burst emits a >=100-log burst
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/log-burst"
+        headers: { content-type: application/json }
+        body: '{"data":{}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 99
+
+  - name: python pylog-burst emits a >=100-log burst
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pylog-burst"
+        headers: { content-type: application/json }
+        body: '{"data":{}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 99
+
+  - name: funcd captured the JS burst as OTLP-JSONL in blob (>=100 records)
+    steps:
+      - type: exec
+        # count TOTAL OTLP LogRecords (every record carries a severityNumber) — robust across languages.
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'c=$(cat /var/lib/funcd/data/blob/logs/default/log-burst/*/*.otlp.jsonl 2>/dev/null | grep -o severityNumber | wc -l); [ "$c" -ge 100 ] && echo "JSCAPTURED $c" || echo "JSTOOFEW $c"'
+        retry: 15
+        delay: 2
+        info: "JS capture → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSCAPTURED"
+
+  - name: funcd captured the Python burst as OTLP-JSONL in blob (>=100 records)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'c=$(cat /var/lib/funcd/data/blob/logs/default/pylog-burst/*/*.otlp.jsonl 2>/dev/null | grep -o severityNumber | wc -l); [ "$c" -ge 100 ] && echo "PYCAPTURED $c" || echo "PYTOOFEW $c"'
+        retry: 15
+        delay: 2
+        info: "Python capture → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring PYCAPTURED"

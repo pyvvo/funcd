@@ -1,0 +1,44 @@
+# Thin OVERRIDE of the bench VM (scripts/lima.yaml) for the funclog demo (ADR-0081) on REAL containerd.
+# `base:` inherits the image/arch, resources, the `funcd install` provision, and the runtime probe; this
+# file carries only the demo's deltas. Driven by `just lima-example-funclog`. The two log-burst examples
+# (JS + Python) each emit >=100 console./logging logs per invoke; the runtime-shim writes them over the
+# Path B UDS channel and funcd captures them as OTLP-JSONL under <dataDir>/blob/logs/.
+base: lima.yaml
+
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/log-burst; reg=/mnt/funcd-deps/registry
+      install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
+      mkdir -p "$d" /var/lib/funcd/data
+      tar xzf /mnt/funcd-deps/log-burst.tgz -C "$d"
+      rm -rf "$reg"
+      # Both examples are named "log-burst"; deploy the Python one as "pylog-burst" so they coexist.
+      funcdctl push "$d/burst.mjs"     "oci-layout://$reg:log-burst"   # JS (no I/O contract — the logs are the point)
+      funcdctl push "$d/py/handler.py" "oci-layout://$reg:pylog-burst" # Python
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      funcdctl apply -f "$d/burst.yaml"
+      sed -e 's/name: log-burst/name: pylog-burst/' -e 's#:log-burst#:pylog-burst#' "$d/py/handler.yaml" | funcdctl apply -f -
+
+probes:
+  - description: "log-burst (JS) + pylog-burst (Python) reconcile to Ready on a real containerd sandbox"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      phase() { funcdctl get function "$1" -n default -o json 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
+      for i in $(seq 1 60); do
+        [ "$(phase log-burst)" = Ready ] && [ "$(phase pylog-burst)" = Ready ] && exit 0; sleep 2
+      done
+      exit 1
+    hint: "log-burst/pylog-burst did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-funclog`"

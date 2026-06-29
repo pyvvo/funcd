@@ -209,6 +209,39 @@ lima-example-kv: build-runtime-images build-shim
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_kv_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
 
+# the containerd-lane FUNCLOG e2e (ADR-0081): deploy the JS + Python log-burst examples (each emits >=100
+# console./logging logs per invoke) on REAL containerd; the curated-image shim writes Path B over the UDS
+# channel and funcd captures the logs as OTLP-JSONL under <dataDir>/blob/logs/. Proves the producer +
+# transport + pipeline end to end, for both languages. The containerd analogue of the in-process funclog
+# e2e. Needs docker + node.
+lima_funclog_vm := lima_name + "-funclog"
+[group('example')]
+lima-example-funclog: build-runtime-images build-shim
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
+    # JS log-burst → burst.mjs (plain esbuild, no I/O contract — the burst is the point)
+    ln -sfn ../../../shim/nodejs/node_modules examples/js/log-burst/node_modules
+    ( cd examples/js/log-burst && node --experimental-strip-types build.ts )
+    # Stage the JS bundle + both manifests + the Python handler (shipped as-is) into one tarball.
+    stage="$(mktemp -d)"
+    cp examples/js/log-burst/burst.mjs examples/js/log-burst/burst.yaml \
+       examples/js/log-burst/funcdconfig.yaml "$stage/"
+    mkdir -p "$stage/py"
+    cp examples/python/log-burst/src/handler.py examples/python/log-burst/handler.yaml "$stage/py/"
+    tar czf {{lima_deps}}/log-burst.tgz -C "$stage" .
+    rm -rf "$stage"
+    trap 'limactl stop -f {{lima_funclog_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_funclog_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_funclog_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_funclog_vm}} --tty=false scripts/lima-funclog.yaml
+    # Declarative e2e via OVH Venom (ADR-0077/0081): each invoke emits >=100 logs, and funcd captured them
+    # as OTLP-JSONL under <dataDir>/blob/logs/ (asserted by an in-VM read), for BOTH JS + Python.
+    suite="$(pwd)/e2e/funclog.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_funclog_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_funclog.venom.xml"
+
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under
