@@ -1,7 +1,9 @@
 # ADR-0080: S3-protocol frontend on the blob substrate
 
-- **Status**: Proposed
-- **Date**: 2026-06-24
+- **Status**: Accepted
+- **Date**: 2026-06-24 (Accepted 2026-06-29 after judge pass — folded M1 new-Bucket-kind plumbing, M2 schema.go
+  curated-vocabulary edits + S3Identity principal, M3 connection→identity trust anchor, m4 s3::write base-permit;
+  reframed as a **built-in provider** per the blueprint provider model)
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, blob, s3, gateway, lakehouse, duckdb, ducklake, cedar, authz
 - **Realizes**: FEAT-0003/F47
@@ -325,13 +327,17 @@ forbid (principal, action == Action::"s3::write", resource)
   binding + connection-scoped identity, the same model as KV/links (ADR-0073/0076); a manual keypair exists only
   for external clients. Medallion governance is real Cedar.
 - **(+)** the `blob` port still keeps external-S3 (Garage/AWS) a config swap.
-- **(+)** establishes a reusable **protocol-gateway seam** — node-private TCP listener + connection-scoped-identity
-  middleware + Cedar binding-as-grant over a declared domain — whose first instance is this S3 gateway; **F48's
-  Quack catalog gateway is its second consumer** (different protocol + action namespace, same identity + authz model).
-- **(+)** **F48's catalog service consumes the data plane through this gateway over S3** — *not* `blob.Bucket`
-  in-process: its DuckDB engine is out-of-process (cgo can't live in the pure-Go daemon, ADR-0065) and reaches
-  Parquet only via httpfs/S3, so F48 reads/writes under the **same** Cedar/binding governance as any function (no
-  privileged bypass). F48's catalog *metadata* is separate — local to F48, reached over Quack.
+- **(+)** the S3 frontend is a **built-in provider** (the blueprint's provider model) — an in-daemon, pure-Go,
+  always-on protocol endpoint: a node-private TCP listener + connection-scoped identity + Cedar binding-as-grant,
+  bridging the S3 wire *directly* to the daemon-internal `blob.Bucket` port. Built-in because versitygw is
+  embeddable pure-Go and it needs its **own** listener + native (SigV4) auth + direct port access. It is **not** an
+  add-on: an add-on provider (e.g. F48's catalog, the FEAT-0004 observability serving provider) is an out-of-daemon
+  DuckDB **service function** reached through the ingress gateway. (Earlier drafts wrongly called F48 a "Quack
+  gateway / second consumer of a protocol-gateway seam" — F48 is an add-on provider, not a built-in one.)
+- **(+)** **F48's catalog is an add-on provider that consumes the data plane through this S3 (built-in) provider** —
+  *not* `blob.Bucket` in-process: its DuckDB engine is out-of-process (cgo can't live in the pure-Go daemon,
+  ADR-0065) and reaches Parquet only via httpfs/S3, so F48 reads/writes under the **same** Cedar/binding governance
+  as any function (no privileged bypass). F48's catalog *metadata* is separate — local to F48, reached over Quack.
 - **(−)** new dependency weight (`aws-sdk-go-v2/service/s3` via versitygw).
 - **(−)** a TCP surface (anonymous for in-netns fns, SigV4 for external) to operate; versitygw single-instance-per-process;
   the in-platform connection→identity middleware is **fail-closed** (an unmappable source denies, never anonymous-allows)
