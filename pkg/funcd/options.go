@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"log/slog"
+	"time"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
@@ -45,6 +46,21 @@ func WithBlob(b blob.Bucket) Option {
 // WithBus injects the messaging port.
 func WithBus(b bus.Bus) Option {
 	return func(c *config) error { c.bus = b; return nil }
+}
+
+// WithFunclog tunes structured function-log capture (ADR-0081): the segment seal age and size
+// (either 0 keeps the sink default — 10s / 8 MiB). Capture is on by default when the runtime
+// supports it; use WithoutFunclog to disable.
+func WithFunclog(segmentMaxAge time.Duration, segmentMaxBytes int) Option {
+	return func(c *config) error {
+		c.funclogMaxAge, c.funclogMaxBytes = segmentMaxAge, segmentMaxBytes
+		return nil
+	}
+}
+
+// WithoutFunclog disables structured function-log capture (Path B); raw stdout/stderr still flows.
+func WithoutFunclog() Option {
+	return func(c *config) error { c.funclogDisabled = true; return nil }
 }
 
 // WithRuntime injects the function runtime (worker) port.

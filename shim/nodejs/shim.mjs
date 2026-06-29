@@ -3238,6 +3238,104 @@ function makeKV() {
   };
 }
 
+// src/funclog.ts
+import { writeSync } from "node:fs";
+import { connect } from "node:net";
+var SEVERITY = {
+  debug: "DEBUG",
+  log: "INFO",
+  info: "INFO",
+  warn: "WARN",
+  error: "ERROR"
+};
+function safeStringify(value) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  try {
+    return JSON.stringify(value, (_k, v) => {
+      if (typeof v === "bigint") return v.toString();
+      if (typeof v === "object" && v !== null) {
+        if (seen.has(v)) return "[Circular]";
+        seen.add(v);
+      }
+      return v;
+    });
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return "[Unserializable]";
+    }
+  }
+}
+function isPlainObject(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+function buildRecord(method, args) {
+  const body = typeof args[0] === "string" ? args[0] : "";
+  const attrs = { args: safeStringify(args) };
+  for (const arg of args) {
+    if (!isPlainObject(arg)) continue;
+    for (const [k, v] of Object.entries(arg)) {
+      if (k === "args") continue;
+      attrs[k] = typeof v === "string" ? v : safeStringify(v);
+    }
+  }
+  return {
+    ts: Date.now() * 1e6,
+    sev: SEVERITY[method],
+    body,
+    attrs,
+    inv: "",
+    trace_id: "",
+    span_id: "",
+    "funcd.source": "console"
+  };
+}
+function openSink(env) {
+  const fdRaw = env.FUNCD_LOG_FD;
+  if (fdRaw !== void 0 && fdRaw !== "") {
+    const fd = Number(fdRaw);
+    if (!Number.isInteger(fd) || fd < 0) return null;
+    return (line) => {
+      try {
+        writeSync(fd, line);
+      } catch {
+      }
+    };
+  }
+  const sockPath = env.FUNCD_LOG_SOCK;
+  if (sockPath !== void 0 && sockPath !== "") {
+    let sock = connect(sockPath);
+    sock.on("error", () => {
+      sock = null;
+    });
+    sock.unref();
+    return (line) => {
+      try {
+        sock?.write(line);
+      } catch {
+      }
+    };
+  }
+  return null;
+}
+function installConsoleCapture(env = process.env) {
+  const sink = openSink(env);
+  if (!sink) return false;
+  const methods = ["debug", "log", "info", "warn", "error"];
+  for (const method of methods) {
+    console[method] = (...args) => {
+      try {
+        sink(JSON.stringify(buildRecord(method, args)) + "\n");
+      } catch {
+      }
+    };
+  }
+  return true;
+}
+
 // src/shim.ts
 function createApp(handler, validators = {}) {
   const app = new Hono2();
@@ -3275,12 +3373,13 @@ function createApp(handler, validators = {}) {
   return app;
 }
 async function main() {
+  installConsoleCapture();
   const artifact = process.env.FUNCD_ARTIFACT;
   const handlerName = process.env.FUNCD_HANDLER ?? "handle";
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
   const portFile = process.env.FUNCD_PORTFILE;
   if (!artifact) {
-    console.error("funcd-shim: FUNCD_ARTIFACT is required");
+    process.stderr.write("funcd-shim: FUNCD_ARTIFACT is required\n");
     process.exit(2);
   }
   let handler;
@@ -3290,13 +3389,15 @@ async function main() {
     handler = resolveHandler(mod, handlerName);
     validators = resolveValidators(mod);
   } catch (err) {
-    console.error(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}
+`);
     process.exit(3);
   }
   const hostname = fixedPort > 0 ? "0.0.0.0" : "127.0.0.1";
   serve({ fetch: createApp(handler, validators).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
-    console.log(`funcd-shim: listening on ${hostname}:${info.port}`);
+    process.stderr.write(`funcd-shim: listening on ${hostname}:${info.port}
+`);
   });
 }
 var entry = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : "";

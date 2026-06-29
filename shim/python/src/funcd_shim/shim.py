@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
 from . import runtime
+from .funclog import install_log_capture
 from .types import CloudEvent, FunctionContext, Handler
 
 if TYPE_CHECKING:
@@ -152,6 +153,11 @@ def make_request_handler(
 def main(argv: list[str] | None = None) -> int:
     """Load the artifact, resolve the handler + optional contract, and serve. Returns the process
     exit code (0 only if the server is interrupted cleanly)."""
+    # Path B function-log capture (ADR-0081): install BEFORE the handler loads/runs so the first
+    # logging.* a function emits is captured. No-op unless FUNCD_LOG_FD/FUNCD_LOG_SOCK is set. The
+    # shim's own operational messages use print(... stderr), not logging, so they are never captured.
+    install_log_capture()
+
     artifact = os.environ.get("FUNCD_ARTIFACT")
     handler_name = os.environ.get("FUNCD_HANDLER", "handle")
     fixed_port = int(os.environ["FUNCD_PORT"]) if os.environ.get("FUNCD_PORT") else 0

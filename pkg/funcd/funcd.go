@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,10 +33,12 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/dataplane"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
+	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
@@ -70,11 +73,15 @@ type config struct {
 	// the default (100); negative disables the quota.
 	kvMaxStoresPerNamespace int
 	blob                    blob.Bucket
-	bus                     bus.Bus
-	runtime                 runtime.Runtime
-	gateway                 gateway.Gateway
-	logger                  *slog.Logger
-	telemetry               *observability.Telemetry
+	// funclog structured function-log capture (ADR-0081): on by default when the runtime supports it.
+	funclogDisabled bool
+	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
+	funclogMaxBytes int           // segment seal size; 0 ⇒ sink default (8 MiB)
+	bus             bus.Bus
+	runtime         runtime.Runtime
+	gateway         gateway.Gateway
+	logger          *slog.Logger
+	telemetry       *observability.Telemetry
 
 	// control plane (ADR-0028)
 	listenAddr  string
@@ -145,7 +152,8 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr *local.Manager // per-function worker-node local API broker (ADR-0064)
+	invokeMgr *local.Manager    // per-function worker-node local API broker (ADR-0064)
+	logSink   *funclog.BlobSink // structured function-log capture sink (ADR-0081); nil if unwired
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -400,6 +408,33 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.dataPlaneListener = dln
 	p.dataPlaneAddr = dln.Addr().String()
+
+	// ADR-0081: structured function-log capture (Path B). If the runtime driver implements the
+	// LogCapturer capability and a blob substrate is present, build the funclog sink and install the
+	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink.
+	// (Path A, raw stdout/stderr, stays the runtime's own log file.)
+	if lc, ok := c.runtime.(runtime.LogCapturer); ok && c.blob != nil && !c.funclogDisabled {
+		sink, serr := funclog.NewBlobSink(funclog.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
+		})
+		if serr != nil {
+			return fault.Wrapf(serr, fault.Internal, op, "build funclog sink")
+		}
+		p.logSink = sink
+		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
+			res := funclog.Resource{
+				Namespace: string(spec.Namespace),
+				Function:  string(spec.Name),
+				Replica:   strconv.Itoa(spec.Replica),
+			}
+			go func() {
+				defer func() { _ = r.Close() }()
+				_ = funclog.Pump(context.Background(), funclog.NewNDJSONReader(r), sink, res, p.logger)
+			}()
+		})
+	}
+
 	return nil
 }
 
@@ -479,10 +514,18 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()
 		}
+		// Close the runtime first (stops instances → log channels EOF → pumps flush), then seal any
+		// remaining funclog segments, all before blob.Close() (the sink writes to blob) — ADR-0081.
+		runtimeErr := p.cfg.runtime.Close()
+		var logSinkErr error
+		if p.logSink != nil {
+			logSinkErr = p.logSink.Close()
+		}
 		errs := []error{
 			p.cfg.bus.Close(),
 			p.cfg.gateway.Close(),
-			p.cfg.runtime.Close(),
+			runtimeErr,
+			logSinkErr,
 			p.cfg.blob.Close(),
 			p.cfg.store.Close(),
 		}

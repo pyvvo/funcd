@@ -55,6 +55,9 @@ type BlobSink struct {
 
 	mu       sync.Mutex            // guards the segments map (get-or-create); each segment locks itself
 	segments map[Resource]*segment // per-Resource open segment
+
+	stop     chan struct{} // closes to stop the background age-flusher
+	stopOnce sync.Once
 }
 
 type segment struct {
@@ -83,10 +86,54 @@ func NewBlobSink(d Deps) (*BlobSink, error) {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	return &BlobSink{
+	s := &BlobSink{
 		bucket: d.Bucket, maxBytes: d.SegmentMaxBytes, maxAge: d.SegmentMaxAge,
 		clock: d.Clock, log: d.Logger, segments: make(map[Resource]*segment),
-	}, nil
+		stop: make(chan struct{}),
+	}
+	go s.flushLoop()
+	return s, nil
+}
+
+// flushLoop proactively seals segments older than maxAge — the "time" flush for idle segments (one
+// that received no further Append after a burst would otherwise sit in memory until Close). It ticks
+// on real time; age is judged by the sink clock. Stopped by Close.
+func (s *BlobSink) flushLoop() {
+	interval := s.maxAge / 2
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			s.flushAged()
+		}
+	}
+}
+
+// flushAged seals every segment whose age has reached maxAge.
+func (s *BlobSink) flushAged() {
+	now := s.clock.Now()
+	s.mu.Lock()
+	var aged []Resource
+	for res, seg := range s.segments {
+		seg.mu.Lock()
+		old := len(seg.entries) > 0 && now.Sub(seg.opened) >= s.maxAge
+		seg.mu.Unlock()
+		if old {
+			aged = append(aged, res)
+		}
+	}
+	s.mu.Unlock()
+	for _, res := range aged {
+		if _, err := s.Flush(context.Background(), res); err != nil {
+			s.log.Warn("funclog: age-flush failed", "namespace", res.Namespace, "function", res.Function, "error", err)
+		}
+	}
 }
 
 // Append adds e to res's open segment, sealing+Putting it if it crosses the size/age cap.
@@ -141,8 +188,9 @@ func (s *BlobSink) Flush(ctx context.Context, res Resource) (string, error) {
 	return key, nil
 }
 
-// Close seals and Puts every open segment (the loss-safe shutdown boundary).
+// Close stops the age-flusher, then seals and Puts every open segment (the loss-safe shutdown boundary).
 func (s *BlobSink) Close() error {
+	s.stopOnce.Do(func() { close(s.stop) })
 	s.mu.Lock()
 	res := make([]Resource, 0, len(s.segments))
 	for r := range s.segments {

@@ -31,6 +31,12 @@ def init(src: str, artifact: str, handler: str) -> None:
     if src not in sys.path:
         sys.path.insert(0, src)
     from funcd_shim import runtime
+    from funcd_shim.funclog import install_log_capture
+
+    # Path B capture (ADR-0081): each pool worker runs in its own subinterpreter with its own root
+    # logger, so install the capture handler here (per-interpreter), before the handler loads. No-op
+    # unless FUNCD_LOG_FD/FUNCD_LOG_SOCK is set (the env is inherited into the worker interpreter).
+    install_log_capture()
 
     module = runtime.load_module(artifact)
     _handler = runtime.resolve_handler(module, handler)

@@ -21,6 +21,7 @@ import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
+import { installConsoleCapture } from './funclog.ts';
 
 export type { CloudEvent, FunctionContext, Handler, Json, Validator } from './types.ts';
 export { resolveHandler, resolveValidators } from './runtime.ts';
@@ -76,13 +77,19 @@ export function createApp(
 
 /** main loads the artifact, resolves the handler, and serves the contract. */
 async function main(): Promise<void> {
+  // ADR-0081 Path B: patch the function's console.* onto the side channel BEFORE the handler runs,
+  // so every console call becomes a captured NDJSON record (no-op when no channel env is set). The
+  // shim's OWN operational lines below go to process.stderr directly — NOT through the patched
+  // console — so they never masquerade as function logs on the Path B channel.
+  installConsoleCapture();
+
   const artifact = process.env.FUNCD_ARTIFACT;
   const handlerName = process.env.FUNCD_HANDLER ?? 'handle';
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
   const portFile = process.env.FUNCD_PORTFILE;
 
   if (!artifact) {
-    console.error('funcd-shim: FUNCD_ARTIFACT is required');
+    process.stderr.write('funcd-shim: FUNCD_ARTIFACT is required\n');
     process.exit(2);
   }
 
@@ -93,14 +100,14 @@ async function main(): Promise<void> {
     handler = resolveHandler(mod, handlerName);
     validators = resolveValidators(mod);
   } catch (err) {
-    console.error(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // materialization shape-gate failure (ADR-0030)
   }
 
   const hostname = fixedPort > 0 ? '0.0.0.0' : '127.0.0.1';
   serve({ fetch: createApp(handler, validators).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
-    console.log(`funcd-shim: listening on ${hostname}:${info.port}`);
+    process.stderr.write(`funcd-shim: listening on ${hostname}:${info.port}\n`);
   });
 }
 

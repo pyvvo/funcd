@@ -1,0 +1,18 @@
+# log-burst — a function that emits a burst of ≥100 console.* logs per invocation (ADR-0081, Path B).
+# The runtime-shim patches the function's console.* onto the Path B side channel (fd 3 / UDS) and the
+# host captures them as structured records into the funcd-system log store — channel-only (no double
+# capture on stdout). No KV / contract binding needed: the logs ARE the point of this example.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: log-burst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:log-burst   # funcdctl push burst.mjs (built from src/burst.ts)
+  replicas: 1
+  scaling:
+    minReplicas: 1

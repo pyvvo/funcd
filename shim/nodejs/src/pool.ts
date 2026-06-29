@@ -20,6 +20,7 @@ import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
+import { installConsoleCapture } from './funclog.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -52,6 +53,11 @@ async function workerMain(): Promise<void> {
   const port = parentPort;
   if (!port) return;
 
+  // ADR-0081 Path B: patch the function's console.* onto the side channel BEFORE its handler runs
+  // (no-op when no channel env is set). The pool's OWN operational lines below go to process.stderr
+  // directly — NOT through the patched console — so they never become fake function logs.
+  installConsoleCapture();
+
   let handler: Handler;
   let validators: { input?: Validator; output?: Validator };
   try {
@@ -59,7 +65,7 @@ async function workerMain(): Promise<void> {
     handler = resolveHandler(mod, spec.handler ?? 'handle');
     validators = resolveValidators(mod);
   } catch (err) {
-    console.error(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)
   }
   const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke(), kv: makeKV() };
@@ -246,7 +252,7 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
 async function main(): Promise<void> {
   const manifestPath = process.env.FUNCD_POOL_MANIFEST;
   if (!manifestPath) {
-    console.error('funcd-pool: FUNCD_POOL_MANIFEST is required');
+    process.stderr.write('funcd-pool: FUNCD_POOL_MANIFEST is required\n');
     process.exit(2);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as WorkerSpec[];
@@ -254,7 +260,7 @@ async function main(): Promise<void> {
   try {
     await pool.ready;
   } catch (err) {
-    console.error(`funcd-pool: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-pool: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3);
   }
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
@@ -262,7 +268,7 @@ async function main(): Promise<void> {
   const hostname = fixedPort > 0 ? '0.0.0.0' : '127.0.0.1';
   serve({ fetch: pool.app.fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
-    console.log(`funcd-pool: ${manifest.length} handler(s) listening on ${hostname}:${info.port}`);
+    process.stderr.write(`funcd-pool: ${manifest.length} handler(s) listening on ${hostname}:${info.port}\n`);
   });
 }
 

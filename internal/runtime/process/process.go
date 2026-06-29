@@ -41,11 +41,20 @@ type instance struct {
 type driver struct {
 	mu        sync.Mutex
 	instances map[runtime.InstanceID]*instance
+	capture   runtime.LogCaptureFunc // optional Path B log-channel hook (ADR-0081); nil = disabled
 }
 
 // New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI).
 func New() runtime.Runtime {
 	return &driver{instances: map[runtime.InstanceID]*instance{}}
+}
+
+// SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
+// set, Start passes the shim a write pipe as fd 3 (FUNCD_LOG_FD=3) and hands the read end to the hook.
+func (d *driver) SetLogCapture(fn runtime.LogCaptureFunc) {
+	d.mu.Lock()
+	d.capture = fn
+	d.mu.Unlock()
 }
 
 func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
@@ -109,10 +118,34 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	// FUNCD_PORTFILE is the driver↔shim port handshake (ADR-0030): the shim binds
 	// 127.0.0.1:0 and writes its OS-assigned port here, which Status reads back.
 	cmd.Env = append(envSlice(inst.spec.Env), "FUNCD_PORTFILE="+inst.portFile)
+
+	// Path B structured-log channel (ADR-0081): when a capture hook is set, pass the shim a write
+	// pipe as fd 3 and hand the read end to the hook. ExtraFiles[0] becomes the child's fd 3.
+	var logRead *os.File
+	if d.capture != nil {
+		pr, pw, perr := os.Pipe()
+		if perr != nil {
+			_ = logFile.Close()
+			return fault.Wrapf(perr, fault.Internal, op, "create log pipe")
+		}
+		cmd.ExtraFiles = []*os.File{pw}
+		cmd.Env = append(cmd.Env, "FUNCD_LOG_FD=3")
+		logRead = pr
+	}
+
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
+		if logRead != nil {
+			_ = logRead.Close()
+			_ = cmd.ExtraFiles[0].Close()
+		}
 		inst.state = runtime.StateFailed
 		return fault.Wrapf(err, fault.Internal, op, "start process")
+	}
+
+	if logRead != nil {
+		_ = cmd.ExtraFiles[0].Close() // close the parent's copy of the write end so EOF propagates on child exit
+		d.capture(inst.spec, logRead) // the hook owns reading + closing the read end
 	}
 
 	inst.cmd = cmd

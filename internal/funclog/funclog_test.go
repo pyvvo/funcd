@@ -30,6 +30,7 @@ func newSink(t *testing.T, b blob.Bucket, maxBytes int) *funclog.BlobSink {
 		Clock: clock.Fake(time.Unix(1_700_000_000, 0)),
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() }) // stop the background age-flusher
 	return s
 }
 
