@@ -1258,5 +1258,20 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0082-implementation-claude-opus-4-8.md",
     "notes": "provider model catalog: leaf internal/provider (Kind/Descriptor/Catalog) + composition-root wiring + startup log; behavior-preserving (no provider pkg edited, full suite green); catalog matches blueprint (bus excluded). One env-attributed pre-existing fix (artifacts_test.go stale path from 811dfb1)."
+  },
+  {
+    "date": "2026-06-29",
+    "adr": "0081",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0081-implementation-claude-opus-4-8.md",
+    "notes": "Path B log capture verified on BOTH runtimes: in-process e2e (process fd3, 115\u2192\u2265100 OTLP) + Lima containerd e2e (UDS, JS 200 + Python 100, all 4 venom testcases PASS). Both shims + examples. 3 minor follow-ons: Path A host-pump, daemon env-config keys, wazero hook."
   }
 ]

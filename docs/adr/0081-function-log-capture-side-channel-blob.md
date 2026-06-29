@@ -1,9 +1,12 @@
 # ADR-0081: Function log capture via a console-intercept side channel, persisted as OTLP-JSONL through the blob port
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after three judge passes — signal-generic narrowed to the pipeline,
   Sink concurrency contract, loss-free qualified to freeze/teardown, `internal/platform/config` path, and the
-  per-language harness capture contract added)
+  per-language harness capture contract added. **Reviewing → Implemented 2026-06-29** — review **pass**, see
+  docs/reviews/adr-0081-implementation-claude-opus-4-8.md; `internal/funclog` pipeline + both shims (Node console /
+  Python logging) + the fd3 (process) and UDS (containerd) transports + composition wiring, verified end-to-end by
+  the in-process e2e **and** the Lima containerd e2e (JS + Python, all 4 testcases PASS). 3 minor follow-ons recorded)
 - **Deciders**: green-0-rabbit
 - **Tags**: observability, logs, otel, otlp, capture, blob, tenant-telemetry, side-channel
 - **Realizes**: [FEAT-0004/F50](../feat/0004-feat-platform-observability.md)
