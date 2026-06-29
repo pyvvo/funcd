@@ -1,0 +1,23 @@
+# report — reads the lakehouse "gold" marts via DuckDB over the S3 endpoint (ADR-0080) and serves a result.
+# The spec.blob binding (alias "lake" → bucket "lakehouse", prefix "gold") grants READ — the binding is the
+# capability (ADR-0076 parity, the read side). report is NOT gold's owner (transform is — bucket.yaml), so it
+# may READ but never WRITE gold. Default-deny: drop the binding and the S3 read is Forbidden. Identity is
+# connection-scoped (no key); DuckDB uses anonymous S3, e.g. SELECT * FROM 's3://lakehouse/gold/*.parquet'.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: report
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: python314
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:report   # funcdctl push report.py
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  blob:
+    - alias: lake           # ctx handle / DuckDB s3 read scope: s3://lakehouse/gold/*.parquet
+      bucket: lakehouse     # the Bucket (domain)
+      prefix: gold          # the sub-domain it may read (read-only — not the owner)
