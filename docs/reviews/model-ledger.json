@@ -1273,5 +1273,20 @@
     "dod_total": 11,
     "report": "docs/reviews/adr-0081-implementation-claude-opus-4-8.md",
     "notes": "Path B log capture verified on BOTH runtimes: in-process e2e (process fd3, 115\u2192\u2265100 OTLP) + Lima containerd e2e (UDS, JS 200 + Python 100, all 4 venom testcases PASS). Both shims + examples. 3 minor follow-ons: Path A host-pump, daemon env-config keys, wazero hook."
+  },
+  {
+    "date": "2026-06-29",
+    "adr": "0083",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0083-implementation-claude-opus-4-8.md",
+    "notes": "F53 OTLP-JSONL\u2192Parquet compaction: 8/8 scenarios green, lint 0, parquet-go Apache-2.0 pure-Go, crash-safe verified; 2 minors are ADR-documented follow-ons; 1 env-attributed pre-existing bench failure (py shim readiness, unrelated)."
   }
 ]

@@ -63,6 +63,24 @@ func WithoutFunclog() Option {
 	return func(c *config) error { c.funclogDisabled = true; return nil }
 }
 
+// WithLogCompaction tunes function-log compacted compaction (ADR-0083): the window (bucket size + close
+// threshold), the pass interval, and the compacted retention. A zero window/interval keeps the default
+// (1h / 5m); retention <= 0 keeps compacted forever. Compaction is on by default when a blob substrate is
+// present; use WithoutLogCompaction to disable.
+func WithLogCompaction(window, interval, retention time.Duration) Option {
+	return func(c *config) error {
+		c.logCompactWindow, c.logCompactInterval, c.logCompactRetention = window, interval, retention
+		c.logCompactConfigured = true
+		return nil
+	}
+}
+
+// WithoutLogCompaction disables compacted compaction: no compactor goroutine runs and raw OTLP-JSONL is left
+// untouched (capture itself still runs).
+func WithoutLogCompaction() Option {
+	return func(c *config) error { c.logCompactDisabled = true; return nil }
+}
+
 // WithRuntime injects the function runtime (worker) port.
 func WithRuntime(r runtime.Runtime) Option {
 	return func(c *config) error { c.runtime = r; return nil }

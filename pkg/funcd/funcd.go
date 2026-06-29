@@ -34,6 +34,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/dataplane"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
 	"github.com/green-0-rabbit/funcd/internal/funclog"
+	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
@@ -77,11 +78,19 @@ type config struct {
 	funclogDisabled bool
 	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
 	funclogMaxBytes int           // segment seal size; 0 ⇒ sink default (8 MiB)
-	bus             bus.Bus
-	runtime         runtime.Runtime
-	gateway         gateway.Gateway
-	logger          *slog.Logger
-	telemetry       *observability.Telemetry
+	// funclog compacted compaction (ADR-0083): on by default when a blob substrate is present. When
+	// logCompactConfigured is false the defaults apply (window 1h / interval 5m / retention 30d);
+	// WithLogCompaction sets explicit values (retention <= 0 ⇒ keep forever); WithoutLogCompaction disables it.
+	logCompactDisabled   bool
+	logCompactConfigured bool
+	logCompactWindow     time.Duration
+	logCompactInterval   time.Duration
+	logCompactRetention  time.Duration
+	bus                  bus.Bus
+	runtime              runtime.Runtime
+	gateway              gateway.Gateway
+	logger               *slog.Logger
+	telemetry            *observability.Telemetry
 
 	// control plane (ADR-0028)
 	listenAddr  string
@@ -152,8 +161,9 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr *local.Manager    // per-function worker-node local API broker (ADR-0064)
-	logSink   *funclog.BlobSink // structured function-log capture sink (ADR-0081); nil if unwired
+	invokeMgr *local.Manager     // per-function worker-node local API broker (ADR-0064)
+	logSink   *funclog.BlobSink  // structured function-log capture sink (ADR-0081); nil if unwired
+	compactor *compact.Compactor // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -435,6 +445,24 @@ func (p *Platform) buildControlPlane() error {
 		})
 	}
 
+	// ADR-0083: funclog compacted compaction. When a blob substrate is present and compaction is not disabled,
+	// build the daemon-internal compactor that folds raw OTLP-JSONL into partitioned Parquet. Defaults
+	// (window 1h / interval 5m / retention 30d) unless WithLogCompaction set explicit values.
+	if c.blob != nil && !c.logCompactDisabled {
+		retention := compact.DefaultRetention
+		if c.logCompactConfigured {
+			retention = c.logCompactRetention
+		}
+		comp, cerr := compact.New(compact.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			Window: c.logCompactWindow, Interval: c.logCompactInterval, Retention: retention,
+		})
+		if cerr != nil {
+			return fault.Wrapf(cerr, fault.Internal, op, "build funclog compactor")
+		}
+		p.compactor = comp
+	}
+
 	return nil
 }
 
@@ -472,6 +500,15 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "activator stopped", "error", err)
 		}
 	}()
+	if p.compactor != nil { // ADR-0083: funclog compacted compaction loop (stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.compactor.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "funclog compactor stopped", "error", err)
+			}
+		}()
+	}
 	go func() {
 		if err := p.httpServer.Serve(p.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.logger.ErrorContext(ctx, "control-plane server stopped", "error", err)
