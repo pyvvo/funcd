@@ -132,6 +132,13 @@ type Handlers interface {
 	ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error)
 	DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// Bucket (namespaced) — ADR-0080
+	GetBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error)
+	CreateBucket(ctx context.Context, b v1.Bucket) (v1.Bucket, error)
+	ListBuckets(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
+	ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error)
+	DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

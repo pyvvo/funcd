@@ -66,6 +66,14 @@ type FunctionSpec struct {
 	// KV access. Cross-resource validity (the store/table exist) is an admission (ADR-0063); only the
 	// structural rules (alias is a unique DNS-1123 label) are checked in Validate.
 	KV []FunctionKV `json:"kv,omitempty"`
+	// Blob declares this function's blob (S3) bindings (ADR-0080, F47): each binds a local alias to a
+	// (bucket, prefix) sub-domain in this namespace, reachable from the handler / its DuckDB as
+	// s3://<bucket>/<prefix>/…. The binding IS the read capability — with no matching entry, blob access
+	// on that alias is Forbidden (default-deny); writes require this function to be the prefix's owner.
+	// Mirrors spec.kv (wrangler-style: naming lives on the consumer). Empty ⇒ no blob access.
+	// Cross-resource validity (the bucket/prefix exist) is an admission; only the structural rules
+	// (alias is a unique DNS-1123 label) are checked in Validate.
+	Blob []FunctionBlob `json:"blob,omitempty"`
 }
 
 // FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
@@ -91,6 +99,18 @@ type FunctionKV struct {
 	Store ObjectName `json:"store"`
 	// Table is a sub-domain (KVStore.spec.tables[].name) of that store; a DNS-1123 label.
 	Table string `json:"table" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+}
+
+// FunctionBlob declares one blob (S3) binding (ADR-0080, F47): a local alias bound to a (bucket, prefix)
+// sub-domain in the same namespace. The binding is the read grant; writes require this function to be the
+// prefix's owner. Mirrors FunctionKV (the wrangler/spec.kv convention).
+type FunctionBlob struct {
+	// Alias is the local handle; a DNS-1123 label, unique within Blob.
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	// Bucket is the name of a Bucket in this function's namespace.
+	Bucket ObjectName `json:"bucket"`
+	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label.
+	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
 
 // Pooling is the per-function pooling opt-in (ADR-0046, F28). Named "Pooling" (not
@@ -183,6 +203,21 @@ func (s *FunctionSpec) Validate() error {
 		kvSeen[b.Alias] = true
 		if !dnsLabel.MatchString(b.Table) {
 			return fault.Invalidf(op, "spec.kv[%s].table %q is not a valid DNS-1123 label", b.Alias, b.Table)
+		}
+	}
+	// Blob binding structural rules (ADR-0080): alias is a DNS-1123 label, unique within Blob; prefix is a
+	// DNS-1123 label. Cross-resource rules (the bucket/prefix exist) are an admission.
+	blobSeen := make(map[string]bool, len(s.Blob))
+	for _, b := range s.Blob {
+		if !dnsLabel.MatchString(b.Alias) {
+			return fault.Invalidf(op, "spec.blob alias %q is not a valid DNS-1123 label", b.Alias)
+		}
+		if blobSeen[b.Alias] {
+			return fault.Invalidf(op, "spec.blob alias %q is duplicated", b.Alias)
+		}
+		blobSeen[b.Alias] = true
+		if !dnsLabel.MatchString(b.Prefix) {
+			return fault.Invalidf(op, "spec.blob[%s].prefix %q is not a valid DNS-1123 label", b.Alias, b.Prefix)
 		}
 	}
 	return nil

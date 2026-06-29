@@ -65,6 +65,8 @@ const (
 	shutdownTimeout      = 15 * time.Second
 	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
 	defaultKVStoresPerNamespace = 100
+	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
+	defaultBucketsPerNamespace = 100
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -74,7 +76,10 @@ type config struct {
 	// kvMaxStoresPerNamespace is the per-namespace KVStore count cap at admission (ADR-0072); 0 ⇒
 	// the default (100); negative disables the quota.
 	kvMaxStoresPerNamespace int
-	blob                    blob.Bucket
+	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
+	// the default (100); negative disables the quota.
+	bucketMaxPerNamespace int
+	blob                  blob.Bucket
 	// funclog structured function-log capture (ADR-0081): on by default when the runtime supports it.
 	funclogDisabled bool
 	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
@@ -228,6 +233,11 @@ func (p *Platform) buildControlPlane() error {
 	kvMaxStores := c.kvMaxStoresPerNamespace
 	if kvMaxStores == 0 {
 		kvMaxStores = defaultKVStoresPerNamespace
+	}
+	// Bucket per-namespace count quota (ADR-0080): 0 ⇒ the default (100); negative disables it.
+	bucketMax := c.bucketMaxPerNamespace
+	if bucketMax == 0 {
+		bucketMax = defaultBucketsPerNamespace
 	}
 
 	sched, err := singlenode.New(c.localNode)
@@ -398,6 +408,16 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewKVBindingValidityAdmission(storeReader{c.store}),
 			admission.NewKVOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
+			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota; blob-binding-validity
+			// (Function.spec.blob names an existing bucket/prefix); bucket-prefix-owner-exists (Bucket
+			// prefixes[].owner is a real Function); bucket-deletion-protection (bound by spec.blob or non-empty
+			// data on Delete; still-bound prefix removal on Update). The data-emptiness prober is nil until the
+			// s3gateway data plane lands (a later slice) — binding-protection still applies (nil ⇒ skip the
+			// data check, the optional-prober pattern KVStore uses).
+			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
+			admission.NewBlobBindingValidityAdmission(storeReader{c.store}),
+			admission.NewBucketPrefixOwnerExistsAdmission(storeReader{c.store}),
+			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),

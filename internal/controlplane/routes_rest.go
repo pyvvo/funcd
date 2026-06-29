@@ -399,6 +399,71 @@ func registerKVStore(api huma.API, h Handlers) {
 	})
 }
 
+// ===== Bucket (namespaced) — ADR-0080 =====
+
+type createBucketInput struct{ Body v1.Bucket }
+type bucketOutput struct{ Body v1.Bucket }
+type listBucketOutput struct{ Body []v1.Bucket }
+
+func registerBucket(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listBuckets", Method: http.MethodGet, Path: base,
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedList) (*listBucketOutput, error) {
+		items, err := h.ListBuckets(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listBucketOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createBucket", Method: http.MethodPost, Path: base,
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *createBucketInput) (*bucketOutput, error) {
+		item, err := h.CreateBucket(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getBucket", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedGet) (*bucketOutput, error) {
+		item, err := h.GetBucket(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceBucket", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Bucket
+	}) (*bucketOutput, error) {
+		item, err := h.ReplaceBucket(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteBucket", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteBucket(ctx, in.Namespace, in.Name))
+	})
+}
+
 // ===== Policy (namespaced) — ADR-0074 =====
 
 type createPolicyInput struct{ Body v1.Policy }

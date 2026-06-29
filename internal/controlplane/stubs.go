@@ -29,6 +29,7 @@ type StubHandlers struct {
 	workerNodes    map[string]v1.WorkerNode
 	gateways       map[string]v1.Gateway
 	kvstores       map[string]v1.KVStore
+	buckets        map[string]v1.Bucket
 	policies       map[string]v1.Policy
 }
 
@@ -51,6 +52,7 @@ func NewStubHandlers() *StubHandlers {
 		workerNodes:    make(map[string]v1.WorkerNode),
 		gateways:       make(map[string]v1.Gateway),
 		kvstores:       make(map[string]v1.KVStore),
+		buckets:        make(map[string]v1.Bucket),
 		policies:       make(map[string]v1.Policy),
 	}
 }
@@ -616,6 +618,62 @@ func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, nam
 		return fault.NotFoundf("StubHandlers.DeleteKVStore", "KVStore %s not found", key)
 	}
 	delete(s.kvstores, key)
+	return nil
+}
+
+// ---- Bucket (ADR-0080) ----
+
+func (s *StubHandlers) GetBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.buckets[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Bucket{}, fault.NotFoundf("StubHandlers.GetBucket", "Bucket %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateBucket(_ context.Context, b v1.Bucket) (v1.Bucket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(b.Namespace, b.Name)
+	if _, exists := s.buckets[key]; exists {
+		return v1.Bucket{}, fault.Conflictf("StubHandlers.CreateBucket", "Bucket %s already exists", key)
+	}
+	s.buckets[key] = b
+	return b, nil
+}
+
+func (s *StubHandlers) ListBuckets(_ context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Bucket, 0)
+	for _, v := range s.buckets {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.buckets[key]; !exists {
+		return v1.Bucket{}, fault.NotFoundf("StubHandlers.ReplaceBucket", "Bucket %s not found", key)
+	}
+	s.buckets[key] = b
+	return b, nil
+}
+
+func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.buckets[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteBucket", "Bucket %s not found", key)
+	}
+	delete(s.buckets, key)
 	return nil
 }
 

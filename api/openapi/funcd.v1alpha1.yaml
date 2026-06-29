@@ -21,6 +21,50 @@ components:
       required:
         - binding
       type: object
+    Bucket:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/BucketSpec"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    BucketPrefix:
+      additionalProperties: false
+      properties:
+        name:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        owner:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+      type: object
+    BucketSpec:
+      additionalProperties: false
+      properties:
+        maxObjectBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        prefixes:
+          items:
+            $ref: "#/components/schemas/BucketPrefix"
+          type:
+            - array
+            - "null"
+      required:
+        - prefixes
+      type: object
     Condition:
       additionalProperties: false
       properties:
@@ -189,6 +233,25 @@ components:
         - metadata
         - spec
       type: object
+    FunctionBlob:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        bucket:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        prefix:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - bucket
+        - prefix
+      type: object
     FunctionKV:
       additionalProperties: false
       properties:
@@ -233,6 +296,12 @@ components:
       properties:
         artifact:
           $ref: "#/components/schemas/ArtifactRef"
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
@@ -1065,6 +1134,165 @@ paths:
           description: Error
       tags:
         - Namespace
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets:
+    get:
+      operationId: listBuckets
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Bucket"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Bucket
+    post:
+      operationId: createBucket
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Bucket"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bucket"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Bucket
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets/{name}:
+    delete:
+      operationId: deleteBucket
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Bucket
+    get:
+      operationId: getBucket
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bucket"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Bucket
+    put:
+      operationId: replaceBucket
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Bucket"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bucket"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Bucket
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps:
     get:
       operationId: listConfigMaps
