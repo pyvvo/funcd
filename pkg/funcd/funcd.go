@@ -35,6 +35,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/eventing"
 	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
+	"github.com/green-0-rabbit/funcd/internal/funclog/logread"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
@@ -373,11 +374,18 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
 	p.controller = ctrl
 
+	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
+	// whenever a blob substrate is — nil leaves the route unregistered.
+	var logReader controlplane.LogQuerier
+	if c.blob != nil {
+		logReader = logread.NewBlobReader(c.blob)
+	}
 	handler, err := controlplane.NewServer(controlplane.Deps{
 		Store:       c.store,
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
+		Logs:        logReader,
 		Admissions: []admission.Admission{
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),

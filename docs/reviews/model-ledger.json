@@ -1288,5 +1288,20 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0083-implementation-claude-opus-4-8.md",
     "notes": "F53 OTLP-JSONL\u2192Parquet compaction: 8/8 scenarios green, lint 0, parquet-go Apache-2.0 pure-Go, crash-safe verified; 2 minors are ADR-documented follow-ons; 1 env-attributed pre-existing bench failure (py shim readiness, unrelated)."
+  },
+  {
+    "date": "2026-06-29",
+    "adr": "0084",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 0,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0084-implementation-claude-opus-4-8.md",
+    "notes": "F54 log read path: 8/8 scenarios green (reader+endpoint+SDK+funcdctl logs), tenant scoping proven (403/200/operator-all), DecodeJSONL additive (F53 green), OpenAPI regenerated, lint 0, no new deps; 3 minors are ADR-documented follow-ons; 1 env bench flake (py shim) unrelated."
   }
 ]

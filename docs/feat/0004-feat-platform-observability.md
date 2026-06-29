@@ -38,18 +38,18 @@ implementation detail belongs here. Feature status: `idea → adr → accepted �
 | F51 | **Traces capture** — capture function spans on the same signal-generic OTLP pipeline and persist as raw OTLP-JSONL, identity-tagged, reusing F50's seam. | F50 | — | idea |
 | F52 | **Metrics** — function/platform metrics with a **live Prometheus-scrape** surface (real-time, daemon-side) **and** a historical lane persisted alongside logs/traces (Prometheus pull does **not** come from Parquet — a deliberate live/historical split). | F50 | — | idea |
 | F53 | **Time-windowed compaction → Parquet** — funcd's own compaction pipeline folds many small raw OTLP-JSONL objects into fewer columnar **Parquet** objects over a **configurable window/retention** (sane default) — funcd's own raw→compacted pipeline, without DuckLake. | F50 | [ADR-0083](../adr/0083-funclog-compaction-otlp-jsonl-to-parquet.md) | implemented |
-| F54 | **`funcd-system` observability serving provider (add-on)** — a **regular function** (min-replica=1, no scale-to-zero) running **DuckDB** (in the function sandbox, **not** the pure-Go daemon) over the compacted Parquet, reached at a well-known route, reading via the ordinary `spec.blob` binding. **Query-time tenant scoping** (Loki/Mimir model): a governed reader injects a **mandatory filter derived from the caller's authenticated identity** (ADR-0018 RBAC subject for humans / connection-scoped `Ref` for in-platform), never client-asserted — operator gets the full view, a tenant sees only its own. | F50, F53 · [ADR-0018](../adr/0018-api-server-authn-rbac-admission.md) (authn/RBAC) · [ADR-0019](../adr/0019-service-facade-pattern-kv.md) (facade) | — | idea |
-| F55 | **Public ecosystem-standard endpoint** — expose the served signals over **OTLP + ecosystem-standard** surfaces (OTLP in/out, Prometheus scrape for metrics, Loki/Tempo-shaped reads for logs/traces) so any standard tool (Grafana, collectors, vendors) plugs in. **Served by the F54 add-on provider through the ingress gateway** (see the blueprint's *provider* model — built-in vs. add-on). | F54 | — | idea |
+| F54 | **Function-log reader + `funcdctl logs`** — a **thin pure-Go in-daemon reader** (parquet-go + `pdata/plog` over the `blob.Bucket` port, **not** DuckDB, **not** a function) that merges the compacted Parquet with the recent raw OTLP-JSONL tail, filtered by time/severity/limit, served on a **control-plane logs route** and surfaced as `funcdctl logs <fn>`. **Query-time tenant scoping** (Loki/Mimir model): the readable namespace is the **caller's RBAC-authorized** one (ADR-0018 subject), never client-asserted — operator gets the full view, a tenant sees only its own. (Refined from the original DuckDB-serving-function sketch — the no-cgo daemon reads its own Parquet.) | F50, F53 · [ADR-0018](../adr/0018-api-server-authn-rbac-admission.md) (authn/RBAC) · [ADR-0042](../adr/0042-cobra-cli-framework.md) (funcdctl/SDK) | [ADR-0084](../adr/0084-funclog-read-funcdctl-logs.md) | implemented |
+| F55 | **Public ecosystem-standard endpoint** — expose the served signals over **OTLP + ecosystem-standard** surfaces (OTLP in/out, Prometheus scrape for metrics, Loki/Tempo-shaped reads for logs/traces) so any standard tool (Grafana, collectors, vendors) plugs in. **Served over the F54 read path through the ingress gateway.** | F54 | — | idea |
 
 ## How it lands on funcd (high level)
 
 funcd's own primitives, not the lakehouse: the daemon **captures** function signals over the side channel — the
 **log-ingest built-in provider** (always-on, depends on nothing but the daemon) — **persists** them raw as
 OTLP-JSONL through `blob.Bucket` into `funcd-system` (F50); a funcd **compaction** pipeline folds them to Parquet
-over a configurable window (F53); a pinned **serving provider** (F54, add-on) queries that Parquet with DuckDB and
-enforces per-caller tenant scoping; and a **public OTLP/Grafana/Prometheus endpoint** exposes it platform-wide
-(F55). Capture is a daemon-side built-in provider, always-on; serving is a best-effort add-on — when the platform
-is degraded, raw bytes still land in blob.
+over a configurable window (F53); a **thin pure-Go in-daemon reader** (F54) merges that Parquet with the recent raw
+tail, enforces per-caller RBAC tenant scoping, and backs `funcdctl logs`; and a **public OTLP/Grafana/Prometheus
+endpoint** exposes it platform-wide (F55). Capture and compaction are daemon-side, always-on; the read path is
+served by the control plane — when the platform is degraded, raw bytes still land in blob.
 
 ```mermaid
 flowchart TB
@@ -61,8 +61,8 @@ flowchart TB
         BLOB["blob.Bucket<br/>(funcd-system: raw OTLP-JSONL)"]
         COMP["F53 · time-windowed compaction → Parquet"]
     end
-    subgraph Serve["funcd-system functions (DuckDB in sandbox)"]
-        SRV["F54 · serving provider (add-on, min-replica=1)<br/>DuckDB · query-time tenant scoping"]
+    subgraph Serve["funcd control plane (pure-Go, in-daemon)"]
+        SRV["F54 · thin pure-Go reader<br/>parquet-go + plog · query-time RBAC tenant scoping"]
         EP["F55 · public OTLP / Grafana / Prometheus"]
     end
     GRAF["Grafana / OTLP consumers / funcdctl logs"]
@@ -71,9 +71,10 @@ flowchart TB
     CAP -->|"raw OTLP-JSONL (identity-tagged)"| BLOB
     BLOB --> COMP
     COMP -->|"Parquet"| SRV
+    BLOB -.->|"raw tail"| SRV
     SRV --> EP
     EP --> GRAF
-    SRV -.->|"spec.blob binding"| BLOB
+    SRV -.->|"blob.Bucket read"| BLOB
 ```
 
 ## Exit criterion

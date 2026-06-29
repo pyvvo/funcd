@@ -236,24 +236,38 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 // readRaw reads + decodes every raw object of a window into Rows (one Row per LogRecord).
 func (c *Compactor) readRaw(ctx context.Context, keys []string) ([]Row, error) {
 	const op = "compact.Compactor.readRaw"
-	var um plog.JSONUnmarshaler
 	var rows []Row
 	for _, key := range keys {
 		data, err := c.bucket.Get(ctx, key)
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "get raw %q", key)
 		}
-		for _, line := range bytes.Split(data, []byte{'\n'}) {
-			line = bytes.TrimSpace(line)
-			if len(line) == 0 {
-				continue
-			}
-			logs, err := um.UnmarshalLogs(line)
-			if err != nil {
-				return nil, fault.Wrapf(err, fault.Invalid, op, "decode OTLP-JSONL line in %q", key)
-			}
-			rows = appendRows(rows, logs)
+		decoded, err := DecodeJSONL(data)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "decode raw %q", key)
 		}
+		rows = append(rows, decoded...)
+	}
+	return rows, nil
+}
+
+// DecodeJSONL decodes one raw OTLP-JSON-Lines object's bytes into Rows (one per LogRecord) — the per-line decode
+// the compactor and the ADR-0084 reader share: split on '\n', skip blank lines, plog.JSONUnmarshaler.UnmarshalLogs
+// each line (a bad line ⇒ fault.Invalid), appendRows. An additive export of the compactor's existing loop.
+func DecodeJSONL(data []byte) ([]Row, error) {
+	const op = "compact.DecodeJSONL"
+	var um plog.JSONUnmarshaler
+	var rows []Row
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		logs, err := um.UnmarshalLogs(line)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Invalid, op, "decode OTLP-JSONL line")
+		}
+		rows = appendRows(rows, logs)
 	}
 	return rows, nil
 }

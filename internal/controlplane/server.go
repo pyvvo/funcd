@@ -22,6 +22,9 @@ type Deps struct {
 	// Admissions are extra admissions registered on the write-path pipeline (ADR-0063), appended
 	// after the built-in validate admission. ADR-0064 passes the link admissions here. Optional.
 	Admissions []admission.Admission
+	// Logs is the function-log reader (ADR-0084). Optional; when set, NewServer registers the
+	// namespaced GET …/functions/{name}/logs route (authorized get/Function per caller).
+	Logs LogQuerier
 }
 
 // NewServer builds the authenticated, authorized, store-backed control-plane API
@@ -48,7 +51,10 @@ func NewServer(d Deps) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.Authn(d.Credentials))
 	admissions := append([]admission.Admission{admission.NewValidateAdmission()}, d.Admissions...)
-	NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...)))
+	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...)))
+	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
+		RegisterLogs(api, d.Logs, d.Authorizer)
+	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil
 }

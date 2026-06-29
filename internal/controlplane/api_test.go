@@ -133,6 +133,7 @@ func TestSpecGeneratedFromGo(t *testing.T) {
 	h := controlplane.NewStubHandlers()
 	r := chi.NewRouter()
 	api := controlplane.NewAPI(r, h)
+	controlplane.RegisterStubLogs(api) // ADR-0084: the logs route is part of the committed spec
 
 	raw, err := api.OpenAPI().YAML()
 	if err != nil {

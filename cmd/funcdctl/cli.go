@@ -46,7 +46,7 @@ func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.token, "token", os.Getenv("FUNCD_TOKEN"),
 		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
-		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), // control-plane verbs (need the SDK client)
+		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), // control-plane verbs (need the SDK client)
 		a.pushCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), // artifact verbs (internal/artifact; no server)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
 	)

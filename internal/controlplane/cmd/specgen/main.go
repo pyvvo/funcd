@@ -22,6 +22,7 @@ func main() {
 	r := chi.NewRouter()
 	h := controlplane.NewStubHandlers()
 	api := controlplane.NewAPI(r, h)
+	controlplane.RegisterStubLogs(api) // ADR-0084: document the function-logs route in the committed spec
 
 	raw, yamlErr := api.OpenAPI().YAML()
 	if yamlErr != nil {
