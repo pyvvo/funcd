@@ -60,17 +60,22 @@ and **scope-when-picked-up** (the rough ADR slate or first slice). This keeps th
 rotting before it's scoped into a version. Match the depth of the existing items (run `show`
 on one to see the house style).
 
-## Status follows the ADR lifecycle (when an item is scoped into an ADR)
+## Status follows the ADR lifecycle (every feature ADR carries a card)
 
-Per the repo's working agreement (`.claude/CLAUDE.md`), an item that gets scoped into an ADR
-**stays on the board** and its Status tracks the ADR's lifecycle — the ADR gates move it:
+Per the repo's working agreement (`.claude/CLAUDE.md`), a **feature ADR** — one realizing a genuine
+deliverable feat-row (a user-facing capability, e.g. FEAT-0001, FEAT-0003) — **carries a board card
+created when the ADR is first drafted**, and its Status tracks the ADR's lifecycle (the gates move it):
 
-- fresh idea / through ADR `Draft`/`Proposed` → **Backlog**
-- ADR **Accepted** → `status "<item>" "In Progress"` (done by the `adr` / `adr-batch` accept step)
-- ADR **Implemented** → `status "<item>" "Done"` (done by the `adr-impl-review` gate)
+- ADR `Draft` → **`create`** the card (Backlog) — the `adr` skill, at draft. If it was scoped from a
+  pre-existing idea, **reuse that card** (`list` first); don't create a duplicate.
+- through `Draft`/`Proposed` (+ judge) → stays **Backlog**
+- ADR **Accepted** → `status "<item>" "In Progress"` (the `adr` / `adr-batch` accept step)
+- ADR **Reviewing** → stays **In Progress** (no move)
+- ADR **Implemented** → `status "<item>" "Done"` (the `adr-impl-review` gate)
 
-Only items that **originated on the board** have a card to move; a normal roadmap ADR with no
-backlog item skips this.
+**Pure-infra / process / refactor ADRs skip the card** (a rename, a tooling/e2e ADR, the process ADR) —
+and a free idea that never becomes an ADR just lives in Backlog. When unsure, read the ADR's `Realizes:`
+header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
 
 ## Identity / hygiene
 

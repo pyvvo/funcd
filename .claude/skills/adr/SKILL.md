@@ -105,6 +105,15 @@ Quality bar per section:
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,
   the implementation PR).
 
+**Open the board card (feature ADRs only).** If this ADR realizes a genuine deliverable feat-row (a
+user-facing capability, e.g. FEAT-0001/FEAT-0003), **create its Project #4 tracking card in `Backlog`
+now**, at draft — native lifecycle tracking starts here, not at acceptance. Use the
+[`/project-management`](../project-management/SKILL.md) skill (`list` first; if the ADR was scoped from a
+pre-existing board idea, **reuse that card** rather than create a second). Title it so it's findable
+(`"<short title> — ADR-NNNN / FEAT-NNNN Fxx"`); give it a rich body (why · chosen shape · deps · scope).
+**Pure-infra / process / refactor ADRs skip the card** (a rename, a tooling/e2e ADR, the process ADR) —
+when unsure, the `Realizes:` header decides: a user-facing feat-row gets a card, an infra/process row does not.
+
 ## Step 3 — Review to acceptance
 
 1. Present the user a short summary: the decision itself, the alternatives that lost and
@@ -128,9 +137,9 @@ Quality bar per section:
 - Update the feature row in the active `docs/feat/` document: link the ADR in the
   `ADR(s)` column and advance the status (`idea → adr` at draft, `→ accepted` at
   acceptance).
-- **If this ADR was scoped from a Project #4 backlog item, move that item `Backlog → In
-  Progress`** (see CLAUDE.md → *Backlog* for the `gh project item-edit` command + IDs). A
-  normal roadmap ADR with no board item skips this.
+- **Move the feature ADR's board card `Backlog → In Progress`** (the card opened at draft, Step 2; see
+  CLAUDE.md → *Backlog* for the `/project-management` `status` command). A pure-infra / process / refactor
+  ADR has no card and skips this.
 
 ## Step 5 — Stop
 

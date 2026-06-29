@@ -137,6 +137,9 @@ When `just build`/`just lint`/`just test` fail, distinguish the cause:
   has no `Realizes` line, or that file/row doesn't exist, or it matches more than one row, don't
   guess — note it in the handoff and leave the feat doc untouched. (The "active" feat doc, when you
   otherwise need it, is the highest-numbered file in `docs/feat/` whose status is `Active`.)
+- **Board card: no move.** A feature ADR's Project #4 card is already `In Progress` (moved at acceptance);
+  `Reviewing` maps to the same board state, so this gate touches no card — the `→ Done` move belongs to the
+  review gate at `Implemented`. (Pure-infra / process / refactor ADRs have no card.)
 - Grep the changed files for the local username/paths to confirm no identity leak.
 - Close with a short **implementation report**: files created, deps/tools added (with versions), the
   Scenario→test results (all passing), the green `just ci` result, the ADR → `Reviewing` and feat

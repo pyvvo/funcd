@@ -214,30 +214,41 @@ docs (they would rot the feat/roadmap with un-decided scope). They go to the pro
 
 Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
 the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
-artifact-contract registry, and distro packaging P-Z.)
+artifact-contract registry, and distro packaging P-Z.) **And — see below — a *feature* ADR also
+carries a board card** from the moment it's drafted, so the board shows feature work in flight, not
+only un-scoped ideas.
 
-### A board item's status tracks its ADR lifecycle
+### A feature ADR carries a board card that natively tracks its lifecycle
 
-When a backlog item is scoped into an ADR, **it stays on the board** (don't close it) and its
-**Status follows the ADR's lifecycle** — the ADR gates move it. A fresh idea sits in **Backlog**;
-through `Draft`/`Proposed` it stays in **Backlog**; then:
+A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
+FEAT-0001, FEAT-0003) — **gets a Project #4 tracking card created when it is first drafted**, and its
+**Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
+it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
 
-- **ADR `Accepted` → move the item to `In Progress`** (done by the `adr` / `adr-batch` accept step).
-- **ADR `Implemented` → move the item to `Done`** (done by the `adr-impl-review` gate, the sole
-  stamper of `Implemented`).
+**Pure-infra / process / refactor ADRs skip the card** — a rename (ADR-0078/0079), a tooling/e2e ADR
+(ADR-0077), the process ADR (ADR-0000): no card. (If a feature ADR was *scoped from a pre-existing
+board idea*, **reuse that card — don't create a second**; `driver.py list` first.) When unsure, read
+the ADR's `Realizes:` header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
 
-The skill gates carry this as an explicit step. Move the card with the
+The board's three Status options — **Backlog · In Progress · Done** — map onto the five ADR statuses:
+
+| ADR status | Board card | Moved by |
+|---|---|---|
+| `Draft` | **create the card in `Backlog`** | the `adr` skill, at draft |
+| `Proposed` (+ judge) | stays `Backlog` | — |
+| `Accepted` | `→ In Progress` | the `adr` / `adr-batch` accept step |
+| `Reviewing` | stays `In Progress` | — (no move; `adr-impl` just notes it) |
+| `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
+
+The skill gates carry each move as an explicit step. Create/move the card with the
 [`/project-management`](skills/project-management/SKILL.md) skill (it resolves the item by title
-substring — no ids to hand-assemble). The Status options are **Backlog · In Progress · Done**:
+substring — no ids to hand-assemble):
 
 ```bash
-python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"
-python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"
+python3 .claude/skills/project-management/driver.py create --title "<…> — ADR-NNNN / FEAT-NNNN Fxx" --body "<…>"  # at Draft
+python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
+python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
 ```
-
-Only items that **originated on the board** have a ticket to move — a normal roadmap ADR (no
-backlog item) skips this. If unsure whether an ADR maps to a board item, list the board and match
-by topic before editing.
 
 ## Dev environment — run everything through Nix
 
