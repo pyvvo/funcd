@@ -112,6 +112,24 @@ type Deps struct {
 	// InvokeSockets provisions the per-function worker-node local API (ADR-0064) and yields the
 	// socket path the reconciler sets as FUNCD_INVOKE_SOCKET. nil ⇒ fn-to-fn links off.
 	InvokeSockets InvokeSocketProvider
+
+	// S3Gateway, when Enabled, injects a per-function SigV4 keypair + endpoint into the worker
+	// env (ADR-0085) for a function that declares spec.blob — AWS_ACCESS_KEY_ID/
+	// AWS_SECRET_ACCESS_KEY (DeriveKeypair over Master), AWS_REGION, AWS_ENDPOINT_URL_S3
+	// (ListenAddr). A function without spec.blob, or a disabled gateway, gets nothing.
+	S3Gateway S3GatewayInjection
+}
+
+// S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
+// the per-function (access, secret) from the node master over the Ref — supplied by the wiring
+// (pkg/funcd) so this package stays free of the versitygw dependency the gateway carries; the
+// master secret it closes over is never logged. The zero value (Enabled false) injects nothing.
+type S3GatewayInjection struct {
+	Enabled    bool
+	ListenAddr string
+	// Derive returns the deterministic per-(ns, fn) SigV4 keypair (s3gateway.DeriveKeypair,
+	// bound to the node master secret). Required when Enabled.
+	Derive func(ns, fn string) (access, secret string)
 }
 
 // EndpointMode selects how a worker is ADDRESSED (ADR-0032); it is orthogonal to the
@@ -161,6 +179,10 @@ type Reconciler struct {
 
 	// invokeSockets provisions the per-function worker-node local API (ADR-0064); nil ⇒ links off.
 	invokeSockets InvokeSocketProvider
+
+	// s3Gateway injects the per-function S3 keypair env (ADR-0085) when enabled and the function
+	// declares spec.blob. The master secret is never logged.
+	s3Gateway S3GatewayInjection
 
 	// pooling (ADR-0046/0050): the pure placement policy + per-family pool-host launch commands + cap.
 	// A function pools iff a pool host exists for its runtime family (poolKeyFor); none ⇒ solo.
@@ -223,6 +245,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		secrets:           d.Secrets,
 		developerFor:      developerFor,
 		invokeSockets:     d.InvokeSockets,
+		s3Gateway:         d.S3Gateway,
 		assigner:          pooling.NewAssigner(),
 		poolShimCommand:   d.PoolShimCommand,
 		poolShimsByFamily: d.PoolShimsByFamily,
@@ -721,6 +744,22 @@ func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) {
 	env["FUNCD_INVOKE_SOCKET"] = sock
 }
 
+// addS3Env injects the per-function S3 SigV4 keypair + endpoint (ADR-0085) when the s3gateway
+// is enabled AND the function declares spec.blob — AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+// (derived from the node master secret over the Ref), AWS_REGION, AWS_ENDPOINT_URL_S3. The
+// function never chooses its secret; it cannot derive a peer's. A function without spec.blob,
+// or a disabled gateway, gets nothing. The secret is set into env but never logged.
+func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
+	if !r.s3Gateway.Enabled || r.s3Gateway.Derive == nil || len(fn.Spec.Blob) == 0 {
+		return
+	}
+	access, secret := r.s3Gateway.Derive(string(fn.Namespace), string(fn.Name))
+	env["AWS_ACCESS_KEY_ID"] = access
+	env["AWS_SECRET_ACCESS_KEY"] = secret
+	env["AWS_REGION"] = "us-east-1"
+	env["AWS_ENDPOINT_URL_S3"] = "http://" + r.s3Gateway.ListenAddr
+}
+
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
@@ -730,6 +769,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 			"FUNCD_PORT":     strconv.Itoa(containerShimPort),
 		}
+		r.addS3Env(env, fn)
 		r.mergeSecretEnv(env, secretEnv)
 		mounts := []runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
@@ -760,6 +800,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 		}
 		r.addInvokeSocket(env, fn) // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		r.addS3Env(env, fn)        // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

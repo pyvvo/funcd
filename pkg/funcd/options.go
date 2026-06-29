@@ -81,6 +81,25 @@ func WithoutLogCompaction() Option {
 	return func(c *config) error { c.logCompactDisabled = true; return nil }
 }
 
+// WithS3Gateway enables the opt-in S3-protocol frontend over the blob substrate
+// (ADR-0080/0085): a node-private TCP listener serving GET(+range)/PUT(+multipart)/
+// HEAD/DELETE/ListObjectsV2 governed by the cedar spec.blob binding-as-grant PEP, with
+// per-function SigV4 keypairs derived from a node master secret and injected into a
+// spec.blob function's worker env. listenAddr is node-private (e.g. 127.0.0.1:9000);
+// maxUploadBytes (0 ⇒ 1 GiB) caps a single buffered object; masterSecretFile (empty ⇒
+// generate+persist 0600 under dataDir/s3gateway/master.key) supplies the node master.
+// Without this option no listener, IAM, or keypair injection exists.
+func WithS3Gateway(listenAddr string, maxUploadBytes int64, masterSecretFile, dataDir string) Option {
+	return func(c *config) error {
+		c.s3gwEnabled = true
+		c.s3gwListenAddr = listenAddr
+		c.s3gwMaxUploadBytes = maxUploadBytes
+		c.s3gwMasterFile = masterSecretFile
+		c.s3gwDataDir = dataDir
+		return nil
+	}
+}
+
 // WithRuntime injects the function runtime (worker) port.
 func WithRuntime(r runtime.Runtime) Option {
 	return func(c *config) error { c.runtime = r; return nil }

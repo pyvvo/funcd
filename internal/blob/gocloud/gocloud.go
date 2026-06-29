@@ -121,6 +121,27 @@ func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOption
 	return u, nil
 }
 
+// GetRange implements the optional blob.RangeReader capability (ADR-0080) via
+// gocloud's NewRangeReader: it reads only bytes [offset, offset+length) of the
+// object, so DuckDB's ranged Parquet reads do not pull the whole object. A
+// negative length means "to end" (the gocloud convention, identical to the port's).
+func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	const op = "blob.GetRange"
+	if offset < 0 {
+		return nil, fault.Invalidf(op, "negative offset %d for %q", offset, key)
+	}
+	r, err := k.b.NewRangeReader(ctx, key, offset, length, nil)
+	if err != nil {
+		return nil, mapErr(op, key, err)
+	}
+	defer func() { _ = r.Close() }()
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, mapErr(op, key, err)
+	}
+	return data, nil
+}
+
 func (k *bucket) Close() error {
 	if err := k.b.Close(); err != nil {
 		return fault.Wrapf(err, fault.Internal, "gocloud.Close", "close bucket")

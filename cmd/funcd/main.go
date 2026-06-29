@@ -195,6 +195,13 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
 
+	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate.
+	if cfg.S3Gateway.Enabled {
+		opts = append(opts, funcd.WithS3Gateway(
+			cfg.S3Gateway.ListenAddr, cfg.S3Gateway.MaxUploadBytes,
+			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
+	}
+
 	execOpts, closeExec, err := executionOptions(ctx, cfg)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)

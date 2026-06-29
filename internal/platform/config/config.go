@@ -98,6 +98,14 @@ type Config struct {
 		Endpoint string `json:"endpoint,omitempty" env:"FUNCD_TELEMETRY_ENDPOINT"`
 		Insecure bool   `json:"insecure,omitempty" env:"FUNCD_TELEMETRY_INSECURE"`
 	} `json:"telemetry,omitempty"`
+	// S3Gateway is the opt-in S3-protocol frontend over the blob substrate (ADR-0080/0085).
+	// Disabled by default ⇒ no listener, no IAM, no keypair injection.
+	S3Gateway struct {
+		Enabled          bool   `json:"enabled,omitempty" env:"FUNCD_S3GATEWAY_ENABLED"`
+		ListenAddr       string `json:"listenAddr,omitempty" env:"FUNCD_S3GATEWAY_LISTEN_ADDR"`
+		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES"`
+		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
+	} `json:"s3gateway,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -120,6 +128,10 @@ func defaults() Config {
 	c.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
 	c.Log.Format = "json"
 	c.Log.Level = "info"
+	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
+	c.S3Gateway.Enabled = false
+	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
+	c.S3Gateway.MaxUploadBytes = 1 << 30
 	return c
 }
 
