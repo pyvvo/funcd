@@ -26,12 +26,17 @@ provision:
       install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
       mkdir -p "$d" /var/lib/funcd/data
       tar xzf /mnt/funcd-deps/catalog-quack.tgz -C "$d"
+      # The EXTERNAL consumer is plain host python3 + the duckdb wheel (it autoinstalls the quack
+      # extension on first LOAD); install it so client.py runs on the host (best-effort — the lane is
+      # gated, so a failure here doesn't mask the real blocker).
+      python3 -m pip install --quiet duckdb 2>/dev/null || pip3 install --quiet duckdb 2>/dev/null || true
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
-      # Apply order: the ConfigMap + Bucket first (the CatalogService's config/blob refs must exist),
-      # then the CatalogService (the provider-runtime brings up the duckdb engine).
+      # Apply order: ConfigMap + Secret + Bucket first (the CatalogService's config/secrets/blob refs
+      # must exist), then the CatalogService (the provider-runtime brings up the duckdb engine).
       funcdctl apply -f "$d/configmap.yaml"
+      funcdctl apply -f "$d/secret.yaml"
       funcdctl apply -f "$d/bucket.yaml"
       funcdctl apply -f "$d/catalogservice.yaml"
 

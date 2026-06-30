@@ -292,10 +292,12 @@ lima-example-duckdb: build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # Stage the catalog-quack manifests + config (no JS bundle — the catalog IS the deployed engine).
+    # Stage the catalog-quack manifests + config + the real Quack consumer (client.py) — no JS bundle,
+    # the catalog IS the deployed engine and client.py is the in-platform + external consumer.
     stage="$(mktemp -d)"
-    cp examples/catalog-quack/configmap.yaml examples/catalog-quack/bucket.yaml \
-       examples/catalog-quack/catalogservice.yaml examples/catalog-quack/funcdconfig.yaml "$stage/"
+    cp examples/catalog-quack/configmap.yaml examples/catalog-quack/secret.yaml examples/catalog-quack/bucket.yaml \
+       examples/catalog-quack/catalogservice.yaml examples/catalog-quack/funcdconfig.yaml \
+       examples/catalog-quack/client.py "$stage/"
     tar czf {{lima_deps}}/catalog-quack.tgz -C "$stage" .
     rm -rf "$stage"
     trap 'limactl stop -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true' EXIT

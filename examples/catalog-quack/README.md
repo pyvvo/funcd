@@ -8,16 +8,33 @@ checkpointing its SQLite catalog to blob.
 ## What you apply (the user-facing flow)
 
 ```bash
-funcdctl apply -f bucket.yaml -f configmap.yaml -f catalogservice.yaml
+funcdctl apply -f bucket.yaml -f configmap.yaml -f secret.yaml -f catalogservice.yaml
 ```
 
 - **`bucket.yaml`** — the `lakehouse` Bucket + the `gold` prefix the catalog owns (Parquet + the
   `_ducklake/catalog.db` SQLite catalog live here).
 - **`configmap.yaml`** — non-secret engine tuning (`DUCKDB_*`), consumed via `spec.config` (the
   ADR-0057 convention, extended to `CatalogService` by ADR-0087).
+- **`secret.yaml`** — the Quack auth token, consumed via `spec.secrets`. A Quack client **always**
+  needs a token (a token-less client is refused), so the engine serves with `QUACK_TOKEN` and every
+  consumer presents the same; the ingress gateway is the authoritative *outer* gate.
 - **`catalogservice.yaml`** — the `lake` CatalogService: the `gold` blob binding, the catalog ref,
-  resources, and `config`. (`secrets:` would carry a Quack token; this internal-only example omits it
-  — the engine serves token-less behind the platform's auth.)
+  resources, `config`, and `secrets`.
+
+## Consuming the catalog — a real client
+
+A Quack client is just a local DuckDB with the `quack` extension loaded (there is no separate JS/Python
+Quack library — Quack is DuckDB-to-DuckDB, Protobuf over HTTP). **`client.py`** is that client,
+verified working: it runs SQL on the remote catalog via `quack_query(uri, sql, token, disable_ssl)`.
+
+```bash
+# in-platform (the curated duckdb image is the client) OR external (`pip install duckdb`):
+python3 client.py --endpoint <catalog-address> --token funcd-catalog-token --sql "SELECT 42 AS answer"
+```
+
+The `just lima-example-duckdb` venom exercises **both** an in-platform consumer (client.py via the
+`duckdb` image, a container on the node) **and** an external consumer (client.py on the host, plain
+`pip install duckdb`) — the same client, two vantage points.
 
 Then the **CatalogService reconciler** (reworked by ADR-0087) derives the per-fn S3 keypair over the
 provider identity, resolves `config`/`secrets` into the engine env, assembles a `provider.ProviderSpec`,

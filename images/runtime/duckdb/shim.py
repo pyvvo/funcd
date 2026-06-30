@@ -232,13 +232,17 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _on_term)
     signal.signal(signal.SIGINT, _on_term)
 
-    # Serve Quack over HTTP on the fixed netns port (a quack:// RPC URI). disable_ssl: the ingress
-    # gateway terminates TLS and is the authoritative auth gate (ADR-0013) — Quack runs plain HTTP
-    # behind it with no token of its own (allow_other_hostname: the gateway proxies a different Host).
-    # quack_serve is non-blocking (spawns the server) — we then block on signal.pause().
+    # Serve Quack over HTTP on the fixed netns port (a quack:// RPC URI). A Quack client ALWAYS needs a
+    # token (a token-less client is refused "Could not find a Quack authentication token"), so the
+    # engine serves WITH one: QUACK_TOKEN, injected from the CatalogService's spec.secrets. disable_ssl:
+    # the ingress gateway terminates TLS and is the authoritative OUTER auth gate (ADR-0013) — Quack
+    # runs plain HTTP behind it, the token is the inner gate (allow_other_hostname: the gateway proxies
+    # a different Host). quack_serve is non-blocking (spawns the server) — we then block on signal.pause().
+    quack_token = _require("QUACK_TOKEN")  # >= 4 chars; consumers present the same token
     serve_uri = f"quack://0.0.0.0:{quack_port}"
     con.execute(
-        "CALL quack_serve(?, disable_ssl=true, allow_other_hostname=true)", [serve_uri]
+        "CALL quack_serve(?, token := ?, disable_ssl := true, allow_other_hostname := true)",
+        [serve_uri, quack_token],
     ).fetchall()
 
     signal.pause()  # block; the SIGTERM handler checkpoints + exits when the sandbox stops us.

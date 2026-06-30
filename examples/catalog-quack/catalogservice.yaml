@@ -5,8 +5,8 @@
 # probes GET /=200 readiness, and publishes status.
 #
 # spec.blob MUST include the catalog's (bucket, prefix) — it is the bound, owned binding the engine
-# writes its catalog + Parquet through (the Validate rule). spec.secrets (a Quack token) is omitted:
-# this example is internal-only and serves token-less behind the platform auth.
+# writes its catalog + Parquet through (the Validate rule). spec.secrets carries the Quack token the
+# engine serves with (every consumer presents the same — a Quack client always needs a token).
 apiVersion: funcd.io/v1alpha1
 kind: CatalogService
 metadata:
@@ -24,5 +24,7 @@ spec:
   resources:
     cpu: "2"
     memory: "4Gi"
+  secrets:
+    - lake-quack-token         # Secret Data key QUACK_TOKEN → engine env (the Quack auth token)
   config:
     - lake-engine-config       # ConfigMap Data keys (DUCKDB_*) → engine env

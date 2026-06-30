@@ -3,24 +3,28 @@
 #
 # It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
 # add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
-# engine, it reaches Ready on its own HTTP readiness probe, and a Quack client round-trips SQL — DuckDB
-# reading/writing Parquet through the F47 S3 surface and checkpointing its SQLite catalog to blob.
+# engine, it reaches Ready on its own HTTP readiness probe, and TWO real consumers round-trip SQL over
+# Quack with the catalog's token (examples/catalog-quack/client.py — a DuckDB-with-quack client):
+#   * an IN-PLATFORM consumer  — client.py run via the curated `duckdb` image (a container on the node),
+#                                reaching the catalog's in-platform address;
+#   * an EXTERNAL consumer      — client.py run on the VM host (plain `python3` + `pip install duckdb`),
+#                                reaching the catalog's host-reachable address.
 #
-# ⚠️ GATED: the live round-trip needs a provider F47/Cedar identity (the engine is not a Function, so
-# its S3 access is authz-denied today). This suite is the INTENDED test, complete + ready; it passes
-# once the provider-identity follow-up lands (Project #4 board card "Provider F47/Cedar identity …").
-name: catalog-quack add-on provider (ADR-0086/0087, containerd lane)
+# ⚠️ GATED: the live round-trip needs a provider F47/Cedar identity (the engine is NOT a Function, so
+# the Cedar s3 policies don't grant it blobBindings / prefix ownership → its S3 access is authz-denied,
+# the shim's startup GetObject 403s, and the engine never reaches Ready). See
+# examples/catalog-quack/README.md + the Project #4 card "Provider F47/Cedar identity …". (External
+# consumption additionally needs ingress host-routing; today both consumers reach the node-private
+# address.) This suite is the INTENDED test, complete + ready; it passes once those land.
+name: catalog-quack add-on provider — in-platform + external consumers (ADR-0086/0087)
 
 vars:
-  dp: http://127.0.0.1:8081  # funcd data plane, forwarded from the Lima guest
-  cp: http://127.0.0.1:8080  # funcd control plane
+  tok: funcd-catalog-token   # = base64-decoded Secret QUACK_TOKEN; consumers present it
 
 testcases:
   - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
     steps:
       - type: exec
-        # The provider-runtime (ADR-0087) brings up the duckdb engine; the CatalogService reflects its
-        # readiness. Assert Ready + the published status.Address + that NO backing Function exists.
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
@@ -34,27 +38,40 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PHASE=Ready"
-          - result.systemout ShouldContainSubstring "FUNCTIONS=0"   # the engine is a provider, NOT a Function
+          - result.systemout ShouldContainSubstring "FUNCTIONS=0"   # a provider, NOT a Function
 
-  - name: a Quack client round-trips SQL against the catalog (Parquet on S3, catalog checkpointed)
+  - name: an IN-PLATFORM consumer round-trips SQL over Quack (client.py via the duckdb image)
     steps:
       - type: exec
-        # A duckdb Quack client (the same curated image, run one-shot) connects to the engine's
-        # status.Address and runs CREATE/INSERT/SELECT — proving the live DuckLake/Quack/S3 path.
+        # The same curated duckdb image is the client; client.py (staged at /opt/catalog-quack) is
+        # mounted in, reaching the catalog's in-platform address with the token.
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
-            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
-            sudo ctr -n funcd run --rm --net-host docker.io/funcd/runtime-duckdb:latest qclient \
-              /usr/local/bin/python3.14 -c "
-            import os,duckdb
-            c=duckdb.connect(config={\"extension_directory\":\"/opt/duckdb-ext\"})
-            c.execute(\"SET autoinstall_known_extensions=false\"); c.execute(\"LOAD quack\")
-            n=c.execute(\"SELECT count(*) AS n FROM quack_query(\x27quack://$addr\x27,\x27SELECT 42 AS x\x27, disable_ssl:=true)\").fetchone()
-            print(\"QUACK_OK\", n)"'
+            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            sudo ctr -n funcd run --rm --net-host --mount type=bind,src=/opt/catalog-quack/client.py,dst=/client.py,options=rbind:ro \
+              docker.io/funcd/runtime-duckdb:latest qc-internal \
+              /usr/local/bin/python3.14 /client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT 42 AS answer"'
         retry: 5
         delay: 3
-        info: "quack round-trip → {{.result.systemout}}"
+        info: "in-platform consumer → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring QUACK_OK
+          - result.systemout ShouldContainSubstring "(42,)"
+
+  - name: an EXTERNAL consumer round-trips SQL over Quack (client.py on the host, pip duckdb)
+    steps:
+      - type: exec
+        # An external client: plain host python3 with `pip install duckdb` (provisioned), running the
+        # SAME client.py against the catalog's host-reachable address with the token.
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            python3 /opt/catalog-quack/client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT i, i*i AS sq FROM range(3) t(i)"'
+        retry: 5
+        delay: 3
+        info: "external consumer → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "(2, 4)"
