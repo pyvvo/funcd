@@ -32,3 +32,24 @@ testcases:
           - result.bodyjson.get ShouldEqual true   # GetObject read it back, body matched
           - result.bodyjson.list ShouldBeGreaterThan 0 # ListObjectsV2 saw the key under gold/
           - result.bodyjson.denied ShouldEqual true # PutObject into unbound `other` was 403-denied by the PEP
+
+  # A DIRECT, wire-level negative (not via the function's self-report): a request carrying a forged
+  # SigV4 credential (an access key the in-process IAM resolves to no account) must be rejected by the
+  # gateway with a raw 403 — proving SigV4 is enforced at the edge, independent of the in-platform path.
+  # (The Go identity_test.go asserts the same for a real-key/wrong-secret forgery; this is the live wire.)
+  - name: the gateway rejects a forged SigV4 signature with a raw 403
+    steps:
+      - type: exec
+        # Run inside the VM against the node-private gateway (bound 0.0.0.0:9000 ⇒ reachable on loopback).
+        # FORGED403 / FORGEDBAD are disjoint markers (success is not a substring of the failure line).
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc 'code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -X PUT \
+            -H "Authorization: AWS4-HMAC-SHA256 Credential=AKIAFORGED0000000000/20260630/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=0000000000000000000000000000000000000000000000000000000000000000" \
+            -H "x-amz-date: 20260630T000000Z" -H "x-amz-content-sha256: UNSIGNED-PAYLOAD" \
+            "http://127.0.0.1:9000/lakehouse/gold/forged.txt"); [ "$code" = 403 ] && echo "FORGED403 $code" || echo "FORGEDBAD $code"'
+        retry: 5
+        delay: 2
+        info: "forged-sig → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring FORGED403"
