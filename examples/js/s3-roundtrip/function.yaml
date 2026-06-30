@@ -1,0 +1,25 @@
+# s3-roundtrip (step 3 of the apply order) — the Function WITH its spec.blob binding.
+#
+# Re-applied as an Update AFTER bucket.yaml exists, so `blob-binding-validity` (Create||Update) finds
+# bucket lakehouse / prefix gold and admits the binding. The spec.blob entry is the read capability
+# (ADR-0076 parity); being gold's prefix.owner (bucket.yaml) is the WRITE grant (single writer). With
+# both, the daemon injects the AWS_* SigV4 keypair + endpoint into the worker (ADR-0085 addS3Env) — the
+# function reads its credentials purely from env and round-trips S3 against the gateway.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: s3-roundtrip
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:s3-roundtrip   # funcdctl push roundtrip.mjs
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  blob:
+    - alias: gold           # the in-code handle / S3 scope: s3://lakehouse/gold/<key>
+      bucket: lakehouse     # the Bucket (domain)
+      prefix: gold          # the sub-domain it owns → reads AND writes (single writer)

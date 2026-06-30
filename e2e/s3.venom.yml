@@ -1,0 +1,34 @@
+# Venom e2e for the s3-roundtrip containerd lane (ADR-0080/0085, F47) — the declarative invoke +
+# assert phase of `just lima-example-s3`, run host-side AFTER the self-deploying Lima VM is Ready.
+#
+# It proves the whole S3 frontend loop end to end on REAL containerd, IN-PLATFORM (a deployed JS
+# function, not a host client): a single invoke of s3-roundtrip uses the function's funcd-INJECTED
+# keypair (AWS_* env — ADR-0085) + a bundled @aws-sdk/client-s3 to:
+#   * PutObject  lakehouse/gold/roundtrip-<inv>.txt  (the fn OWNS gold)        → put=true
+#   * GetObject  it back, body matches                                         → get=true
+#   * ListObjectsV2 prefix lakehouse/gold/, the key present                    → list>=1
+#   * PutObject  lakehouse/other/x.txt (unbound prefix) → 403 AccessDenied     → denied=true
+# i.e. keypair-injection → SigV4 over TCP → the Cedar PEP (deny on `other`) → blob.Bucket, live.
+name: s3-roundtrip frontend (ADR-0080/0085, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081 # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: s3-roundtrip round-trips S3 and the PEP denies the unbound prefix
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/s3-roundtrip"
+        headers: { content-type: application/json }
+        body: '{"data":{}}'
+        # retry-as-wait: the first invoke may land before the sandbox is fully warm; retry to 200.
+        retry: 20
+        delay: 2
+        info: "s3-roundtrip → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.put ShouldEqual true   # PutObject into the OWNED gold prefix succeeded
+          - result.bodyjson.get ShouldEqual true   # GetObject read it back, body matched
+          - result.bodyjson.list ShouldBeGreaterThan 0 # ListObjectsV2 saw the key under gold/
+          - result.bodyjson.denied ShouldEqual true # PutObject into unbound `other` was 403-denied by the PEP

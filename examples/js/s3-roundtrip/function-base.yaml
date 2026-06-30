@@ -1,0 +1,30 @@
+# s3-roundtrip (step 1 of the apply order) — the Function WITHOUT spec.blob.
+#
+# Why two steps: the admission graph has a create-time cycle (ADR-0080):
+#   * the Bucket's prefixes[gold].owner = s3-roundtrip → `bucket-prefix-owner-exists` requires the
+#     Function to exist BEFORE the Bucket is created;
+#   * the Function's spec.blob references bucket lakehouse/prefix gold → `blob-binding-validity`
+#     requires the Bucket to exist BEFORE the binding is admitted.
+# Resolved exactly as ADR-0073's KVStore fixtures do: create the Function binding-LESS first (this
+# file), then the Bucket (its owner now exists), then re-apply the Function WITH spec.blob (an
+# Update — function.yaml; the bucket+prefix now exist so blob-binding-validity passes).
+#
+# IMPORTANT: this base Function is scaled to ZERO (minReplicas/replicas 0) so NO warm replica is
+# created yet. If a replica spun up here (binding-less), it would run WITHOUT the AWS_* S3 env
+# (addS3Env only injects for a function with spec.blob — ADR-0085), and the later blob-binding Update
+# would not recreate that already-Ready replica. Keeping it at 0 means the FIRST replica is created
+# only by function.yaml (which carries spec.blob) → it gets the injected keypair.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: s3-roundtrip
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  artifact:
+    uri: oci-layout:///mnt/funcd-deps/registry:s3-roundtrip   # funcdctl push roundtrip.mjs
+  replicas: 0
+  scaling:
+    minReplicas: 0

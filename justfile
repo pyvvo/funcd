@@ -242,6 +242,40 @@ lima-example-funclog: build-runtime-images build-shim
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_funclog_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_funclog.venom.xml"
 
+# the S3-FRONTEND e2e (ADR-0080/0085, F47) on REAL containerd: deploy the s3-roundtrip JS function and
+# prove the IN-PLATFORM S3 path — the function uses its funcd-INJECTED keypair (AWS_* env, ADR-0085) +
+# a bundled @aws-sdk/client-s3 to PutObject/GetObject/ListObjectsV2 the OWNED gold prefix (allowed) and
+# a PutObject into an unbound prefix (403 from the Cedar PEP). Proves keypair-injection → SigV4 over TCP
+# → the PEP → blob.Bucket on the live daemon. The gateway binds 0.0.0.0:9000 and the worker's netns
+# reaches it via the CNI bridge gateway (10.63.0.1, the .1 of the default SubnetCIDR). Needs docker + node.
+lima_s3_vm := lima_name + "-s3"
+[group('example')]
+lima-example-s3: build-runtime-images build-shim
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
+    # JS s3-roundtrip → roundtrip.mjs (esbuild BUNDLES the @aws-sdk/client-s3 dep → self-contained .mjs).
+    # This example DEPENDS on the AWS SDK (not in the shim's node_modules), so install its own deps first
+    # (a repo-local npm cache keeps it hermetic and avoids a shared ~/.npm).
+    ( cd examples/js/s3-roundtrip && npm install --silent --no-audit --no-fund --cache "$(pwd)/.npm-cache" && node --experimental-strip-types build.ts )
+    # Stage the bundle + the three manifests (apply order: function-base → bucket → function) + the config.
+    stage="$(mktemp -d)"
+    cp examples/js/s3-roundtrip/roundtrip.mjs \
+       examples/js/s3-roundtrip/function-base.yaml examples/js/s3-roundtrip/bucket.yaml \
+       examples/js/s3-roundtrip/function.yaml examples/js/s3-roundtrip/funcdconfig.yaml "$stage/"
+    tar czf {{lima_deps}}/s3-roundtrip.tgz -C "$stage" .
+    rm -rf "$stage"
+    trap 'limactl stop -f {{lima_s3_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_s3_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_s3_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_s3_vm}} --tty=false scripts/lima-s3.yaml
+    # Declarative e2e via OVH Venom (ADR-0077/0080): one invoke round-trips S3 (put/get/list on the owned
+    # gold prefix) and the PEP denies the unbound `other` prefix (403) — asserted on the returned JSON.
+    suite="$(pwd)/e2e/s3.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_s3_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_s3.venom.xml"
+
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under

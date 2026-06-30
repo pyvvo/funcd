@@ -1,0 +1,34 @@
+# Operator config for the s3-roundtrip containerd lane (ADR-0080/0085): file-backed substrate (the
+# blob.Bucket the S3 frontend writes through) + the containerd runtime (curated nodejs22 image), PLUS
+# the opt-in S3 gateway.
+#
+# s3gateway:
+#   * enabled       — turns on the S3 listener, the IAM/SigV4 verifier, and per-function keypair
+#                     injection (ADR-0085);
+#   * listenAddr 0.0.0.0:9000 — bind on ALL interfaces so the gateway is reachable from BOTH host
+#                     loopback AND the CNI bridge (the netns'd worker routes to the node via the bridge);
+#   * endpoint http://10.63.0.1:9000 — the sandbox-facing URL injected into the worker's
+#                     AWS_ENDPOINT_URL_S3. Under containerd the worker is in its own netns and CANNOT
+#                     reach 127.0.0.1; 10.63.0.1 is the CNI bridge GATEWAY IP (the .1 of the default
+#                     SubnetCIDR 10.63.0.0/16 — config.go), i.e. the node address the sandbox routes to.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces:
+    - default
+runtime:
+  mode: containerd
+s3gateway:
+  enabled: true
+  listenAddr: 0.0.0.0:9000
+  endpoint: http://10.63.0.1:9000
+log:
+  format: text
+  level: info
