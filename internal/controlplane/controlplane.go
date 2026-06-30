@@ -139,6 +139,13 @@ type Handlers interface {
 	ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error)
 	DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// CatalogService (namespaced) — ADR-0086
+	GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error)
+	CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error)
+	ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error)
+	ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error)
+	DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

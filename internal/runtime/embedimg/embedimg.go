@@ -26,6 +26,7 @@ import (
 //
 //go:embed nodejs22.tar
 //go:embed python314.tar
+//go:embed duckdb.tar
 var curated embed.FS
 
 // tarFile maps a runtime name to its embedded OCI tar filename.
@@ -34,6 +35,7 @@ var curated embed.FS
 var tarFile = map[string]string{
 	"nodejs22":  "nodejs22.tar",
 	"python314": "python314.tar",
+	"duckdb":    "duckdb.tar",
 }
 
 // Tar returns the embedded OCI image tar for a runtime ("nodejs22"/"python314") as a fresh,

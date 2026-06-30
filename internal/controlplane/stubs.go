@@ -30,6 +30,7 @@ type StubHandlers struct {
 	gateways       map[string]v1.Gateway
 	kvstores       map[string]v1.KVStore
 	buckets        map[string]v1.Bucket
+	catalogServices map[string]v1.CatalogService
 	policies       map[string]v1.Policy
 }
 
@@ -53,6 +54,7 @@ func NewStubHandlers() *StubHandlers {
 		gateways:       make(map[string]v1.Gateway),
 		kvstores:       make(map[string]v1.KVStore),
 		buckets:        make(map[string]v1.Bucket),
+		catalogServices: make(map[string]v1.CatalogService),
 		policies:       make(map[string]v1.Policy),
 	}
 }
@@ -674,6 +676,62 @@ func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name
 		return fault.NotFoundf("StubHandlers.DeleteBucket", "Bucket %s not found", key)
 	}
 	delete(s.buckets, key)
+	return nil
+}
+
+// ---- CatalogService (ADR-0086) ----
+
+func (s *StubHandlers) GetCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.catalogServices[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.CatalogService{}, fault.NotFoundf("StubHandlers.GetCatalogService", "CatalogService %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateCatalogService(_ context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(cs.Namespace, cs.Name)
+	if _, exists := s.catalogServices[key]; exists {
+		return v1.CatalogService{}, fault.Conflictf("StubHandlers.CreateCatalogService", "CatalogService %s already exists", key)
+	}
+	s.catalogServices[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) ListCatalogServices(_ context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.CatalogService, 0)
+	for _, v := range s.catalogServices {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.catalogServices[key]; !exists {
+		return v1.CatalogService{}, fault.NotFoundf("StubHandlers.ReplaceCatalogService", "CatalogService %s not found", key)
+	}
+	s.catalogServices[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.catalogServices[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteCatalogService", "CatalogService %s not found", key)
+	}
+	delete(s.catalogServices, key)
 	return nil
 }
 

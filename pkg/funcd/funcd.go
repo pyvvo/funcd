@@ -49,6 +49,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/secrets"
 	"github.com/green-0-rabbit/funcd/internal/services"
 	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
+	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
@@ -428,6 +429,15 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
+	// CatalogService reconciler (ADR-0086/F48): materialize the backing min-replica=1 `duckdb`
+	// Function (the declared spec.blob → ADR-0085 injects the per-fn S3 keypair); the EXISTING
+	// function→gateway path exposes it (no Route resource); reflect readiness + publish the Quack
+	// endpoint in status. DuckDB runs out-of-process in the curated image — no cgo in the daemon.
+	catalogReconciler, err := catalogsvc.NewReconciler(catalogsvc.ReconcilerDeps{Store: c.store, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
+	}
+	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -464,6 +474,9 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBlobBindingValidityAdmission(storeReader{c.store}),
 			admission.NewBucketPrefixOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
+			// ADR-0086 CatalogService validity: spec.blob + spec.catalog name real Buckets/prefixes
+			// in the namespace (cloned from blob-binding-validity).
+			admission.NewCatalogBlobValidityAdmission(storeReader{c.store}),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),

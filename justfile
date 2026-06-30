@@ -60,8 +60,10 @@ ARCH := `go env GOARCH`
 build-runtime-images:
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/duckdb/Dockerfile -t funcd/runtime-duckdb:latest .
     docker save funcd/runtime-nodejs22:latest | gzip -9 > internal/runtime/embedimg/nodejs22.tar
     docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
+    docker save funcd/runtime-duckdb:latest | gzip -9 > internal/runtime/embedimg/duckdb.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
 
 # regenerate the Node runtime shims from TypeScript (ADR-0037/0044): typecheck + self-test +

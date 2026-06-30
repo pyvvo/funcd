@@ -34,6 +34,7 @@ const (
 	KindGateway       Kind = "Gateway"
 	KindKVStore       Kind = "KVStore"
 	KindBucket        Kind = "Bucket"
+	KindCatalogService Kind = "CatalogService"
 	KindPolicy        Kind = "Policy"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
@@ -48,7 +49,8 @@ func (k Kind) Validate() error {
 	case KindNamespace, KindResourceGroup, KindFunction, KindRevision,
 		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
-		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket, KindPolicy:
+		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
+		KindCatalogService, KindPolicy:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -286,6 +288,10 @@ func NewObject(k Kind) (Object, bool) {
 		b := &Bucket{}
 		b.TypeMeta = typeMetaFor(k)
 		return b, true
+	case KindCatalogService:
+		cs := &CatalogService{}
+		cs.TypeMeta = typeMetaFor(k)
+		return cs, true
 	case KindPolicy:
 		pol := &Policy{}
 		pol.TypeMeta = typeMetaFor(k)
@@ -315,6 +321,7 @@ func AllKinds() []Kind {
 		KindGateway,
 		KindKVStore,
 		KindBucket,
+		KindCatalogService,
 		KindPolicy,
 	}
 }

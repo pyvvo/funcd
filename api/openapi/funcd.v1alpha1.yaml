@@ -65,6 +65,69 @@ components:
       required:
         - prefixes
       type: object
+    CatalogRef:
+      additionalProperties: false
+      properties:
+        bucket:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        prefix:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - bucket
+        - prefix
+      type: object
+    CatalogService:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/CatalogServiceSpec"
+        status:
+          $ref: "#/components/schemas/CatalogServiceStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    CatalogServiceSpec:
+      additionalProperties: false
+      properties:
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalog:
+          $ref: "#/components/schemas/CatalogRef"
+        resources:
+          $ref: "#/components/schemas/ResourceSpec"
+      required:
+        - blob
+        - catalog
+      type: object
+    CatalogServiceStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        endpoint:
+          type: string
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - Status
+      type: object
     Condition:
       additionalProperties: false
       properties:
@@ -705,6 +768,14 @@ components:
       required:
         - Status
       type: object
+    ResourceSpec:
+      additionalProperties: false
+      properties:
+        cpu:
+          type: string
+        memory:
+          type: string
+      type: object
     Revision:
       additionalProperties: false
       properties:
@@ -1293,6 +1364,165 @@ paths:
           description: Error
       tags:
         - Bucket
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices:
+    get:
+      operationId: listCatalogServices
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CatalogService"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    post:
+      operationId: createCatalogService
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogService"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices/{name}:
+    delete:
+      operationId: deleteCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    get:
+      operationId: getCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    put:
+      operationId: replaceCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogService"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps:
     get:
       operationId: listConfigMaps

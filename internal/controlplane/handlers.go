@@ -119,6 +119,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Bucket:
 		o.TypeMeta = tm
+	case *v1.CatalogService:
+		o.TypeMeta = tm
 	case *v1.Policy:
 		o.TypeMeta = tm
 	}
@@ -674,6 +676,48 @@ func (h *storeHandlers) ReplaceBucket(ctx context.Context, ns v1.NamespaceName, 
 
 func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindBucket, ns, name)
+}
+
+// --- CatalogService (namespaced) — ADR-0086 ---
+
+func (h *storeHandlers) GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
+	o, err := h.getObj(ctx, v1.KindCatalogService, ns, name)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
+	o, err := h.createObj(ctx, v1.KindCatalogService, &cs)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
+	objs, err := h.listObj(ctx, v1.KindCatalogService, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.CatalogService, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.CatalogService)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
+	o, err := h.replaceObj(ctx, v1.KindCatalogService, ns, name, &cs)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindCatalogService, ns, name)
 }
 
 // --- Policy (namespaced) — ADR-0074 ---

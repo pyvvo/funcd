@@ -464,6 +464,71 @@ func registerBucket(api huma.API, h Handlers) {
 	})
 }
 
+// ===== CatalogService (namespaced) — ADR-0086 =====
+
+type createCatalogServiceInput struct{ Body v1.CatalogService }
+type catalogServiceOutput struct{ Body v1.CatalogService }
+type listCatalogServiceOutput struct{ Body []v1.CatalogService }
+
+func registerCatalogService(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listCatalogServices", Method: http.MethodGet, Path: base,
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedList) (*listCatalogServiceOutput, error) {
+		items, err := h.ListCatalogServices(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listCatalogServiceOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createCatalogService", Method: http.MethodPost, Path: base,
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *createCatalogServiceInput) (*catalogServiceOutput, error) {
+		item, err := h.CreateCatalogService(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getCatalogService", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedGet) (*catalogServiceOutput, error) {
+		item, err := h.GetCatalogService(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceCatalogService", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.CatalogService
+	}) (*catalogServiceOutput, error) {
+		item, err := h.ReplaceCatalogService(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteCatalogService", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteCatalogService(ctx, in.Namespace, in.Name))
+	})
+}
+
 // ===== Policy (namespaced) — ADR-0074 =====
 
 type createPolicyInput struct{ Body v1.Policy }
