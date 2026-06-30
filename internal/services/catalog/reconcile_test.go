@@ -7,11 +7,51 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/controller"
+	"github.com/green-0-rabbit/funcd/internal/provider"
 	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	storemem "github.com/green-0-rabbit/funcd/internal/store/memory"
 )
+
+// fakeProvider is a provider.Runtime double: it records the ProviderSpec it was Converge'd with and
+// the refs it was asked to Teardown, so a test can assert what the reconciler assembled WITHOUT a
+// real container runtime. It NEVER creates a Function (proving the engine is not a backing Function).
+type fakeProvider struct {
+	converged []provider.ProviderSpec
+	tornDown  []provider.ProviderRef
+	status    provider.ProviderStatus
+}
+
+func (f *fakeProvider) Converge(_ context.Context, spec provider.ProviderSpec) (provider.ProviderStatus, error) {
+	f.converged = append(f.converged, spec)
+	return f.status, nil
+}
+
+func (f *fakeProvider) Teardown(_ context.Context, ref provider.ProviderRef) error {
+	f.tornDown = append(f.tornDown, ref)
+	return nil
+}
+
+func (f *fakeProvider) lastSpec(t *testing.T) provider.ProviderSpec {
+	t.Helper()
+	require.NotEmpty(t, f.converged, "Converge was never called")
+	return f.converged[len(f.converged)-1]
+}
+
+// fakeSecrets is a catalogsvc.SecretResolver double resolving any named Secret to a fixed env map.
+type fakeSecrets struct {
+	env map[string]string
+	err error
+}
+
+func (f fakeSecrets) ResolveEnv(_ context.Context, _ auth.Identity, _ v1.NamespaceName, _ []string) (map[string]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.env, nil
+}
 
 // mkCatalogService builds a VALID CatalogService: the catalog (lakehouse/gold) is always present as
 // a spec.blob binding (CatalogService.Validate requires the catalog prefix to be a declared blob
@@ -36,112 +76,195 @@ func mkCatalogService(name string, blob ...v1.FunctionBlob) *v1.CatalogService {
 	return cs
 }
 
-// backingFn is the deterministic name the reconciler materializes: "<cs-name>-duckdb".
-func backingFn(csName string) v1.ObjectName { return v1.ObjectName(csName + "-duckdb") }
+// engineIdentity is the engine identity kept in status.Function (repointed from a backing Function):
+// "<cs-name>-duckdb".
+func engineIdentity(csName string) v1.ObjectName { return v1.ObjectName(csName + "-duckdb") }
 
-func reconcileOnce(t *testing.T, st store.Store, name string) {
+// newReconciler builds a reconciler over the fake provider (+ optional deps tweaks).
+func newReconciler(t *testing.T, st store.Store, prov provider.Runtime, opts func(*catalogsvc.ReconcilerDeps)) *catalogsvc.Reconciler {
 	t.Helper()
-	r, err := catalogsvc.NewReconciler(catalogsvc.ReconcilerDeps{Store: st})
+	d := catalogsvc.ReconcilerDeps{
+		Store:    st,
+		Provider: prov,
+		ImageFor: func(rt string) string { return "funcd/runtime-" + rt },
+	}
+	if opts != nil {
+		opts(&d)
+	}
+	r, err := catalogsvc.NewReconciler(d)
 	require.NoError(t, err)
-	_, err = r.Reconcile(context.Background(), controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: v1.ObjectName(name)})
+	return r
+}
+
+func reconcileOnce(t *testing.T, r *catalogsvc.Reconciler, name string) {
+	t.Helper()
+	_, err := r.Reconcile(context.Background(), controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: v1.ObjectName(name)})
 	require.NoError(t, err)
 }
 
-// noRoutesExist asserts no Route resource exists in the namespace — the CatalogService is exposed via
-// the EXISTING function→gateway path (ADR-0013), so the reconciler must program NO Route.
-func noRoutesExist(t *testing.T, st store.Store) {
-	t.Helper()
-	routes, err := st.List(context.Background(), v1.KindRoute.GVK(), store.ListOptions{Namespace: "default"})
-	require.NoError(t, err)
-	require.Empty(t, routes.Items, "the reconciler programs NO Route resource — the function→gateway path exposes the engine")
-}
-
-// scenario: catalog-service-deploys — a CatalogService reconciles into a backing min-replica=1
-// `duckdb` Function carrying the declared spec.blob; NO Route resource is created (the function is
-// exposed via the existing function→gateway path).
-func TestReconcile_catalog_service_deploys(t *testing.T) {
+// scenario: catalogservice-uses-provider-runtime — a CatalogService reconciles into a call to the
+// provider-runtime's Converge with a ProviderSpec (image=duckdb, port=8080, readiness GET / 200,
+// pinned single replica, the catalog s3:// key + FUNCD_QUACK_PORT in env). NO backing Function is
+// created in the store (the engine is NOT a Function).
+func TestReconcile_catalogservice_uses_provider_runtime(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	prov := &fakeProvider{}
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Derive = func(ns, name string) (string, string) { return "AKIA-" + name, "secret-" + name }
+		d.S3Endpoint = "http://10.63.0.1:9000"
+	})
 	_, err := st.Create(ctx, mkCatalogService("lake",
 		v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"}))
 	require.NoError(t, err)
 
-	reconcileOnce(t, st, "lake")
+	reconcileOnce(t, r, "lake")
 
-	obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", backingFn("lake"))
-	require.NoError(t, err, "a backing Function must exist")
-	fn := obj.(*v1.Function)
-	require.Equal(t, v1.RuntimeName("duckdb"), fn.Spec.Runtime, "backing runtime is duckdb")
-	require.Equal(t, 1, fn.Spec.Scaling.MinReplicas, "min-replica=1 (no scale-to-zero)")
-	require.Equal(t, 1, fn.Spec.Replicas, "exactly one replica (single catalog writer)")
-	require.Equal(t, []v1.FunctionBlob{{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"}}, fn.Spec.Blob,
-		"the CatalogService's spec.blob is projected onto the backing Function (ADR-0085 keypair injection)")
+	spec := prov.lastSpec(t)
+	require.Equal(t, provider.ProviderRef{Namespace: "default", Name: "lake"}, spec.Ref, "provider identity is the CatalogService (ns, name)")
+	require.Equal(t, "funcd/runtime-duckdb", spec.Image, "the curated duckdb engine image")
+	require.Equal(t, 8080, spec.Port, "the Quack serving port")
+	require.Equal(t, provider.ReadinessProbe{Path: "/", ExpectStatus: 200}, spec.Readiness, "the Quack HTTP readiness probe (not the funcd shim's)")
+	require.Equal(t, 1, spec.Replicas, "pinned single writer")
+	require.Nil(t, spec.Route, "internal-only in V1 — no ingress route programmed")
 
-	// status reflects the materialized function + published Quack endpoint (its standard ingress path).
+	// env: the ADR-0085 keypair (derived over the provider identity) + catalog key + quack port.
+	require.Equal(t, "AKIA-lake", spec.Env["AWS_ACCESS_KEY_ID"])
+	require.Equal(t, "secret-lake", spec.Env["AWS_SECRET_ACCESS_KEY"])
+	require.Equal(t, "us-east-1", spec.Env["AWS_REGION"])
+	require.Equal(t, "http://10.63.0.1:9000", spec.Env["AWS_ENDPOINT_URL_S3"])
+	require.Equal(t, "s3://lakehouse/gold/_ducklake/catalog.db", spec.Env["FUNCD_DUCKLAKE_CATALOG"])
+	require.Equal(t, "8080", spec.Env["FUNCD_QUACK_PORT"])
+
+	// NO backing Function exists — the engine is not a Function (scenario: provider-not-a-function).
+	_, gerr := st.Get(ctx, v1.KindFunction.GVK(), "default", engineIdentity("lake"))
+	require.Error(t, gerr, "the provider-runtime deploys the engine — NO backing Function is created")
+
+	// status.Function is kept, repointed at the engine identity; status reflects the provider.
 	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
 	require.NoError(t, err)
 	cs := csObj.(*v1.CatalogService)
-	require.Equal(t, backingFn("lake"), cs.Status.Function)
-	require.Equal(t, "/function/lake-duckdb", cs.Status.Endpoint)
-
-	noRoutesExist(t, st)
+	require.Equal(t, engineIdentity("lake"), cs.Status.Function)
 }
 
-// scenario: min-replica-pinned — the materialized Function has MinReplicas==1 (no scale-to-zero); it
-// is the single writer of its catalog, always reachable.
-func TestReconcile_min_replica_pinned(t *testing.T) {
+// scenario: provider-bindings-injected — spec.secrets (QUACK_TOKEN) + spec.config (DUCKDB_*) appear
+// in the ProviderSpec.Env merged from the resolved Secret + ConfigMap Data.
+func TestReconcile_provider_bindings_injected(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	prov := &fakeProvider{}
+
+	// a ConfigMap carrying DUCKDB_* engine tuning.
+	cm := &v1.ConfigMap{}
+	cm.TypeMeta = v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap}
+	cm.Name, cm.Namespace, cm.ResourceGroup = "lake-engine-config", "default", "rg1"
+	cm.Spec.Data = map[string]string{"DUCKDB_MEMORY_LIMIT": "3GB", "DUCKDB_THREADS": "2"}
+	_, err := st.Create(ctx, cm)
+	require.NoError(t, err)
+
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Secrets = fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+	})
+	cs := mkCatalogService("lake", v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"})
+	cs.Spec.Secrets = []v1.ObjectName{"lake-quack-token"}
+	cs.Spec.Config = []v1.ObjectName{"lake-engine-config"}
+	_, err = st.Create(ctx, cs)
+	require.NoError(t, err)
+
+	reconcileOnce(t, r, "lake")
+
+	env := prov.lastSpec(t).Env
+	require.Equal(t, "change-me", env["QUACK_TOKEN"], "the resolved Secret Data (the Quack token) is in the engine env")
+	require.Equal(t, "3GB", env["DUCKDB_MEMORY_LIMIT"], "the resolved ConfigMap Data (engine tuning) is in the engine env")
+	require.Equal(t, "2", env["DUCKDB_THREADS"])
+}
+
+// scenario: provider-pinned-single-writer — the assembled ProviderSpec is pinned at exactly one
+// replica (no scale-to-zero).
+func TestReconcile_provider_pinned_single_writer(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	prov := &fakeProvider{}
+	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
 	require.NoError(t, err)
 
-	reconcileOnce(t, st, "lake")
-
-	obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", backingFn("lake"))
-	require.NoError(t, err)
-	fn := obj.(*v1.Function)
-	require.Equal(t, 1, fn.Spec.Scaling.MinReplicas, "pinned minReplicas=1 — no scale-to-zero")
-	require.Equal(t, 1, fn.Spec.Replicas)
+	reconcileOnce(t, r, "lake")
+	require.Equal(t, 1, prov.lastSpec(t).Replicas, "pinned single replica (no scale-to-zero)")
 }
 
-// scenario: unauthorized-denied — the reconciler creates NO Route/public bypass: the function is
-// exposed via the standard function→gateway path, which carries the ingress auth middleware (ADR-0013).
-// So after reconcile no Route resource exists. The actual 403 for an unauthorized client is the
-// gateway's, tested live on the node-gated lane.
-func TestReconcile_unauthorized_denied(t *testing.T) {
+// scenario (Ready reflection) — when the provider reports Ready, the CatalogService is Ready and its
+// endpoint is the netns Address (internal-only, no ingress route).
+func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
 	require.NoError(t, err)
 
-	reconcileOnce(t, st, "lake")
-	noRoutesExist(t, st)
+	reconcileOnce(t, r, "lake")
+
+	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	cs := csObj.(*v1.CatalogService)
+	require.Equal(t, v1.PhaseReady, cs.Status.Phase)
+	require.Equal(t, "10.63.0.7:8080", cs.Status.Endpoint, "internal-only ⇒ endpoint is the netns Address")
+	cond, ok := cs.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, cond.Status)
 }
 
-// scenario (delete path) — a deleted (absent) CatalogService best-effort deletes its backing
-// Function; a missing backing Function is fine (idempotent).
-func TestReconcile_delete_removes_backing_function(t *testing.T) {
+// scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine
+// down via the provider-runtime; it is idempotent (a missing engine is fine).
+func TestReconcile_delete_tears_down_provider(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	prov := &fakeProvider{}
+	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
 	require.NoError(t, err)
-	reconcileOnce(t, st, "lake")
-	_, err = st.Get(ctx, v1.KindFunction.GVK(), "default", backingFn("lake"))
-	require.NoError(t, err, "backing function present after deploy")
+	reconcileOnce(t, r, "lake")
 
-	// delete the CatalogService, then reconcile — the backing Function is reclaimed.
+	// delete the CatalogService, then reconcile — the engine is torn down.
 	require.NoError(t, st.Delete(ctx, v1.KindCatalogService.GVK(), "default", "lake", ""))
-	reconcileOnce(t, st, "lake")
-	_, err = st.Get(ctx, v1.KindFunction.GVK(), "default", backingFn("lake"))
-	require.Error(t, err, "backing function reclaimed on CatalogService delete")
+	reconcileOnce(t, r, "lake")
+	require.Equal(t, []provider.ProviderRef{{Namespace: "default", Name: "lake"}}, prov.tornDown,
+		"a deleted CatalogService tears the engine down via the provider-runtime")
 
-	// a second delete-reconcile is a no-op (idempotent — missing backing function is fine).
-	reconcileOnce(t, st, "lake")
+	// a second delete-reconcile is a no-op-safe (idempotent — Teardown called again, no error).
+	reconcileOnce(t, r, "lake")
+	require.Len(t, prov.tornDown, 2)
 }
 
-// DEFERRED node-gated scenarios (ADR-0086): the live-DuckDB scenarios need the native DuckDB image (a
-// separate process) on real containerd, so they run on the homebox/Lima FUNCD_IT=1 lane (the ADR-0080
-// s3gateway precedent), NOT this in-process suite:
+// scenario (fail-closed) — a CatalogService declaring spec.secrets with NO resolver wired holds the
+// service not-Ready (BindingResolveFailed) and does NOT converge the engine.
+func TestReconcile_secrets_without_resolver_fails_closed(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	prov := &fakeProvider{}
+	r := newReconciler(t, st, prov, nil) // no Secrets resolver
+	cs := mkCatalogService("lake")
+	cs.Spec.Secrets = []v1.ObjectName{"lake-quack-token"}
+	_, err := st.Create(ctx, cs)
+	require.NoError(t, err)
+
+	reconcileOnce(t, r, "lake")
+
+	require.Empty(t, prov.converged, "no engine is converged when a declared secret can't be resolved")
+	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	got := csObj.(*v1.CatalogService)
+	require.Equal(t, v1.PhasePending, got.Status.Phase)
+	cond, ok := got.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "BindingResolveFailed", cond.Reason)
+}
+
+// DEFERRED node-gated scenarios (ADR-0086/0087): the live-DuckDB scenarios need the native DuckDB
+// image (a separate process) on real containerd, so they run on the homebox/Lima FUNCD_IT=1 lane
+// (the ADR-0080 s3gateway precedent), NOT this in-process suite:
 //   - query-over-quack              — a Quack SELECT reads bound Parquet via the F47 S3 surface.
 //   - write-creates-ducklake-snapshot — an INSERT writes Parquet + a DuckLake catalog snapshot on blob.
 //   - tenant-isolation              — A's endpoint reading B's bucket → 403 (the F47 keypair, cryptographic).

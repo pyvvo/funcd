@@ -64,3 +64,39 @@ func TestCatalogServiceValidate(t *testing.T) {
 		t.Errorf("bad catalog prefix: want Invalid, got %v", err)
 	}
 }
+
+// scenario: spec.secrets/spec.config validate (ADR-0087) — each names a Secret/ConfigMap whose Data
+// is injected into the engine env (the ADR-0057 convention). Structural Validate checks only that
+// each is a valid DNS-1123 ObjectName; cross-resource existence + read authorization is the
+// reconciler's resolution step, not Validate.
+func TestCatalogServiceValidate_secrets_config(t *testing.T) {
+	goldCatalog := CatalogRef{Bucket: "lakehouse", Prefix: "gold"}
+	gold := FunctionBlob{Alias: "catalog", Bucket: "lakehouse", Prefix: "gold"}
+
+	// valid: well-formed secret + config names.
+	cs := catalogService("ok", goldCatalog, gold)
+	cs.Spec.Secrets = []ObjectName{"lake-quack-token"}
+	cs.Spec.Config = []ObjectName{"lake-engine-config"}
+	if err := cs.Validate(); err != nil {
+		t.Errorf("valid secrets/config rejected: %v", err)
+	}
+
+	// valid: empty secrets/config (the common case — a provider needing no token/config).
+	if err := catalogService("none", goldCatalog, gold).Validate(); err != nil {
+		t.Errorf("empty secrets/config rejected: %v", err)
+	}
+
+	// invalid: a non-DNS-1123 secret name.
+	bad := catalogService("badsecret", goldCatalog, gold)
+	bad.Spec.Secrets = []ObjectName{"Not_A_Label"}
+	if err := bad.Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad secret name: want Invalid, got %v", err)
+	}
+
+	// invalid: a non-DNS-1123 config name.
+	badc := catalogService("badconfig", goldCatalog, gold)
+	badc.Spec.Config = []ObjectName{"Bad_Config"}
+	if err := badc.Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad config name: want Invalid, got %v", err)
+	}
+}

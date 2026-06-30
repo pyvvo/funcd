@@ -107,8 +107,26 @@ components:
             - "null"
         catalog:
           $ref: "#/components/schemas/CatalogRef"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
         resources:
           $ref: "#/components/schemas/ResourceSpec"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
       required:
         - blob
         - catalog

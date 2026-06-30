@@ -34,10 +34,20 @@ type CatalogServiceSpec struct {
 	// the prefix must be OWNED by this service's function (single-writer). The SQLite catalog file
 	// lives at <prefix>/_ducklake/catalog.db.
 	Catalog CatalogRef `json:"catalog"`
-	// Resources sizes the backing engine (cpu/mem); DuckDB is memory-hungry. RECORDED ONLY (forward-
-	// compat, like Scaling.MaxReplicas) — FunctionSpec has no resources field today, so the reconciler
-	// does NOT project it onto the materialized Function.
+	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. The provider-runtime maps it
+	// onto runtime.Limits when numerically parseable (ADR-0087), else it is recorded forward-compat.
 	Resources ResourceSpec `json:"resources,omitempty"`
+	// Secrets names the Secret resources in this namespace whose Data is injected into the engine
+	// as env vars (ADR-0087, reusing the ADR-0057 FunctionSpec.Secrets convention verbatim): the
+	// Quack token (QUACK_TOKEN). Each named Secret's Data keys become engine env-var names;
+	// reserved FUNCD_* keys are never overridable. Only the NAMES are persisted; resolved values
+	// live only in the engine's env. Resolution is PDP-authorized (ADR-0022/0057); an unauthorized
+	// or missing Secret fails the service closed (not Ready). Empty ⇒ no secret injection.
+	Secrets []ObjectName `json:"secrets,omitempty"`
+	// Config names the ConfigMap resources in this namespace whose Data is injected into the engine
+	// as env vars (ADR-0087): engine tuning (DUCKDB_*). Same env-injection shape as Secrets, but
+	// from non-sensitive ConfigMap Data. Empty ⇒ no config injection.
+	Config []ObjectName `json:"config,omitempty"`
 }
 
 // CatalogRef names the bound (bucket, prefix) the DuckLake catalog syncs under (ADR-0086). The
@@ -123,6 +133,20 @@ func (c *CatalogService) Validate() error {
 	if !catalogBound {
 		return fault.Invalidf(op, "spec.catalog (%q/%q) must be one of spec.blob bindings (the catalog prefix must be a bound, owned blob binding so the engine can write it)",
 			c.Spec.Catalog.Bucket, c.Spec.Catalog.Prefix)
+	}
+	// spec.secrets / spec.config each name a Secret / ConfigMap in this namespace whose Data is
+	// injected into the engine env (ADR-0087, the ADR-0057 convention). Structural Validate checks
+	// only that each is a valid DNS-1123 ObjectName; cross-resource existence + read authorization
+	// is the reconciler's resolution step (PDP-authorized, ADR-0057), not Validate.
+	for _, s := range c.Spec.Secrets {
+		if !dnsLabel.MatchString(string(s)) {
+			return fault.Invalidf(op, "spec.secrets entry %q is not a valid DNS-1123 name", s)
+		}
+	}
+	for _, cm := range c.Spec.Config {
+		if !dnsLabel.MatchString(string(cm)) {
+			return fault.Invalidf(op, "spec.config entry %q is not a valid DNS-1123 name", cm)
+		}
 	}
 	return nil
 }

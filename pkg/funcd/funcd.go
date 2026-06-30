@@ -429,11 +429,32 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
-	// CatalogService reconciler (ADR-0086/F48): materialize the backing min-replica=1 `duckdb`
-	// Function (the declared spec.blob → ADR-0085 injects the per-fn S3 keypair); the EXISTING
-	// function→gateway path exposes it (no Route resource); reflect readiness + publish the Quack
-	// endpoint in status. DuckDB runs out-of-process in the curated image — no cgo in the daemon.
-	catalogReconciler, err := catalogsvc.NewReconciler(catalogsvc.ReconcilerDeps{Store: c.store, Logger: p.logger})
+	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
+	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
+	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
+	// the provider identity (ADR-0085) and resolves spec.secrets/spec.config (the Quack token + engine
+	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
+	providerRuntime, err := provider.NewRuntime(provider.Deps{Runtime: c.runtime, Gateway: c.gateway, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build provider runtime")
+	}
+	catalogDeps := catalogsvc.ReconcilerDeps{
+		Store:      c.store,
+		Provider:   providerRuntime,
+		Secrets:    secretResolver,
+		S3Endpoint: c.s3gwEndpoint,
+		ImageFor:   c.imageFor,
+		Logger:     p.logger,
+	}
+	// The engine's S3 keypair is derived over the PROVIDER identity (ADR-0085), the same deriver the
+	// Function reconciler uses — present only when the S3 gateway is enabled.
+	if s3Injection.Enabled {
+		catalogDeps.Derive = s3Injection.Derive
+		if catalogDeps.S3Endpoint == "" {
+			catalogDeps.S3Endpoint = "http://" + s3Injection.ListenAddr
+		}
+	}
+	catalogReconciler, err := catalogsvc.NewReconciler(catalogDeps)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
 	}
