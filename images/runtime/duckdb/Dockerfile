@@ -44,7 +44,24 @@ RUN set -eux; \
     PYTHONPATH=/opt/funcd-duckdb DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb-ext \
       python3 -c "import os,duckdb; os.makedirs('/opt/duckdb-ext',exist_ok=True); \
         c=duckdb.connect(config={'extension_directory':'/opt/duckdb-ext'}); \
-        [c.execute(f'INSTALL {e}') for e in ('httpfs','ducklake','quack')]"
+        [c.execute(f'INSTALL {e}') for e in ('httpfs','ducklake','quack','sqlite')]"
+
+# The system shared-library closure the 3.14 interpreter, its stdlib C-extensions, the native DuckDB
+# wheel, AND the loaded extensions link against (zlib→binascii, openssl→ssl + httpfs S3-TLS, ffi,
+# sqlite, lzma, …). distroless/cc ships ONLY glibc + libstdc++/libgcc, so without this closure the
+# very first `import duckdb` dies on `libz.so.1: cannot open shared object file` (ADR-0071 — the same
+# closure the python314 curated image gathers; extended here for the DuckDB native lib + extensions).
+# Excludes the core libs distroless already provides (so we never clobber its glibc).
+RUN set -eux; mkdir -p /opt/funcd-libs; \
+    { ldd /usr/local/lib/libpython3.14.so* || true; \
+      for f in /usr/local/lib/python3.14/lib-dynload/*.so; do ldd "$f" || true; done; \
+      find /opt/funcd-duckdb -name '*.so*' -exec ldd {} \; 2>/dev/null || true; \
+      find /opt/duckdb-ext -name '*.duckdb_extension' -exec ldd {} \; 2>/dev/null || true; } 2>/dev/null \
+      | awk '/=>/ {print $3}' \
+      | grep -E '^/(usr/)?lib' \
+      | grep -vE 'libc\.so|libm\.so|libpython|ld-linux|libstdc|libgcc|libdl|libpthread|librt' \
+      | sort -u \
+      | while read -r lib; do cp -L "$lib" /opt/funcd-libs/; done
 
 # --- stage 2: the runtime image, on the custom distroless 3.14 base (mirrors python314/Dockerfile) -
 FROM gcr.io/distroless/cc-debian12
@@ -53,6 +70,9 @@ FROM gcr.io/distroless/cc-debian12
 COPY --from=deps /usr/local/bin/python3.14 /usr/local/bin/python3.14
 COPY --from=deps /usr/local/lib/libpython3.14.so* /usr/local/lib/
 COPY --from=deps /usr/local/lib/python3.14 /usr/local/lib/python3.14
+# The stdlib + DuckDB native-lib + extension shared-lib closure gathered in the deps stage
+# (zlib/openssl/ffi/sqlite/…) — without it the distroless base can't `import duckdb` (ADR-0071).
+COPY --from=deps /opt/funcd-libs/ /usr/local/lib/
 # The duckdb + boto3 wheels (the engine + the S3 client) and the pre-installed DuckDB extensions.
 COPY --from=deps /opt/funcd-duckdb /opt/funcd-duckdb
 COPY --from=deps /opt/duckdb-ext /opt/duckdb-ext
