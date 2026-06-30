@@ -17,6 +17,7 @@ import (
 type s3Meta struct {
 	fns     map[string]*v1.Function
 	buckets map[string]*v1.Bucket
+	css     map[string]*v1.CatalogService // add-on providers (ADR-0088)
 }
 
 func (m s3Meta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
@@ -28,6 +29,10 @@ func (m s3Meta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceN
 	case v1.KindBucket:
 		if b, ok := m.buckets[key(ns, name)]; ok {
 			return b, nil
+		}
+	case v1.KindCatalogService:
+		if c, ok := m.css[key(ns, name)]; ok {
+			return c, nil
 		}
 	}
 	return nil, fault.NotFoundf("s3Meta.Get", "%s %s/%s not found", gvk.Kind, ns, name)

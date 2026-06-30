@@ -15,6 +15,7 @@ import (
 type blobReader struct {
 	buckets []*v1.Bucket
 	fns     []*v1.Function
+	css     []*v1.CatalogService // add-on providers (ADR-0088): a valid prefix owner too
 }
 
 func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
@@ -32,8 +33,20 @@ func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Names
 				out = append(out, f)
 			}
 		}
+	case v1.KindCatalogService:
+		for _, c := range r.css {
+			if c.Namespace == ns {
+				out = append(out, c)
+			}
+		}
 	}
 	return out, nil
+}
+
+func mkCatalogSvc(name string) *v1.CatalogService {
+	c := &v1.CatalogService{TypeMeta: v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService}}
+	c.Name, c.Namespace, c.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	return c
 }
 
 type blobFakeProber struct{ has bool }
@@ -115,6 +128,26 @@ func TestScenarioBucketPrefixOwnerExists(t *testing.T) {
 	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
 		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "public"})})
 	require.NoError(t, err, "an unowned prefix is allowed")
+}
+
+// scenario: bucket-owner-may-be-a-provider — a prefix owner that is an add-on provider (CatalogService,
+// ADR-0088), not a Function, is admitted; a name that is neither is still rejected.
+func TestScenarioBucketPrefixOwnerMayBeProvider(t *testing.T) {
+	gvk := v1.KindBucket.GVK()
+	r := blobReader{fns: []*v1.Function{mkBlobFn("etl-svc")}, css: []*v1.CatalogService{mkCatalogSvc("lake")}}
+	adm := admission.NewBucketPrefixOwnerExistsAdmission(r)
+
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "gold", Owner: "lake"})})
+	require.NoError(t, err, "owner=lake (a CatalogService provider) is admitted (ADR-0088)")
+
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "bronze", Owner: "etl-svc"})})
+	require.NoError(t, err, "owner=etl-svc (a Function) is still admitted")
+
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "x", Owner: "ghost"})})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "owner=ghost (neither Function nor CatalogService) ⇒ Invalid")
 }
 
 // scenario: deletion-protected — a bucket named by some Function.spec.blob or still holding objects can't

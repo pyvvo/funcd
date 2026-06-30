@@ -169,7 +169,30 @@ func (p metaEntityProvider) EntitiesFor(ctx context.Context, principal, resource
 			attrs["blobBindings"] = cedartypes.NewSet(blobBindings...)
 			em[pUID] = cedartypes.Entity{UID: pUID, Attributes: cedartypes.NewRecord(attrs)}
 		}
-	} else if fault.KindOf(ferr) != fault.NotFound {
+	} else if fault.KindOf(ferr) == fault.NotFound {
+		// Provider fallback (ADR-0088): an add-on provider (CatalogService, ADR-0086/0087) is a
+		// first-class S3 principal — its spec.blob are its blobBindings. FUNCTION-FIRST: only reached
+		// when no Function of this name exists, so a same-named Function always wins (deterministic).
+		// The principal UID is unchanged (functionUID, name-based), so the s3::write owner comparison
+		// still matches when a prefix's owner names this provider. A provider has no links/kv → those
+		// Sets stay absent (inert).
+		if csobj, cserr := p.r.Get(ctx, v1.KindCatalogService.GVK(), principal.Namespace, principal.Name); cserr == nil {
+			if cs, ok := csobj.(*v1.CatalogService); ok {
+				attrs := cedartypes.RecordMap{
+					"namespace":     cedartypes.String(cs.Namespace),
+					"resourceGroup": cedartypes.String(cs.ResourceGroup),
+				}
+				blobBindings := make([]cedartypes.Value, 0, len(cs.Spec.Blob))
+				for _, b := range cs.Spec.Blob {
+					blobBindings = append(blobBindings, blobPrefixUID(principal.Namespace, b.Bucket, b.Prefix))
+				}
+				attrs["blobBindings"] = cedartypes.NewSet(blobBindings...)
+				em[pUID] = cedartypes.Entity{UID: pUID, Attributes: cedartypes.NewRecord(attrs)}
+			}
+		} else if fault.KindOf(cserr) != fault.NotFound {
+			return nil, fault.Wrapf(cserr, fault.Internal, op, "get catalogservice %q", principal.Name)
+		}
+	} else {
 		return nil, fault.Wrapf(ferr, fault.Internal, op, "get function %q", principal.Name)
 	}
 

@@ -155,9 +155,15 @@ func (a bucketPrefixOwnerExists) Admit(ctx context.Context, req Request) (v1.Obj
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
 	}
+	// ADR-0088: an add-on provider (CatalogService) is a first-class prefix owner too, so an owner may
+	// be a Function OR a CatalogService (single-writer unchanged — one owner name per prefix).
+	css, err := a.r.List(ctx, v1.KindCatalogService.GVK(), ns)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list catalogservices in %q", ns)
+	}
 	for _, p := range b.Spec.Prefixes {
-		if p.Owner != "" && !nameExists(fns, p.Owner) {
-			return nil, fault.Invalidf(op, "spec.prefixes[%s].owner %q does not exist in namespace %q", p.Name, p.Owner, ns)
+		if p.Owner != "" && !nameExists(fns, p.Owner) && !nameExists(css, p.Owner) {
+			return nil, fault.Invalidf(op, "spec.prefixes[%s].owner %q is not a Function or CatalogService in namespace %q", p.Name, p.Owner, ns)
 		}
 	}
 	return req.Object, nil

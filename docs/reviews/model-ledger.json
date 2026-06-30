@@ -1363,5 +1363,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0087-implementation-claude-opus-4-8.md",
     "notes": "F57 add-on provider runtime. internal/provider over runtime.Runtime + optional gateway; CatalogService reworked (no backing Function, spec.secrets/config, keypair over provider identity). 1 Minor adr-attributed (gateway ProgramRoutes replace-all, documented TODO, unexercised by internal-only path). Live duckdb Quack lane built+run separately."
+  },
+  {
+    "date": "2026-07-01",
+    "adr": "0088",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0088-implementation-claude-opus-4-8.md",
+    "notes": "F58 provider F47/Cedar identity. 2 surgical changes (EntitiesFor CatalogService blobBindings fallback, Function-first; owner admission accepts a CatalogService); policy + UID scheme untouched. 5 scenarios pass (read/write/denied/precedence/admission). 1 Minor by-design (name-collision precedence). Lifts the F48 live-path gate."
   }
 ]
