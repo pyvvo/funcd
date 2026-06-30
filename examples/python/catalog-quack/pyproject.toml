@@ -4,15 +4,16 @@ version = "0.1.0"
 description = "A real Quack consumer for the F48 DuckLake/DuckDB/Quack catalog (ADR-0086/0087/0088): a DuckDB-with-quack client that runs SQL on a deployed CatalogService over the Quack protocol."
 authors = [{ name = "The funcd Authors" }]
 requires-python = ">=3.12"
-# A Quack client IS a local DuckDB with the quack extension (Quack is DuckDB-to-DuckDB, Protobuf over
-# HTTP — there is no separate client library). This is the one runtime dependency.
-dependencies = ["duckdb>=1.5.4"]
-
-[project.scripts]
-catalog-quack-client = "catalog_quack_client:main"
+# funcd-shim is the typed authoring contract (CloudEvent/FunctionContext). duckdb is the Quack client
+# (a Quack client IS a local DuckDB) — provided at deploy by the duckdb-capable function runtime; here
+# it is for local typecheck + tests.
+dependencies = ["funcd-shim", "duckdb>=1.5.4"]
 
 [dependency-groups]
 dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+
+[tool.uv.sources]
+funcd-shim = { path = "../../../shim/python", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

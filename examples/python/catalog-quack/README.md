@@ -25,20 +25,28 @@ funcdctl apply -f bucket.yaml          # adds owner: lake (now the CatalogServic
 - **`catalogservice.yaml`** — the `lake` CatalogService: the `gold` blob binding, the catalog ref,
   resources, `config`, and `secrets`.
 
-## Consuming the catalog — a real client
+## Consuming the catalog — a funcd Function
 
-A Quack client is just a local DuckDB with the `quack` extension loaded (there is no separate JS/Python
-Quack library — Quack is DuckDB-to-DuckDB, Protobuf over HTTP). **`client.py`** is that client,
-verified working: it runs SQL on the remote catalog via `quack_query(uri, sql, token, disable_ssl)`.
+The consumer is a **funcd Function** (`src/handler.py` + `consumer.yaml`) — the funcd-native shape, not a
+CLI. Invoke it (`POST /function/catalog-reader {"data":{"sql":"SELECT …"}}`) and it runs the SQL on the
+`lake` CatalogService over Quack and returns the rows. A Quack client *is* a local DuckDB with the
+`quack` extension (there is no separate JS/Python Quack library — Quack is DuckDB-to-DuckDB, Protobuf
+over HTTP), so the handler `import duckdb` and calls `quack_query(uri, sql, token, …)`.
 
-```bash
-# in-platform (the curated duckdb image is the client) OR external (`pip install duckdb`):
-python3 client.py --endpoint <catalog-address> --token funcd-catalog-token --sql "SELECT 42 AS answer"
-```
+**Two deploy prerequisites** (both follow-ups — Project #4 *"Provider consumption binding"*), because a
+function needs DuckDB and an injected endpoint:
 
-The `just lima-example-duckdb` venom exercises **both** an in-platform consumer (client.py via the
-`duckdb` image, a container on the node) **and** an external consumer (client.py on the host, plain
-`pip install duckdb`) — the same client, two vantage points.
+1. **A DuckDB-capable function runtime** (`python-duckdb`). The curated `python314`/`nodejs22` runtimes
+   are stdlib/JS-only with **no DuckDB** (+ its native lib closure); only the `duckdb` *engine* image
+   carries it, and its entrypoint is the catalog shim, not a function handler. This handler needs a
+   runtime that has duckdb + the quack extension **and** the funcd python shim as its entrypoint.
+2. **The `spec.catalogs` consumer binding** — it injects `FUNCD_CATALOG_LAKE_URL`/`_TOKEN` and opens the
+   egress grant (function → catalog). Until it lands, bind the token via `spec.secrets` + the URL via a
+   ConfigMap.
+
+So the live `just lima-example-duckdb` lane asserts the **provider** side end-to-end (deploy → Ready →
+serving Quack → S3-authorized); the function-consumer round-trip lands with those two follow-ups. The
+handler's logic is unit-tested now (`uv run pytest`).
 
 Then the **CatalogService reconciler** (reworked by ADR-0087) derives the per-fn S3 keypair over the
 provider identity, resolves `config`/`secrets` into the engine env, assembles a `provider.ProviderSpec`,
@@ -64,7 +72,8 @@ auto-progresses to Ready.
 ## The e2e lane
 
 `scripts/lima-duckdb.yaml` + `e2e/duckdb.venom.yml` + `just lima-example-duckdb` are the live lane on
-real containerd: deploy the CatalogService → the provider-runtime brings up the engine → readiness →
-both consumers (`catalog_quack_client.py`, in-platform via the `duckdb` image + external on the host)
-round-trip SQL over Quack. External *ingress* host-routing (vs the node-private address used here) is a
-separate follow-up — the consumer-binding ADR.
+real containerd. They assert the **provider** side end-to-end: the CatalogService deploys (no backing
+Function) → the provider-runtime brings up the `duckdb` engine → it reaches Ready → it serves Quack
+(`GET /`→`200`) and its S3 access is authorized (ADR-0088 — no `403`). The **consumer Function**
+(`consumer.yaml` + `src/handler.py`) round-trip lands with the two follow-ups above (the duckdb-capable
+function runtime + the `spec.catalogs` binding).

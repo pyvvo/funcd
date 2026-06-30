@@ -1,75 +1,60 @@
-# Venom e2e for the catalog-quack lane (ADR-0086 + ADR-0087, F48/F57) — the assert phase of
-# `just lima-example-duckdb`, run host-side after the self-deploying Lima VM is Ready.
+# Venom e2e for the catalog-quack lane (ADR-0086 + ADR-0087 + ADR-0088, F48/F57/F58) — the assert phase
+# of `just lima-example-duckdb`, run host-side after the self-deploying Lima VM is Ready.
 #
 # It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
 # add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
-# engine, it reaches Ready on its own HTTP readiness probe, and TWO real consumers round-trip SQL over
-# Quack with the catalog's token (examples/python/catalog-quack/client.py — a DuckDB-with-quack client):
-#   * an IN-PLATFORM consumer  — client.py run via the curated `duckdb` image (a container on the node),
-#                                reaching the catalog's in-platform address;
-#   * an EXTERNAL consumer      — client.py run on the VM host (plain `python3` + `pip install duckdb`),
-#                                reaching the catalog's host-reachable address.
+# engine, the engine gets its F47/Cedar identity (ADR-0088 — its spec.blob are its blobBindings, it owns
+# its catalog prefix) so its keypair reads/writes S3 through the F47 PEP, and it reaches Ready on its own
+# HTTP readiness probe.
 #
-# The engine reaches Ready because it has its F47/Cedar identity (ADR-0088 — its spec.blob are its
-# blobBindings, it owns its catalog prefix), so it reads/writes Parquet + checkpoints its catalog
-# through the F47 PEP. Both consumers reach the catalog at its node-private address (status.endpoint);
-# external ingress host-routing is a separate follow-up (the consumer-binding ADR).
-name: catalog-quack add-on provider — in-platform + external consumers (ADR-0086/0087/0088)
-
-vars:
-  tok: funcd-catalog-token   # = base64-decoded Secret QUACK_TOKEN; consumers present it
+# The CONSUMER is a funcd FUNCTION (examples/python/catalog-quack/src/handler.py + consumer.yaml) — the
+# funcd-native shape. Deploying/invoking it live is GATED on two follow-ups (Project #4 "Provider
+# consumption binding"): a DuckDB-capable function runtime (`python-duckdb`) and the `spec.catalogs`
+# consumer binding (endpoint/token injection + the egress grant). So this suite asserts the proven core
+# (deploy → Ready, no backing Function); the function-consumer round-trip lands with those follow-ups.
+name: catalog-quack add-on provider — deploy + Ready on real containerd (ADR-0086/0087/0088)
 
 testcases:
   - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
     steps:
       - type: exec
+        # The provider-runtime brings up the duckdb engine; with its F47/Cedar identity (ADR-0088) the
+        # engine reads/writes S3 (HEAD 404 fresh, not 403), serves Quack, and the readiness probe passes
+        # — the CatalogService auto-progresses to Ready (the reconciler requeues while it boots). Assert
+        # Ready + the published status.endpoint, and that NO backing Function exists (it's a provider).
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
             cs=$(funcdctl get catalogservice lake -n default -o json)
             phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
             fns=$(funcdctl get function -n default -o json 2>/dev/null | python3 -c "import sys,json;print(len(json.load(sys.stdin).get(\"items\",[])))" 2>/dev/null || echo 0)
-            echo "PHASE=$phase FUNCTIONS=$fns"'
+            echo "PHASE=$phase ENDPOINT=$ep FUNCTIONS=$fns"'
         retry: 30
         delay: 2
         info: "catalogservice lake → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PHASE=Ready"
-          - result.systemout ShouldContainSubstring "FUNCTIONS=0"   # a provider, NOT a Function
+          - result.systemout ShouldContainSubstring ":8080"          # serving Quack on the fixed netns port
+          - result.systemout ShouldContainSubstring "FUNCTIONS=0"     # a provider, NOT a Function
 
-  - name: an IN-PLATFORM consumer round-trips SQL over Quack (client.py via the duckdb image)
+  - name: the engine serves Quack and its S3 access is authorized (ADR-0088, not 403)
     steps:
       - type: exec
-        # The same curated duckdb image is the client; client.py (staged at /opt/catalog-quack) is
-        # mounted in, reaching the catalog's in-platform address with the token.
+        # Directly hit the engine: GET / is the Quack RPC endpoint (200), and the daemon's S3 vgw log
+        # shows the catalog HEAD authorized as 404 (fresh) — proving the provider's F47/Cedar identity.
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
             addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
-            sudo ctr -a /var/lib/funcd/data/containerd/containerd.sock -n funcd-default run --rm --net-host --mount type=bind,src=/opt/catalog-quack/catalog_quack_client.py,dst=/client.py,options=rbind:ro \
-              docker.io/funcd/runtime-duckdb:latest qc-internal \
-              /usr/local/bin/python3.14 /client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT 42 AS answer"'
-        retry: 5
-        delay: 3
-        info: "in-platform consumer → {{.result.systemout}}"
+            code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$addr/")
+            denied=$(sudo journalctl -u funcd-demo --no-pager 2>/dev/null | grep -c " 403 .* /lakehouse/gold/" || echo 0)
+            echo "QUACK_HTTP=$code S3_403_COUNT=$denied"'
+        retry: 10
+        delay: 2
+        info: "engine → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "(42,)"
-
-  - name: an EXTERNAL consumer round-trips SQL over Quack (client.py on the host, pip duckdb)
-    steps:
-      - type: exec
-        # An external client: plain host python3 with `pip install duckdb` (provisioned), running the
-        # SAME client.py against the catalog's host-reachable address with the token.
-        script: |
-          limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
-            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
-            python3 /opt/catalog-quack/catalog_quack_client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT i, i*i AS sq FROM range(3) t(i)"'
-        retry: 5
-        delay: 3
-        info: "external consumer → {{.result.systemout}}"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "(2, 4)"
+          - result.systemout ShouldContainSubstring "QUACK_HTTP=200"  # the engine serves Quack
+          - result.systemout ShouldContainSubstring "S3_403_COUNT=0"  # no S3 denial — ADR-0088 authorized it
