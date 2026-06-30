@@ -1,0 +1,28 @@
+# The F48 catalog/query service (ADR-0086), deployed as an add-on provider by the provider-runtime
+# (ADR-0087) — NOT a Function. The reconciler derives the per-fn S3 keypair over the provider identity
+# (default/lake), resolves spec.config (the DUCKDB_* ConfigMap) into the engine env, and the
+# provider-runtime Create/Start's the curated `duckdb` engine (image entrypoint = the Python shim),
+# probes GET /=200 readiness, and publishes status.
+#
+# spec.blob MUST include the catalog's (bucket, prefix) — it is the bound, owned binding the engine
+# writes its catalog + Parquet through (the Validate rule). spec.secrets (a Quack token) is omitted:
+# this example is internal-only and serves token-less behind the platform auth.
+apiVersion: funcd.io/v1alpha1
+kind: CatalogService
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  blob:
+    - alias: gold
+      bucket: lakehouse
+      prefix: gold
+  catalog:
+    bucket: lakehouse
+    prefix: gold               # SQLite catalog at gold/_ducklake/catalog.db; Parquet under gold/
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+  config:
+    - lake-engine-config       # ConfigMap Data keys (DUCKDB_*) → engine env

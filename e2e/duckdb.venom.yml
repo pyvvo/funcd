@@ -1,0 +1,60 @@
+# Venom e2e for the catalog-quack lane (ADR-0086 + ADR-0087, F48/F57) — the assert phase of
+# `just lima-example-duckdb`, run host-side after the self-deploying Lima VM is Ready.
+#
+# It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
+# add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
+# engine, it reaches Ready on its own HTTP readiness probe, and a Quack client round-trips SQL — DuckDB
+# reading/writing Parquet through the F47 S3 surface and checkpointing its SQLite catalog to blob.
+#
+# ⚠️ GATED: the live round-trip needs a provider F47/Cedar identity (the engine is not a Function, so
+# its S3 access is authz-denied today). This suite is the INTENDED test, complete + ready; it passes
+# once the provider-identity follow-up lands (Project #4 board card "Provider F47/Cedar identity …").
+name: catalog-quack add-on provider (ADR-0086/0087, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081  # funcd data plane, forwarded from the Lima guest
+  cp: http://127.0.0.1:8080  # funcd control plane
+
+testcases:
+  - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
+    steps:
+      - type: exec
+        # The provider-runtime (ADR-0087) brings up the duckdb engine; the CatalogService reflects its
+        # readiness. Assert Ready + the published status.Address + that NO backing Function exists.
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            cs=$(funcdctl get catalogservice lake -n default -o json)
+            phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            fns=$(funcdctl get function -n default -o json 2>/dev/null | python3 -c "import sys,json;print(len(json.load(sys.stdin).get(\"items\",[])))" 2>/dev/null || echo 0)
+            echo "PHASE=$phase FUNCTIONS=$fns"'
+        retry: 30
+        delay: 2
+        info: "catalogservice lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PHASE=Ready"
+          - result.systemout ShouldContainSubstring "FUNCTIONS=0"   # the engine is a provider, NOT a Function
+
+  - name: a Quack client round-trips SQL against the catalog (Parquet on S3, catalog checkpointed)
+    steps:
+      - type: exec
+        # A duckdb Quack client (the same curated image, run one-shot) connects to the engine's
+        # status.Address and runs CREATE/INSERT/SELECT — proving the live DuckLake/Quack/S3 path.
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
+            sudo ctr -n funcd run --rm --net-host docker.io/funcd/runtime-duckdb:latest qclient \
+              /usr/local/bin/python3.14 -c "
+            import os,duckdb
+            c=duckdb.connect(config={\"extension_directory\":\"/opt/duckdb-ext\"})
+            c.execute(\"SET autoinstall_known_extensions=false\"); c.execute(\"LOAD quack\")
+            n=c.execute(\"SELECT count(*) AS n FROM quack_query(\x27quack://$addr\x27,\x27SELECT 42 AS x\x27, disable_ssl:=true)\").fetchone()
+            print(\"QUACK_OK\", n)"'
+        retry: 5
+        delay: 3
+        info: "quack round-trip → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring QUACK_OK

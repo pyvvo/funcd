@@ -1,0 +1,28 @@
+# Operator config for the catalog-quack lane (ADR-0086/0087): file-backed blob substrate + the
+# containerd runtime (the curated `duckdb` engine image) + the S3 gateway (F47/ADR-0085) the engine
+# reads/writes Parquet + its catalog through. Mirrors the s3-roundtrip config:
+#   * s3gateway.enabled        — the S3 listener + IAM/SigV4 + per-fn keypair injection (ADR-0085);
+#   * listenAddr 0.0.0.0:9000  — reachable from host loopback AND the CNI bridge (the engine's netns);
+#   * endpoint http://10.63.0.1:9000 — the sandbox-facing S3 URL injected as AWS_ENDPOINT_URL_S3 (the
+#                                CNI bridge gateway IP — the netns'd engine can't reach 127.0.0.1).
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces:
+    - default
+runtime:
+  mode: containerd
+s3gateway:
+  enabled: true
+  listenAddr: 0.0.0.0:9000
+  endpoint: http://10.63.0.1:9000
+log:
+  format: text
+  level: info

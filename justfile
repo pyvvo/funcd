@@ -278,6 +278,35 @@ lima-example-s3: build-runtime-images build-shim
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_s3_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_s3.venom.xml"
 
+# the containerd-lane CATALOG-QUACK e2e (ADR-0086/0087, F48/F57): deploy a CatalogService and let the
+# add-on PROVIDER RUNTIME bring up the curated `duckdb` engine (DuckDB+DuckLake+Quack) — no backing
+# Function — reading/writing Parquet through the F47 S3 surface and serving Quack. ⚠️ GATED: the engine
+# needs a provider F47/Cedar identity (it is not a Function) before its S3 access is authorized and it
+# can reach Ready — see examples/catalog-quack/README.md + the Project #4 "Provider F47/Cedar identity"
+# card. The lane is complete + ready; it passes once that follow-up lands. Needs docker (image build).
+lima_duckdb_vm := lima_name + "-duckdb"
+[group('example')]
+lima-example-duckdb: build-runtime-images
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
+    # Stage the catalog-quack manifests + config (no JS bundle — the catalog IS the deployed engine).
+    stage="$(mktemp -d)"
+    cp examples/catalog-quack/configmap.yaml examples/catalog-quack/bucket.yaml \
+       examples/catalog-quack/catalogservice.yaml examples/catalog-quack/funcdconfig.yaml "$stage/"
+    tar czf {{lima_deps}}/catalog-quack.tgz -C "$stage" .
+    rm -rf "$stage"
+    trap 'limactl stop -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_duckdb_vm}} --tty=false scripts/lima-duckdb.yaml
+    # Declarative e2e via OVH Venom: the CatalogService deploys as a provider (no backing Function) +
+    # reaches Ready, and a Quack client round-trips SQL (DuckLake/Quack/S3). GATED — see the lane header.
+    suite="$(pwd)/e2e/duckdb.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_duckdb_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_duckdb.venom.xml"
+
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under

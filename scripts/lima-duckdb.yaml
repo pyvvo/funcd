@@ -1,0 +1,50 @@
+# Self-deploying Lima VM for the F48 catalog-quack lane (ADR-0086 + ADR-0087) on REAL containerd.
+# `base:` inherits the image/arch, resources, the `funcd install` provision, and the runtime probe;
+# this file carries only the lane's deltas. Driven by `just lima-example-duckdb`.
+#
+# It deploys a CatalogService and lets the add-on PROVIDER RUNTIME (ADR-0087) bring up the curated
+# `duckdb` engine (DuckDB + DuckLake + Quack) — NO backing Function — reading/writing Parquet through
+# the F47 S3 surface and serving Quack on its netns port.
+#
+# ⚠️ GATED — the deploy probe below currently CANNOT reach Ready: a provider engine has no F47/Cedar
+# identity (it is not a Function), so the shim's startup S3 GetObject is authz-denied (403) and the
+# engine never serves. See examples/catalog-quack/README.md + the Project #4 board card
+# "Provider F47/Cedar identity …". This lane is complete + ready; it passes once that follow-up lands.
+base: lima.yaml
+
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/catalog-quack
+      install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
+      mkdir -p "$d" /var/lib/funcd/data
+      tar xzf /mnt/funcd-deps/catalog-quack.tgz -C "$d"
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      # Apply order: the ConfigMap + Bucket first (the CatalogService's config/blob refs must exist),
+      # then the CatalogService (the provider-runtime brings up the duckdb engine).
+      funcdctl apply -f "$d/configmap.yaml"
+      funcdctl apply -f "$d/bucket.yaml"
+      funcdctl apply -f "$d/catalogservice.yaml"
+
+probes:
+  - description: "the CatalogService reaches Ready (the duckdb engine deployed by the provider-runtime)"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      phase() { funcdctl get catalogservice "$1" -n default -o json 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
+      for i in $(seq 1 90); do
+        [ "$(phase lake)" = Ready ] && exit 0; sleep 2
+      done
+      exit 1
+    hint: "lake did not reach Ready — GATED on the provider F47/Cedar identity follow-up (the engine's S3 access is authz-denied without a Function identity); see examples/catalog-quack/README.md + `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-duckdb`"
