@@ -6,10 +6,10 @@
 # `duckdb` engine (DuckDB + DuckLake + Quack) — NO backing Function — reading/writing Parquet through
 # the F47 S3 surface and serving Quack on its netns port.
 #
-# ⚠️ GATED — the deploy probe below currently CANNOT reach Ready: a provider engine has no F47/Cedar
-# identity (it is not a Function), so the shim's startup S3 GetObject is authz-denied (403) and the
-# engine never serves. See examples/catalog-quack/README.md + the Project #4 board card
-# "Provider F47/Cedar identity …". This lane is complete + ready; it passes once that follow-up lands.
+# The CatalogService reaches Ready: the engine gets its F47/Cedar identity (ADR-0088 — its spec.blob
+# are its blobBindings, it owns its catalog prefix), so its keypair reads/writes S3 (HEAD 404 fresh,
+# not 403), recovers/attaches the catalog, serves Quack, and the provider-runtime's readiness probe
+# passes. See examples/python/catalog-quack/README.md.
 base: lima.yaml
 
 mounts:
@@ -33,12 +33,16 @@ provision:
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
-      # Apply order: ConfigMap + Secret + Bucket first (the CatalogService's config/secrets/blob refs
-      # must exist), then the CatalogService (the provider-runtime brings up the duckdb engine).
+      # Apply order resolves the admission cycle (bucket-owner ↔ CatalogService), the s3-roundtrip
+      # pattern: ConfigMap + Secret → the Bucket WITHOUT owner (bucket-base) → the CatalogService (its
+      # catalog-blob-validity now passes — the bucket/prefix exist) → the Bucket WITH owner=lake (an
+      # Update; the owner-exists admission now admits the CatalogService `lake`, ADR-0088). Then the
+      # provider-runtime brings up the duckdb engine.
       funcdctl apply -f "$d/configmap.yaml"
       funcdctl apply -f "$d/secret.yaml"
-      funcdctl apply -f "$d/bucket.yaml"
+      funcdctl apply -f "$d/bucket-base.yaml"
       funcdctl apply -f "$d/catalogservice.yaml"
+      funcdctl apply -f "$d/bucket.yaml"
 
 probes:
   - description: "the CatalogService reaches Ready (the duckdb engine deployed by the provider-runtime)"
@@ -52,4 +56,4 @@ probes:
         [ "$(phase lake)" = Ready ] && exit 0; sleep 2
       done
       exit 1
-    hint: "lake did not reach Ready — GATED on the provider F47/Cedar identity follow-up (the engine's S3 access is authz-denied without a Function identity); see examples/catalog-quack/README.md + `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-duckdb`"
+    hint: "lake did not reach Ready — check the engine: `curl http://<status.address>/` should be 200 (Quack), and the S3 HEAD on the catalog should be 404 (authorized, fresh) not 403; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-duckdb`"

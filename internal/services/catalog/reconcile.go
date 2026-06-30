@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
@@ -98,6 +99,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
+	}
+	if !st.Ready {
+		// The engine is still starting (the container is up but its Quack endpoint isn't answering the
+		// readiness probe yet) — re-converge + re-probe soon until Ready, the same re-poll the Function
+		// reconciler does while a worker boots (ADR-0030). Without this the CatalogService would stay
+		// Pending until an unrelated watch event, never auto-progressing to Ready.
+		return controller.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 	return controller.Result{}, nil
 }

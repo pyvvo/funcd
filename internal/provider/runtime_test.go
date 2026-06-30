@@ -318,3 +318,21 @@ func TestTeardown_stops_engine_and_removes_route(t *testing.T) {
 		require.NotEqual(t, gateway.RouteID("default/lake"), r.ID, "the provider's route is removed on Teardown")
 	}
 }
+
+// scenario (regression — the lima-duckdb live bug): a curated image-entrypoint engine binds the FIXED
+// spec.Port in its netns (EndpointNetnsFixedPort), and its portfile-resolved Instance.Port is 0.
+// Converge must probe spec.Port, NOT Instance.Port — else a real engine serving on :8080 (Instance.Port
+// 0) is wrongly reported EngineNotReady. The in-process fake formerly returned Instance.Port == spec.Port
+// and so missed this; here the fake returns Instance.Port 0 to mirror the real engine.
+func TestConverge_uses_spec_port_not_instance_port(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, 0) // Instance.Port = 0 (portfile unresolved, like a real image engine)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt})
+	require.NoError(t, err)
+
+	st, err := pr.Converge(context.Background(), specFor(host, port, nil)) // spec.Port = the actual engine port
+	require.NoError(t, err)
+	require.True(t, st.Ready, "Converge probes spec.Port (the fixed netns port), not the 0 Instance.Port")
+	require.Equal(t, host+":"+strconv.Itoa(port), st.Address, "status.Address uses spec.Port, not Instance.Port")
+}

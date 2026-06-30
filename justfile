@@ -282,7 +282,7 @@ lima-example-s3: build-runtime-images build-shim
 # add-on PROVIDER RUNTIME bring up the curated `duckdb` engine (DuckDB+DuckLake+Quack) — no backing
 # Function — reading/writing Parquet through the F47 S3 surface and serving Quack. ⚠️ GATED: the engine
 # needs a provider F47/Cedar identity (it is not a Function) before its S3 access is authorized and it
-# can reach Ready — see examples/catalog-quack/README.md + the Project #4 "Provider F47/Cedar identity"
+# can reach Ready — see examples/python/catalog-quack/README.md + the Project #4 "Provider F47/Cedar identity"
 # card. The lane is complete + ready; it passes once that follow-up lands. Needs docker (image build).
 lima_duckdb_vm := lima_name + "-duckdb"
 [group('example')]
@@ -295,9 +295,10 @@ lima-example-duckdb: build-runtime-images
     # Stage the catalog-quack manifests + config + the real Quack consumer (client.py) — no JS bundle,
     # the catalog IS the deployed engine and client.py is the in-platform + external consumer.
     stage="$(mktemp -d)"
-    cp examples/catalog-quack/configmap.yaml examples/catalog-quack/secret.yaml examples/catalog-quack/bucket.yaml \
-       examples/catalog-quack/catalogservice.yaml examples/catalog-quack/funcdconfig.yaml \
-       examples/catalog-quack/client.py "$stage/"
+    cp examples/python/catalog-quack/configmap.yaml examples/python/catalog-quack/secret.yaml \
+       examples/python/catalog-quack/bucket-base.yaml examples/python/catalog-quack/bucket.yaml \
+       examples/python/catalog-quack/catalogservice.yaml examples/python/catalog-quack/funcdconfig.yaml \
+       examples/python/catalog-quack/src/catalog_quack_client.py "$stage/"
     tar czf {{lima_deps}}/catalog-quack.tgz -C "$stage" .
     rm -rf "$stage"
     trap 'limactl stop -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true' EXIT

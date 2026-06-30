@@ -4,19 +4,17 @@
 # It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
 # add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
 # engine, it reaches Ready on its own HTTP readiness probe, and TWO real consumers round-trip SQL over
-# Quack with the catalog's token (examples/catalog-quack/client.py — a DuckDB-with-quack client):
+# Quack with the catalog's token (examples/python/catalog-quack/client.py — a DuckDB-with-quack client):
 #   * an IN-PLATFORM consumer  — client.py run via the curated `duckdb` image (a container on the node),
 #                                reaching the catalog's in-platform address;
 #   * an EXTERNAL consumer      — client.py run on the VM host (plain `python3` + `pip install duckdb`),
 #                                reaching the catalog's host-reachable address.
 #
-# ⚠️ GATED: the live round-trip needs a provider F47/Cedar identity (the engine is NOT a Function, so
-# the Cedar s3 policies don't grant it blobBindings / prefix ownership → its S3 access is authz-denied,
-# the shim's startup GetObject 403s, and the engine never reaches Ready). See
-# examples/catalog-quack/README.md + the Project #4 card "Provider F47/Cedar identity …". (External
-# consumption additionally needs ingress host-routing; today both consumers reach the node-private
-# address.) This suite is the INTENDED test, complete + ready; it passes once those land.
-name: catalog-quack add-on provider — in-platform + external consumers (ADR-0086/0087)
+# The engine reaches Ready because it has its F47/Cedar identity (ADR-0088 — its spec.blob are its
+# blobBindings, it owns its catalog prefix), so it reads/writes Parquet + checkpoints its catalog
+# through the F47 PEP. Both consumers reach the catalog at its node-private address (status.endpoint);
+# external ingress host-routing is a separate follow-up (the consumer-binding ADR).
+name: catalog-quack add-on provider — in-platform + external consumers (ADR-0086/0087/0088)
 
 vars:
   tok: funcd-catalog-token   # = base64-decoded Secret QUACK_TOKEN; consumers present it
@@ -49,7 +47,7 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
             addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
-            sudo ctr -n funcd run --rm --net-host --mount type=bind,src=/opt/catalog-quack/client.py,dst=/client.py,options=rbind:ro \
+            sudo ctr -a /var/lib/funcd/data/containerd/containerd.sock -n funcd-default run --rm --net-host --mount type=bind,src=/opt/catalog-quack/catalog_quack_client.py,dst=/client.py,options=rbind:ro \
               docker.io/funcd/runtime-duckdb:latest qc-internal \
               /usr/local/bin/python3.14 /client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT 42 AS answer"'
         retry: 5
@@ -68,7 +66,7 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
             addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
-            python3 /opt/catalog-quack/client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT i, i*i AS sq FROM range(3) t(i)"'
+            python3 /opt/catalog-quack/catalog_quack_client.py --endpoint "$addr" --token "{{.tok}}" --sql "SELECT i, i*i AS sq FROM range(3) t(i)"'
         retry: 5
         delay: 3
         info: "external consumer → {{.result.systemout}}"

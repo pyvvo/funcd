@@ -133,9 +133,12 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 		return status, nil
 	}
 
-	addr := ready.IP + ":" + strconv.Itoa(ready.Port)
+	// The engine binds the FIXED spec.Port in its netns (EndpointNetnsFixedPort, ADR-0032) — the
+	// portfile-resolved Instance.Port is 0 for a curated image-entrypoint engine, so address the
+	// configured port, not Instance.Port.
+	addr := ready.IP + ":" + strconv.Itoa(spec.Port)
 	status.Address = addr
-	if ready.IP == "" || ready.Port == 0 || !r.probeReady(ctx, ready.IP, ready.Port, spec.Readiness) {
+	if ready.IP == "" || !r.probeReady(ctx, ready.IP, spec.Port, spec.Readiness) {
 		status.Reason = "EngineNotReady"
 		return status, nil
 	}
@@ -225,7 +228,7 @@ func (r *engineRuntime) programRoute(ctx context.Context, spec ProviderSpec, ins
 			"namespace", spec.Ref.Namespace, "name", spec.Ref.Name)
 		return nil
 	}
-	upstream := "http://" + inst.IP + ":" + strconv.Itoa(inst.Port)
+	upstream := "http://" + inst.IP + ":" + strconv.Itoa(spec.Port)
 	route := gateway.Route{
 		ID:         gateway.RouteID(spec.Route.ID),
 		Host:       spec.Route.Host,

@@ -1,0 +1,41 @@
+[project]
+name = "funcd-example-catalog-quack"
+version = "0.1.0"
+description = "A real Quack consumer for the F48 DuckLake/DuckDB/Quack catalog (ADR-0086/0087/0088): a DuckDB-with-quack client that runs SQL on a deployed CatalogService over the Quack protocol."
+authors = [{ name = "The funcd Authors" }]
+requires-python = ">=3.12"
+# A Quack client IS a local DuckDB with the quack extension (Quack is DuckDB-to-DuckDB, Protobuf over
+# HTTP — there is no separate client library). This is the one runtime dependency.
+dependencies = ["duckdb>=1.5.4"]
+
+[project.scripts]
+catalog-quack-client = "catalog_quack_client:main"
+
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]

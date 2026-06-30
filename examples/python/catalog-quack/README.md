@@ -8,7 +8,11 @@ checkpointing its SQLite catalog to blob.
 ## What you apply (the user-facing flow)
 
 ```bash
-funcdctl apply -f bucket.yaml -f configmap.yaml -f secret.yaml -f catalogservice.yaml
+# Apply order resolves the admission cycle (bucket-owner ↔ CatalogService): the Bucket WITHOUT an
+# owner first, then the CatalogService, then the Bucket WITH owner=lake (an Update).
+funcdctl apply -f configmap.yaml -f secret.yaml -f bucket-base.yaml
+funcdctl apply -f catalogservice.yaml
+funcdctl apply -f bucket.yaml          # adds owner: lake (now the CatalogService exists)
 ```
 
 - **`bucket.yaml`** — the `lakehouse` Bucket + the `gold` prefix the catalog owns (Parquet + the
@@ -41,28 +45,26 @@ provider identity, resolves `config`/`secrets` into the engine env, assembles a 
 and the **provider-runtime** `Create`/`Start`s the `duckdb` engine container (no backing Function, no
 Function shape gate), probes its HTTP readiness (`GET /`→`200`), and publishes `status` — all automatic.
 
-## ⚠️ Live status — blocked on the provider-identity follow-up
+## Live status — working end-to-end (ADR-0086 + ADR-0087 + ADR-0088)
 
-The **provider-runtime deploy mechanism (ADR-0087) is implemented + in-process tested**, and the
-`duckdb` image is verified (it builds, the engine loads + confines + checkpoints). But the **live
-data path is gated** on a real gap this example surfaced:
+Verified on real containerd (`just lima-example-duckdb`): the CatalogService deploys as an add-on
+provider (no backing Function), the provider-runtime brings up the `duckdb` engine, it reaches **Ready**
+on its HTTP readiness probe (`curl http://<status.address>/` → `200`), and its keypair reads/writes S3
+through the F47 PEP (`HEAD` on the catalog → `404` fresh, **not** `403`).
 
-> The F47/Cedar authorization model (ADR-0080) is **Function-based**: `s3::read` needs the principal's
-> `blobBindings` (materialized from a **Function's** `spec.blob`), `s3::write` needs `principal ==
-> prefix.owner` (a **Function** entity), and the Bucket-prefix-`owner` admission requires the owner to be
-> a **real Function**. ADR-0087 deploys the engine **without** a backing Function — so the engine's
-> keypair authenticates but has **no Cedar entity / no bindings / can't own a prefix** → S3 is
-> default-denied → the shim's startup `GetObject` 403s → the engine never reaches Ready.
+The keystone was **ADR-0088 (provider F47/Cedar identity)**: the Cedar EntityProvider now sources a
+provider principal's `blobBindings` from the `CatalogService.spec.blob` (Function-first) and the
+prefix-owner admission accepts a `CatalogService` owner — so `owner: lake` on `bucket.yaml` is admitted
+and the engine's S3 access is authorized, all under the same binding-as-grant as a function (the S3
+policy is unchanged). Two earlier provider-runtime fixes also fell out of building this lane: the
+readiness probe addresses the fixed `spec.Port` (not the portfile-resolved `Instance.Port`, which is 0
+for an image-entrypoint engine), and the reconciler **requeues** while the engine boots so it
+auto-progresses to Ready.
 
-The fix is a **provider F47/Cedar identity** (a follow-up ADR — see the Project #4 board card *"Provider
-F47/Cedar identity …"*): either an identity-only Function the reconciler creates, or (cleaner) a
-first-class provider principal in the Cedar entity model + the owner admission. Until that lands, the
-`bucket.yaml` `owner:` and the live `just lima-example-duckdb` round-trip below are **gated**.
+## The e2e lane
 
-## The e2e lane (gated)
-
-`scripts/lima-duckdb.yaml` + `e2e/duckdb.venom.yml` + `just lima-example-duckdb` are the intended live
-lane on real containerd: deploy the CatalogService → the provider-runtime brings up the engine →
-readiness → a Quack client round-trips a `SELECT`/`INSERT` (Parquet on S3, catalog checkpointed). They
-are **complete and ready**, headed with the gate above; they pass once a provider engine can obtain its
-F47 identity.
+`scripts/lima-duckdb.yaml` + `e2e/duckdb.venom.yml` + `just lima-example-duckdb` are the live lane on
+real containerd: deploy the CatalogService → the provider-runtime brings up the engine → readiness →
+both consumers (`catalog_quack_client.py`, in-platform via the `duckdb` image + external on the host)
+round-trip SQL over Quack. External *ingress* host-routing (vs the node-private address used here) is a
+separate follow-up — the consumer-binding ADR.
