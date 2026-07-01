@@ -1,6 +1,10 @@
 # ADR-0059: Function I/O contract as OCI manifest metadata — statically inspectable without running the artifact
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0090](0090-mandatory-single-io-schema.md) (2026-07-01) — the *opt-in, two-flag*
+  contract surface (`--contract-input`/`--contract-output`; a contract-less artifact when neither is given)
+  becomes a single **mandatory** `--schema`. This ADR's OCI-metadata *mechanism* (contract blob + manifest
+  annotation + `inspect`-without-pull) is **kept**, unchanged.
 - **Date**: 2026-06-19
 - **Deciders**: green-0-rabbit
 - **Judge note (accepted 2026-06-19)**: folded the judge's Major (the keyed `{input?, output?}` blob needs labeled
