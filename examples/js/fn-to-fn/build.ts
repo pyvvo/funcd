@@ -2,7 +2,8 @@
 //   1. generates the closed JSON Schema from FuncInput/FuncOutput (ts-json-schema-generator),
 //   2. compiles a precompiled, eval-free AJV-standalone validator and BAKES it into the bundle as
 //      __funcdValidateInput/__funcdValidateOutput (what the shim runs around the handler),
-//   3. writes the schemas to <fn>-{input,output}.schema.json for `funcdctl push --contract-*`.
+//   3. writes the contract to <fn>.schema.json (one `{"input":…,"output":…}` doc, both sides —
+//      ADR-0090) for `funcdctl push --schema <fn>.schema.json`.
 //
 // Run from the example dir with the shim's toolchain on NODE_PATH (see package.json `build`):
 //   NODE_PATH=../../../shim/nodejs/node_modules node --experimental-strip-types build.ts
@@ -42,8 +43,9 @@ for (const fn of ['greeter', 'front']) {
   unlinkSync(entryFile); // drop the transient entry + validator scratch files
   if (validatorSource) unlinkSync(join(here, `.${fn}.validator.mjs`));
 
-  if (inputSchema) writeFileSync(join(here, `${fn}-input.schema.json`), JSON.stringify(inputSchema, null, 2) + '\n');
-  if (outputSchema) writeFileSync(join(here, `${fn}-output.schema.json`), JSON.stringify(outputSchema, null, 2) + '\n');
+  // ADR-0090: one mandatory `--schema` doc — both sides always present (a void side is {"type":"null"}).
+  const contract = { input: inputSchema, output: outputSchema };
+  writeFileSync(join(here, `${fn}.schema.json`), JSON.stringify(contract, null, 2) + '\n');
   // eslint-disable-next-line no-console
-  console.log(`built ${fn}.mjs` + (validatorSource ? ' (+ baked contract validators + schemas)' : ' (no contract)'));
+  console.log(`built ${fn}.mjs` + (validatorSource ? ` (+ baked contract validators + ${fn}.schema.json)` : ' (no contract)'));
 }

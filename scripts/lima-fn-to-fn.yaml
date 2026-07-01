@@ -32,7 +32,7 @@ provision:
       rm -rf "$reg"
       for fn in greeter front; do
         funcdctl push "$d/$fn.mjs" "oci-layout://$reg:$fn" \
-          --contract-input "$d/$fn-input.schema.json" --contract-output "$d/$fn-output.schema.json"
+          --schema "$d/$fn.schema.json"
       done
 
       # run funcd (containerd mode) as a transient unit (journalctl -u funcd-demo), wait for the control

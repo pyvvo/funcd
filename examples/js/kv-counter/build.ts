@@ -2,7 +2,8 @@
 //   1. generates the closed JSON Schema from FuncInput/FuncOutput (ts-json-schema-generator),
 //   2. compiles a precompiled, eval-free AJV-standalone validator and BAKES it into the bundle as
 //      __funcdValidateInput/__funcdValidateOutput (what the shim runs around the handler),
-//   3. writes counter-{input,output}.schema.json for `funcdctl push --contract-*`.
+//   3. writes counter.schema.json (one `{"input":…,"output":…}` doc, both sides — ADR-0090) for
+//      `funcdctl push --schema counter.schema.json`.
 // So the kv-counter contract is *enforced* (bad input → 422, bad output → 500), same as fn-to-fn.
 //
 // Run from the example dir with the shim's toolchain resolvable (see package.json `build`).
@@ -40,7 +41,8 @@ await build({
 unlinkSync(entryFile); // drop the transient entry + validator scratch files
 if (validatorSource) unlinkSync(join(here, '.counter.validator.mjs'));
 
-if (inputSchema) writeFileSync(join(here, 'counter-input.schema.json'), JSON.stringify(inputSchema, null, 2) + '\n');
-if (outputSchema) writeFileSync(join(here, 'counter-output.schema.json'), JSON.stringify(outputSchema, null, 2) + '\n');
+// ADR-0090: one mandatory `--schema` doc — both sides always present (a void side is {"type":"null"}).
+const contract = { input: inputSchema, output: outputSchema };
+writeFileSync(join(here, 'counter.schema.json'), JSON.stringify(contract, null, 2) + '\n');
 // eslint-disable-next-line no-console
-console.log('built counter.mjs' + (validatorSource ? ' (+ baked contract validators + schemas)' : ' (no contract)'));
+console.log('built counter.mjs' + (validatorSource ? ' (+ baked contract validators + counter.schema.json)' : ' (no contract)'));

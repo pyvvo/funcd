@@ -23,11 +23,9 @@ provision:
       tar xzf /mnt/funcd-deps/kv-counter.tgz -C "$d"
       rm -rf "$reg"
       funcdctl push "$d/counter.mjs" "oci-layout://$reg:counter" \
-        --contract-input "$d/counter-input.schema.json" \
-        --contract-output "$d/counter-output.schema.json"
+        --schema "$d/counter.schema.json"
       funcdctl push "$d/py/counter.py" "oci-layout://$reg:pycounter" \
-        --contract-input "$d/py/counter-input.schema.json" \
-        --contract-output "$d/py/counter-output.schema.json"
+        --schema "$d/py/counter.schema.json"
       export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true

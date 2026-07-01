@@ -153,8 +153,8 @@ lima-example-fn-to-fn: build-runtime-images build-shim
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
     ( cd examples/js/fn-to-fn && node --experimental-strip-types build.ts )
     tar czf {{lima_deps}}/fn-to-fn.tgz -C examples/js/fn-to-fn \
-      greeter.mjs front.mjs greeter-input.schema.json greeter-output.schema.json \
-      front-input.schema.json front-output.schema.json greeter.yaml front.yaml funcdconfig.yaml
+      greeter.mjs front.mjs greeter.schema.json front.schema.json \
+      greeter.yaml front.yaml funcdconfig.yaml
     # the demo VM deploys itself on boot; tear it down on exit
     trap 'limactl stop -f {{lima_fn_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true' EXIT
     limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true
@@ -190,13 +190,13 @@ lima-example-kv: build-runtime-images build-shim
     # a per-table owner (default-deny — no grant.yaml). ADR-0076: a declared spec.kv binding GRANTS kv::read
     # on its table (built-in permit), so own-table reads need NO read Policy; the owner-write is a built-in
     # forbid (no write Policy). No policy.yaml is staged — the lane proves reads work with no read Policy.
-    cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter-input.schema.json \
-       examples/js/kv-counter/counter-output.schema.json examples/js/kv-counter/counter.yaml \
+    cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter.schema.json \
+       examples/js/kv-counter/counter.yaml \
        examples/js/kv-counter/counter-unbound.yaml examples/js/kv-counter/store.yaml \
        examples/js/kv-counter/funcdconfig.yaml "$stage/"
     mkdir -p "$stage/py"
-    cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter-input.schema.json \
-       examples/python/kv-counter/counter-output.schema.json examples/python/kv-counter/counter.yaml \
+    cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter.schema.json \
+       examples/python/kv-counter/counter.yaml \
        examples/python/kv-counter/store.yaml "$stage/py/"
     tar czf {{lima_deps}}/kv-counter.tgz -C "$stage" .
     rm -rf "$stage"

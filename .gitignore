@@ -41,8 +41,7 @@ __pycache__
 
 # Python kv-counter example build outputs (regenerate with `uv run --group build python build.py`)
 /examples/python/kv-counter/counter.py
-/examples/python/kv-counter/counter-input.schema.json
-/examples/python/kv-counter/counter-output.schema.json
+/examples/python/kv-counter/counter.schema.json
 
 # Function dependency-bundle build output (ADR-0089 deployment package: handler + vendored native
 # deps) — a `bundle/` dir in ANY example/subproject; never commit the (often ~100MB) vendored closure
