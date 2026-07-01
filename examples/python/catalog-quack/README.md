@@ -33,25 +33,39 @@ CLI. Invoke it (`POST /function/catalog-reader {"data":{"sql":"SELECT …"}}`) a
 `quack` extension (there is no separate JS/Python Quack library — Quack is DuckDB-to-DuckDB, Protobuf
 over HTTP), so the handler `import duckdb` and calls `quack_query(uri, sql, token, …)`.
 
-**Two deploy prerequisites** (both follow-ups — Project #4 *"Provider consumption binding"*), because a
-function needs DuckDB and an injected endpoint:
+**DuckDB travels in the artifact — no `python-duckdb` runtime (ADR-0089).** The consumer runs on the
+**stock curated `python314`** runtime; its DuckDB wheel + the `quack`/`httpfs` extensions are vendored
+into a deployment-package **bundle** (a directory) that `funcdctl push` turns into one tar+gzip OCI layer.
+Build it hermetically (inside the curated image, so the native closure is glibc/arch-matched) and push it:
 
-1. **A DuckDB-capable function runtime** (`python-duckdb`). The curated `python314`/`nodejs22` runtimes
-   are stdlib/JS-only with **no DuckDB** (+ its native lib closure); only the `duckdb` *engine* image
-   carries it, and its entrypoint is the catalog shim, not a function handler. This handler needs a
-   runtime that has duckdb + the quack extension **and** the funcd python shim as its entrypoint.
-2. **The `spec.catalogs` consumer binding** — it injects `FUNCD_CATALOG_LAKE_URL`/`_TOKEN` and opens the
-   egress grant (function → catalog). Until it lands, bind the token via `spec.secrets` + the URL via a
-   ConfigMap.
+```bash
+python build.py                                          # → bundle/  (handler + vendored duckdb + duckdb-ext/ + __funcd_contract.json)
+funcdctl push examples/python/catalog-quack/bundle <ref> --entry handler.py
+```
+
+funcd untars the bundle into the artifact dir and sets `PYTHONPATH` + `FUNCD_BUNDLE_DIR`, so `import duckdb`
+and the offline `duckdb-ext/` extensions resolve with **zero** runtime changes. The bundle also embeds the
+ADR-0090 `{input, output}` contract (`__funcd_contract.json`), which push gates and promotes to the OCI
+contract layer (`funcdctl inspect`).
+
+**One remaining deploy prerequisite** (a follow-up — Project #4 *"Provider consumption binding"*):
+
+- **The `spec.catalogs` consumer binding** — it injects `FUNCD_CATALOG_LAKE_URL`/`_TOKEN` and opens the
+  egress grant (function → catalog). Until it lands, bind the token via `spec.secrets` + the URL via a
+  ConfigMap.
 
 So the live `just lima-example-duckdb` lane asserts the **provider** side end-to-end (deploy → Ready →
-serving Quack → S3-authorized); the function-consumer round-trip lands with those two follow-ups. The
+serving Quack → S3-authorized); the function-consumer round-trip lands with that one follow-up. The
 handler's logic is unit-tested now (`uv run pytest`).
 
 Then the **CatalogService reconciler** (reworked by ADR-0087) derives the per-fn S3 keypair over the
 provider identity, resolves `config`/`secrets` into the engine env, assembles a `provider.ProviderSpec`,
 and the **provider-runtime** `Create`/`Start`s the `duckdb` engine container (no backing Function, no
 Function shape gate), probes its HTTP readiness (`GET /`→`200`), and publishes `status` — all automatic.
+
+Building the consumer bundle needs the `build` dependency group (pydantic, for the ADR-0058 baker) and
+the shim toolchain resolvable: `uv run --group build python build.py`. `build.py --no-hermetic` vendors
+via host `pip` for iteration (unsafe for release — see ADR-0089).
 
 ## Live status — working end-to-end (ADR-0086 + ADR-0087 + ADR-0088)
 

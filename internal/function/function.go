@@ -769,6 +769,25 @@ func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
 	env["AWS_ENDPOINT_URL_S3"] = endpoint
 }
 
+// isPythonFamily reports whether rt is a python-family runtime (e.g. "python314") — the family
+// whose vendored deps import via PYTHONPATH (ADR-0089). It mirrors shimFor's family-prefix match.
+func isPythonFamily(rt v1.RuntimeName) bool {
+	return strings.HasPrefix(string(rt), "python")
+}
+
+// addBundleEnv sets the generic bundle env (ADR-0089) into a worker's env: FUNCD_BUNDLE_DIR names
+// the bundle root (any runtime — a handler resolves its own asset dirs from it, e.g. duckdb-ext),
+// and for the python family PYTHONPATH names the same root so every vendored dependency imports.
+// bundleRoot is the container artifact dir in container mode and Dir(artifactPath) in process mode.
+// A single-file function gets the same env harmlessly (the dir holds only the one file), so bundle
+// vs single-file is transparent to the runtime; the ADR-0049 shim is unchanged.
+func addBundleEnv(env map[string]string, rt v1.RuntimeName, bundleRoot string) {
+	env["FUNCD_BUNDLE_DIR"] = bundleRoot
+	if isPythonFamily(rt) {
+		env["PYTHONPATH"] = bundleRoot
+	}
+}
+
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
@@ -778,6 +797,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 			"FUNCD_PORT":     strconv.Itoa(containerShimPort),
 		}
+		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		r.addS3Env(env, fn)
 		r.mergeSecretEnv(env, secretEnv)
 		mounts := []runtime.Mount{{
@@ -808,8 +828,9 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_ARTIFACT": artifactPath,
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 		}
-		r.addInvokeSocket(env, fn) // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
-		r.addS3Env(env, fn)        // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
+		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
+		r.addInvokeSocket(env, fn)                                     // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		r.addS3Env(env, fn)                                            // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

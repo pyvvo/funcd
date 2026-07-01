@@ -9,13 +9,15 @@ How a function reaches the catalog (the bindings funcd injects):
     `spec.catalogs` consumer binding (the follow-up consumer-binding ADR) or, until that lands, from a
     bound Secret/ConfigMap. The egress PDP authorizes the function→catalog path (binding-as-grant).
 
-DEPLOY PREREQUISITES (see README — both are follow-ups, tracked on Project #4):
-  1. A DuckDB-capable function runtime. The curated `python314`/`nodejs22` runtimes are stdlib/JS-only
-     and have NO DuckDB (+ its native lib closure); only the `duckdb` engine image carries it, and its
-     entrypoint is the catalog shim, not a function handler. A `python-duckdb` function runtime (the
-     duckdb deps + the funcd python shim entrypoint) is needed for this handler to `import duckdb`.
-  2. The consumer binding (`spec.catalogs`) that injects FUNCD_CATALOG_*_URL/_TOKEN + opens the egress
-     grant. Until it exists, the URL/TOKEN come from a Secret/ConfigMap the function binds.
+DuckDB travels in the artifact (ADR-0089): this handler runs on the STOCK curated `python314` runtime.
+The `duckdb` wheel + the `quack`/`httpfs` extensions are vendored into a deployment-package BUNDLE
+(`build.py` → `bundle/`), which `funcdctl push --entry handler.py` ships as one OCI layer. funcd sets
+PYTHONPATH + FUNCD_BUNDLE_DIR so `import duckdb` and the offline `duckdb-ext/` extensions resolve with no
+runtime changes — no `python-duckdb` image needed.
+
+DEPLOY PREREQUISITE (a follow-up, tracked on Project #4):
+  * The consumer binding (`spec.catalogs`) that injects FUNCD_CATALOG_*_URL/_TOKEN + opens the egress
+    grant. Until it exists, the URL/TOKEN come from a Secret/ConfigMap the function binds.
 """
 
 from __future__ import annotations
@@ -56,11 +58,19 @@ def handle(context: FunctionContext, event: CloudEvent[FuncInput]) -> FuncOutput
     token = os.environ[f"FUNCD_CATALOG_{alias}_TOKEN"]
 
     con = duckdb.connect()
+    # The bundle ships the quack/httpfs extensions in <FUNCD_BUNDLE_DIR>/duckdb-ext (ADR-0089); load
+    # them OFFLINE from there (no network install). Falls back to DUCKDB_EXTENSION_DIRECTORY, else the
+    # DuckDB default. FUNCD_BUNDLE_DIR is set by funcd for both a bundle and a single-file artifact.
+    bundle_dir = os.environ.get("FUNCD_BUNDLE_DIR")
     ext_dir = os.environ.get("DUCKDB_EXTENSION_DIRECTORY")
+    if not ext_dir and bundle_dir:
+        candidate = os.path.join(bundle_dir, "duckdb-ext")
+        if os.path.isdir(candidate):
+            ext_dir = candidate
     if ext_dir:
         con.execute("SET autoinstall_known_extensions=false")
+        con.execute("SET autoload_known_extensions=false")
         con.execute(f"SET extension_directory='{ext_dir}'")
-    con.execute("INSTALL quack")
     con.execute("LOAD quack")
     rows = con.execute(
         "SELECT * FROM quack_query(?, ?, token := ?, disable_ssl := true)",

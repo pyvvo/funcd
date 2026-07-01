@@ -1393,5 +1393,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0090-implementation-claude-opus-4-8.md",
     "notes": "pass; mandatory single I/O schema + void={type:null} compiled-from-schema; Node lane + exhaustive examples deferred (e2e); pre-existing TestPythonPoolSmoke unrelated (env)"
+  },
+  {
+    "date": "2026-07-01",
+    "adr": "0089",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0089-implementation-claude-opus-4-8.md",
+    "notes": "pass; tar bundle + fail-closed traversal guard + VerifyBundleContract(both-keys, ADR-0090) + workerSpec PYTHONPATH/FUNCD_BUNDLE_DIR; live containerd/venom lane deferred (e2e); pre-existing TestPythonPoolSmoke unrelated (env)"
   }
 ]

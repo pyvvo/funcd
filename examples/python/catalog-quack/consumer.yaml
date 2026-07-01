@@ -3,15 +3,16 @@
 # `lake` CatalogService over Quack and returns the rows. This is the funcd-native consumption shape (a
 # deployed, governed, invokable function) — not a CLI.
 #
-# ⚠️ DEPLOY PREREQUISITES (two follow-ups — Project #4 "Provider consumption binding"):
-#   1. runtime `python-duckdb` — a DuckDB-capable function runtime. The curated python314/nodejs22
-#      runtimes are stdlib/JS-only with NO DuckDB (+ its lib closure); a Quack client IS a DuckDB, so
-#      this handler needs a runtime carrying duckdb + the quack extension + the funcd python shim
-#      entrypoint (the duckdb engine image's deps, but a function-handler entrypoint). It does not
-#      exist yet, so this manifest does not deploy on today's funcd.
-#   2. spec.catalogs — the consumer binding that injects FUNCD_CATALOG_LAKE_URL/_TOKEN + opens the
-#      egress grant (function → catalog). Until it lands, bind the token via spec.secrets + the URL via
-#      a ConfigMap.
+# It runs on the STOCK curated `python314` runtime — no `python-duckdb` image. The DuckDB wheel + the
+# quack/httpfs extensions travel IN the artifact as a deployment-package BUNDLE (ADR-0089): build it
+# hermetically with `python build.py` → `bundle/`, then
+#   funcdctl push examples/python/catalog-quack/bundle <ref> --entry handler.py
+# funcd untars the bundle into the artifact dir and sets PYTHONPATH + FUNCD_BUNDLE_DIR so `import duckdb`
+# and the offline `duckdb-ext/` extensions resolve with zero runtime changes.
+#
+# ⚠️ ONE remaining follow-up — Project #4 "Provider consumption binding":
+#   spec.catalogs — the consumer binding that injects FUNCD_CATALOG_LAKE_URL/_TOKEN + opens the egress
+#   grant (function → catalog). Until it lands, bind the token via spec.secrets + the URL via a ConfigMap.
 apiVersion: funcd.io/v1alpha1
 kind: Function
 metadata:
@@ -19,13 +20,13 @@ metadata:
   namespace: default
   resourceGroup: rg1
 spec:
-  runtime: python-duckdb        # the (future) DuckDB-capable function runtime — see prerequisite 1
+  runtime: python314            # the STOCK curated runtime — the duckdb dep travels in the bundle (ADR-0089)
   handler: handle
   artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:catalog-reader   # funcdctl push src/handler.py
+    uri: oci-layout:///mnt/funcd-deps/registry:catalog-reader   # funcdctl push ./bundle … --entry handler.py
   replicas: 1
   scaling:
     minReplicas: 1
-  catalogs:                      # the (future) consumer binding — see prerequisite 2
+  catalogs:                      # the (future) consumer binding — see the follow-up above
     - alias: lake                # → FUNCD_CATALOG_LAKE_URL / _TOKEN injected into the handler
       service: lake              # the CatalogService to consume

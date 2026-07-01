@@ -1,10 +1,16 @@
 # ADR-0089: Function dependency bundling — the deployment-package model
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-07-01 (accepted 2026-07-01 — judge: sound, well-scoped, 0 Blockers; folded 2 Majors [pinned the
   real `--contract-*`/`ContractBlob` push surface; specified `__funcd_contract.json` + `VerifyBundleContract` as
   explicitly new build+push behavior promoting into the existing contract path] + 3 Minors; then re-pointed to
   ADR-0090 for the single mandatory schema surface)
+- **Implemented**: 2026-07-01 — review **pass** (0 Blockers/0 Majors), see
+  [scorecard](../reviews/adr-0089-implementation-claude-opus-4-8.md). `internal/artifact/bundle.go` (deterministic
+  `PackBundle`, fail-closed traversal-safe untar, `VerifyBundleContract` [both-keys per ADR-0090 + baked-validator
+  presence], `PushBundle`); `Pull`+materializer bundle-entry resolution; `funcdctl push` dir-detection + `--entry`;
+  `workerSpec` `PYTHONPATH`/`FUNCD_BUNDLE_DIR` (python family). Four sub-checks green; the live containerd/venom lane
+  + the F48 consumer round-trip deferred (inherently e2e).
 - **Deciders**: green-0-rabbit
 - **Tags**: artifact, bundle, python, native-deps, runtime, contract, lakehouse
 - **Realizes**: [FEAT-0003/F59](../feat/0003-feat-data-platform.md)

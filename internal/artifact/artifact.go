@@ -161,6 +161,12 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
 		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
 	}
+	// A multi-file bundle (ADR-0089) is a BundleTarMediaType layer: untar it into dir (traversal-safe)
+	// and return dir/<entry>. This is selected before the single-blob layer so a bundle artifact takes
+	// the tar path; a single-blob artifact keeps the ADR-0031 behavior below unchanged.
+	if bundleLayer, ok := layerByMediaType(manifest.Layers, BundleTarMediaType); ok {
+		return pullBundle(ctx, op, target, bundleLayer, dir)
+	}
 	// Select the bundle layer by media type (not Layers[0]) so a contract layer (ADR-0059) never
 	// changes which bytes materialize.
 	layer, ok := layerByMediaType(manifest.Layers, bundleMediaType)
@@ -341,7 +347,13 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	}
 	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest))
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
-		return filepath.Join(cacheDir, entries[0].Name()), nil // cached (immutable per digest)
+		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
+		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
+		// single-file cache has no sidecar → fall back to the lone file (entries[0]).
+		if entry := bundleEntryFromCache(cacheDir); entry != "" {
+			return filepath.Join(cacheDir, filepath.FromSlash(entry)), nil
+		}
+		return filepath.Join(cacheDir, entries[0].Name()), nil // cached single-file (immutable per digest)
 	}
 	path, perr := Pull(ctx, ref, digest, cacheDir)
 	if perr != nil {

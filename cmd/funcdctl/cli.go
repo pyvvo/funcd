@@ -188,16 +188,29 @@ func (a *cli) deleteCmd() *cobra.Command {
 // in Function.spec.artifact (ADR-0031). It talks to the registry/layout, not the control plane.
 func (a *cli) pushCmd() *cobra.Command {
 	var schemaPath string
+	var entry string
 	cmd := &cobra.Command{
-		Use:   "push <file> <ref>",
-		Short: "Package a bundle as an OCI artifact and push it (prints <ref>@<digest>)",
+		Use:   "push <path> <ref>",
+		Short: "Package a function (a file or a bundle directory) as an OCI artifact and push it (prints <ref>@<digest>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Every function carries a mandatory single I/O contract (ADR-0090): one --schema file
-			// holding {input, output} (both keys required — a void side is {"type":"null"}, never
-			// absent). Each side is gated against the funcd profile (the "def", ADR-0058/0060) BEFORE
-			// packaging, then assembled into the {dialect, input, output} contract blob embedded as OCI
-			// metadata (ADR-0059), readable later via `funcdctl inspect` without pulling the bundle.
+			path, ref := args[0], args[1]
+			// A DIRECTORY is a multi-file bundle (ADR-0089): the mandatory {input, output} contract
+			// travels IN the bundle as __funcd_contract.json (not --schema), and PushBundle gates it
+			// (VerifyBundleContract, ADR-0090) + promotes it to the OCI contract layer. A FILE is the
+			// unchanged single-blob push whose contract comes from --schema.
+			if info, serr := os.Stat(path); serr == nil && info.IsDir() {
+				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry)
+				if err != nil {
+					return err
+				}
+				return a.writef("%s@%s\n", ref, digest)
+			}
+			// Every single-file function carries a mandatory single I/O contract (ADR-0090): one
+			// --schema file holding {input, output} (both keys required — a void side is {"type":"null"},
+			// never absent). Each side is gated against the funcd profile (the "def", ADR-0058/0060)
+			// BEFORE packaging, then assembled into the {dialect, input, output} contract blob embedded
+			// as OCI metadata (ADR-0059), readable later via `funcdctl inspect` without pulling the bundle.
 			input, output, gerr := gateSchema(schemaPath)
 			if gerr != nil {
 				return gerr
@@ -206,15 +219,17 @@ func (a *cli) pushCmd() *cobra.Command {
 			if berr != nil {
 				return berr
 			}
-			digest, err := artifact.Push(cmd.Context(), args[1], args[0], blob)
+			digest, err := artifact.Push(cmd.Context(), ref, path, blob)
 			if err != nil {
 				return err
 			}
-			return a.writef("%s@%s\n", args[1], digest)
+			return a.writef("%s@%s\n", ref, digest)
 		},
 	}
 	cmd.Flags().StringVar(&schemaPath, "schema", "",
-		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata")
+		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata (single-file push only; a bundle carries __funcd_contract.json)")
+	cmd.Flags().StringVar(&entry, "entry", "handler.py",
+		"handler entry file relative to the bundle root (directory push only, ADR-0089)")
 	return cmd
 }
 

@@ -11,6 +11,9 @@ dependencies = ["funcd-shim", "duckdb>=1.5.4"]
 
 [dependency-groups]
 dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+# the push-time bundle build (build.py → funcd_shim.build) reads FuncInput/FuncOutput and bakes the
+# ADR-0058 validators; it needs pydantic (build-time only, never in the deployed bundle).
+build = ["pydantic>=2.13.4"]
 
 [tool.uv.sources]
 funcd-shim = { path = "../../../shim/python", editable = true }
