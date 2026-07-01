@@ -1,9 +1,14 @@
 # ADR-0090: Mandatory single I/O schema — void as `{"type":"null"}`
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-07-01 (accepted 2026-07-01 — judge: sound, well-scoped, 0 Blockers; folded 2 Majors [void-input
   author marker `FuncInput = None`; the void validator now compiled from its `{"type":"null"}` schema, removing
   the hand-baked `_VOID_VALIDATOR` so ADR-0060's validator≡schema invariant holds uniformly] + 3 Minors)
+- **Implemented**: 2026-07-01 — review **pass** (0 Blockers/0 Majors), see
+  [scorecard](../reviews/adr-0090-implementation-claude-opus-4-8.md). `ContractBlob` both-required + `VoidSchema`;
+  single `--schema` CLI (`gateSchema`, per-side profile check); `build.py` void compiled-from-schema (`_VOID_VALIDATOR`
+  removed) + undeclared-side error. Four sub-checks green; Node void emission + exhaustive `examples/**` migration +
+  the containerd/venom lanes deferred (inherently e2e).
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, schema, artifact, push, runtime, void
 - **Realizes**: [FEAT-0001/F60](../feat/0001-feat-v1.1.md)

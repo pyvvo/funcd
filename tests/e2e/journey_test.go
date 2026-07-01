@@ -80,7 +80,9 @@ func TestE2EUserJourney(t *testing.T) {
 		[]byte("export function handle(_, event) { return { echoed: event }; }\n"), 0o600))
 	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
 
-	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
+	// contracts are mandatory (ADR-0090): a --schema with a {input, output} document (Json in / any out).
+	schema := writeE2ESchema(t, `{"input":{},"output":{}}`)
+	pushed := strings.TrimSpace(runCLI("push", bundle, layout, "--schema", schema))
 	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"),
 		"`funcdctl push` prints <ref>@<digest>, got %q", pushed)
 
@@ -130,7 +132,9 @@ func TestE2EEventDataContract(t *testing.T) {
 			`    ? [{ message: "hello must be a string" }] : []; }`+"\n"+
 			`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))
 	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	pushed := strings.TrimSpace(runCLI("push", bundle, layout))
+	// mandatory contract (ADR-0090): input accepts the {hello?: string} data (Json), void-typed output.
+	schema := writeE2ESchema(t, `{"input":{},"output":{"type":"null"}}`)
+	pushed := strings.TrimSpace(runCLI("push", bundle, layout, "--schema", schema))
 	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"), "push prints <ref>@<digest>, got %q", pushed)
 
 	applyFunction(t, runCLI, "contracted", layout, "", `"scaling":{"minReplicas":1},"replicas":1`)
@@ -212,6 +216,15 @@ func buildFuncdcli(t *testing.T) string {
 }
 
 // applyFunction writes a Function manifest and applies it through the CLI.
+// writeE2ESchema writes the mandatory {input, output} contract document (ADR-0090) to a temp file
+// and returns its path — the --schema source funcdctl push now requires.
+func writeE2ESchema(t *testing.T, body string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "schema.json")
+	require.NoError(t, os.WriteFile(f, []byte(body), 0o600))
+	return f
+}
+
 func applyFunction(t *testing.T, runCLI func(...string) string, name, ref, digest, scalingJSON string) {
 	t.Helper()
 	manifest := fmt.Sprintf(`{"apiVersion":"funcd.io/v1alpha1","kind":"Function",`+

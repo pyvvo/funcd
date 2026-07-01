@@ -187,24 +187,20 @@ func (a *cli) deleteCmd() *cobra.Command {
 // cmdPush packages a bundle as an OCI artifact and pushes it, printing "<ref>@<digest>" to put
 // in Function.spec.artifact (ADR-0031). It talks to the registry/layout, not the control plane.
 func (a *cli) pushCmd() *cobra.Command {
-	var inputPath, outputPath string
+	var schemaPath string
 	cmd := &cobra.Command{
 		Use:   "push <file> <ref>",
 		Short: "Package a bundle as an OCI artifact and push it (prints <ref>@<digest>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Gate each build-generated contract schema against the funcd profile (the "def",
-			// ADR-0058/0060) BEFORE packaging — an out-of-profile contract never ships. The schemas
-			// are KEYED (input vs output), so they are labeled flags; both optional. The gated
-			// schemas are assembled into the {input?, output?, dialect} contract blob embedded as OCI
+			// Every function carries a mandatory single I/O contract (ADR-0090): one --schema file
+			// holding {input, output} (both keys required — a void side is {"type":"null"}, never
+			// absent). Each side is gated against the funcd profile (the "def", ADR-0058/0060) BEFORE
+			// packaging, then assembled into the {dialect, input, output} contract blob embedded as OCI
 			// metadata (ADR-0059), readable later via `funcdctl inspect` without pulling the bundle.
-			input, ierr := gateContract("--contract-input", inputPath)
-			if ierr != nil {
-				return ierr
-			}
-			output, oerr := gateContract("--contract-output", outputPath)
-			if oerr != nil {
-				return oerr
+			input, output, gerr := gateSchema(schemaPath)
+			if gerr != nil {
+				return gerr
 			}
 			blob, berr := artifact.ContractBlob(input, output)
 			if berr != nil {
@@ -217,27 +213,44 @@ func (a *cli) pushCmd() *cobra.Command {
 			return a.writef("%s@%s\n", args[1], digest)
 		},
 	}
-	cmd.Flags().StringVar(&inputPath, "contract-input", "",
-		"path to the generated INPUT contract JSON Schema (gated against the funcd profile, then embedded as OCI metadata)")
-	cmd.Flags().StringVar(&outputPath, "contract-output", "",
-		"path to the generated OUTPUT contract JSON Schema (gated against the funcd profile, then embedded as OCI metadata)")
+	cmd.Flags().StringVar(&schemaPath, "schema", "",
+		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata")
 	return cmd
 }
 
-// gateContract reads a contract schema file (empty path ⇒ nil, that side absent) and runs it through
-// the funcd profile gate (ADR-0058/0060) before it can be embedded. flag names the source for errors.
-func gateContract(flag, path string) ([]byte, error) {
+// gateSchema reads the single --schema file holding one {input, output} contract document (ADR-0090),
+// requires BOTH keys present, and runs each side through the funcd profile gate (ADR-0058/0060,
+// contract.Check checks one schema at a time). A void side is {"type":"null"}, never absent. Contracts
+// are mandatory: an empty path fails fault.Invalid (no contract-less push).
+func gateSchema(path string) (input, output []byte, err error) {
+	const op = "funcdctl push"
 	if path == "" {
-		return nil, nil
+		return nil, nil, fault.Invalidf(op, "every function must declare an I/O contract (--schema <file> with {input, output})")
 	}
-	schema, rerr := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
+	data, rerr := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
 	if rerr != nil {
-		return nil, fault.Invalidf("funcdctl push", "read %s %q: %v", flag, path, rerr)
+		return nil, nil, fault.Invalidf(op, "read --schema %q: %v", path, rerr)
 	}
-	if cerr := contract.Check(schema); cerr != nil {
-		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), "funcdctl push", "%s %q is outside the funcd profile", flag, path)
+	var doc struct {
+		Input  json.RawMessage `json:"input"`
+		Output json.RawMessage `json:"output"`
 	}
-	return schema, nil
+	if jerr := json.Unmarshal(data, &doc); jerr != nil {
+		return nil, nil, fault.Invalidf(op, "--schema %q is not a valid {input, output} JSON document: %v", path, jerr)
+	}
+	if len(doc.Input) == 0 {
+		return nil, nil, fault.Invalidf(op, "--schema %q is missing the \"input\" key (a void side is {\"type\":\"null\"})", path)
+	}
+	if len(doc.Output) == 0 {
+		return nil, nil, fault.Invalidf(op, "--schema %q is missing the \"output\" key (a void side is {\"type\":\"null\"})", path)
+	}
+	if cerr := contract.Check(doc.Input); cerr != nil {
+		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "--schema %q input side is outside the funcd profile", path)
+	}
+	if cerr := contract.Check(doc.Output); cerr != nil {
+		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "--schema %q output side is outside the funcd profile", path)
+	}
+	return doc.Input, doc.Output, nil
 }
 
 // inspectCmd reads a function artifact's I/O contract from its OCI metadata (ADR-0059) — manifest +

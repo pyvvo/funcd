@@ -49,24 +49,31 @@ const (
 	contractDialect = "https://json-schema.org/draft/2020-12/schema"
 )
 
-// ContractBlob assembles the contract-blob payload (ADR-0059): {input?, output?, dialect}. input and
-// output are the generated JSON Schemas (ADR-0058; either may be nil → that side is omitted). Returns
-// (nil, nil) when neither is present, so a contract-less push stays the unchanged ADR-0031 artifact.
+// VoidSchema is the canonical void side (ADR-0090): a side that carries no meaningful payload is the
+// explicit JSON Schema {"type":"null"} — never an omission. Both sides are always present in the blob;
+// a void side declares itself with this schema, and its validator is compiled from it like any other.
+const VoidSchema = `{"type":"null"}`
+
+// ContractBlob assembles the mandatory {dialect, input, output} contract blob (ADR-0090, supersedes
+// ADR-0059's optional form). BOTH input and output must be present and non-empty — a void side is
+// VoidSchema, never nil. Returns fault.Invalid if either is missing; there is no contract-less
+// artifact. The marshaled JSON always serializes both fields (no omitempty).
 func ContractBlob(input, output []byte) ([]byte, error) {
 	const op = "artifact.ContractBlob"
-	if len(input) == 0 && len(output) == 0 {
-		return nil, nil
+	if len(input) == 0 {
+		return nil, fault.Invalidf(op, "every function must declare an input contract (a void side is %s)", VoidSchema)
+	}
+	if len(output) == 0 {
+		return nil, fault.Invalidf(op, "every function must declare an output contract (a void side is %s)", VoidSchema)
 	}
 	payload := struct {
-		Input   json.RawMessage `json:"input,omitempty"`
-		Output  json.RawMessage `json:"output,omitempty"`
+		Input   json.RawMessage `json:"input"`
+		Output  json.RawMessage `json:"output"`
 		Dialect string          `json:"dialect"`
-	}{Dialect: contractDialect}
-	if len(input) > 0 {
-		payload.Input = json.RawMessage(input)
-	}
-	if len(output) > 0 {
-		payload.Output = json.RawMessage(output)
+	}{
+		Input:   json.RawMessage(input),
+		Output:  json.RawMessage(output),
+		Dialect: contractDialect,
 	}
 	blob, err := json.Marshal(payload)
 	if err != nil {

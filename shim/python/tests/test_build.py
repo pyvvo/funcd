@@ -9,6 +9,8 @@ import ast
 import sys
 from typing import Any
 
+import pytest
+
 from funcd_shim.build import build
 
 _SRC = (
@@ -53,6 +55,9 @@ _TYPEDDICT_SRC = (
     "class FuncInput(TypedDict):\n"
     "    order_id: str\n"
     "    qty: int\n"
+    "\n"
+    "class FuncOutput(TypedDict):\n"
+    "    echoed: int\n"
     "\n"
     "def handle(ctx: FunctionContext, event: CloudEvent[FuncInput]):\n"
     "    return {'echoed': event['data']['qty']}\n"
@@ -127,7 +132,11 @@ def test_runtime_artifact_validates_and_handles_without_pydantic() -> None:
     assert handle(None, {"data": {"order_id": "o", "qty": 5}}) == {"accepted": True}
 
 
-def test_build_void_output() -> None:
+# scenario: void-output-schema-explicit (ADR-0090) — `FuncOutput = None` emits an EXPLICIT
+# {"type":"null"} output schema (was: omitted), and its validator is compiled from THAT schema (the
+# hand-baked _VOID_VALIDATOR is gone) — None is valid, a non-empty result is rejected (→ the shim's
+# 500 wire, unchanged by this ADR).
+def test_scenario_void_output_schema_explicit() -> None:
     src = (
         "from pydantic import BaseModel\n"
         "class FuncInput(BaseModel):\n"
@@ -137,19 +146,38 @@ def test_build_void_output() -> None:
         "    return None\n"
     )
     r = build(src)
-    assert r.output_schema is None  # void has no body schema
+    assert r.output_schema == {"type": "null"}, "a void output is the explicit {'type':'null'} schema"
     ns = _exec(r.runtime_source)
-    assert ns["__funcd_validate_output"](None) == []  # empty is valid
+    assert ns["__funcd_validate_output"](None) == []  # None is valid (the shim then replies 204)
     assert ns["__funcd_validate_output"]({"x": 1}), "a non-empty result violates the void contract"
 
 
-def test_build_no_contract_bakes_nothing() -> None:
-    src = "def handle(ctx, event):\n    return {'ok': True}\n"
+# scenario: void-input-schema-explicit (ADR-0090) — the NEW symmetric void-input marker
+# `FuncInput = None` emits an EXPLICIT {"type":"null"} input schema; its validator (compiled from that
+# schema) accepts None/absent data and rejects non-null (→ the shim's 422 wire).
+def test_scenario_void_input_schema_explicit() -> None:
+    src = (
+        "from pydantic import BaseModel\n"
+        "FuncInput = None\n"  # explicit void INPUT (new symmetric marker)
+        "class FuncOutput(BaseModel):\n"
+        "    ok: bool\n"
+        "def handle(ctx, event):\n"
+        "    return {'ok': True}\n"
+    )
     r = build(src)
-    assert r.input_schema is None and r.output_schema is None
-    rt = r.runtime_source
-    assert "__funcd_validate_input" not in rt and "__funcd_validate_output" not in rt
-    assert "def handle" in rt
+    assert r.input_schema == {"type": "null"}, "a void input is the explicit {'type':'null'} schema"
+    ns = _exec(r.runtime_source)
+    assert ns["__funcd_validate_input"](None) == []  # absent/null data is accepted
+    assert ns["__funcd_validate_input"]({"anything": 1}), "non-null data violates the void input contract"
+
+
+# scenario: undeclared-io-is-error (ADR-0090) — the "unchecked" path is gone: a handler that fails to
+# declare FuncInput or FuncOutput is a BUILD error (the author must declare, `None` for void).
+def test_scenario_undeclared_io_is_error() -> None:
+    with pytest.raises(ValueError, match="FuncInput"):
+        build("def handle(ctx, event):\n    return {'ok': True}\n")
+    with pytest.raises(ValueError, match="FuncOutput"):
+        build("FuncInput = None\ndef handle(ctx, event):\n    return None\n")
 
 
 # a top-level DISCRIMINATED UNION contract (FuncOutput = A | B) — pydantic emits anyOf + $ref; the
@@ -165,6 +193,7 @@ _UNION_SRC = (
     "class Rejected(TypedDict):\n"
     "    kind: Literal['rejected']\n"
     "    reason: str\n"
+    "FuncInput = None\n"  # void input (ADR-0090); focus is the discriminated OUTPUT union
     "FuncOutput = Accepted | Rejected\n"
     "\n"
     "def handle(ctx, event):\n"
@@ -202,8 +231,9 @@ _FUTURE_ANN_SRC = (
     "    name: str\n"
     "    tier: Literal['free', 'pro']\n"
     "\n"
+    "FuncOutput = None\n"  # void output (ADR-0090); focus is resolving the INPUT under future-annotations
     "def handle(ctx, event):\n"
-    "    return {'ok': True}\n"
+    "    return None\n"
 )
 
 
@@ -222,6 +252,7 @@ def test_build_json_input_is_empty_schema() -> None:
     src = (
         "from funcd_shim import CloudEvent, FunctionContext, Json\n"
         "FuncInput = Json\n"
+        "FuncOutput = None\n"  # void output (ADR-0090); focus is the `Json` INPUT escape hatch
         "def handle(ctx, event):\n"
         "    return None\n"
     )

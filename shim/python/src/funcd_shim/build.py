@@ -31,19 +31,23 @@ _CONTRACT = ("FuncInput", "FuncOutput")
 
 _build_seq = 0  # makes each synthetic contract module's name unique (avoids pydantic's type cache)
 
-_VOID_VALIDATOR = (
-    "def __funcd_validate_output(d):\n"
-    "    return [] if d is None else ['expected no body (void output contract)']\n"
-)
+# The canonical void side (ADR-0090): "takes/returns nothing" is the explicit JSON Schema
+# {"type":"null"}, not an omission. Its validator is compiled FROM this schema through the same
+# fastjsonschema path as every other side (a null-only check), so ADR-0060's "validator ≡ advertised
+# schema" invariant holds uniformly — there is no hand-baked void validator.
+_VOID_SCHEMA: dict[str, Any] = {"type": "null"}
 
 
 @dataclass
 class BuildResult:
-    """The runtime artifact source + the generated schemas (for the gate / OCI metadata)."""
+    """The runtime artifact source + the generated schemas (for the gate / OCI metadata).
+
+    Contracts are mandatory (ADR-0090): both ``input_schema`` and ``output_schema`` are always
+    present — a void side is ``{"type": "null"}``, never ``None``."""
 
     runtime_source: str
-    input_schema: dict[str, Any] | None
-    output_schema: dict[str, Any] | None
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
 
 
 def build(source: str) -> BuildResult:
@@ -60,22 +64,43 @@ def build(source: str) -> BuildResult:
     try:
         exec(compile(source, "<funcd_function>", "exec"), module.__dict__)  # noqa: S102 - trusted author source, build-time only
         ns = module.__dict__
-        in_schema = _schema_of(ns.get("FuncInput"))
-        out_schema = _schema_of(ns.get("FuncOutput"))
-        void_output = "FuncOutput" in ns and ns["FuncOutput"] is None
+        in_schema = _side_schema(ns, "FuncInput")
+        out_schema = _side_schema(ns, "FuncOutput")
     finally:
         sys.modules.pop(name, None)
 
-    baked: list[str] = []
-    if in_schema is not None:
-        baked.append(_validator_source(in_schema, "__funcd_validate_input", "i"))
-    if out_schema is not None:
-        baked.append(_validator_source(out_schema, "__funcd_validate_output", "o"))
-    elif void_output:
-        baked.append(_VOID_VALIDATOR)
+    # Every side — void included — is compiled to its validator FROM its emitted schema through the
+    # SAME fastjsonschema path (ADR-0090/0060 invariant): {"type": "null"} compiles to a null-only
+    # check, so there is no place where the advertised schema and the enforced validator diverge.
+    baked = [
+        _validator_source(in_schema, "__funcd_validate_input", "i"),
+        _validator_source(out_schema, "__funcd_validate_output", "o"),
+    ]
 
     runtime = _strip_and_bake(source, "\n".join(baked))
     return BuildResult(runtime, in_schema, out_schema)
+
+
+def _side_schema(ns: dict[str, Any], marker: str) -> dict[str, Any]:
+    """Resolve one contract side (``FuncInput`` / ``FuncOutput``) to its mandatory JSON Schema
+    (ADR-0090). ``None`` is the explicit void marker → ``{"type": "null"}``; a declared type derives
+    its schema; an **undeclared** side is a build error (the "unchecked" path is gone — the author
+    must declare the type, ``None`` for void)."""
+    if marker not in ns:
+        raise ValueError(
+            f"{marker} is not declared — every function must declare an I/O contract "
+            f"(ADR-0090); use `{marker} = None` for a void side."
+        )
+    value = ns[marker]
+    if value is None:
+        return dict(_VOID_SCHEMA)  # explicit void: {"type": "null"}
+    schema = _schema_of(value)
+    if schema is None:
+        raise ValueError(
+            f"{marker} does not resolve to a JSON Schema — declare a pydantic model, a TypedDict, "
+            f"a discriminated union, `Json`, or `None` for a void side."
+        )
+    return schema
 
 
 def _schema_of(obj: Any) -> dict[str, Any] | None:

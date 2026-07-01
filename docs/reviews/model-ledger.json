@@ -1378,5 +1378,20 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0088-implementation-claude-opus-4-8.md",
     "notes": "F58 provider F47/Cedar identity. 2 surgical changes (EntitiesFor CatalogService blobBindings fallback, Function-first; owner admission accepts a CatalogService); policy + UID scheme untouched. 5 scenarios pass (read/write/denied/precedence/admission). 1 Minor by-design (name-collision precedence). Lifts the F48 live-path gate."
+  },
+  {
+    "date": "2026-07-01",
+    "adr": "0090",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0090-implementation-claude-opus-4-8.md",
+    "notes": "pass; mandatory single I/O schema + void={type:null} compiled-from-schema; Node lane + exhaustive examples deferred (e2e); pre-existing TestPythonPoolSmoke unrelated (env)"
   }
 ]

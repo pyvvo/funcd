@@ -190,6 +190,45 @@ func TestScenarioNoContractNoMetadata(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "a contract-less artifact → fault.NotFound on inspect")
 }
 
+// scenario: contract-mandatory-push-gate (ADR-0090) — ContractBlob refuses a missing side; there is
+// no contract-less artifact. Both-empty and each-single-side-empty → fault.Invalid.
+func TestScenario_contract_mandatory_push_gate(t *testing.T) {
+	t.Parallel()
+	_, err := artifact.ContractBlob(nil, nil)
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "no contract at all → fault.Invalid")
+}
+
+// scenario: both-keys-required (ADR-0090) — a document with only one side is rejected; both input and
+// output must be present (a void side is VoidSchema, never absent).
+func TestScenario_both_keys_required(t *testing.T) {
+	t.Parallel()
+	_, ierr := artifact.ContractBlob([]byte(schemaIn), nil)
+	require.Error(t, ierr, "output side missing → fault.Invalid")
+	require.Equal(t, fault.Invalid, fault.KindOf(ierr))
+	_, oerr := artifact.ContractBlob(nil, []byte(schemaOut))
+	require.Error(t, oerr, "input side missing → fault.Invalid")
+	require.Equal(t, fault.Invalid, fault.KindOf(oerr))
+}
+
+// scenario: void-side-serialized (ADR-0090) — a void side is the explicit {"type":"null"} schema and
+// it is always SERIALIZED into the blob (no omitempty); both keys are present.
+func TestScenario_void_side_serialized(t *testing.T) {
+	t.Parallel()
+	blob, err := artifact.ContractBlob([]byte(schemaIn), []byte(artifact.VoidSchema))
+	require.NoError(t, err)
+	var payload struct {
+		Input   json.RawMessage `json:"input"`
+		Output  json.RawMessage `json:"output"`
+		Dialect string          `json:"dialect"`
+	}
+	require.NoError(t, json.Unmarshal(blob, &payload))
+	require.JSONEq(t, schemaIn, string(payload.Input))
+	require.JSONEq(t, artifact.VoidSchema, string(payload.Output), "the void side is serialized, not omitted")
+	require.NotEmpty(t, payload.Dialect)
+	require.Contains(t, string(blob), `"output"`, "the output key is always present in the marshaled blob")
+}
+
 // scenario: bundle-selected-by-mediatype — with a contract layer present, Pull still materializes
 // the BUNDLE (selected by media type, not by index).
 func TestScenarioBundleSelectedByMediaType(t *testing.T) {
@@ -197,7 +236,7 @@ func TestScenarioBundleSelectedByMediaType(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	body := "export function handle(_, e) { return e; }\n"
 	bundle := writeBundle(t, body)
-	blob, err := artifact.ContractBlob([]byte(schemaIn), nil)
+	blob, err := artifact.ContractBlob([]byte(schemaIn), []byte(artifact.VoidSchema))
 	require.NoError(t, err)
 	digest, err := artifact.Push(context.Background(), ref, bundle, blob)
 	require.NoError(t, err)
@@ -214,13 +253,13 @@ func TestScenarioBundleSelectedByMediaType(t *testing.T) {
 func TestScenarioContractDigestPinned(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
-	blobA, err := artifact.ContractBlob([]byte(schemaIn), nil) // has "name"
+	blobA, err := artifact.ContractBlob([]byte(schemaIn), []byte(artifact.VoidSchema)) // has "name"
 	require.NoError(t, err)
 	digestA, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle() {}\n"), blobA)
 	require.NoError(t, err)
 
 	// move tag v1 to a DIFFERENT artifact (different bundle ⇒ different manifest digest).
-	blobB, err := artifact.ContractBlob([]byte(schemaOut), nil) // has "ok"
+	blobB, err := artifact.ContractBlob([]byte(schemaOut), []byte(artifact.VoidSchema)) // has "ok"
 	require.NoError(t, err)
 	digestB, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle(_, e) { return e; }\n"), blobB)
 	require.NoError(t, err)
