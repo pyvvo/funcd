@@ -8,10 +8,11 @@
 # HTTP readiness probe.
 #
 # The CONSUMER is a funcd FUNCTION (examples/python/catalog-quack/src/handler.py + consumer.yaml) — the
-# funcd-native shape. Deploying/invoking it live is GATED on two follow-ups (Project #4 "Provider
-# consumption binding"): a DuckDB-capable function runtime (`python-duckdb`) and the `spec.catalogs`
-# consumer binding (endpoint/token injection + the egress grant). So this suite asserts the proven core
-# (deploy → Ready, no backing Function); the function-consumer round-trip lands with those follow-ups.
+# funcd-native shape. It runs on the STOCK `python314` runtime: its duckdb dep travels IN the artifact as
+# an ADR-0089 dependency BUNDLE (vendored duckdb wheel + duckdb-ext/). Testcase 3 deploys it and asserts it
+# reaches Ready — which proves the bundle materialized and `import duckdb` (at handler module load) works on
+# the stock runtime. Only the LIVE SQL round-trip stays GATED on the `spec.catalogs` consumer binding
+# (endpoint/token injection + the function→catalog egress grant, Project #4 "Provider consumption binding").
 name: catalog-quack add-on provider — deploy + Ready on real containerd (ADR-0086/0087/0088)
 
 testcases:
@@ -58,3 +59,24 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "QUACK_HTTP=200"  # the engine serves Quack
           - result.systemout ShouldContainSubstring "S3_403_COUNT=0"  # no S3 denial — ADR-0088 authorized it
+
+  - name: the catalog-reader CONSUMER Function reaches Ready on the stock python314 runtime (ADR-0089 bundle)
+    steps:
+      - type: exec
+        # The consumer is a funcd Function whose artifact is an ADR-0089 dependency BUNDLE carrying the
+        # vendored duckdb wheel + duckdb-ext/. It runs on the STOCK `python314` runtime (no python-duckdb
+        # image). handler.py does `import duckdb` at module load, so Ready ⇒ the bundle materialized and the
+        # vendored native dep loaded on the stock runtime. (The spec.catalogs consumer binding — endpoint/
+        # token injection + egress grant — is a deferred follow-up, so the full SQL invoke is out of scope.)
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            fn=$(funcdctl get function catalog-reader -n default -o json)
+            phase=$(echo "$fn" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            echo "PHASE=$phase"'
+        retry: 60
+        delay: 2
+        info: "function catalog-reader → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PHASE=Ready"     # bundle materialized + import duckdb OK

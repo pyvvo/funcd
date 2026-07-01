@@ -292,13 +292,19 @@ lima-example-duckdb: build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # Stage the catalog-quack manifests + config (no JS bundle — the catalog IS the deployed engine).
-    # The CONSUMER is a funcd Function (src/handler.py + consumer.yaml) gated on the duckdb-capable
-    # function runtime + the spec.catalogs binding (follow-ups), so it is NOT deployed by this lane.
+    # Build the ADR-0089 dependency BUNDLE for the consumer (handler.py + vendored duckdb + duckdb-ext/ +
+    # __funcd_contract.json) — hermetic vendoring inside python:3.14-slim-bookworm (needs docker + network).
+    ( cd examples/python/catalog-quack && uv run --group build python build.py )
+    # Stage the catalog-quack provider manifests + config, PLUS the consumer bundle + consumer.yaml. The
+    # provider (CatalogService) deploys as before; the CONSUMER is a funcd Function on the STOCK python314
+    # runtime whose duckdb dep travels in the bundle (ADR-0089). Reaching Ready proves the bundle
+    # materialized + `import duckdb` works on the stock runtime (the spec.catalogs binding stays a follow-up).
     stage="$(mktemp -d)"
     cp examples/python/catalog-quack/configmap.yaml examples/python/catalog-quack/secret.yaml \
        examples/python/catalog-quack/bucket-base.yaml examples/python/catalog-quack/bucket.yaml \
-       examples/python/catalog-quack/catalogservice.yaml examples/python/catalog-quack/funcdconfig.yaml "$stage/"
+       examples/python/catalog-quack/catalogservice.yaml examples/python/catalog-quack/funcdconfig.yaml \
+       examples/python/catalog-quack/consumer.yaml "$stage/"
+    cp -R examples/python/catalog-quack/bundle "$stage/bundle"
     tar czf {{lima_deps}}/catalog-quack.tgz -C "$stage" .
     rm -rf "$stage"
     trap 'limactl stop -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true' EXIT

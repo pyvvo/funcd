@@ -39,6 +39,12 @@ provision:
       funcdctl apply -f "$d/bucket-base.yaml"
       funcdctl apply -f "$d/catalogservice.yaml"
       funcdctl apply -f "$d/bucket.yaml"
+      # The CONSUMER: push the ADR-0089 dependency bundle (handler.py + vendored duckdb + duckdb-ext/;
+      # the contract comes from the bundle's __funcd_contract.json — no --schema) into the writable mount
+      # registry, then apply the Function. It runs on the STOCK python314 runtime; reaching Ready proves
+      # the bundle materialized and `import duckdb` (at module load) succeeded on the stock runtime.
+      funcdctl push "$d/bundle" "oci-layout:///mnt/funcd-deps/registry:catalog-reader" --entry handler.py
+      funcdctl apply -f "$d/consumer.yaml"
 
 probes:
   - description: "the CatalogService reaches Ready (the duckdb engine deployed by the provider-runtime)"
