@@ -11,6 +11,14 @@
   presence], `PushBundle`); `Pull`+materializer bundle-entry resolution; `funcdctl push` dir-detection + `--entry`;
   `workerSpec` `PYTHONPATH`/`FUNCD_BUNDLE_DIR` (python family). Four sub-checks green; the live containerd/venom lane
   + the F48 consumer round-trip deferred (inherently e2e).
+- **Amended in place**: 2026-07-01 — **exceptionally edited after `Implemented`** (immutability waived by the
+  decider for this ADR only, to fix defects the live lane surfaced): (1) **§4 build image** — the hermetic vendor
+  runs in **`python:3.14-slim-bookworm`** (the base the curated image derives its Python from — same glibc, has
+  pip+shell), **not** the curated image itself, which is custom distroless (no pip/shell, ADR-0049); (2) impl fixes
+  (not decision changes): `Pull` **streams** the bundle layer (oras `content.FetchAll` caps at 32 MiB — a ~100MB
+  vendored closure must stream via `target.Fetch` + a verifying reader); `build.py` `PYTHONPATH` export scoping; the
+  example's `pydantic` build-dep. The normal rule (correct a frozen ADR via a superseding ADR) is preserved for
+  every other ADR.
 - **Deciders**: green-0-rabbit
 - **Tags**: artifact, bundle, python, native-deps, runtime, contract, lakehouse
 - **Realizes**: [FEAT-0003/F59](../feat/0003-feat-data-platform.md)
@@ -163,10 +171,13 @@ grant — Project #4 *“Add-on provider consumption binding”*); a Node bundle
    `{"type":"null"}`), so `VerifyBundleContract` also fails a bundle carrying only one side. This makes the
    deployed artifact self-describing and tamper-evident.
 
-4. **The build is hermetic.** The reference `build.py` runs `pip install --target <bundle>` **inside the
-   curated `python314` image** (`docker run` the same base the function runs on) and pre-installs the
-   DuckDB extensions **offline** into `<bundle>/duckdb-ext/`, so the vendored native closure is byte-for-byte
-   the runtime's glibc/arch.
+4. **The build is hermetic.** The reference `build.py` runs `pip install --target <bundle>` **inside
+   `python:3.14-slim-bookworm`** — the exact base the curated runtime derives its Python from
+   (`images/runtime/python314/Dockerfile` `FROM python:3.14-slim-bookworm AS py`), same glibc/arch and it *has*
+   pip+shell — and pre-installs the DuckDB extensions **offline** into `<bundle>/duckdb-ext/`, so the vendored
+   native closure is byte-for-byte the runtime's glibc/arch. (It does **not** vendor in the curated image itself:
+   that image is custom distroless — no pip, no shell, ADR-0049 — so `pip` cannot run there. Amended from the
+   original "inside the curated image" wording; see the header.)
 
 *Language-agnostic by design.* The transport machinery — the `BundleTarMediaType` layer, the traversal-safe
 untar, `FUNCD_BUNDLE_DIR`, and the digest-pinned bundle — knows nothing about Python; only the `PYTHONPATH`

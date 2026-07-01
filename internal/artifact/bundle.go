@@ -256,10 +256,6 @@ func PushBundle(ctx context.Context, ref, dir, entry string) (digest string, err
 // cache-HIT path can resolve <cacheDir>/<entry> without re-reading the manifest), and returns
 // dir/<entry>. The entry comes from the layer's BundleEntryAnnotation (default handler.py).
 func pullBundle(ctx context.Context, op string, target oras.ReadOnlyTarget, layer ocispec.Descriptor, dir string) (string, error) {
-	blob, berr := content.FetchAll(ctx, target, layer) // verifies the blob against its descriptor digest
-	if berr != nil {
-		return "", fault.Wrapf(berr, fault.Internal, op, "fetch bundle layer")
-	}
 	entry := layer.Annotations[BundleEntryAnnotation]
 	if entry == "" {
 		entry = "handler.py"
@@ -277,8 +273,25 @@ func pullBundle(ctx context.Context, op string, target oras.ReadOnlyTarget, laye
 	if merr := os.MkdirAll(dir, 0o755); merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "create bundle dir")
 	}
-	if uerr := untarBundle(op, blob, dir); uerr != nil {
+	// STREAM the layer (a bundle is large — vendored native deps run to ~100MB): content.FetchAll
+	// buffers the whole blob in memory and caps at oras's 32 MiB maxDescriptorSize (that cap is for
+	// small manifest/config blobs, not layers). target.Fetch + a VerifyReader streams it through
+	// gzip→tar and still digest-verifies the bytes against the descriptor.
+	rc, ferr := target.Fetch(ctx, layer)
+	if ferr != nil {
+		return "", fault.Wrapf(ferr, fault.Internal, op, "fetch bundle layer")
+	}
+	defer func() { _ = rc.Close() }()
+	vr := content.NewVerifyReader(rc, layer)
+	if uerr := untarBundle(op, vr, dir); uerr != nil {
 		return "", uerr
+	}
+	// Drain any bytes gzip/tar didn't consume so the whole blob is read, then verify the digest.
+	if _, derr := io.Copy(io.Discard, vr); derr != nil {
+		return "", fault.Wrapf(derr, fault.Internal, op, "drain bundle layer")
+	}
+	if verr := vr.Verify(); verr != nil {
+		return "", fault.Wrapf(verr, fault.Internal, op, "bundle layer digest mismatch")
 	}
 	if werr := os.WriteFile(filepath.Join(dir, entrySidecar), []byte(entry), 0o644); werr != nil { //nolint:gosec // non-secret cache metadata
 		return "", fault.Wrapf(werr, fault.Internal, op, "write entry sidecar")
@@ -299,8 +312,8 @@ func bundleEntryFromCache(cacheDir string) string {
 // untarBundle extracts a gzipped tar (a BundleTarMediaType layer's bytes) into dir, refusing any
 // entry whose path would escape dir (absolute, "..", or a symlink) — the traversal-safety gate.
 // Only regular files and directories are written; nothing else can appear in a bundle we packed.
-func untarBundle(op string, blob []byte, dir string) error {
-	gz, gerr := gzip.NewReader(bytes.NewReader(blob))
+func untarBundle(op string, r io.Reader, dir string) error {
+	gz, gerr := gzip.NewReader(r)
 	if gerr != nil {
 		return fault.Invalidf(op, "bundle layer is not valid gzip: %v", gerr)
 	}

@@ -9,12 +9,13 @@ turns into one tar+gzip OCI layer, so the F48 Quack consumer runs UNCHANGED on t
   - ``duckdb-ext/``             — the pre-installed ``quack`` + ``httpfs`` extensions (offline)
   - ``__funcd_contract.json``   — the ADR-0090 ``{input, output}`` contract (both keys; void = null)
 
-The vendoring runs INSIDE the curated ``python314`` image (``docker run``) so the native ``.so`` closure
-is byte-for-byte glibc/arch-matched to the runtime (ADR-0089 §4 — no "built-on-host → glibc break").
-This build is inherently e2e: it needs Docker + the curated image. Run from this dir:
+The vendoring runs INSIDE ``python:3.14-slim-bookworm`` (``docker run``) — the same base the curated
+runtime derives its Python from — so the native ``.so`` closure is byte-for-byte glibc/arch-matched to
+the runtime (ADR-0089 §4, corrected: the curated image itself is distroless with no pip/shell). This
+build is inherently e2e: it needs Docker + network. Run from this dir (the ``build`` dep-group has pydantic):
 
-    python build.py                 # hermetic (default): vendors inside the curated image
-    python build.py --no-hermetic   # host-pip fast path for iteration (unsafe for release, ADR-0089)
+    uv run --group build python build.py                 # hermetic (default): vendors in slim-bookworm
+    uv run --group build python build.py --no-hermetic   # host-pip fast path (unsafe for release, ADR-0089)
 """
 
 from __future__ import annotations
@@ -30,7 +31,13 @@ from funcd_shim.build import build
 
 HERE = Path(__file__).parent
 BUNDLE = HERE / "bundle"
-CURATED_IMAGE = "funcd/runtime-python314:latest"
+# The hermetic vendor image (ADR-0089 §4, corrected): vendor the wheel closure in
+# python:3.14-slim-bookworm — the SAME base the curated runtime derives its Python from
+# (images/runtime/python314/Dockerfile `FROM python:3.14-slim-bookworm AS py`), so the native
+# .so closure is byte-for-byte glibc/arch-matched to what the function runs on. We do NOT vendor in
+# the curated image itself: it is custom distroless (gcr.io/distroless/cc-debian12) with no pip/shell
+# (ADR-0049 stdlib-only), so `pip install` cannot run there.
+VENDOR_IMAGE = "python:3.14-slim-bookworm"
 DUCKDB_SPEC = "duckdb>=1.5.4"
 EXTENSIONS = ("quack", "httpfs")
 
@@ -51,8 +58,8 @@ def _bake_handler() -> None:
 
 
 def _vendor_hermetic() -> None:
-    """pip-install the duckdb wheel closure + pre-install the extensions INSIDE the curated image, so
-    the vendored native closure matches the runtime's glibc/arch exactly (ADR-0089 §4)."""
+    """pip-install the duckdb wheel closure + pre-install the extensions in the glibc-matched vendor
+    image, so the vendored native closure matches the runtime's glibc/arch exactly (ADR-0089 §4)."""
     ext_installs = " && ".join(
         f"python -c \"import duckdb; con=duckdb.connect(); "
         f"con.execute('SET extension_directory=\\'/out/duckdb-ext\\''); "
@@ -63,14 +70,15 @@ def _vendor_hermetic() -> None:
         f"set -e; "
         f"pip install --no-cache-dir --target /out '{DUCKDB_SPEC}'; "
         f"mkdir -p /out/duckdb-ext; "
-        f"PYTHONPATH=/out {ext_installs}"
+        # export so PYTHONPATH reaches EVERY chained `python -c` (not just the first before the `&&`).
+        f"export PYTHONPATH=/out; {ext_installs}"
     )
     subprocess.run(  # noqa: S603 - fixed argv, no shell-injection surface
         [
             "docker", "run", "--rm",
             "-v", f"{BUNDLE}:/out",
             "--entrypoint", "sh",
-            CURATED_IMAGE, "-c", script,
+            VENDOR_IMAGE, "-c", script,
         ],
         check=True,
     )
@@ -97,7 +105,8 @@ def main() -> None:
         _vendor_hermetic()
     else:
         _vendor_host()
-    print(f"built bundle/ (handler + vendored duckdb + duckdb-ext/{'+'.join(EXTENSIONS)} + __funcd_contract.json)")
+    exts = "+".join(EXTENSIONS)
+    print(f"built bundle/ (handler + vendored duckdb + duckdb-ext/{exts} + __funcd_contract.json)")
     print(f"push it:  funcdctl push {BUNDLE.relative_to(HERE.parent.parent.parent)} <ref> --entry handler.py")
 
 

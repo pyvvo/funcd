@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -274,4 +275,38 @@ func mustContract(t *testing.T) []byte {
 	blob, err := artifact.ContractBlob([]byte(`{"type":"null"}`), []byte(`{"type":"null"}`))
 	require.NoError(t, err)
 	return blob
+}
+
+// TestScenarioPullLargeBundleExceedsFetchAllCap is a regression guard: a bundle whose (compressed)
+// layer exceeds oras's 32 MiB content.FetchAll cap — vendored native deps run to ~100MB — must still
+// pull. pullBundle STREAMS the layer (target.Fetch + a VerifyReader), it does not buffer it via
+// FetchAll, so the cap never applies.
+func TestScenarioPullLargeBundleExceedsFetchAllCap(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "big")
+	dir := filepath.Join(t.TempDir(), "bundle")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	const entry = "handler.py"
+	handler := "def __funcd_validate_input(d):\n    return []\n" +
+		"def __funcd_validate_output(d):\n    return []\n" +
+		"def handle(context, event):\n    return {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, entry), []byte(handler), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "__funcd_contract.json"),
+		[]byte(`{"input":{"type":"null"},"output":{"type":"null"}}`), 0o600))
+	// ~34 MiB of INCOMPRESSIBLE bytes so the gzipped layer clears the 32 MiB FetchAll cap.
+	big := make([]byte, 34<<20)
+	rng := rand.New(rand.NewSource(1)) //nolint:gosec // deterministic test fixture, not security
+	_, _ = rng.Read(big)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendored.bin"), big, 0o600))
+
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry)
+	require.NoError(t, err)
+
+	out := filepath.Join(t.TempDir(), "out")
+	path, err := artifact.Pull(context.Background(), ref, digest, out)
+	require.NoError(t, err, "a >32 MiB bundle layer must stream, not trip the FetchAll cap")
+	require.Equal(t, filepath.Join(out, entry), path)
+	got, err := os.ReadFile(filepath.Join(out, "vendored.bin"))
+	require.NoError(t, err)
+	require.Equal(t, big, got, "the large vendored file round-trips byte-for-byte")
 }
