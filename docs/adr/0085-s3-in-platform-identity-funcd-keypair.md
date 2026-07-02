@@ -1,6 +1,6 @@
 # ADR-0085: In-platform S3 identity — funcd-managed per-function keypair via an in-process IAM
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after one judge pass — **no Blockers; the security model was verified
   end-to-end against real versitygw v1.6.0** [SigV4 → `CheckValidSignature(…, account.Secret, …)` against
   `IAMService.GetUserAccount`'s returned secret ⇒ a function can sign only as itself]. Folded the two Majors
