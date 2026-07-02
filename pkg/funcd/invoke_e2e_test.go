@@ -2,6 +2,7 @@ package funcd_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -82,16 +83,19 @@ func buildFnToFnExample(t *testing.T) string {
 }
 
 // pushExampleFn pushes a built handler + its generated contract to a local OCI layout — exactly what
-// `funcdctl push <mjs> <ref> --contract-input … --contract-output …` does (gates the schemas against
-// the funcd profile, then embeds them as OCI metadata, ADR-0058/0059). Returns the ref + digest.
+// `funcdctl push <mjs> <ref> --schema <name>.schema.json` does (gates the schemas against the funcd
+// profile, then embeds them as OCI metadata, ADR-0058/0059/0090). Returns the ref + digest.
 func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest string) {
 	t.Helper()
-	read := func(suffix string) []byte {
-		b, rerr := os.ReadFile(filepath.Join(exDir, name+suffix))
-		require.NoError(t, rerr)
-		return b
+	// The build emits ONE combined {input, output} contract file (the ADR-0090 --schema surface).
+	docBytes, rerr := os.ReadFile(filepath.Join(exDir, name+".schema.json"))
+	require.NoError(t, rerr)
+	var doc struct {
+		Input  json.RawMessage `json:"input"`
+		Output json.RawMessage `json:"output"`
 	}
-	in, out := read("-input.schema.json"), read("-output.schema.json")
+	require.NoError(t, json.Unmarshal(docBytes, &doc), "%s schema is a {input, output} document", name)
+	in, out := []byte(doc.Input), []byte(doc.Output)
 	require.NoError(t, contract.Check(in), "%s input schema is in the funcd profile", name)
 	require.NoError(t, contract.Check(out), "%s output schema is in the funcd profile", name)
 	blob, err := artifact.ContractBlob(in, out)

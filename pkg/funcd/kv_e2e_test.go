@@ -55,7 +55,7 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := buildKVExample(t)
 	layout := t.TempDir()
-	// push WITH the I/O contract (counter-{input,output}.schema.json baked by build.ts) — the kv-counter
+	// push WITH the I/O contract (counter.schema.json baked by build.ts, ADR-0090) — the kv-counter
 	// function is contract-validated exactly like fn-to-fn, so the artifact carries its schemas.
 	ref, digest := pushExampleFn(t, layout, exDir, "counter")
 
