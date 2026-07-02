@@ -1438,5 +1438,20 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0092-implementation-claude-opus-4-8.md",
     "notes": "pass; DRY provider env resolution \u2014 one secrets.IsReservedKey/MergeEnvGuarded + provider.ResolveEnv (consumer-side interface, M1); behavior-preserving (catalog suite untouched); exactly one guard"
+  },
+  {
+    "date": "2026-07-02",
+    "adr": "0093",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0093-implementation-claude-opus-4-8.md",
+    "notes": "pass; Function.spec.config (ConfigMap->env, mirrors secrets); resolver relocated to internal/envresolve (one path, no cycle); catalog suite unchanged; ErrConfig/ErrSecret via errors.Join preserves fault.Kind; OpenAPI regen"
   }
 ]

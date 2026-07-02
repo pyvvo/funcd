@@ -1,10 +1,16 @@
 # ADR-0093: Function ConfigMap consumption (`spec.config`) + one unified env-resolver
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: **ACCEPT**, sound + faithful to the code + cycle-free, 0
   Blockers/0 Majors; folded 3 Minors [the resolve-trigger + pooled gate flip to config-OR-secrets; sentinel
   `ErrConfig`/`ErrSecret` so the reconciler attributes `ConfigResolveFailed` vs `SecretResolveFailed` from one
   merged call; name `just generate` + the stale-schema gate])
+- **Implemented**: 2026-07-02 — review **pass** (0 Blockers/0 Majors), see
+  [scorecard](../reviews/adr-0093-implementation-claude-opus-4-8.md). `Function.spec.config` +
+  `internal/envresolve` (the sole resolver; `provider.ResolveEnv` is a thin delegate — no cycle); the Function
+  reconciler resolves config+secrets via it (gate flips to config-OR-secrets; `ErrConfig`/`ErrSecret` via
+  `errors.Join` preserve the fault Kind and pick `ConfigResolveFailed` vs `SecretResolveFailed`); OpenAPI
+  regenerated. **Behavior-preserving**: the catalog suite is unchanged (byte-identical env). Four sub-checks green.
 - **Deciders**: green-0-rabbit
 - **Tags**: function, config, configmap, env-injection, provider, refactor, dry
 - **Realizes**: [FEAT-0003/F63](../feat/0003-feat-data-platform.md)

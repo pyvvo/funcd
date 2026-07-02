@@ -53,6 +53,14 @@ type FunctionSpec struct {
 	// stored on the Function (they live only in the worker's env). Resolution is PDP-authorized
 	// (ADR-0022/0018); an unauthorized or missing Secret fails the function closed (not Ready).
 	Secrets []ObjectName `json:"secrets,omitempty"`
+	// Config names the ConfigMap resources in this function's namespace whose Data is injected
+	// into the worker as env vars at materialization (ADR-0093), mirroring Secrets but for
+	// NON-sensitive config (a plain store read, no PDP). Config is merged BEFORE Secrets, so a
+	// bound Secret overrides a config default. Reserved FUNCD_* keys are never overridable.
+	// Empty ⇒ no config injection. Fails closed (not Ready, ConfigResolveFailed) if a named
+	// ConfigMap is missing. Pooled functions may not declare Config (per-function env can't
+	// isolate in a shared worker) — same gate as Secrets.
+	Config []ObjectName `json:"config,omitempty"`
 	// Links declares synchronous fn-to-fn RPC dependencies (ADR-0064, F33): each binds a local
 	// alias to a target Function in this namespace, callable from the handler as
 	// context.invoke(alias, input). The alias is the capability — with no matching link, invoke
@@ -250,6 +258,14 @@ func (s *FunctionSpec) Validate() error {
 		catSeen[c.Alias] = true
 		if !dnsLabel.MatchString(string(c.Catalog)) {
 			return fault.Invalidf(op, "spec.catalogs[%s].catalog %q is not a valid CatalogService name", c.Alias, c.Catalog)
+		}
+	}
+	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and
+	// must be a valid DNS-1123 ObjectName (mirrors CatalogService.spec.config). Cross-resource
+	// existence is the reconciler's plain store read (fail-closed, ConfigResolveFailed), not Validate.
+	for _, cm := range s.Config {
+		if !dnsLabel.MatchString(string(cm)) {
+			return fault.Invalidf(op, "spec.config entry %q is not a valid DNS-1123 name", cm)
 		}
 	}
 	return nil

@@ -24,6 +24,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/activator"
 	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/controller"
+	"github.com/green-0-rabbit/funcd/internal/envresolve"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/pooling"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
@@ -331,9 +332,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// into an env map BEFORE provisioning any worker. A PDP-deny / missing Secret / unconfigured
 	// resolver / pooled function fails the function CLOSED (not Ready, SecretResolveFailed, no
 	// worker) — never a worker started with the secret absent. Mirrors the artifact-unresolved gate.
-	secretEnv, serr := r.resolveSecretEnv(ctx, fn, assign.Pooled)
+	secretEnv, serr := r.resolveBindingEnv(ctx, fn, assign.Pooled)
 	if serr != nil {
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "SecretResolveFailed", Message: serr.Error()})
+		// Side-attributed reason (ADR-0093 §4): a config-side failure (missing ConfigMap) reports
+		// ConfigResolveFailed; every other case (secret PDP-deny / missing / unconfigured, or the
+		// pooled gate) reports SecretResolveFailed. One envresolve.ResolveEnv call, two reasons.
+		reason := "SecretResolveFailed"
+		if errors.Is(serr, envresolve.ErrConfig) {
+			reason = "ConfigResolveFailed"
+		}
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: serr.Error()})
 		fn.Status.Phase = v1.PhaseFailed
 		fn.Status.Replicas = 0
 		if _, uerr := r.store.Update(ctx, fn); uerr != nil {

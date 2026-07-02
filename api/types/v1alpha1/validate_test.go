@@ -174,3 +174,30 @@ func TestFunctionKVValidateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// scenario: function-config-validate (ADR-0093) — each spec.config entry names a ConfigMap and must
+// be a valid DNS-1123 name (mirrors spec.secrets / CatalogService.spec.config). Cross-resource
+// existence is the reconciler's fail-closed read, not Validate.
+func TestFunctionConfigValidateMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config []ObjectName
+		valid  bool
+	}{
+		{"no config", nil, true},
+		{"valid single", []ObjectName{"tuning"}, true},
+		{"valid multiple", []ObjectName{"tuning", "engine-cfg"}, true},
+		{"uppercase name", []ObjectName{"Tuning"}, false},
+		{"underscore name", []ObjectName{"tun_ing"}, false},
+		{"empty name", []ObjectName{""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fnWith(FunctionSpec{Config: tc.config}).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed config set must be fault.Invalid")
+			}
+		})
+	}
+}

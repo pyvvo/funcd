@@ -79,7 +79,7 @@ func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	require.Equal(t, "ok", spec.Env["SAFE"], "a non-reserved secret key still merges")
 }
 
-// resolveSecretEnv is fail-closed on every non-happy path (ADR-0057 Decision 5).
+// resolveBindingEnv is fail-closed on every non-happy path (ADR-0057 Decision 5; ADR-0093 extends the gate to config).
 func TestResolveSecretEnvFailClosed(t *testing.T) {
 	t.Parallel()
 	fn := sampleFn()
@@ -87,24 +87,24 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 
 	t.Run("no-secrets-returns-nil", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{})
-		env, err := r.resolveSecretEnv(context.Background(), sampleFn(), false)
+		env, err := r.resolveBindingEnv(context.Background(), sampleFn(), false)
 		require.NoError(t, err)
 		require.Nil(t, env)
 	})
 	t.Run("not-configured-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, nil) // no resolver wired
-		_, err := r.resolveSecretEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn, false)
 		require.Error(t, err)
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	})
 	t.Run("pooled-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{env: map[string]string{"API_KEY": "x"}})
-		_, err := r.resolveSecretEnv(context.Background(), fn, true) // pooled
+		_, err := r.resolveBindingEnv(context.Background(), fn, true) // pooled
 		require.Error(t, err, "a pooled function cannot inject secrets into its shared worker")
 	})
 	t.Run("resolver-error-propagates", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{err: fault.Forbiddenf("test", "denied")})
-		_, err := r.resolveSecretEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn, false)
 		require.Error(t, err)
 		require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	})
