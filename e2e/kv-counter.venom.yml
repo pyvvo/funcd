@@ -63,7 +63,7 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
-            funcdctl apply -f /opt/kv-counter/counter-unbound.yaml
+            funcdctl apply -f /opt/lane/counter-unbound.yaml
         assertions:
           - result.code ShouldEqual 0
       # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny. The

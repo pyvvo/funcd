@@ -136,52 +136,6 @@ lima-down:
     -limactl delete {{lima_name}}
 
 
-# the containerd-lane KV example (ADR-0069): a SELF-DEPLOYING VM (scripts/lima-kv.yaml) boots funcd in
-# containerd mode with a DURABLE Badger KV (kvstore.engine: badger), pushes + applies BOTH kv-counter
-# functions — the JS one (nodejs22) and the Python one (python314), each contract-validated — and comes up
-# Ready; this recipe then POSTs each twice: the handler increments a per-name counter via context.kv (→
-# worker-node local API → PDP Facade → durable KV), so the count goes 1 then 2 on a real containerd sandbox.
-# The containerd analogue of the process-lane `example-kv`. Needs docker + node + uv.
-lima_kv_vm := lima_name + "-kv"
-[group('example')]
-lima-example-kv: build-runtime-images build-shim
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{lima_deps}}
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # JS kv-counter → counter.mjs + I/O schemas (esbuild + contract toolchain via the shim node_modules)
-    ln -sfn ../../../shim/nodejs/node_modules examples/js/kv-counter/node_modules
-    ( cd examples/js/kv-counter && node --experimental-strip-types build.ts )
-    # Python kv-counter → counter.py (baked validators) + I/O schemas (funcd_shim.build via uv)
-    ( cd examples/python/kv-counter && uv run --group build python build.py )
-    # Stage both functions into one bundle — py/ subdir keeps the shared schema-file basenames from colliding.
-    stage="$(mktemp -d)"
-    # ADR-0073: each kv-counter declares its KV binding on the Function (spec.kv) + an owned KVStore with
-    # a per-table owner (default-deny — no grant.yaml). ADR-0076: a declared spec.kv binding GRANTS kv::read
-    # on its table (built-in permit), so own-table reads need NO read Policy; the owner-write is a built-in
-    # forbid (no write Policy). No policy.yaml is staged — the lane proves reads work with no read Policy.
-    cp examples/js/kv-counter/counter.mjs examples/js/kv-counter/counter.schema.json \
-       examples/js/kv-counter/counter.yaml \
-       examples/js/kv-counter/counter-unbound.yaml examples/js/kv-counter/store.yaml \
-       examples/js/kv-counter/funcdconfig.yaml "$stage/"
-    mkdir -p "$stage/py"
-    cp examples/python/kv-counter/counter.py examples/python/kv-counter/counter.schema.json \
-       examples/python/kv-counter/counter.yaml \
-       examples/python/kv-counter/store.yaml "$stage/py/"
-    tar czf {{lima_deps}}/kv-counter.tgz -C "$stage" .
-    rm -rf "$stage"
-    trap 'limactl stop -f {{lima_kv_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_kv_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_kv_vm}} --tty=false scripts/lima-kv.yaml
-    # Declarative e2e via OVH Venom (Apache-2.0, flake-pinned — ADR-0077): the full positive (each counter
-    # reads 1→2 with no read Policy) + fail-closed negative (apply counter-unbound.yaml in-VM, then assert the
-    # read is Forbidden) suite. Venom writes venom.log in its CWD, so run it from the scratch dir (outside the
-    # repo) with an absolute suite path; --output-dir keeps the JUnit results there too.
-    suite="$(pwd)/e2e/kv-counter.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_kv_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
-
 # GENERIC data-driven example lane (ADR-0077). `just lima-example <name>` reads the lane's section from
 # scripts/lanes.yaml (the REGISTRY), runs scripts/lane.py to execute its `build` + stage its files + the
 # registry into lane.tgz, boots the ONE generic VM (scripts/lima-lane.yaml — which reads the same section
@@ -205,73 +159,6 @@ lima-example name: build-runtime-images build-shim
     # `ready` target, so we invoke immediately. Run from the scratch dir with the absolute suite path.
     ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
     echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
-
-# the containerd-lane FUNCLOG e2e (ADR-0081): deploy the JS + Python log-burst examples (each emits >=100
-# console./logging logs per invoke) on REAL containerd; the curated-image shim writes Path B over the UDS
-# channel and funcd captures the logs as OTLP-JSONL under <dataDir>/blob/logs/. Proves the producer +
-# transport + pipeline end to end, for both languages. The containerd analogue of the in-process funclog
-# e2e. Needs docker + node.
-lima_funclog_vm := lima_name + "-funclog"
-[group('example')]
-lima-example-funclog: build-runtime-images build-shim
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{lima_deps}}
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # JS log-burst → burst.mjs (plain esbuild, no I/O contract — the burst is the point)
-    ln -sfn ../../../shim/nodejs/node_modules examples/js/log-burst/node_modules
-    ( cd examples/js/log-burst && node --experimental-strip-types build.ts )
-    # Stage the JS bundle + both manifests + the Python handler (shipped as-is) into one tarball.
-    stage="$(mktemp -d)"
-    cp examples/js/log-burst/burst.mjs examples/js/log-burst/burst.yaml \
-       examples/js/log-burst/funcdconfig.yaml "$stage/"
-    mkdir -p "$stage/py"
-    cp examples/python/log-burst/src/handler.py examples/python/log-burst/handler.yaml "$stage/py/"
-    tar czf {{lima_deps}}/log-burst.tgz -C "$stage" .
-    rm -rf "$stage"
-    trap 'limactl stop -f {{lima_funclog_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_funclog_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_funclog_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_funclog_vm}} --tty=false scripts/lima-funclog.yaml
-    # Declarative e2e via OVH Venom (ADR-0077/0081): each invoke emits >=100 logs, and funcd captured them
-    # as OTLP-JSONL under <dataDir>/blob/logs/ (asserted by an in-VM read), for BOTH JS + Python.
-    suite="$(pwd)/e2e/funclog.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_funclog_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_funclog.venom.xml"
-
-# the S3-FRONTEND e2e (ADR-0080/0085, F47) on REAL containerd: deploy the s3-roundtrip JS function and
-# prove the IN-PLATFORM S3 path — the function uses its funcd-INJECTED keypair (AWS_* env, ADR-0085) +
-# a bundled @aws-sdk/client-s3 to PutObject/GetObject/ListObjectsV2 the OWNED gold prefix (allowed) and
-# a PutObject into an unbound prefix (403 from the Cedar PEP). Proves keypair-injection → SigV4 over TCP
-# → the PEP → blob.Bucket on the live daemon. The gateway binds 0.0.0.0:9000 and the worker's netns
-# reaches it via the CNI bridge gateway (10.63.0.1, the .1 of the default SubnetCIDR). Needs docker + node.
-lima_s3_vm := lima_name + "-s3"
-[group('example')]
-lima-example-s3: build-runtime-images build-shim
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{lima_deps}}
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # JS s3-roundtrip → roundtrip.mjs (esbuild BUNDLES the @aws-sdk/client-s3 dep → self-contained .mjs).
-    # This example DEPENDS on the AWS SDK (not in the shim's node_modules), so install its own deps first
-    # (a repo-local npm cache keeps it hermetic and avoids a shared ~/.npm).
-    ( cd examples/js/s3-roundtrip && npm install --silent --no-audit --no-fund --cache "$(pwd)/.npm-cache" && node --experimental-strip-types build.ts )
-    # Stage the bundle + the three manifests (apply order: function-base → bucket → function) + the config.
-    stage="$(mktemp -d)"
-    cp examples/js/s3-roundtrip/roundtrip.mjs \
-       examples/js/s3-roundtrip/function-base.yaml examples/js/s3-roundtrip/bucket.yaml \
-       examples/js/s3-roundtrip/function.yaml examples/js/s3-roundtrip/funcdconfig.yaml "$stage/"
-    tar czf {{lima_deps}}/s3-roundtrip.tgz -C "$stage" .
-    rm -rf "$stage"
-    trap 'limactl stop -f {{lima_s3_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_s3_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_s3_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_s3_vm}} --tty=false scripts/lima-s3.yaml
-    # Declarative e2e via OVH Venom (ADR-0077/0080): one invoke round-trips S3 (put/get/list on the owned
-    # gold prefix) and the PEP denies the unbound `other` prefix (403) — asserted on the returned JSON.
-    suite="$(pwd)/e2e/s3.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_s3_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_s3.venom.xml"
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read

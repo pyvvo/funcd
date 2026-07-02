@@ -43,6 +43,14 @@ __pycache__
 /examples/python/kv-counter/counter.py
 /examples/python/kv-counter/counter.schema.json
 
+# Python log-burst example build outputs (ADR-0090 contract — `uv run --group build python build.py`)
+/examples/python/log-burst/handler.py
+/examples/python/log-burst/handler.schema.json
+
+# JS contract-schema build outputs (ADR-0090 `--schema` docs; the .mjs are handled per-example)
+/examples/js/log-burst/burst.schema.json
+/examples/js/s3-roundtrip/roundtrip.schema.json
+
 # Function dependency-bundle build output (ADR-0089 deployment package: handler + vendored native
 # deps) — a `bundle/` dir in ANY example/subproject; never commit the (often ~100MB) vendored closure
 bundle/

@@ -11,6 +11,8 @@ dependencies = ["funcd-shim"]
 
 [dependency-groups]
 dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+# the push-time contract build (funcd_shim.build) reads FuncInput/FuncOutput via pydantic (ADR-0090).
+build = ["pydantic>=2.13.4"]
 
 [tool.uv.sources]
 funcd-shim = { path = "../../../shim/python" }

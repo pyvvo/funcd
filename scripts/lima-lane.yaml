@@ -46,8 +46,20 @@ provision:
           print("+", *cmd)
           subprocess.run(cmd, check=True)
       for m in spec.get("apply", []):
-          print("+ funcdctl apply -f", m)
-          subprocess.run(["funcdctl", "apply", "-f", m], check=True)
+          # An apply entry is either a plain string (`funcdctl apply -f <file>`) OR a
+          # `{file: <path>, transform: <shell-cmd>}` mapping meaning `cat <file> | <transform> |
+          # funcdctl apply -f -` — the transform (a sed/python one-liner; python3-yaml is present in
+          # the guest) reads the manifest on stdin and writes the mutated manifest on stdout.
+          if isinstance(m, dict):
+              file, transform = m["file"], m["transform"]
+              print("+ cat", file, "|", transform, "| funcdctl apply -f -")
+              src = subprocess.run(["cat", file], check=True, capture_output=True)
+              xf = subprocess.run(transform, shell=True, check=True, input=src.stdout,
+                                  capture_output=True)
+              subprocess.run(["funcdctl", "apply", "-f", "-"], check=True, input=xf.stdout)
+          else:
+              print("+ funcdctl apply -f", m)
+              subprocess.run(["funcdctl", "apply", "-f", m], check=True)
       PY
 
 # Appended after the runtime probe: gate `limactl start` on the lane's `ready` target reaching Ready.

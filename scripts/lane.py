@@ -46,8 +46,16 @@ def main() -> None:
     stage = tempfile.mkdtemp(prefix="funcd-lane-")
     try:
         for f in spec["stage"]:
-            src = os.path.join(example_dir, f)
-            dst = os.path.join(stage, f)
+            # A stage entry is either a plain string (relative to the lane's `dir`, copied under the
+            # same basename) OR a `{from: <repo-relative>, to: <tgz-relative>}` mapping — the mapping
+            # form pulls a file from ANY dir into a chosen (possibly nested, e.g. `py/…`) tgz path.
+            if isinstance(f, dict):
+                src = f["from"]  # repo-relative (the driver runs from the repo root)
+                dst = os.path.join(stage, f["to"])
+            else:
+                src = os.path.join(example_dir, f)
+                dst = os.path.join(stage, f)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             if os.path.isdir(src):
                 shutil.copytree(src, dst)
             else:
