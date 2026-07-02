@@ -1,4 +1,6 @@
-node_modules/
+# no trailing slash: also ignore a `node_modules` SYMLINK (the example build lanes `ln -sfn` the shim's
+# node_modules into each example) — a trailing-slash rule matches only directories, letting the symlink slip.
+node_modules
 /bin/
 /funcd
 /specgen
