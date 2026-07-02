@@ -135,35 +135,6 @@ lima-down:
     -limactl stop -f {{lima_name}}
     -limactl delete {{lima_name}}
 
-# reproduce the fn-to-fn link example (ADR-0064/0058) on REAL containerd sandboxes in Lima: a
-# self-contained DEMO. The deploy is DECLARATIVE — the example is tarred + mounted, and the demo VM
-# (scripts/lima-fn-to-fn.yaml) extracts → pushes → runs funcd → applies it in its own provision blocks,
-# coming up already-deployed (both functions Ready). This recipe only builds the bundle, then INVOKES the
-# round-trip + contract-422 + invoke-propagation (prints outputs; asserts nothing), then tears down.
-# The containerd analogue of the process-lane `example-fn-to-fn`. Needs docker (embedded-image build) +
-# node (the example build); takes minutes (full VM boot).
-lima_fn_vm := lima_name + "-fn"
-[group('example')]
-lima-example-fn-to-fn: build-runtime-images build-shim
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{lima_deps}}
-    # the linux binaries + the example bundle the demo VM mounts at /mnt/funcd-deps
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    ( cd examples/js/fn-to-fn && node --experimental-strip-types build.ts )
-    tar czf {{lima_deps}}/fn-to-fn.tgz -C examples/js/fn-to-fn \
-      greeter.mjs front.mjs greeter.schema.json front.schema.json \
-      greeter.yaml front.yaml funcdconfig.yaml
-    # the demo VM deploys itself on boot; tear it down on exit
-    trap 'limactl stop -f {{lima_fn_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_fn_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_fn_vm}} --tty=false scripts/lima-fn-to-fn.yaml
-    # the VM is up ALREADY DEPLOYED (the Ready probe gated start) — drive the demo via the declarative
-    # Venom suite (host-side against the forwarded ports; see e2e/fn-to-fn.venom.yml + the venom-e2e skill).
-    suite="$(pwd)/e2e/fn-to-fn.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_fn_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_fn-to-fn.venom.xml"
 
 # the containerd-lane KV example (ADR-0069): a SELF-DEPLOYING VM (scripts/lima-kv.yaml) boots funcd in
 # containerd mode with a DURABLE Badger KV (kvstore.engine: badger), pushes + applies BOTH kv-counter

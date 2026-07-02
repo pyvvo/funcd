@@ -41,6 +41,38 @@ env-echo:
     tries: 60
   venom: e2e/env-echo.venom.yml
 
+fn-to-fn:
+  description: Two JS functions with a declared synchronous fn-to-fn link (ADR-0064/0058).
+  dir: examples/js/fn-to-fn
+  build:
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/fn-to-fn/node_modules
+    - cd examples/js/fn-to-fn && node --experimental-strip-types build.ts
+  stage:
+    - greeter.mjs
+    - front.mjs
+    - greeter.schema.json
+    - front.schema.json
+    - greeter.yaml
+    - front.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: greeter.mjs
+      ref: greeter
+      schema: greeter.schema.json
+    - artifact: front.mjs
+      ref: front
+      schema: front.schema.json
+  apply:
+    - greeter.yaml
+    - front.yaml
+  ready:
+    kind: function
+    names:
+      - greeter
+      - front
+    tries: 40
+  venom: e2e/fn-to-fn.venom.yml
+
 duckdb:
   description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
   dir: examples/python/catalog-quack
