@@ -211,39 +211,29 @@ lima-example-kv: build-runtime-images build-shim
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_kv_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
 
-# the containerd-lane CONFIG+SECRET e2e (ADR-0093 spec.config + ADR-0057 spec.secrets): a SELF-DEPLOYING VM
-# (scripts/lima-env-echo.yaml) boots funcd in containerd mode, pushes the contract-validated env-echo.mjs,
-# and applies a ConfigMap (app-config) + a Secret (app-secret) + a Function (env-echo) that binds BOTH — it
-# comes up Ready only when BOTH bindings resolve (fail-closed). This recipe then POSTs the void-input
-# handler once: it echoes the injected env, proving config=prod (ConfigMap), secret=s3cr3t (Secret), and
-# shared=from-secret (the key in both — the Secret wins, config-then-secrets merge order). The containerd
-# counterpart to the in-process scenario pkg/funcd/config_secret_e2e_test.go. Needs docker + node.
-lima_env_echo_vm := lima_name + "-env-echo"
+# GENERIC data-driven example lane (ADR-0077). `just lima-example <name>` reads the lane's section from
+# scripts/lanes.yaml (the REGISTRY), runs scripts/lane.py to execute its `build` + stage its files + the
+# registry into lane.tgz, boots the ONE generic VM (scripts/lima-lane.yaml — which reads the same section
+# in-guest to push + apply + probe Ready), and runs the lane's Venom suite. Add a lane by adding a section
+# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ node/uv per the lane's `build`).
+# Examples: `just lima-example env-echo` · `just lima-example duckdb`.
 [group('example')]
-lima-example-env-echo: build-runtime-images build-shim
+lima-example name: build-runtime-images build-shim
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p {{lima_deps}}
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # JS env-echo → env-echo.mjs + I/O schema (esbuild + contract toolchain via the shim node_modules)
-    ln -sfn ../../../shim/nodejs/node_modules examples/js/env-echo/node_modules
-    ( cd examples/js/env-echo && node --experimental-strip-types build.ts )
-    # Stage the artifact + schema + the four manifests (ConfigMap, Secret, Function, daemon config).
-    stage="$(mktemp -d)"
-    cp examples/js/env-echo/env-echo.mjs examples/js/env-echo/env-echo.schema.json \
-       examples/js/env-echo/configmap.yaml examples/js/env-echo/secret.yaml \
-       examples/js/env-echo/function.yaml examples/js/env-echo/funcdconfig.yaml "$stage/"
-    tar czf {{lima_deps}}/env-echo.tgz -C "$stage" .
-    rm -rf "$stage"
-    trap 'limactl stop -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_env_echo_vm}} --tty=false scripts/lima-env-echo.yaml
-    # Declarative e2e via OVH Venom (ADR-0077): assert Ready (both bindings resolved) + the invoke body
-    # (config=prod, secret=s3cr3t, shared=from-secret). Run from the scratch dir with an absolute suite path.
-    suite="$(pwd)/e2e/env-echo.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_env_echo_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_env-echo.venom.xml"
+    name='{{name}}'; deps='{{lima_deps}}'; vm='{{lima_name}}-{{name}}'
+    mkdir -p "$deps"
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcdctl" ./cmd/funcdctl
+    # host driver: run the lane's `build`, stage lane.tgz (files + registry + LANE marker), print its suite.
+    suite="$(python3 scripts/lane.py "$name" "$deps")"
+    trap "limactl stop -f '$vm' >/dev/null 2>&1 || true; limactl delete -f '$vm' >/dev/null 2>&1 || true" EXIT
+    limactl delete -f "$vm" >/dev/null 2>&1 || true
+    limactl start --name "$vm" --tty=false scripts/lima-lane.yaml
+    # Declarative e2e via OVH Venom (ADR-0077) — the generic VM already gated `limactl start` on the lane's
+    # `ready` target, so we invoke immediately. Run from the scratch dir with the absolute suite path.
+    ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
+    echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
 
 # the containerd-lane FUNCLOG e2e (ADR-0081): deploy the JS + Python log-burst examples (each emits >=100
 # console./logging logs per invoke) on REAL containerd; the curated-image shim writes Path B over the UDS
@@ -311,45 +301,6 @@ lima-example-s3: build-runtime-images build-shim
     suite="$(pwd)/e2e/s3.venom.yml"
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_s3_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_s3.venom.xml"
-
-# the containerd-lane CATALOG-QUACK e2e (ADR-0086/0087/0088/0091, F48/F57/F58): deploy a CatalogService and
-# let the add-on PROVIDER RUNTIME bring up the curated `duckdb` engine (DuckDB+DuckLake+Quack) — no backing
-# Function — reading/writing Parquet through the F47 S3 surface and serving Quack, reaching Ready on its
-# provider F47/Cedar identity (ADR-0088). Then a funcd Function consumer (`catalog-reader`) binds the catalog
-# via `spec.catalogs` (ADR-0091 — FUNCD_CATALOG_LAKE_URL/_TOKEN injected), reaches Ready, and round-trips
-# LIVE SQL on `lake` over Quack. See examples/python/catalog-quack/README.md. Needs docker (image build).
-lima_duckdb_vm := lima_name + "-duckdb"
-[group('example')]
-lima-example-duckdb: build-runtime-images
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p {{lima_deps}}
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
-    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
-    # Build the ADR-0089 dependency BUNDLE for the consumer (handler.py + vendored duckdb + duckdb-ext/ +
-    # __funcd_contract.json) — hermetic vendoring inside python:3.14-slim-bookworm (needs docker + network).
-    ( cd examples/python/catalog-quack && uv run --group build python build.py )
-    # Stage the catalog-quack provider manifests + config, PLUS the consumer bundle + consumer.yaml. The
-    # provider (CatalogService) deploys as before; the CONSUMER is a funcd Function on the STOCK python314
-    # runtime whose duckdb dep travels in the bundle (ADR-0089). Reaching Ready proves the bundle
-    # materialized + `import duckdb` works on the stock runtime (the spec.catalogs binding stays a follow-up).
-    stage="$(mktemp -d)"
-    cp examples/python/catalog-quack/configmap.yaml examples/python/catalog-quack/secret.yaml \
-       examples/python/catalog-quack/bucket-base.yaml examples/python/catalog-quack/bucket.yaml \
-       examples/python/catalog-quack/catalogservice.yaml examples/python/catalog-quack/funcdconfig.yaml \
-       examples/python/catalog-quack/consumer.yaml "$stage/"
-    cp -R examples/python/catalog-quack/bundle "$stage/bundle"
-    tar czf {{lima_deps}}/catalog-quack.tgz -C "$stage" .
-    rm -rf "$stage"
-    trap 'limactl stop -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true' EXIT
-    limactl delete -f {{lima_duckdb_vm}} >/dev/null 2>&1 || true
-    limactl start --name {{lima_duckdb_vm}} --tty=false scripts/lima-duckdb.yaml
-    # Declarative e2e via OVH Venom: the CatalogService deploys as a provider (no backing Function) +
-    # reaches Ready, and the `catalog-reader` consumer Function round-trips LIVE SQL on it over Quack via
-    # its spec.catalogs binding (ADR-0091 endpoint/token injection) — see the lane header.
-    suite="$(pwd)/e2e/duckdb.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_duckdb_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_duckdb.venom.xml"
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read

@@ -1,0 +1,74 @@
+# The funcd example-lane REGISTRY (ADR-0077 declarative e2e). One section per lane; the single generic
+# recipe `just lima-example <name>` (host side) and the single generic VM `scripts/lima-lane.yaml`
+# (guest side) read the section for the lane being launched and drive it entirely from this data — so a
+# new lane is just a section here + its manifests + a Venom suite, with NO per-lane recipe or VM YAML.
+#
+# Per lane:
+#   dir     — the example directory (host-relative), source of the staged files + the build.
+#   build   — host shell commands (run from the repo root, in order) that produce the artifacts to push.
+#   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts).
+#   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
+#             optional schema (single-file --schema) or entry (bundle --entry).
+#   apply   — `funcdctl apply -f` order in the guest (after the pushes).
+#   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s).
+#   venom   — the host-side Venom suite the recipe runs once the VM is up.
+
+env-echo:
+  description: A JS function receiving spec.config (ConfigMap) + spec.secrets (Secret) env (ADR-0093/0057).
+  dir: examples/js/env-echo
+  build:
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/env-echo/node_modules
+    - cd examples/js/env-echo && node --experimental-strip-types build.ts
+  stage:
+    - env-echo.mjs
+    - env-echo.schema.json
+    - configmap.yaml
+    - secret.yaml
+    - function.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: env-echo.mjs
+      ref: env-echo
+      schema: env-echo.schema.json
+  apply:
+    - configmap.yaml
+    - secret.yaml
+    - function.yaml
+  ready:
+    kind: function
+    names:
+      - env-echo
+    tries: 60
+  venom: e2e/env-echo.venom.yml
+
+duckdb:
+  description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
+  dir: examples/python/catalog-quack
+  build:
+    - cd examples/python/catalog-quack && uv run --group build python build.py
+  stage:
+    - configmap.yaml
+    - secret.yaml
+    - bucket-base.yaml
+    - bucket.yaml
+    - catalogservice.yaml
+    - funcdconfig.yaml
+    - consumer.yaml
+    - bundle
+  push:
+    - artifact: bundle
+      ref: catalog-reader
+      entry: handler.py
+  apply:
+    - configmap.yaml
+    - secret.yaml
+    - bucket-base.yaml
+    - catalogservice.yaml
+    - bucket.yaml
+    - consumer.yaml
+  ready:
+    kind: catalogservice
+    names:
+      - lake
+    tries: 90
+  venom: e2e/duckdb.venom.yml
