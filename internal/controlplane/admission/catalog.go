@@ -73,3 +73,46 @@ func (a catalogBlobValidity) Admit(ctx context.Context, req Request) (v1.Object,
 	}
 	return req.Object, nil
 }
+
+// --- catalog-binding-validity (ADR-0091): Create/Update on Function ---------------------------
+
+type catalogBindingValidity struct{ r StoreReader }
+
+// NewCatalogBindingValidityAdmission returns the Validating admission that enforces ADR-0091's catalog
+// consumer-binding rule on a Function Create/Update: every spec.catalogs entry names a CatalogService
+// that exists in the function's namespace. (Clone of blob-binding-validity, scanning spec.catalogs.)
+func NewCatalogBindingValidityAdmission(r StoreReader) Admission { return catalogBindingValidity{r: r} }
+
+func (catalogBindingValidity) Name() string { return "catalog-binding-validity" }
+func (catalogBindingValidity) Phase() Phase { return Validating }
+
+// Handles gates on GVK+op only (it cannot see the spec); the len(spec.catalogs)==0 short-circuit is
+// in Admit, exactly like blob-binding-validity.
+func (catalogBindingValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
+	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
+}
+
+func (a catalogBindingValidity) Admit(ctx context.Context, req Request) (v1.Object, error) {
+	const op = "admission.catalog-binding-validity"
+	fn, ok := req.Object.(*v1.Function)
+	if !ok || len(fn.Spec.Catalogs) == 0 {
+		return req.Object, nil
+	}
+	ns := fn.Namespace
+	css, err := a.r.List(ctx, v1.KindCatalogService.GVK(), ns)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "list catalogservices in %q", ns)
+	}
+	names := make(map[v1.ObjectName]bool, len(css))
+	for _, o := range css {
+		if cs, ok := o.(*v1.CatalogService); ok {
+			names[cs.Name] = true
+		}
+	}
+	for _, bnd := range fn.Spec.Catalogs {
+		if !names[bnd.Catalog] {
+			return nil, fault.Invalidf(op, "spec.catalogs[%s].catalog %q does not name a CatalogService in namespace %q", bnd.Alias, bnd.Catalog, ns)
+		}
+	}
+	return req.Object, nil
+}

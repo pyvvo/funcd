@@ -1,6 +1,12 @@
 # ADR-0091: Function catalog consumer binding (`spec.catalogs`)
 
-- **Status**: Accepted
+- **Status**: Implemented
+- **Implemented**: 2026-07-01 — review **pass** (0 Blockers/0 Majors), see
+  [scorecard](../reviews/adr-0091-implementation-claude-opus-4-8.md). `Function.spec.catalogs` + `Validate()`;
+  `internal/function/catalog.go` `resolveCatalogEnv`/`addCatalogEnv` (**direct** env write — the judge's M1 —
+  with a non-empty regression test; `QUACK_TOKEN` selected; fail-closed `CatalogNotReady` requeue);
+  `catalog-binding-validity` admission; OpenAPI regenerated; `consumer.yaml` restored `spec.catalogs`. Four
+  sub-checks green; the e2e SQL round-trip lands with the duckdb lane.
 - **Date**: 2026-07-01 (accepted 2026-07-01 — judge: sound + correctly scoped, 0 Blockers; folded 1 Major [the
   `addCatalogEnv` env write must be DIRECT, never via `mergeSecretEnv` whose `FUNCD_`-prefix guard would drop
   `FUNCD_CATALOG_*` — a silent fail-open] + 3 Minors [select the `QUACK_TOKEN` key + fail-closed on missing;

@@ -333,6 +333,21 @@ components:
         - bucket
         - prefix
       type: object
+    FunctionCatalog:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        catalog:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - catalog
+      type: object
     FunctionKV:
       additionalProperties: false
       properties:
@@ -380,6 +395,12 @@ components:
         blob:
           items:
             $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            $ref: "#/components/schemas/FunctionCatalog"
           type:
             - array
             - "null"

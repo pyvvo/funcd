@@ -74,6 +74,23 @@ type FunctionSpec struct {
 	// Cross-resource validity (the bucket/prefix exist) is an admission; only the structural rules
 	// (alias is a unique DNS-1123 label) are checked in Validate.
 	Blob []FunctionBlob `json:"blob,omitempty"`
+	// Catalogs declares this function's CatalogService consumer bindings (ADR-0091, F61): each binds a
+	// local alias to a CatalogService in this namespace, injected into the worker as
+	// FUNCD_CATALOG_<ALIAS>_URL (the catalog's status.endpoint) + FUNCD_CATALOG_<ALIAS>_TOKEN (its
+	// QUACK_TOKEN). Declaring the binding IS the grant — only a declaring function receives the token;
+	// it is never surfaced in CatalogService.status. The reconcile requeues (fail-closed) until the
+	// bound catalog is Ready. Empty ⇒ no catalog consumption. Cross-resource validity (the catalog
+	// exists) is an admission; only the structural rules (alias is a unique DNS-1123 label) are Validate.
+	Catalogs []FunctionCatalog `json:"catalogs,omitempty"`
+}
+
+// FunctionCatalog binds this function to a CatalogService it consumes (ADR-0091, F61). Declaring the
+// binding is the grant: funcd injects FUNCD_CATALOG_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
+type FunctionCatalog struct {
+	// Alias names the FUNCD_CATALOG_<ALIAS>_* env pair; a DNS-1123 label, unique within Catalogs.
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	// Catalog is the name of a CatalogService in this function's namespace.
+	Catalog ObjectName `json:"catalog"`
 }
 
 // FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
@@ -218,6 +235,21 @@ func (s *FunctionSpec) Validate() error {
 		blobSeen[b.Alias] = true
 		if !dnsLabel.MatchString(b.Prefix) {
 			return fault.Invalidf(op, "spec.blob[%s].prefix %q is not a valid DNS-1123 label", b.Alias, b.Prefix)
+		}
+	}
+	// Catalog binding structural rules (ADR-0091): alias is a DNS-1123 label, unique within Catalogs;
+	// catalog is a DNS-1123 label. Cross-resource validity (the CatalogService exists) is an admission.
+	catSeen := make(map[string]bool, len(s.Catalogs))
+	for _, c := range s.Catalogs {
+		if !dnsLabel.MatchString(c.Alias) {
+			return fault.Invalidf(op, "spec.catalogs alias %q is not a valid DNS-1123 label", c.Alias)
+		}
+		if catSeen[c.Alias] {
+			return fault.Invalidf(op, "spec.catalogs alias %q is duplicated", c.Alias)
+		}
+		catSeen[c.Alias] = true
+		if !dnsLabel.MatchString(string(c.Catalog)) {
+			return fault.Invalidf(op, "spec.catalogs[%s].catalog %q is not a valid CatalogService name", c.Alias, c.Catalog)
 		}
 	}
 	return nil

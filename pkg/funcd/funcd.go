@@ -498,6 +498,9 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0086 CatalogService validity: spec.blob + spec.catalog name real Buckets/prefixes
 			// in the namespace (cloned from blob-binding-validity).
 			admission.NewCatalogBlobValidityAdmission(storeReader{c.store}),
+			// ADR-0091 catalog consumer-binding validity: Function.spec.catalogs names a real
+			// CatalogService in the namespace (cloned from blob-binding-validity).
+			admission.NewCatalogBindingValidityAdmission(storeReader{c.store}),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),

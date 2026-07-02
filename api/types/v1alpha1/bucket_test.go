@@ -86,3 +86,31 @@ func TestFunctionBlobValidate(t *testing.T) {
 		t.Errorf("bad spec.blob prefix: want Invalid, got %v", err)
 	}
 }
+
+// scenario: alias-unique-dns1123 — spec.catalogs structural rules (ADR-0091): each alias is a unique
+// DNS-1123 label and catalog is a DNS-1123 label; a resolvable shape validates, a duplicate alias /
+// bad alias / bad catalog name is rejected.
+func TestFunctionCatalogValidate(t *testing.T) {
+	mk := func(cats ...FunctionCatalog) *Function {
+		return &Function{
+			TypeMeta:   TypeMeta{APIVersion: KindFunction.GVK().APIVersion(), Kind: KindFunction},
+			ObjectMeta: ObjectMeta{Name: "f", Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       FunctionSpec{Catalogs: cats},
+		}
+	}
+	if err := mk(FunctionCatalog{Alias: "lake", Catalog: "lake"}).Validate(); err != nil {
+		t.Errorf("valid spec.catalogs rejected: %v", err)
+	}
+	if err := mk(
+		FunctionCatalog{Alias: "a", Catalog: "lake"},
+		FunctionCatalog{Alias: "a", Catalog: "warehouse"},
+	).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("duplicate spec.catalogs alias: want Invalid, got %v", err)
+	}
+	if err := mk(FunctionCatalog{Alias: "Bad Alias", Catalog: "lake"}).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad spec.catalogs alias: want Invalid, got %v", err)
+	}
+	if err := mk(FunctionCatalog{Alias: "lake", Catalog: "Bad_Catalog"}).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad spec.catalogs catalog name: want Invalid, got %v", err)
+	}
+}

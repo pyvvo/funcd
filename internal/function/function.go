@@ -342,11 +342,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, r.programAllRoutes(ctx)
 	}
 
+	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
+	// FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound catalog that
+	// is not Ready yet (no status.endpoint, or its Secret has no QUACK_TOKEN) requeues fail-closed —
+	// the function is held Ready=False/CatalogNotReady and re-reconciled soon, never booted with an
+	// empty URL/token (mirrors the ADR-0088 catalog-wait). A hard resolution error fails it closed.
+	catalogEnv, requeue, cerr := r.resolveCatalogEnv(ctx, fn)
+	if cerr != nil {
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "CatalogResolveFailed", Message: cerr.Error()})
+		fn.Status.Phase = v1.PhaseFailed
+		fn.Status.Replicas = 0
+		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
+			return controller.Result{}, retryOnConflict(uerr, op)
+		}
+		return controller.Result{}, r.programAllRoutes(ctx)
+	}
+	if requeue {
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "CatalogNotReady", Message: "a bound CatalogService is not Ready yet (no endpoint or token); waiting"})
+		fn.Status.Phase = v1.PhasePending
+		fn.Status.Replicas = 0
+		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
+			return controller.Result{}, retryOnConflict(uerr, op)
+		}
+		if perr := r.programAllRoutes(ctx); perr != nil {
+			return controller.Result{}, perr
+		}
+		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+
 	// 4. converge workeres to the EFFECTIVE desired count (honors the activator's wake Phase).
 	// Solo: per-function workers (secretEnv merged into each, ADR-0057). Pooled: the one shared
 	// pool worker for the key, driven to the max desired over the key's admitted members (ADR-0046
 	// Decision 6) — pooled functions can't declare secrets (gated above), so secretEnv is nil there.
-	running, err := r.convergeFor(ctx, fn, assign, pinned, secretEnv)
+	running, err := r.convergeFor(ctx, fn, assign, pinned, secretEnv, catalogEnv)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -411,7 +439,7 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 
 // converge creates/starts or stops workeres so the function's running count matches
 // desired; it returns the resulting running count.
-func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int, pinnedDigest string, secretEnv map[string]string) (int, error) {
+func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int, pinnedDigest string, secretEnv, catalogEnv map[string]string) (int, error) {
 	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
 	if err != nil {
 		return 0, err
@@ -439,7 +467,7 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: fn.Namespace, Name: fn.Name, Replica: i}); perr != nil {
 			return 0, fault.Wrapf(perr, fault.KindOf(perr), "function.converge", "schedule")
 		}
-		inst, cerr := r.runtime.Create(ctx, r.workerSpec(fn, i, artifactPath, secretEnv))
+		inst, cerr := r.runtime.Create(ctx, r.workerSpec(fn, i, artifactPath, secretEnv, catalogEnv))
 		if cerr != nil {
 			return 0, fault.Wrapf(cerr, fault.KindOf(cerr), "function.converge", "create worker")
 		}
@@ -788,7 +816,7 @@ func addBundleEnv(env map[string]string, rt v1.RuntimeName, bundleRoot string) {
 	}
 }
 
-func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv map[string]string) runtime.WorkerSpec {
+func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
@@ -799,6 +827,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		}
 		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		r.addS3Env(env, fn)
+		r.addCatalogEnv(env, catalogEnv) // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
 		r.mergeSecretEnv(env, secretEnv)
 		mounts := []runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
@@ -831,6 +860,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		r.addInvokeSocket(env, fn)                                     // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
 		r.addS3Env(env, fn)                                            // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
+		r.addCatalogEnv(env, catalogEnv)                               // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

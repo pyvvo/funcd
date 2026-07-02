@@ -43,7 +43,7 @@ func pythonFn() *v1.Function {
 func TestScenarioBundleEnvProcessMode(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil)
+	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil, nil)
 
 	require.Equal(t, "/art/bundle", spec.Env["FUNCD_BUNDLE_DIR"], "the bundle root is Dir(artifactPath)")
 	require.Equal(t, "/art/bundle", spec.Env["PYTHONPATH"], "python family imports vendored deps via PYTHONPATH")
@@ -54,7 +54,7 @@ func TestScenarioBundleEnvProcessMode(t *testing.T) {
 func TestScenarioBundleEnvContainerMode(t *testing.T) {
 	t.Parallel()
 	r := newContainerReconciler(t)
-	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil)
+	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil, nil)
 
 	require.Equal(t, containerArtifactDir, spec.Env["FUNCD_BUNDLE_DIR"], "container bundle root == the bind-mount target")
 	require.Equal(t, containerArtifactDir, spec.Env["PYTHONPATH"])
@@ -64,7 +64,7 @@ func TestScenarioBundleEnvContainerMode(t *testing.T) {
 func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil) // sampleFn is nodejs22
+	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil) // sampleFn is nodejs22
 
 	require.Equal(t, "/art", spec.Env["FUNCD_BUNDLE_DIR"], "FUNCD_BUNDLE_DIR is generic (any runtime)")
 	_, hasPy := spec.Env["PYTHONPATH"]
@@ -76,7 +76,7 @@ func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 func TestScenarioSingleFileBundleEnvHarmless(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil)
+	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "FUNCD_ARTIFACT unchanged for a single file")
 	require.Equal(t, "app.handler", spec.Env["FUNCD_HANDLER"])

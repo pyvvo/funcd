@@ -62,3 +62,40 @@ func TestScenarioCatalogBlobValidity(t *testing.T) {
 			blobBnd("g", "lakehouse", "gold"), blobBnd("b", "lakehouse", "bronze"))})
 	require.NoError(t, err, "a fully-resolvable CatalogService is allowed")
 }
+
+func mkCatalogConsumerFn(name string, catalogs ...v1.FunctionCatalog) *v1.Function {
+	f := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+	f.Name, f.Namespace, f.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	f.Spec.Catalogs = catalogs
+	return f
+}
+
+// scenario: admission-rejects-unknown-catalog — a Function whose spec.catalogs names a CatalogService
+// that does not exist in the namespace is rejected (Invalid); a binding to a real one passes; a
+// function with no catalog binding short-circuits to allowed (ADR-0091).
+func TestScenarioAdmissionRejectsUnknownCatalog(t *testing.T) {
+	gvk := v1.KindFunction.GVK()
+	r := blobReader{css: []*v1.CatalogService{mkCatalogSvc("lake")}}
+	adm := admission.NewCatalogBindingValidityAdmission(r)
+
+	// Handles gates on GVK+op only — it cannot see the spec.
+	require.True(t, adm.Handles(gvk, admission.Create))
+	require.True(t, adm.Handles(gvk, admission.Update))
+	require.False(t, adm.Handles(gvk, admission.Delete))
+	require.False(t, adm.Handles(v1.KindCatalogService.GVK(), admission.Create))
+
+	// spec.catalogs names a non-existent CatalogService ⇒ Invalid.
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkCatalogConsumerFn("reader", v1.FunctionCatalog{Alias: "lake", Catalog: "ghost"})})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing CatalogService ⇒ Invalid")
+
+	// spec.catalogs names a real CatalogService ⇒ allowed.
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkCatalogConsumerFn("reader", v1.FunctionCatalog{Alias: "lake", Catalog: "lake"})})
+	require.NoError(t, err, "binding to an existing CatalogService is allowed")
+
+	// no catalog binding ⇒ allowed (Admit short-circuits on len==0, not Handles).
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
+		Object: mkCatalogConsumerFn("plain")})
+	require.NoError(t, err, "a function with no spec.catalogs is allowed")
+}

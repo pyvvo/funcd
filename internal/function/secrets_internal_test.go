@@ -60,7 +60,7 @@ func sampleFn() *v1.Function {
 func TestScenarioHandlerReadsInjectedSecret(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"})
+	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"}, nil)
 
 	require.Equal(t, "s3kr3t", spec.Env["API_KEY"], "the secret value is injected into the worker env")
 	require.Equal(t, "postgres://x", spec.Env["DB_URL"])
@@ -72,7 +72,7 @@ func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
 	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs",
-		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"})
+		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"}, nil)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value; the secret cannot override it")
 	require.NotContains(t, spec.Env, "FUNCD_PORT", "a FUNCD_-prefixed secret key is dropped, not injected")

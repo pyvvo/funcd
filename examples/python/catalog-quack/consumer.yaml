@@ -10,9 +10,9 @@
 # funcd untars the bundle into the artifact dir and sets PYTHONPATH + FUNCD_BUNDLE_DIR so `import duckdb`
 # and the offline `duckdb-ext/` extensions resolve with zero runtime changes.
 #
-# ⚠️ ONE remaining follow-up — Project #4 "Provider consumption binding":
-#   spec.catalogs — the consumer binding that injects FUNCD_CATALOG_LAKE_URL/_TOKEN + opens the egress
-#   grant (function → catalog). Until it lands, bind the token via spec.secrets + the URL via a ConfigMap.
+# The consumer binding (`spec.catalogs`, ADR-0091) injects FUNCD_CATALOG_LAKE_URL (the `lake` catalog's
+# status.endpoint) + FUNCD_CATALOG_LAKE_TOKEN (its QUACK_TOKEN) — declaring the binding IS the grant, and
+# the reconcile requeues until `lake` is Ready. The handler reads that env pair to reach Quack.
 apiVersion: funcd.io/v1alpha1
 kind: Function
 metadata:
@@ -27,8 +27,9 @@ spec:
   replicas: 1
   scaling:
     minReplicas: 1
-  # NOTE: the consumer binding (`spec.catalogs`) that would inject FUNCD_CATALOG_LAKE_URL/_TOKEN and open
-  # the function→catalog egress grant is a DEFERRED follow-up (Project #4 "Provider consumption binding") —
-  # it is NOT an implemented Function field yet, so it is intentionally omitted here. Reaching Ready proves
-  # the ADR-0089 bundle materialized and `import duckdb` (at module load) succeeded on the stock runtime;
-  # the full SQL invoke against the `lake` catalog lands with that binding follow-up.
+  # The consumer binding (ADR-0091): bind the `lake` CatalogService under alias `lake`. funcd injects
+  # FUNCD_CATALOG_LAKE_URL (= lake's status.endpoint) + FUNCD_CATALOG_LAKE_TOKEN (= its QUACK_TOKEN), and
+  # requeues this function until `lake` is Ready — so the SQL invoke reaches Quack with a real endpoint+token.
+  catalogs:
+    - alias: lake
+      catalog: lake
