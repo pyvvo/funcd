@@ -2,18 +2,19 @@ package function
 
 import (
 	"context"
-	"strings"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/green-0-rabbit/funcd/internal/secrets"
 )
 
 // SecretResolver resolves a function's bound Secret names → an env-var map for worker
 // injection, PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local
-// seam, never on the internal/secrets feature directly (ADR-0002 import discipline) —
-// satisfied by *secrets.Resolver, wired in pkg/funcd. A nil resolver on Deps disables secret
-// injection: a function that declares spec.secrets then fails closed (SecretResolveFailed).
+// seam for resolution (ADR-0002 import discipline) — satisfied by *secrets.Resolver, wired in
+// pkg/funcd; it uses internal/secrets only for the pure reserved-key guard (MergeEnvGuarded,
+// no store dep, ADR-0092). A nil resolver on Deps disables secret injection: a function that
+// declares spec.secrets then fails closed (SecretResolveFailed).
 type SecretResolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
@@ -48,20 +49,8 @@ func (r *Reconciler) resolveSecretEnv(ctx context.Context, fn *v1.Function, pool
 // can never shadow the shim contract (ADR-0057, reserved-env-not-overridable). Pure: it mutates
 // only the passed env map.
 func (r *Reconciler) mergeSecretEnv(env, secretEnv map[string]string) {
-	for k, v := range secretEnv {
-		if isReservedFuncdKey(k) {
-			r.logger.Warn("dropping secret env key that collides with a reserved FUNCD_ key", "key", k)
-			continue
-		}
-		env[k] = v
-	}
+	secrets.MergeEnvGuarded(env, secretEnv, r.logger)
 }
-
-// isReservedFuncdKey reports whether an env key is reserved by the runtime shim contract
-// (FUNCD_ARTIFACT/HANDLER/PORT/POOL_MANIFEST/PORTFILE, …). A prefix guard (not an explicit
-// set) keeps every current and future reserved key protected without editing this function —
-// a resolved secret can never shadow a reserved key (ADR-0057, reserved-env-not-overridable).
-func isReservedFuncdKey(k string) bool { return strings.HasPrefix(k, "FUNCD_") }
 
 // secretNames converts the typed spec field to the []string the Resolver takes.
 func secretNames(names []v1.ObjectName) []string {

@@ -1,11 +1,17 @@
 # ADR-0092: Shared provider env resolution — one `spec.secrets`+`spec.config`→engine-env helper (DRY)
 
-- **Status**: Accepted
+- **Status**: Implemented
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: sound, accurate to the code, behavior-preserving, 0
   Blockers; folded 1 Major [`EnvDeps.Secrets` must be a consumer-side **interface**, not the concrete
   `*secrets.Resolver` — so the catalog controller's `SecretResolver` interface + its fakes compile unchanged,
   ADR-0002] + 3 Minors [name the `KindConfigMap.GVK()`/`cm.Spec.Data` read; acknowledge the drop-warning
   log-message unification (env output byte-identical); nil-logger tolerated])
+- **Implemented**: 2026-07-02 — review **pass** (0 Blockers/0 Majors), see
+  [scorecard](../reviews/adr-0092-implementation-claude-opus-4-8.md). One `secrets.IsReservedKey`/`MergeEnvGuarded`
+  (both local `isReservedFuncdKey` copies deleted — exactly one guard in the tree); `provider.ResolveEnv` (new
+  `internal/provider/env.go`, consumer-side `SecretResolver` interface); the CatalogService controller +
+  Function reconciler refactored onto them. **Behavior-preserving**: the catalog suite is untouched (byte-
+  identical engine env); `Converge` stays env-agnostic. Four sub-checks green.
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, secrets, config, env-injection, refactor, dry
 - **Realizes**: [FEAT-0003/F62](../feat/0003-feat-data-platform.md)

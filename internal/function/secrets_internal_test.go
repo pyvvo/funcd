@@ -110,10 +110,9 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 	})
 }
 
-func TestIsReservedFuncdKeyAndSecretNames(t *testing.T) {
+func TestSecretNames(t *testing.T) {
 	t.Parallel()
-	require.True(t, isReservedFuncdKey("FUNCD_PORT"))
-	require.True(t, isReservedFuncdKey("FUNCD_ANYTHING_FUTURE"))
-	require.False(t, isReservedFuncdKey("API_KEY"))
+	// The reserved-FUNCD_-key guard moved to internal/secrets (ADR-0092, single definition — see
+	// secrets.TestMergeEnvGuarded / secrets.IsReservedKey); only secretNames remains local here.
 	require.Equal(t, []string{"a", "b"}, secretNames([]v1.ObjectName{"a", "b"}))
 }

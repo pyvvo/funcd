@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/provider"
+	"github.com/green-0-rabbit/funcd/internal/secrets"
 )
 
 // Reconcile converges one CatalogService (ADR-0086 as reworked by ADR-0087). A present
@@ -134,73 +134,28 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 		env["AWS_ENDPOINT_URL"] = r.s3Endpoint
 	}
 
-	// spec.config (ConfigMaps, non-sensitive): merge Data keys (DUCKDB_*) into env.
-	for _, name := range cs.Spec.Config {
-		cm, gerr := r.getConfigMap(ctx, cs.Namespace, name)
-		if gerr != nil {
-			return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "resolve config %q", name)
-		}
-		for k, v := range cm.Spec.Data {
-			if isReservedFuncdKey(k) {
-				r.logger.Warn("dropping config env key that collides with a reserved FUNCD_ key", "key", k)
-				continue
-			}
-			env[k] = v
-		}
+	// spec.config (ConfigMaps, non-sensitive) + spec.secrets (Secrets, sensitive) → guarded engine
+	// env, resolved through the shared provider helper (ADR-0092): config first, then secrets, each
+	// dropping any reserved FUNCD_ key. The provider-specific env above (S3 keypair, endpoints,
+	// FUNCD_*) is composed BEFORE and preserved — the helper's result is merged in with the same
+	// reserved-key guard.
+	resolved, rerr := provider.ResolveEnv(ctx, provider.EnvDeps{
+		Secrets:  r.secrets,
+		Store:    r.store,
+		Identity: r.developerFor,
+		Logger:   r.logger,
+	}, cs.Namespace, cs.Spec.Config, cs.Spec.Secrets)
+	if rerr != nil {
+		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "resolve provider env")
 	}
-
-	// spec.secrets (Secrets, sensitive): resolve PDP-authorized → merge Data keys (QUACK_TOKEN).
-	if len(cs.Spec.Secrets) > 0 {
-		if r.secrets == nil {
-			return nil, fault.Invalidf(op, "secret injection is not configured but %s/%s declares %d secret(s)",
-				cs.Namespace, cs.Name, len(cs.Spec.Secrets))
-		}
-		resolved, serr := r.secrets.ResolveEnv(ctx, r.developerFor(cs.Namespace), cs.Namespace, objectNames(cs.Spec.Secrets))
-		if serr != nil {
-			return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "resolve secrets")
-		}
-		for k, v := range resolved {
-			if isReservedFuncdKey(k) {
-				r.logger.Warn("dropping secret env key that collides with a reserved FUNCD_ key", "key", k)
-				continue
-			}
-			env[k] = v
-		}
-	}
+	secrets.MergeEnvGuarded(env, resolved, r.logger)
 	return env, nil
-}
-
-// getConfigMap reads a ConfigMap by name from the store (cross-resource resolution of spec.config).
-func (r *Reconciler) getConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.ConfigMap, error) {
-	const op = "services.catalog.getConfigMap"
-	obj, err := r.store.Get(ctx, v1.KindConfigMap.GVK(), ns, name)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "get configmap %s/%s", ns, name)
-	}
-	cm, ok := obj.(*v1.ConfigMap)
-	if !ok {
-		return nil, fault.Internalf(op, "object %s/%s is not a ConfigMap", ns, name)
-	}
-	return cm, nil
 }
 
 // catalogURI is the s3:// key the DuckLake SQLite catalog lives at (ADR-0086): the bound
 // (bucket, prefix) under the reserved _ducklake/catalog.db key.
 func catalogURI(c v1.CatalogRef) string {
 	return fmt.Sprintf("s3://%s/%s/_ducklake/catalog.db", c.Bucket, c.Prefix)
-}
-
-// isReservedFuncdKey reports whether an env key is reserved by the runtime shim contract (FUNCD_*);
-// a resolved secret/config value can never shadow it (mirrors ADR-0057, reserved-env-not-overridable).
-func isReservedFuncdKey(k string) bool { return strings.HasPrefix(k, "FUNCD_") }
-
-// objectNames converts the typed spec field to the []string the SecretResolver takes.
-func objectNames(names []v1.ObjectName) []string {
-	out := make([]string, len(names))
-	for i, n := range names {
-		out[i] = string(n)
-	}
-	return out
 }
 
 // retryOnConflict swallows a store Conflict (re-reconciled on the next watch event), else wraps.

@@ -1423,5 +1423,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0091-implementation-claude-opus-4-8.md",
     "notes": "pass; spec.catalogs consumer binding; addCatalogEnv DIRECT write (M1) + non-empty test; fail-closed CatalogNotReady requeue; admission; OpenAPI regen; e2e SQL round-trip deferred to duckdb lane"
+  },
+  {
+    "date": "2026-07-02",
+    "adr": "0092",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0092-implementation-claude-opus-4-8.md",
+    "notes": "pass; DRY provider env resolution \u2014 one secrets.IsReservedKey/MergeEnvGuarded + provider.ResolveEnv (consumer-side interface, M1); behavior-preserving (catalog suite untouched); exactly one guard"
   }
 ]
