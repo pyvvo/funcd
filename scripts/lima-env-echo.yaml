@@ -1,0 +1,52 @@
+# Thin OVERRIDE of the bench VM (scripts/lima.yaml) for the env-echo demo (ADR-0093/0057) on REAL
+# containerd. `base:` inherits the image/arch, resources, the `funcd install` provision, and the runtime
+# probe; this file carries only the demo's deltas. Driven by `just lima-example-env-echo`. Lima merge
+# (2.1.2): provision + probes APPEND after base's; mounts dedup by mountPoint with the child winning.
+base: lima.yaml
+
+# Writable so the guest pushes the OCI layout into /mnt/funcd-deps/registry (the manifest's artifact.uri).
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+# Appended after `funcd install`: extract the bundle, push the contract-validated env-echo.mjs, run funcd
+# (containerd mode), then apply the ConfigMap → Secret → Function. Ready requires BOTH bindings to resolve
+# (fail-closed), so the probe below reaching Ready already proves resolution.
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/env-echo; reg=/mnt/funcd-deps/registry
+      install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
+      mkdir -p "$d" /var/lib/funcd/data
+      tar xzf /mnt/funcd-deps/env-echo.tgz -C "$d"
+      rm -rf "$reg"
+      funcdctl push "$d/env-echo.mjs" "oci-layout://$reg:env-echo" \
+        --schema "$d/env-echo.schema.json"
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      # Apply the config sources BEFORE the function so both bindings resolve on the first reconcile
+      # (a missing ConfigMap/Secret would hold the Function out of Ready — ConfigResolveFailed /
+      # SecretResolveFailed — fail-closed).
+      funcdctl apply -f "$d/configmap.yaml"
+      funcdctl apply -f "$d/secret.yaml"
+      funcdctl apply -f "$d/function.yaml"
+
+# Appended after the runtime probe: gate `limactl start` on env-echo reaching Ready (both bindings
+# resolved) on a real containerd sandbox.
+probes:
+  - description: "env-echo reconciles to Ready (config + secret bindings resolved, real containerd sandbox)"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      phase() { funcdctl get function "$1" -n default -o json 2>/dev/null \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",{}).get("phase","?"))' 2>/dev/null; }
+      for i in $(seq 1 60); do
+        [ "$(phase env-echo)" = Ready ] && exit 0; sleep 2
+      done
+      exit 1
+    hint: "env-echo did not reach Ready; see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-env-echo` (a binding may not have resolved: ConfigResolveFailed / SecretResolveFailed)"

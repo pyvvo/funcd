@@ -211,6 +211,40 @@ lima-example-kv: build-runtime-images build-shim
     ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_kv_vm}}" "$suite" )
     echo "venom results: {{lima_deps}}/test_results_kv-counter.venom.xml"
 
+# the containerd-lane CONFIG+SECRET e2e (ADR-0093 spec.config + ADR-0057 spec.secrets): a SELF-DEPLOYING VM
+# (scripts/lima-env-echo.yaml) boots funcd in containerd mode, pushes the contract-validated env-echo.mjs,
+# and applies a ConfigMap (app-config) + a Secret (app-secret) + a Function (env-echo) that binds BOTH — it
+# comes up Ready only when BOTH bindings resolve (fail-closed). This recipe then POSTs the void-input
+# handler once: it echoes the injected env, proving config=prod (ConfigMap), secret=s3cr3t (Secret), and
+# shared=from-secret (the key in both — the Secret wins, config-then-secrets merge order). The containerd
+# counterpart to the in-process scenario pkg/funcd/config_secret_e2e_test.go. Needs docker + node.
+lima_env_echo_vm := lima_name + "-env-echo"
+[group('example')]
+lima-example-env-echo: build-runtime-images build-shim
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
+    # JS env-echo → env-echo.mjs + I/O schema (esbuild + contract toolchain via the shim node_modules)
+    ln -sfn ../../../shim/nodejs/node_modules examples/js/env-echo/node_modules
+    ( cd examples/js/env-echo && node --experimental-strip-types build.ts )
+    # Stage the artifact + schema + the four manifests (ConfigMap, Secret, Function, daemon config).
+    stage="$(mktemp -d)"
+    cp examples/js/env-echo/env-echo.mjs examples/js/env-echo/env-echo.schema.json \
+       examples/js/env-echo/configmap.yaml examples/js/env-echo/secret.yaml \
+       examples/js/env-echo/function.yaml examples/js/env-echo/funcdconfig.yaml "$stage/"
+    tar czf {{lima_deps}}/env-echo.tgz -C "$stage" .
+    rm -rf "$stage"
+    trap 'limactl stop -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_env_echo_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_env_echo_vm}} --tty=false scripts/lima-env-echo.yaml
+    # Declarative e2e via OVH Venom (ADR-0077): assert Ready (both bindings resolved) + the invoke body
+    # (config=prod, secret=s3cr3t, shared=from-secret). Run from the scratch dir with an absolute suite path.
+    suite="$(pwd)/e2e/env-echo.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_env_echo_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_env-echo.venom.xml"
+
 # the containerd-lane FUNCLOG e2e (ADR-0081): deploy the JS + Python log-burst examples (each emits >=100
 # console./logging logs per invoke) on REAL containerd; the curated-image shim writes Path B over the UDS
 # channel and funcd captures the logs as OTLP-JSONL under <dataDir>/blob/logs/. Proves the producer +

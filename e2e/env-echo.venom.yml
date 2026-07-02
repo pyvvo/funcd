@@ -1,0 +1,47 @@
+# Venom e2e suite for the env-echo containerd lane (ADR-0093 spec.config + ADR-0057 spec.secrets) — the
+# declarative invoke phase of `just lima-example-env-echo`, run host-side AFTER the self-deploying Lima VM
+# is Ready. It proves that a Function binding BOTH a ConfigMap (spec.config) and a Secret (spec.secrets)
+# receives BOTH sets of Data as worker env at runtime, by invoking a void-input handler that echoes them:
+#   1. env-echo is Ready — Ready requires BOTH bindings to resolve (fail-closed), so this already proves
+#      resolution reconcile-side.
+#   2. the injected values reach the RUNNING handler — config=prod (ConfigMap), secret=s3cr3t (Secret),
+#      and shared=from-secret (the key present in both: the Secret wins, config-then-secrets order).
+# The http step hits the VM's forwarded 127.0.0.1 data plane; the exec step reads phase in-VM via limactl.
+name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: env-echo is Ready (both config + secret bindings resolved)
+    steps:
+      # Read the Function phase IN the VM (co-located with the daemon). Ready ⇒ both bindings resolved
+      # (fail-closed: an unresolved ConfigMap/Secret would hold it out of Ready).
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl get function env-echo -n default -o json \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"]["phase"])'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual Ready
+
+  - name: the config + secret values reach the running handler (secret wins the shared key)
+    steps:
+      # Void-input contract (ADR-0090): the input schema is {"type":"null"}, so the invocation sends
+      # data: null. retry/delay absorbs first-invoke warm-up.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers: { content-type: application/json }
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "invoke → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual prod          # spec.config ConfigMap value → env
+          - result.bodyjson.secret ShouldEqual s3cr3t        # spec.secrets Secret value → env
+          - result.bodyjson.shared ShouldEqual from-secret   # in both: the secret wins (config-then-secrets)
