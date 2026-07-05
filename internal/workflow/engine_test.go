@@ -206,3 +206,90 @@ func phaseOf(rec *runstate.Record, name string) v1.StepPhase {
 	}
 	return ""
 }
+
+// scenario: crash-recovery-resumes-run — a persisted mid-flight run resumes; the
+// in-flight step is re-dispatched, completed steps are not re-run.
+func TestCrashRecoveryResumesRun(t *testing.T) {
+	f := newFake()
+	f.outputs["b"] = json.RawMessage(`{"done":true}`)
+	rs, err := badger.New(badger.Config{InMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rs.Close() })
+	ctx := context.Background()
+	// simulate a crash: a Succeeded (with output), b was Running.
+	_ = rs.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "run-r", Phase: runRunning,
+		Steps: []runstate.StepState{
+			{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{"x":1}`)},
+			{Name: "b", Phase: v1.StepRunning},
+		},
+	})
+	e, _ := New(Deps{Runs: rs, Dispatch: f})
+	rec, err := e.Resume(ctx, "default", "run-r", spec(step("a", ""), step("b", "", "a")))
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if rec.Phase != runSucceeded {
+		t.Fatalf("resumed run phase = %s, want Succeeded", rec.Phase)
+	}
+	if f.calls["a"] != 0 {
+		t.Fatal("a already Succeeded — must not re-run")
+	}
+	if f.calls["b"] != 1 {
+		t.Fatalf("b was in-flight — must re-dispatch once, got %d", f.calls["b"])
+	}
+}
+
+// scenario: cancel-terminates-run — cancel marks the run and its live steps Cancelled.
+func TestCancelTerminatesRun(t *testing.T) {
+	rs, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rs.Close() })
+	ctx := context.Background()
+	_ = rs.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "run-c", Phase: runRunning,
+		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}, {Name: "b", Phase: v1.StepRunning}},
+	})
+	e, _ := New(Deps{Runs: rs, Dispatch: newFake()})
+	if err := e.Cancel(ctx, "default", "run-c"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got, _ := rs.Get(ctx, "default", "run-c")
+	if got.Phase != runCancelled {
+		t.Fatalf("phase = %s, want Cancelled", got.Phase)
+	}
+	if got.Steps[1].Phase != v1.StepCancelled {
+		t.Fatalf("running step b should be Cancelled, got %s", got.Steps[1].Phase)
+	}
+}
+
+// scenario: pause-and-resume-run — pause stops new dispatch; resume completes it.
+func TestPauseAndResume(t *testing.T) {
+	f := newFake()
+	rs, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rs.Close() })
+	ctx := context.Background()
+	_ = rs.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "run-p", Phase: runRunning,
+		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)}, {Name: "b", Phase: v1.StepPending}},
+	})
+	e, _ := New(Deps{Runs: rs, Dispatch: f})
+	if err := e.Pause(ctx, "default", "run-p"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	got, _ := rs.Get(ctx, "default", "run-p")
+	if got.Phase != runPaused {
+		t.Fatalf("phase = %s, want Paused", got.Phase)
+	}
+	if f.calls["b"] != 0 {
+		t.Fatal("b must not dispatch while paused")
+	}
+	rec, err := e.Resume(ctx, "default", "run-p", spec(step("a", ""), step("b", "", "a")))
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if rec.Phase != runSucceeded || f.calls["b"] != 1 {
+		t.Fatalf("resume should complete b; phase=%s calls=%d", rec.Phase, f.calls["b"])
+	}
+}

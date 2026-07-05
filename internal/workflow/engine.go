@@ -100,7 +100,82 @@ func (e *Engine) Execute(ctx context.Context, ns, runName v1.ObjectName, spec v1
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
 	}
+	return e.drive(ctx, rec, rs, outputs, spec, input)
+}
 
+// Resume continues a persisted run after a crash (ADR-0094): it rebuilds the
+// scheduling state from the durable record and re-dispatches any step that was
+// in-flight (with a fresh attempt), so no state is lost.
+func (e *Engine) Resume(ctx context.Context, ns, runName v1.ObjectName, spec v1.WorkflowSpec) (*runstate.Record, error) {
+	rec, err := e.runs.Get(ctx, v1.NamespaceName(ns), runName)
+	if err != nil {
+		return nil, err
+	}
+	rs, outputs := rebuildState(spec, rec)
+	rec.Paused = false // resume clears the pause
+	rec.Phase = runRunning
+	return e.drive(ctx, rec, rs, outputs, spec, rec.Input)
+}
+
+// rebuildState restores scheduling state from a durable record. An in-flight
+// (Running) step is reset to Pending so recovery re-dispatches it.
+func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1.ObjectName]json.RawMessage) {
+	rs := newRunState(spec)
+	outputs := map[v1.ObjectName]json.RawMessage{}
+	for _, s := range rec.Steps {
+		n, ok := rs.steps[s.Name]
+		if !ok {
+			continue
+		}
+		if s.Phase == v1.StepRunning {
+			n.phase = v1.StepPending // re-dispatch on recovery
+			continue
+		}
+		n.phase = s.Phase
+		if s.Phase == v1.StepSucceeded && len(s.Output) > 0 {
+			outputs[s.Name] = s.Output
+		}
+	}
+	return rs, outputs
+}
+
+// Pause requests a graceful pause: the persisted run is marked Paused so the next
+// drive dispatches nothing new (in-flight steps, in the async model, finish first).
+func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	rec, err := e.runs.Get(ctx, ns, name)
+	if err != nil {
+		return err
+	}
+	rec.Paused = true
+	rec.Phase = runPaused
+	return e.runs.Put(ctx, rec)
+}
+
+// Cancel abandons a run: pending/running steps are marked Cancelled and the run ends
+// Cancelled immediately (the in-flight invocation is abandoned; idempotency covers it).
+func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	rec, err := e.runs.Get(ctx, ns, name)
+	if err != nil {
+		return err
+	}
+	for i := range rec.Steps {
+		if rec.Steps[i].Phase == v1.StepPending || rec.Steps[i].Phase == v1.StepRunning {
+			rec.Steps[i].Phase = v1.StepCancelled
+		}
+	}
+	rec.Phase = runCancelled
+	return e.runs.Put(ctx, rec)
+}
+
+// drive advances a run to a terminal phase from the given scheduling state.
+func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+	if rec.Paused {
+		rec.Phase = runPaused
+		if err := e.persist(ctx, rec, rs, outputs); err != nil {
+			return nil, err
+		}
+		return rec, nil
+	}
 	if to := timeoutOf(spec); to > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, to)
@@ -132,7 +207,7 @@ func (e *Engine) Execute(ctx context.Context, ns, runName v1.ObjectName, spec v1
 				return e.fail(ctx, rec, rs, outputs, spec, input, fault.Wrapf(ctx.Err(), fault.Unavailable, engineOp, "run deadline"))
 			}
 			n.phase = v1.StepRunning
-			out, err := e.dispatchStep(ctx, ns, runName, spec, n, input, outputs)
+			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, spec, n, input, outputs)
 			if err != nil {
 				n.phase = v1.StepFailed
 				return e.fail(ctx, rec, rs, outputs, spec, input, err)
@@ -175,7 +250,7 @@ func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, input json.R
 }
 
 // dispatchStep invokes one step with retry, building its input from its parents.
-func (e *Engine) dispatchStep(ctx context.Context, ns, runName v1.ObjectName, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	st := specStep(spec, n.name)
 	stepInput := e.stepInput(n, input, outputs, st)
 	max := e.cfg.DefaultMaxAttempts
@@ -193,7 +268,7 @@ func (e *Engine) dispatchStep(ctx context.Context, ns, runName v1.ObjectName, sp
 	var lastErr error
 	for attempt := 1; attempt <= max; attempt++ {
 		out, err := e.dispatch.Dispatch(ctx, DispatchRequest{
-			Namespace: v1.NamespaceName(ns), Run: runName, Step: n.name, Target: target,
+			Namespace: ns, Run: runName, Step: n.name, Target: target,
 			Attempt: attempt, Input: stepInput,
 		})
 		if err == nil {
