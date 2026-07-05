@@ -1453,5 +1453,20 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0093-implementation-claude-opus-4-8.md",
     "notes": "pass; Function.spec.config (ConfigMap->env, mirrors secrets); resolver relocated to internal/envresolve (one path, no cycle); catalog suite unchanged; ErrConfig/ErrSecret via errors.Join preserves fault.Kind; OpenAPI regen"
+  },
+  {
+    "date": "2026-07-05",
+    "adr": "0095",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0095-implementation-claude-opus-4-8.md",
+    "notes": "goja reference engine: 17/17 scenarios green, lint clean, goja sole new dep; 1 minor [model] (allow/deny is scenario-driven not a matrix table); divide-by-zero semantics [adr] handled by authorized in-place note"
   }
 ]

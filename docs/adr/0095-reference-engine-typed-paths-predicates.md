@@ -1,7 +1,7 @@
 # ADR-0095: Reference engine — typed native-JavaScript expressions on goja (one grammar for the platform)
 
-- **Status**: Accepted
-- **Date**: 2026-07-05 (accepted 2026-07-05; judged twice — 1 Blocker + 3 Majors folded: the guard rule, scalar-only equality + scalar-item membership, root longest-first matching, scenario count. **In-place update 2026-07-05 (process bypass, decider-authorized):** the engine is now **goja** (`github.com/dop251/goja`, pure-Go ECMAScript) with **native JavaScript syntax** instead of a hand-rolled `${{ … }}` postfix grammar. A bench (`bench/expr-engine`, RESULTS.md) drove this: goja beats the hand-rolled evaluator on parse/cold/warm/throughput, native operators are 2.5× faster than injected methods, and `exists()` **cannot** be a method on an absent field (`TypeError`) — so the guard is native `!== undefined`. The differentiator is preserved: funcd keeps a **type-checker over goja's public parser AST** (`goja/parser`), so a bad condition still fails at **reconcile**, not runtime. The public Go contract (`Mode`/`Field`/`Resolver`/`Parse`/`Check`/`Roots`/`Eval`/`EvalBool`) is unchanged — only the grammar and the internals change. The prior hand-rolled `internal/expr` implementation is superseded in place and re-implemented on goja.)
+- **Status**: Implemented
+- **Date**: 2026-07-05 (implemented 2026-07-05 → `internal/expr` on goja, review passed: 17/17 scenarios, lint clean, goja sole new dep. Accepted 2026-07-05; judged twice — 1 Blocker + 3 Majors folded: the guard rule, scalar-only equality + scalar-item membership, root longest-first matching, scenario count. **In-place update 2026-07-05 (process bypass, decider-authorized):** the engine is now **goja** (`github.com/dop251/goja`, pure-Go ECMAScript) with **native JavaScript syntax** instead of a hand-rolled `${{ … }}` postfix grammar. A bench (`bench/expr-engine`, RESULTS.md) drove this: goja beats the hand-rolled evaluator on parse/cold/warm/throughput, native operators are 2.5× faster than injected methods, and `exists()` **cannot** be a method on an absent field (`TypeError`) — so the guard is native `!== undefined`. The differentiator is preserved: funcd keeps a **type-checker over goja's public parser AST** (`goja/parser`), so a bad condition still fails at **reconcile**, not runtime. The public Go contract (`Mode`/`Field`/`Resolver`/`Parse`/`Check`/`Roots`/`Eval`/`EvalBool`) is unchanged — only the grammar and the internals change. The prior hand-rolled `internal/expr` implementation is superseded in place and re-implemented on goja.)
 - **Deciders**: green-0-rabbit
 - **Tags**: expression, templating, contracts, workflow, sensor
 - **Realizes**: [FEAT-0005/F73](../feat/0005-feat-workflow-engine.md)
@@ -165,8 +165,10 @@ type Field struct {
 }
 
 // Resolver answers path lookups against the consumer's schemas. Implementations are
-// context-scoped: they expose exactly the roots the consumer permits.
+// context-scoped: Roots reports the root documents exposed (Check matches leading
+// member segments against it, longest-first); Resolve reports the Field at a path.
 type Resolver interface {
+	Roots() []string                                    // the exposed root documents
 	Resolve(root string, path []string) (Field, error) // fault.NotFound / fault.Invalid
 }
 
@@ -190,7 +192,7 @@ and Eval at runtime.
 |---|---|
 | JSON-Schema contracts via the consumer's `Resolver` | `Parse` / `Check` / `Eval` / `EvalBool` / `Roots` |
 | `json.RawMessage` documents at evaluation | position-carrying `fault.Invalid` diagnostics |
-| nothing else — stdlib only, no config keys | the grammar contract above (frozen surface for V2 growth) |
+| `github.com/dop251/goja` + `goja/parser` (the ES parser + evaluator); stdlib; `api/fault` | the frozen public surface above (stable for V2 growth) |
 
 ## Temporary workarounds
 
@@ -226,6 +228,7 @@ corpus green; the four sub-checks green; goja is the only new dep; godoc on ever
 - (+) One pure-Go dependency (goja/sobek); funcd owns only the ~500-line checker, not a parser/evaluator; benched faster than the hand-rolled engine.
 - (−) Deliberately a *subset* of JS — no loops, user functions, interpolation, or truthiness; the checker rejects the rest at reconcile. Arbitrary user compute has its home in a Function step, not here.
 - Risk: the subset-checker must reject every unsafe construct — mitigated by a table-driven allow/deny test matrix and a fuzz test over Parse+Check (no panic on any input).
+- (−) JS division semantics: `x/0` is `Infinity` in JS (no throw), so the checker rejects a *literal* `/0` and Eval faults on a non-finite **Select** result; a division buried in a Condition comparison follows JS (`Infinity > 1` = true — arithmetically reasonable). This is the one place goja's semantics differ from the prior hand-rolled evaluator (implementation note).
 
 ## Open questions
 
