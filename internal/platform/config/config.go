@@ -111,6 +111,17 @@ type Config struct {
 		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES"`
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`
+
+	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives at
+	// <Storage.DataDir>/workflow (in-memory when Storage.Mode is memory). DefaultStepTimeout +
+	// DefaultRetry feed the engine core; Retention (run GC horizon) and PayloadLimit (max run
+	// input bytes) are reserved for the run-GC / admission gates and not yet enforced by the core.
+	Workflow struct {
+		DefaultStepTimeout string `json:"defaultStepTimeout,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_STEP_TIMEOUT"`
+		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY"`
+		Retention          string `json:"retention,omitempty" env:"FUNCD_WORKFLOW_RETENTION"`
+		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT"`
+	} `json:"workflow,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -137,6 +148,8 @@ func defaults() Config {
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
 	c.S3Gateway.MaxUploadBytes = 1 << 30
+	// Workflow engine (ADR-0094): one attempt by default (no retry), no step timeout.
+	c.Workflow.DefaultRetry = 1
 	return c
 }
 

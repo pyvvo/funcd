@@ -101,6 +101,20 @@ func WithS3Gateway(listenAddr, endpoint string, maxUploadBytes int64, masterSecr
 	}
 }
 
+// WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; this option
+// sets its persistence + tunables: dataDir is the Badger run-state directory (empty ⇒ in-memory,
+// the default / InMemory-preset path), defaultStepTimeout bounds a single step invocation
+// (0 ⇒ none), and defaultRetry is the per-step attempt cap when a step declares no retry
+// (< 1 ⇒ 1, no retry). cmd/funcd derives dataDir as <dataDir>/workflow from config.
+func WithWorkflow(dataDir string, defaultStepTimeout time.Duration, defaultRetry int) Option {
+	return func(c *config) error {
+		c.workflowDataDir = dataDir
+		c.workflowStepTimeout = defaultStepTimeout
+		c.workflowDefaultRetry = defaultRetry
+		return nil
+	}
+}
+
 // WithRuntime injects the function runtime (worker) port.
 func WithRuntime(r runtime.Runtime) Option {
 	return func(c *config) error { c.runtime = r; return nil }

@@ -91,11 +91,11 @@ func New(d Deps) (*Engine, error) {
 // record. It is the engine core; the controller reconciler drives it asynchronously
 // (wiring is a separate layer). Steps of a ready batch are dispatched sequentially in
 // V1 (correct for the DAG; concurrent fan-out is a performance optimization).
-func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
 	rs := newRunState(spec)
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	rec := &runstate.Record{
-		Namespace: ns, Name: runName, Phase: runRunning, Input: input,
+		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 				return e.fail(ctx, rec, rs, outputs, spec, input, fault.Wrapf(ctx.Err(), fault.Unavailable, engineOp, "run deadline"))
 			}
 			n.phase = v1.StepRunning
-			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, spec, n, input, outputs)
+			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, rec.Workflow, spec, n, input, outputs)
 			if err != nil {
 				n.phase = v1.StepFailed
 				return e.fail(ctx, rec, rs, outputs, spec, input, err)
@@ -249,8 +249,19 @@ func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, input json.R
 	return run, skip, nil
 }
 
+// stepTarget resolves the function a step dispatches to: a step that references an existing
+// function (spec.function) targets it directly; an image step targets its materialized owned
+// function <workflow>-<step> (ADR-0094). An empty workflow (bare-engine tests) yields "-<step>",
+// harmless because those tests key their fake dispatcher on the step name.
+func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName) v1.ObjectName {
+	if st := specStep(spec, step); st != nil && st.Function != "" {
+		return st.Function
+	}
+	return materializedStepName(workflow, step)
+}
+
 // dispatchStep invokes one step with retry, building its input from its parents.
-func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	st := specStep(spec, n.name)
 	stepInput := e.stepInput(n, input, outputs, st)
 	max := e.cfg.DefaultMaxAttempts
@@ -261,10 +272,7 @@ func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName 
 		}
 		backoff = st.Retry.Backoff
 	}
-	target := n.name // materialized function name is <workflow>-<step>; the dispatcher maps it
-	if st != nil && st.Function != "" {
-		target = st.Function
-	}
+	target := stepTarget(workflow, spec, n.name)
 	var lastErr error
 	for attempt := 1; attempt <= max; attempt++ {
 		out, err := e.dispatch.Dispatch(ctx, DispatchRequest{
@@ -346,7 +354,8 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			"reason": cause.Error(),
 		})
 		_, _ = e.dispatch.Dispatch(ctx, DispatchRequest{
-			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure, Target: spec.OnFailure,
+			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure,
+			Target:  stepTarget(rec.Workflow, spec, spec.OnFailure),
 			Attempt: 1, Input: fc,
 		}) // handler outcome never changes the run phase (ADR-0094)
 	}

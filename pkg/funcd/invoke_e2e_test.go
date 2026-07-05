@@ -101,7 +101,7 @@ func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest str
 	blob, err := artifact.ContractBlob(in, out)
 	require.NoError(t, err)
 	ref = "oci-layout://" + layoutDir + ":" + name
-	digest, err = artifact.Push(context.Background(), ref, filepath.Join(exDir, name+".mjs"), blob)
+	digest, err = artifact.Push(context.Background(), ref, filepath.Join(exDir, name+".mjs"), blob, "")
 	require.NoError(t, err)
 	return ref, digest
 }

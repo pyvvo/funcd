@@ -6,10 +6,45 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
 
 const materializeOp = "workflow.materialize"
+
+// WorkflowReconciler is the controller.Reconciler for the Workflow kind: it brings a
+// Workflow's owned step Functions and KVStores to the desired state (the Deployment→
+// ReplicaSet analogy, ADR-0094) via the Materializer. Run execution is the RunReconciler's
+// job; this reconciler only maintains the materialized fleet.
+type WorkflowReconciler struct {
+	store store.Store
+	mat   *Materializer
+	log   *slog.Logger
+}
+
+// NewWorkflowReconciler builds the Workflow reconciler over a Materializer.
+func NewWorkflowReconciler(s store.Store, m *Materializer, log *slog.Logger) *WorkflowReconciler {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &WorkflowReconciler{store: s, mat: m, log: log.With("component", "workflow.reconcile")}
+}
+
+// Reconcile materializes one Workflow's owned resources.
+func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, req.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return controller.Result{}, nil // deleted; owned resources cascade via ownerRefs
+	}
+	if err != nil {
+		return controller.Result{}, err
+	}
+	wf := obj.(*v1.Workflow)
+	if merr := r.mat.Materialize(ctx, wf); merr != nil {
+		return controller.Result{}, merr
+	}
+	return controller.Result{}, nil
+}
 
 // RuntimeResolver resolves a step image's runtime class from its OCI manifest
 // (the dev.funcd.runtime.v1 annotation, ADR-0059 family). Production reads it via
@@ -76,7 +111,14 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 
 // materializedName is the owned Function's name: <workflow>-<step>.
 func materializedName(wf *v1.Workflow, step v1.ObjectName) v1.ObjectName {
-	return v1.ObjectName(string(wf.Name) + "-" + string(step))
+	return materializedStepName(wf.Name, step)
+}
+
+// materializedStepName is the owned Function's name for a step, given the workflow name:
+// <workflow>-<step>. The engine uses it to resolve an image step's dispatch target without
+// the Workflow object in hand.
+func materializedStepName(workflow, step v1.ObjectName) v1.ObjectName {
+	return v1.ObjectName(string(workflow) + "-" + string(step))
 }
 
 func ownerRef(wf *v1.Workflow) v1.OwnerReference {

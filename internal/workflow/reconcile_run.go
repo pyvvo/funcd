@@ -64,7 +64,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	}
 
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh.
-	rec, err := r.drive(ctx, req.Namespace, req.Name, wf.Spec, run.Spec.Input)
+	rec, err := r.drive(ctx, req.Namespace, req.Name, wf.Name, wf.Spec, run.Spec.Input)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -79,11 +79,11 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	return controller.Result{}, nil
 }
 
-func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
 	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
 		return r.engine.Resume(ctx, ns, name, spec)
 	}
-	return r.engine.Execute(ctx, ns, name, spec, input)
+	return r.engine.Execute(ctx, ns, name, workflow, spec, input)
 }
 
 // mirror copies the engine record's coarse state into the WorkflowRun status.

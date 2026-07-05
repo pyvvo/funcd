@@ -53,6 +53,9 @@ import (
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
+	"github.com/green-0-rabbit/funcd/internal/workflow"
+	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	wbadger "github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
 )
 
 // DevToken is the default control-plane credential token wired by InMemory(). It
@@ -139,6 +142,14 @@ type config struct {
 	s3gwMaxUploadBytes int64
 	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
 	s3gwDataDir        string // where the master.key is persisted when no master file is set
+
+	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
+	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
+	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core;
+	// retention + payloadLimit are declared here but enforced by later gates (run GC / admission).
+	workflowDataDir      string
+	workflowStepTimeout  time.Duration
+	workflowDefaultRetry int
 }
 
 // validate returns the first missing required dependency as a fault.Invalid.
@@ -178,8 +189,9 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr *local.Manager     // per-function worker-node local API broker (ADR-0064)
-	logSink   *funclog.BlobSink  // structured function-log capture sink (ADR-0081); nil if unwired
+	invokeMgr    *local.Manager   // per-function worker-node local API broker (ADR-0064)
+	workflowRuns runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
+	logSink      *funclog.BlobSink  // structured function-log capture sink (ADR-0081); nil if unwired
 	compactor *compact.Compactor // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw      *s3gateway.Server  // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 
@@ -459,6 +471,43 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
 	}
 	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
+
+	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
+	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
+	// waker (fail-closed to targets that resolve to a real Function), and two reconcilers — the
+	// Workflow reconciler materializes the owned step Function/KVStore fleet, the WorkflowRun
+	// reconciler drives a run through the engine and mirrors its status + status.runs link.
+	runs, rerr := wbadger.New(wbadger.Config{InMemory: c.workflowDataDir == "", Dir: c.workflowDataDir})
+	if rerr != nil {
+		return fault.Wrapf(rerr, fault.KindOf(rerr), op, "build workflow run store")
+	}
+	p.workflowRuns = runs
+	wfDispatcher, derr := workflow.NewHTTPDispatcher(workflow.DispatchDeps{
+		Endpoints: fnReconciler.Endpoints(),
+		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
+		Grant:     storeGranter{store: c.store},
+		Client:    &http.Client{Timeout: 30 * time.Second},
+		Logger:    p.logger,
+	})
+	if derr != nil {
+		return fault.Wrapf(derr, fault.KindOf(derr), op, "build workflow dispatcher")
+	}
+	maxAttempts := c.workflowDefaultRetry
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	wfEngine, eerr := workflow.New(workflow.Deps{
+		Runs:     runs,
+		Dispatch: wfDispatcher,
+		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout},
+		Logger:   p.logger,
+	})
+	if eerr != nil {
+		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
+	}
+	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
+	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, p.logger))
+	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, p.logger))
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -692,12 +741,39 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 			p.cfg.blob.Close(),
 			p.cfg.store.Close(),
 		}
+		if p.workflowRuns != nil {
+			errs = append(errs, p.workflowRuns.Close())
+		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))
 		}
 		p.shutdownErr = errors.Join(errs...)
 	})
 	return p.shutdownErr
+}
+
+// runtimeResolver is the production workflow.RuntimeResolver: it reads a step image's runtime
+// class from the OCI manifest annotation (dev.funcd.runtime.v1, ADR-0094) without pulling the
+// bundle. The image string is the OCI ref; no digest is pinned here (the manifest is the truth).
+type runtimeResolver struct{}
+
+func (runtimeResolver) Runtime(ctx context.Context, image string) (v1.RuntimeName, error) {
+	rt, err := artifact.InspectRuntime(ctx, image, "")
+	if err != nil {
+		return "", err
+	}
+	return v1.RuntimeName(rt), nil
+}
+
+// storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.
+// The engine only ever dispatches steps of a run's pinned spec to their declared/materialized
+// targets; this gate additionally requires the target to resolve to a real Function, so an
+// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.)
+type storeGranter struct{ store store.Store }
+
+func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
+	_, err := g.store.Get(context.Background(), v1.KindFunction.GVK(), ns, target)
+	return err == nil
 }
 
 // storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions and the
