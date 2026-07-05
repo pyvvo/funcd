@@ -37,6 +37,42 @@ type WorkflowSpec struct {
 	// OnFailure names a handler step (defined in Steps, excluded from the DAG) invoked
 	// once when the run ends Failed. Empty ⇒ no handler.
 	OnFailure ObjectName `json:"onFailure,omitempty"`
+	// Pooling configures how the workflow's materialized step Functions are pooled and
+	// kept warm (ADR-0046 worker pooling + ADR-0016 scaling). Empty ⇒ the default: all
+	// image steps share one pool. A step may override it with its own step.pooling.
+	Pooling WorkflowPooling `json:"pooling,omitempty"`
+}
+
+// WorkflowPooling governs how a workflow's materialized step Functions are grouped
+// into worker pools and kept warm. It is applied to each owned Function at
+// materialization (a step's own Pooling overrides it).
+type WorkflowPooling struct {
+	// Mode is "shared" (default — image steps of the same runtime co-locate in one
+	// worker pool, saving memory) or "isolated" (each step runs in its own solo
+	// worker / container).
+	Mode PoolingMode `json:"mode,omitempty"`
+	// Worker names the shared pool when Mode is shared; empty ⇒ the workflow's name.
+	// Steps of different runtimes never share a worker (the pool is per-runtime); this
+	// is the logical pool name they group under.
+	Worker string `json:"worker,omitempty" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	// MinReplicas keeps warm workers: 0 scales to zero (cold start on the first step of
+	// the pool), ≥1 avoids the cold-start latency.
+	MinReplicas int `json:"minReplicas,omitempty" minimum:"0" maximum:"15"`
+}
+
+// PoolingMode selects shared-pool vs isolated-container materialization.
+type PoolingMode string
+
+const (
+	// PoolingShared co-locates same-runtime image steps in one worker pool (default).
+	PoolingShared PoolingMode = "shared"
+	// PoolingIsolated gives each step its own solo worker/container.
+	PoolingIsolated PoolingMode = "isolated"
+)
+
+// Schema carries PoolingMode's enum into the generated OpenAPI (ADR-0048).
+func (PoolingMode) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(string(PoolingShared), string(PoolingIsolated))
 }
 
 // WorkflowStep is one step: exactly one of Image / Function / Workflow (Workflow is
@@ -64,6 +100,10 @@ type WorkflowStep struct {
 	Retry *StepRetry `json:"retry,omitempty"`
 	// Timeout is the per-step invocation bound; 0 ⇒ the engine default.
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"86400000000000"`
+	// Pooling overrides the workflow-level pooling for this step's materialized
+	// Function (nil ⇒ inherit spec.pooling). Set Mode "isolated" to give one step its
+	// own container while the rest share a pool.
+	Pooling *WorkflowPooling `json:"pooling,omitempty"`
 	// KV/Blob/Secrets/Config/Catalogs are the step's bindings (Function.spec shapes).
 	KV       []FunctionKV      `json:"kv,omitempty"`
 	Blob     []FunctionBlob    `json:"blob,omitempty"`
@@ -191,6 +231,12 @@ func (w *Workflow) Validate() error {
 		if s.Join != "" && s.Join != JoinAll && s.Join != JoinAny {
 			return fault.Invalidf(op, "step %q: join must be %q or %q", s.Name, JoinAll, JoinAny)
 		}
+		if err := validatePoolingMode(op, s.Pooling); err != nil {
+			return err
+		}
+	}
+	if err := validatePoolingMode(op, &w.Spec.Pooling); err != nil {
+		return err
 	}
 	// dependsOn edges reference real steps, no self-edge; the graph is acyclic.
 	for i := range w.Spec.Steps {
@@ -322,6 +368,17 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %q is not a step", i, j, o)
 			}
 		}
+	}
+	return nil
+}
+
+// validatePoolingMode checks a pooling block's Mode is a known value (nil ⇒ ok).
+func validatePoolingMode(op string, p *WorkflowPooling) error {
+	if p == nil {
+		return nil
+	}
+	if p.Mode != "" && p.Mode != PoolingShared && p.Mode != PoolingIsolated {
+		return fault.Invalidf(op, "pooling.mode must be %q or %q", PoolingShared, PoolingIsolated)
 	}
 	return nil
 }

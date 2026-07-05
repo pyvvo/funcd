@@ -110,6 +110,12 @@ No new Go dependencies — license gate trivially satisfied.
   until a workflow (or Function) re-declares ownership; `delete` cascades it.
 - **Mutability**: spec edits stamp Revisions via `metadata.generation` (existing machinery);
   in-flight runs are unaffected (pinned at start).
+- **Pooling & warmth** (decider-directed addition): `spec.pooling` governs how the materialized
+  step Functions are pooled — `mode: shared` (default: same-runtime image steps co-locate in one
+  worker pool, ADR-0046) or `mode: isolated` (each step its own solo worker/container) — plus
+  `minReplicas` (≥1 keeps warm workers, avoiding step cold-start; 0 scales to zero). A step's own
+  `pooling` overrides the workflow default. Materialization maps this onto each owned Function's
+  `spec.pooling.worker` + `spec.scaling.minReplicas`.
 - **Declared contract — inline, total defaults**: `spec.contract` is authored **inline in the
   spec** (the ADR-0090 ContractBlob shape; no sidecar file, no flag — the manifest is
   self-contained). Admission enforces **total type safety on the declared contract**: every optional property in
