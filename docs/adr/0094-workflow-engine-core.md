@@ -1,7 +1,7 @@
 # ADR-0094: Workflow engine core — `Workflow`/`WorkflowRun` resources and the state-machine orchestrator
 
 - **Status**: Accepted
-- **Date**: 2026-07-05 (accepted 2026-07-05; judged twice — 2 Blockers + 6 Majors folded: companion sequencing, the `exists()` guard rule lives in ADR-0095, onFailure trigger set, `image` asymmetry justified + transitional, two typing rules assigned to F65, scalar equality, root matching; `status.runs` run-link added post-judge)
+- **Date**: 2026-07-05 (accepted 2026-07-05; judged twice — 2 Blockers + 6 Majors folded: companion sequencing, the `exists()` guard rule lives in ADR-0095, onFailure trigger set, `image` asymmetry justified + transitional, two typing rules assigned to F65, scalar equality, root matching; `status.runs` run-link added post-judge. **In-place update 2026-07-05 (process bypass, decider-authorized):** `when.condition` now uses **native JavaScript** on the goja engine (ADR-0095, likewise updated) — a bench (`bench/expr-engine`) showed goja beats the hand-rolled evaluator on every axis and keeps reconcile-time type-checking by walking goja's parser AST; the postfix `.greaterThan(0)` method syntax is replaced by native operators `>`/`===`/`&&` with `!== undefined` as the guard. The engine seam and `StepWhen.Condition string` contract are unchanged.)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, orchestration, controller, state-machine, badger, scale-to-zero
 - **Realizes**: [FEAT-0005/F64](../feat/0005-feat-workflow-engine.md)
@@ -76,7 +76,7 @@ at-least-once semantics stated honestly; no new dependencies.
 | Steps reference pre-deployed Functions only | Two-phase deploy UX, dangling name refs, nothing self-contained. Kept only as the `function:` escape hatch for shared services. |
 | Run state in `WorkflowRun.status` only (metastore) | Per-transition status churn on the metastore; no transactional write-ahead. Badger = truth, status = coarse view. |
 | Sensor-side joins (Argo model) | Duplicates the engine's `dependsOn` join one layer down and needs correlation state V1 doesn't otherwise need. |
-| Expression-string conditions (CEL/expr dependency) | A general evaluator defeats static checking and adds a dependency; the ADR-0095 typed postfix grammar is checkable at reconcile. |
+| Untyped expression conditions (raw CEL/JS, no checker) | A general evaluator that only runs at runtime defeats reconcile-time checking; ADR-0095 keeps a type-checker over goja's parser AST so a bad condition still fails at reconcile. |
 | `go-playground/validator/v10` struct tags for spec validation | Duplicates the established single source (huma schema tags → OpenAPI, ADR-0048 + semantic `Validate()` methods with `api/fault`); its reflection-tag dialect cannot express the cross-field/cross-resource rules these specs need (kind-union exactly-one, step-name edges, owner-is-a-step), and adds a dependency for no new capability. |
 
 No new Go dependencies — license gate trivially satisfied.
@@ -135,9 +135,10 @@ fast with `InputSchemaMismatch`.
 List order chains implicitly (no `dependsOn` ⇒ previous step). `dependsOn` declares edges;
 fan-out **is** parallel dispatch. `join: all` (default) requires every parent `Succeeded`;
 `join: any` requires one (exclusive-branch merges). `when.condition` holds an ADR-0095 expression
-(Condition mode) — roots `step.<name>.output` (direct parents only) and `input`; every condition
-ends in a predicate method; referenced optional fields must carry a schema `default` (else guard
-with `exists()`). `when` false ⇒ `Skipped`; skip cascades through `join: all`, does not block
+(Condition mode: a native-JavaScript boolean over the goja engine) — roots `step.<name>.output`
+(direct parents only) and `input`; the expression must type as boolean against the cached
+contracts (no truthiness — `&&`/`||` require booleans, `===` same-type scalars); referenced
+optional fields must carry a schema `default` or be guarded with `!== undefined`. `when` false ⇒ `Skipped`; skip cascades through `join: all`, does not block
 `join: any`; a `join: all` step with any `Skipped` parent is `Skipped`. **`join: any` fires only
 once all parents are terminal and ≥ 1 `Succeeded`** (deterministic — no first-past-the-post race
 when branch conditions are not mutually exclusive); all parents `Skipped` ⇒ the join step is
@@ -246,7 +247,7 @@ spec:
       image: oci-layout:///mnt/funcd-deps/registry:publish-v1
       dependsOn: [stats]
       when:
-        condition: ${{ step.stats.output.rows.greaterThan(0) }}
+        condition: ${{ step.stats.output.rows > 0 }}
       params:
         format: parquet
     - name: notify-ops          # the onFailure handler — outside the DAG: no edges, no when
