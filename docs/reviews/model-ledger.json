@@ -1468,5 +1468,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0095-implementation-claude-opus-4-8.md",
     "notes": "goja reference engine: 17/17 scenarios green, lint clean, goja sole new dep; 1 minor [model] (allow/deny is scenario-driven not a matrix table); divide-by-zero semantics [adr] handled by authorized in-place note"
+  },
+  {
+    "date": "2026-07-05",
+    "adr": "0094",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "changes-requested",
+    "blockers": 2,
+    "majors": 3,
+    "minors": 3,
+    "model_attributed": 7,
+    "dod_passed": 8,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0094-implementation-claude-opus-4-8.md",
+    "notes": "core engine/state-machine/recovery/materialization strong; B: 4 scenario tests missing (model), spec pinning not held across pause/crash (model); M: payloadLimit+retention unenforced (model), DefaultStepTimeout dead+300s default absent (model), deletion:retain not differentiated (model); minors: stale Engine.Describe sig (adr), RunTimedOut reason, join-any engine-level"
   }
 ]
