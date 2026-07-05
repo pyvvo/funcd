@@ -91,11 +91,11 @@ func New(d Deps) (*Engine, error) {
 // record. It is the engine core; the controller reconciler drives it asynchronously
 // (wiring is a separate layer). Steps of a ready batch are dispatched sequentially in
 // V1 (correct for the DAG; concurrent fan-out is a performance optimization).
-func (e *Engine) Execute(ctx context.Context, ns, runName v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
 	rs := newRunState(spec)
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	rec := &runstate.Record{
-		Namespace: v1.NamespaceName(ns), Name: runName, Phase: runRunning, Input: input,
+		Namespace: ns, Name: runName, Phase: runRunning, Input: input,
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
@@ -106,8 +106,8 @@ func (e *Engine) Execute(ctx context.Context, ns, runName v1.ObjectName, spec v1
 // Resume continues a persisted run after a crash (ADR-0094): it rebuilds the
 // scheduling state from the durable record and re-dispatches any step that was
 // in-flight (with a fresh attempt), so no state is lost.
-func (e *Engine) Resume(ctx context.Context, ns, runName v1.ObjectName, spec v1.WorkflowSpec) (*runstate.Record, error) {
-	rec, err := e.runs.Get(ctx, v1.NamespaceName(ns), runName)
+func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec) (*runstate.Record, error) {
+	rec, err := e.runs.Get(ctx, ns, runName)
 	if err != nil {
 		return nil, err
 	}
