@@ -1,8 +1,8 @@
-// Package badger is the run-state runstore driver (ADR-0094), backed by Badger v4.
+// Package badger is the run-state runstate driver (ADR-0094), backed by Badger v4.
 // One driver serves every backend: New selects Badger's in-memory mode (tests/dev,
 // hermetic — no files) or an on-disk directory (production durability). The backend
 // is passed at New, so swapping memory↔file is a config change, not a code change —
-// and the shared runstore.Contract proves both behave identically.
+// and the shared runstate.Contract proves both behave identically.
 package badger
 
 import (
@@ -14,10 +14,10 @@ import (
 	"github.com/dgraph-io/badger/v4/options"
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstore"
+	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
 
-const op = "runstore.badger"
+const op = "runstate.badger"
 
 const keyPrefix = "run/"
 
@@ -29,13 +29,13 @@ type Config struct {
 	Dir string
 }
 
-// store is the Badger-backed runstore.Store.
+// store is the Badger-backed runstate.Store.
 type store struct {
 	db *badger.DB
 }
 
-// New opens a run store on the configured backend and returns it as runstore.Store.
-func New(cfg Config) (runstore.Store, error) {
+// New opens a run store on the configured backend and returns it as runstate.Store.
+func New(cfg Config) (runstate.Store, error) {
 	var bopts badger.Options
 	if cfg.InMemory {
 		bopts = badger.DefaultOptions("").WithInMemory(true)
@@ -62,8 +62,8 @@ func recordKey(ns v1.NamespaceName, name v1.ObjectName) []byte {
 	return []byte(keyPrefix + string(ns) + "/" + string(name))
 }
 
-func (s *store) Get(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (*runstore.Record, error) {
-	var rec runstore.Record
+func (s *store) Get(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (*runstate.Record, error) {
+	var rec runstate.Record
 	err := s.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(recordKey(ns, name))
 		if err != nil {
@@ -80,7 +80,7 @@ func (s *store) Get(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) 
 	return &rec, nil
 }
 
-func (s *store) Put(_ context.Context, rec *runstore.Record) error {
+func (s *store) Put(_ context.Context, rec *runstate.Record) error {
 	if rec == nil || rec.Name == "" {
 		return fault.Invalidf(op, "run record must have a name")
 	}
@@ -105,17 +105,17 @@ func (s *store) Delete(_ context.Context, ns v1.NamespaceName, name v1.ObjectNam
 	return nil
 }
 
-func (s *store) List(_ context.Context, opts runstore.ListOptions) ([]*runstore.Record, error) {
+func (s *store) List(_ context.Context, opts runstate.ListOptions) ([]*runstate.Record, error) {
 	prefix := []byte(keyPrefix)
 	if opts.Namespace != "" {
 		prefix = []byte(keyPrefix + string(opts.Namespace) + "/")
 	}
-	var out []*runstore.Record
+	var out []*runstate.Record
 	err := s.db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			var rec runstore.Record
+			var rec runstate.Record
 			if err := it.Item().Value(func(val []byte) error { return json.Unmarshal(val, &rec) }); err != nil {
 				return err
 			}

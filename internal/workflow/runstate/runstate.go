@@ -1,9 +1,9 @@
-// Package runstore is the durable-run-state PORT for the workflow engine (ADR-0094).
+// Package runstate is the durable-run-state PORT for the workflow engine (ADR-0094).
 // The engine persists each WorkflowRun's authoritative state through this interface
 // and never touches a storage backend directly, so the persistence engine is a
 // swap: memory (tests/dev) and badger (production) are the V1 drivers, each in its
 // own subpackage, both verified by the shared contract suite (Contract).
-package runstore
+package runstate
 
 import (
 	"context"

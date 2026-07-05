@@ -1,4 +1,4 @@
-package runstore
+package runstate
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 )
 
-// Contract exercises the runstore.Store port against a driver. Every driver's test
+// Contract exercises the runstate.Store port against a driver. Every driver's test
 // runs it (ADR-0002 shared contract suite), so memory and badger are held to one
 // behavior: roundtrip, not-found, overwrite, delete, no-aliasing, and List filters.
 func Contract(t *testing.T, newStore func(t *testing.T) Store) {
