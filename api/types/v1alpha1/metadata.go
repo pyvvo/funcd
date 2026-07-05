@@ -36,6 +36,8 @@ const (
 	KindBucket        Kind = "Bucket"
 	KindCatalogService Kind = "CatalogService"
 	KindPolicy        Kind = "Policy"
+	KindWorkflow      Kind = "Workflow"
+	KindWorkflowRun   Kind = "WorkflowRun"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -50,7 +52,7 @@ func (k Kind) Validate() error {
 		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
-		KindCatalogService, KindPolicy:
+		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -296,6 +298,14 @@ func NewObject(k Kind) (Object, bool) {
 		pol := &Policy{}
 		pol.TypeMeta = typeMetaFor(k)
 		return pol, true
+	case KindWorkflow:
+		wf := &Workflow{}
+		wf.TypeMeta = typeMetaFor(k)
+		return wf, true
+	case KindWorkflowRun:
+		wr := &WorkflowRun{}
+		wr.TypeMeta = typeMetaFor(k)
+		return wr, true
 	default:
 		return nil, false
 	}
@@ -323,6 +333,8 @@ func AllKinds() []Kind {
 		KindBucket,
 		KindCatalogService,
 		KindPolicy,
+		KindWorkflow,
+		KindWorkflowRun,
 	}
 }
 

@@ -1,0 +1,359 @@
+package v1alpha1
+
+import (
+	"encoding/json"
+	"time"
+
+	huma "github.com/danielgtaylor/huma/v2"
+	"github.com/green-0-rabbit/funcd/api/fault"
+)
+
+// Workflow is a namespaced, status-bearing resource: a declarative multi-step run
+// definition whose steps are functions (ADR-0094, FEAT-0005/F64). The engine owns
+// and materializes the step Functions; a WorkflowRun is one execution.
+type Workflow struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata"`
+	Spec       WorkflowSpec   `json:"spec"`
+	Status     WorkflowStatus `json:"status,omitempty"`
+}
+
+// WorkflowSpec is the desired state: the ordered steps, workflow-owned KV stores, an
+// optional declared I/O contract, a run-level timeout, and an optional onFailure
+// handler step.
+type WorkflowSpec struct {
+	// Steps are the workflow's steps. List order chains implicitly (no dependsOn ⇒
+	// the previous step); dependsOn declares explicit edges.
+	Steps []WorkflowStep `json:"steps"`
+	// KV declares workflow-owned KVStores whose table owners name a step (materialized
+	// to the owning Function). Empty ⇒ no owned stores.
+	KV []WorkflowKVStore `json:"kv,omitempty"`
+	// Contract is the optional declared I/O contract (ADR-0090 shape); nil ⇒ the
+	// effective contract is derived (F65). Every optional property must carry a
+	// default (the total-defaults rule).
+	Contract *WorkflowContract `json:"contract,omitempty"`
+	// Timeout is the wall-clock bound on a whole run (paused time excluded); 0 ⇒ none.
+	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"604800000000000"`
+	// OnFailure names a handler step (defined in Steps, excluded from the DAG) invoked
+	// once when the run ends Failed. Empty ⇒ no handler.
+	OnFailure ObjectName `json:"onFailure,omitempty"`
+}
+
+// WorkflowStep is one step: exactly one of Image / Function / Workflow (Workflow is
+// reserved until F70). Bindings reuse the Function.spec shapes verbatim.
+type WorkflowStep struct {
+	// Name is the step's name; a DNS-1123 label, unique within the workflow.
+	Name ObjectName `json:"name"`
+	// Image is a full OCI artifact reference (tag at the string end) the workflow owns
+	// and materializes into a Function. The primary step kind.
+	Image string `json:"image,omitempty"`
+	// Function references an existing Function in the namespace (a shared service).
+	Function ObjectName `json:"function,omitempty"`
+	// Workflow references a child Workflow — reserved; rejected until F70.
+	Workflow ObjectName `json:"workflow,omitempty"`
+	// DependsOn names the parent steps; empty ⇒ follows the previous step in list order.
+	DependsOn []ObjectName `json:"dependsOn,omitempty"`
+	// Join is the fan-in mode: "all" (default) requires every parent Succeeded, "any"
+	// requires one (exclusive-branch merges).
+	Join JoinMode `json:"join,omitempty"`
+	// When is an optional gate condition (ADR-0095 native-JS boolean); false ⇒ Skipped.
+	When *StepWhen `json:"when,omitempty"`
+	// Params is a static overlay merged over the step's flowing input (static wins).
+	Params json.RawMessage `json:"params,omitempty"`
+	// Retry is the per-step retry policy; nil ⇒ the engine default.
+	Retry *StepRetry `json:"retry,omitempty"`
+	// Timeout is the per-step invocation bound; 0 ⇒ the engine default.
+	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"86400000000000"`
+	// KV/Blob/Secrets/Config/Catalogs are the step's bindings (Function.spec shapes).
+	KV       []FunctionKV      `json:"kv,omitempty"`
+	Blob     []FunctionBlob    `json:"blob,omitempty"`
+	Secrets  []ObjectName      `json:"secrets,omitempty"`
+	Config   []ObjectName      `json:"config,omitempty"`
+	Catalogs []FunctionCatalog `json:"catalogs,omitempty"`
+}
+
+// JoinMode is a step's fan-in mode.
+type JoinMode string
+
+const (
+	// JoinAll requires every parent to have Succeeded (the default).
+	JoinAll JoinMode = "all"
+	// JoinAny requires at least one parent to have Succeeded (exclusive-branch merge).
+	JoinAny JoinMode = "any"
+)
+
+// Schema carries JoinMode's enum into the generated OpenAPI (ADR-0048).
+func (JoinMode) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(string(JoinAll), string(JoinAny))
+}
+
+// StepWhen holds a native-JS boolean condition (ADR-0095 Condition mode) evaluated
+// against direct-parent outputs and the run input.
+type StepWhen struct {
+	Condition string `json:"condition"`
+}
+
+// StepRetry is a per-step retry policy: attempts and exponential backoff.
+type StepRetry struct {
+	MaxAttempts int           `json:"maxAttempts,omitempty" minimum:"1" maximum:"100"`
+	Backoff     time.Duration `json:"backoff,omitempty" minimum:"0" maximum:"3600000000000"`
+}
+
+// WorkflowKVStore declares a workflow-owned KVStore whose table owners name a step.
+type WorkflowKVStore struct {
+	// Name is the store name; a DNS-1123 label.
+	Name ObjectName `json:"name"`
+	// Deletion is "retain" (default — the store outlives the workflow) or "delete".
+	Deletion DeletionPolicy `json:"deletion,omitempty"`
+	// Tables are the store's sub-domains; each Owner names a step.
+	Tables []KVTable `json:"tables"`
+}
+
+// DeletionPolicy is a workflow-owned store's delete behavior.
+type DeletionPolicy string
+
+const (
+	// DeletionRetain leaves the store on workflow delete (the default).
+	DeletionRetain DeletionPolicy = "retain"
+	// DeletionDelete cascades the store on workflow delete.
+	DeletionDelete DeletionPolicy = "delete"
+)
+
+// Schema carries DeletionPolicy's enum into the generated OpenAPI (ADR-0048).
+func (DeletionPolicy) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(string(DeletionRetain), string(DeletionDelete))
+}
+
+// WorkflowContract is a declared or derived I/O contract (ADR-0090 ContractBlob shape).
+type WorkflowContract struct {
+	Dialect string          `json:"dialect,omitempty"`
+	Input   json.RawMessage `json:"input,omitempty"`
+	Output  json.RawMessage `json:"output,omitempty"`
+}
+
+// WorkflowStatus is the observed state: phase, the effective contract, the resolved
+// step graph (F65 fills it), and the run link (CronJob status.active pattern).
+type WorkflowStatus struct {
+	Status   `json:",inline"`
+	Contract *WorkflowContract    `json:"contract,omitempty"`
+	Steps    []WorkflowStepStatus `json:"steps,omitempty"`
+	Runs     *WorkflowRunLinks    `json:"runs,omitempty"`
+}
+
+// WorkflowStepStatus is one step's resolved digest-pinned image + cached contract.
+type WorkflowStepStatus struct {
+	Name     ObjectName        `json:"name"`
+	Image    string            `json:"image,omitempty"`
+	Contract *WorkflowContract `json:"contract,omitempty"`
+}
+
+// WorkflowRunLinks links a Workflow to its runs: active (in-flight) names + lifetime
+// terminal-phase counts. Bounded (active-only); history lives in engine state.
+type WorkflowRunLinks struct {
+	Active    []ObjectName `json:"active,omitempty"`
+	Succeeded int          `json:"succeeded,omitempty"`
+	Failed    int          `json:"failed,omitempty"`
+	Cancelled int          `json:"cancelled,omitempty"`
+}
+
+// GroupVersionKind returns the constant GVK for Workflow.
+func (w *Workflow) GroupVersionKind() GroupVersionKind { return KindWorkflow.GVK() }
+
+// GetStatus returns the embedded Status for the controller's write-back seam.
+func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
+
+// Validate enforces the Workflow rules JSON Schema can't express (ADR-0094): the
+// step kind-union, unique step names, dependsOn edge validity + acyclicity, the
+// reserved workflow: kind, the onFailure handler constraints, workflow-owned store
+// owners naming a step, and the declared-contract total-defaults rule. Field-format
+// constraints (durations, retry bounds, enums) are schema-enforced at the edge.
+func (w *Workflow) Validate() error {
+	const op = "Workflow.Validate"
+	if err := validateMeta(w.TypeMeta, &w.ObjectMeta, KindWorkflow); err != nil {
+		return err
+	}
+	if len(w.Spec.Steps) == 0 {
+		return fault.Invalidf(op, "spec.steps must not be empty")
+	}
+	names := make(map[ObjectName]bool, len(w.Spec.Steps))
+	for i := range w.Spec.Steps {
+		s := &w.Spec.Steps[i]
+		if s.Name == "" || !dnsLabel.MatchString(string(s.Name)) {
+			return fault.Invalidf(op, "spec.steps[%d].name %q is not a valid DNS-1123 label", i, s.Name)
+		}
+		if names[s.Name] {
+			return fault.Invalidf(op, "duplicate step name %q", s.Name)
+		}
+		names[s.Name] = true
+		if err := s.validateKind(op); err != nil {
+			return err
+		}
+		if s.Join != "" && s.Join != JoinAll && s.Join != JoinAny {
+			return fault.Invalidf(op, "step %q: join must be %q or %q", s.Name, JoinAll, JoinAny)
+		}
+	}
+	// dependsOn edges reference real steps, no self-edge; the graph is acyclic.
+	for i := range w.Spec.Steps {
+		s := &w.Spec.Steps[i]
+		for _, d := range s.DependsOn {
+			if d == s.Name {
+				return fault.Invalidf(op, "step %q depends on itself", s.Name)
+			}
+			if !names[d] {
+				return fault.Invalidf(op, "step %q depends on unknown step %q", s.Name, d)
+			}
+		}
+	}
+	if err := w.validateAcyclic(op); err != nil {
+		return err
+	}
+	if err := w.validateOnFailure(op, names); err != nil {
+		return err
+	}
+	if err := w.validateOwnedStores(op, names); err != nil {
+		return err
+	}
+	if w.Spec.Contract != nil {
+		if err := validateTotalDefaults(op, "input", w.Spec.Contract.Input); err != nil {
+			return err
+		}
+		if err := validateTotalDefaults(op, "output", w.Spec.Contract.Output); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateKind enforces the step kind-union: exactly one of image/function; the
+// workflow: kind is reserved (rejected until F70).
+func (s *WorkflowStep) validateKind(op string) error {
+	set := 0
+	if s.Image != "" {
+		set++
+	}
+	if s.Function != "" {
+		set++
+	}
+	if s.Workflow != "" {
+		return fault.Invalidf(op, "step %q: the workflow: kind is reserved (child runs land with F70)", s.Name)
+	}
+	if set != 1 {
+		return fault.Invalidf(op, "step %q must set exactly one of image or function", s.Name)
+	}
+	return nil
+}
+
+// validateAcyclic rejects a dependsOn cycle via DFS (a cycle is unbuildable).
+func (w *Workflow) validateAcyclic(op string) error {
+	deps := make(map[ObjectName][]ObjectName, len(w.Spec.Steps))
+	for i := range w.Spec.Steps {
+		deps[w.Spec.Steps[i].Name] = w.Spec.Steps[i].DependsOn
+	}
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := make(map[ObjectName]int, len(deps))
+	var visit func(n ObjectName) error
+	visit = func(n ObjectName) error {
+		color[n] = gray
+		for _, d := range deps[n] {
+			switch color[d] {
+			case gray:
+				return fault.Invalidf(op, "dependsOn cycle through step %q", d)
+			case white:
+				if err := visit(d); err != nil {
+					return err
+				}
+			}
+		}
+		color[n] = black
+		return nil
+	}
+	for n := range deps {
+		if color[n] == white {
+			if err := visit(n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateOnFailure checks the handler names a real step outside the DAG (no
+// dependsOn/when, and no step depends on it).
+func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error {
+	if w.Spec.OnFailure == "" {
+		return nil
+	}
+	if !names[w.Spec.OnFailure] {
+		return fault.Invalidf(op, "spec.onFailure %q is not a step", w.Spec.OnFailure)
+	}
+	for i := range w.Spec.Steps {
+		s := &w.Spec.Steps[i]
+		if s.Name == w.Spec.OnFailure {
+			if len(s.DependsOn) != 0 || s.When != nil {
+				return fault.Invalidf(op, "onFailure handler %q must have no dependsOn and no when", s.Name)
+			}
+			continue
+		}
+		for _, d := range s.DependsOn {
+			if d == w.Spec.OnFailure {
+				return fault.Invalidf(op, "step %q may not depend on the onFailure handler %q", s.Name, d)
+			}
+		}
+	}
+	return nil
+}
+
+// validateOwnedStores checks each owned store's table owner names a step.
+func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) error {
+	for i := range w.Spec.KV {
+		st := &w.Spec.KV[i]
+		if st.Name == "" || !dnsLabel.MatchString(string(st.Name)) {
+			return fault.Invalidf(op, "spec.kv[%d].name %q is not a valid DNS-1123 label", i, st.Name)
+		}
+		if st.Deletion != "" && st.Deletion != DeletionRetain && st.Deletion != DeletionDelete {
+			return fault.Invalidf(op, "spec.kv[%d].deletion must be %q or %q", i, DeletionRetain, DeletionDelete)
+		}
+		for j := range st.Tables {
+			if o := st.Tables[j].Owner; o != "" && !names[o] {
+				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %q is not a step", i, j, o)
+			}
+		}
+	}
+	return nil
+}
+
+// validateTotalDefaults enforces that every optional property of a declared contract
+// schema carries a default — so the workflow boundary is total (ADR-0094).
+func validateTotalDefaults(op, which string, raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var schema struct {
+		Required   []string                   `json:"required"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return fault.Invalidf(op, "spec.contract.%s is not a JSON Schema object: %v", which, err)
+	}
+	required := make(map[string]bool, len(schema.Required))
+	for _, r := range schema.Required {
+		required[r] = true
+	}
+	for name, propRaw := range schema.Properties {
+		if required[name] {
+			continue
+		}
+		var prop map[string]json.RawMessage
+		if err := json.Unmarshal(propRaw, &prop); err != nil {
+			return fault.Invalidf(op, "spec.contract.%s.properties.%s is malformed: %v", which, name, err)
+		}
+		if _, ok := prop["default"]; !ok {
+			return fault.Invalidf(op, "spec.contract.%s optional property %q must declare a default (total-defaults rule)", which, name)
+		}
+	}
+	return nil
+}
