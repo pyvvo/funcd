@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 	wbadger "github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
 )
 
@@ -101,6 +103,64 @@ func TestRunReconcilerCancel(t *testing.T) {
 	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
 	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Cancelled != 1 {
 		t.Fatalf("status.runs = %+v, want Cancelled=1", wfObj.(*v1.Workflow).Status.Runs)
+	}
+}
+
+// scenario: duplicate-run-name-rejected — a second WorkflowRun with an existing name is rejected
+// with Conflict (AlreadyExists) at the store/admission layer.
+func TestDuplicateRunNameRejected(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "dup", "wf", `{}`)
+	again := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "dup", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf"},
+	}
+	if _, err := s.Create(ctx, again); fault.KindOf(err) != fault.Conflict {
+		t.Fatalf("second create of an existing run name must Conflict (AlreadyExists), got %v", err)
+	}
+}
+
+// scenario: revision-pinned-mid-run-repush — the LIVE workflow serves step b at v2 (an artifact
+// re-push + re-reconcile), but an in-flight run pinned to b@v1 keeps executing v1 on resume;
+// only new runs would see v2. Immunity is structural: Resume rebuilds from the record's pinned spec.
+func TestRevisionPinnedMidRunRepush(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	bV2 := step("b", "", "a")
+	bV2.Image = "oci:b@v2" // the re-pushed live image
+	seedWorkflow(t, s, "wf", step("a", ""), bV2)
+	seedRun(t, s, "run-x", "wf", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	bV1 := step("b", "", "a")
+	bV1.Image = "oci:b@v1" // the digest pinned when the run started
+	_ = rstate.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "run-x", Workflow: "wf", Phase: runRunning,
+		Spec: spec(step("a", ""), bV1),
+		Steps: []runstate.StepState{
+			{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)},
+			{Name: "b", Phase: v1.StepRunning},
+		},
+	})
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil)
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-x"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-x")
+	var bRev string
+	for _, ss := range obj.(*v1.WorkflowRun).Status.Steps {
+		if ss.Name == "b" {
+			bRev = ss.Revision
+		}
+	}
+	if bRev != "oci:b@v1" {
+		t.Fatalf("in-flight step b must keep its PINNED image oci:b@v1 (immune to the v2 re-push), got %q", bRev)
 	}
 }
 

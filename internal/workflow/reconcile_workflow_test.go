@@ -33,7 +33,7 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 		Spec: v1.WorkflowSpec{
 			Pooling: v1.WorkflowPooling{Mode: v1.PoolingShared, MinReplicas: 1},
 			KV: []v1.WorkflowKVStore{{
-				Name: "counters-kv", Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}},
+				Name: "counters-kv", Deletion: v1.DeletionDelete, Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}},
 			}},
 			Steps: []v1.WorkflowStep{
 				{Name: "ingest", Image: "oci:ingest-v1", KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}},
@@ -85,6 +85,36 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 	}
 	if len(kv.OwnerReferences) != 1 {
 		t.Fatal("kvstore missing owner ref for cascade")
+	}
+}
+
+// scenario core: deletion policy differentiation — a `retain` owned store carries NO cascading
+// owner reference (it outlives the workflow); a `delete` one does (it cascades).
+func TestMaterializeDeletionPolicy(t *testing.T) {
+	s := newStore(t)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	ctx := context.Background()
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1", UID: "u"},
+		Spec: v1.WorkflowSpec{
+			KV: []v1.WorkflowKVStore{
+				{Name: "keep-kv", Deletion: v1.DeletionRetain, Tables: []v1.KVTable{{Name: "t"}}},
+				{Name: "drop-kv", Deletion: v1.DeletionDelete, Tables: []v1.KVTable{{Name: "t"}}},
+			},
+			Steps: []v1.WorkflowStep{{Name: "a", Image: "oci:a"}},
+		},
+	}
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	keep, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "keep-kv")
+	if refs := keep.(*v1.KVStore).OwnerReferences; len(refs) != 0 {
+		t.Fatalf("retain store must have NO owner ref (outlives the workflow), got %d", len(refs))
+	}
+	drop, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "drop-kv")
+	if refs := drop.(*v1.KVStore).OwnerReferences; len(refs) != 1 {
+		t.Fatalf("delete store must cascade via one owner ref, got %d", len(refs))
 	}
 }
 

@@ -148,8 +148,12 @@ func defaults() Config {
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
 	c.S3Gateway.MaxUploadBytes = 1 << 30
-	// Workflow engine (ADR-0094): one attempt by default (no retry), no step timeout.
+	// Workflow engine (ADR-0094): one attempt by default (no retry), 300s per-step timeout,
+	// 30-day terminal-run retention, 1 MiB run-payload cap.
 	c.Workflow.DefaultRetry = 1
+	c.Workflow.DefaultStepTimeout = "300s"
+	c.Workflow.Retention = "720h"
+	c.Workflow.PayloadLimit = 1 << 20
 	return c
 }
 

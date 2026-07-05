@@ -204,18 +204,24 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	// Workflow engine (ADR-0094): durable run state at <dataDir>/workflow (in-memory when the
 	// substrate is memory), plus the workflow.* tunables.
-	var stepTimeout time.Duration
+	var stepTimeout, retention time.Duration
 	if cfg.Workflow.DefaultStepTimeout != "" {
 		stepTimeout, err = time.ParseDuration(cfg.Workflow.DefaultStepTimeout)
 		if err != nil {
 			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.defaultStepTimeout %q: %w", cfg.Workflow.DefaultStepTimeout, err)
 		}
 	}
+	if cfg.Workflow.Retention != "" {
+		retention, err = time.ParseDuration(cfg.Workflow.Retention)
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.retention %q: %w", cfg.Workflow.Retention, err)
+		}
+	}
 	workflowDir := ""
 	if cfg.Storage.Mode != "memory" {
 		workflowDir = filepath.Join(cfg.Storage.DataDir, "workflow")
 	}
-	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, cfg.Workflow.DefaultRetry))
+	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit))
 
 	execOpts, closeExec, err := executionOptions(ctx, cfg)
 	if err != nil {

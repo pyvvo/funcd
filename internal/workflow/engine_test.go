@@ -221,13 +221,14 @@ func TestCrashRecoveryResumesRun(t *testing.T) {
 	// simulate a crash: a Succeeded (with output), b was Running.
 	_ = rs.Put(ctx, &runstate.Record{
 		Namespace: "default", Name: "run-r", Phase: runRunning,
+		Spec: spec(step("a", ""), step("b", "", "a")), // the pinned spec recovery rebuilds from
 		Steps: []runstate.StepState{
 			{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{"x":1}`)},
 			{Name: "b", Phase: v1.StepRunning},
 		},
 	})
 	e, _ := New(Deps{Runs: rs, Dispatch: f})
-	rec, err := e.Resume(ctx, "default", "run-r", spec(step("a", ""), step("b", "", "a")))
+	rec, err := e.Resume(ctx, "default", "run-r")
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
@@ -272,6 +273,7 @@ func TestPauseAndResume(t *testing.T) {
 	ctx := context.Background()
 	_ = rs.Put(ctx, &runstate.Record{
 		Namespace: "default", Name: "run-p", Phase: runRunning,
+		Spec:  spec(step("a", ""), step("b", "", "a")),
 		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)}, {Name: "b", Phase: v1.StepPending}},
 	})
 	e, _ := New(Deps{Runs: rs, Dispatch: f})
@@ -285,7 +287,7 @@ func TestPauseAndResume(t *testing.T) {
 	if f.calls["b"] != 0 {
 		t.Fatal("b must not dispatch while paused")
 	}
-	rec, err := e.Resume(ctx, "default", "run-p", spec(step("a", ""), step("b", "", "a")))
+	rec, err := e.Resume(ctx, "default", "run-p")
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}

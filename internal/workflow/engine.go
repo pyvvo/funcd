@@ -7,8 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/api/fault"
+	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
 
@@ -51,6 +52,7 @@ func isPermanent(err error) bool {
 type Config struct {
 	DefaultMaxAttempts int           // per-step, when a step sets no retry (default 1 = no retry)
 	DefaultStepTimeout time.Duration // per-step invocation bound (0 = none)
+	PayloadLimit       int64         // max bytes for a step output (and run input, at admission); 0 = unbounded
 }
 
 // Deps wires the engine (internal component, ADR-0002 §1).
@@ -58,6 +60,7 @@ type Deps struct {
 	Runs     runstate.Store // durable run state (the port; Badger driver in prod, in-memory in tests)
 	Dispatch Dispatcher     // the step-invocation seam
 	Config   Config
+	Clock    clock.Clock // stamps run timestamps (retention GC input); defaults to the system clock
 	Logger   *slog.Logger
 }
 
@@ -66,6 +69,7 @@ type Engine struct {
 	runs     runstate.Store
 	dispatch Dispatcher
 	cfg      Config
+	clock    clock.Clock
 	log      *slog.Logger
 }
 
@@ -84,7 +88,11 @@ func New(d Deps) (*Engine, error) {
 	if d.Config.DefaultMaxAttempts < 1 {
 		d.Config.DefaultMaxAttempts = 1
 	}
-	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, log: log.With("component", "workflow.engine")}, nil
+	clk := d.Clock
+	if clk == nil {
+		clk = clock.System()
+	}
+	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, log: log.With("component", "workflow.engine")}, nil
 }
 
 // Execute runs a workflow synchronously to a terminal phase and returns the final
@@ -96,6 +104,8 @@ func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
+		Spec:      spec, // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
+		StartedAt: e.clock.Now().UnixNano(),
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
@@ -103,10 +113,12 @@ func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	return e.drive(ctx, rec, rs, outputs, spec, input)
 }
 
-// Resume continues a persisted run after a crash (ADR-0094): it rebuilds the
-// scheduling state from the durable record and re-dispatches any step that was
-// in-flight (with a fresh attempt), so no state is lost.
-func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, spec v1.WorkflowSpec) (*runstate.Record, error) {
+// Resume continues a persisted run after a crash, pause, or cancel-race (ADR-0094): it rebuilds
+// the scheduling state from the durable record and re-dispatches any step that was in-flight
+// (with a fresh attempt), so no state is lost. It rebuilds from the record's PINNED spec
+// (rec.Spec), never the live Workflow — an in-flight run is immune to a mid-run spec edit or
+// artifact re-push. The caller passes no spec; the pinned one is the truth.
+func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName) (*runstate.Record, error) {
 	rec, err := e.runs.Get(ctx, ns, runName)
 	if err != nil {
 		return nil, err
@@ -114,6 +126,7 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	if rec.Terminal() {
 		return rec, nil // a finished run (succeeded/failed/cancelled) is never re-driven
 	}
+	spec := rec.Spec // the pinned spec — mid-run edits to the live Workflow do not reach here
 	rs, outputs := rebuildState(spec, rec)
 	rec.Paused = false // resume clears the pause
 	rec.Phase = runRunning
@@ -140,6 +153,33 @@ func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1
 		}
 	}
 	return rs, outputs
+}
+
+// SweepExpired deletes terminal run records whose last update is older than retention (ADR-0094:
+// terminal runs "swept after workflow.retention"). retention ≤ 0 disables the sweep. Returns the
+// number of records reclaimed. Non-terminal runs are never swept. Callers invoke it periodically
+// (pkg/funcd lifecycle); it is idempotent and safe to run concurrently with reconciles (the store
+// is the single writer per run and a terminal run is immutable).
+func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration) (int, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	recs, err := e.runs.List(ctx, runstate.ListOptions{})
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.KindOf(err), engineOp, "list runs for retention sweep")
+	}
+	cutoff := e.clock.Now().Add(-retention).UnixNano()
+	swept := 0
+	for _, rec := range recs {
+		if !rec.Terminal() || rec.UpdatedAt == 0 || rec.UpdatedAt >= cutoff {
+			continue
+		}
+		if derr := e.runs.Delete(ctx, rec.Namespace, rec.Name); derr != nil {
+			return swept, fault.Wrapf(derr, fault.KindOf(derr), engineOp, "delete expired run %q", rec.Name)
+		}
+		swept++
+	}
+	return swept, nil
 }
 
 // Pause requests a graceful pause: the persisted run is marked Paused so the next
@@ -206,13 +246,16 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 		}
 		// 3. dispatch the batch (sequential V1), fail-fast on the first permanent failure.
 		for _, n := range batch {
-			if ctx.Err() != nil {
-				return e.fail(ctx, rec, rs, outputs, spec, input, fault.Wrapf(ctx.Err(), fault.Unavailable, engineOp, "run deadline"))
+			if ctx.Err() != nil { // run deadline hit between steps
+				return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 			}
 			n.phase = v1.StepRunning
 			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, rec.Workflow, spec, n, input, outputs)
 			if err != nil {
 				n.phase = v1.StepFailed
+				if ctx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
+					return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+				}
 				return e.fail(ctx, rec, rs, outputs, spec, input, err)
 			}
 			n.phase = v1.StepSucceeded
@@ -276,13 +319,32 @@ func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName,
 		backoff = st.Retry.Backoff
 	}
 	target := stepTarget(workflow, spec, n.name)
+	// Per-step invocation bound: the step's own timeout, else the engine default (0 ⇒ none).
+	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
+	// separately in drive and maps to RunTimedOut.
+	stepTimeout := e.cfg.DefaultStepTimeout
+	if st != nil && st.Timeout > 0 {
+		stepTimeout = st.Timeout
+	}
 	var lastErr error
 	for attempt := 1; attempt <= max; attempt++ {
-		out, err := e.dispatch.Dispatch(ctx, DispatchRequest{
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if stepTimeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, stepTimeout)
+		}
+		out, err := e.dispatch.Dispatch(attemptCtx, DispatchRequest{
 			Namespace: ns, Run: runName, Step: n.name, Target: target,
 			Attempt: attempt, Input: stepInput,
 		})
+		if cancel != nil {
+			cancel()
+		}
 		if err == nil {
+			if e.cfg.PayloadLimit > 0 && int64(len(out)) > e.cfg.PayloadLimit {
+				// An over-cap output is permanent — a retry cannot shrink it (ADR-0094 payload cap).
+				return nil, Permanent(fault.Invalidf(engineOp, "step %q output %d bytes exceeds payload limit %d", n.name, len(out), e.cfg.PayloadLimit))
+			}
 			return out, nil
 		}
 		lastErr = err
@@ -374,11 +436,15 @@ func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState
 	for _, name := range rs.order {
 		n := rs.steps[name]
 		ss := runstate.StepState{Name: n.name, Phase: n.phase}
+		if st := specStep(rec.Spec, n.name); st != nil && st.Image != "" {
+			ss.Revision = st.Image // the pinned artifact ref this step executes (from the pinned spec)
+		}
 		if out, ok := outputs[n.name]; ok {
 			ss.Output = out
 		}
 		rec.Steps = append(rec.Steps, ss)
 	}
+	rec.UpdatedAt = e.clock.Now().UnixNano()
 	return e.runs.Put(ctx, rec)
 }
 
@@ -392,3 +458,9 @@ func specStep(spec v1.WorkflowSpec, name v1.ObjectName) *v1.WorkflowStep {
 }
 
 func timeoutOf(spec v1.WorkflowSpec) time.Duration { return spec.Timeout }
+
+// runTimedOut wraps a run-deadline cause as the ADR-0094 RunTimedOut failure reason (distinct
+// from a per-step timeout, which is a retryable step failure).
+func runTimedOut(cause error) error {
+	return fault.Wrapf(cause, fault.Unavailable, engineOp, "RunTimedOut: run deadline exceeded")
+}

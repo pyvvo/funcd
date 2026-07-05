@@ -176,13 +176,16 @@ func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore, owner v1.OwnerReferen
 			tables[i].Owner = materializedName(wf, t.Owner)
 		}
 	}
+	meta := v1.ObjectMeta{Name: kv.Name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup}
+	// deletion policy (ADR-0094): `delete` attaches a cascading owner reference so the store is
+	// reclaimed with the workflow; `retain` (default) attaches none, so the store outlives it.
+	if kv.Deletion == v1.DeletionDelete {
+		meta.OwnerReferences = []v1.OwnerReference{owner}
+	}
 	return &v1.KVStore{
-		TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
-		ObjectMeta: v1.ObjectMeta{
-			Name: kv.Name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup,
-			OwnerReferences: []v1.OwnerReference{owner},
-		},
-		Spec: v1.KVStoreSpec{Tables: tables},
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
+		ObjectMeta: meta,
+		Spec:       v1.KVStoreSpec{Tables: tables},
 	}
 }
 

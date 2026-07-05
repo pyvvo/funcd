@@ -149,7 +149,9 @@ type config struct {
 	// retention + payloadLimit are declared here but enforced by later gates (run GC / admission).
 	workflowDataDir      string
 	workflowStepTimeout  time.Duration
+	workflowRetention    time.Duration
 	workflowDefaultRetry int
+	workflowPayloadLimit int64
 }
 
 // validate returns the first missing required dependency as a fault.Invalid.
@@ -189,8 +191,10 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr    *local.Manager   // per-function worker-node local API broker (ADR-0064)
-	workflowRuns runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
+	invokeMgr         *local.Manager   // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
+	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
 	logSink      *funclog.BlobSink  // structured function-log capture sink (ADR-0081); nil if unwired
 	compactor *compact.Compactor // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw      *s3gateway.Server  // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
@@ -499,12 +503,14 @@ func (p *Platform) buildControlPlane() error {
 	wfEngine, eerr := workflow.New(workflow.Deps{
 		Runs:     runs,
 		Dispatch: wfDispatcher,
-		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout},
+		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit},
 		Logger:   p.logger,
 	})
 	if eerr != nil {
 		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
 	}
+	p.workflowEngine = wfEngine
+	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, p.logger))
 	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, p.logger))
@@ -553,6 +559,8 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
+			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
+			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 		},
 	})
 	if err != nil {
@@ -669,6 +677,13 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	if p.workflowEngine != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.runWorkflowRetention(ctx)
+		}()
+	}
 	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
 		wg.Add(1)
 		go func() {
@@ -774,6 +789,33 @@ type storeGranter struct{ store store.Store }
 func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
 	_, err := g.store.Get(context.Background(), v1.KindFunction.GVK(), ns, target)
 	return err == nil
+}
+
+// runWorkflowRetention periodically reclaims terminal WorkflowRun records older than the retention
+// horizon (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
+// cancel. A sweep failure is logged, not fatal — the next tick retries.
+func (p *Platform) runWorkflowRetention(ctx context.Context) {
+	interval := p.workflowRetention
+	if interval > time.Hour {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := p.workflowEngine.SweepExpired(ctx, p.workflowRetention)
+			if err != nil {
+				p.logger.WarnContext(ctx, "workflow retention sweep failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				p.logger.InfoContext(ctx, "workflow retention sweep reclaimed runs", "count", n)
+			}
+		}
+	}
 }
 
 // storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions and the

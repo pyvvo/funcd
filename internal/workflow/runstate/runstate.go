@@ -22,11 +22,16 @@ type Record struct {
 	Name      v1.ObjectName    `json:"name"`
 	Workflow  v1.ObjectName    `json:"workflow"`
 	Input     json.RawMessage  `json:"input,omitempty"`
-	Phase     v1.Phase         `json:"phase"`
-	Paused    bool             `json:"paused,omitempty"`
-	Steps     []StepState      `json:"steps,omitempty"`
-	StartedAt int64            `json:"startedAt,omitempty"`
-	UpdatedAt int64            `json:"updatedAt,omitempty"`
+	// Spec is the WorkflowSpec snapshotted at run start (ADR-0094 "pinned at start"): the
+	// step graph, images/digests, and per-step + run policies the run executes against. Resume
+	// and recovery rebuild from THIS pinned spec, never the live Workflow — so a mid-run spec
+	// edit or artifact re-push leaves an in-flight run on its pinned graph and digests.
+	Spec      v1.WorkflowSpec `json:"spec,omitempty"`
+	Phase     v1.Phase        `json:"phase"`
+	Paused    bool            `json:"paused,omitempty"`
+	Steps     []StepState     `json:"steps,omitempty"`
+	StartedAt int64           `json:"startedAt,omitempty"`
+	UpdatedAt int64           `json:"updatedAt,omitempty"`
 	// PausedNanos accumulates time spent paused, excluded from the run-timeout clock.
 	PausedNanos int64 `json:"pausedNanos,omitempty"`
 }

@@ -111,7 +111,9 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 
 func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
 	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
-		return r.engine.Resume(ctx, ns, name, spec)
+		// A durable record exists → resume from its PINNED spec (the live wf.Spec is not passed;
+		// an in-flight run is immune to a mid-run edit or re-push).
+		return r.engine.Resume(ctx, ns, name)
 	}
 	return r.engine.Execute(ctx, ns, name, workflow, spec, input)
 }
