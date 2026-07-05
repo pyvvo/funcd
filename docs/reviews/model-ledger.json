@@ -1483,5 +1483,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0094-implementation-claude-opus-4-8.md",
     "notes": "core engine/state-machine/recovery/materialization strong; B: 4 scenario tests missing (model), spec pinning not held across pause/crash (model); M: payloadLimit+retention unenforced (model), DefaultStepTimeout dead+300s default absent (model), deletion:retain not differentiated (model); minors: stale Engine.Describe sig (adr), RunTimedOut reason, join-any engine-level"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0094",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0094-implementation-claude-opus-4-8-2.md",
+    "notes": "round 2: all 5 model findings closed (pinning via Record.Spec, 4 scenario tests, per-step timeout+300s, payload cap admission+engine, retention sweep, deletion:retain); 17/17 scenarios; DoD 13/13; 1 minor rides to F65 (adr: stale Describe sig)"
   }
 ]
