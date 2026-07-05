@@ -51,6 +51,13 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	}
 	wf := wfObj.(*v1.Workflow)
 
+	// Cancel request (declarative, ADR-0094): abandon in-flight work and terminate Cancelled.
+	// Checked before pause/drive — cancel wins over a concurrent pause. The controller workqueue
+	// delivered this reconcile because spec.cancel was written; there is no synchronous path.
+	if run.Spec.Cancel {
+		return controller.Result{}, r.cancelRun(ctx, run, wf)
+	}
+
 	// Pause request: mark Paused, dispatch nothing.
 	if run.Spec.Paused {
 		if err := r.engine.Pause(ctx, req.Namespace, req.Name); err != nil && fault.KindOf(err) != fault.NotFound {
@@ -77,6 +84,29 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		r.log.Warn("status.runs update failed", "workflow", wf.Name, "error", lerr)
 	}
 	return controller.Result{}, nil
+}
+
+// cancelRun abandons a run's in-flight work and terminates it Cancelled (ADR-0094), then mirrors
+// the terminal state into WorkflowRun.status (so describe sees it and the reconciler's terminal
+// short-circuit keeps it from being re-driven) and refreshes the parent's status.runs. It runs
+// on the controller workqueue when it observes spec.cancel — the declarative cancel path.
+func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow) error {
+	if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
+		return err
+	}
+	rec, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)
+	if gerr == nil {
+		mirror(run, rec)
+	} else {
+		run.Status.Phase = runCancelled
+	}
+	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
+		return uerr
+	}
+	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
+		r.log.Warn("status.runs update failed after cancel", "workflow", wf.Name, "error", lerr)
+	}
+	return nil
 }
 
 func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {

@@ -30,6 +30,8 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerBucket(api, h)
 	registerCatalogService(api, h)
 	registerPolicy(api, h)
+	registerWorkflow(api, h)
+	registerWorkflowRun(api, h)
 }
 
 // ---- shared input types ----

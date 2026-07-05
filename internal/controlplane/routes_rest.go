@@ -915,3 +915,133 @@ func registerGateway(api huma.API, h Handlers) {
 		return nil, wrapFaultError(h.DeleteGateway(ctx, in.Name))
 	})
 }
+
+// ===== Workflow (namespaced) — ADR-0094 =====
+
+type createWorkflowInput struct{ Body v1.Workflow }
+type workflowOutput struct{ Body v1.Workflow }
+type listWorkflowOutput struct{ Body []v1.Workflow }
+
+func registerWorkflow(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listWorkflows", Method: http.MethodGet, Path: base,
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedList) (*listWorkflowOutput, error) {
+		items, err := h.ListWorkflows(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listWorkflowOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createWorkflow", Method: http.MethodPost, Path: base,
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *createWorkflowInput) (*workflowOutput, error) {
+		item, err := h.CreateWorkflow(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getWorkflow", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedGet) (*workflowOutput, error) {
+		item, err := h.GetWorkflow(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceWorkflow", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Workflow
+	}) (*workflowOutput, error) {
+		item, err := h.ReplaceWorkflow(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteWorkflow", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteWorkflow(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== WorkflowRun (namespaced) — ADR-0094 =====
+
+type createWorkflowRunInput struct{ Body v1.WorkflowRun }
+type workflowRunOutput struct{ Body v1.WorkflowRun }
+type listWorkflowRunOutput struct{ Body []v1.WorkflowRun }
+
+func registerWorkflowRun(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listWorkflowRuns", Method: http.MethodGet, Path: base,
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedList) (*listWorkflowRunOutput, error) {
+		items, err := h.ListWorkflowRuns(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listWorkflowRunOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createWorkflowRun", Method: http.MethodPost, Path: base,
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *createWorkflowRunInput) (*workflowRunOutput, error) {
+		item, err := h.CreateWorkflowRun(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getWorkflowRun", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedGet) (*workflowRunOutput, error) {
+		item, err := h.GetWorkflowRun(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceWorkflowRun", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.WorkflowRun
+	}) (*workflowRunOutput, error) {
+		item, err := h.ReplaceWorkflowRun(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteWorkflowRun", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteWorkflowRun(ctx, in.Namespace, in.Name))
+	})
+}

@@ -28,6 +28,11 @@ type WorkflowRunSpec struct {
 	// Paused requests a graceful pause: no new steps dispatch, in-flight steps finish
 	// (set by `funcdctl workflow pause`, cleared by `resume`).
 	Paused bool `json:"paused,omitempty"`
+	// Cancel requests cancellation (ADR-0094): a declarative one-way intent, the same shape
+	// as Paused. Set by `funcdctl workflow cancel`, it is observed by the run reconciler on
+	// the controller workqueue (never a synchronous endpoint) which abandons in-flight work
+	// and terminates the run Cancelled. Ignored once the run is already terminal.
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 // WorkflowRunStatus is the coarse mirror of engine run state (Badger is the truth):

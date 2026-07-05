@@ -70,6 +70,40 @@ func TestRunReconcilerDrivesAndLinks(t *testing.T) {
 	}
 }
 
+// scenario: cancel-terminates-run — a declarative spec.cancel is observed on the reconcile
+// (the controller workqueue is the FIFO); the reconciler abandons in-flight work and mirrors
+// Cancelled into WorkflowRun.status, and status.runs counts it. No synchronous endpoint.
+func TestRunReconcilerCancel(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	run := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "run-c", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Cancel: true},
+	}
+	if _, err := s.Create(ctx, run); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil)
+
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-c"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-c")
+	if obj.(*v1.WorkflowRun).Status.Phase != runCancelled {
+		t.Fatalf("cancelled run phase = %s, want Cancelled", obj.(*v1.WorkflowRun).Status.Phase)
+	}
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Cancelled != 1 {
+		t.Fatalf("status.runs = %+v, want Cancelled=1", wfObj.(*v1.Workflow).Status.Runs)
+	}
+}
+
 // a paused run is marked Paused and dispatches nothing.
 func TestRunReconcilerPause(t *testing.T) {
 	ctx := context.Background()

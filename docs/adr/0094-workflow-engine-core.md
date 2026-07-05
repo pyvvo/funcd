@@ -1,7 +1,7 @@
 # ADR-0094: Workflow engine core — `Workflow`/`WorkflowRun` resources and the state-machine orchestrator
 
 - **Status**: Accepted
-- **Date**: 2026-07-05 (accepted 2026-07-05; judged twice — 2 Blockers + 6 Majors folded: companion sequencing, the `exists()` guard rule lives in ADR-0095, onFailure trigger set, `image` asymmetry justified + transitional, two typing rules assigned to F65, scalar equality, root matching; `status.runs` run-link added post-judge. **In-place update 2026-07-05 (process bypass, decider-authorized):** `when.condition` now uses **native JavaScript** on the goja engine (ADR-0095, likewise updated) — a bench (`bench/expr-engine`) showed goja beats the hand-rolled evaluator on every axis and keeps reconcile-time type-checking by walking goja's parser AST; the postfix `.greaterThan(0)` method syntax is replaced by native operators `>`/`===`/`&&` with `!== undefined` as the guard. The engine seam and `StepWhen.Condition string` contract are unchanged.)
+- **Date**: 2026-07-05 (accepted 2026-07-05; judged twice — 2 Blockers + 6 Majors folded: companion sequencing, the `exists()` guard rule lives in ADR-0095, onFailure trigger set, `image` asymmetry justified + transitional, two typing rules assigned to F65, scalar equality, root matching; `status.runs` run-link added post-judge. **In-place update 2026-07-05 (process bypass, decider-authorized):** `when.condition` now uses **native JavaScript** on the goja engine (ADR-0095, likewise updated) — a bench (`bench/expr-engine`) showed goja beats the hand-rolled evaluator on every axis and keeps reconcile-time type-checking by walking goja's parser AST; the postfix `.greaterThan(0)` method syntax is replaced by native operators `>`/`===`/`&&` with `!== undefined` as the guard. The engine seam and `StepWhen.Condition string` contract are unchanged. **In-place update 2026-07-05 (process bypass, decider-authorized): cancel is now declarative, not an imperative endpoint.** `funcdctl workflow cancel` sets a new `WorkflowRun.spec.cancel: true` (the same shape as `spec.paused`); the run reconciler observes it on the ADR-0015 controller workqueue (the queue *is* the dispatch FIFO) and calls `Engine.Cancel` + mirrors `Cancelled`. No synchronous `POST …/cancel` route, no `RunCanceller` server dep — the control-plane server stays store-CRUD-only. Consequence: cancel is eventually-consistent (terminal on the next reconcile), consistent with pause. `Engine.Cancel` is unchanged; it is invoked by the reconciler rather than an API handler.)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, orchestration, controller, state-machine, badger, scale-to-zero
 - **Realizes**: [FEAT-0005/F64](../feat/0005-feat-workflow-engine.md)
@@ -33,7 +33,7 @@ Each becomes a named acceptance test.
 - `duplicate-run-name-rejected` — Given an existing `WorkflowRun` name, When a second with the same name is applied, Then admission rejects it (AlreadyExists).
 - `contract-defaults-required` — Given a declared `spec.contract` whose input (or output) has an optional property without a `default`, Then admission rejects the Workflow naming the property (total-defaults rule).
 - `crash-recovery-resumes-run` — Given a run with one step in flight when the engine restarts, Then recovery re-dispatches that step with a fresh attempt ID and the run completes; no state is lost.
-- `cancel-terminates-run` — Given a running step, When `funcdctl workflow cancel <run>`, Then the in-flight invocation is abandoned, the step and run end `Cancelled` immediately.
+- `cancel-terminates-run` — Given a running step, When `funcdctl workflow cancel <run>` sets `spec.cancel`, Then on the next reconcile the in-flight invocation is abandoned and the step and run end `Cancelled` (declarative, via the controller workqueue — the same path as pause).
 - `pause-and-resume-run` — Given a running fan-out, When `funcdctl workflow pause <run>`, Then in-flight steps complete and are recorded but nothing new dispatches and the run shows `Paused`; When `resume`, Then scheduling continues and the run ends `Succeeded` (the run timeout excluded the paused interval).
 - `run-timeout-fails` — Given `spec.timeout: 1s` on the workflow and a slow step, Then on expiry the run ends `Failed` with `RunTimedOut`.
 - `onfailure-handler-runs` — Given `spec.onFailure` naming a handler step, When the run fails, Then the handler is invoked once with the engine's FailureContext, its outcome is recorded, and the run phase stays `Failed` regardless of the handler's result.
@@ -176,8 +176,9 @@ freezes and resumes with the run). The run-level timeout clock **excludes** time
 ### Failure, cancel, on-failure
 
 Step failure is **fail-fast**: running siblings are cancelled, downstream is skipped, the run ends
-`Failed`. `cancel` **abandons** in-flight invocations (idempotency is already required by
-at-least-once) and terminates the run `Cancelled` immediately. `spec.onFailure` names a handler
+`Failed`. `cancel` is **declarative** (`spec.cancel: true`, the pause shape): the run reconciler
+observes it on the controller workqueue and **abandons** in-flight invocations (idempotency is
+already required by at-least-once), terminating the run `Cancelled` on that reconcile. `spec.onFailure` names a handler
 step (defined in `steps`, excluded from the DAG: no `dependsOn` into/out of it, no `when`);
 it fires **iff the run ends `Failed`** — step exhaustion, `RunTimedOut`, and an
 `InputSchemaMismatch` fast-fail (then `failedStep` is empty) all qualify; **`Cancelled` does
@@ -199,8 +200,9 @@ Workflow ref (never ambient daemon identity). All references are same-namespace.
 `pkg/funcd` gains options + lifecycle (start engine, stop on shutdown). Config: `workflow.retention`,
 `workflow.payloadLimit`, `workflow.defaultStepTimeout` (300s), `workflow.defaultRetry` (maxAttempts 1
 = no retry), data dir fixed at `<dataDir>/workflow`. `funcdctl workflow
-run|runs|pause|resume|cancel|describe` call control-plane endpoints: `pause`/`resume` patch
-`spec.paused`, `describe` reads engine state through the API server (never Badger directly),
+run|runs|pause|resume|cancel|describe` are sugar over the WorkflowRun CRUD surface: `pause`/`resume`
+patch `spec.paused`, `cancel` patches `spec.cancel` (all declarative — the reconciler acts on the
+controller workqueue), `describe` reads engine state through the API server (never Badger directly),
 and `runs <workflow>` lists that workflow's WorkflowRuns (a `spec.workflow`-filtered list,
 newest first, `--phase` filterable). `funcdctl get workflows|workflowruns` work like any
 resource (the workflow list shows an ACTIVE column from `status.runs`; the run list shows a
@@ -384,6 +386,7 @@ type WorkflowRunSpec struct {
 	Workflow ObjectName      `json:"workflow"`
 	Input    json.RawMessage `json:"input,omitempty"`
 	Paused   bool            `json:"paused,omitempty"` // declarative pause/resume (funcdctl sugar)
+	Cancel   bool            `json:"cancel,omitempty"` // declarative one-way cancel intent (funcdctl sugar)
 }
 type WorkflowRunStatus struct {
 	Status `json:",inline"`
@@ -422,7 +425,9 @@ func (e *Engine) Close() error
 func (e *Engine) ReconcileWorkflow(ctx context.Context, req controller.Request) (controller.Result, error)
 func (e *Engine) ReconcileRun(ctx context.Context, req controller.Request) (controller.Result, error)
 
-// Control-plane verbs (exposed via the API server; funcdctl calls them).
+// Engine actions invoked by the run reconciler (NOT API handlers). Cancel is triggered by the
+// declarative spec.cancel marker the reconciler observes on the controller workqueue; Describe
+// is served by a plain GET of WorkflowRun (its status mirrors engine state).
 func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName) error
 func (e *Engine) Describe(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName) (*RunRecord, error)
 ```
@@ -442,7 +447,7 @@ input: {}          # the run's original input, verbatim
 | Consumes | Exposes |
 |---|---|
 | `store.Store` (resources, status writes) | `Workflow`/`WorkflowRun` kinds + admission rules |
-| `activator.Endpoints` + `eventing.Waker` (dispatch) | engine control-plane endpoints (cancel/describe) |
+| `activator.Endpoints` + `eventing.Waker` (dispatch) | `WorkflowRun` CRUD + `spec.cancel`/`spec.paused` markers (declarative verbs) |
 | `internal/artifact.Inspect` (manifest contract/runtime — via the F65 gate) | `status.contract` + `status.steps[]` (the resolved cache F65 fills) |
 | Badger at `<dataDir>/workflow` | `X-Funcd-Attempt` header to step functions |
 | the ADR-0095 evaluator (`when.condition`, Condition mode) | audit log lines for denied dispatch |

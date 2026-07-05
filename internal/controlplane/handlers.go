@@ -971,3 +971,79 @@ func (h *storeHandlers) ReplaceGateway(ctx context.Context, name v1.ObjectName, 
 func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindGateway, "", name)
 }
+
+// ---- Workflow (ADR-0094) ----
+
+func (h *storeHandlers) GetWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error) {
+	o, err := h.getObj(ctx, v1.KindWorkflow, ns, name)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) CreateWorkflow(ctx context.Context, wf v1.Workflow) (v1.Workflow, error) {
+	o, err := h.createObj(ctx, v1.KindWorkflow, &wf)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) ListWorkflows(ctx context.Context, ns v1.NamespaceName) ([]v1.Workflow, error) {
+	objs, err := h.listObj(ctx, v1.KindWorkflow, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Workflow, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Workflow)
+	}
+	return out, nil
+}
+func (h *storeHandlers) ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error) {
+	o, err := h.replaceObj(ctx, v1.KindWorkflow, ns, name, &wf)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindWorkflow, ns, name)
+}
+
+// ---- WorkflowRun (ADR-0094) ----
+
+func (h *storeHandlers) GetWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error) {
+	o, err := h.getObj(ctx, v1.KindWorkflowRun, ns, name)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) CreateWorkflowRun(ctx context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	o, err := h.createObj(ctx, v1.KindWorkflowRun, &run)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error) {
+	objs, err := h.listObj(ctx, v1.KindWorkflowRun, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.WorkflowRun, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.WorkflowRun)
+	}
+	return out, nil
+}
+func (h *storeHandlers) ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	o, err := h.replaceObj(ctx, v1.KindWorkflowRun, ns, name, &run)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindWorkflowRun, ns, name)
+}

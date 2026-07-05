@@ -111,6 +111,9 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	if err != nil {
 		return nil, err
 	}
+	if rec.Terminal() {
+		return rec, nil // a finished run (succeeded/failed/cancelled) is never re-driven
+	}
 	rs, outputs := rebuildState(spec, rec)
 	rec.Paused = false // resume clears the pause
 	rec.Phase = runRunning

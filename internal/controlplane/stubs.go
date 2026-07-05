@@ -32,6 +32,8 @@ type StubHandlers struct {
 	buckets        map[string]v1.Bucket
 	catalogServices map[string]v1.CatalogService
 	policies       map[string]v1.Policy
+	workflows      map[string]v1.Workflow
+	workflowRuns   map[string]v1.WorkflowRun
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -56,6 +58,8 @@ func NewStubHandlers() *StubHandlers {
 		buckets:        make(map[string]v1.Bucket),
 		catalogServices: make(map[string]v1.CatalogService),
 		policies:       make(map[string]v1.Policy),
+		workflows:      make(map[string]v1.Workflow),
+		workflowRuns:   make(map[string]v1.WorkflowRun),
 	}
 }
 
@@ -1123,3 +1127,115 @@ func (s *StubHandlers) DeleteGateway(_ context.Context, name v1.ObjectName) erro
 
 // Compile-time check: StubHandlers implements Handlers.
 var _ Handlers = (*StubHandlers)(nil)
+
+// ---- Workflow (ADR-0094) ----
+
+func (s *StubHandlers) GetWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.workflows[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Workflow{}, fault.NotFoundf("StubHandlers.GetWorkflow", "Workflow %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateWorkflow(_ context.Context, wf v1.Workflow) (v1.Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(wf.Namespace, wf.Name)
+	if _, exists := s.workflows[key]; exists {
+		return v1.Workflow{}, fault.Conflictf("StubHandlers.CreateWorkflow", "Workflow %s already exists", key)
+	}
+	s.workflows[key] = wf
+	return wf, nil
+}
+
+func (s *StubHandlers) ListWorkflows(_ context.Context, ns v1.NamespaceName) ([]v1.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Workflow, 0)
+	for _, v := range s.workflows {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflows[key]; !exists {
+		return v1.Workflow{}, fault.NotFoundf("StubHandlers.ReplaceWorkflow", "Workflow %s not found", key)
+	}
+	s.workflows[key] = wf
+	return wf, nil
+}
+
+func (s *StubHandlers) DeleteWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflows[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteWorkflow", "Workflow %s not found", key)
+	}
+	delete(s.workflows, key)
+	return nil
+}
+
+// ---- WorkflowRun (ADR-0094) ----
+
+func (s *StubHandlers) GetWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.workflowRuns[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.WorkflowRun{}, fault.NotFoundf("StubHandlers.GetWorkflowRun", "WorkflowRun %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateWorkflowRun(_ context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(run.Namespace, run.Name)
+	if _, exists := s.workflowRuns[key]; exists {
+		return v1.WorkflowRun{}, fault.Conflictf("StubHandlers.CreateWorkflowRun", "WorkflowRun %s already exists", key)
+	}
+	s.workflowRuns[key] = run
+	return run, nil
+}
+
+func (s *StubHandlers) ListWorkflowRuns(_ context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.WorkflowRun, 0)
+	for _, v := range s.workflowRuns {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflowRuns[key]; !exists {
+		return v1.WorkflowRun{}, fault.NotFoundf("StubHandlers.ReplaceWorkflowRun", "WorkflowRun %s not found", key)
+	}
+	s.workflowRuns[key] = run
+	return run, nil
+}
+
+func (s *StubHandlers) DeleteWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflowRuns[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteWorkflowRun", "WorkflowRun %s not found", key)
+	}
+	delete(s.workflowRuns, key)
+	return nil
+}

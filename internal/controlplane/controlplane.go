@@ -152,6 +152,20 @@ type Handlers interface {
 	ListPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.Policy, error)
 	ReplacePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error)
 	DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Workflow (namespaced) — ADR-0094
+	GetWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error)
+	CreateWorkflow(ctx context.Context, wf v1.Workflow) (v1.Workflow, error)
+	ListWorkflows(ctx context.Context, ns v1.NamespaceName) ([]v1.Workflow, error)
+	ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error)
+	DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// WorkflowRun (namespaced) — ADR-0094
+	GetWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error)
+	CreateWorkflowRun(ctx context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error)
+	ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error)
+	ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error)
+	DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 }
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.

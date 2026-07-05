@@ -898,6 +898,31 @@ components:
       required:
         - Status
       type: object
+    RunStepStatus:
+      additionalProperties: false
+      properties:
+        attempts:
+          format: int64
+          type: integer
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        phase:
+          enum:
+            - Pending
+            - Running
+            - Succeeded
+            - Failed
+            - Skipped
+            - Cancelled
+          type: string
+        revision:
+          type: string
+      required:
+        - name
+      type: object
     RuntimeClass:
       additionalProperties: false
       properties:
@@ -1035,6 +1060,28 @@ components:
             - Terminating
           type: string
       type: object
+    StepRetry:
+      additionalProperties: false
+      properties:
+        backoff:
+          format: int64
+          maximum: 3600000000000
+          minimum: 0
+          type: integer
+        maxAttempts:
+          format: int64
+          maximum: 100
+          minimum: 1
+          type: integer
+      type: object
+    StepWhen:
+      additionalProperties: false
+      properties:
+        condition:
+          type: string
+      required:
+        - condition
+      type: object
     TimerSpec:
       additionalProperties: false
       properties:
@@ -1075,6 +1122,288 @@ components:
           $ref: "#/components/schemas/Status"
       required:
         - Status
+      type: object
+    Workflow:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/WorkflowSpec"
+        status:
+          $ref: "#/components/schemas/WorkflowStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    WorkflowContract:
+      additionalProperties: false
+      properties:
+        dialect:
+          type: string
+        input: {}
+        output: {}
+      type: object
+    WorkflowKVStore:
+      additionalProperties: false
+      properties:
+        deletion:
+          enum:
+            - retain
+            - delete
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        tables:
+          items:
+            $ref: "#/components/schemas/KVTable"
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - tables
+      type: object
+    WorkflowPooling:
+      additionalProperties: false
+      properties:
+        minReplicas:
+          format: int64
+          maximum: 15
+          minimum: 0
+          type: integer
+        mode:
+          enum:
+            - shared
+            - isolated
+          type: string
+        worker:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
+    WorkflowRun:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/WorkflowRunSpec"
+        status:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    WorkflowRunLinks:
+      additionalProperties: false
+      properties:
+        active:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        cancelled:
+          format: int64
+          type: integer
+        failed:
+          format: int64
+          type: integer
+        succeeded:
+          format: int64
+          type: integer
+      type: object
+    WorkflowRunSpec:
+      additionalProperties: false
+      properties:
+        cancel:
+          type: boolean
+        input: {}
+        paused:
+          type: boolean
+        workflow:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - workflow
+      type: object
+    WorkflowRunStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        steps:
+          items:
+            $ref: "#/components/schemas/RunStepStatus"
+          type:
+            - array
+            - "null"
+      required:
+        - Status
+      type: object
+    WorkflowSpec:
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        kv:
+          items:
+            $ref: "#/components/schemas/WorkflowKVStore"
+          type:
+            - array
+            - "null"
+        onFailure:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        pooling:
+          $ref: "#/components/schemas/WorkflowPooling"
+        steps:
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+          type:
+            - array
+            - "null"
+        timeout:
+          format: int64
+          maximum: 604800000000000
+          minimum: 0
+          type: integer
+      required:
+        - steps
+      type: object
+    WorkflowStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        runs:
+          $ref: "#/components/schemas/WorkflowRunLinks"
+        steps:
+          items:
+            $ref: "#/components/schemas/WorkflowStepStatus"
+          type:
+            - array
+            - "null"
+      required:
+        - Status
+      type: object
+    WorkflowStep:
+      additionalProperties: false
+      properties:
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            $ref: "#/components/schemas/FunctionCatalog"
+          type:
+            - array
+            - "null"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        dependsOn:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        image:
+          type: string
+        join:
+          enum:
+            - all
+            - any
+          type: string
+        kv:
+          items:
+            $ref: "#/components/schemas/FunctionKV"
+          type:
+            - array
+            - "null"
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        params: {}
+        pooling:
+          $ref: "#/components/schemas/WorkflowPooling"
+        retry:
+          $ref: "#/components/schemas/StepRetry"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        timeout:
+          format: int64
+          maximum: 86400000000000
+          minimum: 0
+          type: integer
+        when:
+          $ref: "#/components/schemas/StepWhen"
+        workflow:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+      type: object
+    WorkflowStepStatus:
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        image:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
       type: object
 info:
   description: funcd control-plane API — code-first via huma. Generated from typed Go operations; not hand-authored.
@@ -3695,6 +4024,324 @@ paths:
           description: Error
       tags:
         - Service
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns:
+    get:
+      operationId: listWorkflowRuns
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    post:
+      operationId: createWorkflowRun
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}:
+    delete:
+      operationId: deleteWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    get:
+      operationId: getWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    put:
+      operationId: replaceWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows:
+    get:
+      operationId: listWorkflows
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Workflow"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    post:
+      operationId: createWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workflow"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}:
+    delete:
+      operationId: deleteWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    get:
+      operationId: getWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    put:
+      operationId: replaceWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workflow"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
   /apis/funcd.io/v1alpha1/namespaces/{name}:
     delete:
       operationId: deleteNamespace
