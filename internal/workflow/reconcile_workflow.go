@@ -12,6 +12,10 @@ import (
 
 const materializeOp = "workflow.materialize"
 
+// materializedHandler is the exported entrypoint a materialized step Function declares — the funcd
+// convention and the nodejs/python shim's FUNCD_HANDLER default (ADR-0094).
+const materializedHandler = "handle"
+
 // WorkflowReconciler is the controller.Reconciler for the Workflow kind: it brings a
 // Workflow's owned step Functions and KVStores to the desired state (the Deployment→
 // ReplicaSet analogy, ADR-0094) via the Materializer. Run execution is the RunReconciler's
@@ -141,7 +145,12 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			OwnerReferences: []v1.OwnerReference{owner},
 		},
 		Spec: v1.FunctionSpec{
-			Runtime:  rt,
+			Runtime: rt,
+			// Handler is the exported entrypoint the shim resolves (ADR-0094: materialization
+			// supplies runtime + handler). funcd's convention (and the shim's FUNCD_HANDLER default)
+			// is the `handle` export; a materialized step function carries it so it passes shape
+			// validation and serves without the author restating it on every step.
+			Handler:  materializedHandler,
 			Artifact: v1.ArtifactRef{URI: st.Image},
 			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas},
 			Blob:     st.Blob,

@@ -123,6 +123,10 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Policy:
 		o.TypeMeta = tm
+	case *v1.Workflow:
+		o.TypeMeta = tm
+	case *v1.WorkflowRun:
+		o.TypeMeta = tm
 	}
 }
 

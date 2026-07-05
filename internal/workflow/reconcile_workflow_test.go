@@ -54,6 +54,9 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 	if fn.Spec.Runtime != "nodejs22" || fn.Spec.Artifact.URI != "oci:ingest-v1" {
 		t.Fatalf("function spec wrong: %+v", fn.Spec)
 	}
+	if fn.Spec.Handler != "handle" { // materialization supplies the entrypoint so the fn passes shape validation
+		t.Fatalf("materialized handler = %q, want handle", fn.Spec.Handler)
+	}
 	if fn.Spec.Pooling.Worker != "orders" { // shared → pool named after the workflow
 		t.Fatalf("shared pooling worker = %q, want orders", fn.Spec.Pooling.Worker)
 	}
