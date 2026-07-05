@@ -207,7 +207,7 @@ func definesSymbol(src []byte, sym string) bool {
 // PushBundle packs dir (PackBundle) as a BundleTarMediaType layer with the entry annotation,
 // adds the VerifyBundleContract result as the ADR-0059 contract layer, and pushes it — mirroring
 // Push's oras flow. Returns the manifest descriptor digest.
-func PushBundle(ctx context.Context, ref, dir, entry string) (digest string, err error) {
+func PushBundle(ctx context.Context, ref, dir, entry, runtime string) (digest string, err error) {
 	const op = "artifact.PushBundle"
 	contract, verr := VerifyBundleContract(dir, entry)
 	if verr != nil {
@@ -238,6 +238,9 @@ func PushBundle(ctx context.Context, ref, dir, entry string) (digest string, err
 		}
 		opts.Layers = append(opts.Layers, contractLayer)
 		opts.ManifestAnnotations[contractAnnotation] = contractLayer.Digest.String()
+	}
+	if runtime != "" {
+		opts.ManifestAnnotations[runtimeAnnotation] = runtime
 	}
 	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {

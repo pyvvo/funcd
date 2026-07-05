@@ -110,7 +110,7 @@ func RunContainerd(ctx context.Context, cfg ContainerdConfig) (FootprintReport, 
 		return FootprintReport{}, fault.Wrapf(err, fault.Internal, op, "sdk client")
 	}
 	ref := "oci-layout://" + filepath.Join(tmp, "layout") + ":v1"
-	if _, perr := artifact.Push(ctx, ref, bundle, nil); perr != nil {
+	if _, perr := artifact.Push(ctx, ref, bundle, nil, ""); perr != nil {
 		return FootprintReport{}, fault.Wrapf(perr, fault.Internal, op, "push artifact")
 	}
 	dataPlane := "http://" + p.DataPlaneAddr()

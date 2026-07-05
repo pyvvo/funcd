@@ -45,6 +45,10 @@ const (
 	contractMediaType = "application/vnd.funcd.contract.v1+json"
 	// contractAnnotation flags the manifest as carrying a contract (value = the contract blob digest).
 	contractAnnotation = "dev.funcd.contract.v1"
+	// runtimeAnnotation records the function's runtime class on the manifest (ADR-0094): a
+	// self-describing artifact so the workflow materializer reads the runtime from the manifest
+	// alone — never pulling the bundle or running code. Empty ⇒ no runtime is asserted.
+	runtimeAnnotation = "dev.funcd.runtime.v1"
 	// contractDialect is the JSON Schema dialect the generated contracts use (ADR-0058 profile).
 	contractDialect = "https://json-schema.org/draft/2020-12/schema"
 )
@@ -98,7 +102,7 @@ func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descripto
 // rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
 // contract is non-nil (ADR-0059), it adds a content-addressed contract blob layer +
 // the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact.
-func Push(ctx context.Context, ref, file string, contract []byte) (digest string, err error) {
+func Push(ctx context.Context, ref, file string, contract []byte, runtime string) (digest string, err error) {
 	const op = "artifact.Push"
 	data, rerr := os.ReadFile(file) //nolint:gosec // file is a user-supplied CLI argument
 	if rerr != nil {
@@ -125,6 +129,12 @@ func Push(ctx context.Context, ref, file string, contract []byte) (digest string
 		}
 		opts.Layers = append(opts.Layers, contractLayer)
 		opts.ManifestAnnotations = map[string]string{contractAnnotation: contractLayer.Digest.String()}
+	}
+	if runtime != "" {
+		if opts.ManifestAnnotations == nil {
+			opts.ManifestAnnotations = map[string]string{}
+		}
+		opts.ManifestAnnotations[runtimeAnnotation] = runtime
 	}
 	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {
@@ -215,6 +225,42 @@ func Inspect(ctx context.Context, ref, digest string) (contract []byte, err erro
 		return nil, fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
 	}
 	return inspectFrom(ctx, target, fetchRef, digest)
+}
+
+// InspectRuntime reads a function's runtime class straight from its OCI manifest annotation
+// (dev.funcd.runtime.v1, ADR-0094): it fetches the manifest ONLY — never the bundle, never the
+// contract, never executing code — so the workflow materializer can resolve a step image's runtime
+// without pulling it. It resolves by digest when supplied (tamper-evident), else a bare tag.
+// fault.NotFound when the artifact asserts no runtime.
+func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, err error) {
+	const op = "artifact.InspectRuntime"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference
+	}
+	if fetchRef == "" {
+		return "", fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
+	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	if ferr != nil {
+		return "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
+	}
+	if digest != "" && manifestDesc.Digest.String() != digest {
+		return "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
+	}
+	var manifest ocispec.Manifest
+	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
+		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
+	}
+	rt := manifest.Annotations[runtimeAnnotation]
+	if rt == "" {
+		return "", fault.NotFoundf(op, "artifact %s asserts no runtime", fetchRef)
+	}
+	return rt, nil
 }
 
 // inspectFrom is Inspect's core over an already-resolved target (the white-box seam the

@@ -78,7 +78,7 @@ func TestScenarioPushDirectoryBundlesTar(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	dir, entry := goodBundle(t)
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry)
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
 	require.NoError(t, err)
 	require.Contains(t, digest, "sha256:")
 
@@ -97,7 +97,7 @@ func TestScenarioPushSingleFileUnchanged(t *testing.T) {
 	require.NoError(t, os.WriteFile(p, []byte("def handle():\n    return {}\n"), 0o600))
 	contract := mustContract(t)
 
-	digest, err := artifact.Push(context.Background(), ref, p, contract)
+	digest, err := artifact.Push(context.Background(), ref, p, contract, "")
 	require.NoError(t, err)
 
 	m := fetchManifest(t, ref, digest)
@@ -165,7 +165,7 @@ func TestScenarioPushGatesBundleContract(t *testing.T) {
 		require.Contains(t, string(blob), "\"input\"")
 		require.Contains(t, string(blob), "\"output\"")
 
-		digest, err := artifact.PushBundle(context.Background(), ref, dir, entry)
+		digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
 		require.NoError(t, err)
 		// The contract is inspectable straight from the manifest (never pulling the bundle).
 		got, err := artifact.Inspect(context.Background(), ref, digest)
@@ -181,7 +181,7 @@ func TestScenarioPullUntarsBundle(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	dir, entry := goodBundle(t)
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry)
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
@@ -247,7 +247,7 @@ func TestScenarioPullSingleFileUnchanged(t *testing.T) {
 	body := "def handle():\n    return {}\n"
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
 
-	digest, err := artifact.Push(context.Background(), ref, p, mustContract(t))
+	digest, err := artifact.Push(context.Background(), ref, p, mustContract(t), "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
@@ -299,7 +299,7 @@ func TestScenarioPullLargeBundleExceedsFetchAllCap(t *testing.T) {
 	_, _ = rng.Read(big)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendored.bin"), big, 0o600))
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry)
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")

@@ -189,6 +189,7 @@ func (a *cli) deleteCmd() *cobra.Command {
 func (a *cli) pushCmd() *cobra.Command {
 	var schemaPath string
 	var entry string
+	var runtime string
 	cmd := &cobra.Command{
 		Use:   "push <path> <ref>",
 		Short: "Package a function (a file or a bundle directory) as an OCI artifact and push it (prints <ref>@<digest>)",
@@ -200,7 +201,7 @@ func (a *cli) pushCmd() *cobra.Command {
 			// (VerifyBundleContract, ADR-0090) + promotes it to the OCI contract layer. A FILE is the
 			// unchanged single-blob push whose contract comes from --schema.
 			if info, serr := os.Stat(path); serr == nil && info.IsDir() {
-				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry)
+				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry, runtime)
 				if err != nil {
 					return err
 				}
@@ -219,7 +220,7 @@ func (a *cli) pushCmd() *cobra.Command {
 			if berr != nil {
 				return berr
 			}
-			digest, err := artifact.Push(cmd.Context(), ref, path, blob)
+			digest, err := artifact.Push(cmd.Context(), ref, path, blob, runtime)
 			if err != nil {
 				return err
 			}
@@ -230,6 +231,8 @@ func (a *cli) pushCmd() *cobra.Command {
 		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata (single-file push only; a bundle carries __funcd_contract.json)")
 	cmd.Flags().StringVar(&entry, "entry", "handler.py",
 		"handler entry file relative to the bundle root (directory push only, ADR-0089)")
+	cmd.Flags().StringVar(&runtime, "runtime", "",
+		"runtime class recorded on the manifest (dev.funcd.runtime.v1, ADR-0094) so the workflow materializer resolves a step image's runtime without pulling the bundle")
 	return cmd
 }
 
