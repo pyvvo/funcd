@@ -1,0 +1,39 @@
+# orders — a five-step Workflow (ADR-0094). The engine materializes each `image:` step into an
+# owned Function (orders-<step>) that pulls + serves on containerd, then drives a run's DAG:
+#
+#   ingest ── score ──┬── hi  (when score > 30) ──┐
+#                     └── lo  (when score <= 30) ──┴── report (join: any)
+#
+# Chaining passes a parent's output verbatim; the fan-out branches are exclusive via `when`
+# (ADR-0095 native-JS); `report` joins whichever branch survived. Owned Functions cascade with the
+# Workflow (delete-owner); they are per-workflow, not per-run, and kept warm (minReplicas: 1).
+apiVersion: funcd.io/v1alpha1
+kind: Workflow
+metadata:
+  name: orders
+  namespace: default
+  resourceGroup: rg1
+spec:
+  pooling:
+    mode: isolated        # one solo container per step (no shared pool worker on this lane)
+    minReplicas: 1        # keep each materialized step warm — no cold-start race in the e2e
+  steps:
+    - name: ingest
+      image: oci-layout:///mnt/funcd-deps/registry:ingest
+    - name: score
+      image: oci-layout:///mnt/funcd-deps/registry:score
+      dependsOn: [ingest]
+    - name: hi
+      image: oci-layout:///mnt/funcd-deps/registry:hi
+      dependsOn: [score]
+      when:
+        condition: "${{ step.score.output.score > 30 }}"
+    - name: lo
+      image: oci-layout:///mnt/funcd-deps/registry:lo
+      dependsOn: [score]
+      when:
+        condition: "${{ step.score.output.score <= 30 }}"
+    - name: report
+      image: oci-layout:///mnt/funcd-deps/registry:report
+      dependsOn: [hi, lo]
+      join: any

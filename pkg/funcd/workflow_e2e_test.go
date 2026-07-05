@@ -80,12 +80,14 @@ func TestScenarioWorkflowEndToEnd(t *testing.T) {
 	src := t.TempDir()
 	layout := t.TempDir()
 
-	// Five tiny step handlers reading the raw event and returning the raw next-step input.
-	writeStep(t, src, "ingest", `export const handle = (ctx, e) => ({ n: e.n, ingested: true });`)
-	writeStep(t, src, "enrich", `export const handle = (ctx, e) => ({ n: e.n, enriched: e.n * 2 });`)
-	writeStep(t, src, "hi", `export const handle = (ctx, e) => ({ picked: "hi", enriched: e.enriched });`)
-	writeStep(t, src, "lo", `export const handle = (ctx, e) => ({ picked: "lo", enriched: e.enriched });`)
-	writeStep(t, src, "report", `export const handle = (ctx, e) => ({ done: true, branches: Object.keys(e) });`)
+	// Five tiny step handlers. Each is an ordinary funcd function: it reads the CloudEvent's `data`
+	// (the flowing input the dispatcher enveloped) and returns the raw output that becomes the next
+	// step's input.
+	writeStep(t, src, "ingest", `export const handle = (ctx, e) => ({ n: e.data.n, ingested: true });`)
+	writeStep(t, src, "enrich", `export const handle = (ctx, e) => ({ n: e.data.n, enriched: e.data.n * 2 });`)
+	writeStep(t, src, "hi", `export const handle = (ctx, e) => ({ picked: "hi", enriched: e.data.enriched });`)
+	writeStep(t, src, "lo", `export const handle = (ctx, e) => ({ picked: "lo", enriched: e.data.enriched });`)
+	writeStep(t, src, "report", `export const handle = (ctx, e) => ({ done: true, branches: Object.keys(e.data) });`)
 
 	img := map[string]string{}
 	for _, s := range []string{"ingest", "enrich", "hi", "lo", "report"} {

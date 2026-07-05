@@ -1,0 +1,15 @@
+# A WorkflowRun applied already-paused (spec.paused: true), so the reconciler marks it Paused and
+# dispatches nothing — the deterministic entry point for the pause/resume lifecycle test. The Venom
+# suite observes Paused, then `funcdctl workflow resume orders-pause` clears the flag and the run
+# drives to Succeeded. (input travels as JSON — a YAML object here becomes the run's json input.)
+apiVersion: funcd.io/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: orders-pause
+  namespace: default
+  resourceGroup: rg1
+spec:
+  workflow: orders
+  paused: true
+  input:
+    n: 4

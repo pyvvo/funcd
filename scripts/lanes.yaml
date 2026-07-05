@@ -189,6 +189,69 @@ kv:
     tries: 60
   venom: e2e/kv-counter.venom.yml
 
+workflow:
+  description: A five-step Workflow (ingest→score→{hi|lo}→report) — the engine materializes image steps into owned Functions and drives runs on real containerd (ADR-0094).
+  dir: examples/js/workflow
+  build:
+    # Each step is an ordinary contract-bearing function; build.ts bakes each contract and emits
+    # <step>.mjs + <step>.schema.json (esbuild + the shim's contract toolchain via node_modules).
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/workflow/node_modules
+    - cd examples/js/workflow && node --experimental-strip-types build.ts
+  stage:
+    - ingest.mjs
+    - score.mjs
+    - hi.mjs
+    - lo.mjs
+    - report.mjs
+    - ingest.schema.json
+    - score.schema.json
+    - hi.schema.json
+    - lo.schema.json
+    - report.schema.json
+    - workflow.yaml
+    - run-pause.yaml
+    - run-cancel.yaml
+    - funcdconfig.yaml
+  # Each step image carries --runtime nodejs22 (the dev.funcd.runtime.v1 annotation) so the workflow
+  # materializer resolves its runtime from the manifest alone (ADR-0094).
+  push:
+    - artifact: ingest.mjs
+      ref: ingest
+      schema: ingest.schema.json
+      runtime: nodejs22
+    - artifact: score.mjs
+      ref: score
+      schema: score.schema.json
+      runtime: nodejs22
+    - artifact: hi.mjs
+      ref: hi
+      schema: hi.schema.json
+      runtime: nodejs22
+    - artifact: lo.mjs
+      ref: lo
+      schema: lo.schema.json
+      runtime: nodejs22
+    - artifact: report.mjs
+      ref: report
+      schema: report.schema.json
+      runtime: nodejs22
+  # Apply only the Workflow — the engine materializes the owned step Functions (orders-<step>). The
+  # run manifests (run-pause/run-cancel) are applied IN-VM by the Venom suite (the lifecycle phase).
+  apply:
+    - workflow.yaml
+  # Readiness gate: the five materialized step Functions pull + serve on containerd (they appear only
+  # after the Workflow reconciles, so `funcdctl get function` tolerates a transient not-found).
+  ready:
+    kind: function
+    names:
+      - orders-ingest
+      - orders-score
+      - orders-hi
+      - orders-lo
+      - orders-report
+    tries: 90
+  venom: e2e/workflow.venom.yml
+
 funclog:
   description: The log-burst JS + Python functions each emit >=100 logs; funcd captures them as OTLP-JSONL (ADR-0081/0084).
   dir: examples/js/log-burst

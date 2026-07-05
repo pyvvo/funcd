@@ -43,6 +43,8 @@ provision:
               cmd += ["--schema", p["schema"]]
           if p.get("entry"):
               cmd += ["--entry", p["entry"]]
+          if p.get("runtime"):  # dev.funcd.runtime.v1 annotation — a workflow step image is self-describing (ADR-0094)
+              cmd += ["--runtime", p["runtime"]]
           print("+", *cmd)
           subprocess.run(cmd, check=True)
       for m in spec.get("apply", []):

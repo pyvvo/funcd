@@ -1,0 +1,135 @@
+# Venom e2e suite for the workflow containerd lane (ADR-0094) — the declarative drive + lifecycle
+# phase of `just lima-example workflow`, run host-side AFTER the self-deploying Lima VM is Ready (the
+# `ready` gate already waited for the five materialized step Functions — orders-<step> — to pull and
+# serve on real containerd). Every step drives the control plane via `funcdctl workflow …` IN the VM
+# (co-located with the daemon), so the run's steps execute as REAL containers — no fakes, no stubs.
+#
+# It proves, end to end:
+#   1. run + chaining + fan-out + when + join — a run drives ingest→score→hi→report and Succeeds
+#      (n=4 ⇒ score 40 > 30 ⇒ the hi branch runs, lo is Skipped, report joins the survivor). The run
+#      reaching Succeeded is itself proof the typed contracts aligned and data flowed step to step.
+#   2. the exclusive OTHER branch — n=2 ⇒ score 20 ≤ 30 ⇒ lo runs, hi Skipped.
+#   3. runs listing + the parent Workflow's status.runs link (the CronJob status.active pattern).
+#   4. pause → resume — a run applied paused never dispatches (status Paused); resume drives it to
+#      Succeeded.
+#   5. cancel — a paused run is cancelled from Paused and ends Cancelled, no step ever dispatched.
+name: workflow engine — run/chaining/fan-out/when/join + pause/resume/cancel (ADR-0094, containerd lane)
+
+vars:
+  # the in-VM funcdctl invocation prefix (control plane is node-private; funcdctl runs co-located).
+  fctl: "limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
+
+testcases:
+  - name: run the hi branch — chaining + fan-out + when + join drive to Succeeded
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow run orders run-hi --input '{\"n\":4}'"
+        info: "start → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      # poll the run: the daemon materialized functions are warm, but a real container round-trip per
+      # step still takes a moment — retry/delay absorbs it. The python one-liner prints the run phase
+      # + a {step: phase} map so the assertions are exact (not substring-ambiguous across steps).
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun run-hi -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+json.dumps({s["name"]:s["phase"] for s in d["status"].get("steps",[])}))'
+        retry: 40
+        delay: 2
+        info: "run-hi → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring "\"ingest\": \"Succeeded\""
+          - result.systemout ShouldContainSubstring "\"score\": \"Succeeded\""
+          - result.systemout ShouldContainSubstring "\"hi\": \"Succeeded\""
+          - result.systemout ShouldContainSubstring "\"lo\": \"Skipped\""
+          - result.systemout ShouldContainSubstring "\"report\": \"Succeeded\""
+
+  - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow run orders run-lo --input '{\"n\":2}'"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun run-lo -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+json.dumps({s["name"]:s["phase"] for s in d["status"].get("steps",[])}))'
+        retry: 40
+        delay: 2
+        info: "run-lo → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring "\"lo\": \"Succeeded\""
+          - result.systemout ShouldContainSubstring "\"hi\": \"Skipped\""
+
+  - name: runs listing + the parent workflow links its runs (status.runs)
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow runs -n default"
+        info: "runs → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring run-hi
+          - result.systemout ShouldContainSubstring run-lo
+      - type: exec
+        script: |
+          {{.fctl}} get workflow orders -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("SUCCEEDED="+str(d["status"].get("runs",{}).get("succeeded",0)))'
+        retry: 10
+        delay: 2
+        info: "orders.status.runs → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SUCCEEDED=2
+
+  - name: pause then resume — a paused run dispatches nothing, resume drives it to Succeeded
+    steps:
+      # applied already-paused (run-pause.yaml, spec.paused: true) → the reconciler marks it Paused.
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/run-pause.yaml"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-pause -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 15
+        delay: 2
+        info: "orders-pause (paused) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Paused
+      # resume clears spec.paused; the reconciler drives the run to Succeeded.
+      - type: exec
+        script: "{{.fctl}} workflow resume orders-pause -n default"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-pause -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 40
+        delay: 2
+        info: "orders-pause (resumed) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+
+  - name: cancel — a paused run is cancelled from Paused and ends Cancelled
+    steps:
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/run-cancel.yaml"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-cancel -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Paused
+      - type: exec
+        script: "{{.fctl}} workflow cancel orders-cancel -n default"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-cancel -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 20
+        delay: 2
+        info: "orders-cancel → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Cancelled

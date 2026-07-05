@@ -18,6 +18,33 @@ import (
 // dedupe under at-least-once (ADR-0094).
 const attemptHeader = "X-Funcd-Attempt"
 
+// stepEvent wraps a step's input in a CloudEvent envelope (ADR-0094: dispatch reuses the eventing
+// seam). A materialized step function is an ordinary funcd Function: the shim reads `event.data`
+// and validates it against the step's I/O contract, so the flowing input (the run input, or a
+// parent's output — verbatim) travels as the event's `data`. The id is deterministic
+// (<run>-<step>-<attempt>) so retries share it under at-least-once. A step with no input still
+// sends `data: null` (a valid CloudEvent), never an empty body.
+func stepEvent(req DispatchRequest) []byte {
+	data := req.Input
+	if len(data) == 0 {
+		data = json.RawMessage("null")
+	}
+	body, _ := json.Marshal(struct {
+		SpecVersion string          `json:"specversion"`
+		Type        string          `json:"type"`
+		Source      string          `json:"source"`
+		ID          string          `json:"id"`
+		Data        json.RawMessage `json:"data"`
+	}{
+		SpecVersion: "1.0",
+		Type:        "dev.funcd.workflow.step.v1",
+		Source:      string(req.Namespace) + "/" + string(req.Run),
+		ID:          string(req.Run) + "-" + string(req.Step) + "-" + strconv.Itoa(req.Attempt),
+		Data:        data,
+	})
+	return body
+}
+
 // Waker wakes a scaled-to-zero function and returns its ready upstream (ADR-0033). A
 // structural match for eventing.Waker, declared locally so the workflow package does
 // not import a sibling feature.
@@ -95,7 +122,7 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", req.Namespace, req.Target)
 		}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(req.Input))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(stepEvent(req)))
 	if err != nil {
 		return nil, fault.Internalf(op, "build request: %v", err)
 	}
