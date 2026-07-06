@@ -2,7 +2,11 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
@@ -11,6 +15,34 @@ import (
 )
 
 const materializeOp = "workflow.materialize"
+
+// F65 (ADR-0098) conditions + sentinels for the typed-edge contract-check gate.
+const (
+	condReady          v1.ConditionType = "Ready"
+	condSchemaMismatch v1.ConditionType = "SchemaMismatch"
+)
+
+// errArtifactNotReady signals a step image not yet in the registry — the reconciler requeues (the
+// CatalogNotReady pattern) rather than declaring a mismatch (ADR-0098; no apply-order trap).
+var errArtifactNotReady = errors.New("workflow: a step artifact is not yet pushed")
+
+// contractRequeue backs off the not-ready requeue so a missing artifact doesn't hot-loop the reconciler
+// (each attempt does registry metadata I/O).
+const contractRequeue = 5 * time.Second
+
+// mismatchError is a typed-edge / root / when failure — a reconcile-time SchemaMismatch (not requeued).
+type mismatchError struct {
+	reason string // EdgeTypeMismatch · RootSchemaConflict · WhenTypeError
+	msg    string
+}
+
+func (e *mismatchError) Error() string { return e.msg }
+
+// ContractResolver reads a step image's I/O contract from OCI metadata (ADR-0059/0098), mirroring
+// RuntimeResolver. Production wraps artifact.InspectContract; tests inject a fake. NotFound ⇒ not pushed.
+type ContractResolver interface {
+	Contract(ctx context.Context, image string) (contract v1.WorkflowContract, digest string, err error)
+}
 
 // materializedHandler is the exported entrypoint a materialized step Function declares — the funcd
 // convention and the nodejs/python shim's FUNCD_HANDLER default (ADR-0094).
@@ -21,20 +53,24 @@ const materializedHandler = "handle"
 // ReplicaSet analogy, ADR-0094) via the Materializer. Run execution is the RunReconciler's
 // job; this reconciler only maintains the materialized fleet.
 type WorkflowReconciler struct {
-	store store.Store
-	mat   *Materializer
-	log   *slog.Logger
+	store     store.Store
+	mat       *Materializer
+	contracts ContractResolver // F65: reads step I/O contracts from OCI metadata (nil ⇒ the gate is skipped)
+	log       *slog.Logger
 }
 
-// NewWorkflowReconciler builds the Workflow reconciler over a Materializer.
-func NewWorkflowReconciler(s store.Store, m *Materializer, log *slog.Logger) *WorkflowReconciler {
+// NewWorkflowReconciler builds the Workflow reconciler over a Materializer + a ContractResolver (the F65
+// typed-edge gate, ADR-0098). A nil ContractResolver skips the gate (materialization-only).
+func NewWorkflowReconciler(s store.Store, m *Materializer, contracts ContractResolver, log *slog.Logger) *WorkflowReconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &WorkflowReconciler{store: s, mat: m, log: log.With("component", "workflow.reconcile")}
+	return &WorkflowReconciler{store: s, mat: m, contracts: contracts, log: log.With("component", "workflow.reconcile")}
 }
 
-// Reconcile materializes one Workflow's owned resources.
+// Reconcile materializes one Workflow's owned resources, then runs the F65 typed-edge contract gate:
+// resolve each step's contract from OCI metadata, type-check the edges + when: predicates, derive +
+// cache the graph in status, and set Ready / SchemaMismatch (ADR-0098).
 func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
@@ -46,6 +82,34 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	wf := obj.(*v1.Workflow)
 	if merr := r.mat.Materialize(ctx, wf); merr != nil {
 		return controller.Result{}, merr
+	}
+	if r.contracts == nil {
+		return controller.Result{}, nil // gate disabled (materialization-only wiring / tests)
+	}
+
+	contract, steps, cerr := r.deriveAndCheck(ctx, wf)
+	switch {
+	case errors.Is(cerr, errArtifactNotReady):
+		// A step image is not pushed yet — requeue AFTER a backoff (not a hot loop; each attempt does
+		// registry metadata I/O), leaving status untouched so there is no spurious mismatch (ADR-0098).
+		return controller.Result{RequeueAfter: contractRequeue}, nil
+	case cerr != nil:
+		var mm *mismatchError
+		if !errors.As(cerr, &mm) {
+			return controller.Result{}, cerr // an infra error — requeue via the controller
+		}
+		wf.Status.Contract, wf.Status.Steps = contract, steps // cache what resolved
+		wf.Status.Phase = v1.PhasePending
+		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionTrue, Reason: mm.reason, Message: mm.msg})
+		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: mm.reason, Message: mm.msg})
+	default:
+		wf.Status.Contract, wf.Status.Steps = contract, steps
+		wf.Status.Phase = v1.PhaseReady
+		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionFalse, Reason: "EdgesTypeChecked"})
+		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked"})
+	}
+	if _, uerr := r.store.Update(ctx, wf); uerr != nil {
+		return controller.Result{}, uerr
 	}
 	return controller.Result{}, nil
 }
@@ -252,3 +316,135 @@ func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st 
 	}
 	return nil
 }
+
+const checkOp = "workflow.contract-check"
+
+// deriveAndCheck resolves every function step's contract from OCI metadata, type-checks the edges +
+// when: predicates + root merge, and returns the derived workflow contract + per-step statuses (ADR-0098).
+// A not-yet-pushed image ⇒ errArtifactNotReady (requeue); a typing failure ⇒ *mismatchError.
+func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow) (*v1.WorkflowContract, []v1.WorkflowStepStatus, error) {
+	rs := newRunState(wf.Spec)
+	contracts := map[v1.ObjectName]v1.WorkflowContract{}
+	var stepStatuses []v1.WorkflowStepStatus
+
+	// 1. Resolve each function step's contract from OCI metadata (never the bytes). Builtins are untyped.
+	for i := range wf.Spec.Steps {
+		st := &wf.Spec.Steps[i]
+		image, ok, err := r.stepImage(ctx, wf, st)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !ok {
+			continue
+		}
+		c, digest, cerr := r.contracts.Contract(ctx, image)
+		if fault.KindOf(cerr) == fault.NotFound {
+			return nil, nil, errArtifactNotReady
+		}
+		if cerr != nil {
+			return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), checkOp, "resolve contract for step %q", st.Name)
+		}
+		contracts[st.Name] = c
+		pinned := image
+		if digest != "" {
+			pinned = image + "@" + digest
+		}
+		cc := c
+		stepStatuses = append(stepStatuses, v1.WorkflowStepStatus{Name: st.Name, Image: pinned, Contract: &cc})
+	}
+
+	// 2. Type-check every edge (required-primitive subsumption + void + fan-in composite + params).
+	for i := range wf.Spec.Steps {
+		st := &wf.Spec.Steps[i]
+		child, ok := contracts[st.Name]
+		if !ok {
+			continue
+		}
+		producer, has := producerSchema(rs.steps[st.Name], contracts)
+		if !has {
+			continue // a root, or all parents untyped
+		}
+		if diffs := checkEdge(producer, child.Input, paramsKeys(st)); len(diffs) > 0 {
+			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("edge into step %q: %s", st.Name, v1.FieldDiffs(diffs))}
+		}
+	}
+
+	// 3. Derive the workflow contract (root-combined input + leaf output/composite).
+	wc, derr := deriveWorkflowContract(rs, contracts)
+	if derr != nil {
+		var sc *schemaConflict
+		if errors.As(derr, &sc) {
+			return nil, nil, &mismatchError{reason: "RootSchemaConflict", msg: sc.Error()}
+		}
+		return nil, nil, derr
+	}
+
+	// 4. Type-check when: predicates against the parents' cached output schemas + the derived input
+	//    (ADR-0095 Condition mode) — a bad path/type fails here, never at runtime.
+	if err := checkWhenConditions(wf.Spec, rs, contracts, wc.Input); err != nil {
+		return nil, nil, err
+	}
+	return &wc, stepStatuses, nil
+}
+
+// stepImage returns the OCI ref whose contract types a step: an owned image directly, or a function-ref's
+// referenced Function image (store lookup). A builtin/workflow step, or a ref not present yet, is untyped.
+func (r *WorkflowReconciler) stepImage(ctx context.Context, wf *v1.Workflow, st *v1.WorkflowStep) (string, bool, error) {
+	if st.Function == nil {
+		return "", false, nil
+	}
+	if st.Function.Image != "" {
+		return st.Function.Image, true, nil
+	}
+	if st.Function.Ref != "" {
+		obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), wf.Namespace, st.Function.Ref)
+		if fault.KindOf(err) == fault.NotFound {
+			return "", false, nil // the referenced Function isn't present yet — untyped this round
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return obj.(*v1.Function).Spec.Image, true, nil
+	}
+	return "", false, nil
+}
+
+// producerSchema is the output schema a step's parents present to it: a single typed parent's output
+// verbatim, or the fan-in composite keyed by parent name. false ⇒ no typed parent (a root).
+func producerSchema(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract) (json.RawMessage, bool) {
+	var typed []v1.ObjectName
+	for _, p := range n.dependsOn {
+		if _, ok := contracts[p]; ok {
+			typed = append(typed, p)
+		}
+	}
+	switch len(typed) {
+	case 0:
+		return nil, false
+	case 1:
+		return contracts[typed[0]].Output, true
+	default:
+		outs := make(map[v1.ObjectName]json.RawMessage, len(typed))
+		for _, p := range typed {
+			outs[p] = contracts[p].Output
+		}
+		return compositeSchema(outs), true
+	}
+}
+
+// paramsKeys is the set of top-level fields a step's spec.params supplies (not required from a parent).
+func paramsKeys(st *v1.WorkflowStep) map[string]bool {
+	if len(st.Params) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(st.Params, &m) != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
+}
+

@@ -70,8 +70,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, nil
 	}
 
-	// Drive: resume if a durable record exists (recovery / unpause), else start fresh.
-	rec, err := r.drive(ctx, req.Namespace, req.Name, wf.Name, wf.Spec, run.Spec.Input)
+	// Drive: resume if a durable record exists (recovery / unpause), else start fresh (pinning the
+	// workflow's derived contract for the ADR-0098 run-start input gate).
+	rec, err := r.drive(ctx, req.Namespace, req.Name, wf.Name, wf.Spec, run.Spec.Input, wf.Status.Contract)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -109,13 +110,13 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 	return nil
 }
 
-func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, contract *v1.WorkflowContract) (*runstate.Record, error) {
 	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
-		// A durable record exists → resume from its PINNED spec (the live wf.Spec is not passed;
-		// an in-flight run is immune to a mid-run edit or re-push).
+		// A durable record exists → resume from its PINNED spec + contract (the live wf.Spec/status is
+		// not passed; an in-flight run is immune to a mid-run edit or re-push).
 		return r.engine.Resume(ctx, ns, name)
 	}
-	return r.engine.Execute(ctx, ns, name, workflow, spec, input)
+	return r.engine.Execute(ctx, ns, name, workflow, spec, input, contract)
 }
 
 // mirror copies the engine record's coarse state into the WorkflowRun status.

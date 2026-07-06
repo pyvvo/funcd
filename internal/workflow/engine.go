@@ -99,13 +99,31 @@ func New(d Deps) (*Engine, error) {
 // record. It is the engine core; the controller reconciler drives it asynchronously
 // (wiring is a separate layer). Steps of a ready batch are dispatched sequentially in
 // V1 (correct for the DAG; concurrent fan-out is a performance optimization).
-func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+// contract (optional, ADR-0098) is the workflow's derived contract pinned at run start; when present it
+// gates the run input (InputSchemaMismatch) and Resume reads the pinned copy. nil ⇒ no run-start check.
+func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, contract ...*v1.WorkflowContract) (*runstate.Record, error) {
 	rs := newRunState(spec)
 	outputs := map[v1.ObjectName]json.RawMessage{}
+	var pinned *v1.WorkflowContract
+	if len(contract) > 0 {
+		pinned = contract[0]
+	}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
 		Spec:      spec, // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
+		Contract:  pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
 		StartedAt: e.clock.Now().UnixNano(),
+	}
+	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
+	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
+	if pinned != nil && len(pinned.Input) > 0 {
+		if diffs := v1.CheckInput(input, pinned.Input); len(diffs) > 0 {
+			rec.Phase = runFailed
+			if err := e.persist(ctx, rec, rs, outputs); err != nil {
+				return nil, err
+			}
+			return rec, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs))
+		}
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ package funcd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -512,7 +513,7 @@ func (p *Platform) buildControlPlane() error {
 	p.workflowEngine = wfEngine
 	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
-	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, p.logger))
+	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, contractResolver{}, p.logger))
 	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, p.logger))
 	p.controller = ctrl
 
@@ -561,6 +562,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewPolicyValidityAdmission(),
 			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
+			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
+			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
 		},
 	})
 	if err != nil {
@@ -780,6 +783,22 @@ func (runtimeResolver) Runtime(ctx context.Context, image string) (v1.RuntimeNam
 	return v1.RuntimeName(rt), nil
 }
 
+// contractResolver is the production workflow.ContractResolver (ADR-0098): it reads a step image's I/O
+// contract from OCI metadata (never the bundle) and the resolved manifest digest, for the typed-edge gate.
+type contractResolver struct{}
+
+func (contractResolver) Contract(ctx context.Context, image string) (v1.WorkflowContract, string, error) {
+	blob, digest, err := artifact.InspectContract(ctx, image, "")
+	if err != nil {
+		return v1.WorkflowContract{}, "", err
+	}
+	var c v1.WorkflowContract
+	if uerr := json.Unmarshal(blob, &c); uerr != nil {
+		return v1.WorkflowContract{}, "", uerr
+	}
+	return c, digest, nil
+}
+
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.
 // The engine only ever dispatches steps of a run's pinned spec to their declared/materialized
 // targets; this gate additionally requires the target to resolve to a real Function, so an
@@ -828,6 +847,11 @@ func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Na
 		return nil, err
 	}
 	return res.Items, nil
+}
+
+// Get adapts store.Store.Get for the ADR-0098 WorkflowRun contract admission (reads the parent Workflow).
+func (r storeReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
 }
 
 // metaReader adapts store.Store to kvsvc.MetaReader for the ADR-0073 KV BindingResolver (the kv package

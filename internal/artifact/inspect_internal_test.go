@@ -43,9 +43,10 @@ func TestInspectWithoutPullNeverFetchesBundle(t *testing.T) {
 	require.NoError(t, err)
 	ct := &countingTarget{ReadOnlyTarget: store, fetched: map[string]int{}}
 
-	got, err := inspectFrom(context.Background(), ct, digest, digest)
+	got, gotDigest, err := inspectFrom(context.Background(), ct, digest, digest)
 	require.NoError(t, err)
 	require.JSONEq(t, string(blob), string(got), "Inspect returns the contract blob")
+	require.Equal(t, digest, gotDigest, "inspectFrom returns the resolved manifest digest")
 	require.Zero(t, ct.fetched[bundleMediaType], "Inspect must NEVER fetch the bundle layer")
 	require.Equal(t, 1, ct.fetched[contractMediaType], "Inspect fetches the contract blob exactly once")
 

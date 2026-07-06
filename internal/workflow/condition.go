@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,88 @@ import (
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/expr"
 )
+
+// checkWhenConditions type-checks every step's when.condition at RECONCILE against its parents' cached
+// OUTPUT schemas + the derived workflow input (ADR-0098), reusing the ADR-0095 goja Condition-mode
+// checker — a misspelled or mistyped predicate field is a SchemaMismatch (WhenTypeError) before any run.
+func checkWhenConditions(spec v1.WorkflowSpec, rs *runState, contracts map[v1.ObjectName]v1.WorkflowContract, inputSchema json.RawMessage) error {
+	for i := range spec.Steps {
+		st := &spec.Steps[i]
+		if st.When == nil || st.When.Condition == "" {
+			continue
+		}
+		res := whenSchemaResolver(rs.steps[st.Name], contracts, inputSchema)
+		ex, perr := expr.Parse(st.When.Condition, expr.Condition)
+		if perr != nil {
+			return &mismatchError{reason: "WhenTypeError", msg: fmt.Sprintf("step %q when: %v", st.Name, perr)}
+		}
+		if cerr := ex.Check(res); cerr != nil {
+			return &mismatchError{reason: "WhenTypeError", msg: fmt.Sprintf("step %q when: %v", st.Name, cerr)}
+		}
+	}
+	return nil
+}
+
+// whenSchemaResolver builds the schema-backed Resolver for one step's when: the roots are `input` (the
+// derived workflow input schema) and `step.<parent>.output` for each typed direct parent.
+func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract, inputSchema json.RawMessage) schemaResolver {
+	schemas := map[string]json.RawMessage{}
+	if len(inputSchema) > 0 {
+		schemas["input"] = inputSchema
+	}
+	for _, p := range n.dependsOn {
+		if c, ok := contracts[p]; ok && len(c.Output) > 0 {
+			schemas["step."+string(p)+".output"] = c.Output
+		}
+	}
+	return schemaResolver{schemas: schemas}
+}
+
+// schemaResolver is an expr.Resolver answering path types from cached JSON-Schema documents (the
+// reconcile-time twin of the runtime docResolver): it descends `properties`, strict where the schema is
+// precise (a declared-properties object with a missing key ⇒ NotFound, catching a misspelling) and
+// permissive where the schema is silent about nesting (V1 primitive-only — structural typing is deferred).
+type schemaResolver struct {
+	schemas map[string]json.RawMessage
+}
+
+func (s schemaResolver) Roots() []string {
+	out := make([]string, 0, len(s.schemas))
+	for k := range s.schemas {
+		out = append(out, k)
+	}
+	return out
+}
+
+func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) {
+	cur, ok := s.schemas[root]
+	if !ok {
+		return expr.Field{}, fault.NotFoundf("workflow.when", "root %q not in scope", root)
+	}
+	for _, seg := range path {
+		var view struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		_ = json.Unmarshal(cur, &view)
+		if view.Properties == nil {
+			// The schema is silent about nesting — V1 can't type deeper; accept permissively.
+			return expr.Field{Type: "string", Required: true}, nil
+		}
+		next, found := view.Properties[seg]
+		if !found {
+			return expr.Field{}, fault.NotFoundf("workflow.when", "field %q not in the schema", seg)
+		}
+		cur = next
+	}
+	var t struct {
+		Type  string `json:"type"`
+		Items struct {
+			Type string `json:"type"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(cur, &t)
+	return expr.Field{Type: t.Type, Items: t.Items.Type, Required: true}, nil
+}
 
 // evalWhen evaluates a step's when.condition (ADR-0095 native-JS boolean) against
 // the run input and the step's direct-parent outputs. Roots are `step.<parent>.output`

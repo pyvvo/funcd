@@ -1513,5 +1513,20 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0096-implementation-claude-fable-5.md",
     "notes": "three-kind step reshape (function{image|ref}/builtin{wait|pass}/workflow) + engine-native blocking wait + pass transform; yield/park model reverted to plain blocking on decider direction (no special Waiting state); 10/10 scenarios named+passing, +expr object-literal (Select-only); build/lint/test/mod green; 1 minor: dispatch-knobs-on-function-only is compile-enforced, no dedicated test (model, non-blocking)"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0098",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0098-implementation-claude-opus-4-8.md",
+    "notes": "F65 typed edges: reconcile derives+caches contract graph from OCI metadata, type-checks edges (required-primitive+void+fan-in+params) + when: (goja Condition) \u2192 Ready/SchemaMismatch; run admission + run-start check the cached contract (zero registry I/O). 11/11 scenarios named+passing; build/lint/test/mod green; workflow venom lane 6/6 (F65 status.contract asserted). Fixed a reconciler hot-loop\u2192backoff mid-impl. 1 nit (contractless\u2261not-pushed, harmless)"
   }
 ]

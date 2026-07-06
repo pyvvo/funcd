@@ -224,6 +224,27 @@ func Inspect(ctx context.Context, ref, digest string) (contract []byte, err erro
 	if fetchRef == "" {
 		return nil, fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
 	}
+	blob, _, ierr := inspectFrom(ctx, target, fetchRef, digest)
+	return blob, ierr
+}
+
+// InspectContract is Inspect that also returns the resolved manifest descriptor digest (ADR-0098): the
+// single metadata fetch already yields it, so a caller (the workflow contract-check gate) can record the
+// pinned ref@digest alongside the contract without a second round-trip. Same static-inspection invariant
+// — the bundle bytes are never fetched.
+func InspectContract(ctx context.Context, ref, digest string) (contract []byte, resolvedDigest string, err error) {
+	const op = "artifact.InspectContract"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return nil, "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference
+	}
+	if fetchRef == "" {
+		return nil, "", fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
 	return inspectFrom(ctx, target, fetchRef, digest)
 }
 
@@ -266,29 +287,30 @@ func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, er
 // inspectFrom is Inspect's core over an already-resolved target (the white-box seam the
 // inspect-without-pull invariant test drives with a counting target). It fetches the manifest +
 // contract blob ONLY; wantDigest (if non-empty) pins the manifest.
-func inspectFrom(ctx context.Context, target oras.ReadOnlyTarget, fetchRef, wantDigest string) ([]byte, error) {
+func inspectFrom(ctx context.Context, target oras.ReadOnlyTarget, fetchRef, wantDigest string) ([]byte, string, error) {
 	const op = "artifact.Inspect"
 	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
 	if ferr != nil {
-		return nil, fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
+		return nil, "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
 	}
-	if wantDigest != "" && manifestDesc.Digest.String() != wantDigest {
-		return nil, fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), wantDigest)
+	resolved := manifestDesc.Digest.String()
+	if wantDigest != "" && resolved != wantDigest {
+		return nil, "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", resolved, wantDigest)
 	}
 	var manifest ocispec.Manifest
 	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
-		return nil, fault.Invalidf(op, "decode manifest: %v", jerr)
+		return nil, "", fault.Invalidf(op, "decode manifest: %v", jerr)
 	}
 	contractLayer, ok := layerByMediaType(manifest.Layers, contractMediaType)
 	if !ok {
-		return nil, fault.NotFoundf(op, "artifact %s carries no contract", fetchRef)
+		return nil, "", fault.NotFoundf(op, "artifact %s carries no contract", fetchRef)
 	}
 	// Fetch ONLY the contract blob — the bundle layer is never fetched (the static-inspection invariant).
 	blob, berr := content.FetchAll(ctx, target, contractLayer) // verifies the blob against its descriptor digest
 	if berr != nil {
-		return nil, fault.Wrapf(berr, fault.Internal, op, "fetch contract blob")
+		return nil, "", fault.Wrapf(berr, fault.Internal, op, "fetch contract blob")
 	}
-	return blob, nil
+	return blob, resolved, nil
 }
 
 // Login stores registry credentials via oras-go's credential store (the local OCI layout

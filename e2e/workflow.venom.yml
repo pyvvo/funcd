@@ -22,6 +22,20 @@ vars:
   fctl: "limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
 
 testcases:
+  # F65 (ADR-0098): the Workflow reconciler resolved each step's contract from OCI metadata, type-checked
+  # every edge, and cached the derived graph in status — so `orders` reaches Ready with a status.contract.
+  - name: typed edges — orders reaches Ready with a derived, cached contract (F65)
+    steps:
+      - type: exec
+        script: |
+          {{.fctl}} get workflow orders -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);st=d.get("status",{});c={x["type"]:x["status"] for x in st.get("conditions",[])};print("READY="+c.get("Ready",""),"CONTRACT="+str(bool(st.get("contract",{}).get("input"))),"STEPS="+str(len(st.get("steps",[]))))'
+        retry: 30
+        delay: 2
+        info: "orders typed-edge status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+          - result.systemout ShouldContainSubstring CONTRACT=True
+
   - name: run the hi branch — chaining + fan-out + when + join drive to Succeeded
     steps:
       - type: exec

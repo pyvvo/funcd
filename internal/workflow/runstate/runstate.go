@@ -27,7 +27,10 @@ type Record struct {
 	// and recovery rebuild from THIS pinned spec, never the live Workflow — so a mid-run spec
 	// edit or artifact re-push leaves an in-flight run on its pinned graph and digests.
 	Spec      v1.WorkflowSpec `json:"spec,omitempty"`
-	Phase     v1.Phase        `json:"phase"`
+	// Contract is the workflow's derived I/O contract pinned at run start (ADR-0098): the run-start
+	// InputSchemaMismatch check reads it, and Resume uses this copy — immune to a mid-run re-derive.
+	Contract  *v1.WorkflowContract `json:"contract,omitempty"`
+	Phase     v1.Phase             `json:"phase"`
 	Paused    bool            `json:"paused,omitempty"`
 	Steps     []StepState     `json:"steps,omitempty"`
 	StartedAt int64           `json:"startedAt,omitempty"`
