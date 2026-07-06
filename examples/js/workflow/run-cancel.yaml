@@ -11,4 +11,4 @@ spec:
   workflow: orders
   paused: true
   input:
-    n: 2
+    amount: 2

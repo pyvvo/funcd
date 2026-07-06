@@ -43,7 +43,7 @@ cancel lifecycle over `funcdctl workflow …`.
 funcdctl push ingest.mjs oci-layout://<registry>:ingest --schema ingest.schema.json --runtime nodejs22
 # … repeat for score, hi, lo, report …
 funcdctl apply -f workflow.yaml
-funcdctl workflow run orders my-run --input '{"n":4}'   # score 40 > 30 → the hi branch
+funcdctl workflow run orders my-run --input '{"amount":4}'   # score 40 > 30 → the hi branch
 funcdctl workflow describe my-run                       # watch it reach Succeeded
 funcdctl workflow runs                                  # list the workflow's runs
 ```
