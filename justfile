@@ -160,6 +160,28 @@ lima-example name: build-runtime-images build-shim
     ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
     echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
 
+# Run EVERY Venom e2e lane back-to-back: the data-driven lanes from scripts/lanes.yaml (each has its own
+# `venom:` suite, ADR-0077) PLUS the metastore lane. Lanes are enumerated from the registry, so a new lane
+# is covered automatically. Continues past a failing lane and prints a PASS/FAIL summary, exiting non-zero
+# if any lane failed. Needs docker (colima) up. `just lima-example-all`.
+[group('example')]
+lima-example-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    lanes=$(python3 -c "import yaml; d=yaml.safe_load(open('scripts/lanes.yaml')); print(' '.join(k for k,v in d.items() if isinstance(v,dict) and v.get('venom')))")
+    echo "venom lanes: $lanes metastore"
+    passed=""; failed=""
+    for lane in $lanes; do
+        echo "═════════════ venom lane: $lane ═════════════"
+        if just lima-example "$lane"; then passed="$passed $lane"; else failed="$failed $lane"; fi
+    done
+    echo "═════════════ venom lane: metastore ═════════════"
+    if just lima-example-metastore; then passed="$passed metastore"; else failed="$failed metastore"; fi
+    echo "═════════════════════════════════════════════════"
+    echo "PASSED:$passed"
+    [ -n "$failed" ] && { echo "FAILED:$failed"; exit 1; }
+    echo "ALL VENOM E2E LANES PASSED ✅"
+
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
 # containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
 # it back — proving the new engine persists control-plane state across a real daemon restart under
