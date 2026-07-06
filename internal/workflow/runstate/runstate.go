@@ -39,7 +39,10 @@ type Record struct {
 	// root). Reused by Resume, never re-minted. Empty ⇒ no traceparent (additive/legacy).
 	TraceID    string `json:"traceId,omitempty"`    // 32 lowercase hex (16 bytes)
 	RootSpanID string `json:"rootSpanId,omitempty"` // 16 lowercase hex (8 bytes)
-	Phase      v1.Phase `json:"phase"`
+	// RootParentID is the run-root span's parent (ADR-0104): "" for a top-level run; the PARENT run's
+	// RootSpanID for a sub-workflow child, so a composition (parent + inline children) is one nested trace.
+	RootParentID string   `json:"rootParentId,omitempty"` // 16 hex; empty ⇒ the run is a trace root
+	Phase        v1.Phase `json:"phase"`
 	Paused    bool            `json:"paused,omitempty"`
 	Steps     []StepState     `json:"steps,omitempty"`
 	StartedAt int64           `json:"startedAt,omitempty"`

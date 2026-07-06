@@ -36,31 +36,40 @@ func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *s
 	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run")}
 }
 
-// emitRunSpan writes one INTERNAL span for the terminal run into the trace sink (ADR-0103). Defensive
-// no-op unless traces != nil, rec != nil, rec.Terminal(), and rec has a trace context. SpanID is the
-// run's RootSpanID (ADR-0102), so the step spans parented on it nest under this root. Best-effort: a
-// sink error is logged, never failing the reconcile.
-func (r *RunReconciler) emitRunSpan(ctx context.Context, rec *runstate.Record) {
-	if r.traces == nil || rec == nil || !rec.Terminal() || rec.TraceID == "" {
-		return
-	}
+// buildRunSpan builds the run-root Resource + INTERNAL Span for a terminal run (ADR-0103; shared by the
+// reconciler for top-level runs and the engine for inline sub-workflow child runs, ADR-0104). SpanID is the
+// run's RootSpanID (ADR-0102), so the step spans parented on it nest under this root; ParentID is
+// rec.RootParentID — "" for a top-level run, the parent run's RootSpanID for a sub-workflow child (ADR-0104).
+func buildRunSpan(rec *runstate.Record) (funclog.Resource, funclog.Span) {
 	status := funclog.StatusOk
 	if rec.Phase != runSucceeded {
 		status = funclog.StatusError
 	}
 	sp := funclog.Span{
-		TraceID: rec.TraceID,
-		SpanID:  rec.RootSpanID,
-		Name:    string(rec.Workflow),
-		Kind:    funclog.SpanInternal,
-		Start:   time.Unix(0, rec.StartedAt),
-		End:     time.Unix(0, rec.UpdatedAt),
-		Status:  status,
-		Attrs:   map[string]string{"funcd.run": string(rec.Name), "funcd.phase": string(rec.Phase)},
+		TraceID:  rec.TraceID,
+		SpanID:   rec.RootSpanID,
+		ParentID: rec.RootParentID, // ADR-0104: "" ⇒ trace root; else nests under the parent run span
+		Name:     string(rec.Workflow),
+		Kind:     funclog.SpanInternal,
+		Start:    time.Unix(0, rec.StartedAt),
+		End:      time.Unix(0, rec.UpdatedAt),
+		Status:   status,
+		Attrs:    map[string]string{"funcd.run": string(rec.Name), "funcd.phase": string(rec.Phase)},
 	}
 	res := funclog.Resource{Namespace: string(rec.Namespace), Function: string(rec.Workflow), Replica: string(rec.Name)}
-	if err := r.traces.AppendSpan(ctx, res, sp); err != nil {
-		r.log.WarnContext(ctx, "workflow: run-root span emit failed", "run", rec.Name, "error", err)
+	return res, sp
+}
+
+// emitRunSpan writes one run-root span to sink for a terminal run (ADR-0103/0104). Defensive no-op unless
+// sink != nil, rec != nil, rec.Terminal(), and rec has a trace context. Best-effort: a sink error is logged,
+// never failing the caller. Shared by the reconciler (top-level runs) and the engine (inline child runs).
+func emitRunSpan(ctx context.Context, sink funclog.TraceSink, rec *runstate.Record, log *slog.Logger) {
+	if sink == nil || rec == nil || !rec.Terminal() || rec.TraceID == "" {
+		return
+	}
+	res, sp := buildRunSpan(rec)
+	if err := sink.AppendSpan(ctx, res, sp); err != nil {
+		log.WarnContext(ctx, "workflow: run-root span emit failed", "run", rec.Name, "error", err)
 	}
 }
 
@@ -114,7 +123,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return controller.Result{}, uerr
 	}
-	r.emitRunSpan(ctx, rec) // ADR-0103: one run-root span at the terminal transition (no-op if non-terminal)
+	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: one run-root span at the terminal transition (no-op if non-terminal)
 	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
 		r.log.Warn("status.runs update failed", "workflow", wf.Name, "error", lerr)
 	}
@@ -138,7 +147,7 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return uerr
 	}
-	r.emitRunSpan(ctx, rec) // ADR-0103: the cancelled run's root span (the distinct second emit site)
+	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
 	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
 		r.log.Warn("status.runs update failed after cancel", "workflow", wf.Name, "error", lerr)
 	}

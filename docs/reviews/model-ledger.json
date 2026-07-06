@@ -1588,5 +1588,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0103-implementation-claude-opus-4-8.md",
     "notes": "PASS \u2014 run-root span emitted once at terminal (both drive + cancelRun sites), nil-safe, one shared sink; 6 TestRunSpan + in-process e2e + Venom kind:1 lane all green; seam intentional/acyclic; 0 findings (1 env-only python314.tar rebuild noted)"
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0104",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0104-implementation-claude-opus-4-8.md",
+    "notes": "pass \u2014 one-composition-one-trace: 4 new + 6 ADR-0103 run-root regression tests green, composition e2e + Venom lane (10/0) green; emitRunSpan method\u2192pkg-func refactor behavior-preserving (top-level ParentID==\"\"), no double-emit, no cycle, go.mod unchanged; 0 findings"
   }
 ]

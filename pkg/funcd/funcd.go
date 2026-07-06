@@ -529,6 +529,7 @@ func (p *Platform) buildControlPlane() error {
 		Dispatch: wfDispatcher,
 		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit},
 		Children: childResolver{c.store}, // ADR-0099: resolve a child workflow's spec for a `workflow:` step
+		Traces:   traceSink,              // ADR-0104: the engine emits the run-root span for inline sub-workflow child runs
 		Logger:   p.logger,
 	})
 	if eerr != nil {

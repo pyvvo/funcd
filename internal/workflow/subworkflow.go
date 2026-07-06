@@ -36,7 +36,11 @@ func (e *Engine) runChild(ctx context.Context, parent *runstate.Record, child v1
 	}
 	childInput := e.stepInput(n, input, outputs, specStep(parent.Spec, n.name))
 	childRun := parent.Name + "-" + n.name // deterministic nested run name (observability + stable recovery)
-	rec, err := e.execute(ctx, parent.Namespace, childRun, child, childSpec, childInput, nil, parent.Depth+1)
+	// ADR-0104: the child inherits the parent's trace (one composition = one trace) and nests its run-root
+	// span under the parent run's span. The child runs inline (never through the reconciler), so the ENGINE
+	// emits its run-root span here — before the error check, so a FAILED child still gets its span.
+	rec, err := e.execute(ctx, parent.Namespace, childRun, child, childSpec, childInput, nil, parent.Depth+1, parent.TraceID, parent.RootSpanID)
+	emitRunSpan(ctx, e.traces, rec, e.log)
 	if err != nil {
 		return nil, err // the child run failed → the step fails (propagate the cause)
 	}

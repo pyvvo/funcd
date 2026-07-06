@@ -124,6 +124,22 @@ testcases:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring ROOTSPANOK"
 
+  # ── ADR-0104 one composition = one trace: the `pipeline`→`scorer` sub-workflow run (above) — the child run
+  #    inherits the parent's trace and the engine emits the child run span nested under it. Proof: a traceId
+  #    present in BOTH the parent run span (traces/<ns>/pipeline/) AND the child run span (traces/<ns>/scorer/) —
+  #    the parent and child runs are one trace. (Full nesting is proven precisely by the in-process Go e2e.)
+  - name: one composition = one trace — the pipeline parent and scorer child runs share one traceId (ADR-0104)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'par=$(cat /var/lib/funcd/data/blob/traces/default/pipeline/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); chi=$(cat /var/lib/funcd/data/blob/traces/default/scorer/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); common=$(comm -12 <(echo "$par") <(echo "$chi") | grep -c traceId); [ "$common" -ge 1 ] && echo "COMPOSITIONOK common=$common" || echo "COMPOSITIONNONE p=$(echo "$par"|grep -c traceId) c=$(echo "$chi"|grep -c traceId)"'
+        retry: 15
+        delay: 2
+        info: "composition trace → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring COMPOSITIONOK"
+
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:
       - type: exec

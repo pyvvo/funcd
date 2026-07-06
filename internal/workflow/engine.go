@@ -11,6 +11,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
@@ -86,7 +87,10 @@ type Deps struct {
 	Config   Config
 	Clock    clock.Clock   // stamps run timestamps (retention GC input); defaults to the system clock
 	Children ChildResolver // ADR-0099: resolves a child workflow's spec for a `workflow:` step (nil ⇒ rejected)
-	Logger   *slog.Logger
+	// Traces is the shared funclog trace sink (ADR-0104): the engine emits the run-root span for INLINE
+	// sub-workflow child runs (the reconciler drives only top-level runs). nil ⇒ no child run-root span.
+	Traces funclog.TraceSink
+	Logger *slog.Logger
 }
 
 // Engine executes workflow runs against durable state and the dispatcher.
@@ -96,6 +100,7 @@ type Engine struct {
 	cfg      Config
 	clock    clock.Clock
 	children ChildResolver
+	traces   funclog.TraceSink // ADR-0104: run-root span emitter for inline child runs; nil ⇒ none
 	log      *slog.Logger
 }
 
@@ -121,7 +126,7 @@ func New(d Deps) (*Engine, error) {
 	if clk == nil {
 		clk = clock.System()
 	}
-	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, log: log.With("component", "workflow.engine")}, nil
+	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, traces: d.Traces, log: log.With("component", "workflow.engine")}, nil
 }
 
 // Execute runs a workflow synchronously to a terminal phase and returns the final
@@ -135,23 +140,33 @@ func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	if len(contract) > 0 {
 		pinned = contract[0]
 	}
-	return e.execute(ctx, ns, runName, workflow, spec, input, pinned, 0) // a top-level run is depth 0
+	return e.execute(ctx, ns, runName, workflow, spec, input, pinned, 0, "", "") // top-level run: depth 0, fresh trace
 }
 
 // execute is Execute threading the sub-workflow nesting depth (ADR-0099): the public Execute starts at 0;
-// runChild recurses at depth+1. All other behavior (run-start contract gate, drive) is unchanged.
-func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int) (*runstate.Record, error) {
+// runChild recurses at depth+1. inheritTraceID/inheritRootParent carry the parent run's trace context for a
+// sub-workflow child (ADR-0104): empty ⇒ a top-level run mints a fresh trace with no parent; non-empty ⇒ the
+// child shares the parent's TraceID (one trace) and nests its run-root span under the parent run's span.
+func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
 	rs := newRunState(spec)
 	outputs := map[v1.ObjectName]json.RawMessage{}
-	traceID, rootSpanID := mintTraceContext() // ADR-0102: one W3C trace context per run, propagated to every step
+	// ADR-0102/0104: one W3C trace context per run. A top-level run mints a fresh trace; a sub-workflow child
+	// inherits the parent's TraceID (shared trace) but mints its OWN RootSpanID and nests under the parent.
+	traceID, rootSpanID := mintTraceContext()
+	rootParentID := ""
+	if inheritTraceID != "" {
+		traceID = inheritTraceID          // share the parent's trace (one composition = one trace)
+		rootParentID = inheritRootParent  // nest the child run span under the parent run span
+	}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
-		Spec:       spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
-		Contract:   pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
-		Depth:      depth,  // sub-workflow nesting depth (ADR-0099)
-		TraceID:    traceID,
-		RootSpanID: rootSpanID,
-		StartedAt:  e.clock.Now().UnixNano(),
+		Spec:         spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
+		Contract:     pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
+		Depth:        depth,  // sub-workflow nesting depth (ADR-0099)
+		TraceID:      traceID,
+		RootSpanID:   rootSpanID,
+		RootParentID: rootParentID, // ADR-0104: "" for top-level, the parent run's RootSpanID for a child
+		StartedAt:    e.clock.Now().UnixNano(),
 	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
