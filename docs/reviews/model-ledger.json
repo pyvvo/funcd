@@ -1498,5 +1498,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0094-implementation-claude-opus-4-8-2.md",
     "notes": "round 2: all 5 model findings closed (pinning via Record.Spec, 4 scenario tests, per-step timeout+300s, payload cap admission+engine, retention sweep, deletion:retain); 17/17 scenarios; DoD 13/13; 1 minor rides to F65 (adr: stale Describe sig)"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0096",
+    "phase": "implementation",
+    "model": "claude-fable-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0096-implementation-claude-fable-5.md",
+    "notes": "three-kind step reshape (function{image|ref}/builtin{wait|pass}/workflow) + engine-native blocking wait + pass transform; yield/park model reverted to plain blocking on decider direction (no special Waiting state); 10/10 scenarios named+passing, +expr object-literal (Select-only); build/lint/test/mod green; 1 minor: dispatch-knobs-on-function-only is compile-enforced, no dedicated test (model, non-blocking)"
   }
 ]

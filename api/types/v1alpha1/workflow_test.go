@@ -13,7 +13,7 @@ func wfMeta() (TypeMeta, ObjectMeta) {
 }
 
 func imgStep(name string, deps ...ObjectName) WorkflowStep {
-	return WorkflowStep{Name: ObjectName(name), Image: "oci:img", DependsOn: deps}
+	return WorkflowStep{Name: ObjectName(name), Function: &FunctionStep{Image: "oci:img"}, DependsOn: deps}
 }
 
 func newWorkflow(spec WorkflowSpec) *Workflow {
@@ -28,21 +28,37 @@ func TestWorkflowValidateOK(t *testing.T) {
 	}
 }
 
+// scenario: step-kind-union-validated — exactly one top-level kind; a function sets exactly one of
+// image/ref; a builtin sets exactly one of wait/pass; the workflow kind is reserved (ADR-0096).
 func TestWorkflowKindUnion(t *testing.T) {
-	// two kinds set on one step.
-	w := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{{Name: "a", Image: "oci:x", Function: "f"}}})
-	if err := w.Validate(); err == nil {
-		t.Fatal("a step with both image and function must be rejected")
+	bad := map[string]WorkflowStep{
+		"two top-level kinds": {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Builtin: &BuiltinStep{Wait: "1s"}},
+		"function image+ref":  {Name: "a", Function: &FunctionStep{Image: "oci:x", Ref: "f"}},
+		"function neither":    {Name: "a", Function: &FunctionStep{}},
+		"builtin wait+pass":   {Name: "a", Builtin: &BuiltinStep{Wait: "1s", Pass: "${{ input }}"}},
+		"builtin neither":     {Name: "a", Builtin: &BuiltinStep{}},
+		"workflow reserved":   {Name: "a", Workflow: &WorkflowRef{Ref: "child"}},
+		"no kind":             {Name: "a"},
 	}
-	// workflow: kind reserved.
-	w2 := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{{Name: "a", Workflow: "child"}}})
-	if err := w2.Validate(); err == nil {
-		t.Fatal("the workflow: step kind must be reserved/rejected")
+	for name, st := range bad {
+		st := st
+		t.Run(name, func(t *testing.T) {
+			if err := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{st}}).Validate(); err == nil {
+				t.Fatalf("%s must be rejected", name)
+			}
+		})
 	}
-	// no kind set.
-	w3 := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{{Name: "a"}}})
-	if err := w3.Validate(); err == nil {
-		t.Fatal("a step with no kind must be rejected")
+	// each valid single kind passes.
+	good := []WorkflowStep{
+		{Name: "a", Function: &FunctionStep{Image: "oci:x"}},
+		{Name: "a", Function: &FunctionStep{Ref: "shared"}},
+		{Name: "a", Builtin: &BuiltinStep{Wait: "1s"}},
+		{Name: "a", Builtin: &BuiltinStep{Pass: "${{ input }}"}},
+	}
+	for _, st := range good {
+		if err := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{st}}).Validate(); err != nil {
+			t.Fatalf("valid step %+v rejected: %v", st, err)
+		}
 	}
 }
 
@@ -110,7 +126,7 @@ func TestWorkflowPoolingMode(t *testing.T) {
 	// per-step override with a valid mode + workflow default.
 	ok := newWorkflow(WorkflowSpec{
 		Pooling: WorkflowPooling{Mode: PoolingShared, MinReplicas: 1},
-		Steps:   []WorkflowStep{{Name: "a", Image: "oci:x", Pooling: &WorkflowPooling{Mode: PoolingIsolated}}},
+		Steps:   []WorkflowStep{{Name: "a", Function: &FunctionStep{Image: "oci:x", Pooling: &WorkflowPooling{Mode: PoolingIsolated}}}},
 	})
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("valid pooling config rejected: %v", err)

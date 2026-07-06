@@ -219,9 +219,14 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 		}
 		return rec, nil
 	}
-	if to := timeoutOf(spec); to > 0 {
+	// Run-timeout is start-relative and excludes paused time (ADR-0094 guarantee, ADR-0096): a run
+	// now spans reconciles (a builtin wait yields), so a single-drive ctx deadline can't bound it.
+	if spec.Timeout > 0 {
+		if e.clock.Now().UnixNano() > runDeadline(rec, spec) {
+			return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(context.DeadlineExceeded))
+		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, to)
+		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, runDeadline(rec, spec)))
 		defer cancel()
 	}
 
@@ -244,10 +249,29 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 			}
 			break // terminal (or nothing left runnable)
 		}
-		// 3. dispatch the batch (sequential V1), fail-fast on the first permanent failure.
+		// 3. run the batch (sequential V1), fail-fast on the first permanent failure. A step is
+		//    either a builtin (run in-engine) or a function (dispatched); a builtin wait may PARK
+		//    the run (yield), returning the non-terminal record so the reconciler requeues.
 		for _, n := range batch {
 			if ctx.Err() != nil { // run deadline hit between steps
 				return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+			}
+			st := specStep(spec, n.name)
+			if st != nil && st.Builtin != nil {
+				// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
+				// then it Succeeds. No dispatch, no special state (ADR-0096).
+				n.phase = v1.StepRunning
+				out, err := e.runBuiltin(ctx, st, n, input, outputs)
+				if err != nil {
+					n.phase = v1.StepFailed
+					if ctx.Err() != nil { // the run deadline interrupted a blocking wait
+						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+					}
+					return e.fail(ctx, rec, rs, outputs, spec, input, err)
+				}
+				n.phase = v1.StepSucceeded
+				outputs[n.name] = out
+				continue
 			}
 			n.phase = v1.StepRunning
 			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, rec.Workflow, spec, n, input, outputs)
@@ -300,8 +324,8 @@ func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, input json.R
 // function <workflow>-<step> (ADR-0094). An empty workflow (bare-engine tests) yields "-<step>",
 // harmless because those tests key their fake dispatcher on the step name.
 func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName) v1.ObjectName {
-	if st := specStep(spec, step); st != nil && st.Function != "" {
-		return st.Function
+	if st := specStep(spec, step); st != nil && st.Function != nil && st.Function.Ref != "" {
+		return st.Function.Ref
 	}
 	return materializedStepName(workflow, step)
 }
@@ -312,19 +336,20 @@ func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName,
 	stepInput := e.stepInput(n, input, outputs, st)
 	max := e.cfg.DefaultMaxAttempts
 	backoff := time.Duration(0)
-	if st != nil && st.Retry != nil {
-		if st.Retry.MaxAttempts > 0 {
-			max = st.Retry.MaxAttempts
+	fn := functionOf(st) // dispatch knobs live on FunctionStep (ADR-0096)
+	if fn != nil && fn.Retry != nil {
+		if fn.Retry.MaxAttempts > 0 {
+			max = fn.Retry.MaxAttempts
 		}
-		backoff = st.Retry.Backoff
+		backoff = fn.Retry.Backoff
 	}
 	target := stepTarget(workflow, spec, n.name)
 	// Per-step invocation bound: the step's own timeout, else the engine default (0 ⇒ none).
 	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
 	// separately in drive and maps to RunTimedOut.
 	stepTimeout := e.cfg.DefaultStepTimeout
-	if st != nil && st.Timeout > 0 {
-		stepTimeout = st.Timeout
+	if fn != nil && fn.Timeout > 0 {
+		stepTimeout = fn.Timeout
 	}
 	var lastErr error
 	for attempt := 1; attempt <= max; attempt++ {
@@ -368,12 +393,22 @@ func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName,
 // verbatim; a fan-in step gets a composite keyed by parent name; a root step gets the
 // run input. `params` (static overlay) is merged over it (static wins).
 func (e *Engine) stepInput(n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage, st *v1.WorkflowStep) json.RawMessage {
-	var base json.RawMessage
+	base := e.flowingInput(n, input, outputs)
+	if st == nil || len(st.Params) == 0 {
+		return base
+	}
+	return mergeParams(base, st.Params)
+}
+
+// flowingInput is the step's flowing input BEFORE the params overlay: a root step gets the run
+// input; a single-parent step its parent's output verbatim; a fan-in step a composite keyed by
+// parent name. A builtin wait passes this through as its output verbatim (params does not apply).
+func (e *Engine) flowingInput(n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) json.RawMessage {
 	switch {
 	case len(n.dependsOn) == 0:
-		base = input
+		return input
 	case len(n.dependsOn) == 1:
-		base = outputs[n.dependsOn[0]]
+		return outputs[n.dependsOn[0]]
 	default:
 		composite := map[string]json.RawMessage{}
 		for _, p := range n.dependsOn {
@@ -382,12 +417,8 @@ func (e *Engine) stepInput(n *stepNode, input json.RawMessage, outputs map[v1.Ob
 			}
 		}
 		b, _ := json.Marshal(composite)
-		base = b
+		return b
 	}
-	if st == nil || len(st.Params) == 0 {
-		return base
-	}
-	return mergeParams(base, st.Params)
 }
 
 // mergeParams overlays static params over base (static wins on key collision).
@@ -436,8 +467,8 @@ func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState
 	for _, name := range rs.order {
 		n := rs.steps[name]
 		ss := runstate.StepState{Name: n.name, Phase: n.phase}
-		if st := specStep(rec.Spec, n.name); st != nil && st.Image != "" {
-			ss.Revision = st.Image // the pinned artifact ref this step executes (from the pinned spec)
+		if fn := functionOf(specStep(rec.Spec, n.name)); fn != nil && fn.Image != "" {
+			ss.Revision = fn.Image // the pinned artifact ref this step executes (from the pinned spec)
 		}
 		if out, ok := outputs[n.name]; ok {
 			ss.Output = out
@@ -457,7 +488,20 @@ func specStep(spec v1.WorkflowSpec, name v1.ObjectName) *v1.WorkflowStep {
 	return nil
 }
 
-func timeoutOf(spec v1.WorkflowSpec) time.Duration { return spec.Timeout }
+// functionOf returns a step's FunctionStep (dispatch shape), or nil for a builtin/workflow/absent
+// step. Dispatch knobs (image/ref/retry/timeout/bindings/pooling) live only here (ADR-0096).
+func functionOf(st *v1.WorkflowStep) *v1.FunctionStep {
+	if st == nil {
+		return nil
+	}
+	return st.Function
+}
+
+// runDeadline is the absolute unix-nanos the run must finish by: start + timeout + accumulated
+// paused time (paused time excluded from the clock, ADR-0094; wait time counts, ADR-0096).
+func runDeadline(rec *runstate.Record, spec v1.WorkflowSpec) int64 {
+	return rec.StartedAt + int64(spec.Timeout) + rec.PausedNanos
+}
 
 // runTimedOut wraps a run-deadline cause as the ADR-0094 RunTimedOut failure reason (distinct
 // from a per-step timeout, which is a retryable step failure).

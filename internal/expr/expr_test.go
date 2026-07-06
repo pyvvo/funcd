@@ -196,6 +196,32 @@ func TestMembershipTyped(t *testing.T) {
 	}
 }
 
+// scenario: select-object-literal-constructs (ADR-0096) — a Select expression may construct an object
+// from typed fields (the `pass` transform); each value is checked, and the result marshals to JSON.
+func TestSelectObjectLiteral(t *testing.T) {
+	r := fakeResolver{roots: []string{"input", "step.a.output"}, fields: map[string]Field{
+		"input|day": req("string"), "step.a.output|rows": req("integer"),
+	}}
+	e := mustCheck(t, "${{ {count: step.a.output.rows, day: input.day} }}", Select, r)
+	got, err := e.Eval(docs("input", `{"day":"mon"}`, "step.a.output", `{"rows":7}`))
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	var out struct {
+		Count int    `json:"count"`
+		Day   string `json:"day"`
+	}
+	if err := json.Unmarshal(got, &out); err != nil || out.Count != 7 || out.Day != "mon" {
+		t.Fatalf("object literal = %s (%+v), want {count:7 day:mon}", got, out)
+	}
+	// a value referencing an unknown field is still rejected by the checker.
+	mustFailCheck(t, "${{ {x: input.nope} }}", Select, r)
+	// object literals are Select-only: Condition mode rejects them (not a boolean / unsupported).
+	mustFailCheck(t, "${{ {count: step.a.output.rows} }}", Condition, r)
+	// an empty object literal is rejected.
+	mustFailCheck(t, "${{ {} }}", Select, r)
+}
+
 // scenario: compute-arithmetic
 func TestComputeArithmetic(t *testing.T) {
 	r := fakeResolver{roots: []string{"step.stats.output", "step.audit.output"}, fields: map[string]Field{

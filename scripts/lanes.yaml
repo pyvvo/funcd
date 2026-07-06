@@ -190,7 +190,7 @@ kv:
   venom: e2e/kv-counter.venom.yml
 
 workflow:
-  description: A five-step Workflow (ingest→score→{hi|lo}→report) — the engine materializes image steps into owned Functions and drives runs on real containerd (ADR-0094).
+  description: A Workflow (ingest→score→{hi|lo}→report→wait→pass) mixing materialized function steps with engine-native built-ins (a blocking wait + a pass transform), driven on real containerd (ADR-0094 + ADR-0096).
   dir: examples/js/workflow
   build:
     # Each step is an ordinary contract-bearing function; build.ts bakes each contract and emits

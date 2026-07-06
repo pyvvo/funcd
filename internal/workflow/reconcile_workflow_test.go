@@ -36,8 +36,8 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 				Name: "counters-kv", Deletion: v1.DeletionDelete, Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}},
 			}},
 			Steps: []v1.WorkflowStep{
-				{Name: "ingest", Image: "oci:ingest-v1", KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}},
-				{Name: "solo", Image: "oci:solo-v1", Pooling: &v1.WorkflowPooling{Mode: v1.PoolingIsolated}},
+				{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest-v1", KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}}},
+				{Name: "solo", Function: &v1.FunctionStep{Image: "oci:solo-v1", Pooling: &v1.WorkflowPooling{Mode: v1.PoolingIsolated}}},
 			},
 		},
 	}
@@ -105,7 +105,7 @@ func TestMaterializeDeletionPolicy(t *testing.T) {
 				{Name: "keep-kv", Deletion: v1.DeletionRetain, Tables: []v1.KVTable{{Name: "t"}}},
 				{Name: "drop-kv", Deletion: v1.DeletionDelete, Tables: []v1.KVTable{{Name: "t"}}},
 			},
-			Steps: []v1.WorkflowStep{{Name: "a", Image: "oci:a"}},
+			Steps: []v1.WorkflowStep{{Name: "a", Function: &v1.FunctionStep{Image: "oci:a"}}},
 		},
 	}
 	if err := m.Materialize(ctx, wf); err != nil {
@@ -129,7 +129,7 @@ func TestMaterializeIdempotent(t *testing.T) {
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1", UID: "u"},
-		Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "a", Image: "oci:a"}}},
+		Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "a", Function: &v1.FunctionStep{Image: "oci:a"}}}},
 	}
 	if err := m.Materialize(ctx, wf); err != nil {
 		t.Fatalf("first materialize: %v", err)

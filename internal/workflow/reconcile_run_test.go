@@ -130,14 +130,14 @@ func TestRevisionPinnedMidRunRepush(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	bV2 := step("b", "", "a")
-	bV2.Image = "oci:b@v2" // the re-pushed live image
+	bV2.Function.Image = "oci:b@v2" // the re-pushed live image
 	seedWorkflow(t, s, "wf", step("a", ""), bV2)
 	seedRun(t, s, "run-x", "wf", `{}`)
 
 	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
 	t.Cleanup(func() { _ = rstate.Close() })
 	bV1 := step("b", "", "a")
-	bV1.Image = "oci:b@v1" // the digest pinned when the run started
+	bV1.Function.Image = "oci:b@v1" // the digest pinned when the run started
 	_ = rstate.Put(ctx, &runstate.Record{
 		Namespace: "default", Name: "run-x", Workflow: "wf", Phase: runRunning,
 		Spec: spec(step("a", ""), bV1),

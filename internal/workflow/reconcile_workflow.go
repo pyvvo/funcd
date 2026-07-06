@@ -80,10 +80,10 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 	// 1. Owned Functions (without kv, so the store owners exist before the KVStores).
 	for i := range wf.Spec.Steps {
 		st := &wf.Spec.Steps[i]
-		if st.Image == "" { // only owned (image) steps are materialized
+		if st.Function == nil || st.Function.Image == "" { // only owned (function.image) steps are materialized
 			continue
 		}
-		rt, err := m.runtimes.Runtime(ctx, st.Image)
+		rt, err := m.runtimes.Runtime(ctx, st.Function.Image)
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "resolve runtime for step %q", st.Name)
 		}
@@ -103,7 +103,7 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 	// 3. Patch owned Functions that carry kv bindings (the binding IS the capability).
 	for i := range wf.Spec.Steps {
 		st := &wf.Spec.Steps[i]
-		if st.Image == "" || len(st.KV) == 0 {
+		if st.Function == nil || st.Function.Image == "" || len(st.Function.KV) == 0 {
 			continue
 		}
 		if err := m.patchFunctionKV(ctx, wf, st); err != nil {
@@ -151,12 +151,12 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			// is the `handle` export; a materialized step function carries it so it passes shape
 			// validation and serves without the author restating it on every step.
 			Handler:  materializedHandler,
-			Artifact: v1.ArtifactRef{URI: st.Image},
+			Artifact: v1.ArtifactRef{URI: st.Function.Image},
 			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas},
-			Blob:     st.Blob,
-			Secrets:  st.Secrets,
-			Config:   st.Config,
-			Catalogs: st.Catalogs,
+			Blob:     st.Function.Blob,
+			Secrets:  st.Function.Secrets,
+			Config:   st.Function.Config,
+			Catalogs: st.Function.Catalogs,
 		},
 	}
 	if pool.Mode != v1.PoolingIsolated { // shared (default): co-locate under a pool worker
@@ -171,8 +171,8 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 
 // effectivePooling resolves a step's pooling: its own override, else the workflow default.
 func effectivePooling(wf *v1.Workflow, st *v1.WorkflowStep) v1.WorkflowPooling {
-	if st.Pooling != nil {
-		return *st.Pooling
+	if st.Function != nil && st.Function.Pooling != nil {
+		return *st.Function.Pooling
 	}
 	return wf.Spec.Pooling
 }
@@ -246,7 +246,7 @@ func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st 
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "get function %q for kv patch", name)
 	}
 	fn := obj.(*v1.Function)
-	fn.Spec.KV = st.KV
+	fn.Spec.KV = st.Function.KV
 	if _, err := m.store.Update(ctx, fn); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "patch kv on function %q", name)
 	}

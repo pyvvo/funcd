@@ -96,6 +96,14 @@ func Parse(src string, mode Mode) (*Expr, error) {
 	if inner == "" {
 		return nil, fault.Invalidf(parseOp, "empty expression")
 	}
+	// A bare object literal (`{a: 1}`) parses as a block statement, not an expression, so wrap a
+	// leading-`{` source in parens — the JS idiom (`() => ({…})`). Safe and targeted: a leading `{`
+	// is only ever an intended object literal here (a block statement is rejected below anyway). The
+	// wrapped form is stored so Check (AST walk) and Eval (compile) stay consistent. ADR-0096 lets a
+	// Select `pass` construct objects; ADR-0095's Condition mode still rejects them (checkObjectLiteral).
+	if strings.HasPrefix(inner, "{") {
+		inner = "(" + inner + ")"
+	}
 	prog, err := parser.ParseFile(nil, "expr", inner, 0)
 	if err != nil {
 		return nil, fault.Invalidf(parseOp, "invalid expression: %s", oneLine(err.Error()))

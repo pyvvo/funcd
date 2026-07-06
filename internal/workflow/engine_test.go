@@ -65,7 +65,7 @@ func newTestEngine(t *testing.T, disp Dispatcher, cfg Config) *Engine {
 }
 
 func whenStep(name, cond string, deps ...string) v1.WorkflowStep {
-	s := v1.WorkflowStep{Name: v1.ObjectName(name), Image: "oci:img", When: &v1.StepWhen{Condition: cond}}
+	s := v1.WorkflowStep{Name: v1.ObjectName(name), Function: &v1.FunctionStep{Image: "oci:img"}, When: &v1.StepWhen{Condition: cond}}
 	for _, d := range deps {
 		s.DependsOn = append(s.DependsOn, v1.ObjectName(d))
 	}
@@ -194,7 +194,7 @@ func TestPermanentFailureNoRetry(t *testing.T) {
 
 func retryStep(name string, maxAttempts int, deps ...string) v1.WorkflowStep {
 	s := step(name, "", deps...)
-	s.Retry = &v1.StepRetry{MaxAttempts: maxAttempts}
+	s.Function.Retry = &v1.StepRetry{MaxAttempts: maxAttempts}
 	return s
 }
 
@@ -205,6 +205,20 @@ func phaseOf(rec *runstate.Record, name string) v1.StepPhase {
 		}
 	}
 	return ""
+}
+
+// scenario: function-ref-dispatches — a function step sourced from a `ref:` dispatches to that existing
+// Function (no materialization); an image step dispatches to the materialized `<workflow>-<step>` (ADR-0096).
+func TestFunctionRefDispatches(t *testing.T) {
+	refStep := v1.WorkflowStep{Name: "notify", Function: &v1.FunctionStep{Ref: "mailer"}}
+	imgStep := v1.WorkflowStep{Name: "charge", Function: &v1.FunctionStep{Image: "oci:charge"}}
+	sp := spec(imgStep, refStep)
+	if got := stepTarget("orders", sp, "notify"); got != "mailer" {
+		t.Fatalf("a function-ref step must dispatch to the referenced Function, got %q", got)
+	}
+	if got := stepTarget("orders", sp, "charge"); got != "orders-charge" {
+		t.Fatalf("a function-image step must dispatch to the materialized name, got %q", got)
+	}
 }
 
 // scenario: crash-recovery-resumes-run — a persisted mid-flight run resumes; the

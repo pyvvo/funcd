@@ -75,18 +75,17 @@ func (PoolingMode) Schema(huma.Registry) *huma.Schema {
 	return enumSchema(string(PoolingShared), string(PoolingIsolated))
 }
 
-// WorkflowStep is one step: exactly one of Image / Function / Workflow (Workflow is
-// reserved until F70). Bindings reuse the Function.spec shapes verbatim.
+// WorkflowStep is one step — a kind-keyed union of exactly one of Function / Builtin / Workflow
+// (Workflow is reserved until F70), plus the orchestration fields common to every kind (ADR-0096).
 type WorkflowStep struct {
 	// Name is the step's name; a DNS-1123 label, unique within the workflow.
 	Name ObjectName `json:"name"`
-	// Image is a full OCI artifact reference (tag at the string end) the workflow owns
-	// and materializes into a Function. The primary step kind.
-	Image string `json:"image,omitempty"`
-	// Function references an existing Function in the namespace (a shared service).
-	Function ObjectName `json:"function,omitempty"`
+	// Function is a dispatched step: an owned image (materialized) or a ref to an existing Function.
+	Function *FunctionStep `json:"function,omitempty"`
+	// Builtin is an engine-native step (wait / pass) — run in-process, never dispatched.
+	Builtin *BuiltinStep `json:"builtin,omitempty"`
 	// Workflow references a child Workflow — reserved; rejected until F70.
-	Workflow ObjectName `json:"workflow,omitempty"`
+	Workflow *WorkflowRef `json:"workflow,omitempty"`
 	// DependsOn names the parent steps; empty ⇒ follows the previous step in list order.
 	DependsOn []ObjectName `json:"dependsOn,omitempty"`
 	// Join is the fan-in mode: "all" (default) requires every parent Succeeded, "any"
@@ -94,15 +93,26 @@ type WorkflowStep struct {
 	Join JoinMode `json:"join,omitempty"`
 	// When is an optional gate condition (ADR-0095 native-JS boolean); false ⇒ Skipped.
 	When *StepWhen `json:"when,omitempty"`
-	// Params is a static overlay merged over the step's flowing input (static wins).
+	// Params is a static overlay merged over the step's flowing input (static wins). For a function
+	// step it overlays the dispatched input; a pass expression sees the overlaid input; a wait
+	// ignores it (output = input verbatim).
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// FunctionStep is a dispatched step (ADR-0096): sourced from an OWNED Image (materialized into
+// <workflow>-<step>) OR a Ref to an existing Function (exactly one). All dispatch-only knobs live
+// here, so an engine-native (Builtin) step cannot express them by construction.
+type FunctionStep struct {
+	// Image is a full OCI artifact reference the workflow owns and materializes into a Function.
+	Image string `json:"image,omitempty"`
+	// Ref references an existing Function in the namespace (a shared service).
+	Ref ObjectName `json:"ref,omitempty"`
 	// Retry is the per-step retry policy; nil ⇒ the engine default.
 	Retry *StepRetry `json:"retry,omitempty"`
 	// Timeout is the per-step invocation bound; 0 ⇒ the engine default.
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"86400000000000"`
-	// Pooling overrides the workflow-level pooling for this step's materialized
-	// Function (nil ⇒ inherit spec.pooling). Set Mode "isolated" to give one step its
-	// own container while the rest share a pool.
+	// Pooling overrides the workflow-level pooling for this step's materialized Function
+	// (nil ⇒ inherit spec.pooling); image steps only.
 	Pooling *WorkflowPooling `json:"pooling,omitempty"`
 	// KV/Blob/Secrets/Config/Catalogs are the step's bindings (Function.spec shapes).
 	KV       []FunctionKV      `json:"kv,omitempty"`
@@ -110,6 +120,24 @@ type WorkflowStep struct {
 	Secrets  []ObjectName      `json:"secrets,omitempty"`
 	Config   []ObjectName      `json:"config,omitempty"`
 	Catalogs []FunctionCatalog `json:"catalogs,omitempty"`
+}
+
+// BuiltinStep is an engine-native step (ADR-0096) — a nested kind-union of exactly one of Wait /
+// Pass, evaluated in-process (no container, no dispatch). Room to grow (Gate, F66).
+type BuiltinStep struct {
+	// Wait is a timer: a Go duration string ("30s") or a ${{ }} goja Select expression evaluating
+	// to a number of seconds. The step blocks in-engine for the duration (on the run context, so the
+	// run-timeout interrupts it), then passes its flowing input through as output. A normal step —
+	// Running then Succeeded; no special state.
+	Wait string `json:"wait,omitempty"`
+	// Pass is a ${{ }} goja Select expression over the step's flowing input + prior step outputs;
+	// its result is the step's output. No dispatch.
+	Pass string `json:"pass,omitempty"`
+}
+
+// WorkflowRef references a child Workflow — reserved (F70), rejected by Validate until then.
+type WorkflowRef struct {
+	Ref ObjectName `json:"ref,omitempty"`
 }
 
 // JoinMode is a step's fan-in mode.
@@ -231,8 +259,10 @@ func (w *Workflow) Validate() error {
 		if s.Join != "" && s.Join != JoinAll && s.Join != JoinAny {
 			return fault.Invalidf(op, "step %q: join must be %q or %q", s.Name, JoinAll, JoinAny)
 		}
-		if err := validatePoolingMode(op, s.Pooling); err != nil {
-			return err
+		if s.Function != nil {
+			if err := validatePoolingMode(op, s.Function.Pooling); err != nil {
+				return err
+			}
 		}
 	}
 	if err := validatePoolingMode(op, &w.Spec.Pooling); err != nil {
@@ -270,21 +300,43 @@ func (w *Workflow) Validate() error {
 	return nil
 }
 
-// validateKind enforces the step kind-union: exactly one of image/function; the
-// workflow: kind is reserved (rejected until F70).
+// validateKind enforces the step kind-union (ADR-0096): exactly one of function/builtin; a function
+// sets exactly one of image/ref; a builtin sets exactly one of wait/pass; the workflow: kind is
+// reserved (rejected until F70). Dispatch knobs live only on FunctionStep, so a builtin cannot carry
+// them by construction — no runtime check needed.
 func (s *WorkflowStep) validateKind(op string) error {
 	set := 0
-	if s.Image != "" {
+	if s.Function != nil {
 		set++
+		fset := 0
+		if s.Function.Image != "" {
+			fset++
+		}
+		if s.Function.Ref != "" {
+			fset++
+		}
+		if fset != 1 {
+			return fault.Invalidf(op, "step %q: function must set exactly one of image or ref", s.Name)
+		}
 	}
-	if s.Function != "" {
+	if s.Builtin != nil {
 		set++
+		bset := 0
+		if s.Builtin.Wait != "" {
+			bset++
+		}
+		if s.Builtin.Pass != "" {
+			bset++
+		}
+		if bset != 1 {
+			return fault.Invalidf(op, "step %q: builtin must set exactly one of wait or pass", s.Name)
+		}
 	}
-	if s.Workflow != "" {
+	if s.Workflow != nil {
 		return fault.Invalidf(op, "step %q: the workflow: kind is reserved (child runs land with F70)", s.Name)
 	}
 	if set != 1 {
-		return fault.Invalidf(op, "step %q must set exactly one of image or function", s.Name)
+		return fault.Invalidf(op, "step %q must set exactly one of function or builtin", s.Name)
 	}
 	return nil
 }

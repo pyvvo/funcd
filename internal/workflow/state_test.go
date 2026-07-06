@@ -8,7 +8,7 @@ import (
 
 // step builds a WorkflowStep with a name, dependsOn, and optional join.
 func step(name string, join v1.JoinMode, deps ...string) v1.WorkflowStep {
-	s := v1.WorkflowStep{Name: v1.ObjectName(name), Image: "oci:img", Join: join}
+	s := v1.WorkflowStep{Name: v1.ObjectName(name), Function: &v1.FunctionStep{Image: "oci:img"}, Join: join}
 	for _, d := range deps {
 		s.DependsOn = append(s.DependsOn, v1.ObjectName(d))
 	}
@@ -168,7 +168,7 @@ func TestCancelledStepCancelsRun(t *testing.T) {
 func TestLeavesAndOnFailureExcluded(t *testing.T) {
 	s := spec(step("a", ""), step("b", "", "a"), step("c", "", "a"))
 	s.OnFailure = "handler"
-	s.Steps = append(s.Steps, v1.WorkflowStep{Name: "handler", Image: "oci:h"})
+	s.Steps = append(s.Steps, v1.WorkflowStep{Name: "handler", Function: &v1.FunctionStep{Image: "oci:h"}})
 	rs := newRunState(s)
 	// handler is not a DAG step.
 	for _, n := range rs.dagSteps() {

@@ -102,11 +102,15 @@ func TestScenarioWorkflowEndToEnd(t *testing.T) {
 			// isolated pooling + one warm replica each → solo workers on the process shim, no cold-start race.
 			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
 			Steps: []v1.WorkflowStep{
-				{Name: "ingest", Image: img["ingest"]},
-				{Name: "enrich", Image: img["enrich"], DependsOn: []v1.ObjectName{"ingest"}},
-				{Name: "hi", Image: img["hi"], DependsOn: []v1.ObjectName{"enrich"}, When: &v1.StepWhen{Condition: `${{ step.enrich.output.enriched > 5 }}`}},
-				{Name: "lo", Image: img["lo"], DependsOn: []v1.ObjectName{"enrich"}, When: &v1.StepWhen{Condition: `${{ step.enrich.output.enriched <= 5 }}`}},
-				{Name: "report", Image: img["report"], DependsOn: []v1.ObjectName{"hi", "lo"}, Join: v1.JoinAny},
+				{Name: "ingest", Function: &v1.FunctionStep{Image: img["ingest"]}},
+				{Name: "enrich", Function: &v1.FunctionStep{Image: img["enrich"]}, DependsOn: []v1.ObjectName{"ingest"}},
+				{Name: "hi", Function: &v1.FunctionStep{Image: img["hi"]}, DependsOn: []v1.ObjectName{"enrich"}, When: &v1.StepWhen{Condition: `${{ step.enrich.output.enriched > 5 }}`}},
+				{Name: "lo", Function: &v1.FunctionStep{Image: img["lo"]}, DependsOn: []v1.ObjectName{"enrich"}, When: &v1.StepWhen{Condition: `${{ step.enrich.output.enriched <= 5 }}`}},
+				{Name: "report", Function: &v1.FunctionStep{Image: img["report"]}, DependsOn: []v1.ObjectName{"hi", "lo"}, Join: v1.JoinAny},
+				// engine-native built-ins (ADR-0096): a wait parks the run on a durable timer, then a pass
+				// reshapes report's (flowed-through) output in-process — neither is materialized/dispatched.
+				{Name: "settle", Builtin: &v1.BuiltinStep{Wait: "1s"}, DependsOn: []v1.ObjectName{"report"}},
+				{Name: "summary", Builtin: &v1.BuiltinStep{Pass: `${{ {done: step.settle.output.done, settled: true} }}`}, DependsOn: []v1.ObjectName{"settle"}},
 			},
 		},
 	}
@@ -136,6 +140,8 @@ func TestScenarioWorkflowEndToEnd(t *testing.T) {
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "hi"), "hi ran (enriched 8 > 5 — proves enrich's output flowed into the when)")
 	require.Equal(t, v1.StepPhase("Skipped"), runStepPhase(got, "lo"), "lo skipped (the exclusive branch)")
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "report"), "report merged the surviving branch (join: any)")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "settle"), "settle (builtin wait) blocked then resolved in-engine")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "summary"), "summary (builtin pass) transformed in-engine, no dispatch")
 
 	// A second run with n=2 → enriched=4 (≤5) → the exclusive branch flips: lo runs, hi Skipped.
 	run2 := &v1.WorkflowRun{

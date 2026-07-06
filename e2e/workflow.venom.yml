@@ -13,7 +13,9 @@
 #   4. pause → resume — a run applied paused never dispatches (status Paused); resume drives it to
 #      Succeeded.
 #   5. cancel — a paused run is cancelled from Paused and ends Cancelled, no step ever dispatched.
-name: workflow engine — run/chaining/fan-out/when/join + pause/resume/cancel (ADR-0094, containerd lane)
+#   6. engine-native built-ins (ADR-0096): after report, a `wait` step delays in-engine then a `pass`
+#      step transforms in-engine — both Succeed with NO container dispatched (asserted in cases 1–2).
+name: workflow engine — run/chaining/fan-out/when/join + pause/resume/cancel + builtins wait/pass (ADR-0094 + ADR-0096, containerd lane)
 
 vars:
   # the in-VM funcdctl invocation prefix (control plane is node-private; funcdctl runs co-located).
@@ -43,6 +45,10 @@ testcases:
           - result.systemout ShouldContainSubstring hi=Succeeded
           - result.systemout ShouldContainSubstring lo=Skipped
           - result.systemout ShouldContainSubstring report=Succeeded
+          # engine-native built-ins ran in-process after the dispatched steps (ADR-0096): the wait
+          # parked then resolved, the pass transformed — neither materialized a container.
+          - result.systemout ShouldContainSubstring settle=Succeeded
+          - result.systemout ShouldContainSubstring summary=Succeeded
 
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:

@@ -112,6 +112,8 @@ func check(node ast.Expression, ctx checkCtx) (typ, error) {
 		return typ{k: kindBoolean}, nil
 	case *ast.ArrayLiteral:
 		return checkArrayLiteral(n, ctx)
+	case *ast.ObjectLiteral:
+		return checkObjectLiteral(n, ctx)
 	default:
 		return typ{}, fault.Invalidf(checkOp, "unsupported expression %T (position %d)", node, pos(node))
 	}
@@ -268,6 +270,35 @@ func checkArrayLiteral(a *ast.ArrayLiteral, ctx checkCtx) (typ, error) {
 		}
 	}
 	return typ{k: kindArray, items: item}, nil
+}
+
+// checkObjectLiteral admits an object literal `{ key: expr, … }` — the value-construction primitive
+// for a builtin `pass` step (ADR-0096). Select mode only (a Condition must be an explicit boolean,
+// never an object). Keys are names or string literals (not computed); each value is checked in
+// context like any subexpression. The node types to kindObject (opaque — pass output isn't re-typed
+// against a contract). Mirrors checkArrayLiteral; Eval returns the object via Export() unchanged.
+func checkObjectLiteral(o *ast.ObjectLiteral, ctx checkCtx) (typ, error) {
+	if ctx.e.mode != Select {
+		return typ{}, fault.Invalidf(checkOp, "object literals are only allowed in a select expression (position %d)", pos(o))
+	}
+	if len(o.Value) == 0 {
+		return typ{}, fault.Invalidf(checkOp, "empty object literal is not allowed (position %d)", pos(o))
+	}
+	for _, p := range o.Value {
+		pk, ok := p.(*ast.PropertyKeyed)
+		if !ok || pk.Computed {
+			return typ{}, fault.Invalidf(checkOp, "object properties must be `key: value` with a literal key (position %d)", pos(p))
+		}
+		switch pk.Key.(type) {
+		case *ast.StringLiteral, *ast.Identifier:
+		default:
+			return typ{}, fault.Invalidf(checkOp, "object keys must be a name or string literal (position %d)", pos(pk.Value))
+		}
+		if _, err := check(pk.Value, ctx); err != nil {
+			return typ{}, err
+		}
+	}
+	return typ{k: kindObject}, nil
 }
 
 func checkCall(c *ast.CallExpression, ctx checkCtx) (typ, error) {

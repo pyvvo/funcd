@@ -65,6 +65,14 @@ components:
       required:
         - prefixes
       type: object
+    BuiltinStep:
+      additionalProperties: false
+      properties:
+        pass:
+          type: string
+        wait:
+          type: string
+      type: object
     CatalogRef:
       additionalProperties: false
       properties:
@@ -464,6 +472,62 @@ components:
           type: integer
       required:
         - Status
+      type: object
+    FunctionStep:
+      additionalProperties: false
+      properties:
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            $ref: "#/components/schemas/FunctionCatalog"
+          type:
+            - array
+            - "null"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        image:
+          type: string
+        kv:
+          items:
+            $ref: "#/components/schemas/FunctionKV"
+          type:
+            - array
+            - "null"
+        pooling:
+          $ref: "#/components/schemas/WorkflowPooling"
+        ref:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        retry:
+          $ref: "#/components/schemas/StepRetry"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        timeout:
+          format: int64
+          maximum: 86400000000000
+          minimum: 0
+          type: integer
       type: object
     Gateway:
       additionalProperties: false
@@ -1187,6 +1251,15 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       type: object
+    WorkflowRef:
+      additionalProperties: false
+      properties:
+        ref:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
     WorkflowRun:
       additionalProperties: false
       properties:
@@ -1308,27 +1381,8 @@ components:
     WorkflowStep:
       additionalProperties: false
       properties:
-        blob:
-          items:
-            $ref: "#/components/schemas/FunctionBlob"
-          type:
-            - array
-            - "null"
-        catalogs:
-          items:
-            $ref: "#/components/schemas/FunctionCatalog"
-          type:
-            - array
-            - "null"
-        config:
-          items:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-          type:
-            - array
-            - "null"
+        builtin:
+          $ref: "#/components/schemas/BuiltinStep"
         dependsOn:
           items:
             maxLength: 63
@@ -1339,54 +1393,22 @@ components:
             - array
             - "null"
         function:
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
-        image:
-          type: string
+          $ref: "#/components/schemas/FunctionStep"
         join:
           enum:
             - all
             - any
           type: string
-        kv:
-          items:
-            $ref: "#/components/schemas/FunctionKV"
-          type:
-            - array
-            - "null"
         name:
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         params: {}
-        pooling:
-          $ref: "#/components/schemas/WorkflowPooling"
-        retry:
-          $ref: "#/components/schemas/StepRetry"
-        secrets:
-          items:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-          type:
-            - array
-            - "null"
-        timeout:
-          format: int64
-          maximum: 86400000000000
-          minimum: 0
-          type: integer
         when:
           $ref: "#/components/schemas/StepWhen"
         workflow:
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
+          $ref: "#/components/schemas/WorkflowRef"
       required:
         - name
       type: object
