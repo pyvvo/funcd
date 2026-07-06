@@ -102,7 +102,7 @@ func (h *poolHarness) applyPooled(t *testing.T, name, worker string, scaling v1.
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact.URI = h.artifactFor(t, name)
+	fn.Spec.Image = h.artifactFor(t, name)
 	fn.Spec.Replicas = replicas
 	fn.Spec.Scaling = scaling
 	fn.Spec.Pooling.Worker = worker

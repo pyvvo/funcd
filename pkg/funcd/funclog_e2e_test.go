@@ -95,7 +95,7 @@ func TestScenarioE2EFunclogCapturesBurst(t *testing.T) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "log-burst", "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest}
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 	fn.Spec.Replicas = 1
 	fn.Spec.Scaling.MinReplicas = 1
 	_, err = c.Apply(context.Background(), fn)

@@ -12,8 +12,7 @@ metadata:
 spec:
   runtime: python314
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:report   # funcdctl push report.py
+  image: oci-layout:///mnt/funcd-deps/registry:report   # funcdctl push report.py
   replicas: 1
   scaling:
     minReplicas: 1

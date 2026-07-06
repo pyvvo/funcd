@@ -11,8 +11,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///tmp/funcd-demo/layout:v1   # the OCI ref (no digest — ADR-0035 pins it)
+  image: oci-layout:///tmp/funcd-demo/layout:v1   # the OCI ref (no digest — ADR-0035 pins it)
   scaling:
     minReplicas: 1
   replicas: 1

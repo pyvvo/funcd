@@ -12,8 +12,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:counter
+  image: oci-layout:///mnt/funcd-deps/registry:counter
   replicas: 1
   scaling:
     minReplicas: 1

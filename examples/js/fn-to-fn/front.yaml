@@ -9,8 +9,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:front       # funcdctl push front.mjs (built from src/front.ts)
+  image: oci-layout:///mnt/funcd-deps/registry:front       # funcdctl push front.mjs (built from src/front.ts)
   replicas: 1
   scaling:
     minReplicas: 1

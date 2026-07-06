@@ -230,7 +230,7 @@ func applyFunction(t *testing.T, runCLI func(...string) string, name, ref, diges
 	manifest := fmt.Sprintf(`{"apiVersion":"funcd.io/v1alpha1","kind":"Function",`+
 		`"metadata":{"name":%q,"namespace":"default","resourceGroup":"rg1"},`+
 		`"spec":{"runtime":"nodejs22","handler":"handle",`+
-		`"artifact":{"uri":%q,"digest":%q},%s}}`, name, ref, digest, scalingJSON)
+		`"image":%q,"imageDigest":%q,%s}}`, name, ref, digest, scalingJSON)
 	f := filepath.Join(t.TempDir(), name+".json")
 	require.NoError(t, os.WriteFile(f, []byte(manifest), 0o600))
 	out := runCLI("apply", "-f", f)

@@ -64,7 +64,7 @@ func TestScenarioFunctionConfigAndSecretEnvInjected(t *testing.T) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "env-echo", "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact.URI = writeEnvEchoArtifact(t)
+	fn.Spec.Image = writeEnvEchoArtifact(t)
 	fn.Spec.Replicas = 1
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
 	fn.Spec.Config = []v1.ObjectName{"app-config"}  // ADR-0093

@@ -53,7 +53,7 @@ func (h *harness) createFn(t *testing.T, name string, replicas int, valid bool) 
 	if valid {
 		fn.Spec.Runtime = "nodejs22"
 		fn.Spec.Handler = "app.handler"
-		fn.Spec.Artifact = v1.ArtifactRef{URI: "blob://artifacts/" + name}
+		fn.Spec.Image = "blob://artifacts/" + name
 	}
 	_, err := h.st.Create(context.Background(), fn)
 	require.NoError(t, err)

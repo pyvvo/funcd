@@ -190,7 +190,7 @@ func WithMaterializer(m function.Materializer) Option {
 }
 
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are
-// pulled by digest from their `artifact.uri` into a per-digest cache under dir. When a
+// pulled by digest from their `spec.image` into a per-digest cache under dir. When a
 // runtime shim is configured and no explicit Materializer is set, this selects the oras
 // driver over the local-file stand-in.
 func WithArtifactStore(dir string) Option {

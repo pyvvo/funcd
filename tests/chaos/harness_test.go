@@ -87,7 +87,7 @@ func (h *harness) deployReady(t *testing.T, name string) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact.URI = h.art
+	fn.Spec.Image = h.art
 	fn.Spec.Replicas = 1
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
 	_, err := h.c.Apply(context.Background(), fn)

@@ -51,7 +51,7 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 		t.Fatalf("owned function not created: %v", err)
 	}
 	fn := obj.(*v1.Function)
-	if fn.Spec.Runtime != "nodejs22" || fn.Spec.Artifact.URI != "oci:ingest-v1" {
+	if fn.Spec.Runtime != "nodejs22" || fn.Spec.Image != "oci:ingest-v1" {
 		t.Fatalf("function spec wrong: %+v", fn.Spec)
 	}
 	if fn.Spec.Handler != "handle" { // materialization supplies the entrypoint so the fn passes shape validation

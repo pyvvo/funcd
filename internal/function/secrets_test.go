@@ -55,7 +55,7 @@ func (h *harness) createSecretFn(t *testing.T, name string, secrets ...v1.Object
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "app.handler"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: "blob://artifacts/" + name}
+	fn.Spec.Image = "blob://artifacts/" + name
 	fn.Spec.Secrets = secrets
 	_, err := h.st.Create(context.Background(), fn)
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestScenarioConfigMissingFailsClosedReconcile(t *testing.T) {
 	fn.Name, fn.Namespace, fn.ResourceGroup = "cfg", "default", "rg1"
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "app.handler"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: "blob://artifacts/cfg"}
+	fn.Spec.Image = "blob://artifacts/cfg"
 	fn.Spec.Config = []v1.ObjectName{"absent"}
 	_, err := h.st.Create(context.Background(), fn)
 	require.NoError(t, err)

@@ -6,7 +6,7 @@
 //
 // The artifact is one digest-addressed OCI artifact: a manifest of artifactType
 // application/vnd.funcd.function.artifact.v1 with a single bundle-blob layer. The
-// ArtifactRef.Digest is the manifest descriptor digest and is the authority — pulls are
+// imageDigest is the manifest descriptor digest and is the authority — pulls are
 // by digest, an empty digest is rejected, and a mutable tag is only a locator.
 package artifact
 
@@ -379,17 +379,17 @@ func NewOrasMaterializer(artifactDir string) *OrasMaterializer {
 	return &OrasMaterializer{artifactDir: artifactDir}
 }
 
-// Materialize resolves fn.spec.artifact.uri → target, pulls by fn.spec.artifact.digest
+// Materialize resolves fn.spec.image → target, pulls by fn.spec.imageDigest
 // (the authority; empty → fault.Invalid), and returns the cached local path.
 func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "artifact.OrasMaterializer.Materialize"
-	ref := fn.Spec.Artifact.URI
-	digest := fn.Spec.Artifact.Digest
+	ref := fn.Spec.Image
+	digest := fn.Spec.ImageDigest
 	if ref == "" {
-		return "", fault.Invalidf(op, "function %s/%s has no spec.artifact.uri", fn.Namespace, fn.Name)
+		return "", fault.Invalidf(op, "function %s/%s has no spec.image", fn.Namespace, fn.Name)
 	}
 	if digest == "" {
-		return "", fault.Invalidf(op, "function %s/%s has no spec.artifact.digest (the digest is the authority)", fn.Namespace, fn.Name)
+		return "", fault.Invalidf(op, "function %s/%s has no spec.imageDigest (the digest is the authority)", fn.Namespace, fn.Name)
 	}
 	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest))
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {

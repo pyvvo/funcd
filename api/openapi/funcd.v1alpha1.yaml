@@ -3,15 +3,6 @@
 
 components:
   schemas:
-    ArtifactRef:
-      additionalProperties: false
-      properties:
-        digest:
-          pattern: ^sha256:[a-f0-9]{64}$
-          type: string
-        uri:
-          type: string
-      type: object
     BlobServiceSpec:
       additionalProperties: false
       properties:
@@ -398,8 +389,6 @@ components:
     FunctionSpec:
       additionalProperties: false
       properties:
-        artifact:
-          $ref: "#/components/schemas/ArtifactRef"
         blob:
           items:
             $ref: "#/components/schemas/FunctionBlob"
@@ -423,6 +412,11 @@ components:
             - "null"
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
+        image:
+          type: string
+        imageDigest:
+          pattern: ^sha256:[a-f0-9]{64}$
           type: string
         kv:
           items:
@@ -907,12 +901,15 @@ components:
     RevisionSpec:
       additionalProperties: false
       properties:
-        artifact:
-          $ref: "#/components/schemas/ArtifactRef"
         function:
           $ref: "#/components/schemas/ObjectRef"
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
+        image:
+          type: string
+        imageDigest:
+          pattern: ^sha256:[a-f0-9]{64}$
           type: string
         number:
           format: int64

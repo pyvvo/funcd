@@ -220,7 +220,7 @@ func deploy(ctx context.Context, c *sdk.Client, ns, name, ref string, minReplica
 	fn, _ := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), v1.NamespaceName(ns), "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref}
+	fn.Spec.Image = ref
 	fn.Spec.Replicas = replicas
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: minReplicas, IdleTimeout: idle}
 	_, err := c.Apply(ctx, fn)

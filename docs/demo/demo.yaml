@@ -5,5 +5,5 @@ server: http://127.0.0.1:8080                     # SERVER     — control-plane
 dataPlane: http://127.0.0.1:8081                  # DATAPLANE  — function-invocation HTTP (curl)
 token: funcd-dev-token                            # TOKEN      — dev bearer token (funcdctl --token)
 function: echo                                    # the function name deployed in the journey
-# the OCI ref pushed + deployed lives in docs/demo/function.yaml (spec.artifact.uri) — the
+# the OCI ref pushed + deployed lives in docs/demo/function.yaml (spec.image) — the
 # single source; the journey reads it from there (no digest — ADR-0035 pins it).

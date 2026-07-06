@@ -65,7 +65,7 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	require.NoError(t, err)
 	var fn v1.Function
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse counter.yaml")
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest}
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 
 	// ADR-0073 ordering: owner-exists (KVStore.tables[].owner is a real Function) needs the function to
 	// exist before the store; binding-validity (spec.kv names an existing store/table) needs the store to

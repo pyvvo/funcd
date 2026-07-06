@@ -37,8 +37,12 @@ type FunctionSpec struct {
 	Runtime RuntimeName `json:"runtime,omitempty"`
 	// Handler is the entrypoint the shim resolves at materialization (e.g. "app.handler") — F13.
 	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
-	// Artifact is the source artifact (JS bundle / Python wheel), pinned by digest into the Revision — F13.
-	Artifact ArtifactRef `json:"artifact,omitempty"`
+	// Image is the source artifact OCI ref (oci-layout:// · file:// · a bare registry ref; the tag at the
+	// string end), pulled + served by the runtime — F13/ADR-0020, flattened by ADR-0097 (was spec.artifact.uri).
+	Image string `json:"image,omitempty"`
+	// ImageDigest is the content digest pinned into the stamped Revision ("what was validated ships"),
+	// system-set at materialization (ADR-0035) — ADR-0097 (was spec.artifact.digest).
+	ImageDigest string `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$"`
 	// Replicas is the manual replica count (>=0); the effective count also honors Scaling + the
 	// activator's wake (ADR-0016/0020) — F13.
 	Replicas int `json:"replicas,omitempty" minimum:"0" maximum:"15"`
@@ -145,13 +149,6 @@ type Pooling struct {
 	// Worker is an owner-chosen worker id. Empty ⇒ solo (own worker). Functions sharing
 	// (namespace, runtime, Worker) co-locate as handlers in one worker_threads pool worker.
 	Worker string `json:"worker,omitempty"`
-}
-
-// ArtifactRef points at a function's source artifact (ADR-0020, F13): where it lives and
-// the content digest pinned into the stamped Revision ("what was validated ships").
-type ArtifactRef struct {
-	URI    string `json:"uri,omitempty"` // oci-layout:// · file:// · or a bare registry ref (no scheme) — non-empty only (Validate); the materializer parses it (ADR-0031)
-	Digest string `json:"digest,omitempty" pattern:"^sha256:[a-f0-9]{64}$"`
 }
 
 // Scaling is the F11 scale-to-zero policy on a Function (ADR-0016). Field validation

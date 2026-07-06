@@ -116,7 +116,7 @@ func loadFn(t *testing.T, manifest, ref, digest string) *v1.Function {
 	require.NoError(t, err)
 	var fn v1.Function
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse %s", manifest)
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest}
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 	return &fn
 }
 

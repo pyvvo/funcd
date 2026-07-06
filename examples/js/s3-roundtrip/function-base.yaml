@@ -23,8 +23,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:s3-roundtrip   # funcdctl push roundtrip.mjs
+  image: oci-layout:///mnt/funcd-deps/registry:s3-roundtrip   # funcdctl push roundtrip.mjs
   replicas: 0
   scaling:
     minReplicas: 0

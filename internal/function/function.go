@@ -464,7 +464,7 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 	artifactPath := ""
 	if r.materializer != nil && desired > len(insts) {
 		mfn := *fn
-		mfn.Spec.Artifact.Digest = pinnedDigest
+		mfn.Spec.ImageDigest = pinnedDigest
 		artifactPath, err = r.materializer.Materialize(ctx, &mfn)
 		if err != nil {
 			return 0, fault.Wrapf(err, fault.KindOf(err), "function.converge", "materialize artifact")
@@ -546,17 +546,17 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	if err == nil {
 		fn.Status.CurrentRevision = revName
 		if rev, ok := existing.(*v1.Revision); ok {
-			return rev.Spec.Artifact.Digest, nil // never re-resolved
+			return rev.Spec.ImageDigest, nil // never re-resolved
 		}
-		return fn.Spec.Artifact.Digest, nil
+		return fn.Spec.ImageDigest, nil
 	}
 	if fault.KindOf(err) != fault.NotFound {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
-	pinned := fn.Spec.Artifact.Digest
+	pinned := fn.Spec.ImageDigest
 	if pinned == "" {
-		d, rerr := r.pinDigest(ctx, fn.Spec.Artifact.URI)
+		d, rerr := r.pinDigest(ctx, fn.Spec.Image)
 		if rerr != nil {
 			return "", rerr
 		}
@@ -572,7 +572,7 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		Number:   fn.Generation,
 		Runtime:  fn.Spec.Runtime,
 		Handler:  fn.Spec.Handler,
-		Artifact: v1.ArtifactRef{URI: fn.Spec.Artifact.URI, Digest: pinned},
+		Image: fn.Spec.Image, ImageDigest: pinned,
 	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
 		if fault.KindOf(cerr) != fault.Conflict {
@@ -581,7 +581,7 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		// concurrent create — adopt the stored Revision's pinned digest (idempotent).
 		if cur, gerr := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName)); gerr == nil {
 			if rev2, ok := cur.(*v1.Revision); ok {
-				pinned = rev2.Spec.Artifact.Digest
+				pinned = rev2.Spec.ImageDigest
 			}
 		}
 	}
@@ -916,8 +916,8 @@ func (basicValidator) Validate(_ context.Context, fn *v1.Function) error {
 		return fault.Invalidf("function.shape", "function %q: spec.runtime is required", fn.Name)
 	case fn.Spec.Handler == "":
 		return fault.Invalidf("function.shape", "function %q: spec.handler is required", fn.Name)
-	case fn.Spec.Artifact.URI == "":
-		return fault.Invalidf("function.shape", "function %q: spec.artifact.uri is required", fn.Name)
+	case fn.Spec.Image == "":
+		return fault.Invalidf("function.shape", "function %q: spec.image is required", fn.Name)
 	}
 	return nil
 }

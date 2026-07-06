@@ -185,7 +185,7 @@ func (a *cli) deleteCmd() *cobra.Command {
 }
 
 // cmdPush packages a bundle as an OCI artifact and pushes it, printing "<ref>@<digest>" to put
-// in Function.spec.artifact (ADR-0031). It talks to the registry/layout, not the control plane.
+// in Function.spec.image (ADR-0031/0097). It talks to the registry/layout, not the control plane.
 func (a *cli) pushCmd() *cobra.Command {
 	var schemaPath string
 	var entry string

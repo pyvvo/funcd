@@ -22,8 +22,7 @@ metadata:
 spec:
   runtime: python314            # the STOCK curated runtime — the duckdb dep travels in the bundle (ADR-0089)
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:catalog-reader   # funcdctl push ./bundle … --entry handler.py
+  image: oci-layout:///mnt/funcd-deps/registry:catalog-reader   # funcdctl push ./bundle … --entry handler.py
   replicas: 1
   scaling:
     minReplicas: 1

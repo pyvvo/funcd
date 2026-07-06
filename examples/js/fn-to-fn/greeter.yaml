@@ -8,8 +8,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:greeter   # funcdctl push greeter.mjs (built from src/greeter.ts)
+  image: oci-layout:///mnt/funcd-deps/registry:greeter   # funcdctl push greeter.mjs (built from src/greeter.ts)
   replicas: 1
   scaling:
     minReplicas: 1            # keep one warm worker (no cold start)

@@ -128,7 +128,7 @@ func TestScenario_PoolingRoundtripAndValidate(t *testing.T) {
 		Spec: FunctionSpec{
 			Runtime:  "nodejs22",
 			Handler:  "h",
-			Artifact: ArtifactRef{URI: "oci://example/app:v1"},
+			Image: "oci://example/app:v1",
 			Pooling:  Pooling{Worker: "agents"},
 		},
 	}

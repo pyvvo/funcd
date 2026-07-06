@@ -35,7 +35,7 @@ func TestScenarioCLIPushesArtifact(t *testing.T) {
 
 	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
 	require.NoError(t, err)
-	require.Contains(t, digest, "sha256:", "Push prints a sha256 descriptor digest for spec.artifact.digest")
+	require.Contains(t, digest, "sha256:", "Push prints a sha256 descriptor digest for spec.imageDigest")
 }
 
 // scenario: push-pull-roundtrips — push to a LOCAL layout (no registry server), pull back,
@@ -99,7 +99,7 @@ func TestScenarioMaterializerSatisfiesADR0030Seam(t *testing.T) {
 	require.True(t, ok)
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace = "echo", "default"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest}
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 
 	path, err := m.Materialize(context.Background(), fn)
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestScenarioMaterializerSatisfiesADR0030Seam(t *testing.T) {
 	require.Equal(t, path, again, "the per-digest cache returns the same local path")
 
 	// a Function without a digest is rejected (the digest is the authority).
-	fn.Spec.Artifact.Digest = ""
+	fn.Spec.ImageDigest = ""
 	_, err = m.Materialize(context.Background(), fn)
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "no digest → fault.Invalid")

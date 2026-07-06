@@ -197,7 +197,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "echo", "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref} // no digest
+	fn.Spec.Image = ref // no digest
 	fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
 	_, err = c.Apply(ctx, fn)
 	require.NoError(t, err)

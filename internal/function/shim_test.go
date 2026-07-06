@@ -182,7 +182,7 @@ func (h *shimHarness) createFn(t *testing.T, name string) {
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime = "nodejs22"
 	fn.Spec.Handler = "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: "file://" + h.artifact}
+	fn.Spec.Image = "file://" + h.artifact
 	_, err := h.st.Create(context.Background(), fn)
 	require.NoError(t, err)
 }
@@ -390,7 +390,7 @@ func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.G
 	fn.Name, fn.Namespace, fn.ResourceGroup = "echo", "default", "rg1"
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: "file://" + artifact}
+	fn.Spec.Image = "file://" + artifact
 	_, err = st.Create(context.Background(), fn)
 	require.NoError(t, err)
 
