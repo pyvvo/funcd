@@ -160,6 +160,15 @@ lima-example name: build-runtime-images build-shim
     ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
     echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
 
+# Prime the local Lima cache with the pinned Debian VM image so lanes boot with NO upstream dependency (the
+# digest pin already skips the freshness HEAD on repeat boots; this seeds a COLD cache). Downloads the
+# host-arch image from the pinned mirror in scripts/lima.yaml, verifies the sha512 digest, and places it in
+# Lima's download cache. Idempotent. Use `from=<url>` to pull from an alternate reachable source (still
+# digest-verified) if the pinned host is unreachable. `just lima-cache-image` · `just lima-cache-image from=https://…`
+[group('example')]
+lima-cache-image from="":
+    python3 scripts/lima-cache.py {{ if from == "" { "" } else { "--from " + from } }}
+
 # Run EVERY Venom e2e lane back-to-back: the data-driven lanes from scripts/lanes.yaml (each has its own
 # `venom:` suite, ADR-0077) PLUS the metastore lane. Lanes are enumerated from the registry, so a new lane
 # is covered automatically. Continues past a failing lane and prints a PASS/FAIL summary, exiting non-zero
