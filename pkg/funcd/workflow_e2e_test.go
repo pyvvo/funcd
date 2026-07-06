@@ -173,3 +173,76 @@ func TestScenarioWorkflowEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 2, "workflow runs lists both runs")
 }
+
+// setRunSpec applies a spec mutation to a WorkflowRun over the real control plane, retrying on the
+// optimistic-concurrency conflict a concurrent reconcile can cause (the declarative pause/cancel path).
+func setRunSpec(t *testing.T, c *sdk.Client, name string, mutate func(*v1.WorkflowRunSpec)) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		run := getRun(t, c, name)
+		mutate(&run.Spec)
+		_, err := c.Apply(context.Background(), run)
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "apply spec change to %s", name)
+}
+
+// scenario: pause-and-resume-run + cancel-terminates-run (ADR-0094) over the REAL control plane — the
+// declarative lifecycle: a run applied `paused` never dispatches (status Paused); clearing spec.paused
+// resumes it to Succeeded; a second run is cancelled from Paused and ends Cancelled. This is the e2e
+// proof that pause/resume/cancel work end-to-end through the reconciler + engine, not just in unit tests.
+func TestScenarioWorkflowPauseResumeCancel(t *testing.T) {
+	c, _ := shimPlatformOCI(t)
+	src, layout := t.TempDir(), t.TempDir()
+	writeStep(t, src, "work", `export const handle = (ctx, e) => ({ done: true, n: e.data.n });`)
+	img := pushStepImage(t, layout, src, "work")
+
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "life", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
+			Steps:   []v1.WorkflowStep{{Name: "work", Function: &v1.FunctionStep{Image: img}}},
+		},
+	}
+	_, err := c.Apply(context.Background(), wf)
+	require.NoError(t, err)
+	waitMaterializedReady(t, c, "life-work")
+
+	// 1) Applied paused → the reconciler marks it Paused and dispatches nothing.
+	pauseRun := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "life-pause", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "life", Input: json.RawMessage(`{"n":7}`), Paused: true},
+	}
+	_, err = c.Apply(context.Background(), pauseRun)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "life-pause").Status.Phase == "Paused"
+	}, 15*time.Second, 100*time.Millisecond, "the paused run reaches Paused")
+	require.NotEqual(t, v1.StepPhase("Succeeded"), runStepPhase(getRun(t, c, "life-pause"), "work"),
+		"the step must NOT have run while paused")
+
+	// 2) Resume: clear spec.paused → the run drives to Succeeded.
+	setRunSpec(t, c, "life-pause", func(s *v1.WorkflowRunSpec) { s.Paused = false })
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "life-pause").Status.Phase == "Succeeded"
+	}, 20*time.Second, 100*time.Millisecond, "the resumed run reaches Succeeded")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(getRun(t, c, "life-pause"), "work"),
+		"the step ran after resume")
+
+	// 3) Cancel from Paused: a second run applied paused, then cancelled, ends Cancelled.
+	cancelRun := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "life-cancel", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "life", Input: json.RawMessage(`{"n":1}`), Paused: true},
+	}
+	_, err = c.Apply(context.Background(), cancelRun)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "life-cancel").Status.Phase == "Paused"
+	}, 15*time.Second, 100*time.Millisecond, "the second run reaches Paused")
+	setRunSpec(t, c, "life-cancel", func(s *v1.WorkflowRunSpec) { s.Cancel = true })
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "life-cancel").Status.Phase == "Cancelled"
+	}, 20*time.Second, 100*time.Millisecond, "the cancelled run reaches Cancelled")
+}
