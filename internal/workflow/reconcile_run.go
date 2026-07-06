@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/controller"
+	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
@@ -20,15 +22,46 @@ const runOp = "workflow.reconcileRun"
 type RunReconciler struct {
 	store  store.Store
 	engine *Engine
+	traces funclog.TraceSink // ADR-0103: emits the run-root span at terminal; nil ⇒ no span (additive)
 	log    *slog.Logger
 }
 
-// NewRunReconciler builds the run reconciler.
-func NewRunReconciler(s store.Store, e *Engine, log *slog.Logger) *RunReconciler {
+// NewRunReconciler builds the run reconciler. traces is the shared funclog trace sink (ADR-0103): when
+// non-nil, the reconciler emits one INTERNAL run-root span per terminal run so the run's step spans
+// (F51, parented on the run root) nest under it. nil ⇒ no run-root span (additive).
+func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *slog.Logger) *RunReconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &RunReconciler{store: s, engine: e, log: log.With("component", "workflow.run")}
+	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run")}
+}
+
+// emitRunSpan writes one INTERNAL span for the terminal run into the trace sink (ADR-0103). Defensive
+// no-op unless traces != nil, rec != nil, rec.Terminal(), and rec has a trace context. SpanID is the
+// run's RootSpanID (ADR-0102), so the step spans parented on it nest under this root. Best-effort: a
+// sink error is logged, never failing the reconcile.
+func (r *RunReconciler) emitRunSpan(ctx context.Context, rec *runstate.Record) {
+	if r.traces == nil || rec == nil || !rec.Terminal() || rec.TraceID == "" {
+		return
+	}
+	status := funclog.StatusOk
+	if rec.Phase != runSucceeded {
+		status = funclog.StatusError
+	}
+	sp := funclog.Span{
+		TraceID: rec.TraceID,
+		SpanID:  rec.RootSpanID,
+		Name:    string(rec.Workflow),
+		Kind:    funclog.SpanInternal,
+		Start:   time.Unix(0, rec.StartedAt),
+		End:     time.Unix(0, rec.UpdatedAt),
+		Status:  status,
+		Attrs:   map[string]string{"funcd.run": string(rec.Name), "funcd.phase": string(rec.Phase)},
+	}
+	res := funclog.Resource{Namespace: string(rec.Namespace), Function: string(rec.Workflow), Replica: string(rec.Name)}
+	if err := r.traces.AppendSpan(ctx, res, sp); err != nil {
+		r.log.WarnContext(ctx, "workflow: run-root span emit failed", "run", rec.Name, "error", err)
+	}
 }
 
 // Reconcile drives one WorkflowRun toward its terminal phase.
@@ -81,6 +114,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return controller.Result{}, uerr
 	}
+	r.emitRunSpan(ctx, rec) // ADR-0103: one run-root span at the terminal transition (no-op if non-terminal)
 	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
 		r.log.Warn("status.runs update failed", "workflow", wf.Name, "error", lerr)
 	}
@@ -104,6 +138,7 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return uerr
 	}
+	r.emitRunSpan(ctx, rec) // ADR-0103: the cancelled run's root span (the distinct second emit site)
 	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
 		r.log.Warn("status.runs update failed after cancel", "workflow", wf.Name, "error", lerr)
 	}

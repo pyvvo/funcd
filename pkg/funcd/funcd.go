@@ -481,6 +481,25 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
 
+	// ADR-0101/0103: one shared funclog trace sink — the F51 per-invocation step spans AND the
+	// engine's per-run root span (ADR-0103) both persist here, so a run's spans form one coherent
+	// trace. Built whenever a blob substrate is present and traces are enabled (NOT gated on
+	// LogCapturer: the run-root span is emitted in-process, not over the shim channel). traceSink is
+	// a nil INTERFACE when disabled (never a typed-nil *BlobTraceSink), so the reconciler's nil-check
+	// holds. pkg/funcd owns its lifecycle (closed once at shutdown); consumers only hold a reference.
+	var traceSink funclog.TraceSink
+	if c.blob != nil && !c.funclogDisabled && !c.funclogTracesDisabled {
+		ts, terr := funclog.NewBlobTraceSink(funclog.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
+		})
+		if terr != nil {
+			return fault.Wrapf(terr, fault.Internal, op, "build funclog trace sink")
+		}
+		p.traceSink = ts
+		traceSink = ts
+	}
+
 	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
 	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
 	// waker (fail-closed to targets that resolve to a real Function), and two reconcilers — the
@@ -519,7 +538,7 @@ func (p *Platform) buildControlPlane() error {
 	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, contractResolver{}, p.logger))
-	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, p.logger))
+	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger))
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -608,20 +627,9 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(serr, fault.Internal, op, "build funclog sink")
 		}
 		p.logSink = sink
-		// ADR-0101: the traces signal rides the same channel. When enabled, build the trace sink and
-		// route span-tagged lines to it; the demux (Route) sends untagged lines to the logs sink.
-		var traceSink funclog.TraceSink // nil ⇒ span lines are read off the channel and dropped
-		if !c.funclogTracesDisabled {
-			ts, terr := funclog.NewBlobTraceSink(funclog.Deps{
-				Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
-				SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
-			})
-			if terr != nil {
-				return fault.Wrapf(terr, fault.Internal, op, "build funclog trace sink")
-			}
-			p.traceSink = ts
-			traceSink = ts
-		}
+		// ADR-0101: the traces signal rides the same channel. Reuse the shared trace sink built above
+		// (ADR-0103) so step spans + the run-root span land in one trace store; the demux (Route) sends
+		// span-tagged lines to it and untagged lines to the logs sink. nil ⇒ span lines are dropped.
 		sinks := funclog.Sinks{Logs: sink, Traces: traceSink}
 		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
 			res := funclog.Resource{

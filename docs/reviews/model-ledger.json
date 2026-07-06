@@ -1573,5 +1573,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0102-implementation-claude-opus-4-8.md",
     "notes": "pass; one-run-one-trace propagation faithful; 1 Minor (model): mintTraceContext drops declared err in favor of ADR empty-context behavior; build/lint/mod/test green, Go e2e + fresh Venom lane pass, no funclog import, no go.mod change"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0103",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0103-implementation-claude-opus-4-8.md",
+    "notes": "PASS \u2014 run-root span emitted once at terminal (both drive + cancelRun sites), nil-safe, one shared sink; 6 TestRunSpan + in-process e2e + Venom kind:1 lane all green; seam intentional/acyclic; 0 findings (1 env-only python314.tar rebuild noted)"
   }
 ]

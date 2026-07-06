@@ -48,7 +48,7 @@ func TestRunReconcilerDrivesAndLinks(t *testing.T) {
 	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
 	t.Cleanup(func() { _ = rstate.Close() })
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
-	rr := NewRunReconciler(s, eng, nil)
+	rr := NewRunReconciler(s, eng, nil, nil)
 
 	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "orders-01"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -91,7 +91,7 @@ func TestRunReconcilerCancel(t *testing.T) {
 	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
 	t.Cleanup(func() { _ = rstate.Close() })
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
-	rr := NewRunReconciler(s, eng, nil)
+	rr := NewRunReconciler(s, eng, nil, nil)
 
 	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-c"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -147,7 +147,7 @@ func TestRevisionPinnedMidRunRepush(t *testing.T) {
 		},
 	})
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
-	rr := NewRunReconciler(s, eng, nil)
+	rr := NewRunReconciler(s, eng, nil, nil)
 	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-x"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestRunReconcilerPause(t *testing.T) {
 	t.Cleanup(func() { _ = rstate.Close() })
 	f := newFake()
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
-	rr := NewRunReconciler(s, eng, nil)
+	rr := NewRunReconciler(s, eng, nil, nil)
 
 	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-p"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)

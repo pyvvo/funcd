@@ -108,6 +108,22 @@ testcases:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring ONETRACEOK"
 
+  # ── ADR-0103: the engine emits a run-ROOT span for the run itself — an INTERNAL span (kind 1) under
+  #    the workflow's own prefix traces/<ns>/<workflow>/ (distinct from the steps' <workflow>-<step>/).
+  #    That is the real root the step SERVER spans nest under (the full parenting is proven precisely by
+  #    the in-process Go e2e; here we prove the engine emits it on real containerd).
+  - name: run-root span — the engine emits an INTERNAL run span at the top of the trace (ADR-0103)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'c=$(cat /var/lib/funcd/data/blob/traces/default/orders/*/*.otlp.jsonl 2>/dev/null | grep -o "\"kind\":1" | wc -l); [ "$c" -ge 1 ] && echo "ROOTSPANOK c=$c" || echo "ROOTSPANNONE c=$c"'
+        retry: 15
+        delay: 2
+        info: "run-root span → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring ROOTSPANOK"
+
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:
       - type: exec

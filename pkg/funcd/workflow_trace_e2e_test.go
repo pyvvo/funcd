@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/pdata/ptrace"
+
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
@@ -107,18 +109,28 @@ func TestScenarioE2EWorkflowOneRunOneTrace(t *testing.T) {
 		return getRun(t, c, "traced-01").Status.Phase == "Succeeded"
 	}, 30*time.Second, 100*time.Millisecond, "the 2-step run reaches Succeeded")
 
-	// One run = one trace: both step-function invocations' spans land in blob under one trace-id,
-	// parented on the same run root. (The funclog age-flusher seals within ~500ms, so this retries.)
+	// One run = one trace with a REAL root (ADR-0102 propagation + ADR-0103 run-root span): the engine
+	// emits an INTERNAL run-root span (no parent) whose SpanID is what every step-function SERVER span
+	// (F51) parents on — so the run is one trace, rooted by a run span carrying its total duration.
+	// (The funclog age-flusher seals within ~500ms, so this retries.)
 	require.Eventually(t, func() bool {
 		traceIDs := map[string]struct{}{}
-		parents := map[string]struct{}{}
-		n := 0
+		var rootSpanID string
+		haveRoot := false
+		stepParents := map[string]struct{}{}
+		steps := 0
 		for _, sp := range readSpans(t, bucket) {
 			traceIDs[sp.TraceID().String()] = struct{}{}
-			parents[sp.ParentSpanID().String()] = struct{}{}
-			n++
+			switch {
+			case sp.Kind() == ptrace.SpanKindInternal && sp.ParentSpanID().String() == "":
+				rootSpanID, haveRoot = sp.SpanID().String(), true // the run-root span (ADR-0103)
+			case sp.Kind() == ptrace.SpanKindServer:
+				stepParents[sp.ParentSpanID().String()] = struct{}{} // a step invocation span (F51)
+				steps++
+			}
 		}
-		// ≥2 spans (both steps), exactly ONE distinct trace-id, all parented on ONE run root.
-		return n >= 2 && len(traceIDs) == 1 && len(parents) == 1
-	}, 15*time.Second, 300*time.Millisecond, "every step span shares one trace-id, parented on the run root")
+		_, stepsOnRoot := stepParents[rootSpanID]
+		// one trace · a run-root span exists · ≥2 step spans · all step spans parent on the root span.
+		return len(traceIDs) == 1 && haveRoot && steps >= 2 && len(stepParents) == 1 && stepsOnRoot
+	}, 15*time.Second, 300*time.Millisecond, "the run-root span roots one trace and the step spans nest under it")
 }
