@@ -1543,5 +1543,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0099-implementation-claude-opus-4-8.md",
     "notes": "F70 sub-workflows: workflow kind flipped to accepted; inline recursive runChild over the engine (child run output = step output), depth guard + reconcile cycle detection, typed edges across the boundary (child status.contract = step contract via F65). 8/8 scenarios named+passing; build/lint/test/mod green; Go e2e (parent workflow: step runs real child inline over the control plane) green. Containerd venom lane wired+correct but env-blocked (cloud.debian.org outage \u2192 Lima VM image unfetchable); added a digest-pin resilience fix to lima.yaml; lane re-runnable. env-attributed, non-scoring"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0101",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0101-implementation-claude-opus-4-8.md",
+    "notes": "PASS: build/lint/mod-verify green, no go.mod change; funclog+funcd tests pass incl. traces e2e + logs regression guard; Node 37/0, Python 56 (UDS excluded=env), Venom 12/12; all 10 scenarios have named passing tests; 1 minor (io.Closer written as Close(), model, non-blocking)"
   }
 ]

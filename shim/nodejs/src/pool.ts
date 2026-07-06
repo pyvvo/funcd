@@ -20,7 +20,8 @@ import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
-import { installConsoleCapture } from './funclog.ts';
+import { installConsoleCapture, openChannel } from './funclog.ts';
+import { startSpan } from './tracespan.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -31,6 +32,7 @@ interface WorkerSpec {
 interface Req {
   id: number;
   event: CloudEvent;
+  traceparent?: string; // ADR-0101: the host forwards the incoming W3C header so the worker's span adopts it
 }
 interface Res {
   id: number;
@@ -53,10 +55,11 @@ async function workerMain(): Promise<void> {
   const port = parentPort;
   if (!port) return;
 
-  // ADR-0081 Path B: patch the function's console.* onto the side channel BEFORE its handler runs
-  // (no-op when no channel env is set). The pool's OWN operational lines below go to process.stderr
-  // directly — NOT through the patched console — so they never become fake function logs.
-  installConsoleCapture();
+  // ADR-0081 Path B + ADR-0101 traces: open the worker's telemetry channel ONCE and share it between
+  // console capture and the per-invocation span (a single channel per worker). No channel env ⇒ null
+  // ⇒ both no-op. The pool's OWN operational lines go to process.stderr, never the patched console.
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
 
   let handler: Handler;
   let validators: { input?: Validator; output?: Validator };
@@ -76,25 +79,32 @@ async function workerMain(): Promise<void> {
       if (validators.input) {
         const errors = validators.input(event.data);
         if (errors.length > 0) {
+          // ADR-0101: input-mismatch short-circuits before the handler → no invocation, no span.
           port.postMessage({ id: req.id, status: 422, error: 'event data does not match the input contract', details: errors });
           return;
         }
       }
+      // ADR-0101: a real invocation → its SERVER span (adopts req.traceparent or mints a root),
+      // emitted on the worker's channel; the handler runs inside the span's context so logs correlate.
+      const span = startSpan(channel, spec.name, req.traceparent);
       try {
-        const result = await handler(ctx, event);
+        const result = await span.run(() => handler(ctx, event));
         if (validators.output) {
           const errors = validators.output(result === undefined ? null : result);
           if (errors.length > 0) {
+            span.end('ERROR', 'handler result does not match the output contract');
             port.postMessage({ id: req.id, status: 500, error: 'handler result does not match the output contract', details: errors });
             return;
           }
         }
+        span.end('OK');
         if (result === undefined || result === null) {
           port.postMessage({ id: req.id, none: true });
         } else {
           port.postMessage({ id: req.id, result });
         }
       } catch (err) {
+        span.end('ERROR', String(err instanceof Error ? err.message : err));
         port.postMessage({ id: req.id, status: 500, error: String(err instanceof Error ? err.message : err) });
       }
     })();
@@ -178,7 +188,7 @@ class PooledHandler {
     }, 50);
   }
 
-  async invoke(event: CloudEvent): Promise<Res> {
+  async invoke(event: CloudEvent, traceparent?: string): Promise<Res> {
     if (!this.healthy) return { id: -1, status: 503, error: `function ${this.spec.name} unavailable` };
     const id = this.nextID++;
     return new Promise<Res>((resolve) => {
@@ -187,7 +197,7 @@ class PooledHandler {
         resolve({ id, status: 503, error: `function ${this.spec.name} timed out` });
       }, requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.worker.postMessage({ id, event } satisfies Req);
+      this.worker.postMessage({ id, event, traceparent } satisfies Req);
     });
   }
 
@@ -231,7 +241,7 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
     }
-    const res = await h.invoke(event);
+    const res = await h.invoke(event, c.req.header('traceparent')); // ADR-0101: forward the trace header to the worker
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
     if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);

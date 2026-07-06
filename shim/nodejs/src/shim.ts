@@ -21,7 +21,8 @@ import { resolveHandler, resolveValidators } from './runtime.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
-import { installConsoleCapture } from './funclog.ts';
+import { installConsoleCapture, openChannel, type Sink } from './funclog.ts';
+import { startSpan } from './tracespan.ts';
 
 export type { CloudEvent, FunctionContext, Handler, Json, Validator } from './types.ts';
 export { resolveHandler, resolveValidators } from './runtime.ts';
@@ -34,9 +35,12 @@ export { resolveHandler, resolveValidators } from './runtime.ts';
 export function createApp(
   handler: Handler,
   validators: { input?: Validator; output?: Validator } = {},
+  trace: { sink?: Sink | null; fnName?: string } = {},
 ): Hono {
   const app = new Hono();
   const ctx: FunctionContext = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
+  const traceSink = trace.sink ?? null; // ADR-0101: per-invocation span emitter (null ⇒ context only)
+  const fnName = trace.fnName ?? 'invoke';
 
   app.get('/health/liveness', (c) => c.text('ok'));
   app.get('/health/readiness', (c) => c.text('ready'));
@@ -52,22 +56,29 @@ export function createApp(
     if (validators.input) {
       const errors = validators.input(event.data);
       if (errors.length > 0) {
+        // ADR-0101: an input-mismatch short-circuits BEFORE the handler → no invocation, no span.
         return c.json({ error: 'event data does not match the input contract', details: errors }, 422);
       }
     }
+    // ADR-0101: a real invocation begins → open its SERVER span (adopts traceparent or mints a root);
+    // the handler runs inside the span's context so its logs correlate.
+    const span = startSpan(traceSink, fnName, c.req.header('traceparent'));
     try {
-      const result = await handler(ctx, event);
+      const result = await span.run(() => handler(ctx, event));
       if (validators.output) {
         // normalize an absent return to null so a `void` validator (accepts empty) and a typed
         // validator (rejects empty) both see a concrete value.
         const errors = validators.output(result === undefined ? null : result);
         if (errors.length > 0) {
+          span.end('ERROR', 'handler result does not match the output contract');
           return c.json({ error: 'handler result does not match the output contract', details: errors }, 500);
         }
       }
+      span.end('OK');
       if (result === undefined || result === null) return c.body(null, 204);
       return c.json(result as Record<string, unknown>);
     } catch (err) {
+      span.end('ERROR', String(err instanceof Error ? err.message : err));
       return c.json({ error: String(err instanceof Error ? err.message : err) }, 500);
     }
   });
@@ -77,11 +88,12 @@ export function createApp(
 
 /** main loads the artifact, resolves the handler, and serves the contract. */
 async function main(): Promise<void> {
-  // ADR-0081 Path B: patch the function's console.* onto the side channel BEFORE the handler runs,
-  // so every console call becomes a captured NDJSON record (no-op when no channel env is set). The
-  // shim's OWN operational lines below go to process.stderr directly — NOT through the patched
-  // console — so they never masquerade as function logs on the Path B channel.
-  installConsoleCapture();
+  // ADR-0081 Path B + ADR-0101 traces: open the telemetry channel ONCE and share it between console
+  // capture and the per-invocation span (a single channel per process — a second UDS connect would
+  // double-capture). No channel env ⇒ null ⇒ both are no-ops (console stays Path A). The shim's OWN
+  // operational lines go to process.stderr directly — never through the patched console.
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
 
   const artifact = process.env.FUNCD_ARTIFACT;
   const handlerName = process.env.FUNCD_HANDLER ?? 'handle';
@@ -105,7 +117,9 @@ async function main(): Promise<void> {
   }
 
   const hostname = fixedPort > 0 ? '0.0.0.0' : '127.0.0.1';
-  serve({ fetch: createApp(handler, validators).fetch, hostname, port: fixedPort }, (info) => {
+  const fnName = process.env.FUNCD_FUNCTION ?? 'invoke';
+  const appTrace = { sink: channel, fnName };
+  serve({ fetch: createApp(handler, validators, appTrace).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
     process.stderr.write(`funcd-shim: listening on ${hostname}:${info.port}\n`);
   });

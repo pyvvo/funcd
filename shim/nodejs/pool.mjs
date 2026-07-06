@@ -3242,6 +3242,15 @@ function makeKV() {
 // src/funclog.ts
 import { writeSync } from "node:fs";
 import { connect } from "node:net";
+
+// src/invcontext.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+var invStore = new AsyncLocalStorage();
+function currentInv() {
+  return invStore.getStore();
+}
+
+// src/funclog.ts
 var SEVERITY = {
   debug: "DEBUG",
   log: "INFO",
@@ -3283,18 +3292,19 @@ function buildRecord(method, args) {
       attrs[k] = typeof v === "string" ? v : safeStringify(v);
     }
   }
+  const inv = currentInv();
   return {
     ts: Date.now() * 1e6,
     sev: SEVERITY[method],
     body,
     attrs,
-    inv: "",
-    trace_id: "",
-    span_id: "",
+    inv: inv?.inv ?? "",
+    trace_id: inv?.traceId ?? "",
+    span_id: inv?.spanId ?? "",
     "funcd.source": "console"
   };
 }
-function openSink(env) {
+function openChannel(env) {
   const fdRaw = env.FUNCD_LOG_FD;
   if (fdRaw !== void 0 && fdRaw !== "") {
     const fd = Number(fdRaw);
@@ -3322,8 +3332,7 @@ function openSink(env) {
   }
   return null;
 }
-function installConsoleCapture(env = process.env) {
-  const sink = openSink(env);
+function installConsoleCapture(env = process.env, sink = openChannel(env)) {
   if (!sink) return false;
   const methods = ["debug", "log", "info", "warn", "error"];
   for (const method of methods) {
@@ -3337,6 +3346,69 @@ function installConsoleCapture(env = process.env) {
   return true;
 }
 
+// src/tracespan.ts
+import { randomBytes } from "node:crypto";
+var ZERO_TRACE = "0".repeat(32);
+var ZERO_SPAN = "0".repeat(16);
+function parseTraceparent(tp) {
+  if (!tp) return null;
+  const parts = tp.trim().split("-");
+  if (parts.length < 4) return null;
+  const [version, traceId, parentId] = parts;
+  if (!/^[0-9a-f]{2}$/.test(version) || version === "ff") return null;
+  if (!/^[0-9a-f]{32}$/.test(traceId) || traceId === ZERO_TRACE) return null;
+  if (!/^[0-9a-f]{16}$/.test(parentId) || parentId === ZERO_SPAN) return null;
+  return { traceId, parentId };
+}
+function newInvContext(tp) {
+  const adopted = parseTraceparent(tp);
+  return {
+    inv: randomBytes(8).toString("hex"),
+    traceId: adopted ? adopted.traceId : randomBytes(16).toString("hex"),
+    spanId: randomBytes(8).toString("hex"),
+    parentId: adopted ? adopted.parentId : ""
+  };
+}
+function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
+  const rec = {
+    "funcd.signal": "traces",
+    trace_id: ctx.traceId,
+    span_id: ctx.spanId,
+    parent_id: ctx.parentId,
+    name,
+    kind: "SERVER",
+    start,
+    end,
+    status,
+    status_msg: statusMsg,
+    attrs: {},
+    inv: ctx.inv
+  };
+  try {
+    sink(JSON.stringify(rec) + "\n");
+  } catch {
+  }
+}
+function startSpan(sink, name, tp) {
+  const inv = newInvContext(tp);
+  const startNs = Date.now() * 1e6;
+  const t0 = process.hrtime.bigint();
+  let ended = false;
+  return {
+    inv,
+    run(fn) {
+      return invStore.run(inv, async () => fn());
+    },
+    end(status, statusMsg = "") {
+      if (ended) return;
+      ended = true;
+      if (!sink) return;
+      const endNs = startNs + Number(process.hrtime.bigint() - t0);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg);
+    }
+  };
+}
+
 // src/pool.ts
 var maxOldMB = Number(process.env.FUNCD_POOL_MAX_OLD_MB ?? 64);
 var maxYoungMB = Number(process.env.FUNCD_POOL_MAX_YOUNG_MB ?? 16);
@@ -3345,7 +3417,8 @@ async function workerMain() {
   const spec = workerData;
   const port = parentPort;
   if (!port) return;
-  installConsoleCapture();
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
   let handler;
   let validators;
   try {
@@ -3368,21 +3441,25 @@ async function workerMain() {
           return;
         }
       }
+      const span = startSpan(channel, spec.name, req.traceparent);
       try {
-        const result = await handler(ctx, event);
+        const result = await span.run(() => handler(ctx, event));
         if (validators.output) {
           const errors = validators.output(result === void 0 ? null : result);
           if (errors.length > 0) {
+            span.end("ERROR", "handler result does not match the output contract");
             port.postMessage({ id: req.id, status: 500, error: "handler result does not match the output contract", details: errors });
             return;
           }
         }
+        span.end("OK");
         if (result === void 0 || result === null) {
           port.postMessage({ id: req.id, none: true });
         } else {
           port.postMessage({ id: req.id, result });
         }
       } catch (err) {
+        span.end("ERROR", String(err instanceof Error ? err.message : err));
         port.postMessage({ id: req.id, status: 500, error: String(err instanceof Error ? err.message : err) });
       }
     })();
@@ -3453,7 +3530,7 @@ var PooledHandler = class {
       if (!this.closed) this.spawn();
     }, 50);
   }
-  async invoke(event) {
+  async invoke(event, traceparent) {
     if (!this.healthy) return { id: -1, status: 503, error: `function ${this.spec.name} unavailable` };
     const id = this.nextID++;
     return new Promise((resolve) => {
@@ -3462,7 +3539,7 @@ var PooledHandler = class {
         resolve({ id, status: 503, error: `function ${this.spec.name} timed out` });
       }, requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.worker.postMessage({ id, event });
+      this.worker.postMessage({ id, event, traceparent });
     });
   }
   async close() {
@@ -3495,7 +3572,7 @@ function createPool(manifest, limits) {
     } catch {
       return c.text("invalid CloudEvent JSON", 400);
     }
-    const res = await h.invoke(event);
+    const res = await h.invoke(event, c.req.header("traceparent"));
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
     if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);

@@ -23,6 +23,16 @@ import logging
 import os
 import socket
 import time
+from typing import Protocol
+
+from .invcontext import current_inv
+
+
+class Channel(Protocol):
+    """The write side of the telemetry side channel — the seam log + trace capture share (ADR-0101).
+    ``_Channel`` (fd/UDS) is the runtime implementation; tests supply their own."""
+
+    def write_line(self, line: bytes) -> None: ...
 
 # ADR-0081 wire: levelno -> severity token. WARNING->WARN, CRITICAL->FATAL; anything unknown -> INFO.
 _SEV_BY_LEVELNO: dict[int, str] = {
@@ -58,6 +68,13 @@ class _Channel:
             pass
 
 
+def open_channel() -> _Channel | None:
+    """Resolve the telemetry channel from the env contract, or ``None`` when neither var is set.
+    Public so an entrypoint opens the channel ONCE and shares it between log + trace capture
+    (ADR-0101: both signals ride the one channel; a second connect would double-capture)."""
+    return _open_channel()
+
+
 def _open_channel() -> _Channel | None:
     """Resolve the channel from the env contract, or ``None`` when neither var is set."""
     fd_env = os.environ.get("FUNCD_LOG_FD")
@@ -88,7 +105,7 @@ class FuncLogHandler(logging.Handler):
     It does not echo to stdout/stderr, so Path A (raw fd 1/2) never re-captures a Path B line.
     """
 
-    def __init__(self, channel: _Channel) -> None:
+    def __init__(self, channel: Channel) -> None:
         super().__init__(level=logging.NOTSET)
         self._channel = channel
 
@@ -110,27 +127,32 @@ class FuncLogHandler(logging.Handler):
         for key, value in record.__dict__.items():
             if key not in _INTRINSIC_RECORD_KEYS:
                 attrs[key] = _stringify(value)
+        # ADR-0101: tag with the active invocation context (set by the trace span around the handler)
+        # so logs correlate with their span. Outside an invocation the context is None → empty ids.
+        inv = current_inv()
         obj = {
             "ts": time.time_ns(),
             "sev": _SEV_BY_LEVELNO.get(record.levelno, "INFO"),
             "body": record.getMessage(),
             "attrs": attrs,
-            "inv": "",
-            "trace_id": "",
-            "span_id": "",
+            "inv": inv.inv if inv else "",
+            "trace_id": inv.trace_id if inv else "",
+            "span_id": inv.span_id if inv else "",
             "funcd.source": "logging",
         }
         return (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def install_log_capture() -> FuncLogHandler | None:
-    """Install Path B capture on the root logger if a channel env is set; else do nothing.
+def install_log_capture(channel: Channel | None = None) -> FuncLogHandler | None:
+    """Install Path B capture on the root logger if a channel is available; else do nothing.
 
     Returns the installed handler (or ``None`` when no channel is configured), mainly for tests.
     Call this EARLY in shim startup, before any function handler runs, so the first ``logging.info``
-    a function emits is already captured.
+    a function emits is already captured. Pass ``channel`` to reuse a channel an entrypoint already
+    opened (ADR-0101: log + trace capture share ONE channel); omit it to open from the env.
     """
-    channel = _open_channel()
+    if channel is None:
+        channel = _open_channel()
     if channel is None:
         return None
     handler = FuncLogHandler(channel)

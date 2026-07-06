@@ -3241,6 +3241,15 @@ function makeKV() {
 // src/funclog.ts
 import { writeSync } from "node:fs";
 import { connect } from "node:net";
+
+// src/invcontext.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+var invStore = new AsyncLocalStorage();
+function currentInv() {
+  return invStore.getStore();
+}
+
+// src/funclog.ts
 var SEVERITY = {
   debug: "DEBUG",
   log: "INFO",
@@ -3282,18 +3291,19 @@ function buildRecord(method, args) {
       attrs[k] = typeof v === "string" ? v : safeStringify(v);
     }
   }
+  const inv = currentInv();
   return {
     ts: Date.now() * 1e6,
     sev: SEVERITY[method],
     body,
     attrs,
-    inv: "",
-    trace_id: "",
-    span_id: "",
+    inv: inv?.inv ?? "",
+    trace_id: inv?.traceId ?? "",
+    span_id: inv?.spanId ?? "",
     "funcd.source": "console"
   };
 }
-function openSink(env) {
+function openChannel(env) {
   const fdRaw = env.FUNCD_LOG_FD;
   if (fdRaw !== void 0 && fdRaw !== "") {
     const fd = Number(fdRaw);
@@ -3321,8 +3331,7 @@ function openSink(env) {
   }
   return null;
 }
-function installConsoleCapture(env = process.env) {
-  const sink = openSink(env);
+function installConsoleCapture(env = process.env, sink = openChannel(env)) {
   if (!sink) return false;
   const methods = ["debug", "log", "info", "warn", "error"];
   for (const method of methods) {
@@ -3336,10 +3345,75 @@ function installConsoleCapture(env = process.env) {
   return true;
 }
 
+// src/tracespan.ts
+import { randomBytes } from "node:crypto";
+var ZERO_TRACE = "0".repeat(32);
+var ZERO_SPAN = "0".repeat(16);
+function parseTraceparent(tp) {
+  if (!tp) return null;
+  const parts = tp.trim().split("-");
+  if (parts.length < 4) return null;
+  const [version, traceId, parentId] = parts;
+  if (!/^[0-9a-f]{2}$/.test(version) || version === "ff") return null;
+  if (!/^[0-9a-f]{32}$/.test(traceId) || traceId === ZERO_TRACE) return null;
+  if (!/^[0-9a-f]{16}$/.test(parentId) || parentId === ZERO_SPAN) return null;
+  return { traceId, parentId };
+}
+function newInvContext(tp) {
+  const adopted = parseTraceparent(tp);
+  return {
+    inv: randomBytes(8).toString("hex"),
+    traceId: adopted ? adopted.traceId : randomBytes(16).toString("hex"),
+    spanId: randomBytes(8).toString("hex"),
+    parentId: adopted ? adopted.parentId : ""
+  };
+}
+function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
+  const rec = {
+    "funcd.signal": "traces",
+    trace_id: ctx.traceId,
+    span_id: ctx.spanId,
+    parent_id: ctx.parentId,
+    name,
+    kind: "SERVER",
+    start,
+    end,
+    status,
+    status_msg: statusMsg,
+    attrs: {},
+    inv: ctx.inv
+  };
+  try {
+    sink(JSON.stringify(rec) + "\n");
+  } catch {
+  }
+}
+function startSpan(sink, name, tp) {
+  const inv = newInvContext(tp);
+  const startNs = Date.now() * 1e6;
+  const t0 = process.hrtime.bigint();
+  let ended = false;
+  return {
+    inv,
+    run(fn) {
+      return invStore.run(inv, async () => fn());
+    },
+    end(status, statusMsg = "") {
+      if (ended) return;
+      ended = true;
+      if (!sink) return;
+      const endNs = startNs + Number(process.hrtime.bigint() - t0);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg);
+    }
+  };
+}
+
 // src/shim.ts
-function createApp(handler, validators = {}) {
+function createApp(handler, validators = {}, trace = {}) {
   const app = new Hono2();
   const ctx = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
+  const traceSink = trace.sink ?? null;
+  const fnName = trace.fnName ?? "invoke";
   app.get("/health/liveness", (c) => c.text("ok"));
   app.get("/health/readiness", (c) => c.text("ready"));
   app.post("/", async (c) => {
@@ -3356,24 +3430,29 @@ function createApp(handler, validators = {}) {
         return c.json({ error: "event data does not match the input contract", details: errors }, 422);
       }
     }
+    const span = startSpan(traceSink, fnName, c.req.header("traceparent"));
     try {
-      const result = await handler(ctx, event);
+      const result = await span.run(() => handler(ctx, event));
       if (validators.output) {
         const errors = validators.output(result === void 0 ? null : result);
         if (errors.length > 0) {
+          span.end("ERROR", "handler result does not match the output contract");
           return c.json({ error: "handler result does not match the output contract", details: errors }, 500);
         }
       }
+      span.end("OK");
       if (result === void 0 || result === null) return c.body(null, 204);
       return c.json(result);
     } catch (err) {
+      span.end("ERROR", String(err instanceof Error ? err.message : err));
       return c.json({ error: String(err instanceof Error ? err.message : err) }, 500);
     }
   });
   return app;
 }
 async function main() {
-  installConsoleCapture();
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
   const artifact = process.env.FUNCD_ARTIFACT;
   const handlerName = process.env.FUNCD_HANDLER ?? "handle";
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
@@ -3394,7 +3473,9 @@ async function main() {
     process.exit(3);
   }
   const hostname = fixedPort > 0 ? "0.0.0.0" : "127.0.0.1";
-  serve({ fetch: createApp(handler, validators).fetch, hostname, port: fixedPort }, (info) => {
+  const fnName = process.env.FUNCD_FUNCTION ?? "invoke";
+  const appTrace = { sink: channel, fnName };
+  serve({ fetch: createApp(handler, validators, appTrace).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
     process.stderr.write(`funcd-shim: listening on ${hostname}:${info.port}
 `);

@@ -63,6 +63,14 @@ func WithoutFunclog() Option {
 	return func(c *config) error { c.funclogDisabled = true; return nil }
 }
 
+// WithoutFunclogTraces disables the traces signal (ADR-0101, per-invocation spans) while keeping the
+// logs signal. Subordinate to WithoutFunclog: with the whole funclog channel off, there is no channel
+// and this is moot. With the channel on but traces off, the host's trace sink is nil and span lines
+// are read off the channel and dropped. Traces are on by default when the runtime supports capture.
+func WithoutFunclogTraces() Option {
+	return func(c *config) error { c.funclogTracesDisabled = true; return nil }
+}
+
 // WithLogCompaction tunes function-log compacted compaction (ADR-0083): the window (bucket size + close
 // threshold), the pass interval, and the compacted retention. A zero window/interval keeps the default
 // (1h / 5m); retention <= 0 keeps compacted forever. Compaction is on by default when a blob substrate is

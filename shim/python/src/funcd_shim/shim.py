@@ -32,10 +32,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
 from . import runtime
-from .funclog import install_log_capture
+from .funclog import install_log_capture, open_channel
+from .tracespan import InvocationSpan
 from .types import CloudEvent, FunctionContext, Handler
 
 if TYPE_CHECKING:
+    from .funclog import _Channel
     from .kv import KVClient
 
 
@@ -58,13 +60,19 @@ class _Context:
 
 
 def make_request_handler(
-    handler: Handler, validators: runtime.Validators
+    handler: Handler,
+    validators: runtime.Validators,
+    channel: _Channel | None = None,
+    fn_name: str = "invoke",
 ) -> type[BaseHTTPRequestHandler]:
     """Build the ``BaseHTTPRequestHandler`` class that serves the contract around *handler*.
 
     The optional *validators* gate the I/O (ADR-0058): ``input`` validates ``event.data`` before
     the handler (mismatch → 422, handler never called); ``output`` validates the result after
     (mismatch → 500, never emitted as 200). A void output contract → 204 on empty / 500 otherwise.
+
+    ADR-0101: when *channel* is set, each invocation emits an auto SERVER span on it (adopting the
+    incoming ``traceparent`` or minting a root); *fn_name* names the span.
     """
     context: FunctionContext = _Context()
 
@@ -124,28 +132,34 @@ def make_request_handler(
             if validators.input is not None:
                 errors = validators.input(event.get("data"))
                 if errors:
+                    # ADR-0101: input-mismatch short-circuits before the handler → no invocation, no span.
                     self._send_json(
                         422,
                         {"error": "event data does not match the input contract", "details": errors},
                     )
                     return
-            try:
-                result = handler(context, event)
-            except Exception as err:  # noqa: BLE001 - user handler errors become 500
-                self._send_json(500, {"error": str(err)})
-                return
-            if validators.output is not None:
-                errors = validators.output(result)
-                if errors:
-                    self._send_json(
-                        500,
-                        {"error": "handler result does not match the output contract", "details": errors},
-                    )
+            # ADR-0101: a real invocation begins → its SERVER span (adopts traceparent or mints a root);
+            # the handler runs inside the span's context so its logs correlate.
+            with InvocationSpan(channel, fn_name, self.headers.get("traceparent")) as span:
+                try:
+                    result = handler(context, event)
+                except Exception as err:  # noqa: BLE001 - user handler errors become 500
+                    span.fail(str(err))
+                    self._send_json(500, {"error": str(err)})
                     return
-            if result is None:
-                self._send_empty(204)
-            else:
-                self._send_json(200, result)
+                if validators.output is not None:
+                    errors = validators.output(result)
+                    if errors:
+                        span.fail("handler result does not match the output contract")
+                        self._send_json(
+                            500,
+                            {"error": "handler result does not match the output contract", "details": errors},
+                        )
+                        return
+                if result is None:
+                    self._send_empty(204)
+                else:
+                    self._send_json(200, result)
 
     return ShimHandler
 
@@ -153,10 +167,12 @@ def make_request_handler(
 def main(argv: list[str] | None = None) -> int:
     """Load the artifact, resolve the handler + optional contract, and serve. Returns the process
     exit code (0 only if the server is interrupted cleanly)."""
-    # Path B function-log capture (ADR-0081): install BEFORE the handler loads/runs so the first
-    # logging.* a function emits is captured. No-op unless FUNCD_LOG_FD/FUNCD_LOG_SOCK is set. The
-    # shim's own operational messages use print(... stderr), not logging, so they are never captured.
-    install_log_capture()
+    # Path B log capture (ADR-0081) + traces (ADR-0101): open the telemetry channel ONCE and share it
+    # between log capture and the per-invocation span (a second connect would double-capture). Install
+    # BEFORE the handler loads so the first logging.* is captured. No-op unless FUNCD_LOG_FD/SOCK is set.
+    # The shim's own messages use print(... stderr), not logging, so they are never captured.
+    channel = open_channel()
+    install_log_capture(channel)
 
     artifact = os.environ.get("FUNCD_ARTIFACT")
     handler_name = os.environ.get("FUNCD_HANDLER", "handle")
@@ -176,7 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         return 3  # materialization shape-gate failure (ADR-0030 §3)
 
     hostname = "0.0.0.0" if fixed_port > 0 else "127.0.0.1"  # noqa: S104 - container bind is intentional
-    server = ThreadingHTTPServer((hostname, fixed_port), make_request_handler(handler, validators))
+    fn_name = os.environ.get("FUNCD_FUNCTION", "invoke")
+    server = ThreadingHTTPServer(
+        (hostname, fixed_port), make_request_handler(handler, validators, channel, fn_name)
+    )
     bound_port = server.server_address[1]
     if port_file:
         with open(port_file, "w", encoding="utf-8") as fh:

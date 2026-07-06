@@ -1,8 +1,8 @@
-# Venom e2e for the funclog containerd lane (ADR-0081 capture + ADR-0084 read) — the declarative
-# invoke + capture-assert + read-assert phase of `just lima-example-funclog`, run host-side AFTER the
-# self-deploying Lima VM is Ready.
+# Venom e2e for the funclog containerd lane (ADR-0081 capture + ADR-0084 read + ADR-0101 traces) — the
+# declarative invoke + capture-assert + read-assert phase of `just lima-example-funclog`, run host-side
+# AFTER the self-deploying Lima VM is Ready.
 #
-# It proves the whole log loop end to end on REAL containerd, for BOTH languages:
+# It proves the whole log loop end to end on REAL containerd (UDS transport), for BOTH languages:
 #   1. each log-burst invoke returns emitted >= 100 (the function ran and emitted the burst);
 #   2. funcd captured those logs as OTLP-JSON-Lines under <dataDir>/blob/logs/<ns>/<fn>/ — >= 100
 #      records per language (asserted by an in-VM read of the blob, co-located with the daemon so it
@@ -10,8 +10,12 @@
 #      capture assertions retry;
 #   3. the ADR-0084 read path closes the loop: `funcdctl logs <fn> -n default` (the thin pure-Go reader
 #      over the raw OTLP-JSONL tail, served on the RBAC-scoped control-plane route) returns >= 100 lines
-#      per language — proving capture → persist → READ works on real containerd, not just bytes in blob.
-name: funclog capture + read (ADR-0081/0084, containerd lane)
+#      per language — proving capture → persist → READ works on real containerd, not just bytes in blob;
+#   4. ADR-0101 TRACES: an invoke carrying a W3C `traceparent` produces one auto SERVER span, captured on
+#      the SAME UDS channel (demuxed by "funcd.signal"), persisted as OTLP-trace-JSONL under
+#      <dataDir>/blob/traces/<ns>/<fn>/. The span ADOPTS the incoming trace (its traceId + parentSpanId),
+#      and the invocation's logs carry the SAME traceId (logs↔trace correlation), for both languages.
+name: funclog capture + read + traces (ADR-0081/0084/0101, containerd lane)
 
 vars:
   dp: http://127.0.0.1:8081 # funcd data plane, forwarded from the Lima guest
@@ -108,3 +112,74 @@ testcases:
         assertions:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring JSFILTEROK"
+
+  # ── ADR-0101 traces: a traceparent-carrying invoke → one auto SERVER span, captured on the same UDS
+  #    channel and persisted under blob/traces/, adopting the caller trace; the invocation's logs correlate.
+  - name: js log-burst invoked WITH a W3C traceparent (the invocation joins the caller trace)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/log-burst"
+        headers:
+          content-type: application/json
+          traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+        body: '{"data":{}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 99
+
+  - name: funcd captured the JS invocation as an OTLP SERVER span adopting the traceparent
+    steps:
+      - type: exec
+        # The persisted span (OTLP-trace-JSON) carries the ADOPTED traceId + the caller as parentSpanId,
+        # kind 2 (SERVER). One grep per facet; disjoint OK/NONE markers so success can't match a miss.
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'f=$(cat /var/lib/funcd/data/blob/traces/default/log-burst/*/*.otlp.jsonl 2>/dev/null); t=$(echo "$f" | grep -o "\"traceId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"" | wc -l); p=$(echo "$f" | grep -o "\"parentSpanId\":\"bbbbbbbbbbbbbbbb\"" | wc -l); k=$(echo "$f" | grep -o "\"kind\":2" | wc -l); [ "$t" -ge 1 ] && [ "$p" -ge 1 ] && [ "$k" -ge 1 ] && echo "JSSPANOK t=$t p=$p k=$k" || echo "JSSPANNONE t=$t p=$p k=$k"'
+        retry: 15
+        delay: 2
+        info: "JS span capture → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSSPANOK"
+
+  - name: the JS invocation's logs carry the span's traceId (logs↔trace correlation)
+    steps:
+      - type: exec
+        # The burst's console logs, emitted inside the invocation, are stamped with the SAME adopted trace.
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'c=$(cat /var/lib/funcd/data/blob/logs/default/log-burst/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"" | wc -l); [ "$c" -ge 1 ] && echo "JSCORROK $c" || echo "JSCORRNONE $c"'
+        retry: 15
+        delay: 2
+        info: "JS log correlation → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSCORROK"
+
+  - name: python pylog-burst invoked WITH a W3C traceparent
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pylog-burst"
+        headers:
+          content-type: application/json
+          traceparent: "00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01"
+        body: '{"data":{}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 99
+
+  - name: funcd captured the Python invocation as an OTLP SERVER span adopting the traceparent
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'f=$(cat /var/lib/funcd/data/blob/traces/default/pylog-burst/*/*.otlp.jsonl 2>/dev/null); t=$(echo "$f" | grep -o "\"traceId\":\"cccccccccccccccccccccccccccccccc\"" | wc -l); p=$(echo "$f" | grep -o "\"parentSpanId\":\"dddddddddddddddd\"" | wc -l); k=$(echo "$f" | grep -o "\"kind\":2" | wc -l); [ "$t" -ge 1 ] && [ "$p" -ge 1 ] && [ "$k" -ge 1 ] && echo "PYSPANOK t=$t p=$p k=$k" || echo "PYSPANNONE t=$t p=$p k=$k"'
+        retry: 15
+        delay: 2
+        info: "Python span capture → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring PYSPANOK"

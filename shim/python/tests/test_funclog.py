@@ -131,7 +131,7 @@ def test_uds_channel_captures_lines(monkeypatch: Any, tmp_path: Path) -> None:
     logging.getLogger().warning("hello %d", 42, extra={"k": "v"})
 
     # Close the channel socket so the server side sees EOF, then join the reader.
-    handler._channel._sock.close()  # type: ignore[union-attr]  # test reaches into the channel
+    handler._channel._sock.close()  # type: ignore[attr-defined]  # test reaches into the concrete _Channel
     reader.join(timeout=5)
     server.close()
 

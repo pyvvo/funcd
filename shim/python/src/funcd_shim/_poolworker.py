@@ -22,21 +22,23 @@ if TYPE_CHECKING:
 # Per-interpreter state, set by init() and read by invoke() — isolated to this worker interpreter.
 _handler: Handler | None = None
 _validators: Validators = Validators()
+_channel: Any = None  # the shared telemetry channel (ADR-0101), opened once in init()
 
 
 def init(src: str, artifact: str, handler: str) -> None:
     """Load the handler + optional FuncInput/FuncOutput validators into this interpreter (the
     materialization shape-gate, ADR-0058). Runs once per worker; a failure breaks the pool → exit 3."""
-    global _handler, _validators
+    global _handler, _validators, _channel
     if src not in sys.path:
         sys.path.insert(0, src)
     from funcd_shim import runtime
-    from funcd_shim.funclog import install_log_capture
+    from funcd_shim.funclog import install_log_capture, open_channel
 
-    # Path B capture (ADR-0081): each pool worker runs in its own subinterpreter with its own root
-    # logger, so install the capture handler here (per-interpreter), before the handler loads. No-op
-    # unless FUNCD_LOG_FD/FUNCD_LOG_SOCK is set (the env is inherited into the worker interpreter).
-    install_log_capture()
+    # Path B capture (ADR-0081) + traces (ADR-0101): each pool worker runs in its own subinterpreter
+    # with its own root logger, so open the channel + install capture here (per-interpreter), before
+    # the handler loads. One shared channel per worker. No-op unless FUNCD_LOG_FD/SOCK is set.
+    _channel = open_channel()
+    install_log_capture(_channel)
 
     module = runtime.load_module(artifact)
     _handler = runtime.resolve_handler(module, handler)
@@ -65,9 +67,10 @@ class _Ctx:
         return KVClient()
 
 
-def invoke(body: str) -> dict[str, Any]:
+def invoke(body: str, traceparent: str | None = None, fn_name: str = "invoke") -> dict[str, Any]:
     """Run one request: parse → optional input validation → handler → optional output validation →
-    a status-tagged envelope the host maps to the HTTP response (identical to the solo shim)."""
+    a status-tagged envelope the host maps to the HTTP response (identical to the solo shim). ADR-0101:
+    a successful-past-input-validation request emits a SERVER span on the worker's channel."""
     if _handler is None:  # defensive — init() always runs first
         return {"status": 500, "body": {"error": "handler not loaded"}}
     try:
@@ -77,21 +80,27 @@ def invoke(body: str) -> dict[str, Any]:
     if _validators.input is not None:
         errors = _validators.input(event.get("data"))
         if errors:
+            # ADR-0101: input-mismatch short-circuits before the handler → no invocation, no span.
             return {
                 "status": 422,
                 "body": {"error": "event data does not match the input contract", "details": errors},
             }
-    try:
-        result = _handler(_Ctx(), event)
-    except Exception as err:  # noqa: BLE001 - user handler errors become 500
-        return {"status": 500, "body": {"error": str(err)}}
-    if _validators.output is not None:
-        errors = _validators.output(result)
-        if errors:
-            return {
-                "status": 500,
-                "body": {"error": "handler result does not match the output contract", "details": errors},
-            }
-    if result is None:
-        return {"status": 204}
-    return {"status": 200, "body": result}
+    from .tracespan import InvocationSpan
+
+    with InvocationSpan(_channel, fn_name, traceparent) as span:
+        try:
+            result = _handler(_Ctx(), event)
+        except Exception as err:  # noqa: BLE001 - user handler errors become 500
+            span.fail(str(err))
+            return {"status": 500, "body": {"error": str(err)}}
+        if _validators.output is not None:
+            errors = _validators.output(result)
+            if errors:
+                span.fail("handler result does not match the output contract")
+                return {
+                    "status": 500,
+                    "body": {"error": "handler result does not match the output contract", "details": errors},
+                }
+        if result is None:
+            return {"status": 204}
+        return {"status": 200, "body": result}

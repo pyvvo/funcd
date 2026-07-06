@@ -90,6 +90,9 @@ type config struct {
 	funclogDisabled bool
 	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
 	funclogMaxBytes int           // segment seal size; 0 ⇒ sink default (8 MiB)
+	// funclog traces signal (ADR-0101): per-invocation spans on the same channel; on by default,
+	// subordinate to the funclog channel (no channel ⇒ moot). WithoutFunclogTraces disables it.
+	funclogTracesDisabled bool
 	// funclog compacted compaction (ADR-0083): on by default when a blob substrate is present. When
 	// logCompactConfigured is false the defaults apply (window 1h / interval 5m / retention 30d);
 	// WithLogCompaction sets explicit values (retention <= 0 ⇒ keep forever); WithoutLogCompaction disables it.
@@ -196,7 +199,8 @@ type Platform struct {
 	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
 	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
 	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
-	logSink      *funclog.BlobSink  // structured function-log capture sink (ADR-0081); nil if unwired
+	logSink      *funclog.BlobSink       // structured function-log capture sink (ADR-0081); nil if unwired
+	traceSink    *funclog.BlobTraceSink  // per-invocation trace sink (ADR-0101); nil if unwired/disabled
 	compactor *compact.Compactor // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw      *s3gateway.Server  // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 
@@ -604,6 +608,21 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(serr, fault.Internal, op, "build funclog sink")
 		}
 		p.logSink = sink
+		// ADR-0101: the traces signal rides the same channel. When enabled, build the trace sink and
+		// route span-tagged lines to it; the demux (Route) sends untagged lines to the logs sink.
+		var traceSink funclog.TraceSink // nil ⇒ span lines are read off the channel and dropped
+		if !c.funclogTracesDisabled {
+			ts, terr := funclog.NewBlobTraceSink(funclog.Deps{
+				Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+				SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
+			})
+			if terr != nil {
+				return fault.Wrapf(terr, fault.Internal, op, "build funclog trace sink")
+			}
+			p.traceSink = ts
+			traceSink = ts
+		}
+		sinks := funclog.Sinks{Logs: sink, Traces: traceSink}
 		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
 			res := funclog.Resource{
 				Namespace: string(spec.Namespace),
@@ -612,7 +631,7 @@ func (p *Platform) buildControlPlane() error {
 			}
 			go func() {
 				defer func() { _ = r.Close() }()
-				_ = funclog.Pump(context.Background(), funclog.NewNDJSONReader(r), sink, res, p.logger)
+				_ = funclog.Route(context.Background(), r, sinks, res, p.logger)
 			}()
 		})
 	}
@@ -747,9 +766,12 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		// Close the runtime first (stops instances → log channels EOF → pumps flush), then seal any
 		// remaining funclog segments, all before blob.Close() (the sink writes to blob) — ADR-0081.
 		runtimeErr := p.cfg.runtime.Close()
-		var logSinkErr error
+		var logSinkErr, traceSinkErr error
 		if p.logSink != nil {
 			logSinkErr = p.logSink.Close()
+		}
+		if p.traceSink != nil { // ADR-0101: seal remaining trace segments before blob.Close()
+			traceSinkErr = p.traceSink.Close()
 		}
 		errs := []error{
 			s3gwErr,
@@ -757,6 +779,7 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 			p.cfg.gateway.Close(),
 			runtimeErr,
 			logSinkErr,
+			traceSinkErr,
 			p.cfg.blob.Close(),
 			p.cfg.store.Close(),
 		}

@@ -38,8 +38,10 @@ class _Pooled:
         """Force the initializer to run and surface a load failure as an exception (→ host exit 3)."""
         self.ex.submit(_poolworker.ready).result()
 
-    def invoke(self, body: bytes) -> dict[str, Any]:
-        result: dict[str, Any] = self.ex.submit(_poolworker.invoke, body.decode()).result()
+    def invoke(self, body: bytes, traceparent: str | None = None, fn_name: str = "invoke") -> dict[str, Any]:
+        result: dict[str, Any] = self.ex.submit(
+            _poolworker.invoke, body.decode(), traceparent, fn_name
+        ).result()
         return result
 
     def close(self) -> None:
@@ -103,7 +105,8 @@ def make_request_handler(handlers: dict[str, _Pooled]) -> type[BaseHTTPRequestHa
             if pooled is None:
                 self._empty(404)
                 return
-            res = pooled.invoke(raw)
+            # ADR-0101: forward the trace header + function name so the worker's span adopts/names.
+            res = pooled.invoke(raw, self.headers.get("traceparent"), name)
             status = int(res["status"])
             if status == 204:
                 self._empty(204)
