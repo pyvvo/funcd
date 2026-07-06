@@ -209,6 +209,8 @@ workflow:
     - lo.schema.json
     - report.schema.json
     - workflow.yaml
+    - child.yaml
+    - parent.yaml
     - run-pause.yaml
     - run-cancel.yaml
     - funcdconfig.yaml
@@ -235,12 +237,15 @@ workflow:
       ref: report
       schema: report.schema.json
       runtime: nodejs22
-  # Apply only the Workflow — the engine materializes the owned step Functions (orders-<step>). The
-  # run manifests (run-pause/run-cancel) are applied IN-VM by the Venom suite (the lifecycle phase).
+  # Apply the Workflows — orders (the main lane), plus the F70 sub-workflow pair: `scorer` (child) and
+  # `pipeline` (parent, whose `sub` step runs scorer inline). The engine materializes each's owned step
+  # Functions. The run manifests (run-pause/run-cancel) are applied IN-VM by the Venom suite.
   apply:
     - workflow.yaml
-  # Readiness gate: the five materialized step Functions pull + serve on containerd (they appear only
-  # after the Workflow reconciles, so `funcdctl get function` tolerates a transient not-found).
+    - child.yaml
+    - parent.yaml
+  # Readiness gate: the materialized step Functions pull + serve on containerd (they appear only after
+  # each Workflow reconciles, so `funcdctl get function` tolerates a transient not-found).
   ready:
     kind: function
     names:
@@ -249,6 +254,8 @@ workflow:
       - orders-hi
       - orders-lo
       - orders-report
+      - scorer-s
+      - pipeline-feed
     tries: 90
   venom: e2e/workflow.venom.yml
 

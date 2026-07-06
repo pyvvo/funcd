@@ -28,17 +28,20 @@ func TestWorkflowValidateOK(t *testing.T) {
 	}
 }
 
-// scenario: step-kind-union-validated — exactly one top-level kind; a function sets exactly one of
-// image/ref; a builtin sets exactly one of wait/pass; the workflow kind is reserved (ADR-0096).
+// scenario: step-kind-union-validated / workflow-kind-validated — exactly one top-level kind; a function
+// sets exactly one of image/ref; a builtin sets exactly one of wait/pass; a workflow needs a valid ref
+// (the kind is accepted now, F70/ADR-0099).
 func TestWorkflowKindUnion(t *testing.T) {
 	bad := map[string]WorkflowStep{
-		"two top-level kinds": {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Builtin: &BuiltinStep{Wait: "1s"}},
-		"function image+ref":  {Name: "a", Function: &FunctionStep{Image: "oci:x", Ref: "f"}},
-		"function neither":    {Name: "a", Function: &FunctionStep{}},
-		"builtin wait+pass":   {Name: "a", Builtin: &BuiltinStep{Wait: "1s", Pass: "${{ input }}"}},
-		"builtin neither":     {Name: "a", Builtin: &BuiltinStep{}},
-		"workflow reserved":   {Name: "a", Workflow: &WorkflowRef{Ref: "child"}},
-		"no kind":             {Name: "a"},
+		"two top-level kinds":    {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Builtin: &BuiltinStep{Wait: "1s"}},
+		"function+workflow":      {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Workflow: &WorkflowRef{Ref: "child"}},
+		"function image+ref":     {Name: "a", Function: &FunctionStep{Image: "oci:x", Ref: "f"}},
+		"function neither":       {Name: "a", Function: &FunctionStep{}},
+		"builtin wait+pass":      {Name: "a", Builtin: &BuiltinStep{Wait: "1s", Pass: "${{ input }}"}},
+		"builtin neither":        {Name: "a", Builtin: &BuiltinStep{}},
+		"workflow empty ref":     {Name: "a", Workflow: &WorkflowRef{}},
+		"workflow bad ref":       {Name: "a", Workflow: &WorkflowRef{Ref: "Not A Label"}},
+		"no kind":                {Name: "a"},
 	}
 	for name, st := range bad {
 		st := st
@@ -54,6 +57,7 @@ func TestWorkflowKindUnion(t *testing.T) {
 		{Name: "a", Function: &FunctionStep{Ref: "shared"}},
 		{Name: "a", Builtin: &BuiltinStep{Wait: "1s"}},
 		{Name: "a", Builtin: &BuiltinStep{Pass: "${{ input }}"}},
+		{Name: "a", Workflow: &WorkflowRef{Ref: "child"}}, // sub-workflow (F70)
 	}
 	for _, st := range good {
 		if err := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{st}}).Validate(); err != nil {

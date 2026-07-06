@@ -76,7 +76,7 @@ func (PoolingMode) Schema(huma.Registry) *huma.Schema {
 }
 
 // WorkflowStep is one step — a kind-keyed union of exactly one of Function / Builtin / Workflow
-// (Workflow is reserved until F70), plus the orchestration fields common to every kind (ADR-0096).
+// (Workflow runs a child workflow, F70), plus the orchestration fields common to every kind (ADR-0096).
 type WorkflowStep struct {
 	// Name is the step's name; a DNS-1123 label, unique within the workflow.
 	Name ObjectName `json:"name"`
@@ -84,7 +84,7 @@ type WorkflowStep struct {
 	Function *FunctionStep `json:"function,omitempty"`
 	// Builtin is an engine-native step (wait / pass) — run in-process, never dispatched.
 	Builtin *BuiltinStep `json:"builtin,omitempty"`
-	// Workflow references a child Workflow — reserved; rejected until F70.
+	// Workflow runs a child Workflow as a step (a sub-workflow, F70/ADR-0099).
 	Workflow *WorkflowRef `json:"workflow,omitempty"`
 	// DependsOn names the parent steps; empty ⇒ follows the previous step in list order.
 	DependsOn []ObjectName `json:"dependsOn,omitempty"`
@@ -135,7 +135,7 @@ type BuiltinStep struct {
 	Pass string `json:"pass,omitempty"`
 }
 
-// WorkflowRef references a child Workflow — reserved (F70), rejected by Validate until then.
+// WorkflowRef references a child Workflow by name — a sub-workflow step (F70/ADR-0099).
 type WorkflowRef struct {
 	Ref ObjectName `json:"ref,omitempty"`
 }
@@ -302,7 +302,7 @@ func (w *Workflow) Validate() error {
 
 // validateKind enforces the step kind-union (ADR-0096): exactly one of function/builtin; a function
 // sets exactly one of image/ref; a builtin sets exactly one of wait/pass; the workflow: kind is
-// reserved (rejected until F70). Dispatch knobs live only on FunctionStep, so a builtin cannot carry
+// (a sub-workflow, F70). Dispatch knobs live only on FunctionStep, so a builtin cannot carry
 // them by construction — no runtime check needed.
 func (s *WorkflowStep) validateKind(op string) error {
 	set := 0
@@ -332,11 +332,14 @@ func (s *WorkflowStep) validateKind(op string) error {
 			return fault.Invalidf(op, "step %q: builtin must set exactly one of wait or pass", s.Name)
 		}
 	}
-	if s.Workflow != nil {
-		return fault.Invalidf(op, "step %q: the workflow: kind is reserved (child runs land with F70)", s.Name)
+	if s.Workflow != nil { // a sub-workflow step (F70/ADR-0099): targets a child Workflow by name
+		set++
+		if !dnsLabel.MatchString(string(s.Workflow.Ref)) {
+			return fault.Invalidf(op, "step %q: workflow.ref %q is not a valid Workflow name", s.Name, s.Workflow.Ref)
+		}
 	}
 	if set != 1 {
-		return fault.Invalidf(op, "step %q must set exactly one of function or builtin", s.Name)
+		return fault.Invalidf(op, "step %q must set exactly one of function, builtin, or workflow", s.Name)
 	}
 	return nil
 }

@@ -246,3 +246,66 @@ func TestScenarioWorkflowPauseResumeCancel(t *testing.T) {
 		return getRun(t, c, "life-cancel").Status.Phase == "Cancelled"
 	}, 20*time.Second, 100*time.Millisecond, "the cancelled run reaches Cancelled")
 }
+
+// scenario: subworkflow-runs-inline-and-output-flows (ADR-0099) over the REAL control plane — a parent
+// workflow with a `workflow:` step runs a child workflow inline; the child's run output flows into the
+// parent's downstream step, all over real function execution on the shim platform.
+func TestScenarioSubworkflow(t *testing.T) {
+	c, _ := shimPlatformOCI(t)
+	src, layout := t.TempDir(), t.TempDir()
+	// child step: doubles n. parent steps: seed passes n through; sink reads the child's output.
+	writeStep(t, src, "double", `export const handle = (ctx, e) => ({ doubled: e.data.n * 2 });`)
+	writeStep(t, src, "seed", `export const handle = (ctx, e) => ({ n: e.data.n });`)
+	writeStep(t, src, "sink", `export const handle = (ctx, e) => ({ got: e.data.doubled });`)
+	img := map[string]string{}
+	for _, s := range []string{"double", "seed", "sink"} {
+		img[s] = pushStepImage(t, layout, src, s)
+	}
+
+	ctx := context.Background()
+	// child workflow: a single function step `double`.
+	child := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "childwf", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
+			Steps:   []v1.WorkflowStep{{Name: "double", Function: &v1.FunctionStep{Image: img["double"]}}},
+		},
+	}
+	_, err := c.Apply(ctx, child)
+	require.NoError(t, err)
+
+	// parent workflow: seed → sub(workflow: childwf) → sink.
+	parent := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "parentwf", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
+			Steps: []v1.WorkflowStep{
+				{Name: "seed", Function: &v1.FunctionStep{Image: img["seed"]}},
+				{Name: "sub", Workflow: &v1.WorkflowRef{Ref: "childwf"}, DependsOn: []v1.ObjectName{"seed"}},
+				{Name: "sink", Function: &v1.FunctionStep{Image: img["sink"]}, DependsOn: []v1.ObjectName{"sub"}},
+			},
+		},
+	}
+	_, err = c.Apply(ctx, parent)
+	require.NoError(t, err)
+	// both workflows' owned functions materialize + serve.
+	waitMaterializedReady(t, c, "childwf-double", "parentwf-seed", "parentwf-sink")
+
+	run := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "prun-01", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "parentwf", Input: json.RawMessage(`{"n":4}`)},
+	}
+	_, err = c.Apply(ctx, run)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "prun-01").Status.Phase == "Succeeded"
+	}, 40*time.Second, 100*time.Millisecond, "the parent run reaches Succeeded (the sub-workflow ran inline)")
+
+	got := getRun(t, c, "prun-01")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "seed"), "seed ran")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "sub"), "the sub-workflow step ran the child inline")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "sink"), "sink ran with the child's output (doubled=8) flowed across the boundary")
+}

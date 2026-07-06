@@ -1528,5 +1528,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0098-implementation-claude-opus-4-8.md",
     "notes": "F65 typed edges: reconcile derives+caches contract graph from OCI metadata, type-checks edges (required-primitive+void+fan-in+params) + when: (goja Condition) \u2192 Ready/SchemaMismatch; run admission + run-start check the cached contract (zero registry I/O). 11/11 scenarios named+passing; build/lint/test/mod green; workflow venom lane 6/6 (F65 status.contract asserted). Fixed a reconciler hot-loop\u2192backoff mid-impl. 1 nit (contractless\u2261not-pushed, harmless)"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0099",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0099-implementation-claude-opus-4-8.md",
+    "notes": "F70 sub-workflows: workflow kind flipped to accepted; inline recursive runChild over the engine (child run output = step output), depth guard + reconcile cycle detection, typed edges across the boundary (child status.contract = step contract via F65). 8/8 scenarios named+passing; build/lint/test/mod green; Go e2e (parent workflow: step runs real child inline over the control plane) green. Containerd venom lane wired+correct but env-blocked (cloud.debian.org outage \u2192 Lima VM image unfetchable); added a digest-pin resilience fix to lima.yaml; lane re-runnable. env-attributed, non-scoring"
   }
 ]

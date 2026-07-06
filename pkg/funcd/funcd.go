@@ -505,6 +505,7 @@ func (p *Platform) buildControlPlane() error {
 		Runs:     runs,
 		Dispatch: wfDispatcher,
 		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit},
+		Children: childResolver{c.store}, // ADR-0099: resolve a child workflow's spec for a `workflow:` step
 		Logger:   p.logger,
 	})
 	if eerr != nil {
@@ -797,6 +798,18 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 		return v1.WorkflowContract{}, "", uerr
 	}
 	return c, digest, nil
+}
+
+// childResolver is the production workflow.ChildResolver (ADR-0099): it reads a child Workflow's pinned
+// spec from the store for a `workflow:` sub-workflow step's inline execution.
+type childResolver struct{ s store.Store }
+
+func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, error) {
+	obj, err := r.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name) // V1: same-namespace children (ADR-0099 scope)
+	if err != nil {
+		return v1.WorkflowSpec{}, err
+	}
+	return obj.(*v1.Workflow).Spec, nil
 }
 
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.

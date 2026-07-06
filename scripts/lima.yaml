@@ -15,11 +15,18 @@
 # Native arch (arm64 on Apple Silicon, amd64 on Intel) via vz — the lane needs a real Linux kernel
 # + cgroup v2, which a same-arch VM gives without emulation.
 
+# Fetched from an official Debian mirror (ftp.acc.umu.se) rather than cloud.debian.org, whose TLS
+# handshake was intermittently timing out from here and breaking VM boot; the mirror serves the identical
+# image. Pinned by content digest so integrity is guaranteed regardless of source AND Lima keys the cache
+# by the digest (skipping the flaky last-modified HEAD). Bump the digest when Debian rolls `latest` — get
+# it from `curl -s https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS` (or the mirror's).
 images:
-  - location: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
     arch: "aarch64"
-  - location: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    digest: "sha512:f7339d10adfe8c4f6aec4cf1134b9fd6086b2710e1f9ba50e7f1d0890024036fe13417b904cc328f7b35dd9ec07165a4857ae425093bb333769f2fb527e2b02b"
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
     arch: "x86_64"
+    digest: "sha512:ee13b9618400b521b83d92dec5106c853c3290d14f25efbacb851828abceac1847b63d3d1bac8059d980c7d443efcbc7451fdd6648b2a134796b28563cedfda9"
 
 cpus: 4
 memory: "4GiB" # the footprint lane's max-density scales with available RAM

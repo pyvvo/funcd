@@ -327,9 +327,27 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 	contracts := map[v1.ObjectName]v1.WorkflowContract{}
 	var stepStatuses []v1.WorkflowStepStatus
 
-	// 1. Resolve each function step's contract from OCI metadata (never the bytes). Builtins are untyped.
+	// 0. Reject a sub-workflow reference cycle (ADR-0099) before resolving — a cycle can never run.
+	if cyc, cerr := r.formsCycle(ctx, wf.Namespace, wf.Name); cerr != nil {
+		return nil, nil, cerr
+	} else if cyc {
+		return nil, nil, &mismatchError{reason: "WorkflowCycle", msg: fmt.Sprintf("workflow %q transitively references itself via a sub-workflow step", wf.Name)}
+	}
+
+	// 1. Resolve each step's contract: a function step from OCI metadata (never the bytes); a sub-workflow
+	//    step from the child workflow's cached status.contract. Builtins are untyped.
 	for i := range wf.Spec.Steps {
 		st := &wf.Spec.Steps[i]
+		if st.Workflow != nil { // a sub-workflow step's contract IS the child's derived status.contract (F65)
+			childC, cerr := r.childContract(ctx, wf.Namespace, st.Workflow.Ref)
+			if cerr != nil {
+				return nil, nil, cerr // child absent or not-Ready ⇒ errArtifactNotReady (requeue)
+			}
+			contracts[st.Name] = childC
+			cc := childC
+			stepStatuses = append(stepStatuses, v1.WorkflowStepStatus{Name: st.Name, Image: "workflow://" + string(st.Workflow.Ref), Contract: &cc})
+			continue
+		}
 		image, ok, err := r.stepImage(ctx, wf, st)
 		if err != nil {
 			return nil, nil, err
@@ -407,6 +425,59 @@ func (r *WorkflowReconciler) stepImage(ctx context.Context, wf *v1.Workflow, st 
 		return obj.(*v1.Function).Spec.Image, true, nil
 	}
 	return "", false, nil
+}
+
+// childContract returns a sub-workflow step's contract — the referenced child Workflow's cached
+// status.contract, read from the store (ADR-0099; the ChildResolver is the engine's execution seam, not
+// reconcile's). An absent or not-yet-Ready child ⇒ errArtifactNotReady (requeue, the CatalogNotReady
+// pattern), so a sub-workflow that hasn't been type-checked yet defers, it isn't a mismatch.
+func (r *WorkflowReconciler) childContract(ctx context.Context, ns v1.NamespaceName, child v1.ObjectName) (v1.WorkflowContract, error) {
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, child)
+	if fault.KindOf(err) == fault.NotFound {
+		return v1.WorkflowContract{}, errArtifactNotReady // the child workflow isn't applied yet
+	}
+	if err != nil {
+		return v1.WorkflowContract{}, err
+	}
+	cw := obj.(*v1.Workflow)
+	if cw.Status.Contract == nil {
+		return v1.WorkflowContract{}, errArtifactNotReady // the child hasn't derived its contract yet (not Ready)
+	}
+	return *cw.Status.Contract, nil
+}
+
+// formsCycle reports whether `start` transitively references itself through `workflow:` steps (ADR-0099).
+// A visited-set bounds the walk; an absent child is not a cycle (it defers via childContract's requeue).
+func (r *WorkflowReconciler) formsCycle(ctx context.Context, ns v1.NamespaceName, start v1.ObjectName) (bool, error) {
+	seen := map[v1.ObjectName]bool{}
+	var reaches func(name v1.ObjectName) (bool, error)
+	reaches = func(name v1.ObjectName) (bool, error) {
+		obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, name)
+		if fault.KindOf(err) == fault.NotFound {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		for i := range obj.(*v1.Workflow).Spec.Steps {
+			st := &obj.(*v1.Workflow).Spec.Steps[i]
+			if st.Workflow == nil {
+				continue
+			}
+			if st.Workflow.Ref == start {
+				return true, nil // reaches start again ⇒ a cycle through start
+			}
+			if seen[st.Workflow.Ref] {
+				continue
+			}
+			seen[st.Workflow.Ref] = true
+			if cyc, err := reaches(st.Workflow.Ref); err != nil || cyc {
+				return cyc, err
+			}
+		}
+		return false, nil
+	}
+	return reaches(start)
 }
 
 // producerSchema is the output schema a step's parents present to it: a single typed parent's output

@@ -36,6 +36,34 @@ testcases:
           - result.systemout ShouldContainSubstring READY=True
           - result.systemout ShouldContainSubstring CONTRACT=True
 
+  # F70 (ADR-0099): the parent `pipeline` reaches Ready — its `sub` step's contract is the child `scorer`'s
+  # derived status.contract (typed edges across the boundary, F65). Then a run drives the child inline.
+  - name: sub-workflows — pipeline is Ready and a run drives the child workflow inline (F70)
+    steps:
+      - type: exec
+        script: |
+          {{.fctl}} get workflow pipeline -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
+        retry: 40
+        delay: 2
+        info: "pipeline typed-edge status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+      - type: exec
+        script: "{{.fctl}} workflow run pipeline sub-01 --input '{\"amount\":4}'"
+        info: "start pipeline → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun sub-01 -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 40
+        delay: 2
+        info: "sub-01 → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring feed=Succeeded
+          - result.systemout ShouldContainSubstring sub=Succeeded
+
   - name: run the hi branch — chaining + fan-out + when + join drive to Succeeded
     steps:
       - type: exec

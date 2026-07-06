@@ -50,9 +50,10 @@ func isPermanent(err error) bool {
 
 // Config holds the engine's tunables (ADR-0094 workflow.* keys).
 type Config struct {
-	DefaultMaxAttempts int           // per-step, when a step sets no retry (default 1 = no retry)
-	DefaultStepTimeout time.Duration // per-step invocation bound (0 = none)
-	PayloadLimit       int64         // max bytes for a step output (and run input, at admission); 0 = unbounded
+	DefaultMaxAttempts  int           // per-step, when a step sets no retry (default 1 = no retry)
+	DefaultStepTimeout  time.Duration // per-step invocation bound (0 = none)
+	PayloadLimit        int64         // max bytes for a step output (and run input, at admission); 0 = unbounded
+	MaxSubworkflowDepth int           // ADR-0099: max sub-workflow nesting (default 8); a deeper chain fails cleanly
 }
 
 // Deps wires the engine (internal component, ADR-0002 §1).
@@ -60,7 +61,8 @@ type Deps struct {
 	Runs     runstate.Store // durable run state (the port; Badger driver in prod, in-memory in tests)
 	Dispatch Dispatcher     // the step-invocation seam
 	Config   Config
-	Clock    clock.Clock // stamps run timestamps (retention GC input); defaults to the system clock
+	Clock    clock.Clock   // stamps run timestamps (retention GC input); defaults to the system clock
+	Children ChildResolver // ADR-0099: resolves a child workflow's spec for a `workflow:` step (nil ⇒ rejected)
 	Logger   *slog.Logger
 }
 
@@ -70,6 +72,7 @@ type Engine struct {
 	dispatch Dispatcher
 	cfg      Config
 	clock    clock.Clock
+	children ChildResolver
 	log      *slog.Logger
 }
 
@@ -88,11 +91,14 @@ func New(d Deps) (*Engine, error) {
 	if d.Config.DefaultMaxAttempts < 1 {
 		d.Config.DefaultMaxAttempts = 1
 	}
+	if d.Config.MaxSubworkflowDepth < 1 {
+		d.Config.MaxSubworkflowDepth = 8 // ADR-0099 default sub-workflow nesting cap
+	}
 	clk := d.Clock
 	if clk == nil {
 		clk = clock.System()
 	}
-	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, log: log.With("component", "workflow.engine")}, nil
+	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, log: log.With("component", "workflow.engine")}, nil
 }
 
 // Execute runs a workflow synchronously to a terminal phase and returns the final
@@ -102,16 +108,23 @@ func New(d Deps) (*Engine, error) {
 // contract (optional, ADR-0098) is the workflow's derived contract pinned at run start; when present it
 // gates the run input (InputSchemaMismatch) and Resume reads the pinned copy. nil ⇒ no run-start check.
 func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, contract ...*v1.WorkflowContract) (*runstate.Record, error) {
-	rs := newRunState(spec)
-	outputs := map[v1.ObjectName]json.RawMessage{}
 	var pinned *v1.WorkflowContract
 	if len(contract) > 0 {
 		pinned = contract[0]
 	}
+	return e.execute(ctx, ns, runName, workflow, spec, input, pinned, 0) // a top-level run is depth 0
+}
+
+// execute is Execute threading the sub-workflow nesting depth (ADR-0099): the public Execute starts at 0;
+// runChild recurses at depth+1. All other behavior (run-start contract gate, drive) is unchanged.
+func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int) (*runstate.Record, error) {
+	rs := newRunState(spec)
+	outputs := map[v1.ObjectName]json.RawMessage{}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
 		Spec:      spec, // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
 		Contract:  pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
+		Depth:     depth,  // sub-workflow nesting depth (ADR-0099)
 		StartedAt: e.clock.Now().UnixNano(),
 	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
@@ -286,6 +299,17 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 					}
 					return e.fail(ctx, rec, rs, outputs, spec, input, err)
+				}
+				n.phase = v1.StepSucceeded
+				outputs[n.name] = out
+				continue
+			}
+			if st != nil && st.Workflow != nil { // a sub-workflow step runs a child workflow inline (ADR-0099)
+				n.phase = v1.StepRunning
+				out, cerr := e.runChild(ctx, rec, st.Workflow.Ref, n, input, outputs)
+				if cerr != nil {
+					n.phase = v1.StepFailed
+					return e.fail(ctx, rec, rs, outputs, spec, input, cerr)
 				}
 				n.phase = v1.StepSucceeded
 				outputs[n.name] = out
