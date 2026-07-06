@@ -92,6 +92,22 @@ testcases:
           - result.systemout ShouldContainSubstring settle=Succeeded
           - result.systemout ShouldContainSubstring summary=Succeeded
 
+  # ── ADR-0102 one run = one trace: the engine stamped a run-scoped W3C traceparent on every step
+  #    dispatch, so each step-function's captured SERVER span (F51/ADR-0101) shares the run's trace.
+  #    Proof: a traceId present in BOTH orders-ingest's AND orders-score's spans — the same run's two
+  #    steps are one trace. (Spans emit post-invocation; the funclog age-flusher seals them → retries.)
+  - name: one run = one trace — a run's ingest and score step spans share one traceId (ADR-0102)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'ing=$(cat /var/lib/funcd/data/blob/traces/default/orders-ingest/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); sco=$(cat /var/lib/funcd/data/blob/traces/default/orders-score/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); common=$(comm -12 <(echo "$ing") <(echo "$sco") | grep -c traceId); [ "$common" -ge 1 ] && echo "ONETRACEOK common=$common" || echo "ONETRACENONE i=$(echo "$ing"|grep -c traceId) s=$(echo "$sco"|grep -c traceId)"'
+        retry: 15
+        delay: 2
+        info: "one-run-one-trace → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring ONETRACEOK"
+
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:
       - type: exec

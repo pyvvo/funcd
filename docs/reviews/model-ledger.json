@@ -1558,5 +1558,20 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0101-implementation-claude-opus-4-8.md",
     "notes": "PASS: build/lint/mod-verify green, no go.mod change; funclog+funcd tests pass incl. traces e2e + logs regression guard; Node 37/0, Python 56 (UDS excluded=env), Venom 12/12; all 10 scenarios have named passing tests; 1 minor (io.Closer written as Close(), model, non-blocking)"
+  },
+  {
+    "date": "2026-07-06",
+    "adr": "0102",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0102-implementation-claude-opus-4-8.md",
+    "notes": "pass; one-run-one-trace propagation faithful; 1 Minor (model): mintTraceContext drops declared err in favor of ADR empty-context behavior; build/lint/mod/test green, Go e2e + fresh Venom lane pass, no funclog import, no go.mod change"
   }
 ]

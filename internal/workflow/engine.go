@@ -2,6 +2,8 @@ package workflow
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,6 +14,22 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
+
+// mintTraceContext returns a fresh W3C trace context (ADR-0102): a 16-byte trace-id and an 8-byte
+// span-id, lowercase hex. Used once per run at start; the same context propagates to every step so a
+// run is one trace. On the near-impossible crypto/rand error it returns empty strings (the caller
+// proceeds with no traceparent — additive, never failing the run).
+func mintTraceContext() (traceID, rootSpanID string) {
+	var t [16]byte
+	var s [8]byte
+	if _, err := rand.Read(t[:]); err != nil {
+		return "", ""
+	}
+	if _, err := rand.Read(s[:]); err != nil {
+		return "", ""
+	}
+	return hex.EncodeToString(t[:]), hex.EncodeToString(s[:])
+}
 
 const engineOp = "workflow.engine"
 
@@ -31,6 +49,11 @@ type DispatchRequest struct {
 	Target    v1.ObjectName // the function to invoke (materialized name or referenced)
 	Attempt   int
 	Input     json.RawMessage
+	// TraceID / ParentSpanID are the run's W3C trace context (ADR-0102): the dispatcher sets a
+	// traceparent header from them so the step-function invocation's span joins the run's trace.
+	// Empty TraceID ⇒ no header (additive). ParentSpanID is the run root (steps parent on it).
+	TraceID      string // 32 hex
+	ParentSpanID string // 16 hex
 }
 
 // permanentError marks a dispatch failure that must not be retried (4xx: contract
@@ -120,12 +143,15 @@ func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, work
 func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int) (*runstate.Record, error) {
 	rs := newRunState(spec)
 	outputs := map[v1.ObjectName]json.RawMessage{}
+	traceID, rootSpanID := mintTraceContext() // ADR-0102: one W3C trace context per run, propagated to every step
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
-		Spec:      spec, // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
-		Contract:  pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
-		Depth:     depth,  // sub-workflow nesting depth (ADR-0099)
-		StartedAt: e.clock.Now().UnixNano(),
+		Spec:       spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
+		Contract:   pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
+		Depth:      depth,  // sub-workflow nesting depth (ADR-0099)
+		TraceID:    traceID,
+		RootSpanID: rootSpanID,
+		StartedAt:  e.clock.Now().UnixNano(),
 	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
@@ -316,7 +342,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 				continue
 			}
 			n.phase = v1.StepRunning
-			out, err := e.dispatchStep(ctx, rec.Namespace, rec.Name, rec.Workflow, spec, n, input, outputs)
+			out, err := e.dispatchStep(ctx, rec, spec, n, input, outputs)
 			if err != nil {
 				n.phase = v1.StepFailed
 				if ctx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
@@ -372,8 +398,10 @@ func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName
 	return materializedStepName(workflow, step)
 }
 
-// dispatchStep invokes one step with retry, building its input from its parents.
-func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+// dispatchStep invokes one step with retry, building its input from its parents. It reads the run's
+// pinned identity + trace context off rec (ADR-0102: every attempt propagates the run's traceparent).
+func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+	ns, runName, workflow := rec.Namespace, rec.Name, rec.Workflow
 	st := specStep(spec, n.name)
 	stepInput := e.stepInput(n, input, outputs, st)
 	max := e.cfg.DefaultMaxAttempts
@@ -403,6 +431,7 @@ func (e *Engine) dispatchStep(ctx context.Context, ns v1.NamespaceName, runName,
 		out, err := e.dispatch.Dispatch(attemptCtx, DispatchRequest{
 			Namespace: ns, Run: runName, Step: n.name, Target: target,
 			Attempt: attempt, Input: stepInput,
+			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the run's trace context
 		})
 		if cancel != nil {
 			cancel()
@@ -495,6 +524,7 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure,
 			Target:  stepTarget(rec.Workflow, spec, spec.OnFailure),
 			Attempt: 1, Input: fc,
+			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
 		}) // handler outcome never changes the run phase (ADR-0094)
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {

@@ -128,6 +128,11 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set(attemptHeader, strconv.Itoa(req.Attempt))
+	// ADR-0102: propagate the run's W3C trace context so the step-function invocation's span (ADR-0101)
+	// joins the run's trace — one run = one trace. Empty trace-id ⇒ no header (additive/legacy).
+	if req.TraceID != "" {
+		httpReq.Header.Set("traceparent", "00-"+req.TraceID+"-"+req.ParentSpanID+"-01")
+	}
 	resp, err := d.client.Do(httpReq)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "invoke %s/%s", req.Namespace, req.Target) // retryable

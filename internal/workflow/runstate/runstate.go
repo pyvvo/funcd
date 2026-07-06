@@ -32,8 +32,14 @@ type Record struct {
 	Contract *v1.WorkflowContract `json:"contract,omitempty"`
 	// Depth is the sub-workflow nesting depth (ADR-0099): 0 for a top-level run, +1 per child. The
 	// engine caps it (Config.MaxSubworkflowDepth) so a reference cycle fails cleanly, not by overflow.
-	Depth int      `json:"depth,omitempty"`
-	Phase v1.Phase `json:"phase"`
+	Depth int `json:"depth,omitempty"`
+	// TraceID / RootSpanID are the run's W3C trace context (ADR-0102): minted at run start and persisted
+	// so every step dispatch (and every retry, and every resumed step) propagates the SAME traceparent —
+	// one trace per run. RootSpanID surfaces as each dispatch's parent span-id (steps parent on the run
+	// root). Reused by Resume, never re-minted. Empty ⇒ no traceparent (additive/legacy).
+	TraceID    string `json:"traceId,omitempty"`    // 32 lowercase hex (16 bytes)
+	RootSpanID string `json:"rootSpanId,omitempty"` // 16 lowercase hex (8 bytes)
+	Phase      v1.Phase `json:"phase"`
 	Paused    bool            `json:"paused,omitempty"`
 	Steps     []StepState     `json:"steps,omitempty"`
 	StartedAt int64           `json:"startedAt,omitempty"`
