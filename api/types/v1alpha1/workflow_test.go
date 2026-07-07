@@ -33,15 +33,15 @@ func TestWorkflowValidateOK(t *testing.T) {
 // (the kind is accepted now, F70/ADR-0099).
 func TestWorkflowKindUnion(t *testing.T) {
 	bad := map[string]WorkflowStep{
-		"two top-level kinds":    {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Builtin: &BuiltinStep{Wait: "1s"}},
-		"function+workflow":      {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Workflow: &WorkflowRef{Ref: "child"}},
-		"function image+ref":     {Name: "a", Function: &FunctionStep{Image: "oci:x", Ref: "f"}},
-		"function neither":       {Name: "a", Function: &FunctionStep{}},
-		"builtin wait+pass":      {Name: "a", Builtin: &BuiltinStep{Wait: "1s", Pass: "${{ input }}"}},
-		"builtin neither":        {Name: "a", Builtin: &BuiltinStep{}},
-		"workflow empty ref":     {Name: "a", Workflow: &WorkflowRef{}},
-		"workflow bad ref":       {Name: "a", Workflow: &WorkflowRef{Ref: "Not A Label"}},
-		"no kind":                {Name: "a"},
+		"two top-level kinds": {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Builtin: &BuiltinStep{Wait: "1s"}},
+		"function+workflow":   {Name: "a", Function: &FunctionStep{Image: "oci:x"}, Workflow: &WorkflowRef{Ref: "child"}},
+		"function image+ref":  {Name: "a", Function: &FunctionStep{Image: "oci:x", Ref: "f"}},
+		"function neither":    {Name: "a", Function: &FunctionStep{}},
+		"builtin wait+pass":   {Name: "a", Builtin: &BuiltinStep{Wait: "1s", Pass: "${{ input }}"}},
+		"builtin neither":     {Name: "a", Builtin: &BuiltinStep{}},
+		"workflow empty ref":  {Name: "a", Workflow: &WorkflowRef{}},
+		"workflow bad ref":    {Name: "a", Workflow: &WorkflowRef{Ref: "Not A Label"}},
+		"no kind":             {Name: "a"},
 	}
 	for name, st := range bad {
 		st := st

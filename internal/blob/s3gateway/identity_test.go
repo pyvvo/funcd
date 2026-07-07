@@ -71,7 +71,7 @@ func TestScenarioExternalSigV4(t *testing.T) {
 	// An admin Policy granting the external S3Identity s3::read on lakehouse/gold.
 	pol := v1.Policy{
 		ObjectMeta: v1.ObjectMeta{Name: "ext-read", Namespace: "default", ResourceGroup: "rg1"},
-		Spec: v1.PolicySpec{Cedar: `permit(principal == S3Identity::"default/EXTACCESS", action == Action::"s3::read", resource == BlobPrefix::"default/lakehouse/gold");`},
+		Spec:       v1.PolicySpec{Cedar: `permit(principal == S3Identity::"default/EXTACCESS", action == Action::"s3::read", resource == BlobPrefix::"default/lakehouse/gold");`},
 	}
 	external := staticExternal{
 		"EXTACCESS": {secret: "ext-secret-value", namespace: "default"},

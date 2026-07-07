@@ -26,7 +26,7 @@ type Record struct {
 	// step graph, images/digests, and per-step + run policies the run executes against. Resume
 	// and recovery rebuild from THIS pinned spec, never the live Workflow — so a mid-run spec
 	// edit or artifact re-push leaves an in-flight run on its pinned graph and digests.
-	Spec      v1.WorkflowSpec `json:"spec,omitempty"`
+	Spec v1.WorkflowSpec `json:"spec,omitempty"`
 	// Contract is the workflow's derived I/O contract pinned at run start (ADR-0098): the run-start
 	// InputSchemaMismatch check reads it, and Resume uses this copy — immune to a mid-run re-derive.
 	Contract *v1.WorkflowContract `json:"contract,omitempty"`
@@ -41,12 +41,12 @@ type Record struct {
 	RootSpanID string `json:"rootSpanId,omitempty"` // 16 lowercase hex (8 bytes)
 	// RootParentID is the run-root span's parent (ADR-0104): "" for a top-level run; the PARENT run's
 	// RootSpanID for a sub-workflow child, so a composition (parent + inline children) is one nested trace.
-	RootParentID string   `json:"rootParentId,omitempty"` // 16 hex; empty ⇒ the run is a trace root
-	Phase        v1.Phase `json:"phase"`
-	Paused    bool            `json:"paused,omitempty"`
-	Steps     []StepState     `json:"steps,omitempty"`
-	StartedAt int64           `json:"startedAt,omitempty"`
-	UpdatedAt int64           `json:"updatedAt,omitempty"`
+	RootParentID string      `json:"rootParentId,omitempty"` // 16 hex; empty ⇒ the run is a trace root
+	Phase        v1.Phase    `json:"phase"`
+	Paused       bool        `json:"paused,omitempty"`
+	Steps        []StepState `json:"steps,omitempty"`
+	StartedAt    int64       `json:"startedAt,omitempty"`
+	UpdatedAt    int64       `json:"updatedAt,omitempty"`
 	// PausedNanos accumulates time spent paused, excluded from the run-timeout clock.
 	PausedNanos int64 `json:"pausedNanos,omitempty"`
 }

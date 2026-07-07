@@ -30,7 +30,7 @@ func providerS3Meta() s3Meta {
 				ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "default", ResourceGroup: "rg1"},
 				Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
 					{Name: "gold", Owner: "lake"}, // owned by the provider "lake"
-					{Name: "silver"},               // unbound, unowned
+					{Name: "silver"},              // unbound, unowned
 				}},
 			},
 		},

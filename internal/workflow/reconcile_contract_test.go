@@ -98,8 +98,8 @@ func TestContractDerivedAndCached(t *testing.T) {
 func TestEdgeTypeMismatchBlocksReady(t *testing.T) {
 	s := newStore(t)
 	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
-		"oci:a": {Output: obj(map[string]string{"rows": "string"}, "rows")},         // emits rows:string
-		"oci:b": {Input: obj(map[string]string{"rows": "integer"}, "rows")},         // needs rows:integer
+		"oci:a": {Output: obj(map[string]string{"rows": "string"}, "rows")}, // emits rows:string
+		"oci:b": {Input: obj(map[string]string{"rows": "integer"}, "rows")}, // needs rows:integer
 	}}
 	wf, _ := reconcileWF(t, s, c, fnStep("a", "oci:a"), fnStep("b", "oci:b", "a"))
 	if ready(wf) {

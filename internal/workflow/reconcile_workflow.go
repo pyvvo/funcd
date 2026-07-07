@@ -215,7 +215,7 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			// is the `handle` export; a materialized step function carries it so it passes shape
 			// validation and serves without the author restating it on every step.
 			Handler:  materializedHandler,
-			Image: st.Function.Image,
+			Image:    st.Function.Image,
 			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas},
 			Blob:     st.Function.Blob,
 			Secrets:  st.Function.Secrets,
@@ -518,4 +518,3 @@ func paramsKeys(st *v1.WorkflowStep) map[string]bool {
 	}
 	return out
 }
-

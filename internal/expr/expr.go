@@ -65,13 +65,13 @@ type Resolver interface {
 // Expr is a parsed (and, after Check, validated) expression. It is safe to Check
 // once and then Eval/EvalBool concurrently.
 type Expr struct {
-	mode    Mode
-	inner   string // the JavaScript between ${{ and }}
-	program *ast.Program
+	mode     Mode
+	inner    string // the JavaScript between ${{ and }}
+	program  *ast.Program
 	compiled *goja.Program
-	checked bool
-	roots   []string
-	defs    []defaultBinding // defaulted references collected at Check
+	checked  bool
+	roots    []string
+	defs     []defaultBinding // defaulted references collected at Check
 }
 
 // defaultBinding records a referenced optional field that carries a schema default,

@@ -572,7 +572,7 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		Number:   fn.Generation,
 		Runtime:  fn.Spec.Runtime,
 		Handler:  fn.Spec.Handler,
-		Image: fn.Spec.Image, ImageDigest: pinned,
+		Image:    fn.Spec.Image, ImageDigest: pinned,
 	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
 		if fault.KindOf(cerr) != fault.Conflict {

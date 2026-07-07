@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/green-0-rabbit/funcd/internal/platform/version"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
 	"github.com/green-0-rabbit/funcd/internal/runtime/provision"
-	"github.com/green-0-rabbit/funcd/internal/platform/version"
 )
 
 // cniBinDir is the OS-standard CNI plugin dir provision.LayDown writes the CNI plugins into.

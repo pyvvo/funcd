@@ -127,7 +127,9 @@ func TestScenarioCrossNamespaceRejected(t *testing.T) {
 // forcing the s3gateway's full-Get+slice fallback.
 type noRangeBucket struct{ inner blob.Bucket }
 
-func (n noRangeBucket) Get(ctx context.Context, key string) ([]byte, error) { return n.inner.Get(ctx, key) }
+func (n noRangeBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	return n.inner.Get(ctx, key)
+}
 func (n noRangeBucket) Put(ctx context.Context, key string, data []byte) error {
 	return n.inner.Put(ctx, key, data)
 }

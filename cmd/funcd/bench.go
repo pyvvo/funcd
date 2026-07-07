@@ -17,8 +17,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
+	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
 	shimpython "github.com/green-0-rabbit/funcd/shim/python"
 )
 

@@ -288,13 +288,13 @@ func TestDivideByZero(t *testing.T) {
 func TestGrammarErrorRejected(t *testing.T) {
 	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|x": req("integer")}}
 	for _, src := range []string{
-		"${{ a..b }}",              // parse error
-		"${{ input.x == 0 }}",      // coercing == rejected at Check
-		"plain text",              // not a template
-		"${{ }}",                   // empty
-		"${{ input.x = 0 }}",       // assignment
-		"${{ (() => true)() }}",    // arrow function
-		"${{ new Date() }}",        // new
+		"${{ a..b }}",           // parse error
+		"${{ input.x == 0 }}",   // coercing == rejected at Check
+		"plain text",            // not a template
+		"${{ }}",                // empty
+		"${{ input.x = 0 }}",    // assignment
+		"${{ (() => true)() }}", // arrow function
+		"${{ new Date() }}",     // new
 	} {
 		mustFailCheck(t, src, Condition, r)
 	}

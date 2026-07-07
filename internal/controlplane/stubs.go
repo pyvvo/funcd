@@ -13,53 +13,53 @@ import (
 type StubHandlers struct {
 	mu sync.RWMutex
 
-	namespaces     map[string]v1.Namespace
-	resourceGroups map[string]v1.ResourceGroup
-	functions      map[string]v1.Function
-	revisions      map[string]v1.Revision
-	routes         map[string]v1.Route
-	services       map[string]v1.Service
-	eventSources   map[string]v1.EventSource
-	configMaps        map[string]v1.ConfigMap
-	secrets        map[string]v1.Secret
-	grants         map[string]v1.Grant
-	egressPolicies map[string]v1.EgressPolicy
-	invocations    map[string]v1.Invocation
-	runtimeClasses map[string]v1.RuntimeClass
-	workerNodes    map[string]v1.WorkerNode
-	gateways       map[string]v1.Gateway
-	kvstores       map[string]v1.KVStore
-	buckets        map[string]v1.Bucket
+	namespaces      map[string]v1.Namespace
+	resourceGroups  map[string]v1.ResourceGroup
+	functions       map[string]v1.Function
+	revisions       map[string]v1.Revision
+	routes          map[string]v1.Route
+	services        map[string]v1.Service
+	eventSources    map[string]v1.EventSource
+	configMaps      map[string]v1.ConfigMap
+	secrets         map[string]v1.Secret
+	grants          map[string]v1.Grant
+	egressPolicies  map[string]v1.EgressPolicy
+	invocations     map[string]v1.Invocation
+	runtimeClasses  map[string]v1.RuntimeClass
+	workerNodes     map[string]v1.WorkerNode
+	gateways        map[string]v1.Gateway
+	kvstores        map[string]v1.KVStore
+	buckets         map[string]v1.Bucket
 	catalogServices map[string]v1.CatalogService
-	policies       map[string]v1.Policy
-	workflows      map[string]v1.Workflow
-	workflowRuns   map[string]v1.WorkflowRun
+	policies        map[string]v1.Policy
+	workflows       map[string]v1.Workflow
+	workflowRuns    map[string]v1.WorkflowRun
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
 func NewStubHandlers() *StubHandlers {
 	return &StubHandlers{
-		namespaces:     make(map[string]v1.Namespace),
-		resourceGroups: make(map[string]v1.ResourceGroup),
-		functions:      make(map[string]v1.Function),
-		revisions:      make(map[string]v1.Revision),
-		routes:         make(map[string]v1.Route),
-		services:       make(map[string]v1.Service),
-		eventSources:   make(map[string]v1.EventSource),
-		configMaps:        make(map[string]v1.ConfigMap),
-		secrets:        make(map[string]v1.Secret),
-		grants:         make(map[string]v1.Grant),
-		egressPolicies: make(map[string]v1.EgressPolicy),
-		invocations:    make(map[string]v1.Invocation),
-		runtimeClasses: make(map[string]v1.RuntimeClass),
-		workerNodes:    make(map[string]v1.WorkerNode),
-		gateways:       make(map[string]v1.Gateway),
-		kvstores:       make(map[string]v1.KVStore),
-		buckets:        make(map[string]v1.Bucket),
+		namespaces:      make(map[string]v1.Namespace),
+		resourceGroups:  make(map[string]v1.ResourceGroup),
+		functions:       make(map[string]v1.Function),
+		revisions:       make(map[string]v1.Revision),
+		routes:          make(map[string]v1.Route),
+		services:        make(map[string]v1.Service),
+		eventSources:    make(map[string]v1.EventSource),
+		configMaps:      make(map[string]v1.ConfigMap),
+		secrets:         make(map[string]v1.Secret),
+		grants:          make(map[string]v1.Grant),
+		egressPolicies:  make(map[string]v1.EgressPolicy),
+		invocations:     make(map[string]v1.Invocation),
+		runtimeClasses:  make(map[string]v1.RuntimeClass),
+		workerNodes:     make(map[string]v1.WorkerNode),
+		gateways:        make(map[string]v1.Gateway),
+		kvstores:        make(map[string]v1.KVStore),
+		buckets:         make(map[string]v1.Bucket),
 		catalogServices: make(map[string]v1.CatalogService),
-		policies:       make(map[string]v1.Policy),
-		workflows:      make(map[string]v1.Workflow),
-		workflowRuns:   make(map[string]v1.WorkflowRun),
+		policies:        make(map[string]v1.Policy),
+		workflows:       make(map[string]v1.Workflow),
+		workflowRuns:    make(map[string]v1.WorkflowRun),
 	}
 }
 

@@ -230,8 +230,8 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	traceID, rootSpanID := mintTraceContext()
 	rootParentID := ""
 	if inheritTraceID != "" {
-		traceID = inheritTraceID          // share the parent's trace (one composition = one trace)
-		rootParentID = inheritRootParent  // nest the child run span under the parent run span
+		traceID = inheritTraceID         // share the parent's trace (one composition = one trace)
+		rootParentID = inheritRootParent // nest the child run span under the parent run span
 	}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
@@ -418,7 +418,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 				e.setRunning(n)
 				out, err := e.runBuiltin(ctx, st, n, input, outputs)
 				if err != nil {
-					e.markFailed(n, err) // ADR-0100: builtin passes its raw cause straight in
+					e.markFailed(n, err)  // ADR-0100: builtin passes its raw cause straight in
 					if ctx.Err() != nil { // the run deadline interrupted a blocking wait
 						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 					}
@@ -442,7 +442,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 			e.setRunning(n)
 			out, err := e.dispatchStep(ctx, rec, spec, n, input, outputs)
 			if err != nil {
-				e.markFailed(n, err) // ADR-0100: errMsg already stamped (bare cause) by dispatchStep
+				e.markFailed(n, err)  // ADR-0100: errMsg already stamped (bare cause) by dispatchStep
 				if ctx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
 					return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 				}
