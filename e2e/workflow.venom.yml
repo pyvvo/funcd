@@ -140,6 +140,21 @@ testcases:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring COMPOSITIONOK"
 
+  # ── ADR-0105 nested DAG parenting: step spans nest along their edges. orders is ingest → score → …, so the
+  #    score step span parents on the ingest step span. Proof: an ingest spanId appears as a score parentSpanId
+  #    (the engine owns the ids + the shim uses them). Fan-in links are proven precisely by the in-process Go e2e.
+  - name: nested DAG parenting — the score step span parents on the ingest step span (ADR-0105)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'ing=$(cat /var/lib/funcd/data/blob/traces/default/orders-ingest/*/*.otlp.jsonl 2>/dev/null | grep -o "\"spanId\":\"[0-9a-f]\{16\}\"" | grep -o "[0-9a-f]\{16\}" | sort -u); sco=$(cat /var/lib/funcd/data/blob/traces/default/orders-score/*/*.otlp.jsonl 2>/dev/null | grep -o "\"parentSpanId\":\"[0-9a-f]\{16\}\"" | grep -o "[0-9a-f]\{16\}" | sort -u); common=$(comm -12 <(echo "$ing") <(echo "$sco") | grep -c .); [ "$common" -ge 1 ] && echo "DAGNESTOK common=$common" || echo "DAGNESTNONE i=$(echo "$ing"|grep -c .) s=$(echo "$sco"|grep -c .)"'
+        retry: 15
+        delay: 2
+        info: "DAG nesting → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring DAGNESTOK"
+
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:
       - type: exec

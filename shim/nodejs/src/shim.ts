@@ -22,7 +22,7 @@ import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
 import { installConsoleCapture, openChannel, type Sink } from './funclog.ts';
-import { startSpan } from './tracespan.ts';
+import { startSpan, parseLinks } from './tracespan.ts';
 
 export type { CloudEvent, FunctionContext, Handler, Json, Validator } from './types.ts';
 export { resolveHandler, resolveValidators } from './runtime.ts';
@@ -61,8 +61,12 @@ export function createApp(
       }
     }
     // ADR-0101: a real invocation begins → open its SERVER span (adopts traceparent or mints a root);
-    // the handler runs inside the span's context so its logs correlate.
-    const span = startSpan(traceSink, fnName, c.req.header('traceparent'));
+    // the handler runs inside the span's context so its logs correlate. ADR-0105: a workflow step is
+    // dispatched with the span-id to USE (X-Funcd-Span-Id) + its fan-in links (X-Funcd-Span-Links).
+    const span = startSpan(
+      traceSink, fnName, c.req.header('traceparent'),
+      c.req.header('x-funcd-span-id'), parseLinks(c.req.header('x-funcd-span-links')),
+    );
     try {
       const result = await span.run(() => handler(ctx, event));
       if (validators.output) {

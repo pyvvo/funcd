@@ -3360,16 +3360,17 @@ function parseTraceparent(tp) {
   if (!/^[0-9a-f]{16}$/.test(parentId) || parentId === ZERO_SPAN) return null;
   return { traceId, parentId };
 }
-function newInvContext(tp) {
+function newInvContext(tp, providedSpanId) {
   const adopted = parseTraceparent(tp);
+  const spanId = providedSpanId && /^[0-9a-f]{16}$/.test(providedSpanId) ? providedSpanId : randomBytes(8).toString("hex");
   return {
     inv: randomBytes(8).toString("hex"),
     traceId: adopted ? adopted.traceId : randomBytes(16).toString("hex"),
-    spanId: randomBytes(8).toString("hex"),
+    spanId,
     parentId: adopted ? adopted.parentId : ""
   };
 }
-function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
+function emitSpan(sink, ctx, name, start, end, status, statusMsg, links) {
   const rec = {
     "funcd.signal": "traces",
     trace_id: ctx.traceId,
@@ -3382,17 +3383,19 @@ function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
     status,
     status_msg: statusMsg,
     attrs: {},
-    inv: ctx.inv
+    inv: ctx.inv,
+    links
   };
   try {
     sink(JSON.stringify(rec) + "\n");
   } catch {
   }
 }
-function startSpan(sink, name, tp) {
-  const inv = newInvContext(tp);
+function startSpan(sink, name, tp, spanId, links = []) {
+  const inv = newInvContext(tp, spanId);
   const startNs = Date.now() * 1e6;
   const t0 = process.hrtime.bigint();
+  const validLinks = links.filter((l) => /^[0-9a-f]{16}$/.test(l));
   let ended = false;
   return {
     inv,
@@ -3404,9 +3407,13 @@ function startSpan(sink, name, tp) {
       ended = true;
       if (!sink) return;
       const endNs = startNs + Number(process.hrtime.bigint() - t0);
-      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg, validLinks);
     }
   };
+}
+function parseLinks(header) {
+  if (!header) return [];
+  return header.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 // src/pool.ts
@@ -3441,7 +3448,7 @@ async function workerMain() {
           return;
         }
       }
-      const span = startSpan(channel, spec.name, req.traceparent);
+      const span = startSpan(channel, spec.name, req.traceparent, req.spanId, req.links ?? []);
       try {
         const result = await span.run(() => handler(ctx, event));
         if (validators.output) {
@@ -3530,7 +3537,7 @@ var PooledHandler = class {
       if (!this.closed) this.spawn();
     }, 50);
   }
-  async invoke(event, traceparent) {
+  async invoke(event, traceparent, spanId, links) {
     if (!this.healthy) return { id: -1, status: 503, error: `function ${this.spec.name} unavailable` };
     const id = this.nextID++;
     return new Promise((resolve) => {
@@ -3539,7 +3546,7 @@ var PooledHandler = class {
         resolve({ id, status: 503, error: `function ${this.spec.name} timed out` });
       }, requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.worker.postMessage({ id, event, traceparent });
+      this.worker.postMessage({ id, event, traceparent, spanId, links });
     });
   }
   async close() {
@@ -3572,7 +3579,12 @@ function createPool(manifest, limits) {
     } catch {
       return c.text("invalid CloudEvent JSON", 400);
     }
-    const res = await h.invoke(event, c.req.header("traceparent"));
+    const res = await h.invoke(
+      event,
+      c.req.header("traceparent"),
+      c.req.header("x-funcd-span-id"),
+      parseLinks(c.req.header("x-funcd-span-links"))
+    );
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
     if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);

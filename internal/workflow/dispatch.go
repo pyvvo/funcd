@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
@@ -129,9 +130,17 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set(attemptHeader, strconv.Itoa(req.Attempt))
 	// ADR-0102: propagate the run's W3C trace context so the step-function invocation's span (ADR-0101)
-	// joins the run's trace — one run = one trace. Empty trace-id ⇒ no header (additive/legacy).
+	// joins the run's trace — one run = one trace. Empty trace-id ⇒ no header (additive/legacy). The
+	// parent is the step's DAG predecessor (ADR-0105), so the step span nests along its edge.
 	if req.TraceID != "" {
 		httpReq.Header.Set("traceparent", "00-"+req.TraceID+"-"+req.ParentSpanID+"-01")
+	}
+	// ADR-0105: give the step function the span-id to USE (so a successor parents on it) + its fan-in links.
+	if req.SpanID != "" {
+		httpReq.Header.Set("X-Funcd-Span-Id", req.SpanID)
+	}
+	if len(req.Links) > 0 {
+		httpReq.Header.Set("X-Funcd-Span-Links", strings.Join(req.Links, ","))
 	}
 	resp, err := d.client.Do(httpReq)
 	if err != nil {

@@ -62,4 +62,5 @@ type Span struct {
 	StatusMsg  string            // the error message when Status == ERROR
 	Attrs      map[string]string // structured attributes
 	Invocation string            // the per-invocation id (== the log lines' inv for correlation)
+	Links      []string          // hex16 span-ids linked in the SAME trace — fan-in edges (ADR-0105)
 }

@@ -141,3 +141,29 @@ test('parseTraceparent: valid header parses; malformed/all-zero → null', () =>
   assert.equal(parseTraceparent(`00-${'0'.repeat(32)}-${'b'.repeat(16)}-01`), null, 'all-zero trace-id rejected');
   assert.equal(parseTraceparent(`00-${'a'.repeat(32)}-${'0'.repeat(16)}-01`), null, 'all-zero parent rejected');
 });
+
+// scenario: engine-owns-span-id (ADR-0105) — a provided X-Funcd-Span-Id is used as the span-id, and
+// X-Funcd-Span-Links are attached as fan-in links.
+test('engine-owns-span-id: a provided X-Funcd-Span-Id is used and X-Funcd-Span-Links are attached', async () => {
+  const c = collector();
+  const app = createApp(() => ({ ok: true }), {}, { sink: c.sink, fnName: 'step' });
+  const provided = 'abcdef0123456789';
+  const res = await app.request('/', jsonReq('{}', {
+    'x-funcd-span-id': provided,
+    'x-funcd-span-links': '1111111111111111, 2222222222222222',
+  }));
+  assert.equal(res.status, 200);
+  const s = c.spans()[0];
+  assert.equal(s.span_id, provided, 'the span uses the engine-provided span-id (not a minted one)');
+  assert.deepEqual(s.links, ['1111111111111111', '2222222222222222'], 'fan-in links attached');
+});
+
+// scenario: direct-invoke-unchanged (ADR-0105) — no X-Funcd-Span-Id → the shim mints its own id, no links.
+test('direct-invoke-unchanged: no X-Funcd-Span-Id → the shim mints its span-id (ADR-0101 unchanged)', async () => {
+  const c = collector();
+  const app = createApp(() => ({ ok: true }), {}, { sink: c.sink, fnName: 'f' });
+  await app.request('/', jsonReq('{}'));
+  const s = c.spans()[0];
+  assert.match(s.span_id as string, /^[0-9a-f]{16}$/, 'minted span-id');
+  assert.deepEqual(s.links, [], 'no links on a direct invoke');
+});

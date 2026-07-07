@@ -21,7 +21,7 @@ from typing import Any
 
 from funcd_shim import runtime, shim
 from funcd_shim.funclog import install_log_capture
-from funcd_shim.tracespan import InvocationSpan, new_inv_context, parse_traceparent
+from funcd_shim.tracespan import InvocationSpan, new_inv_context, parse_links, parse_traceparent
 from funcd_shim.types import CloudEvent, FunctionContext
 
 
@@ -62,6 +62,28 @@ def test_parse_traceparent_valid_and_invalid() -> None:
     assert parse_traceparent("garbage") is None
     assert parse_traceparent(f"00-{'0' * 32}-{CALLER_SPAN}-01") is None  # all-zero trace
     assert parse_traceparent(f"00-{TRACE}-{'0' * 16}-01") is None  # all-zero parent
+
+
+# scenario: python-step-uses-provided-id (ADR-0105) — a provided span-id is used as the span-id, and the
+# X-Funcd-Span-Links are attached as fan-in links; a direct invoke (no id) still mints.
+def test_python_step_uses_provided_id_and_links() -> None:
+    ch = FakeChannel()
+    provided = "abcdef0123456789"
+    with InvocationSpan(ch, "step", TRACEPARENT, provided, ["1111111111111111", "2222222222222222"]):
+        pass
+    s = ch.spans()[0]
+    assert s["span_id"] == provided  # the engine-provided id, not a minted one
+    assert s["links"] == ["1111111111111111", "2222222222222222"]
+
+
+def test_new_inv_context_uses_provided_span_id() -> None:
+    ctx = new_inv_context(None, "0123456789abcdef")
+    assert ctx.span_id == "0123456789abcdef"
+    # a malformed provided id falls back to minting
+    assert len(new_inv_context(None, "nothex").span_id) == 16
+    # parse_links validates hex16 + trims
+    assert parse_links("aaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbb") == ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"]
+    assert parse_links(None) == []
 
 
 def test_new_inv_context_mint_root() -> None:

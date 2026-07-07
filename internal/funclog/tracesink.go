@@ -241,6 +241,18 @@ func marshalTraceOTLP(res Resource, spans []Span, now time.Time) ([]byte, error)
 		for k, v := range sp.Attrs {
 			a.PutStr(k, v)
 		}
+		// ADR-0105: fan-in edges are OTel span links to the non-primary predecessors, in the SAME trace.
+		for _, linkID := range sp.Links {
+			lsid, ok := parseSpanID(linkID)
+			if !ok {
+				continue
+			}
+			l := s.Links().AppendEmpty()
+			if tid, ok := parseTraceID(sp.TraceID); ok {
+				l.SetTraceID(tid)
+			}
+			l.SetSpanID(lsid)
+		}
 	}
 
 	var m ptrace.JSONMarshaler

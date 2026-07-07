@@ -32,6 +32,28 @@ func mintTraceContext() (traceID, rootSpanID string) {
 	return hex.EncodeToString(t[:]), hex.EncodeToString(s[:])
 }
 
+// mintSpanID returns a fresh 8-byte span-id as hex16 (ADR-0105): the engine mints one per DAG step so a
+// successor can parent on it. "" on the near-impossible crypto/rand error (the step then falls back to
+// minting its own span-id in the shim — additive, never failing the run).
+func mintSpanID() string {
+	var s [8]byte
+	if _, err := rand.Read(s[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(s[:])
+}
+
+// stepSpanID returns the pre-minted span-id of a step by name (ADR-0105), read from the run record (populated
+// by the pre-mint persist before drive). "" if the step is absent or unassigned.
+func stepSpanID(rec *runstate.Record, name v1.ObjectName) string {
+	for i := range rec.Steps {
+		if rec.Steps[i].Name == name {
+			return rec.Steps[i].SpanID
+		}
+	}
+	return ""
+}
+
 const engineOp = "workflow.engine"
 
 // Dispatcher is the step-invocation seam (ADR-0094): it delivers a step's input to
@@ -52,9 +74,14 @@ type DispatchRequest struct {
 	Input     json.RawMessage
 	// TraceID / ParentSpanID are the run's W3C trace context (ADR-0102): the dispatcher sets a
 	// traceparent header from them so the step-function invocation's span joins the run's trace.
-	// Empty TraceID ⇒ no header (additive). ParentSpanID is the run root (steps parent on it).
+	// Empty TraceID ⇒ no header (additive). ParentSpanID is the step's PRIMARY predecessor (ADR-0105;
+	// the run root for a true root step) — the parent edge the step nests under.
 	TraceID      string // 32 hex
 	ParentSpanID string // 16 hex
+	// SpanID is the engine-minted span-id the step function uses as its own (ADR-0105, X-Funcd-Span-Id) so a
+	// successor can parent on it. Links are the non-primary fan-in predecessors' span-ids (X-Funcd-Span-Links).
+	SpanID string   // 16 hex; "" ⇒ the shim mints its own (direct invoke / additive)
+	Links  []string // 16-hex span-ids, same trace
 }
 
 // permanentError marks a dispatch failure that must not be retried (4xx: contract
@@ -149,6 +176,11 @@ func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, work
 // child shares the parent's TraceID (one trace) and nests its run-root span under the parent run's span.
 func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
 	rs := newRunState(spec)
+	// ADR-0105: pre-mint a span-id per DAG step so a successor parents on it (the nested DAG waterfall). The
+	// onFailure handler is excluded (dagSteps omits it) — nothing parents on it; it mints its own id in the shim.
+	for _, name := range rs.dagSteps() {
+		rs.steps[name].spanID = mintSpanID()
+	}
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	// ADR-0102/0104: one W3C trace context per run. A top-level run mints a fresh trace; a sub-workflow child
 	// inherits the parent's TraceID (shared trace) but mints its OWN RootSpanID and nests under the parent.
@@ -215,6 +247,8 @@ func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1
 		if !ok {
 			continue
 		}
+		n.spanID = s.SpanID // ADR-0105: restore the pre-minted span-id UNCONDITIONALLY (incl. the in-flight step
+		//                      being re-dispatched) so successors' parent edges never dangle across a restart.
 		if s.Phase == v1.StepRunning {
 			n.phase = v1.StepPending // re-dispatch on recovery
 			continue
@@ -429,6 +463,21 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 		backoff = fn.Retry.Backoff
 	}
 	target := stepTarget(workflow, spec, n.name)
+	// ADR-0105: nest the step span under its DAG predecessor. The primary parent is the first (post-implicit-
+	// chaining) dependency's pre-minted span-id; a true root step (no dependency) parents on the run root. The
+	// remaining dependencies become fan-in span links. Same for every attempt (one span-id per step).
+	parentSpan := rec.RootSpanID
+	var links []string
+	if len(n.dependsOn) > 0 {
+		if pid := stepSpanID(rec, n.dependsOn[0]); pid != "" {
+			parentSpan = pid
+		}
+		for _, dep := range n.dependsOn[1:] {
+			if id := stepSpanID(rec, dep); id != "" {
+				links = append(links, id)
+			}
+		}
+	}
 	// Per-step invocation bound: the step's own timeout, else the engine default (0 ⇒ none).
 	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
 	// separately in drive and maps to RunTimedOut.
@@ -446,7 +495,8 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 		out, err := e.dispatch.Dispatch(attemptCtx, DispatchRequest{
 			Namespace: ns, Run: runName, Step: n.name, Target: target,
 			Attempt: attempt, Input: stepInput,
-			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the run's trace context
+			TraceID: rec.TraceID, ParentSpanID: parentSpan, // ADR-0102/0105: run trace + the predecessor edge
+			SpanID: n.spanID, Links: links, // ADR-0105: the step's own span-id + fan-in links
 		})
 		if cancel != nil {
 			cancel()
@@ -553,7 +603,7 @@ func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState
 	rec.Steps = rec.Steps[:0]
 	for _, name := range rs.order {
 		n := rs.steps[name]
-		ss := runstate.StepState{Name: n.name, Phase: n.phase}
+		ss := runstate.StepState{Name: n.name, Phase: n.phase, SpanID: n.spanID} // SpanID: ADR-0105 (persisted for Resume)
 		if fn := functionOf(specStep(rec.Spec, n.name)); fn != nil && fn.Image != "" {
 			ss.Revision = fn.Image // the pinned artifact ref this step executes (from the pinned spec)
 		}

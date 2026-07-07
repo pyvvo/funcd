@@ -167,6 +167,23 @@ func TestScenarioSpanTransportFd3AndUds(t *testing.T) {
 	}
 }
 
+// A Span with Links marshals to a ptrace span carrying OTel span links in the SAME trace (ADR-0105 fan-in).
+func TestSpanLinksMarshal(t *testing.T) {
+	b := memBucket(t)
+	s := newTraceSink(t, b, 1<<20)
+	sp := serverSpan()
+	sp.Links = []string{"fedcba9876543210", "0123456789abcdef"}
+	require.NoError(t, s.AppendSpan(context.Background(), defaultRes(), sp))
+	_, err := s.Flush(context.Background(), defaultRes())
+	require.NoError(t, err)
+
+	span := readBackTraces(t, b, "traces/").ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0)
+	require.Equal(t, 2, span.Links().Len(), "two fan-in links")
+	require.Equal(t, testTraceID, span.Links().At(0).TraceID().String(), "links are in the same trace")
+	require.Equal(t, "fedcba9876543210", span.Links().At(0).SpanID().String())
+	require.Equal(t, "0123456789abcdef", span.Links().At(1).SpanID().String())
+}
+
 func TestNewBlobTraceSinkValidation(t *testing.T) {
 	_, err := funclog.NewBlobTraceSink(funclog.Deps{Clock: clock.System()})
 	require.Error(t, err) // nil bucket

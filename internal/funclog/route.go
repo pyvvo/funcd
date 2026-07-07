@@ -32,6 +32,7 @@ type spanWire struct {
 	StatusMsg string            `json:"status_msg"`
 	Attrs     map[string]string `json:"attrs"`
 	Inv       string            `json:"inv"`
+	Links     []string          `json:"links"` // ADR-0105: fan-in edges (same-trace span-ids)
 }
 
 func (w spanWire) toSpan() Span {
@@ -55,6 +56,7 @@ func (w spanWire) toSpan() Span {
 		StatusMsg:  w.StatusMsg,
 		Attrs:      w.Attrs,
 		Invocation: w.Inv,
+		Links:      w.Links,
 	}
 }
 

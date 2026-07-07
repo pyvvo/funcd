@@ -46,26 +46,46 @@ def parse_traceparent(tp: str | None) -> tuple[str, str] | None:
     return trace_id, parent_id
 
 
-def new_inv_context(tp: str | None) -> InvContext:
+def new_inv_context(tp: str | None, provided_span_id: str | None = None) -> InvContext:
     """Establish the invocation identity: adopt the traceparent's trace-id + parent span-id when
-    present, else mint a root (fresh 16-byte trace). A fresh span-id and inv id are always minted."""
+    present, else mint a root (fresh 16-byte trace). The span-id is the engine-provided one (ADR-0105,
+    X-Funcd-Span-Id) when a valid hex16 is given, else freshly minted (a direct invoke)."""
     adopted = parse_traceparent(tp)
+    if provided_span_id and _SPAN_RE.match(provided_span_id):
+        span_id = provided_span_id  # ADR-0105: use the engine-provided id
+    else:
+        span_id = secrets.token_hex(8)
     return InvContext(
         inv=secrets.token_hex(8),
         trace_id=adopted[0] if adopted else secrets.token_hex(16),
-        span_id=secrets.token_hex(8),
+        span_id=span_id,
         parent_id=adopted[1] if adopted else "",
     )
+
+
+def parse_links(header: str | None) -> list[str]:
+    """Split an ``X-Funcd-Span-Links`` header (comma-separated hex16 span-ids) into a validated list."""
+    if not header:
+        return []
+    return [s.strip() for s in header.split(",") if s.strip() and _SPAN_RE.match(s.strip())]
 
 
 class InvocationSpan:
     """A live per-invocation SERVER span. Enter to bind the context (so logs correlate); exit emits
     the span record with the outcome. ``status``/``status_msg`` default to OK unless :meth:`fail` set."""
 
-    def __init__(self, channel: Channel | None, name: str, tp: str | None) -> None:
+    def __init__(
+        self,
+        channel: Channel | None,
+        name: str,
+        tp: str | None,
+        span_id: str | None = None,
+        links: list[str] | None = None,
+    ) -> None:
         self._channel = channel
         self._name = name
-        self._ctx = new_inv_context(tp)
+        self._ctx = new_inv_context(tp, span_id)
+        self._links = links or []
         self._status = "OK"
         self._status_msg = ""
         self._start_ns = 0
@@ -107,6 +127,7 @@ class InvocationSpan:
             "status_msg": self._status_msg,
             "attrs": {},
             "inv": self._ctx.inv,
+            "links": self._links,  # ADR-0105: fan-in edges (same-trace span-ids)
         }
         line = (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
         self._channel.write_line(line)  # best-effort; _Channel swallows OSError

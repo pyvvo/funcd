@@ -67,7 +67,13 @@ class _Ctx:
         return KVClient()
 
 
-def invoke(body: str, traceparent: str | None = None, fn_name: str = "invoke") -> dict[str, Any]:
+def invoke(
+    body: str,
+    traceparent: str | None = None,
+    fn_name: str = "invoke",
+    span_id: str | None = None,
+    links: list[str] | None = None,
+) -> dict[str, Any]:
     """Run one request: parse → optional input validation → handler → optional output validation →
     a status-tagged envelope the host maps to the HTTP response (identical to the solo shim). ADR-0101:
     a successful-past-input-validation request emits a SERVER span on the worker's channel."""
@@ -87,7 +93,7 @@ def invoke(body: str, traceparent: str | None = None, fn_name: str = "invoke") -
             }
     from .tracespan import InvocationSpan
 
-    with InvocationSpan(_channel, fn_name, traceparent) as span:
+    with InvocationSpan(_channel, fn_name, traceparent, span_id, links) as span:
         try:
             result = _handler(_Ctx(), event)
         except Exception as err:  # noqa: BLE001 - user handler errors become 500

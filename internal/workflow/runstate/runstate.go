@@ -58,6 +58,9 @@ type StepState struct {
 	Attempts int             `json:"attempts,omitempty"`
 	Revision string          `json:"revision,omitempty"` // pinned digest it executed
 	Output   json.RawMessage `json:"output,omitempty"`   // small output or a by-reference key
+	// SpanID is the engine-minted trace span-id for this step (ADR-0105): minted once at run start so a
+	// successor parents on it, and restored on Resume so the edge stays stable across a restart.
+	SpanID string `json:"spanId,omitempty"` // 16 hex
 }
 
 // Terminal reports whether the run phase is a terminal state (used by List OpenOnly

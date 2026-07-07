@@ -74,7 +74,8 @@ func TestRunMintsAndPropagatesTraceContext(t *testing.T) {
 	isHex(t, rec.TraceID, 32)
 	isHex(t, rec.RootSpanID, 16)
 
-	// steps-share-one-trace + steps-parent-on-run-root
+	// steps-share-one-trace: every step carries the run trace (ADR-0102's invariant). The root step (a)
+	// parents on the run root; downstream steps parent on their predecessor (ADR-0105 DAG parenting).
 	if len(c.reqs) != 3 {
 		t.Fatalf("dispatched %d steps, want 3", len(c.reqs))
 	}
@@ -82,9 +83,19 @@ func TestRunMintsAndPropagatesTraceContext(t *testing.T) {
 		if r.TraceID != rec.TraceID {
 			t.Fatalf("step %q trace = %q, want the run trace %q", r.Step, r.TraceID, rec.TraceID)
 		}
-		if r.ParentSpanID != rec.RootSpanID {
-			t.Fatalf("step %q parent = %q, want the run root %q", r.Step, r.ParentSpanID, rec.RootSpanID)
-		}
+	}
+	byStep := map[v1.ObjectName]DispatchRequest{}
+	for _, r := range c.reqs {
+		byStep[r.Step] = r
+	}
+	if byStep["a"].ParentSpanID != rec.RootSpanID {
+		t.Fatalf("root step a parent = %q, want the run root %q", byStep["a"].ParentSpanID, rec.RootSpanID)
+	}
+	if byStep["b"].ParentSpanID != byStep["a"].SpanID || byStep["a"].SpanID == "" {
+		t.Fatalf("step b parent = %q, want a's span-id %q (ADR-0105 nesting)", byStep["b"].ParentSpanID, byStep["a"].SpanID)
+	}
+	if byStep["c"].ParentSpanID != byStep["b"].SpanID {
+		t.Fatalf("step c parent = %q, want b's span-id %q", byStep["c"].ParentSpanID, byStep["b"].SpanID)
 	}
 }
 
@@ -156,10 +167,12 @@ func TestResumeKeepsTrace(t *testing.T) {
 // a W3C traceparent from the request's trace context, and sets NO header when the context is empty.
 func TestDispatchSetsTraceparentHeader(t *testing.T) {
 	var mu sync.Mutex
-	var gotTP string
+	var gotTP, gotSpanID, gotLinks string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		gotTP = r.Header.Get("traceparent")
+		gotSpanID = r.Header.Get("X-Funcd-Span-Id")
+		gotLinks = r.Header.Get("X-Funcd-Span-Links")
 		mu.Unlock()
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte(`{}`))
@@ -172,28 +185,36 @@ func TestDispatchSetsTraceparentHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// with a trace context → a well-formed W3C traceparent
+	// with a trace context + a step span-id + fan-in links → the W3C traceparent + ADR-0105 headers
 	req := dispatchReq("s")
 	req.TraceID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	req.ParentSpanID = "bbbbbbbbbbbbbbbb"
+	req.SpanID = "cccccccccccccccc"
+	req.Links = []string{"dddddddddddddddd", "eeeeeeeeeeeeeeee"}
 	if _, err := d.Dispatch(context.Background(), req); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	mu.Lock()
-	tp := gotTP
+	tp, sid, links := gotTP, gotSpanID, gotLinks
 	mu.Unlock()
 	if want := "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"; tp != want {
 		t.Fatalf("traceparent = %q, want %q", tp, want)
 	}
+	if sid != "cccccccccccccccc" {
+		t.Fatalf("X-Funcd-Span-Id = %q, want the step span-id", sid)
+	}
+	if links != "dddddddddddddddd,eeeeeeeeeeeeeeee" {
+		t.Fatalf("X-Funcd-Span-Links = %q, want the comma-joined links", links)
+	}
 
-	// no trace context → no header (additive/legacy)
+	// no trace context / no span-id → no headers (additive/legacy)
 	if _, err := d.Dispatch(context.Background(), dispatchReq("s")); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	mu.Lock()
-	tp = gotTP
+	tp, sid, links = gotTP, gotSpanID, gotLinks
 	mu.Unlock()
-	if tp != "" {
-		t.Fatalf("empty context must set no traceparent, got %q", tp)
+	if tp != "" || sid != "" || links != "" {
+		t.Fatalf("empty context must set no trace headers, got tp=%q sid=%q links=%q", tp, sid, links)
 	}
 }

@@ -129,8 +129,15 @@ func TestScenarioE2EWorkflowOneRunOneTrace(t *testing.T) {
 				steps++
 			}
 		}
-		_, stepsOnRoot := stepParents[rootSpanID]
-		// one trace · a run-root span exists · ≥2 step spans · all step spans parent on the root span.
-		return len(traceIDs) == 1 && haveRoot && steps >= 2 && len(stepParents) == 1 && stepsOnRoot
-	}, 15*time.Second, 300*time.Millisecond, "the run-root span roots one trace and the step spans nest under it")
+		_, rootStepPresent := stepParents[rootSpanID] // the root step parents on the run root
+		nested := false                               // ADR-0105: a downstream step nests under another step (not flat)
+		for p := range stepParents {
+			if p != rootSpanID && p != "" {
+				nested = true
+			}
+		}
+		// one trace · a run-root span · ≥2 step spans · the root step parents on the run root · and a
+		// downstream step nests under a predecessor step (ADR-0105 DAG parenting, not the flat run-root model).
+		return len(traceIDs) == 1 && haveRoot && steps >= 2 && rootStepPresent && nested
+	}, 15*time.Second, 300*time.Millisecond, "the run-root roots one trace and the step spans nest along their DAG edges")
 }

@@ -28,6 +28,7 @@ interface SpanRecord {
   status_msg: string;
   attrs: Record<string, string>;
   inv: string;
+  links: string[]; // ADR-0105: fan-in edges — same-trace span-ids this span links to
 }
 
 /** parseTraceparent parses a W3C `traceparent` (`00-<trace32>-<span16>-<flags>`), returning the
@@ -44,19 +45,20 @@ export function parseTraceparent(tp: string | undefined): { traceId: string; par
 }
 
 /** newInvContext establishes the invocation identity: adopt the traceparent's trace-id + parent
- *  span-id when present, else mint a root (fresh 16-byte trace). A fresh 8-byte span-id and inv id
- *  are always minted for this invocation. */
-export function newInvContext(tp: string | undefined): InvContext {
+ *  span-id when present, else mint a root (fresh 16-byte trace). The span-id is the engine-provided
+ *  one (ADR-0105, X-Funcd-Span-Id) when a valid hex16 is given, else freshly minted (direct invoke). */
+export function newInvContext(tp: string | undefined, providedSpanId?: string): InvContext {
   const adopted = parseTraceparent(tp);
+  const spanId = providedSpanId && /^[0-9a-f]{16}$/.test(providedSpanId) ? providedSpanId : randomBytes(8).toString('hex');
   return {
     inv: randomBytes(8).toString('hex'),
     traceId: adopted ? adopted.traceId : randomBytes(16).toString('hex'),
-    spanId: randomBytes(8).toString('hex'),
+    spanId,
     parentId: adopted ? adopted.parentId : '',
   };
 }
 
-function emitSpan(sink: Sink, ctx: InvContext, name: string, start: number, end: number, status: 'OK' | 'ERROR', statusMsg: string): void {
+function emitSpan(sink: Sink, ctx: InvContext, name: string, start: number, end: number, status: 'OK' | 'ERROR', statusMsg: string, links: string[]): void {
   const rec: SpanRecord = {
     'funcd.signal': 'traces',
     trace_id: ctx.traceId,
@@ -70,6 +72,7 @@ function emitSpan(sink: Sink, ctx: InvContext, name: string, start: number, end:
     status_msg: statusMsg,
     attrs: {},
     inv: ctx.inv,
+    links,
   };
   try {
     sink(JSON.stringify(rec) + '\n');
@@ -87,12 +90,14 @@ export interface Span {
 }
 
 /** startSpan opens a per-invocation SERVER span. `sink` null ⇒ the span is a no-op emitter (the
- *  context is still established so logs get ids). `name` is the function name (or "invoke"); `tp`
- *  is the incoming `traceparent` header. */
-export function startSpan(sink: Sink | null, name: string, tp: string | undefined): Span {
-  const inv = newInvContext(tp);
+ *  context is still established so logs get ids). `name` is the function name (or "invoke"); `tp` is
+ *  the incoming `traceparent`; `spanId` is the engine-provided span-id to USE (ADR-0105,
+ *  X-Funcd-Span-Id — else mint); `links` are fan-in edges (X-Funcd-Span-Links) attached to the span. */
+export function startSpan(sink: Sink | null, name: string, tp: string | undefined, spanId?: string, links: string[] = []): Span {
+  const inv = newInvContext(tp, spanId);
   const startNs = Date.now() * 1e6;
   const t0 = process.hrtime.bigint();
+  const validLinks = links.filter((l) => /^[0-9a-f]{16}$/.test(l));
   let ended = false;
   return {
     inv,
@@ -104,7 +109,13 @@ export function startSpan(sink: Sink | null, name: string, tp: string | undefine
       ended = true;
       if (!sink) return;
       const endNs = startNs + Number(process.hrtime.bigint() - t0);
-      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg, validLinks);
     },
   };
+}
+
+/** parseLinks splits an `X-Funcd-Span-Links` header (comma-separated hex16 span-ids) into a list. */
+export function parseLinks(header: string | undefined): string[] {
+  if (!header) return [];
+  return header.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
 }

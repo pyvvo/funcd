@@ -3359,16 +3359,17 @@ function parseTraceparent(tp) {
   if (!/^[0-9a-f]{16}$/.test(parentId) || parentId === ZERO_SPAN) return null;
   return { traceId, parentId };
 }
-function newInvContext(tp) {
+function newInvContext(tp, providedSpanId) {
   const adopted = parseTraceparent(tp);
+  const spanId = providedSpanId && /^[0-9a-f]{16}$/.test(providedSpanId) ? providedSpanId : randomBytes(8).toString("hex");
   return {
     inv: randomBytes(8).toString("hex"),
     traceId: adopted ? adopted.traceId : randomBytes(16).toString("hex"),
-    spanId: randomBytes(8).toString("hex"),
+    spanId,
     parentId: adopted ? adopted.parentId : ""
   };
 }
-function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
+function emitSpan(sink, ctx, name, start, end, status, statusMsg, links) {
   const rec = {
     "funcd.signal": "traces",
     trace_id: ctx.traceId,
@@ -3381,17 +3382,19 @@ function emitSpan(sink, ctx, name, start, end, status, statusMsg) {
     status,
     status_msg: statusMsg,
     attrs: {},
-    inv: ctx.inv
+    inv: ctx.inv,
+    links
   };
   try {
     sink(JSON.stringify(rec) + "\n");
   } catch {
   }
 }
-function startSpan(sink, name, tp) {
-  const inv = newInvContext(tp);
+function startSpan(sink, name, tp, spanId, links = []) {
+  const inv = newInvContext(tp, spanId);
   const startNs = Date.now() * 1e6;
   const t0 = process.hrtime.bigint();
+  const validLinks = links.filter((l) => /^[0-9a-f]{16}$/.test(l));
   let ended = false;
   return {
     inv,
@@ -3403,9 +3406,13 @@ function startSpan(sink, name, tp) {
       ended = true;
       if (!sink) return;
       const endNs = startNs + Number(process.hrtime.bigint() - t0);
-      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg, validLinks);
     }
   };
+}
+function parseLinks(header) {
+  if (!header) return [];
+  return header.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 // src/shim.ts
@@ -3430,7 +3437,13 @@ function createApp(handler, validators = {}, trace = {}) {
         return c.json({ error: "event data does not match the input contract", details: errors }, 422);
       }
     }
-    const span = startSpan(traceSink, fnName, c.req.header("traceparent"));
+    const span = startSpan(
+      traceSink,
+      fnName,
+      c.req.header("traceparent"),
+      c.req.header("x-funcd-span-id"),
+      parseLinks(c.req.header("x-funcd-span-links"))
+    );
     try {
       const result = await span.run(() => handler(ctx, event));
       if (validators.output) {

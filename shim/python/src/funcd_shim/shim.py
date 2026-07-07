@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import runtime
 from .funclog import install_log_capture, open_channel
-from .tracespan import InvocationSpan
+from .tracespan import InvocationSpan, parse_links
 from .types import CloudEvent, FunctionContext, Handler
 
 if TYPE_CHECKING:
@@ -140,7 +140,14 @@ def make_request_handler(
                     return
             # ADR-0101: a real invocation begins → its SERVER span (adopts traceparent or mints a root);
             # the handler runs inside the span's context so its logs correlate.
-            with InvocationSpan(channel, fn_name, self.headers.get("traceparent")) as span:
+            # ADR-0105: a workflow step is dispatched with the span-id to USE + its fan-in links.
+            with InvocationSpan(
+                channel,
+                fn_name,
+                self.headers.get("traceparent"),
+                self.headers.get("X-Funcd-Span-Id"),
+                parse_links(self.headers.get("X-Funcd-Span-Links")),
+            ) as span:
                 try:
                     result = handler(context, event)
                 except Exception as err:  # noqa: BLE001 - user handler errors become 500

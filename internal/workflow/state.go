@@ -28,7 +28,8 @@ type stepNode struct {
 	join      v1.JoinMode
 	hasWhen   bool // whether the step carries a when.condition (evaluated by the engine)
 
-	phase v1.StepPhase
+	phase  v1.StepPhase
+	spanID string // ADR-0105: engine-minted trace span-id, so a successor parents on it (nested DAG waterfall)
 }
 
 // runState is the in-memory scheduling state of one run: the step graph plus the

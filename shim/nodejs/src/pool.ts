@@ -21,7 +21,7 @@ import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
 import { installConsoleCapture, openChannel } from './funclog.ts';
-import { startSpan } from './tracespan.ts';
+import { startSpan, parseLinks } from './tracespan.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -33,6 +33,8 @@ interface Req {
   id: number;
   event: CloudEvent;
   traceparent?: string; // ADR-0101: the host forwards the incoming W3C header so the worker's span adopts it
+  spanId?: string; // ADR-0105: the engine-provided span-id the worker's span uses (X-Funcd-Span-Id)
+  links?: string[]; // ADR-0105: fan-in edges (X-Funcd-Span-Links)
 }
 interface Res {
   id: number;
@@ -86,7 +88,7 @@ async function workerMain(): Promise<void> {
       }
       // ADR-0101: a real invocation → its SERVER span (adopts req.traceparent or mints a root),
       // emitted on the worker's channel; the handler runs inside the span's context so logs correlate.
-      const span = startSpan(channel, spec.name, req.traceparent);
+      const span = startSpan(channel, spec.name, req.traceparent, req.spanId, req.links ?? []);
       try {
         const result = await span.run(() => handler(ctx, event));
         if (validators.output) {
@@ -188,7 +190,7 @@ class PooledHandler {
     }, 50);
   }
 
-  async invoke(event: CloudEvent, traceparent?: string): Promise<Res> {
+  async invoke(event: CloudEvent, traceparent?: string, spanId?: string, links?: string[]): Promise<Res> {
     if (!this.healthy) return { id: -1, status: 503, error: `function ${this.spec.name} unavailable` };
     const id = this.nextID++;
     return new Promise<Res>((resolve) => {
@@ -197,7 +199,7 @@ class PooledHandler {
         resolve({ id, status: 503, error: `function ${this.spec.name} timed out` });
       }, requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.worker.postMessage({ id, event, traceparent } satisfies Req);
+      this.worker.postMessage({ id, event, traceparent, spanId, links } satisfies Req);
     });
   }
 
@@ -241,7 +243,11 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
     }
-    const res = await h.invoke(event, c.req.header('traceparent')); // ADR-0101: forward the trace header to the worker
+    // ADR-0101/0105: forward the trace + span-id + fan-in links headers to the worker.
+    const res = await h.invoke(
+      event, c.req.header('traceparent'),
+      c.req.header('x-funcd-span-id'), parseLinks(c.req.header('x-funcd-span-links')),
+    );
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
     if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);

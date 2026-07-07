@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from funcd_shim import _poolworker
+from funcd_shim.tracespan import parse_links
 
 
 class _Pooled:
@@ -38,9 +39,16 @@ class _Pooled:
         """Force the initializer to run and surface a load failure as an exception (→ host exit 3)."""
         self.ex.submit(_poolworker.ready).result()
 
-    def invoke(self, body: bytes, traceparent: str | None = None, fn_name: str = "invoke") -> dict[str, Any]:
+    def invoke(
+        self,
+        body: bytes,
+        traceparent: str | None = None,
+        fn_name: str = "invoke",
+        span_id: str | None = None,
+        links: list[str] | None = None,
+    ) -> dict[str, Any]:
         result: dict[str, Any] = self.ex.submit(
-            _poolworker.invoke, body.decode(), traceparent, fn_name
+            _poolworker.invoke, body.decode(), traceparent, fn_name, span_id, links
         ).result()
         return result
 
@@ -106,7 +114,14 @@ def make_request_handler(handlers: dict[str, _Pooled]) -> type[BaseHTTPRequestHa
                 self._empty(404)
                 return
             # ADR-0101: forward the trace header + function name so the worker's span adopts/names.
-            res = pooled.invoke(raw, self.headers.get("traceparent"), name)
+            # ADR-0101/0105: forward the trace + span-id + fan-in links headers to the worker.
+            res = pooled.invoke(
+                raw,
+                self.headers.get("traceparent"),
+                name,
+                self.headers.get("X-Funcd-Span-Id"),
+                parse_links(self.headers.get("X-Funcd-Span-Links")),
+            )
             status = int(res["status"])
             if status == 204:
                 self._empty(204)
