@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
@@ -55,6 +56,48 @@ func stepSpanID(rec *runstate.Record, name v1.ObjectName) string {
 }
 
 const engineOp = "workflow.engine"
+
+// maxStatusError caps the step-level error string mirrored to WorkflowRun.status (ADR-0100): the
+// first line, truncated to this length. The full error/stack lives in the step's span + logs
+// (F51/ADR-0101), reachable via `funcdctl workflow logs <run>` (ADR-0106) — status stays bounded so a
+// pathological stack trace can never bloat the CRD.
+const maxStatusError = 512
+
+// capErr returns the first line of s truncated to maxStatusError, appending "…" when it truncated —
+// the bounded troubleshooting summary mirrored to status (ADR-0100).
+func capErr(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > maxStatusError {
+		return s[:maxStatusError] + "…"
+	}
+	return s
+}
+
+// setRunning stamps a step's start as it enters Running (ADR-0100 timings).
+func (e *Engine) setRunning(n *stepNode) {
+	n.phase = v1.StepRunning
+	n.startedAt = e.clock.Now().UnixNano()
+}
+
+// markSucceeded records a step's terminal Succeeded transition + endedAt (ADR-0100).
+func (e *Engine) markSucceeded(n *stepNode) {
+	n.phase = v1.StepSucceeded
+	n.endedAt = e.clock.Now().UnixNano()
+}
+
+// markFailed records a step's terminal Failed transition + endedAt + the raw step-level cause,
+// capped (ADR-0100). It fills errMsg ONLY when unset: dispatchStep already stamps the bare dispatch
+// cause (before its own retry-wrap and fail()'s run-wrap), so a function step keeps that un-wrapped
+// cause; a builtin/sub-workflow step passes its raw cause straight in here.
+func (e *Engine) markFailed(n *stepNode, cause error) {
+	n.phase = v1.StepFailed
+	n.endedAt = e.clock.Now().UnixNano()
+	if n.errMsg == "" && cause != nil {
+		n.errMsg = capErr(cause.Error())
+	}
+}
 
 // Dispatcher is the step-invocation seam (ADR-0094): it delivers a step's input to
 // its function and returns the output. Production wraps activator wake + HTTP; tests
@@ -250,10 +293,16 @@ func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1
 		n.spanID = s.SpanID // ADR-0105: restore the pre-minted span-id UNCONDITIONALLY (incl. the in-flight step
 		//                      being re-dispatched) so successors' parent edges never dangle across a restart.
 		if s.Phase == v1.StepRunning {
-			n.phase = v1.StepPending // re-dispatch on recovery
+			n.phase = v1.StepPending // re-dispatch on recovery — its lineage stays zero (it re-runs fresh)
 			continue
 		}
 		n.phase = s.Phase
+		// ADR-0100: restore an already-terminal step's troubleshooting lineage so a resumed run keeps
+		// its history (recovery re-runs only the in-flight step, reset to Pending above).
+		n.attempts = s.Attempts
+		n.startedAt = s.StartedAt
+		n.endedAt = s.EndedAt
+		n.errMsg = s.Error
 		if s.Phase == v1.StepSucceeded && len(s.Output) > 0 {
 			outputs[s.Name] = s.Output
 		}
@@ -366,40 +415,40 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 			if st != nil && st.Builtin != nil {
 				// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
 				// then it Succeeds. No dispatch, no special state (ADR-0096).
-				n.phase = v1.StepRunning
+				e.setRunning(n)
 				out, err := e.runBuiltin(ctx, st, n, input, outputs)
 				if err != nil {
-					n.phase = v1.StepFailed
+					e.markFailed(n, err) // ADR-0100: builtin passes its raw cause straight in
 					if ctx.Err() != nil { // the run deadline interrupted a blocking wait
 						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 					}
 					return e.fail(ctx, rec, rs, outputs, spec, input, err)
 				}
-				n.phase = v1.StepSucceeded
+				e.markSucceeded(n)
 				outputs[n.name] = out
 				continue
 			}
 			if st != nil && st.Workflow != nil { // a sub-workflow step runs a child workflow inline (ADR-0099)
-				n.phase = v1.StepRunning
+				e.setRunning(n)
 				out, cerr := e.runChild(ctx, rec, st.Workflow.Ref, n, input, outputs)
 				if cerr != nil {
-					n.phase = v1.StepFailed
+					e.markFailed(n, cerr) // ADR-0100: the child's raw failure cause
 					return e.fail(ctx, rec, rs, outputs, spec, input, cerr)
 				}
-				n.phase = v1.StepSucceeded
+				e.markSucceeded(n)
 				outputs[n.name] = out
 				continue
 			}
-			n.phase = v1.StepRunning
+			e.setRunning(n)
 			out, err := e.dispatchStep(ctx, rec, spec, n, input, outputs)
 			if err != nil {
-				n.phase = v1.StepFailed
+				e.markFailed(n, err) // ADR-0100: errMsg already stamped (bare cause) by dispatchStep
 				if ctx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
 					return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
 				}
 				return e.fail(ctx, rec, rs, outputs, spec, input, err)
 			}
-			n.phase = v1.StepSucceeded
+			e.markSucceeded(n)
 			outputs[n.name] = out
 		}
 		if err := e.persist(ctx, rec, rs, outputs); err != nil {
@@ -501,6 +550,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 		if cancel != nil {
 			cancel()
 		}
+		n.attempts = attempt // ADR-0100: record the dispatch attempt count (both exit paths)
 		if err == nil {
 			if e.cfg.PayloadLimit > 0 && int64(len(out)) > e.cfg.PayloadLimit {
 				// An over-cap output is permanent — a retry cannot shrink it (ADR-0094 payload cap).
@@ -522,6 +572,9 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 			}
 		}
 	}
+	// ADR-0100: stamp the BARE dispatch cause here (before this retry-wrap and fail()'s run-wrap), so
+	// describe names the step's actual error (e.g. "scorer returned 503"), not the engine envelope.
+	n.errMsg = capErr(lastErr.Error())
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
 }
 
@@ -603,7 +656,11 @@ func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState
 	rec.Steps = rec.Steps[:0]
 	for _, name := range rs.order {
 		n := rs.steps[name]
-		ss := runstate.StepState{Name: n.name, Phase: n.phase, SpanID: n.spanID} // SpanID: ADR-0105 (persisted for Resume)
+		// SpanID: ADR-0105 (persisted for Resume). StartedAt/EndedAt/Attempts/Error: ADR-0100 troubleshooting lineage.
+		ss := runstate.StepState{
+			Name: n.name, Phase: n.phase, SpanID: n.spanID,
+			Attempts: n.attempts, StartedAt: n.startedAt, EndedAt: n.endedAt, Error: n.errMsg,
+		}
 		if fn := functionOf(specStep(rec.Spec, n.name)); fn != nil && fn.Image != "" {
 			ss.Revision = fn.Image // the pinned artifact ref this step executes (from the pinned spec)
 		}

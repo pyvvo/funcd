@@ -1618,5 +1618,20 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0105-implementation-claude-opus-4-8.md",
     "notes": "Largest F67 increment (engine+dispatch+funclog+both shims): 0/0/0, all scenarios named+passing; lint 0, go mod verify clean, Node 39/39, Python 58 passed, DAG e2e PASS, Venom lane fresh 11 tests/0 fail incl nested-DAG-parenting; M1 mid-flight resume fix correct; additive (header-absent mints)."
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0100",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0100-implementation-claude-opus-4-8.md",
+    "notes": "pass: all 4 checks green (build/test/lint/mod exit 0); 8/8 scenarios named+passing; raw step cause capped @512 + only small facts + trace_id mirrored; Resume restores terminal lineage; describe render + -o json. 1 minor (model): -o flag silently accepts unknown values."
   }
 ]

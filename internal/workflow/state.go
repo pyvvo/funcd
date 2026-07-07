@@ -30,6 +30,14 @@ type stepNode struct {
 
 	phase  v1.StepPhase
 	spanID string // ADR-0105: engine-minted trace span-id, so a successor parents on it (nested DAG waterfall)
+
+	// Troubleshooting lineage (ADR-0100), stamped at the step's terminal transition and mirrored to
+	// status: when it started/ended (→ duration), how many dispatch attempts it took, and the raw
+	// step-level failure cause (capped). Restored across Resume for already-terminal steps.
+	startedAt int64  // unix nanos, stamped when the step goes Running
+	endedAt   int64  // unix nanos, stamped at Succeeded/Failed
+	attempts  int    // dispatch attempts (function steps); 0 for a single-shot builtin/sub-workflow
+	errMsg    string // the raw step-level cause (capped to maxStatusError), Failed steps only
 }
 
 // runState is the in-memory scheduling state of one run: the step graph plus the

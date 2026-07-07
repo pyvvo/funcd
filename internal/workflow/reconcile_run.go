@@ -169,10 +169,12 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 		return
 	}
 	run.Status.Phase = rec.Phase
+	run.Status.TraceID = rec.TraceID // ADR-0100: mirror the run trace so describe + workflow logs (ADR-0106) find it
 	run.Status.Steps = run.Status.Steps[:0]
 	for _, s := range rec.Steps {
 		run.Status.Steps = append(run.Status.Steps, v1.RunStepStatus{
 			Name: s.Name, Phase: s.Phase, Attempts: s.Attempts, Revision: s.Revision,
+			StartedAt: s.StartedAt, EndedAt: s.EndedAt, Error: s.Error, // ADR-0100 troubleshooting facts
 		})
 	}
 }

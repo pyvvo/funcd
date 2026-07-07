@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -169,12 +171,14 @@ func (a *cli) workflowCancelCmd() *cobra.Command {
 	return cmd
 }
 
-// workflowDescribeCmd reads a run's engine state via the API server (WorkflowRun.status mirror).
+// workflowDescribeCmd reads a run's engine state via the API server (WorkflowRun.status mirror) and
+// renders a troubleshooting view: per step its phase · attempts · duration · error, the run trace-id,
+// and a pointer to the full logs (ADR-0100). `-o json` returns the raw object (the prior default).
 func (a *cli) workflowDescribeCmd() *cobra.Command {
-	var ns string
+	var ns, output string
 	cmd := &cobra.Command{
 		Use:   "describe <run>",
-		Short: "Show a workflow run's full state (status mirrors the engine)",
+		Short: "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := a.sdkClient()
@@ -185,11 +189,45 @@ func (a *cli) workflowDescribeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.renderObject(obj, true)
+			if output == "json" {
+				return a.renderObject(obj, true)
+			}
+			return a.renderRunDescribe(obj.(*v1.WorkflowRun))
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: rendered (default) or json")
 	return cmd
+}
+
+// renderRunDescribe prints the ADR-0100 troubleshooting view of a run: the run phase + trace-id, a
+// readable per-step line (phase · attempts · duration · error), and the full-logs pointer.
+func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
+	if err := a.writef("RUN %s   phase: %s\n", run.GetName(), string(run.Status.Phase)); err != nil {
+		return err
+	}
+	for _, s := range run.Status.Steps {
+		line := "  " + string(s.Name) + "   phase: " + string(s.Phase)
+		if s.Attempts > 0 {
+			line += "   attempts: " + strconv.Itoa(s.Attempts)
+		}
+		if s.StartedAt > 0 && s.EndedAt >= s.StartedAt {
+			line += "   duration: " + time.Duration(s.EndedAt-s.StartedAt).String()
+		}
+		if s.Error != "" {
+			line += "   error: " + s.Error
+		}
+		if err := a.writef("%s\n", line); err != nil {
+			return err
+		}
+	}
+	if run.Status.TraceID != "" {
+		if err := a.writef("trace: %s\n", run.Status.TraceID); err != nil {
+			return err
+		}
+	}
+	// A plain informational pointer (invokes nothing) to the run-scoped log read (ADR-0106).
+	return a.writef("full logs: funcdctl workflow logs %s\n", run.GetName())
 }
 
 // nsOrDefault resolves an empty namespace flag to "default" (the funcdctl convention).

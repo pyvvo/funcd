@@ -965,6 +965,11 @@ components:
         attempts:
           format: int64
           type: integer
+        endedAt:
+          format: int64
+          type: integer
+        error:
+          type: string
         name:
           maxLength: 63
           minLength: 1
@@ -981,6 +986,9 @@ components:
           type: string
         revision:
           type: string
+        startedAt:
+          format: int64
+          type: integer
       required:
         - name
       type: object
@@ -1322,6 +1330,8 @@ components:
           type:
             - array
             - "null"
+        traceId:
+          type: string
       required:
         - Status
       type: object

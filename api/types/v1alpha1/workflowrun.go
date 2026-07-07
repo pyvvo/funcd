@@ -40,14 +40,23 @@ type WorkflowRunSpec struct {
 type WorkflowRunStatus struct {
 	Status `json:",inline"`
 	Steps  []RunStepStatus `json:"steps,omitempty"`
+	// TraceID is the run's W3C trace (ADR-0102), mirrored from the engine record (ADR-0100) so
+	// `describe` shows it and `funcdctl workflow logs <run>` (ADR-0106) resolves a run to its logs.
+	TraceID string `json:"traceId,omitempty"` // 32 lowercase hex; empty ⇒ a legacy/traceless run
 }
 
-// RunStepStatus is one step's coarse execution state.
+// RunStepStatus is one step's coarse execution state, including the ADR-0100 troubleshooting facts
+// (timings → duration, populated attempt count, and the capped step-level failure cause).
 type RunStepStatus struct {
 	Name     ObjectName `json:"name"`
 	Phase    StepPhase  `json:"phase,omitempty"`
 	Attempts int        `json:"attempts,omitempty"`
 	Revision string     `json:"revision,omitempty"`
+	// StartedAt/EndedAt (unix nanos) give the step duration; Error is the raw step-level failure
+	// cause, capped (Failed steps only) — the full text lives in the step's span + logs (ADR-0106).
+	StartedAt int64  `json:"startedAt,omitempty"`
+	EndedAt   int64  `json:"endedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // StepPhase is a step's execution phase within a run.
