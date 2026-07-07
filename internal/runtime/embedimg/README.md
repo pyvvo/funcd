@@ -34,6 +34,25 @@ and writes them into this directory as `nodejs22.tar` / `python314.tar`, **per a
 per-arch release build embeds its own matching-arch image — ADR-0054). The recipe is **not**
 run by `just ci`.
 
+## Keeping the working tree clean after a build (`skip-worktree`)
+
+`build-runtime-images` **overwrites** the committed placeholders with real 30–100 MB tars, which
+would otherwise leave the working tree permanently dirty and risk a `git commit -a` staging a
+build artifact. To prevent that, the recipe first runs `just embedimg-pin`, which sets git's
+**`skip-worktree`** bit on the three `*.tar` files: git then ignores the local overwrite, so
+`git status`/`git commit` never see it and you never have to `git checkout` the tars after a lane
+run. The index keeps the placeholder blob, so commits and the `check-hygiene` guard are unaffected.
+
+The bit is **local to each clone** (it lives in `.git/index`, not shared through the repo) — hence
+the recipes, so a fresh clone can opt in with one command:
+
+```
+just embedimg-pin      # ignore local image-build overwrites (auto-run by build-runtime-images)
+just embedimg-unpin    # clear it — needed before a legitimate placeholder update (e.g. a git pull)
+```
+
+`check-hygiene` remains the backstop: even with the bit off, it blocks committing a `>4 KB` blob.
+
 ## Override (no registry by default)
 
 A runtime not present in the embed falls through to the Manager's `--image runtime=ref`

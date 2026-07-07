@@ -32,6 +32,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerPolicy(api, h)
 	registerWorkflow(api, h)
 	registerWorkflowRun(api, h)
+	registerSensor(api, h)
 }
 
 // ---- shared input types ----

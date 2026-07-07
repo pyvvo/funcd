@@ -26,7 +26,7 @@ func TestStepParentsOnPredecessor(t *testing.T) {
 	c := &capturingDispatcher{failN: map[v1.ObjectName]int{}}
 	e := newTestEngine(t, c, Config{})
 	rec, err := e.Execute(context.Background(), "default", "run-ab", "wf",
-		spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`))
+		spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("run: phase %s err %v", rec.Phase, err)
 	}
@@ -49,7 +49,7 @@ func TestFanInLinksNonPrimary(t *testing.T) {
 	e := newTestEngine(t, c, Config{})
 	// a (root) → b (→a); merge depends on [a, b] — a is the first (primary) edge, b the fan-in link.
 	rec, err := e.Execute(context.Background(), "default", "run-fi", "wf",
-		spec(step("a", ""), step("b", "", "a"), step("merge", "", "a", "b")), json.RawMessage(`{}`))
+		spec(step("a", ""), step("b", "", "a"), step("merge", "", "a", "b")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("run: phase %s err %v", rec.Phase, err)
 	}
@@ -68,7 +68,7 @@ func TestRetriesShareStepSpan(t *testing.T) {
 	c := &capturingDispatcher{failN: map[v1.ObjectName]int{"a": 1}} // fail attempt 1, succeed attempt 2
 	e := newTestEngine(t, c, Config{})
 	_, err := e.Execute(context.Background(), "default", "run-r", "wf",
-		spec(retryStep("a", 3)), json.RawMessage(`{}`))
+		spec(retryStep("a", 3)), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

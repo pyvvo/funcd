@@ -213,6 +213,8 @@ workflow:
     - parent.yaml
     - run-pause.yaml
     - run-cancel.yaml
+    - schedule-source.yaml
+    - schedule-sensor.yaml
     - funcdconfig.yaml
   # Each step image carries --runtime nodejs22 (the dev.funcd.runtime.v1 annotation) so the workflow
   # materializer resolves its runtime from the manifest alone (ADR-0094).
@@ -244,6 +246,9 @@ workflow:
     - workflow.yaml
     - child.yaml
     - parent.yaml
+  # NB: schedule-source.yaml + schedule-sensor.yaml (F68/F69) are STAGED but NOT applied at deploy — the
+  # Venom suite applies them IN its final scheduled-workflow case so the timer's per-tick `orders` runs
+  # don't perturb the earlier status.runs count assertions (same ordering rule as the run-replay case).
   # Readiness gate: the materialized step Functions pull + serve on containerd (they appear only after
   # each Workflow reconciles, so `funcdctl get function` tolerates a transient not-found).
   ready:

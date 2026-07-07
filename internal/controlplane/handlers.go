@@ -127,6 +127,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.WorkflowRun:
 		o.TypeMeta = tm
+	case *v1.Sensor:
+		o.TypeMeta = tm
 	}
 }
 
@@ -1050,4 +1052,42 @@ func (h *storeHandlers) ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceN
 }
 func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindWorkflowRun, ns, name)
+}
+
+// ---- Sensor (ADR-0109) ----
+
+func (h *storeHandlers) GetSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Sensor, error) {
+	o, err := h.getObj(ctx, v1.KindSensor, ns, name)
+	if err != nil {
+		return v1.Sensor{}, err
+	}
+	return *o.(*v1.Sensor), nil
+}
+func (h *storeHandlers) CreateSensor(ctx context.Context, se v1.Sensor) (v1.Sensor, error) {
+	o, err := h.createObj(ctx, v1.KindSensor, &se)
+	if err != nil {
+		return v1.Sensor{}, err
+	}
+	return *o.(*v1.Sensor), nil
+}
+func (h *storeHandlers) ListSensors(ctx context.Context, ns v1.NamespaceName) ([]v1.Sensor, error) {
+	objs, err := h.listObj(ctx, v1.KindSensor, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Sensor, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Sensor)
+	}
+	return out, nil
+}
+func (h *storeHandlers) ReplaceSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, se v1.Sensor) (v1.Sensor, error) {
+	o, err := h.replaceObj(ctx, v1.KindSensor, ns, name, &se)
+	if err != nil {
+		return v1.Sensor{}, err
+	}
+	return *o.(*v1.Sensor), nil
+}
+func (h *storeHandlers) DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindSensor, ns, name)
 }

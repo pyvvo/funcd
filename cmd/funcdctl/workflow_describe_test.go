@@ -56,3 +56,19 @@ func TestRenderRunDescribeNoTrace(t *testing.T) {
 		t.Fatalf("logs pointer missing:\n%s", out)
 	}
 }
+
+// scenario: replay provenance — describe prints the `replay of:` line when spec.replay is set (ADR-0107).
+func TestRenderRunDescribeReplayProvenance(t *testing.T) {
+	var buf bytes.Buffer
+	a := &cli{out: &buf}
+	run := &v1.WorkflowRun{}
+	run.Name = "src-r-ab12"
+	run.Status.Phase = v1.PhaseFailed
+	run.Spec.Replay = &v1.ReplaySeed{Run: "src", From: "score"}
+	if err := a.renderRunDescribe(run); err != nil {
+		t.Fatalf("renderRunDescribe: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "replay of: src (from score)") {
+		t.Fatalf("replay provenance line missing:\n%s", out)
+	}
+}

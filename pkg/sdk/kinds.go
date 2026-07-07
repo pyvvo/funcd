@@ -44,6 +44,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindPolicy:         {"policies", true},
 	v1.KindWorkflow:       {"workflows", true},
 	v1.KindWorkflowRun:    {"workflowruns", true},
+	v1.KindSensor:         {"sensors", true},
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

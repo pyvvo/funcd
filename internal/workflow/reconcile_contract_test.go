@@ -170,7 +170,7 @@ func TestRunInputMismatchFailsRun(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
 	rec, err := e.Execute(context.Background(), "default", "run-im", "wf",
-		spec(step("a", "")), json.RawMessage(`{}`), contract) // input missing required "day"
+		spec(step("a", "")), json.RawMessage(`{}`), StartOptions{Contract: contract}) // input missing required "day"
 	if err == nil {
 		t.Fatal("a run whose input violates the pinned contract must fail")
 	}
@@ -188,7 +188,7 @@ func TestRunInputValidDrives(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
 	rec, err := e.Execute(context.Background(), "default", "run-iv", "wf",
-		spec(step("a", "")), json.RawMessage(`{"day":"mon"}`), contract)
+		spec(step("a", "")), json.RawMessage(`{"day":"mon"}`), StartOptions{Contract: contract})
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("a valid input should drive to Succeeded, got %s err %v", rec.Phase, err)
 	}

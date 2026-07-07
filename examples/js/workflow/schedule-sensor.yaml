@@ -1,0 +1,25 @@
+# nightly — a Sensor (ADR-0109, the event→action binder). It binds the `nightly-timer` EventSource's
+# `tick` event to a `workflow:` action that starts an `orders` WorkflowRun per tick, with a literal
+# projected input {"amount":4} (n=4 ⇒ score 40 > 30 ⇒ the hi branch, so the run Succeeds). This is
+# F68 scheduled-workflow-start end to end on real containerd: timer tick → Fanout → Sensor → WorkflowRun.
+# Runs it creates are named `nightly-start-<hex>` (sensor-action-suffix), distinguishing them from the
+# explicitly-started runs in the other lane cases.
+#
+# NB: the `on` keys are QUOTED — YAML 1.1 parses a bare `on:` as the boolean true, which would drop the
+# field (sigs.k8s.io/yaml → JSON key "true"); `"on":` keeps it the string the schema expects.
+apiVersion: funcd.io/v1alpha1
+kind: Sensor
+metadata:
+  name: nightly
+  namespace: default
+  resourceGroup: rg1
+spec:
+  "on":
+    - name: tick
+      source: nightly-timer
+      event: tick
+  do:
+    - name: start
+      "on": tick
+      workflow: orders
+      input: { "amount": 4 }

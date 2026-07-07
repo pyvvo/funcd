@@ -95,4 +95,10 @@ func TestWorkflowRunContractAdmission(t *testing.T) {
 	aa := admission.NewWorkflowRunContractAdmission(fakeGetter{nil})
 	_, err = aa.Admit(ctx, req(`{}`))
 	require.NoError(t, err, "absent parent ⇒ admission allows")
+
+	// replay run ⇒ allow with empty input (ADR-0107: the input comes from the already-validated source).
+	replay := runObj("")
+	replay.Spec.Replay = &v1.ReplaySeed{Run: "src", From: "score"}
+	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindWorkflowRun.GVK(), Object: replay})
+	require.NoError(t, err, "a replay run has empty input by design — the contract check is skipped")
 }

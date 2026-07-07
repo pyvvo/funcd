@@ -48,6 +48,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
 	"github.com/green-0-rabbit/funcd/internal/secrets"
+	"github.com/green-0-rabbit/funcd/internal/sensor"
 	"github.com/green-0-rabbit/funcd/internal/services"
 	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
 	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
@@ -184,12 +185,13 @@ type Platform struct {
 	logger    *slog.Logger
 	providers *provider.Catalog // the platform provider catalog (ADR-0082)
 
-	controller *controller.Controller
-	eventing   *eventing.Source
-	activator  *activator.Activator
-	httpServer *http.Server
-	listener   net.Listener
-	addr       string
+	controller  *controller.Controller
+	eventing    *eventing.Source
+	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	activator   *activator.Activator
+	httpServer  *http.Server
+	listener    net.Listener
+	addr        string
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
@@ -422,12 +424,14 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build activator")
 	}
 	p.activator = act
+	// ADR-0108: an EventSource firing PUBLISHES a named CloudEvent onto the in-process Fanout; the F69
+	// Sensor subscribes to it (the action side — invoke/start-workflow — moved off the Source).
+	fanout := eventing.NewFanout()
+	p.eventFanout = fanout
 	source, err := eventing.NewSource(eventing.Deps{
-		Store:      c.store,
-		Endpoints:  fnReconciler.Endpoints(),
-		Waker:      act, // trigger-driven wake of a scaled-to-zero function (ADR-0033)
-		Logger:     p.logger,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		Store:     c.store,
+		Publisher: fanout,
+		Logger:    p.logger,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build eventing source")
@@ -441,6 +445,18 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
+	// ADR-0109 (F69): the Sensor binds the named events published on the Fanout to actions — start a
+	// WorkflowRun / invoke a Function (via the re-created invoke/wake logic). It subscribes to fanout.
+	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
+		Store:      c.store,
+		Subscriber: fanout,
+		Invoker:    &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Timeout: 30 * time.Second}},
+		Logger:     p.logger,
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
+	}
+	ctrl.Register(v1.KindSensor.GVK(), sensorReconciler)
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
@@ -841,12 +857,23 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 // spec from the store for a `workflow:` sub-workflow step's inline execution.
 type childResolver struct{ s store.Store }
 
-func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, error) {
+func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
 	obj, err := r.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name) // V1: same-namespace children (ADR-0099 scope)
 	if err != nil {
-		return v1.WorkflowSpec{}, err
+		return v1.WorkflowSpec{}, nil, err
 	}
-	return obj.(*v1.Workflow).Spec, nil
+	wf := obj.(*v1.Workflow)
+	// ADR-0107: the child's resolved step images (its ADR-0098 status cache) digest-pin the inline child run.
+	var images map[v1.ObjectName]string
+	if len(wf.Status.Steps) > 0 {
+		images = make(map[v1.ObjectName]string, len(wf.Status.Steps))
+		for _, s := range wf.Status.Steps {
+			if s.Image != "" {
+				images[s.Name] = s.Image
+			}
+		}
+	}
+	return wf.Spec, images, nil
 }
 
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.

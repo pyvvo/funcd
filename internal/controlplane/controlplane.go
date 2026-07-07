@@ -166,6 +166,13 @@ type Handlers interface {
 	ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error)
 	ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error)
 	DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Sensor (namespaced) — ADR-0109
+	GetSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Sensor, error)
+	CreateSensor(ctx context.Context, se v1.Sensor) (v1.Sensor, error)
+	ListSensors(ctx context.Context, ns v1.NamespaceName) ([]v1.Sensor, error)
+	ReplaceSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, se v1.Sensor) (v1.Sensor, error)
+	DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 }
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.

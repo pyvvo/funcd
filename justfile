@@ -57,7 +57,7 @@ build:
 # across cc-derived images) so a multi-image embed does not pay for the base twice on disk.
 ARCH := `go env GOARCH`
 [group('runtime')]
-build-runtime-images:
+build-runtime-images: embedimg-pin
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/duckdb/Dockerfile -t funcd/runtime-duckdb:latest .
@@ -65,6 +65,23 @@ build-runtime-images:
     docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
     docker save funcd/runtime-duckdb:latest | gzip -9 > internal/runtime/embedimg/duckdb.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
+
+# Pin/unpin the embedimg placeholders' skip-worktree bit. `build-runtime-images` OVERWRITES the tracked
+# <1 KB placeholders with real 30–100 MB images, which would otherwise leave the working tree permanently
+# dirty (and risk a `git commit -a` staging a build artifact). The skip-worktree bit makes git ignore the
+# local overwrite: `git status`/`git commit` never see it, so you never have to `git checkout` the tars
+# after a lane run. It is LOCAL to this clone (lives in .git/index, not shared) — hence a recipe so a fresh
+# clone can re-apply it in one step. `embedimg-unpin` clears it (needed before a legitimate placeholder
+# update, e.g. a git pull that changes them). The check-hygiene guard is the backstop that still blocks
+# committing a >4 KB blob even if the bit is off.
+[group('runtime')]
+embedimg-pin:
+    git update-index --skip-worktree internal/runtime/embedimg/*.tar
+    @echo "embedimg placeholders pinned (skip-worktree) — local image builds won't dirty the tree"
+
+[group('runtime')]
+embedimg-unpin:
+    -git update-index --no-skip-worktree internal/runtime/embedimg/*.tar 2>/dev/null || true
 
 # regenerate the Node runtime shims from TypeScript (ADR-0037/0044): typecheck + self-test +
 # esbuild bundle → shim/nodejs/shim.mjs (single-tenant, go:embed'd) + pool.mjs (pooled

@@ -77,7 +77,7 @@ func TestSequentialRunSucceeds(t *testing.T) {
 	f := newFake()
 	e := newTestEngine(t, f, Config{})
 	rec, err := e.Execute(context.Background(), "default", "run-1", "wf",
-		spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{"day":"x"}`))
+		spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{"day":"x"}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestFanoutAndJoin(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	rec, err := e.Execute(context.Background(), "default", "run-2", "wf", spec(
 		step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d"),
-	), json.RawMessage(`{}`))
+	), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestWhenSkipsStep(t *testing.T) {
 	rec, err := e.Execute(context.Background(), "default", "run-3", "wf", spec(
 		step("a", ""),
 		whenStep("b", "${{ step.a.output.rows > 0 }}", "a"),
-	), json.RawMessage(`{}`))
+	), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestWhenRunsStep(t *testing.T) {
 	rec, _ := e.Execute(context.Background(), "default", "run-4", "wf", spec(
 		step("a", ""),
 		whenStep("b", "${{ step.a.output.rows > 0 }}", "a"),
-	), json.RawMessage(`{}`))
+	), json.RawMessage(`{}`), StartOptions{})
 	if f.calls["b"] != 1 || phaseOf(rec, "b") != v1.StepSucceeded {
 		t.Fatalf("b should run when rows>0; calls=%d phase=%s", f.calls["b"], phaseOf(rec, "b"))
 	}
@@ -160,7 +160,7 @@ func TestRetryThenFailFast(t *testing.T) {
 	f.failing["b"] = true // always fails (retryable)
 	e := newTestEngine(t, f, Config{})
 	spc := spec(step("a", ""), retryStep("b", 3, "a"), step("c", "", "b"))
-	rec, err := e.Execute(context.Background(), "default", "run-5", "wf", spc, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-5", "wf", spc, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("expected the run to fail")
 	}
@@ -183,7 +183,7 @@ func TestPermanentFailureNoRetry(t *testing.T) {
 	f := newFake()
 	f.permanent["a"] = true
 	e := newTestEngine(t, f, Config{})
-	_, err := e.Execute(context.Background(), "default", "run-6", "wf", spec(retryStep("a", 5)), json.RawMessage(`{}`))
+	_, err := e.Execute(context.Background(), "default", "run-6", "wf", spec(retryStep("a", 5)), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("expected failure")
 	}

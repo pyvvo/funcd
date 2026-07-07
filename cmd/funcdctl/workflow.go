@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"sort"
@@ -15,13 +17,14 @@ import (
 	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
-// workflowCmd groups the workflow-run verbs (ADR-0094): run|runs|pause|resume|cancel|describe|logs.
+// workflowCmd groups the workflow-run verbs (ADR-0094): run|runs|pause|resume|cancel|describe|logs|replay.
 // run/runs/pause/resume/describe are sugar over the WorkflowRun CRUD surface; cancel calls the
-// imperative control-plane cancel endpoint; logs reads a whole run's logs by trace-id (ADR-0106).
+// imperative control-plane cancel endpoint; logs reads a whole run's logs by trace-id (ADR-0106); replay
+// re-runs a finished run from a chosen step (ADR-0107).
 func (a *cli) workflowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workflow",
-		Short: "Manage workflow runs (run|runs|pause|resume|cancel|describe|logs)",
+		Short: "Manage workflow runs (run|runs|pause|resume|cancel|describe|logs|replay)",
 	}
 	cmd.AddCommand(
 		a.workflowRunCmd(),
@@ -31,7 +34,60 @@ func (a *cli) workflowCmd() *cobra.Command {
 		a.workflowCancelCmd(),
 		a.workflowDescribeCmd(),
 		a.workflowLogsCmd(),
+		a.workflowReplayCmd(),
 	)
+	return cmd
+}
+
+// workflowReplayCmd re-runs a finished run from a chosen step (ADR-0107): it reads the source run for its
+// workflow, then creates a NEW WorkflowRun carrying spec.replay = {run, from, allowDrift}. The engine
+// seeds it from the source's checkpoint (reusing upstream outputs) and re-runs `from` + its descendants.
+func (a *cli) workflowReplayCmd() *cobra.Command {
+	var ns, from, name string
+	var allowDrift bool
+	cmd := &cobra.Command{
+		Use:   "replay <source-run> --from <step>",
+		Short: "Re-run a finished run from a chosen step (reuses upstream outputs; ADR-0107)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if from == "" {
+				return fault.Invalidf("funcdctl workflow replay", "--from <step> is required")
+			}
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			namespace := v1.NamespaceName(nsOrDefault(ns))
+			srcObj, err := c.Get(cmd.Context(), v1.KindWorkflowRun, namespace, v1.ObjectName(args[0]))
+			if err != nil {
+				return err
+			}
+			src := srcObj.(*v1.WorkflowRun)
+			newName := name
+			if newName == "" {
+				newName = args[0] + "-r-" + randHex4()
+			}
+			replay := &v1.WorkflowRun{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+				ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(newName), Namespace: namespace, ResourceGroup: src.ResourceGroup},
+				Spec: v1.WorkflowRunSpec{
+					Workflow: src.Spec.Workflow,
+					Replay:   &v1.ReplaySeed{Run: v1.ObjectName(args[0]), From: v1.ObjectName(from), AllowDrift: allowDrift},
+				},
+			}
+			if verr := replay.Validate(); verr != nil {
+				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl workflow replay", "invalid replay")
+			}
+			if _, err := c.Apply(cmd.Context(), replay); err != nil {
+				return err
+			}
+			return a.writef("replay %s created (of %s from %s)\n", newName, args[0], from)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().StringVar(&from, "from", "", "the step to re-run from (required); it and its descendants re-execute")
+	cmd.Flags().StringVar(&name, "name", "", "the new run's name (default: <source>-r-<hex>)")
+	cmd.Flags().BoolVar(&allowDrift, "allow-drift", false, "re-run even if a step's artifact digest moved since the source run")
 	return cmd
 }
 
@@ -261,6 +317,11 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 			return err
 		}
 	}
+	if r := run.Spec.Replay; r != nil { // ADR-0107 provenance
+		if err := a.writef("replay of: %s (from %s)\n", r.Run, r.From); err != nil {
+			return err
+		}
+	}
 	if run.Status.TraceID != "" {
 		if err := a.writef("trace: %s\n", run.Status.TraceID); err != nil {
 			return err
@@ -268,6 +329,16 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 	}
 	// A plain informational pointer (invokes nothing) to the run-scoped log read (ADR-0106).
 	return a.writef("full logs: funcdctl workflow logs %s\n", run.GetName())
+}
+
+// randHex4 returns 4 random hex chars for a default replay-run suffix; on the near-impossible crypto/rand
+// error it returns a fixed token (the caller can still pass --name).
+func randHex4() string {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "0000"
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // nsOrDefault resolves an empty namespace flag to "default" (the funcdctl convention).

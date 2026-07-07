@@ -42,7 +42,7 @@ func TestWaitBlocksThenContinues(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	start := time.Now()
 	rec, err := e.Execute(context.Background(), "default", "run-w", "wf",
-		spec(waitStep("w", "80ms"), step("after", "", "w")), json.RawMessage(`{"k":1}`))
+		spec(waitStep("w", "80ms"), step("after", "", "w")), json.RawMessage(`{"k":1}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestWaitDurationFromExpression(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	start := time.Now()
 	rec, err := e.Execute(context.Background(), "default", "run-we", "wf",
-		spec(waitStep("w", "${{ input.secs }}")), json.RawMessage(`{"secs":0.05}`))
+		spec(waitStep("w", "${{ input.secs }}")), json.RawMessage(`{"secs":0.05}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestWaitCountsTowardRunTimeout(t *testing.T) {
 	sp := spec(waitStep("w", "5s"))
 	sp.Timeout = 60 * time.Millisecond
 	start := time.Now()
-	rec, err := e.Execute(context.Background(), "default", "run-t", "wf", sp, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-t", "wf", sp, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("run should have timed out")
 	}
@@ -115,7 +115,7 @@ func TestPassTransformsInEngine(t *testing.T) {
 	rec, err := e.Execute(context.Background(), "default", "run-p", "wf", spec(
 		step("a", ""),
 		passStep("shape", "${{ {count: step.a.output.rows, day: input.day} }}", "a"),
-	), json.RawMessage(`{"day":"mon"}`))
+	), json.RawMessage(`{"day":"mon"}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestPassSelectsParentOutput(t *testing.T) {
 	rec, err := e.Execute(context.Background(), "default", "run-ps", "wf", spec(
 		step("a", ""),
 		passStep("route", "${{ step.a.output }}", "a"),
-	), json.RawMessage(`{}`))
+	), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestBuiltinRejectsBadExpression(t *testing.T) {
 	f := newFake()
 	e := newTestEngine(t, f, Config{})
 	_, err := e.Execute(context.Background(), "default", "run-bad", "wf",
-		spec(passStep("bad", "${{ nope.field }}")), json.RawMessage(`{}`))
+		spec(passStep("bad", "${{ nope.field }}")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("a pass referencing an unknown root must fail the run")
 	}

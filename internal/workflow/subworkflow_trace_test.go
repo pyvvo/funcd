@@ -37,7 +37,7 @@ func TestCompositionIsOneTrace(t *testing.T) {
 	e := tracedChildEngine(t, disp, fakeChildren{"scorer": child}, sink, Config{})
 	parent := spec(subwfStep("sub", "scorer")) // the parent's only step is the sub-workflow
 
-	rec, err := e.Execute(ctx, "default", "run-p", "pipeline", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(ctx, "default", "run-p", "pipeline", parent, json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestFailedChildEmitsErrorSpan(t *testing.T) {
 	e := tracedChildEngine(t, disp, fakeChildren{"broken": child}, sink, Config{DefaultMaxAttempts: 1})
 	parent := spec(subwfStep("sub", "broken"))
 
-	rec, err := e.Execute(ctx, "default", "run-f", "top", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(ctx, "default", "run-f", "top", parent, json.RawMessage(`{}`), StartOptions{})
 	if err == nil || rec.Phase == runSucceeded {
 		t.Fatalf("a failing child should fail the parent, got phase %s err %v", rec.Phase, err)
 	}
@@ -103,7 +103,7 @@ func TestNestedDepthOneTrace(t *testing.T) {
 	e := tracedChildEngine(t, disp, fakeChildren{"grand": grand, "mid": mid}, sink, Config{})
 	parent := spec(subwfStep("m", "mid"))
 
-	rec, err := e.Execute(ctx, "default", "run-n", "top", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(ctx, "default", "run-n", "top", parent, json.RawMessage(`{}`), StartOptions{})
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("nested run: phase %s err %v", rec.Phase, err)
 	}
@@ -127,7 +127,7 @@ func TestNestedDepthOneTrace(t *testing.T) {
 func TestTopLevelHasNoRootParent(t *testing.T) {
 	ctx := context.Background()
 	e := engineWith(t, newFake())
-	rec, err := e.Execute(ctx, "default", "run-t", "wf", spec(step("a", "")), json.RawMessage(`{}`))
+	rec, err := e.Execute(ctx, "default", "run-t", "wf", spec(step("a", "")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

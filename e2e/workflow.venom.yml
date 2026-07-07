@@ -207,6 +207,36 @@ testcases:
         assertions:
           - result.systemout ShouldContainSubstring SUCCEEDED=2
 
+  # ── ADR-0107 run replay: re-run the finished `run-hi` from `score` — a NEW run that reuses run-hi's
+  #    recorded `ingest` output and re-runs score + its descendants (hi/report/settle/summary; lo Skipped).
+  #    Proof: the replay reaches Succeeded with the same branch outcome, and `describe` shows the provenance
+  #    line. Digests are unchanged since run-hi (no re-materialization) so the drift gate passes. Placed
+  #    AFTER runs-listing so its extra Succeeded run does not perturb that testcase's status.runs count.
+  - name: run replay — re-run run-hi from score reuses ingest and Succeeds; describe shows provenance (ADR-0107)
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow replay run-hi --from score --name run-replay -n default"
+        info: "replay create → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun run-replay -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 40
+        delay: 2
+        info: "run-replay → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring ingest=Succeeded
+          - result.systemout ShouldContainSubstring score=Succeeded
+          - result.systemout ShouldContainSubstring report=Succeeded
+      - type: exec
+        script: "{{.fctl}} workflow describe run-replay -n default"
+        info: "replay describe → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - "result.systemout ShouldContainSubstring replay of: run-hi (from score)"
+
   - name: pause then resume — a paused run dispatches nothing, resume drives it to Succeeded
     steps:
       # applied already-paused (run-pause.yaml, spec.paused: true) → the reconciler marks it Paused.
@@ -261,3 +291,26 @@ testcases:
         info: "orders-cancel → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldContainSubstring PHASE=Cancelled
+
+  # F68/F69 (ADR-0108 + ADR-0109): the timer EventSource `nightly-timer` fires its `tick` event onto the
+  # in-process Fanout; the `nightly` Sensor subscribes and starts an `orders` run per tick, named
+  # `nightly-start-<hex>` (sensor-action-suffix), with the literal projected input {"amount":4}. No explicit
+  # `workflow run` — the run is born from a timer tick projected through the Sensor's `workflow:` action.
+  # This is the scheduled-workflow path end to end on real containerd: timer → Fanout → Sensor → WorkflowRun.
+  - name: scheduled workflow — a timer EventSource + Sensor start an orders run per tick, which Succeeds (F68/F69)
+    steps:
+      # Applied HERE (not at deploy) and LAST so the timer's per-tick runs don't perturb the earlier
+      # status.runs count — the EventSource starts ticking the moment it reconciles.
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/schedule-source.yaml && {{.fctl}} apply -f /opt/lane/schedule-sensor.yaml"
+        info: "apply schedule → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);items=d if isinstance(d,list) else d.get("items",[]);r=[x for x in items if x["metadata"]["name"].startswith("nightly-start-")];succ=[x["metadata"]["name"] for x in r if x.get("status",{}).get("phase")=="Succeeded"];print("SCHEDULED="+str(len(r)),("OK "+succ[0]) if succ else "WAIT")'
+        retry: 60
+        delay: 2
+        info: "scheduled runs → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring OK

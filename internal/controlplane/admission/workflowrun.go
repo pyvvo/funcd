@@ -69,6 +69,9 @@ func (a workflowRunContract) Admit(ctx context.Context, req Request) (v1.Object,
 	if !ok {
 		return req.Object, nil
 	}
+	if run.Spec.Replay != nil {
+		return req.Object, nil // ADR-0107: a replay inherits the source run's (already-validated) input — spec.input is empty by design
+	}
 	obj, err := a.r.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
 	if err != nil {
 		return req.Object, nil // parent absent / unreadable — the run reconciler owns that; don't block here

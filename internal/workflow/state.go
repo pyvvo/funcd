@@ -28,8 +28,9 @@ type stepNode struct {
 	join      v1.JoinMode
 	hasWhen   bool // whether the step carries a when.condition (evaluated by the engine)
 
-	phase  v1.StepPhase
-	spanID string // ADR-0105: engine-minted trace span-id, so a successor parents on it (nested DAG waterfall)
+	phase    v1.StepPhase
+	spanID   string // ADR-0105: engine-minted trace span-id, so a successor parents on it (nested DAG waterfall)
+	revision string // ADR-0107: the resolved digest-pinned image this step executes; stamped at start (function steps only), restored by rebuildState, preserved for copied replay steps — so the digest survives persist/Resume and is the replay drift-gate's comparison key
 
 	// Troubleshooting lineage (ADR-0100), stamped at the step's terminal transition and mirrored to
 	// status: when it started/ended (→ duration), how many dispatch attempts it took, and the raw
@@ -84,6 +85,34 @@ func newRunState(spec v1.WorkflowSpec) *runState {
 		prevDAG = s.Name
 	}
 	return rs
+}
+
+// descendants returns the DAG steps that transitively DEPEND ON name — the REVERSE dependsOn closure
+// (name's downstream subtree, never its ancestors), computed over the post-implicit-chaining graph
+// (newRunState already filled implicit list-order edges), excluding name itself. Used by replay to
+// compute the re-run set {from} ∪ descendants(from) (ADR-0107). The onFailure handler is never a
+// descendant (it is scheduled by fail(), not the DAG).
+func (rs *runState) descendants(name v1.ObjectName) []v1.ObjectName {
+	children := make(map[v1.ObjectName][]v1.ObjectName, len(rs.steps)) // parent → its direct children
+	for _, s := range rs.dagSteps() {
+		for _, p := range rs.steps[s].dependsOn {
+			children[p] = append(children[p], s)
+		}
+	}
+	seen := map[v1.ObjectName]bool{}
+	var out []v1.ObjectName
+	var walk func(n v1.ObjectName)
+	walk = func(n v1.ObjectName) {
+		for _, c := range children[n] {
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, c)
+				walk(c)
+			}
+		}
+	}
+	walk(name)
+	return out
 }
 
 // dagSteps returns the step names in spec order, excluding the onFailure handler.

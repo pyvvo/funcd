@@ -123,41 +123,9 @@ func TestScenarioDataPlaneWakesColdFunction(t *testing.T) {
 	require.Contains(t, string(body), "echoed")
 }
 
-// scenario: timer-wakes-cold-function (ADR-0033) — a timer EventSource firing at a
-// scaled-to-zero function wakes it through the activator and records a successful
-// Invocation (closing ADR-0023's deferred C3 wake), end-to-end with the real shim.
-func TestScenarioTimerWakesColdFunctionE2E(t *testing.T) {
-	c, _, _ := shimPlatform(t)
-	applyFn(t, c, "tcold", v1.Scaling{MinReplicas: 0, IdleTimeout: time.Hour}, 0, writeArtifact(t))
-	require.Eventually(t, func() bool {
-		ph := phaseOf(t, c, "tcold")
-		return ph == v1.PhaseIdle || ph == v1.PhasePending
-	}, 10*time.Second, 50*time.Millisecond)
-
-	// A timer EventSource bound to the cold function, firing fast.
-	esObj, _ := v1.NewObject(v1.KindEventSource)
-	es := esObj.(*v1.EventSource)
-	es.Name, es.Namespace, es.ResourceGroup = "tick", "default", "rg1"
-	es.Spec.Type = v1.EventSourceTypeTimer
-	es.Spec.Function = "tcold"
-	es.Spec.Timer = &v1.TimerSpec{Interval: 200 * time.Millisecond}
-	_, err := c.Apply(context.Background(), es)
-	require.NoError(t, err)
-
-	// The timer wakes the cold function and records a successful Invocation.
-	require.Eventually(t, func() bool {
-		objs, lerr := c.List(context.Background(), v1.KindInvocation, "default")
-		if lerr != nil {
-			return false
-		}
-		for _, o := range objs {
-			if o.(*v1.Invocation).Status.Phase == v1.PhaseReady {
-				return true
-			}
-		}
-		return false
-	}, 20*time.Second, 100*time.Millisecond, "a timer wakes the scaled-to-zero function and the invocation succeeds")
-}
+// NOTE (ADR-0108): the former `timer-wakes-cold-function` e2e is removed — a v2 timer EventSource
+// PUBLISHES a named event rather than invoking/waking a function directly. The timer → wake-a-cold-function
+// behavior is restored end-to-end by ADR-0109 as `timer event → Sensor function: action → wake` (F69).
 
 // scenario: unknown-function-404 (ADR-0033) — a data-plane request to a non-existent
 // function is rejected without waking anything.

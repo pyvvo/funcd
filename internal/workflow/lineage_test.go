@@ -50,7 +50,7 @@ func TestFailedStepRecordsCause(t *testing.T) {
 	c := newCause()
 	c.fail["b"] = errors.New("scorer returned 503")
 	e := newTestEngine(t, c, Config{})
-	rec, err := e.Execute(context.Background(), "default", "run-fc", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-fc", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("expected the run to fail")
 	}
@@ -68,7 +68,7 @@ func TestAttemptsRecorded(t *testing.T) {
 	c := newCause()
 	c.fail["b"] = errors.New("flaky")
 	e := newTestEngine(t, c, Config{})
-	_, err := e.Execute(context.Background(), "default", "run-at", "wf", spec(step("a", ""), retryStep("b", 3, "a")), json.RawMessage(`{}`))
+	_, err := e.Execute(context.Background(), "default", "run-at", "wf", spec(step("a", ""), retryStep("b", 3, "a")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("expected failure")
 	}
@@ -87,7 +87,7 @@ func TestAttemptsRecorded(t *testing.T) {
 func TestTimingsRecorded(t *testing.T) {
 	c := newCause()
 	e := newTestEngine(t, c, Config{})
-	rec, err := e.Execute(context.Background(), "default", "run-tm", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-tm", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestErrorIsCapped(t *testing.T) {
 	long := strings.Repeat("x", 4000)
 	c.fail["b"] = errors.New(long)
 	e := newTestEngine(t, c, Config{})
-	rec, _ := e.Execute(context.Background(), "default", "run-cap", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`))
+	rec, _ := e.Execute(context.Background(), "default", "run-cap", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{})
 	b := stepState(rec, "b")
 	if b == nil {
 		t.Fatal("b step missing")
@@ -125,7 +125,7 @@ func TestErrorIsCapped(t *testing.T) {
 	c2 := newCause()
 	c2.fail["b"] = errors.New("boom: root cause\nstack frame 1\nstack frame 2")
 	e2 := newTestEngine(t, c2, Config{})
-	rec2, _ := e2.Execute(context.Background(), "default", "run-cap2", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`))
+	rec2, _ := e2.Execute(context.Background(), "default", "run-cap2", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{})
 	if b2 := stepState(rec2, "b"); b2 == nil || b2.Error != "boom: root cause" {
 		t.Fatalf("multiline error should keep only the first line, got %+v", b2)
 	}
@@ -202,7 +202,7 @@ func TestSubworkflowStepRecorded(t *testing.T) {
 	f.outputs["c_leaf"] = json.RawMessage(`{"ok":true}`)
 	child := spec(step("c_leaf", ""))
 	e := childEngine(t, f, fakeChildren{"scorer": child}, Config{})
-	rec, err := e.Execute(context.Background(), "default", "run-sr", "orders", spec(subwfStep("sub", "scorer")), json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-sr", "orders", spec(subwfStep("sub", "scorer")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestSubworkflowStepRecorded(t *testing.T) {
 	f2 := newFake()
 	f2.failing["c_leaf"] = true
 	e2 := childEngine(t, f2, fakeChildren{"scorer": child}, Config{})
-	rec2, err := e2.Execute(context.Background(), "default", "run-sf", "orders", spec(subwfStep("sub", "scorer")), json.RawMessage(`{}`))
+	rec2, err := e2.Execute(context.Background(), "default", "run-sf", "orders", spec(subwfStep("sub", "scorer")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("expected the failing child to fail the run")
 	}

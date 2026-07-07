@@ -1648,5 +1648,50 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0106-implementation-claude-opus-4-8.md",
     "notes": "Run-scoped log read: TraceID filter + namespace-wide reader mode + run-logs route (resolves status.traceId, RBAC on ns) + sdk.RunLogs + funcdctl workflow logs. All 6 scenarios named+passing; build/test/lint/mod/OpenAPI-golden green; in-process e2e ran (not skipped); Venom 12/12. No model/adr/env findings."
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0107",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0107-implementation-claude-opus-4-8.md",
+    "notes": "pass: all 11 replay scenarios named+passing; build/test/lint/mod/openapi-golden/in-proc-e2e green; Venom lane 13/13 incl replay case; digest-pinned Revision survives Resume, copied steps keep source rev; admission replay-input skip present (env-attributed minor: uncommitted embedimg/*.tar build artifacts must not be committed)"
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0108",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0108-implementation-claude-opus-4-8.md",
+    "notes": "PASS \u2014 clean break grep-verified complete (NewTimerEvent/EventSourceType/TimerSpec/Spec.Function all ZERO); all 8 scenarios + fanout routing test named+passing; no-Invocation assertion present; OpenAPI additionalProperties:false regen guards the schema-edge 422; 1 minor (model): Fanout concrete struct vs sketched interface, non-blocking."
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0109",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0109-implementation-claude-opus-4-8.md",
+    "notes": "PASS: F69 Sensor (delivers F68). build/test/lint/mod all exit 0; e2e (57s, node present) + Venom scheduled case pass; all 11 scenarios named+passing; idempotency B1, runName M2, resolver M3 all as-accepted. Minor1=adr (unreachable DanglingDependency reason, dangling caught at Validate). Minor2=model (unrelated embedimg justfile/README bundled in tree \u2014 non-blocking hygiene)."
   }
 ]

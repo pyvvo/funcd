@@ -19,7 +19,6 @@ import (
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/eventing"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
@@ -474,36 +473,6 @@ func TestScenarioShimFixedPortBindNode(t *testing.T) {
 	require.True(t, ok, "the shim bound the fixed FUNCD_PORT and reported readiness")
 }
 
-// scenario: timer-invokes-real-handler (node-gated, ADR-0030). A timer firing through the
-// eventing invoker (ADR-0023) POSTs the CloudEvent to the Ready shim's resolved upstream and
-// the real handler runs — proving the exit criterion's "invoked by a timer" end-to-end.
-func TestScenarioTimerInvokesRealHandler(t *testing.T) {
-	st, r, _ := bringUpRealShim(t)
-
-	source, err := eventing.NewSource(eventing.Deps{
-		Store:      st,
-		Endpoints:  r.Endpoints(),
-		HTTPClient: &http.Client{Timeout: 2 * time.Second},
-	})
-	require.NoError(t, err)
-
-	// A timer EventSource bound to the ready function.
-	esObj, _ := v1.NewObject(v1.KindEventSource)
-	es := esObj.(*v1.EventSource)
-	es.Name, es.Namespace, es.ResourceGroup = "echo", "default", "rg1"
-	es.Spec.Type = v1.EventSourceTypeTimer
-	es.Spec.Function = "echo"
-	es.Spec.Timer = &v1.TimerSpec{Interval: time.Minute}
-	_, err = st.Create(context.Background(), es)
-	require.NoError(t, err)
-
-	// Fire the timer path: invoker resolves the upstream via Endpoints and POSTs to the shim.
-	require.NoError(t, source.Fire(context.Background(), "default", "echo"), "the real handler received the timer CloudEvent")
-
-	// The dispatch recorded a successful Invocation (never silently dropped, ADR-0023).
-	list, err := st.List(context.Background(), v1.KindInvocation.GVK(), store.ListOptions{})
-	require.NoError(t, err)
-	require.NotEmpty(t, list.Items, "an Invocation was recorded for the timer fire")
-	inv := list.Items[0].(*v1.Invocation)
-	require.Equal(t, v1.PhaseReady, inv.Status.Phase, "the invoke reached the real handler and succeeded")
-}
+// NOTE (ADR-0108): the former `timer-invokes-real-handler` e2e is removed — a v2 timer PUBLISHES a
+// named event rather than invoking a function. The "timer → real handler" behavior is restored end-to-end
+// by ADR-0109 as `timer event → Sensor function: action → invoke` (the F69 lane).

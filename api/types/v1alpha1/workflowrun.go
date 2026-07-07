@@ -33,6 +33,22 @@ type WorkflowRunSpec struct {
 	// the controller workqueue (never a synchronous endpoint) which abandons in-flight work
 	// and terminates the run Cancelled. Ignored once the run is already terminal.
 	Cancel bool `json:"cancel,omitempty"`
+	// Replay seeds this run from a finished source run's checkpoint (ADR-0107): the engine copies the
+	// source's pinned spec/contract/input + the terminal steps outside the replay set, then re-runs
+	// `from` + its descendants. When set, Input must be empty (the input comes from the source).
+	Replay *ReplaySeed `json:"replay,omitempty"`
+}
+
+// ReplaySeed re-runs a finished source run from a chosen step (ADR-0107, F71): a new run seeded from
+// the source's recorded checkpoint. Set by `funcdctl workflow replay`; observed by the run reconciler.
+type ReplaySeed struct {
+	// Run is the source run to replay (same namespace).
+	Run ObjectName `json:"run"`
+	// From is the step to re-run from; `from` and its descendants re-execute, upstream steps are reused.
+	From ObjectName `json:"from"`
+	// AllowDrift opts into re-running steps whose resolved artifact digest moved since the source run
+	// (a re-materialized workflow) — "same data, current code". Default false ⇒ drift is rejected.
+	AllowDrift bool `json:"allowDrift,omitempty"`
 }
 
 // WorkflowRunStatus is the coarse mirror of engine run state (Badger is the truth):
@@ -95,6 +111,19 @@ func (r *WorkflowRun) Validate() error {
 	}
 	if r.Spec.Workflow == "" || !dnsLabel.MatchString(string(r.Spec.Workflow)) {
 		return fault.Invalidf(op, "spec.workflow %q is not a valid DNS-1123 label", r.Spec.Workflow)
+	}
+	// Replay seed rules (ADR-0107): run/from are DNS-1123 labels, and the input must come from the
+	// source run — not a second source of truth on the replay.
+	if r.Spec.Replay != nil {
+		if !dnsLabel.MatchString(string(r.Spec.Replay.Run)) {
+			return fault.Invalidf(op, "spec.replay.run %q is not a valid DNS-1123 label", r.Spec.Replay.Run)
+		}
+		if !dnsLabel.MatchString(string(r.Spec.Replay.From)) {
+			return fault.Invalidf(op, "spec.replay.from %q is not a valid DNS-1123 label", r.Spec.Replay.From)
+		}
+		if len(r.Spec.Input) > 0 {
+			return fault.Invalidf(op, "spec.input must be empty when spec.replay is set (the input comes from the source run)")
+		}
 	}
 	return nil
 }

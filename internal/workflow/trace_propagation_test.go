@@ -63,7 +63,7 @@ func TestRunMintsAndPropagatesTraceContext(t *testing.T) {
 	c := &capturingDispatcher{failN: map[v1.ObjectName]int{}}
 	e := newTestEngine(t, c, Config{})
 	rec, err := e.Execute(context.Background(), "default", "run-t1", "wf",
-		spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{}`))
+		spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRetriesShareTrace(t *testing.T) {
 	c := &capturingDispatcher{failN: map[v1.ObjectName]int{"a": 1}} // fail attempt 1, succeed attempt 2
 	e := newTestEngine(t, c, Config{})
 	rec, err := e.Execute(context.Background(), "default", "run-t2", "wf",
-		spec(retryStep("a", 3)), json.RawMessage(`{}`))
+		spec(retryStep("a", 3)), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

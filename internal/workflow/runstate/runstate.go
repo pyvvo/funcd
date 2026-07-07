@@ -41,12 +41,17 @@ type Record struct {
 	RootSpanID string `json:"rootSpanId,omitempty"` // 16 lowercase hex (8 bytes)
 	// RootParentID is the run-root span's parent (ADR-0104): "" for a top-level run; the PARENT run's
 	// RootSpanID for a sub-workflow child, so a composition (parent + inline children) is one nested trace.
-	RootParentID string      `json:"rootParentId,omitempty"` // 16 hex; empty ⇒ the run is a trace root
-	Phase        v1.Phase    `json:"phase"`
-	Paused       bool        `json:"paused,omitempty"`
-	Steps        []StepState `json:"steps,omitempty"`
-	StartedAt    int64       `json:"startedAt,omitempty"`
-	UpdatedAt    int64       `json:"updatedAt,omitempty"`
+	RootParentID string `json:"rootParentId,omitempty"` // 16 hex; empty ⇒ the run is a trace root
+	// SourceRun / SourceFrom are replay provenance (ADR-0107): when this record was seeded from a
+	// finished source run, SourceRun names it and SourceFrom the step the replay re-ran from. Empty ⇒
+	// an ordinary run. The record is otherwise a normal checkpoint.
+	SourceRun  v1.ObjectName `json:"sourceRun,omitempty"`
+	SourceFrom v1.ObjectName `json:"sourceFrom,omitempty"`
+	Phase      v1.Phase      `json:"phase"`
+	Paused     bool          `json:"paused,omitempty"`
+	Steps      []StepState   `json:"steps,omitempty"`
+	StartedAt  int64         `json:"startedAt,omitempty"`
+	UpdatedAt  int64         `json:"updatedAt,omitempty"`
 	// PausedNanos accumulates time spent paused, excluded from the run-timeout clock.
 	PausedNanos int64 `json:"pausedNanos,omitempty"`
 }
@@ -56,7 +61,7 @@ type StepState struct {
 	Name     v1.ObjectName   `json:"name"`
 	Phase    v1.StepPhase    `json:"phase"`
 	Attempts int             `json:"attempts,omitempty"`
-	Revision string          `json:"revision,omitempty"` // pinned digest it executed
+	Revision string          `json:"revision,omitempty"` // the resolved digest-pinned image this step executed (ADR-0107)
 	Output   json.RawMessage `json:"output,omitempty"`   // small output or a by-reference key
 	// SpanID is the engine-minted trace span-id for this step (ADR-0105): minted once at run start so a
 	// successor parents on it, and restored on Resume so the edge stays stable across a restart.

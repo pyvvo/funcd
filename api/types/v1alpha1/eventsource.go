@@ -3,8 +3,6 @@ package v1alpha1
 import (
 	"time"
 
-	huma "github.com/danielgtaylor/huma/v2"
-
 	"github.com/green-0-rabbit/funcd/api/fault"
 )
 
@@ -17,35 +15,28 @@ type EventSource struct {
 	Status     EventSourceStatus `json:"status,omitempty"`
 }
 
-// EventSourceSpec holds the desired state. Behavioral fields owned by F16 (ADR-0023).
+// EventSourceSpec is a kind-keyed source hosting named events (ADR-0108, F72): exactly one source-kind
+// pointer is non-nil (the source kind), each carrying a list of named events. A firing publishes a named
+// CloudEvent that the F69 Sensor (ADR-0109) binds to actions — the source no longer binds a function.
 type EventSourceSpec struct {
-	Type     EventSourceType `json:"type,omitempty"`
-	Timer    *TimerSpec      `json:"timer,omitempty"`    // set when Type == EventSourceTypeTimer
-	Function ObjectName      `json:"function,omitempty"` // the bound function (same namespace)
+	// Timer is the timer source kind (V1): named events, each ticking on its own interval. The webhook
+	// source kind is a named follow-on (it needs an eventing-ingress gateway decision).
+	Timer *TimerSource `json:"timer,omitempty"`
 }
 
-// EventSourceType is the trigger transport (ADR-0023, F16).
-type EventSourceType string
-
-const (
-	// EventSourceTypeHTTP triggers via the gateway route; normalization is the runtime shim's (P-S).
-	EventSourceTypeHTTP EventSourceType = "http"
-	// EventSourceTypeTimer fires the bound function on an interval (V1; cron is a follow-up).
-	EventSourceTypeTimer EventSourceType = "timer"
-)
-
-// Schema carries EventSourceType's enum constraint into the generated OpenAPI (ADR-0048).
-func (EventSourceType) Schema(huma.Registry) *huma.Schema {
-	return enumSchema(string(EventSourceTypeHTTP), string(EventSourceTypeTimer))
+// TimerSource hosts the timer kind's named events (ADR-0108).
+type TimerSource struct {
+	Events []TimerEvent `json:"events"` // ≥1; unique names
 }
 
-// TimerSpec configures a timer EventSource (ADR-0023): V1 uses Interval; cron is a follow-up.
-type TimerSpec struct {
-	// Interval is the timer period in int64 nanoseconds, bounded 100ms ≤ ≤ 24h: the floor bars
-	// a pathological μs/ns fire-storm while still allowing sub-second timers; the ceiling bars an
-	// unbounded one. The tag literals are the sole source (a struct tag can't reference a const);
-	// the human values live here in the comment — ADR-0048.
-	Interval time.Duration `json:"interval,omitempty" minimum:"100000000" maximum:"86400000000000"` // 100ms–24h
+// TimerEvent is one named timer event: a DNS-1123 name + its own interval. Each fires independently and
+// publishes a named CloudEvent (source=<eventsource> URI, type=<name>).
+type TimerEvent struct {
+	Name ObjectName `json:"name"`
+	// Interval is the tick period in int64 nanoseconds, bounded 100ms ≤ ≤ 24h (ADR-0023): the floor bars a
+	// μs/ns fire-storm, the ceiling bars an unbounded one. The tag literals are the sole schema source; the
+	// bounds are re-checked in Validate (which also runs at store.Create, bypassing the huma edge).
+	Interval time.Duration `json:"interval" minimum:"100000000" maximum:"86400000000000"` // 100ms–24h
 }
 
 // EventSourceStatus holds the observed state.
@@ -56,28 +47,39 @@ type EventSourceStatus struct {
 // GroupVersionKind returns the constant GVK for EventSource.
 func (es *EventSource) GroupVersionKind() GroupVersionKind { return KindEventSource.GVK() }
 
-// Validate performs envelope validation, then the cross-field rules JSON Schema can't express
-// (ADR-0048): the timer sub-spec present iff type==timer, and the target function set. The
-// `type` enum and interval bounds are schema-enforced at the edge (not re-checked here).
+// Validate enforces the v2 kind-union rules JSON Schema can't express (ADR-0108/ADR-0048): exactly one
+// source kind set; each kind's events non-empty with unique DNS-1123 names and in-bounds intervals. The
+// removed v1 `type:`/`function:` keys are rejected at the schema edge (additionalProperties:false → 422).
 func (es *EventSource) Validate() error {
 	if err := validateMeta(es.TypeMeta, &es.ObjectMeta, KindEventSource); err != nil {
 		return err
 	}
 	const op = "EventSource.Validate"
-	switch es.Spec.Type {
-	case EventSourceTypeTimer:
-		if es.Spec.Timer == nil {
-			return fault.Invalidf(op, "spec.timer is required when spec.type is %q", EventSourceTypeTimer)
-		}
-	case EventSourceTypeHTTP:
-		if es.Spec.Timer != nil {
-			return fault.Invalidf(op, "spec.timer must be empty when spec.type is %q", EventSourceTypeHTTP)
-		}
-	default:
-		return fault.Invalidf(op, "unknown event source type %q", es.Spec.Type)
+	kinds := 0
+	if es.Spec.Timer != nil {
+		kinds++
 	}
-	if es.Spec.Function == "" {
-		return fault.Invalidf(op, "spec.function (the target) must be set")
+	if kinds != 1 {
+		return fault.Invalidf(op, "exactly one source kind must be set (spec.timer), got %d", kinds)
+	}
+	if es.Spec.Timer != nil {
+		if len(es.Spec.Timer.Events) == 0 {
+			return fault.Invalidf(op, "spec.timer.events must list at least one event")
+		}
+		seen := make(map[ObjectName]bool, len(es.Spec.Timer.Events))
+		for i := range es.Spec.Timer.Events {
+			ev := &es.Spec.Timer.Events[i]
+			if !dnsLabel.MatchString(string(ev.Name)) {
+				return fault.Invalidf(op, "spec.timer.events[%d].name %q is not a valid DNS-1123 label", i, ev.Name)
+			}
+			if seen[ev.Name] {
+				return fault.Invalidf(op, "duplicate event name %q under spec.timer", ev.Name)
+			}
+			seen[ev.Name] = true
+			if ev.Interval < 100*time.Millisecond || ev.Interval > 24*time.Hour {
+				return fault.Invalidf(op, "spec.timer.events[%d].interval %s is out of bounds (100ms–24h)", i, ev.Interval)
+			}
+		}
 	}
 	return nil
 }

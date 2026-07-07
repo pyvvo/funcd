@@ -1,10 +1,9 @@
-// Package eventing implements V1 eventing (ADR-0023): a typed CloudEvents v1.0
-// envelope, an EventSource reconciler that registers timer sources, and an HTTP
-// invoker that fires a CloudEvent at a function's ready upstream (via
-// activator.Endpoints) and records an Invocation. It owns only KindEventSource
-// (one-reconciler-per-gvk, ADR-0015); ticking is a side Run loop, not the
-// reconciler. HTTP-trigger normalization (the runtime shim, P-S), cron schedules,
-// and bus/async eventing are documented deferrals.
+// Package eventing implements funcd eventing (ADR-0023, reshaped by ADR-0108): a typed CloudEvents v1.0
+// envelope, an EventSource reconciler that registers a `timer:` source's NAMED events, and — on each
+// firing — PUBLISHES a named CloudEvent onto a Publisher seam (the in-process Fanout) the F69 Sensor
+// subscribes to. It owns only KindEventSource (one-reconciler-per-gvk, ADR-0015); ticking is a side Run
+// loop, not the reconciler. The action side (invoke a function / start a workflow) is the Sensor
+// (ADR-0109); the webhook source kind, cron schedules, and bus-backed delivery are documented deferrals.
 package eventing
 
 import (
@@ -12,50 +11,73 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 )
 
-const (
-	specVersion    = "1.0"
-	timerEventType = "io.funcd.timer.tick"
-	contentTypeCE  = "application/cloudevents+json"
-)
+const specVersion = "1.0"
 
-// CloudEvent is a CloudEvents v1.0 envelope serialized in the JSON event format.
-// Hand-defined (no cloudevents/sdk-go); a later SDK swap stays behind this type.
+// sourceURIPrefix is the canonical CloudEvent `source` form: funcd://<ns>/eventsource/<name>. NewNamedEvent
+// writes it; the Fanout parses it back to route (ADR-0108) — the single canonical name↔URI mapping.
+const sourceURIScheme = "funcd://"
+
+// CloudEvent is a CloudEvents v1.0 envelope serialized in the JSON event format. Hand-defined (no
+// cloudevents/sdk-go); a later SDK swap stays behind this type.
 type CloudEvent struct {
 	SpecVersion     string          `json:"specversion"`
 	ID              string          `json:"id"`
-	Source          string          `json:"source"`
-	Type            string          `json:"type"`
+	Source          string          `json:"source"` // funcd://<ns>/eventsource/<name>
+	Type            string          `json:"type"`   // the event name (ADR-0108)
 	Time            time.Time       `json:"time"`
 	DataContentType string          `json:"datacontenttype,omitempty"`
 	Data            json.RawMessage `json:"data,omitempty"`
 }
 
-// NewTimerEvent builds a well-formed timer-tick CloudEvent originating from the
-// named EventSource. The id is a fresh random hex string (unique per call).
-func NewTimerEvent(ns v1.NamespaceName, source v1.ObjectName) (CloudEvent, error) {
+// NewNamedEvent builds a well-formed named CloudEvent for one event of an EventSource (ADR-0108): the
+// `source` URI carries the namespace + source name, `type` carries the event name. A timer event has an
+// empty `{}` payload. The id is a fresh random hex string (unique per call).
+func NewNamedEvent(ns v1.NamespaceName, source, event v1.ObjectName) (CloudEvent, error) {
 	id, err := randomID()
 	if err != nil {
 		return CloudEvent{}, err
 	}
 	return CloudEvent{
-		SpecVersion: specVersion,
-		ID:          id,
-		Source:      fmt.Sprintf("funcd://%s/eventsource/%s", ns, source),
-		Type:        timerEventType,
-		Time:        time.Now().UTC(),
+		SpecVersion:     specVersion,
+		ID:              id,
+		Source:          SourceURI(ns, source),
+		Type:            string(event),
+		Time:            time.Now().UTC(),
+		DataContentType: "application/json",
+		Data:            json.RawMessage("{}"),
 	}, nil
+}
+
+// SourceURI is the canonical CloudEvent `source` for an EventSource (ADR-0108).
+func SourceURI(ns v1.NamespaceName, source v1.ObjectName) string {
+	return fmt.Sprintf("%s%s/eventsource/%s", sourceURIScheme, ns, source)
+}
+
+// ParseSourceURI is the inverse of SourceURI: it recovers (namespace, source) from a CloudEvent's
+// `source` field so a subscriber can route by structured key (ADR-0108). ok=false for a foreign URI.
+func ParseSourceURI(uri string) (ns v1.NamespaceName, source v1.ObjectName, ok bool) {
+	rest, found := strings.CutPrefix(uri, sourceURIScheme)
+	if !found {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/") // <ns>/eventsource/<name>
+	if len(parts) != 3 || parts[1] != "eventsource" || parts[0] == "" || parts[2] == "" {
+		return "", "", false
+	}
+	return v1.NamespaceName(parts[0]), v1.ObjectName(parts[2]), true
 }
 
 func randomID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fault.Internalf("eventing.NewTimerEvent", "generate event id: %v", err)
+		return "", fault.Internalf("eventing.NewNamedEvent", "generate event id: %v", err)
 	}
 	return hex.EncodeToString(b[:]), nil
 }

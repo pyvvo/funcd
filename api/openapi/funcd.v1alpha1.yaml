@@ -3,6 +3,34 @@
 
 components:
   schemas:
+    Action:
+      additionalProperties: false
+      properties:
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        input: {}
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        "on":
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        workflow:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+        - "on"
+      type: object
     BlobServiceSpec:
       additionalProperties: false
       properties:
@@ -188,6 +216,29 @@ components:
             type: string
           type: object
       type: object
+    Dependency:
+      additionalProperties: false
+      properties:
+        event:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        source:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+        - source
+        - event
+      type: object
     EgressPolicy:
       additionalProperties: false
       properties:
@@ -276,18 +327,8 @@ components:
     EventSourceSpec:
       additionalProperties: false
       properties:
-        function:
-          maxLength: 63
-          minLength: 1
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-          type: string
         timer:
-          $ref: "#/components/schemas/TimerSpec"
-        type:
-          enum:
-            - http
-            - timer
-          type: string
+          $ref: "#/components/schemas/TimerSource"
       type: object
     EventSourceStatus:
       additionalProperties: false
@@ -844,6 +885,25 @@ components:
         worker:
           type: string
       type: object
+    ReplaySeed:
+      additionalProperties: false
+      properties:
+        allowDrift:
+          type: boolean
+        from:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        run:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - run
+        - from
+      type: object
     ResourceGroup:
       additionalProperties: false
       properties:
@@ -1069,6 +1129,49 @@ components:
             - Opaque
           type: string
       type: object
+    Sensor:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/SensorSpec"
+        status:
+          $ref: "#/components/schemas/SensorStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    SensorSpec:
+      additionalProperties: false
+      properties:
+        do:
+          items:
+            $ref: "#/components/schemas/Action"
+          type:
+            - array
+            - "null"
+        "on":
+          items:
+            $ref: "#/components/schemas/Dependency"
+          type:
+            - array
+            - "null"
+      required:
+        - "on"
+        - do
+      type: object
+    SensorStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+      required:
+        - Status
+      type: object
     Service:
       additionalProperties: false
       properties:
@@ -1151,7 +1254,7 @@ components:
       required:
         - condition
       type: object
-    TimerSpec:
+    TimerEvent:
       additionalProperties: false
       properties:
         interval:
@@ -1159,6 +1262,26 @@ components:
           maximum: 86400000000000
           minimum: 100000000
           type: integer
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+        - interval
+      type: object
+    TimerSource:
+      additionalProperties: false
+      properties:
+        events:
+          items:
+            $ref: "#/components/schemas/TimerEvent"
+          type:
+            - array
+            - "null"
+      required:
+        - events
       type: object
     TypeMeta:
       additionalProperties: false
@@ -1311,6 +1434,8 @@ components:
         input: {}
         paused:
           type: boolean
+        replay:
+          $ref: "#/components/schemas/ReplaySeed"
         workflow:
           maxLength: 63
           minLength: 1
@@ -3894,6 +4019,165 @@ paths:
           description: Error
       tags:
         - Secret
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors:
+    get:
+      operationId: listSensors
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Sensor"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Sensor
+    post:
+      operationId: createSensor
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Sensor"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sensor"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Sensor
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors/{name}:
+    delete:
+      operationId: deleteSensor
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Sensor
+    get:
+      operationId: getSensor
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sensor"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Sensor
+    put:
+      operationId: replaceSensor
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Sensor"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sensor"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Sensor
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/services:
     get:
       operationId: listServices

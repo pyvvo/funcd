@@ -199,31 +199,36 @@ func New(d Deps) (*Engine, error) {
 	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, traces: d.Traces, log: log.With("component", "workflow.engine")}, nil
 }
 
+// StartOptions consolidates run-start inputs (ADR-0107, replacing Execute's variadic contract param):
+// the pinned contract (ADR-0098) + the per-step resolved digest-pinned image map (the ADR-0098 cache),
+// which stamps each function step's revision so a replay can prove it re-runs the same artifact.
+type StartOptions struct {
+	Contract   *v1.WorkflowContract     // pinned derived contract; nil ⇒ no run-start input check
+	StepImages map[v1.ObjectName]string // step name → resolved digest-pinned image; stamps stepNode.revision (function steps)
+}
+
 // Execute runs a workflow synchronously to a terminal phase and returns the final
 // record. It is the engine core; the controller reconciler drives it asynchronously
 // (wiring is a separate layer). Steps of a ready batch are dispatched sequentially in
 // V1 (correct for the DAG; concurrent fan-out is a performance optimization).
-// contract (optional, ADR-0098) is the workflow's derived contract pinned at run start; when present it
-// gates the run input (InputSchemaMismatch) and Resume reads the pinned copy. nil ⇒ no run-start check.
-func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, contract ...*v1.WorkflowContract) (*runstate.Record, error) {
-	var pinned *v1.WorkflowContract
-	if len(contract) > 0 {
-		pinned = contract[0]
-	}
-	return e.execute(ctx, ns, runName, workflow, spec, input, pinned, 0, "", "") // top-level run: depth 0, fresh trace
+func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions) (*runstate.Record, error) {
+	return e.execute(ctx, ns, runName, workflow, spec, input, opts, 0, "", "") // top-level run: depth 0, fresh trace
 }
 
 // execute is Execute threading the sub-workflow nesting depth (ADR-0099): the public Execute starts at 0;
 // runChild recurses at depth+1. inheritTraceID/inheritRootParent carry the parent run's trace context for a
 // sub-workflow child (ADR-0104): empty ⇒ a top-level run mints a fresh trace with no parent; non-empty ⇒ the
 // child shares the parent's TraceID (one trace) and nests its run-root span under the parent run's span.
-func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, pinned *v1.WorkflowContract, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
+func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
+	pinned := opts.Contract
 	rs := newRunState(spec)
 	// ADR-0105: pre-mint a span-id per DAG step so a successor parents on it (the nested DAG waterfall). The
 	// onFailure handler is excluded (dagSteps omits it) — nothing parents on it; it mints its own id in the shim.
 	for _, name := range rs.dagSteps() {
 		rs.steps[name].spanID = mintSpanID()
 	}
+	// ADR-0107: stamp each function step's resolved digest-pinned image (the fidelity record a replay gates on).
+	stampRevisions(rs, spec, opts.StepImages)
 	outputs := map[v1.ObjectName]json.RawMessage{}
 	// ADR-0102/0104: one W3C trace context per run. A top-level run mints a fresh trace; a sub-workflow child
 	// inherits the parent's TraceID (shared trace) but mints its OWN RootSpanID and nests under the parent.
@@ -280,6 +285,100 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	return e.drive(ctx, rec, rs, outputs, spec, rec.Input)
 }
 
+// Replay seeds runName from a finished source run's checkpoint and drives it (ADR-0107): a NEW run that
+// re-runs seed.From + its descendants, reusing the source's recorded upstream outputs verbatim. workflow
+// is the replay run's declared workflow (must match the source's). current is the workflow's live resolved
+// step-image map (the ADR-0098 cache) — the drift-gate comparison key + the re-run steps' revision.
+// Faults: NotFound (source absent); Invalid whose message leads with reason token SeedInvalid or
+// DigestDrift (naming the offending step). The source record is never mutated.
+func (e *Engine) Replay(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
+	src, err := e.runs.Get(ctx, ns, seed.Run)
+	if err != nil {
+		return nil, err // NotFound (source absent) propagates
+	}
+	if !src.Terminal() {
+		return nil, fault.Invalidf(engineOp, "SeedInvalid: source run %q is not terminal (%s) — replay a finished run", seed.Run, src.Phase)
+	}
+	if src.Workflow != workflow {
+		return nil, fault.Invalidf(engineOp, "SeedInvalid: replay workflow %q does not match the source run's workflow %q", workflow, src.Workflow)
+	}
+	spec := src.Spec
+	rs := newRunState(spec)
+	if _, ok := rs.steps[seed.From]; !ok || seed.From == rs.onFailure {
+		return nil, fault.Invalidf(engineOp, "SeedInvalid: %q is not a DAG step of workflow %q", seed.From, workflow)
+	}
+	// The replay set: from + everything downstream of it (re-run); the rest is reused.
+	replaySet := map[v1.ObjectName]bool{seed.From: true}
+	for _, d := range rs.descendants(seed.From) {
+		replaySet[d] = true
+	}
+	srcStep := make(map[v1.ObjectName]runstate.StepState, len(src.Steps))
+	for _, s := range src.Steps {
+		srcStep[s.Name] = s
+	}
+	// Classify + gate every DAG step (the onFailure handler is neither in the set nor checked — it is
+	// seeded Pending below and fires only if the REPLAY fails).
+	for _, name := range rs.dagSteps() {
+		if replaySet[name] {
+			// Drift gate: an image function step whose resolved digest moved since the source ⇒ reject,
+			// unless allowDrift. Ref/builtin/workflow steps are not gated (documented workarounds).
+			if fn := functionOf(specStep(spec, name)); fn != nil && fn.Image != "" && !seed.AllowDrift {
+				if cur, ok := current[name]; ok && srcStep[name].Revision != "" && cur != srcStep[name].Revision {
+					return nil, fault.Invalidf(engineOp, "DigestDrift: step %q artifact changed since the source run (source %q, current %q) — pass --allow-drift to re-run against current code", name, srcStep[name].Revision, cur)
+				}
+			}
+			continue
+		}
+		switch srcStep[name].Phase {
+		case v1.StepSucceeded, v1.StepSkipped, v1.StepPending, "":
+			// copied (Succeeded/Skipped) or seeded-Pending-and-run (Pending/absent — never executed).
+		default: // Failed / Cancelled
+			return nil, fault.Invalidf(engineOp, "SeedInvalid: step %q is %s outside the replay set — replay --from it (or an ancestor) to re-run it", name, srcStep[name].Phase)
+		}
+	}
+	// Build the new record: fresh trace, copy the source's pinned spec/contract/input, provenance.
+	traceID, rootSpanID := mintTraceContext()
+	rec := &runstate.Record{
+		Namespace: ns, Name: runName, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
+		Spec: spec, Contract: src.Contract, Depth: 0,
+		TraceID: traceID, RootSpanID: rootSpanID, RootParentID: "",
+		SourceRun: seed.Run, SourceFrom: seed.From,
+		StartedAt: e.clock.Now().UnixNano(),
+	}
+	// Fresh span-ids for every DAG step (re-run/Pending steps use them); copied steps clear theirs below.
+	for _, name := range rs.dagSteps() {
+		rs.steps[name].spanID = mintSpanID()
+	}
+	outputs := map[v1.ObjectName]json.RawMessage{}
+	for _, name := range rs.order {
+		n := rs.steps[name]
+		if name == rs.onFailure || replaySet[name] || !isCopied(srcStep[name].Phase) {
+			// Handler, replay-set, and never-run (Pending) steps run fresh: Pending, fresh span-id, and
+			// their revision stamps from the CURRENT image (re-run against current code).
+			n.revision = revisionFor(spec, name, current)
+			continue
+		}
+		// Copied step (Succeeded/Skipped outside the set): keep the source's phase/output/revision, but
+		// CLEAR the span-id (so a re-run successor parents on the replay's run root, never a source span)
+		// and leave execution facts zero (it did not run here).
+		s := srcStep[name]
+		n.phase = s.Phase
+		n.revision = s.Revision // keep the SOURCE revision — replay chains stay gateable
+		n.spanID = ""
+		if s.Phase == v1.StepSucceeded && len(s.Output) > 0 {
+			outputs[name] = s.Output
+		}
+	}
+	if err := e.persist(ctx, rec, rs, outputs); err != nil {
+		return nil, err
+	}
+	return e.drive(ctx, rec, rs, outputs, spec, src.Input)
+}
+
+// isCopied reports whether a source step's phase means "reuse it verbatim" in a replay (a terminal
+// success/skip with a settled output), vs re-run it fresh (ADR-0107).
+func isCopied(p v1.StepPhase) bool { return p == v1.StepSucceeded || p == v1.StepSkipped }
+
 // rebuildState restores scheduling state from a durable record. An in-flight
 // (Running) step is reset to Pending so recovery re-dispatches it.
 func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1.ObjectName]json.RawMessage) {
@@ -290,8 +389,11 @@ func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1
 		if !ok {
 			continue
 		}
-		n.spanID = s.SpanID // ADR-0105: restore the pre-minted span-id UNCONDITIONALLY (incl. the in-flight step
-		//                      being re-dispatched) so successors' parent edges never dangle across a restart.
+		n.spanID = s.SpanID     // ADR-0105: restore the pre-minted span-id UNCONDITIONALLY (incl. the in-flight step
+		n.revision = s.Revision // ADR-0107: restore the recorded revision, so the digest survives Resume
+		if n.revision == "" {   // a record that never recorded one (pre-ADR / hand-seeded) back-fills from the PINNED spec
+			n.revision = revisionFor(spec, s.Name, nil)
+		} //                    being re-dispatched) so successors' parent edges never dangle across a restart.
 		if s.Phase == v1.StepRunning {
 			n.phase = v1.StepPending // re-dispatch on recovery — its lineage stays zero (it re-runs fresh)
 			continue
@@ -651,18 +753,40 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 	return rec, fault.Wrapf(cause, fault.KindOf(cause), engineOp, "run %q failed", rec.Name)
 }
 
+// stampRevisions sets each function step's revision to its resolved digest-pinned image (ADR-0107):
+// images[name] when the ADR-0098 cache carries it, else the bare spec ref (bare-engine tests / a
+// not-yet-materialized step). Builtin/`workflow:` steps get no revision. Called once at run start;
+// persist then carries the value across every write, and rebuildState restores it on Resume.
+func stampRevisions(rs *runState, spec v1.WorkflowSpec, images map[v1.ObjectName]string) {
+	for _, name := range rs.order {
+		rs.steps[name].revision = revisionFor(spec, name, images)
+	}
+}
+
+// revisionFor resolves one step's recorded revision: the ADR-0098 cache value when present, else the
+// pinned spec image; "" for a non-function step.
+func revisionFor(spec v1.WorkflowSpec, name v1.ObjectName, images map[v1.ObjectName]string) string {
+	fn := functionOf(specStep(spec, name))
+	if fn == nil {
+		return ""
+	}
+	if img, ok := images[name]; ok && img != "" {
+		return img
+	}
+	return fn.Image
+}
+
 // persist writes the run record (the write-ahead intent + the coarse step mirror).
 func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage) error {
 	rec.Steps = rec.Steps[:0]
 	for _, name := range rs.order {
 		n := rs.steps[name]
 		// SpanID: ADR-0105 (persisted for Resume). StartedAt/EndedAt/Attempts/Error: ADR-0100 troubleshooting lineage.
+		// Revision: ADR-0107 — the resolved digest-pinned image, carried from stepNode so it survives every
+		// persist/Resume cycle and copied replay steps keep the source's digest.
 		ss := runstate.StepState{
-			Name: n.name, Phase: n.phase, SpanID: n.spanID,
+			Name: n.name, Phase: n.phase, SpanID: n.spanID, Revision: n.revision,
 			Attempts: n.attempts, StartedAt: n.startedAt, EndedAt: n.endedAt, Error: n.errMsg,
-		}
-		if fn := functionOf(specStep(rec.Spec, n.name)); fn != nil && fn.Image != "" {
-			ss.Revision = fn.Image // the pinned artifact ref this step executes (from the pinned spec)
 		}
 		if out, ok := outputs[n.name]; ok {
 			ss.Output = out

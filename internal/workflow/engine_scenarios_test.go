@@ -28,7 +28,7 @@ func TestRunTimeoutFails(t *testing.T) {
 	e := newTestEngine(t, blockingDispatcher{}, Config{})
 	spc := spec(step("slow", ""))
 	spc.Timeout = 20 * time.Millisecond
-	rec, err := e.Execute(context.Background(), "default", "run-to", "wf", spc, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-to", "wf", spc, json.RawMessage(`{}`), StartOptions{})
 	if err == nil || !strings.Contains(err.Error(), "RunTimedOut") {
 		t.Fatalf("want a RunTimedOut error, got %v", err)
 	}
@@ -42,7 +42,7 @@ func TestRunTimeoutFails(t *testing.T) {
 func TestPerStepTimeoutIsStepFailure(t *testing.T) {
 	e := newTestEngine(t, blockingDispatcher{}, Config{DefaultStepTimeout: 10 * time.Millisecond})
 	// no run-level Timeout → only the per-step deadline fires.
-	rec, err := e.Execute(context.Background(), "default", "run-st", "wf", spec(step("slow", "")), json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-st", "wf", spec(step("slow", "")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil || strings.Contains(err.Error(), "RunTimedOut") {
 		t.Fatalf("a per-step timeout must be a step failure, not RunTimedOut; got %v", err)
 	}
@@ -59,7 +59,7 @@ func TestOnFailureHandlerRuns(t *testing.T) {
 	e := newTestEngine(t, f, Config{})
 	spc := spec(step("boom", ""), step("notify", "")) // notify is the handler, excluded from the DAG
 	spc.OnFailure = "notify"
-	rec, err := e.Execute(context.Background(), "default", "run-of", "wf", spc, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-of", "wf", spc, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("run should have failed")
 	}
@@ -83,7 +83,7 @@ func TestJoinAnyExclusiveBranch(t *testing.T) {
 		whenStep("yes", `${{ step.a.output.branch === "yes" }}`, "a"),
 		whenStep("no", `${{ step.a.output.branch === "no" }}`, "a"),
 		step("merge", v1.JoinAny, "yes", "no"),
-	), json.RawMessage(`{}`))
+	), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPayloadLimitCapsStepOutput(t *testing.T) {
 	f := newFake()
 	f.outputs["big"] = json.RawMessage(`{"data":"` + strings.Repeat("x", 200) + `"}`)
 	e := newTestEngine(t, f, Config{PayloadLimit: 32})
-	rec, err := e.Execute(context.Background(), "default", "run-pl", "wf", spec(step("big", "")), json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-pl", "wf", spec(step("big", "")), json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("an over-cap step output must fail the run")
 	}

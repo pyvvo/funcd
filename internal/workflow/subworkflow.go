@@ -13,11 +13,13 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
 )
 
-// ChildResolver resolves a child workflow's pinned spec for a `workflow:` step's EXECUTION (store-backed
-// in prod; a fake in tests). Reconcile-time typing does NOT use this — the reconciler reads the child's
-// status.contract from the store it already has (ADR-0099).
+// ChildResolver resolves a child workflow's pinned spec + its resolved step-image cache for a `workflow:`
+// step's EXECUTION (store-backed in prod; a fake in tests). Reconcile-time typing does NOT use this — the
+// reconciler reads the child's status.contract from the store it already has (ADR-0099). The step-image
+// map (ADR-0107, the child's ADR-0098 `status.steps[].Image`) digest-pins the inline child run's record,
+// so a standalone replay of that child run gates on real digests instead of false-positiving.
 type ChildResolver interface {
-	Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, error)
+	Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error)
 }
 
 // runChild executes a sub-workflow step: guard the nesting depth, resolve the referenced workflow, run it
@@ -30,7 +32,7 @@ func (e *Engine) runChild(ctx context.Context, parent *runstate.Record, child v1
 	if parent.Depth+1 > e.cfg.MaxSubworkflowDepth { // backstop for a cycle that slipped the reconcile check
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: max nesting depth %d exceeded (SubworkflowDepthExceeded)", n.name, e.cfg.MaxSubworkflowDepth)
 	}
-	childSpec, err := e.children.Child(ctx, parent.Namespace, child)
+	childSpec, childImages, err := e.children.Child(ctx, parent.Namespace, child)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
@@ -39,7 +41,8 @@ func (e *Engine) runChild(ctx context.Context, parent *runstate.Record, child v1
 	// ADR-0104: the child inherits the parent's trace (one composition = one trace) and nests its run-root
 	// span under the parent run's span. The child runs inline (never through the reconciler), so the ENGINE
 	// emits its run-root span here — before the error check, so a FAILED child still gets its span.
-	rec, err := e.execute(ctx, parent.Namespace, childRun, child, childSpec, childInput, nil, parent.Depth+1, parent.TraceID, parent.RootSpanID)
+	// ADR-0107: the child's own step images digest-pin its record (no contract gate on the inline child).
+	rec, err := e.execute(ctx, parent.Namespace, childRun, child, childSpec, childInput, StartOptions{StepImages: childImages}, parent.Depth+1, parent.TraceID, parent.RootSpanID)
 	emitRunSpan(ctx, e.traces, rec, e.log)
 	if err != nil {
 		return nil, err // the child run failed → the step fails (propagate the cause)

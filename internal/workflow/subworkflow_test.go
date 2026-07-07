@@ -15,12 +15,12 @@ import (
 // fakeChildren resolves child workflow specs by name (the engine's ChildResolver stand-in).
 type fakeChildren map[v1.ObjectName]v1.WorkflowSpec
 
-func (f fakeChildren) Child(_ context.Context, _ v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, error) {
+func (f fakeChildren) Child(_ context.Context, _ v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
 	spec, ok := f[name]
 	if !ok {
-		return v1.WorkflowSpec{}, fault.NotFoundf("test", "no child workflow %q", name)
+		return v1.WorkflowSpec{}, nil, fault.NotFoundf("test", "no child workflow %q", name)
 	}
-	return spec, nil
+	return spec, nil, nil // tests exercise child specs without a digest cache (nil ⇒ fallback to spec refs)
 }
 
 func subwfStep(name, child string, deps ...string) v1.WorkflowStep {
@@ -55,7 +55,7 @@ func TestSubworkflowRunsInlineAndOutputFlows(t *testing.T) {
 	e := childEngine(t, f, fakeChildren{"scorer": child}, Config{})
 
 	parent := spec(step("prep", ""), subwfStep("sub", "scorer", "prep"), step("after", "", "sub"))
-	rec, err := e.Execute(context.Background(), "default", "run-p", "orders", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-p", "orders", parent, json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestSubworkflowNestsMultiLevel(t *testing.T) {
 	e := childEngine(t, f, fakeChildren{"grand": grand, "mid": mid}, Config{})
 
 	parent := spec(subwfStep("sub", "mid"), step("after", "", "sub"))
-	rec, err := e.Execute(context.Background(), "default", "run-n", "top", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-n", "top", parent, json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSubworkflowChildFailureFailsParent(t *testing.T) {
 	f.permanent["c_bad"] = true
 	e := childEngine(t, f, fakeChildren{"broken": spec(step("c_bad", ""))}, Config{})
 	parent := spec(subwfStep("sub", "broken"), step("after", "", "sub"))
-	rec, err := e.Execute(context.Background(), "default", "run-f", "top", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-f", "top", parent, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("a failing child must fail the parent run")
 	}
@@ -123,7 +123,7 @@ func TestSubworkflowMaxDepthGuarded(t *testing.T) {
 	loop := spec(subwfStep("self", "loop")) // references itself
 	e := childEngine(t, f, fakeChildren{"loop": loop}, Config{MaxSubworkflowDepth: 3})
 	parent := spec(subwfStep("sub", "loop"))
-	rec, err := e.Execute(context.Background(), "default", "run-d", "top", parent, json.RawMessage(`{}`))
+	rec, err := e.Execute(context.Background(), "default", "run-d", "top", parent, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
 		t.Fatal("an unbounded sub-workflow chain must fail (depth guard), not overflow")
 	}

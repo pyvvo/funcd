@@ -2,8 +2,8 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
@@ -112,11 +112,24 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, nil
 	}
 
-	// Drive: resume if a durable record exists (recovery / unpause), else start fresh (pinning the
-	// workflow's derived contract for the ADR-0098 run-start input gate).
-	rec, err := r.drive(ctx, req.Namespace, req.Name, wf.Name, wf.Spec, run.Spec.Input, wf.Status.Contract)
+	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
+	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
+	rec, err := r.drive(ctx, run, wf)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
+	}
+	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
+	// a ReplaySeeded=False condition so it terminates (never silently re-reconciles).
+	if rec == nil && run.Spec.Replay != nil && fault.KindOf(err) == fault.Invalid {
+		run.Status.Phase = runFailed
+		run.Status.Conditions.Set(v1.Condition{
+			Type: "ReplaySeeded", Status: v1.ConditionFalse,
+			Reason: replayReason(err), Message: capErr(err.Error()),
+		})
+		if uerr := r.updateRunStatus(ctx, run); uerr != nil {
+			return controller.Result{}, uerr
+		}
+		return controller.Result{}, nil
 	}
 	// A run failure is a terminal outcome, not a reconcile error.
 	mirror(run, rec)
@@ -154,13 +167,46 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 	return nil
 }
 
-func (r *RunReconciler) drive(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, contract *v1.WorkflowContract) (*runstate.Record, error) {
+func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow) (*runstate.Record, error) {
+	ns, name := run.Namespace, run.Name
 	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
 		// A durable record exists → resume from its PINNED spec + contract (the live wf.Spec/status is
-		// not passed; an in-flight run is immune to a mid-run edit or re-push).
+		// not passed; an in-flight run is immune to a mid-run edit or re-push). Covers replay recovery too.
 		return r.engine.Resume(ctx, ns, name)
 	}
-	return r.engine.Execute(ctx, ns, name, workflow, spec, input, contract)
+	images := stepImages(wf) // the ADR-0098 cache: step → resolved digest-pinned image (ADR-0107)
+	if run.Spec.Replay != nil {
+		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift.
+		return r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+	}
+	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
+}
+
+// replayReason extracts the leading reason token (SeedInvalid / DigestDrift) from a replay-seed
+// rejection's fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
+func replayReason(err error) string {
+	msg := err.Error()
+	for _, tok := range []string{"SeedInvalid", "DigestDrift"} {
+		if strings.Contains(msg, tok+":") {
+			return tok
+		}
+	}
+	return "ReplayRejected"
+}
+
+// stepImages projects the workflow's cached resolved step images (ADR-0098 status.steps[].Image) into
+// the name→image map the engine stamps as each step's revision and the replay gate compares (ADR-0107).
+func stepImages(wf *v1.Workflow) map[v1.ObjectName]string {
+	if len(wf.Status.Steps) == 0 {
+		return nil
+	}
+	m := make(map[v1.ObjectName]string, len(wf.Status.Steps))
+	for _, s := range wf.Status.Steps {
+		if s.Image != "" {
+			m[s.Name] = s.Image
+		}
+	}
+	return m
 }
 
 // mirror copies the engine record's coarse state into the WorkflowRun status.

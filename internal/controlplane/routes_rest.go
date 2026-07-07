@@ -1045,3 +1045,61 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 		return nil, wrapFaultError(h.DeleteWorkflowRun(ctx, in.Namespace, in.Name))
 	})
 }
+
+type createSensorInput struct{ Body v1.Sensor }
+type sensorOutput struct{ Body v1.Sensor }
+type listSensorOutput struct{ Body []v1.Sensor }
+
+func registerSensor(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/sensors"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listSensors", Method: http.MethodGet, Path: base, Tags: []string{"Sensor"},
+	}, func(ctx context.Context, in *namespacedList) (*listSensorOutput, error) {
+		items, err := h.ListSensors(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listSensorOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createSensor", Method: http.MethodPost, Path: base, Tags: []string{"Sensor"},
+	}, func(ctx context.Context, in *createSensorInput) (*sensorOutput, error) {
+		item, err := h.CreateSensor(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sensorOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getSensor", Method: http.MethodGet, Path: base + "/{name}", Tags: []string{"Sensor"},
+	}, func(ctx context.Context, in *namespacedGet) (*sensorOutput, error) {
+		item, err := h.GetSensor(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sensorOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceSensor", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"Sensor"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Sensor
+	}) (*sensorOutput, error) {
+		item, err := h.ReplaceSensor(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sensorOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteSensor", Method: http.MethodDelete, Path: base + "/{name}", Tags: []string{"Sensor"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteSensor(ctx, in.Namespace, in.Name))
+	})
+}

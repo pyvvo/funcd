@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,8 +23,8 @@ func svcWith(typ ServiceType, kv *KVServiceSpec, blob *BlobServiceSpec) *Service
 	return s
 }
 
-func esWith(typ EventSourceType, timer *TimerSpec, fn ObjectName) *EventSource {
-	e := &EventSource{Spec: EventSourceSpec{Type: typ, Timer: timer, Function: fn}}
+func esWith(spec EventSourceSpec) *EventSource {
+	e := &EventSource{Spec: spec}
 	e.TypeMeta = TypeMeta{APIVersion: KindEventSource.GVK().APIVersion(), Kind: KindEventSource}
 	e.Name, e.Namespace, e.ResourceGroup = "e", "default", "rg1"
 	return e
@@ -77,29 +78,33 @@ func TestServiceValidateMatrix(t *testing.T) {
 	}
 }
 
-// TestEventSourceValidateMatrix is the EventSource discriminator matrix: spec.type==timer requires the
-// timer sub-spec, type==http forbids it, and a target function is always required (ADR-0048). Parametrized
-// over {type, timer, function} — each accepted shape passes, every malformed shape is fault.Invalid.
-// Covers both discriminator arms, the missing-function rule, and the unknown/empty default branch.
+// TestEventSourceValidateMatrix is the EventSource v2 kind-union matrix (ADR-0108): exactly one source
+// kind, ≥1 named events with unique DNS-1123 names and in-bounds intervals. Each accepted shape passes,
+// every malformed shape is fault.Invalid. (The removed v1 `type:`/`function:` keys are rejected at the
+// schema edge, additionalProperties:false → 422 — not Validate's concern.)
 func TestEventSourceValidateMatrix(t *testing.T) {
+	tev := func(name string, iv time.Duration) TimerEvent {
+		return TimerEvent{Name: ObjectName(name), Interval: iv}
+	}
+	timer := func(events ...TimerEvent) EventSourceSpec {
+		return EventSourceSpec{Timer: &TimerSource{Events: events}}
+	}
 	for _, tc := range []struct {
 		name  string
-		typ   EventSourceType
-		timer *TimerSpec
-		fn    ObjectName
+		spec  EventSourceSpec
 		valid bool
 	}{
-		{"timer with sub-spec + fn", EventSourceTypeTimer, &TimerSpec{}, "fn", true},
-		{"http without timer + fn", EventSourceTypeHTTP, nil, "fn", true},
-		{"timer missing sub-spec", EventSourceTypeTimer, nil, "fn", false},
-		{"http with timer set", EventSourceTypeHTTP, &TimerSpec{}, "fn", false},
-		{"timer without function", EventSourceTypeTimer, &TimerSpec{}, "", false},
-		{"http without function", EventSourceTypeHTTP, nil, "", false},
-		{"unknown type", EventSourceType("nope"), nil, "fn", false},
-		{"empty type", EventSourceType(""), nil, "fn", false},
+		{"one named timer event", timer(tev("tick", time.Minute)), true},
+		{"multiple named events", timer(tev("fast", time.Second), tev("slow", time.Hour)), true},
+		{"no source kind", EventSourceSpec{}, false},
+		{"timer with no events", EventSourceSpec{Timer: &TimerSource{}}, false},
+		{"duplicate event names", timer(tev("t", time.Minute), tev("t", time.Hour)), false},
+		{"non-DNS-1123 event name", timer(tev("Bad_Name", time.Minute)), false},
+		{"interval below floor", timer(tev("t", time.Millisecond)), false},
+		{"interval above ceiling", timer(tev("t", 48*time.Hour)), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := esWith(tc.typ, tc.timer, tc.fn).Validate()
+			err := esWith(tc.spec).Validate()
 			if tc.valid {
 				require.NoError(t, err)
 				return
@@ -198,6 +203,47 @@ func TestFunctionConfigValidateMatrix(t *testing.T) {
 			} else {
 				require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed config set must be fault.Invalid")
 			}
+		})
+	}
+}
+
+// TestSensorValidateMatrix is the Sensor wiring matrix (ADR-0109): ≥1 dep + ≥1 action, unique dep/action
+// names, each action bound to a declared dep with exactly one action kind. (The ${{ }} input check is a
+// reconcile-time step, not Validate's.)
+func TestSensorValidateMatrix(t *testing.T) {
+	se := func(on []Dependency, do []Action) *Sensor {
+		s := &Sensor{Spec: SensorSpec{On: on, Do: do}}
+		s.TypeMeta = TypeMeta{APIVersion: KindSensor.GVK().APIVersion(), Kind: KindSensor}
+		s.Name, s.Namespace, s.ResourceGroup = "s", "default", "rg1"
+		return s
+	}
+	d := func(name, source, event string) Dependency {
+		return Dependency{Name: ObjectName(name), Source: ObjectName(source), Event: ObjectName(event)}
+	}
+	deps := []Dependency{d("dep", "src", "ev")}
+	for _, tc := range []struct {
+		name  string
+		on    []Dependency
+		do    []Action
+		valid bool
+	}{
+		{"workflow action", deps, []Action{{Name: "a", On: "dep", Workflow: "wf"}}, true},
+		{"function action", deps, []Action{{Name: "a", On: "dep", Function: "fn"}}, true},
+		{"no dependencies", nil, []Action{{Name: "a", On: "dep", Workflow: "wf"}}, false},
+		{"no actions", deps, nil, false},
+		{"dangling dependency", deps, []Action{{Name: "a", On: "nope", Workflow: "wf"}}, false},
+		{"both action kinds", deps, []Action{{Name: "a", On: "dep", Workflow: "wf", Function: "fn"}}, false},
+		{"neither action kind", deps, []Action{{Name: "a", On: "dep"}}, false},
+		{"duplicate dep names", []Dependency{d("dep", "s", "e"), d("dep", "s2", "e2")}, []Action{{Name: "a", On: "dep", Workflow: "wf"}}, false},
+		{"duplicate action names", deps, []Action{{Name: "a", On: "dep", Workflow: "wf"}, {Name: "a", On: "dep", Function: "fn"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := se(tc.on, tc.do).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed Sensor must be fault.Invalid")
 		})
 	}
 }

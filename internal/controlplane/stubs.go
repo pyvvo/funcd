@@ -34,6 +34,7 @@ type StubHandlers struct {
 	policies        map[string]v1.Policy
 	workflows       map[string]v1.Workflow
 	workflowRuns    map[string]v1.WorkflowRun
+	sensors         map[string]v1.Sensor
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
@@ -60,6 +61,7 @@ func NewStubHandlers() *StubHandlers {
 		policies:        make(map[string]v1.Policy),
 		workflows:       make(map[string]v1.Workflow),
 		workflowRuns:    make(map[string]v1.WorkflowRun),
+		sensors:         make(map[string]v1.Sensor),
 	}
 }
 
@@ -1237,5 +1239,59 @@ func (s *StubHandlers) DeleteWorkflowRun(_ context.Context, ns v1.NamespaceName,
 		return fault.NotFoundf("StubHandlers.DeleteWorkflowRun", "WorkflowRun %s not found", key)
 	}
 	delete(s.workflowRuns, key)
+	return nil
+}
+
+func (s *StubHandlers) GetSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Sensor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.sensors[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Sensor{}, fault.NotFoundf("StubHandlers.GetSensor", "Sensor %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateSensor(_ context.Context, se v1.Sensor) (v1.Sensor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(se.Namespace, se.Name)
+	if _, exists := s.sensors[key]; exists {
+		return v1.Sensor{}, fault.Conflictf("StubHandlers.CreateSensor", "Sensor %s already exists", key)
+	}
+	s.sensors[key] = se
+	return se, nil
+}
+
+func (s *StubHandlers) ListSensors(_ context.Context, ns v1.NamespaceName) ([]v1.Sensor, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Sensor, 0)
+	for _, v := range s.sensors {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, se v1.Sensor) (v1.Sensor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sensors[key]; !exists {
+		return v1.Sensor{}, fault.NotFoundf("StubHandlers.ReplaceSensor", "Sensor %s not found", key)
+	}
+	s.sensors[key] = se
+	return se, nil
+}
+
+func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sensors[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteSensor", "Sensor %s not found", key)
+	}
+	delete(s.sensors, key)
 	return nil
 }
