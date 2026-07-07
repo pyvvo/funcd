@@ -1633,5 +1633,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0100-implementation-claude-opus-4-8.md",
     "notes": "pass: all 4 checks green (build/test/lint/mod exit 0); 8/8 scenarios named+passing; raw step cause capped @512 + only small facts + trace_id mirrored; Resume restores terminal lineage; describe render + -o json. 1 minor (model): -o flag silently accepts unknown values."
+  },
+  {
+    "date": "2026-07-07",
+    "adr": "0106",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0106-implementation-claude-opus-4-8.md",
+    "notes": "Run-scoped log read: TraceID filter + namespace-wide reader mode + run-logs route (resolves status.traceId, RBAC on ns) + sdk.RunLogs + funcdctl workflow logs. All 6 scenarios named+passing; build/test/lint/mod/OpenAPI-golden green; in-process e2e ran (not skipped); Venom 12/12. No model/adr/env findings."
   }
 ]

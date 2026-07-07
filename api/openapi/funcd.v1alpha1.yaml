@@ -4212,6 +4212,70 @@ paths:
           description: Error
       tags:
         - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}/logs:
+    get:
+      operationId: getWorkflowRunLogs
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+            type: string
+        - description: "minimum level: trace|debug|info|warn|error|fatal"
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "minimum level: trace|debug|info|warn|error|fatal"
+            type: string
+        - description: max records returned, most-recent first-bounded; default 1000, capped 10000
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: max records returned, most-recent first-bounded; default 1000, capped 10000
+            format: int64
+            type: integer
+        - description: narrow to one step's function (the --step drill-down)
+          explode: false
+          in: query
+          name: step
+          schema:
+            description: narrow to one step's function (the --step drill-down)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows:
     get:
       operationId: listWorkflows

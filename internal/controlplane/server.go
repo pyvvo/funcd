@@ -25,6 +25,9 @@ type Deps struct {
 	// Logs is the function-log reader (ADR-0084). Optional; when set, NewServer registers the
 	// namespaced GET …/functions/{name}/logs route (authorized get/Function per caller).
 	Logs LogQuerier
+	// RunLogs is the run-scoped log querier (ADR-0106). Optional; when set, NewServer registers
+	// GET …/workflowruns/{name}/logs (authorized get/WorkflowRun; resolves status.traceId).
+	RunLogs WorkflowRunLogQuerier
 }
 
 // NewServer builds the authenticated, authorized, store-backed control-plane API
@@ -54,6 +57,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...)))
 	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
 		RegisterLogs(api, d.Logs, d.Authorizer)
+	}
+	if d.RunLogs != nil { // ADR-0106: the run-scoped log read route (resolves status.traceId), same RBAC PEP
+		RegisterWorkflowRunLogs(api, d.RunLogs, d.Authorizer)
 	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil

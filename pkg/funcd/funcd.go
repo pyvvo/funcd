@@ -195,14 +195,14 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager   // per-function worker-node local API broker (ADR-0064)
-	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
-	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
-	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
-	logSink      *funclog.BlobSink       // structured function-log capture sink (ADR-0081); nil if unwired
-	traceSink    *funclog.BlobTraceSink  // per-invocation trace sink (ADR-0101); nil if unwired/disabled
-	compactor *compact.Compactor // funclog compacted compaction pipeline (ADR-0083); nil if unwired
-	s3gw      *s3gateway.Server  // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
+	invokeMgr         *local.Manager         // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store         // durable workflow run state (ADR-0094); closed on shutdown
+	workflowEngine    *workflow.Engine       // the run engine (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration          // terminal-run retention horizon (0 ⇒ no sweep)
+	logSink           *funclog.BlobSink      // structured function-log capture sink (ADR-0081); nil if unwired
+	traceSink         *funclog.BlobTraceSink // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	compactor         *compact.Compactor     // funclog compacted compaction pipeline (ADR-0083); nil if unwired
+	s3gw              *s3gateway.Server      // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -543,10 +543,14 @@ func (p *Platform) buildControlPlane() error {
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
-	// whenever a blob substrate is — nil leaves the route unregistered.
+	// whenever a blob substrate is — nil leaves the route unregistered. ADR-0106: the run-scoped querier
+	// (GET …/workflowruns/{name}/logs) reuses the same reader + the metastore (to resolve status.traceId).
 	var logReader controlplane.LogQuerier
+	var runLogQuerier controlplane.WorkflowRunLogQuerier
 	if c.blob != nil {
-		logReader = logread.NewBlobReader(c.blob)
+		reader := logread.NewBlobReader(c.blob)
+		logReader = reader
+		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, reader)
 	}
 	handler, err := controlplane.NewServer(controlplane.Deps{
 		Store:       c.store,
@@ -554,6 +558,7 @@ func (p *Platform) buildControlPlane() error {
 		Credentials: c.credentials,
 		Logger:      p.logger,
 		Logs:        logReader,
+		RunLogs:     runLogQuerier,
 		Admissions: []admission.Admission{
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),

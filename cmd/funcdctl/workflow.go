@@ -12,15 +12,16 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
-// workflowCmd groups the workflow-run verbs (ADR-0094): run|runs|pause|resume|cancel|describe.
+// workflowCmd groups the workflow-run verbs (ADR-0094): run|runs|pause|resume|cancel|describe|logs.
 // run/runs/pause/resume/describe are sugar over the WorkflowRun CRUD surface; cancel calls the
-// imperative control-plane cancel endpoint.
+// imperative control-plane cancel endpoint; logs reads a whole run's logs by trace-id (ADR-0106).
 func (a *cli) workflowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workflow",
-		Short: "Manage workflow runs (run|runs|pause|resume|cancel|describe)",
+		Short: "Manage workflow runs (run|runs|pause|resume|cancel|describe|logs)",
 	}
 	cmd.AddCommand(
 		a.workflowRunCmd(),
@@ -29,7 +30,46 @@ func (a *cli) workflowCmd() *cobra.Command {
 		a.workflowPauseCmd("resume", false),
 		a.workflowCancelCmd(),
 		a.workflowDescribeCmd(),
+		a.workflowLogsCmd(),
 	)
+	return cmd
+}
+
+// workflowLogsCmd reads a whole run's logs from the run-scoped control-plane route (ADR-0106): the server
+// resolves the run's status.traceId and returns every step function's lines (plus sub-workflow child steps
+// — one composition = one trace). --step narrows to one step's function; --since/--severity/--limit filter.
+func (a *cli) workflowLogsCmd() *cobra.Command {
+	var ns, since, severity, step, output string
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "logs <run>",
+		Short: "Print a whole workflow run's logs (the full error/logs by run, tenant-scoped)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch output {
+			case "", "wide", "json":
+			default:
+				return fault.Invalidf("funcdctl workflow logs", "unknown output %q (want: wide or json)", output)
+			}
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			lines, err := c.RunLogs(cmd.Context(), v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]), sdk.LogsOptions{
+				Since: since, Severity: severity, Limit: limit, Step: step,
+			})
+			if err != nil {
+				return err
+			}
+			return a.renderLogLines(lines, output)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().StringVar(&since, "since", "", "only logs since (RFC3339 time or a duration like 15m)")
+	cmd.Flags().StringVar(&severity, "severity", "", "minimum level: trace|debug|info|warn|error|fatal")
+	cmd.Flags().StringVar(&step, "step", "", "narrow to one step's function (the --step drill-down)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max records to return, most-recent (default 1000)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: wide (append source/inv/attrs inline) | json")
 	return cmd
 }
 

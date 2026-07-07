@@ -155,6 +155,23 @@ testcases:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring DAGNESTOK"
 
+  # ── ADR-0106 run-scoped log read: `funcdctl workflow logs <run>` resolves the run's status.traceId and
+  #    returns the whole run's logs (all step functions) in one namespace-wide, trace-filtered read — no
+  #    per-function fan-out. The orders steps ingest/score/report each context.log (info); none log at error.
+  #    Proof: the base read returns ≥1 line, `--severity error` returns strictly fewer, and `--step ingest`
+  #    narrows to just that step's function. (Logs seal via the funclog age-flusher → retries.)
+  - name: run-scoped log read — funcdctl workflow logs run-hi returns the run's logs; --severity/--step filter (ADR-0106)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c 'a=$(funcdctl workflow logs run-hi -n default 2>/dev/null | grep -c .); e=$(funcdctl workflow logs run-hi -n default --severity error 2>/dev/null | grep -c .); s=$(funcdctl workflow logs run-hi -n default --step ingest 2>/dev/null | grep -c .); [ "$a" -ge 1 ] && [ "$e" -lt "$a" ] && [ "$s" -ge 1 ] && [ "$s" -le "$a" ] && echo "RUNLOGSOK a=$a e=$e s=$s" || echo "RUNLOGSNONE a=$a e=$e s=$s"'
+        retry: 15
+        delay: 2
+        info: "run-scoped logs → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring RUNLOGSOK"
+
   - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
     steps:
       - type: exec

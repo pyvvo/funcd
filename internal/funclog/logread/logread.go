@@ -47,13 +47,18 @@ type Line struct {
 	Attrs          json.RawMessage `json:"attrs,omitempty"`
 }
 
-// Query selects + bounds a read. Namespace+Function are required; the rest are optional filters.
+// Query selects + bounds a read. Namespace is required; Function OR TraceID must be set (a bare
+// namespace scan with no trace filter is rejected — see Read's guard). The rest are optional filters.
 type Query struct {
 	Namespace         string
 	Function          string
 	Since             time.Time // zero ⇒ no lower bound
 	MinSeverityNumber int32     // 0 ⇒ all severities
 	Limit             int       // <= 0 ⇒ DefaultLimit; capped at MaxLimit
+	// TraceID scopes the read to one run's trace (ADR-0106): "" ⇒ no trace filter (ADR-0084 per-function
+	// behavior). When Function == "" && TraceID != "", Read scans the whole logs/<ns>/ prefix (namespace-wide,
+	// run-scoped) — every step function's lines for that run, incl. sub-workflow children (same trace, ADR-0104).
+	TraceID string
 }
 
 // Reader returns a function's logs, newest-bounded by Query.
@@ -73,8 +78,11 @@ func NewBlobReader(b blob.Bucket) *BlobReader { return &BlobReader{bucket: b} }
 // Since/MinSeverityNumber, sorts ascending by time, and returns the most-recent Limit (the tail).
 func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 	const op = "logread.BlobReader.Read"
-	if q.Namespace == "" || q.Function == "" {
-		return nil, fault.Invalidf(op, "namespace and function are required")
+	// Guard (ADR-0106): namespace is always required; Function OR TraceID must be set. A bare namespace
+	// scan with no trace filter stays Invalid, so the namespace-wide mode is only ever reachable WITH a
+	// trace-id — it can never become an unfiltered full-namespace dump.
+	if q.Namespace == "" || (q.Function == "" && q.TraceID == "") {
+		return nil, fault.Invalidf(op, "namespace is required, and one of function or traceId must be set")
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -84,7 +92,12 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 		limit = MaxLimit
 	}
 
-	prefix := logsPrefix + q.Namespace + "/" + q.Function + "/"
+	// ADR-0106: namespace-wide, run-scoped read (all functions) when Function is empty and a trace-id is
+	// set; otherwise the ADR-0084 per-function prefix.
+	prefix := logsPrefix + q.Namespace + "/"
+	if q.Function != "" {
+		prefix += q.Function + "/"
+	}
 	objs, err := r.bucket.List(ctx, prefix)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list %q", prefix)
@@ -118,6 +131,9 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 
 	lines := make([]Line, 0, len(rows))
 	for _, row := range rows {
+		if q.TraceID != "" && row.TraceID != q.TraceID { // ADR-0106: run-scoped trace filter
+			continue
+		}
 		if row.SeverityNumber < q.MinSeverityNumber {
 			continue
 		}

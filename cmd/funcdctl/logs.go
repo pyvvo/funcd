@@ -11,6 +11,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/funclog/logread"
 	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
@@ -40,26 +41,7 @@ func (a *cli) logsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, l := range lines {
-				if output == "json" {
-					b, merr := json.Marshal(l)
-					if merr != nil {
-						return fault.Internalf("funcdctl logs", "marshal record: %v", merr)
-					}
-					if werr := a.writef("%s\n", string(b)); werr != nil {
-						return werr
-					}
-					continue
-				}
-				line := l.Time.UTC().Format(time.RFC3339) + " [" + l.Severity + "] " + l.Replica + " " + l.Body
-				if output == "wide" {
-					line += wideSuffix(l.Source, l.Invocation, l.TraceID, l.Attrs)
-				}
-				if werr := a.writef("%s\n", line); werr != nil {
-					return werr
-				}
-			}
-			return nil
+			return a.renderLogLines(lines, output)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace")
@@ -68,6 +50,32 @@ func (a *cli) logsCmd() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 0, "max records to return, most-recent (default 1000)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: wide (append source/inv/attrs inline) | json")
 	return cmd
+}
+
+// renderLogLines writes log lines in the funcdctl format (ADR-0084), shared by `funcdctl logs` and
+// `funcdctl workflow logs` (ADR-0106): "" ⇒ time·severity·replica·body, wide ⇒ + source/inv/attrs inline,
+// json ⇒ one JSON record per line.
+func (a *cli) renderLogLines(lines []logread.Line, output string) error {
+	for _, l := range lines {
+		if output == "json" {
+			b, merr := json.Marshal(l)
+			if merr != nil {
+				return fault.Internalf("funcdctl logs", "marshal record: %v", merr)
+			}
+			if werr := a.writef("%s\n", string(b)); werr != nil {
+				return werr
+			}
+			continue
+		}
+		line := l.Time.UTC().Format(time.RFC3339) + " [" + l.Severity + "] " + l.Replica + " " + l.Body
+		if output == "wide" {
+			line += wideSuffix(l.Source, l.Invocation, l.TraceID, l.Attrs)
+		}
+		if werr := a.writef("%s\n", line); werr != nil {
+			return werr
+		}
+	}
+	return nil
 }
 
 // wideSuffix renders source/inv/trace + the structured attrs as inline " key=value" pairs (attrs sorted),
