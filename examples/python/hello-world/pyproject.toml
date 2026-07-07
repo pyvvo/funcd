@@ -1,12 +1,12 @@
 [project]
 name = "funcd-example-hello-world"
 version = "0.1.0"
-description = "A funcd function authored in Python against the funcd_shim typed contract, deployed with funcdcli (ADR-0049)."
+description = "A funcd function authored in Python against the funcd_shim typed contract, deployed with funcdctl (ADR-0049)."
 authors = [{ name = "The funcd Authors" }]
 requires-python = ">=3.12"
-# funcd-shim is the typed authoring contract (Handler/CloudEvent/FunctionContext) + the JTD
-# validator the tests use. At deploy time the artifact is just src/handler.py — the platform's
-# curated Python image provides the shim; this dependency is for local typechecking + tests only.
+# funcd-shim is the typed authoring contract (Handler/CloudEvent/FunctionContext/Json). At deploy
+# time the artifact is just src/handler.py — the platform's curated Python image provides the shim
+# (and the build bakes the contract validator); this dependency is for local typechecking + tests only.
 dependencies = ["funcd-shim"]
 
 [dependency-groups]

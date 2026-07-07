@@ -1,0 +1,263 @@
+# Venom e2e suite for the workflow containerd lane (ADR-0094) — the declarative drive + lifecycle
+# phase of `just lima-example workflow`, run host-side AFTER the self-deploying Lima VM is Ready (the
+# `ready` gate already waited for the five materialized step Functions — orders-<step> — to pull and
+# serve on real containerd). Every step drives the control plane via `funcdctl workflow …` IN the VM
+# (co-located with the daemon), so the run's steps execute as REAL containers — no fakes, no stubs.
+#
+# It proves, end to end:
+#   1. run + chaining + fan-out + when + join — a run drives ingest→score→hi→report and Succeeds
+#      (n=4 ⇒ score 40 > 30 ⇒ the hi branch runs, lo is Skipped, report joins the survivor). The run
+#      reaching Succeeded is itself proof the typed contracts aligned and data flowed step to step.
+#   2. the exclusive OTHER branch — n=2 ⇒ score 20 ≤ 30 ⇒ lo runs, hi Skipped.
+#   3. runs listing + the parent Workflow's status.runs link (the CronJob status.active pattern).
+#   4. pause → resume — a run applied paused never dispatches (status Paused); resume drives it to
+#      Succeeded.
+#   5. cancel — a paused run is cancelled from Paused and ends Cancelled, no step ever dispatched.
+#   6. engine-native built-ins (ADR-0096): after report, a `wait` step delays in-engine then a `pass`
+#      step transforms in-engine — both Succeed with NO container dispatched (asserted in cases 1–2).
+name: workflow engine — run/chaining/fan-out/when/join + pause/resume/cancel + builtins wait/pass (ADR-0094 + ADR-0096, containerd lane)
+
+vars:
+  # the in-VM funcdctl invocation prefix (control plane is node-private; funcdctl runs co-located).
+  fctl: "limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
+
+testcases:
+  # F65 (ADR-0098): the Workflow reconciler resolved each step's contract from OCI metadata, type-checked
+  # every edge, and cached the derived graph in status — so `orders` reaches Ready with a status.contract.
+  - name: typed edges — orders reaches Ready with a derived, cached contract (F65)
+    steps:
+      - type: exec
+        script: |
+          {{.fctl}} get workflow orders -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);st=d.get("status",{});c={x["type"]:x["status"] for x in st.get("conditions",[])};print("READY="+c.get("Ready",""),"CONTRACT="+str(bool(st.get("contract",{}).get("input"))),"STEPS="+str(len(st.get("steps",[]))))'
+        retry: 30
+        delay: 2
+        info: "orders typed-edge status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+          - result.systemout ShouldContainSubstring CONTRACT=True
+
+  # F70 (ADR-0099): the parent `pipeline` reaches Ready — its `sub` step's contract is the child `scorer`'s
+  # derived status.contract (typed edges across the boundary, F65). Then a run drives the child inline.
+  - name: sub-workflows — pipeline is Ready and a run drives the child workflow inline (F70)
+    steps:
+      - type: exec
+        script: |
+          {{.fctl}} get workflow pipeline -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
+        retry: 40
+        delay: 2
+        info: "pipeline typed-edge status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+      - type: exec
+        script: "{{.fctl}} workflow run pipeline sub-01 --input '{\"amount\":4}'"
+        info: "start pipeline → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun sub-01 -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 40
+        delay: 2
+        info: "sub-01 → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring feed=Succeeded
+          - result.systemout ShouldContainSubstring sub=Succeeded
+
+  - name: run the hi branch — chaining + fan-out + when + join drive to Succeeded
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow run orders run-hi --input '{\"amount\":4}'"
+        info: "start → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      # poll the run: the daemon materialized functions are warm, but a real container round-trip per
+      # step still takes a moment — retry/delay absorbs it. The python one-liner prints the run phase
+      # + a {step: phase} map so the assertions are exact (not substring-ambiguous across steps).
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun run-hi -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 40
+        delay: 2
+        info: "run-hi → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring ingest=Succeeded
+          - result.systemout ShouldContainSubstring score=Succeeded
+          - result.systemout ShouldContainSubstring hi=Succeeded
+          - result.systemout ShouldContainSubstring lo=Skipped
+          - result.systemout ShouldContainSubstring report=Succeeded
+          # engine-native built-ins ran in-process after the dispatched steps (ADR-0096): the wait
+          # parked then resolved, the pass transformed — neither materialized a container.
+          - result.systemout ShouldContainSubstring settle=Succeeded
+          - result.systemout ShouldContainSubstring summary=Succeeded
+
+  # ── ADR-0102 one run = one trace: the engine stamped a run-scoped W3C traceparent on every step
+  #    dispatch, so each step-function's captured SERVER span (F51/ADR-0101) shares the run's trace.
+  #    Proof: a traceId present in BOTH orders-ingest's AND orders-score's spans — the same run's two
+  #    steps are one trace. (Spans emit post-invocation; the funclog age-flusher seals them → retries.)
+  - name: one run = one trace — a run's ingest and score step spans share one traceId (ADR-0102)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'ing=$(cat /var/lib/funcd/data/blob/traces/default/orders-ingest/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); sco=$(cat /var/lib/funcd/data/blob/traces/default/orders-score/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); common=$(comm -12 <(echo "$ing") <(echo "$sco") | grep -c traceId); [ "$common" -ge 1 ] && echo "ONETRACEOK common=$common" || echo "ONETRACENONE i=$(echo "$ing"|grep -c traceId) s=$(echo "$sco"|grep -c traceId)"'
+        retry: 15
+        delay: 2
+        info: "one-run-one-trace → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring ONETRACEOK"
+
+  # ── ADR-0103: the engine emits a run-ROOT span for the run itself — an INTERNAL span (kind 1) under
+  #    the workflow's own prefix traces/<ns>/<workflow>/ (distinct from the steps' <workflow>-<step>/).
+  #    That is the real root the step SERVER spans nest under (the full parenting is proven precisely by
+  #    the in-process Go e2e; here we prove the engine emits it on real containerd).
+  - name: run-root span — the engine emits an INTERNAL run span at the top of the trace (ADR-0103)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'c=$(cat /var/lib/funcd/data/blob/traces/default/orders/*/*.otlp.jsonl 2>/dev/null | grep -o "\"kind\":1" | wc -l); [ "$c" -ge 1 ] && echo "ROOTSPANOK c=$c" || echo "ROOTSPANNONE c=$c"'
+        retry: 15
+        delay: 2
+        info: "run-root span → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring ROOTSPANOK"
+
+  # ── ADR-0104 one composition = one trace: the `pipeline`→`scorer` sub-workflow run (above) — the child run
+  #    inherits the parent's trace and the engine emits the child run span nested under it. Proof: a traceId
+  #    present in BOTH the parent run span (traces/<ns>/pipeline/) AND the child run span (traces/<ns>/scorer/) —
+  #    the parent and child runs are one trace. (Full nesting is proven precisely by the in-process Go e2e.)
+  - name: one composition = one trace — the pipeline parent and scorer child runs share one traceId (ADR-0104)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'par=$(cat /var/lib/funcd/data/blob/traces/default/pipeline/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); chi=$(cat /var/lib/funcd/data/blob/traces/default/scorer/*/*.otlp.jsonl 2>/dev/null | grep -o "\"traceId\":\"[0-9a-f]\{32\}\"" | sort -u); common=$(comm -12 <(echo "$par") <(echo "$chi") | grep -c traceId); [ "$common" -ge 1 ] && echo "COMPOSITIONOK common=$common" || echo "COMPOSITIONNONE p=$(echo "$par"|grep -c traceId) c=$(echo "$chi"|grep -c traceId)"'
+        retry: 15
+        delay: 2
+        info: "composition trace → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring COMPOSITIONOK"
+
+  # ── ADR-0105 nested DAG parenting: step spans nest along their edges. orders is ingest → score → …, so the
+  #    score step span parents on the ingest step span. Proof: an ingest spanId appears as a score parentSpanId
+  #    (the engine owns the ids + the shim uses them). Fan-in links are proven precisely by the in-process Go e2e.
+  - name: nested DAG parenting — the score step span parents on the ingest step span (ADR-0105)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'ing=$(cat /var/lib/funcd/data/blob/traces/default/orders-ingest/*/*.otlp.jsonl 2>/dev/null | grep -o "\"spanId\":\"[0-9a-f]\{16\}\"" | grep -o "[0-9a-f]\{16\}" | sort -u); sco=$(cat /var/lib/funcd/data/blob/traces/default/orders-score/*/*.otlp.jsonl 2>/dev/null | grep -o "\"parentSpanId\":\"[0-9a-f]\{16\}\"" | grep -o "[0-9a-f]\{16\}" | sort -u); common=$(comm -12 <(echo "$ing") <(echo "$sco") | grep -c .); [ "$common" -ge 1 ] && echo "DAGNESTOK common=$common" || echo "DAGNESTNONE i=$(echo "$ing"|grep -c .) s=$(echo "$sco"|grep -c .)"'
+        retry: 15
+        delay: 2
+        info: "DAG nesting → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring DAGNESTOK"
+
+  # ── ADR-0106 run-scoped log read: `funcdctl workflow logs <run>` resolves the run's status.traceId and
+  #    returns the whole run's logs (all step functions) in one namespace-wide, trace-filtered read — no
+  #    per-function fan-out. The orders steps ingest/score/report each context.log (info); none log at error.
+  #    Proof: the base read returns ≥1 line, `--severity error` returns strictly fewer, and `--step ingest`
+  #    narrows to just that step's function. (Logs seal via the funclog age-flusher → retries.)
+  - name: run-scoped log read — funcdctl workflow logs run-hi returns the run's logs; --severity/--step filter (ADR-0106)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c 'a=$(funcdctl workflow logs run-hi -n default 2>/dev/null | grep -c .); e=$(funcdctl workflow logs run-hi -n default --severity error 2>/dev/null | grep -c .); s=$(funcdctl workflow logs run-hi -n default --step ingest 2>/dev/null | grep -c .); [ "$a" -ge 1 ] && [ "$e" -lt "$a" ] && [ "$s" -ge 1 ] && [ "$s" -le "$a" ] && echo "RUNLOGSOK a=$a e=$e s=$s" || echo "RUNLOGSNONE a=$a e=$e s=$s"'
+        retry: 15
+        delay: 2
+        info: "run-scoped logs → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring RUNLOGSOK"
+
+  - name: run the lo branch — the exclusive complement (n=2 ⇒ lo runs, hi Skipped)
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow run orders run-lo --input '{\"amount\":2}'"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun run-lo -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase",""),"STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 40
+        delay: 2
+        info: "run-lo → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring lo=Succeeded
+          - result.systemout ShouldContainSubstring hi=Skipped
+
+  - name: runs listing + the parent workflow links its runs (status.runs)
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow runs -n default"
+        info: "runs → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring run-hi
+          - result.systemout ShouldContainSubstring run-lo
+      - type: exec
+        script: |
+          {{.fctl}} get workflow orders -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("SUCCEEDED="+str(d["status"].get("runs",{}).get("succeeded",0)))'
+        retry: 10
+        delay: 2
+        info: "orders.status.runs → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SUCCEEDED=2
+
+  - name: pause then resume — a paused run dispatches nothing, resume drives it to Succeeded
+    steps:
+      # applied already-paused (run-pause.yaml, spec.paused: true) → the reconciler marks it Paused.
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/run-pause.yaml"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-pause -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 15
+        delay: 2
+        info: "orders-pause (paused) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Paused
+      # resume clears spec.paused; the reconciler drives the run to Succeeded.
+      - type: exec
+        script: "{{.fctl}} workflow resume orders-pause -n default"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-pause -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 40
+        delay: 2
+        info: "orders-pause (resumed) → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+
+  - name: cancel — a paused run is cancelled from Paused and ends Cancelled
+    steps:
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/run-cancel.yaml"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-cancel -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Paused
+      - type: exec
+        script: "{{.fctl}} workflow cancel orders-cancel -n default"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun orders-cancel -n default -o json | python3 -c 'import sys,json;print("PHASE="+json.load(sys.stdin)["status"].get("phase",""))'
+        retry: 20
+        delay: 2
+        info: "orders-cancel → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PHASE=Cancelled

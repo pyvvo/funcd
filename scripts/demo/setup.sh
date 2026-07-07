@@ -8,7 +8,7 @@ cfg() { yq "$1" docs/demo/demo.yaml; }
 DEMO="$(cfg .demoDir)"; SERVER="$(cfg .server)"
 rm -rf "$DEMO"; mkdir -p "$DEMO/bin"
 
-go build -o "$DEMO/bin/funcdcli" ./cmd/funcdcli
+go build -o "$DEMO/bin/funcdctl" ./cmd/funcdctl
 go build -o "$DEMO/bin/demo-server" ./docs/demo/server
 
 # bundle the function artifact from its TypeScript source (the author flow: TS -> handler.mjs)

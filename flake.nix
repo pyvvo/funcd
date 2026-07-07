@@ -18,6 +18,24 @@
     # nixpkgs-lima, installed through the dev shell rather than system-wide.
     limaFor = system: nixpkgs.lib.optionals (pkgsFor system).stdenv.isDarwin
       [ (import nixpkgs-lima { inherit system; }).lima ];
+    # OVH Venom (Apache-2.0), the declarative e2e runner for the containerd example lanes (ADR-0077).
+    # Not in nixpkgs → pinned here via buildGoModule. Cross-platform (unlike Lima), so it is on every
+    # supported system's dev shell. Bumped deliberately via this edit, like nixpkgs-lima.
+    venomFor = system: (pkgsFor system).buildGoModule rec {
+      pname = "venom";
+      version = "1.3.0";
+      src = (pkgsFor system).fetchFromGitHub {
+        owner = "ovh";
+        repo = "venom";
+        rev = "v${version}";
+        hash = "sha256-MyQMmX8R96hsbyJCm/n4GtNL9P6bQwkSSYe1tHmtyT0=";
+      };
+      vendorHash = "sha256-0stYt58RqHv/rENIFudHdfyxbpnvlfIL7UdWA+nfaIY=";
+      subPackages = [ "cmd/venom" ];
+      # set the version Venom otherwise leaves as "snapshot" (it injects it via ldflags at release-build)
+      ldflags = [ "-s" "-w" "-X github.com/ovh/venom.Version=v${version}" ];
+      doCheck = false; # upstream tests need network/containers; we pin the already-proven-green binary
+    };
   in {
     devShells = forAllSystems (system: {
       default = (pkgsFor system).mkShellNoCC {
@@ -26,7 +44,7 @@
           gopls
           just
           git
-        ]) ++ limaFor system;
+        ]) ++ limaFor system ++ [ (venomFor system) ];
         shellHook = ''
           echo "funcd dev shell — go $(go version | awk '{print $3}')"
         '';

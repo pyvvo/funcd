@@ -1,6 +1,9 @@
 // The funcd function programming model (typed contract). A function module exports
 // `handle(context, event)`; the runtime shim invokes it once per CloudEvent. Authors
 // import these types for a typed handler signature + autocomplete.
+import type { KVClient } from './kv.ts';
+
+export type { KVClient } from './kv.ts';
 
 /** A CloudEvent — the normalized trigger envelope (ADR-0023). */
 export interface CloudEvent<T = unknown> {
@@ -20,6 +23,12 @@ export interface CloudEvent<T = unknown> {
 export interface FunctionContext {
   /** Structured log line → stdout (collected by the platform, ADR-0010). */
   log(...args: unknown[]): void;
+  /** Synchronously invoke a linked function by its spec.links alias (ADR-0064). The input is
+   *  validated against the target's contract by the target's shim; its result is returned. Fails
+   *  closed (rejects) if the caller declares no such link. */
+  invoke<I = unknown, O = unknown>(alias: string, input: I): Promise<O>;
+  /** Namespace-scoped key-value storage (ADR-0069): get/put/del a binding's key, or list keys. */
+  kv: KVClient;
 }
 
 /** A function handler: receives the context + CloudEvent, returns a response (or nothing). */
@@ -27,3 +36,18 @@ export type Handler<In = unknown, Out = unknown> = (
   context: FunctionContext,
   event: CloudEvent<In>,
 ) => Out | Promise<Out>;
+
+/** Json — the explicit "arbitrary JSON value" contract type (ADR-0058). Declare `FuncInput`/
+ *  `FuncOutput = Json`, or a field `payload: Json`, when the shape is genuinely unknown; the
+ *  generated contract is the empty schema `{}` (accepts any JSON). Typed as `unknown` so the
+ *  handler must narrow before use — deliberately NOT the unsafe `any`. */
+export type Json = unknown;
+
+/** A single error from a precompiled validator. Shape kept loose (AJV vs pydantic differ); the
+ *  shim only inspects the array length and echoes the errors as 422/500 details. */
+export type ValidationError = unknown;
+
+/** A precompiled, eval-free validator the push build inlines into the bundle from the author's
+ *  FuncInput/FuncOutput type (ADR-0058). Returns [] when `data` is valid. The shim runs it; it
+ *  never compiles a schema at runtime. */
+export type Validator = (data: unknown) => ValidationError[];

@@ -68,7 +68,7 @@ func applyFn(t *testing.T, c *sdk.Client, name string, scaling v1.Scaling, repli
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact.URI = artifact
+	fn.Spec.Image = artifact
 	fn.Spec.Replicas = replicas
 	fn.Spec.Scaling = scaling
 	_, err := c.Apply(context.Background(), fn)

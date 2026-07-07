@@ -17,30 +17,42 @@ const (
 type Kind string
 
 const (
-	KindNamespace     Kind = "Namespace"
-	KindResourceGroup Kind = "ResourceGroup"
-	KindFunction      Kind = "Function"
-	KindRevision      Kind = "Revision"
-	KindRoute         Kind = "Route"
-	KindService       Kind = "Service"
-	KindEventSource   Kind = "EventSource"
-	KindConfig        Kind = "Config"
-	KindSecret        Kind = "Secret"
-	KindGrant         Kind = "Grant"
-	KindEgressPolicy  Kind = "EgressPolicy"
-	KindInvocation    Kind = "Invocation"
-	KindRuntimeClass  Kind = "RuntimeClass"
-	KindWorkerNode    Kind = "WorkerNode"
-	KindGateway       Kind = "Gateway"
+	KindNamespace      Kind = "Namespace"
+	KindResourceGroup  Kind = "ResourceGroup"
+	KindFunction       Kind = "Function"
+	KindRevision       Kind = "Revision"
+	KindRoute          Kind = "Route"
+	KindService        Kind = "Service"
+	KindEventSource    Kind = "EventSource"
+	KindConfigMap      Kind = "ConfigMap"
+	KindSecret         Kind = "Secret"
+	KindGrant          Kind = "Grant"
+	KindEgressPolicy   Kind = "EgressPolicy"
+	KindInvocation     Kind = "Invocation"
+	KindRuntimeClass   Kind = "RuntimeClass"
+	KindWorkerNode     Kind = "WorkerNode"
+	KindGateway        Kind = "Gateway"
+	KindKVStore        Kind = "KVStore"
+	KindBucket         Kind = "Bucket"
+	KindCatalogService Kind = "CatalogService"
+	KindPolicy         Kind = "Policy"
+	KindWorkflow       Kind = "Workflow"
+	KindWorkflowRun    Kind = "WorkflowRun"
+	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
+	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
+	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
+	// from Kind.Validate's known-CRUD set by design.
+	KindS3Identity Kind = "S3Identity"
 )
 
-// Validate returns fault.Invalid if the Kind is not one of the 15 known kinds.
+// Validate returns fault.Invalid if the Kind is not one of the known kinds.
 func (k Kind) Validate() error {
 	switch k {
 	case KindNamespace, KindResourceGroup, KindFunction, KindRevision,
-		KindRoute, KindService, KindEventSource, KindConfig,
+		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
-		KindRuntimeClass, KindWorkerNode, KindGateway:
+		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
+		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -185,7 +197,7 @@ type Object interface {
 
 // StatusObject is the optional extension implemented by kinds with observed state,
 // giving the controller a generic status write-back seam.
-// Config, Secret, Grant, and EgressPolicy do NOT implement it.
+// ConfigMap, Secret, Grant, and EgressPolicy do NOT implement it.
 type StatusObject interface {
 	Object
 	GetStatus() *Status
@@ -238,8 +250,8 @@ func NewObject(k Kind) (Object, bool) {
 		es := &EventSource{}
 		es.TypeMeta = typeMetaFor(k)
 		return es, true
-	case KindConfig:
-		cfg := &Config{}
+	case KindConfigMap:
+		cfg := &ConfigMap{}
 		cfg.TypeMeta = typeMetaFor(k)
 		return cfg, true
 	case KindSecret:
@@ -270,12 +282,36 @@ func NewObject(k Kind) (Object, bool) {
 		gw := &Gateway{}
 		gw.TypeMeta = typeMetaFor(k)
 		return gw, true
+	case KindKVStore:
+		ks := &KVStore{}
+		ks.TypeMeta = typeMetaFor(k)
+		return ks, true
+	case KindBucket:
+		b := &Bucket{}
+		b.TypeMeta = typeMetaFor(k)
+		return b, true
+	case KindCatalogService:
+		cs := &CatalogService{}
+		cs.TypeMeta = typeMetaFor(k)
+		return cs, true
+	case KindPolicy:
+		pol := &Policy{}
+		pol.TypeMeta = typeMetaFor(k)
+		return pol, true
+	case KindWorkflow:
+		wf := &Workflow{}
+		wf.TypeMeta = typeMetaFor(k)
+		return wf, true
+	case KindWorkflowRun:
+		wr := &WorkflowRun{}
+		wr.TypeMeta = typeMetaFor(k)
+		return wr, true
 	default:
 		return nil, false
 	}
 }
 
-// AllKinds returns all 15 kinds in a stable order.
+// AllKinds returns all kinds in a stable order.
 func AllKinds() []Kind {
 	return []Kind{
 		KindNamespace,
@@ -285,7 +321,7 @@ func AllKinds() []Kind {
 		KindRoute,
 		KindService,
 		KindEventSource,
-		KindConfig,
+		KindConfigMap,
 		KindSecret,
 		KindGrant,
 		KindEgressPolicy,
@@ -293,6 +329,12 @@ func AllKinds() []Kind {
 		KindRuntimeClass,
 		KindWorkerNode,
 		KindGateway,
+		KindKVStore,
+		KindBucket,
+		KindCatalogService,
+		KindPolicy,
+		KindWorkflow,
+		KindWorkflowRun,
 	}
 }
 

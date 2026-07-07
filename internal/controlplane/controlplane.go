@@ -69,12 +69,12 @@ type Handlers interface {
 	ReplaceEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, es v1.EventSource) (v1.EventSource, error)
 	DeleteEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
-	// Config (namespaced)
-	GetConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Config, error)
-	CreateConfig(ctx context.Context, cfg v1.Config) (v1.Config, error)
-	ListConfigs(ctx context.Context, ns v1.NamespaceName) ([]v1.Config, error)
-	ReplaceConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.Config) (v1.Config, error)
-	DeleteConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	// ConfigMap (namespaced)
+	GetConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error)
+	CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error)
+	ListConfigMaps(ctx context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error)
+	ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error)
+	DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
 	// Secret (namespaced)
 	GetSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Secret, error)
@@ -124,6 +124,48 @@ type Handlers interface {
 	ListGateways(ctx context.Context) ([]v1.Gateway, error)
 	ReplaceGateway(ctx context.Context, name v1.ObjectName, gw v1.Gateway) (v1.Gateway, error)
 	DeleteGateway(ctx context.Context, name v1.ObjectName) error
+
+	// KVStore (namespaced) — ADR-0072
+	GetKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error)
+	CreateKVStore(ctx context.Context, ks v1.KVStore) (v1.KVStore, error)
+	ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error)
+	ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error)
+	DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Bucket (namespaced) — ADR-0080
+	GetBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error)
+	CreateBucket(ctx context.Context, b v1.Bucket) (v1.Bucket, error)
+	ListBuckets(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
+	ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error)
+	DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// CatalogService (namespaced) — ADR-0086
+	GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error)
+	CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error)
+	ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error)
+	ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error)
+	DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Policy (namespaced) — ADR-0074
+	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
+	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)
+	ListPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.Policy, error)
+	ReplacePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error)
+	DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Workflow (namespaced) — ADR-0094
+	GetWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error)
+	CreateWorkflow(ctx context.Context, wf v1.Workflow) (v1.Workflow, error)
+	ListWorkflows(ctx context.Context, ns v1.NamespaceName) ([]v1.Workflow, error)
+	ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error)
+	DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// WorkflowRun (namespaced) — ADR-0094
+	GetWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error)
+	CreateWorkflowRun(ctx context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error)
+	ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error)
+	ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error)
+	DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 }
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.

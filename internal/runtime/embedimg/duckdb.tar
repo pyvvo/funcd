@@ -1,0 +1,12 @@
+PLACEHOLDER — NOT a real OCI image tar (ADR-0086 / ADR-0054).
+
+This <1 KB committed stand-in exists only so go:embed has a file at compile time and
+embedimg.Tar("duckdb") returns a non-empty reader (the ADR-0054 non-gated unit test).
+
+The REAL per-arch DuckDB 1.5.4 runtime image (DuckDB + the ducklake/httpfs/quack extensions
++ the funcd shim entrypoint — images/runtime/duckdb/Dockerfile) is built at release/integration
+time by 'just build-runtime-images' (docker build -> docker save, gzip -9) and overwrites this
+file before the binary ships. Importing it into the managed containerd (client.Import) and
+exercising the live DuckLake/Quack engine is the node-gated lane (FUNCD_IT=1) — never 'just ci'.
+
+See internal/runtime/embedimg/README.md for the placeholder/release pattern.

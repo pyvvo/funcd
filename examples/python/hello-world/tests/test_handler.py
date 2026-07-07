@@ -1,10 +1,13 @@
-"""Tests for the Python hello-world function — the author's own unit tests, no shim needed."""
+"""Tests for the Python hello-world function — the author's own unit tests, no shim needed.
 
-from __future__ import annotations
+The platform owns input/output *validation* (the push build generates the schema from
+``FuncInput``/``FuncOutput`` and bakes a fastjsonschema validator; the shim runs it), so these
+tests exercise the handler directly on already-valid input.
+"""
 
-from funcd_shim import jtd
+from funcd_shim import CloudEvent
 
-from handler import event_schema, handle
+from handler import FuncInput, handle
 
 
 class _Ctx:
@@ -12,18 +15,13 @@ class _Ctx:
         pass
 
 
-def test_handle_echoes_data() -> None:
-    result = handle(_Ctx(), {"data": {"hello": "world"}})
-    assert result == {"echoed": {"hello": "world"}, "by": "funcd"}
+def test_handle_greets() -> None:
+    event: CloudEvent[FuncInput] = {"id": "1", "source": "s", "type": "t", "data": {"name": "world"}}
+    result = handle(_Ctx(), event)
+    assert result == {"greeting": "Hello, world."}
 
 
-def test_event_schema_accepts_valid() -> None:
-    schema = jtd.compile_schema(event_schema)
-    assert jtd.validate(schema, {"hello": "world"}) == []
-    assert jtd.validate(schema, {}) == []
-
-
-def test_event_schema_rejects_bad_shape() -> None:
-    schema = jtd.compile_schema(event_schema)
-    assert jtd.validate(schema, {"hello": 5}) != []  # wrong type
-    assert jtd.validate(schema, {"unexpected": 1}) != []  # additional property
+def test_funcinput_is_a_plain_dict_at_runtime() -> None:
+    # A TypedDict is runtime-honest: an instance is just a dict, exactly what the shim delivers.
+    data: FuncInput = {"name": "world"}
+    assert isinstance(data, dict)

@@ -60,7 +60,7 @@ func sampleFn() *v1.Function {
 func TestScenarioHandlerReadsInjectedSecret(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"})
+	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"}, nil)
 
 	require.Equal(t, "s3kr3t", spec.Env["API_KEY"], "the secret value is injected into the worker env")
 	require.Equal(t, "postgres://x", spec.Env["DB_URL"])
@@ -72,14 +72,14 @@ func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
 	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs",
-		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"})
+		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"}, nil)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value; the secret cannot override it")
 	require.NotContains(t, spec.Env, "FUNCD_PORT", "a FUNCD_-prefixed secret key is dropped, not injected")
 	require.Equal(t, "ok", spec.Env["SAFE"], "a non-reserved secret key still merges")
 }
 
-// resolveSecretEnv is fail-closed on every non-happy path (ADR-0057 Decision 5).
+// resolveBindingEnv is fail-closed on every non-happy path (ADR-0057 Decision 5; ADR-0093 extends the gate to config).
 func TestResolveSecretEnvFailClosed(t *testing.T) {
 	t.Parallel()
 	fn := sampleFn()
@@ -87,33 +87,32 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 
 	t.Run("no-secrets-returns-nil", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{})
-		env, err := r.resolveSecretEnv(context.Background(), sampleFn(), false)
+		env, err := r.resolveBindingEnv(context.Background(), sampleFn(), false)
 		require.NoError(t, err)
 		require.Nil(t, env)
 	})
 	t.Run("not-configured-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, nil) // no resolver wired
-		_, err := r.resolveSecretEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn, false)
 		require.Error(t, err)
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	})
 	t.Run("pooled-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{env: map[string]string{"API_KEY": "x"}})
-		_, err := r.resolveSecretEnv(context.Background(), fn, true) // pooled
+		_, err := r.resolveBindingEnv(context.Background(), fn, true) // pooled
 		require.Error(t, err, "a pooled function cannot inject secrets into its shared worker")
 	})
 	t.Run("resolver-error-propagates", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{err: fault.Forbiddenf("test", "denied")})
-		_, err := r.resolveSecretEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn, false)
 		require.Error(t, err)
 		require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	})
 }
 
-func TestIsReservedFuncdKeyAndSecretNames(t *testing.T) {
+func TestSecretNames(t *testing.T) {
 	t.Parallel()
-	require.True(t, isReservedFuncdKey("FUNCD_PORT"))
-	require.True(t, isReservedFuncdKey("FUNCD_ANYTHING_FUTURE"))
-	require.False(t, isReservedFuncdKey("API_KEY"))
+	// The reserved-FUNCD_-key guard moved to internal/secrets (ADR-0092, single definition — see
+	// secrets.TestMergeEnvGuarded / secrets.IsReservedKey); only secretNames remains local here.
 	require.Equal(t, []string{"a", "b"}, secretNames([]v1.ObjectName{"a", "b"}))
 }

@@ -1,0 +1,23 @@
+# ingest — writes raw Parquet into the lakehouse "bronze" layer via DuckDB over the S3 endpoint (ADR-0080).
+# The spec.blob binding (alias "lake" → bucket "lakehouse", prefix "bronze") IS the capability: default-deny,
+# without it the S3 access is Forbidden. ingest is bronze's `owner` (bucket.yaml), so it is the single WRITER
+# of bronze (write = caller == prefix.owner, mirroring KV owner-write — ADR-0076). Identity is connection-
+# scoped (no key issued/rotated); DuckDB uses anonymous S3 against the sandbox-scoped endpoint, e.g.
+# COPY raw TO 's3://lakehouse/bronze/raw-2026-06.parquet'.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: ingest
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: python314
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:ingest   # funcdctl push ingest.py
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  blob:
+    - alias: lake           # the in-code handle / DuckDB s3 path scope
+      bucket: lakehouse     # the Bucket (domain)
+      prefix: bronze        # the sub-domain it writes (it is bronze's owner → single writer)

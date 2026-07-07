@@ -8,6 +8,7 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
@@ -18,6 +19,15 @@ type Deps struct {
 	Authorizer  auth.Authorizer
 	Credentials middleware.CredentialStore
 	Logger      *slog.Logger
+	// Admissions are extra admissions registered on the write-path pipeline (ADR-0063), appended
+	// after the built-in validate admission. ADR-0064 passes the link admissions here. Optional.
+	Admissions []admission.Admission
+	// Logs is the function-log reader (ADR-0084). Optional; when set, NewServer registers the
+	// namespaced GET …/functions/{name}/logs route (authorized get/Function per caller).
+	Logs LogQuerier
+	// RunLogs is the run-scoped log querier (ADR-0106). Optional; when set, NewServer registers
+	// GET …/workflowruns/{name}/logs (authorized get/WorkflowRun; resolves status.traceId).
+	RunLogs WorkflowRunLogQuerier
 }
 
 // NewServer builds the authenticated, authorized, store-backed control-plane API
@@ -43,7 +53,14 @@ func NewServer(d Deps) (http.Handler, error) {
 
 	r := chi.NewRouter()
 	r.Use(middleware.Authn(d.Credentials))
-	NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer))
+	admissions := append([]admission.Admission{admission.NewValidateAdmission()}, d.Admissions...)
+	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...)))
+	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
+		RegisterLogs(api, d.Logs, d.Authorizer)
+	}
+	if d.RunLogs != nil { // ADR-0106: the run-scoped log read route (resolves status.traceId), same RBAC PEP
+		RegisterWorkflowRunLogs(api, d.RunLogs, d.Authorizer)
+	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil
 }

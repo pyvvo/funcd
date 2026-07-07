@@ -1,0 +1,23 @@
+# Daemon config for the workflow example on real containerd (ADR-0061/0094). Used by the Lima lane
+# (scripts/lanes.yaml `workflow` + `just lima-example workflow`): file storage + the containerd
+# runtime + the dev token. The workflow engine is always wired; its run state persists at
+# <dataDir>/workflow. Part of the mounted example bundle — the lane VM runs funcd against it.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces: [default]
+runtime:
+  mode: containerd
+workflow:
+  defaultStepTimeout: 60s
+  defaultRetry: 1
+log:
+  format: text
+  level: info

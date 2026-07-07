@@ -1,0 +1,13 @@
+# The owned KVStore the Python kv-counter writes to (ADR-0073). The store is a domain; its "table-counters"
+# table is a sub-domain owned by the pycounter function (its single writer). Deletion-protected (bound by
+# pycounter's spec.kv) and quota-bounded; per-op caps default (1 MiB value / 1 KiB key).
+apiVersion: funcd.io/v1alpha1
+kind: KVStore
+metadata:
+  name: py-counters
+  namespace: default
+  resourceGroup: rg1
+spec:
+  tables:
+    - name: table-counters
+      owner: pycounter

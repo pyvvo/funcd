@@ -87,18 +87,18 @@ func TestScenario_GenericStatusWriteback(t *testing.T) {
 		t.Fatalf("Conditions not written back: len=%d", len(fn.Status.Conditions))
 	}
 
-	// Config does NOT implement StatusObject
-	cfg := &Config{
-		TypeMeta:   TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: KindConfig},
+	// ConfigMap does NOT implement StatusObject
+	cfg := &ConfigMap{
+		TypeMeta:   TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: KindConfigMap},
 		ObjectMeta: ObjectMeta{Name: "test-cfg", Namespace: "default", ResourceGroup: "my-group"},
 	}
 	var obj Object = cfg
 	if _, ok := obj.(StatusObject); ok {
-		t.Error("Config should NOT implement StatusObject")
+		t.Error("ConfigMap should NOT implement StatusObject")
 	}
 
 	// All four pure-data/policy kinds must not implement StatusObject
-	pureKinds := []Kind{KindConfig, KindSecret, KindGrant, KindEgressPolicy}
+	pureKinds := []Kind{KindConfigMap, KindSecret, KindGrant, KindEgressPolicy}
 	for _, k := range pureKinds {
 		o, ok := NewObject(k)
 		if !ok {
@@ -130,6 +130,6 @@ func TestScenario_GenericStatusWriteback(t *testing.T) {
 var (
 	_ Object       = (*Function)(nil)
 	_ StatusObject = (*Function)(nil)
-	_ Object       = (*Config)(nil)
-	// Config must NOT compile as StatusObject — verified at runtime above
+	_ Object       = (*ConfigMap)(nil)
+	// ConfigMap must NOT compile as StatusObject — verified at runtime above
 )

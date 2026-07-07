@@ -21,8 +21,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from funcd_shim import jtd, shim
-from funcd_shim.types import CloudEvent, FunctionContext
+from funcd_shim import runtime, shim
+from funcd_shim.types import CloudEvent, FunctionContext, Validator
 
 ECHO = (
     "def handle(context, event):\n"
@@ -31,9 +31,26 @@ ECHO = (
 )
 
 
+# fake precompiled validators (stand-ins for what pydantic models produce via resolve_validators).
+def hello_input(data: Any) -> list[Any]:
+    ok = isinstance(data, dict) and isinstance(data.get("hello"), str)
+    return [] if ok else [{"msg": "hello must be a string"}]
+
+
+def ok_output(result: Any) -> list[Any]:
+    ok = isinstance(result, dict) and isinstance(result.get("ok"), bool)
+    return [] if ok else [{"msg": "ok must be a boolean"}]
+
+
+def void_output(result: Any) -> list[Any]:
+    return [] if result is None else [{"msg": "expected no body"}]
+
+
 @contextmanager
-def serve(handler: Any, schema: jtd.Schema | None = None) -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), shim.make_request_handler(handler, schema))
+def serve(handler: Any, validators: runtime.Validators | None = None) -> Iterator[str]:
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), shim.make_request_handler(handler, validators or runtime.Validators())
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -62,7 +79,7 @@ def get(base: str, path: str) -> int:
         return int(err.code)
 
 
-def _echo(context: FunctionContext, event: CloudEvent) -> dict[str, Any]:
+def _echo(context: FunctionContext, event: CloudEvent[Any]) -> dict[str, Any]:
     return {"echoed": event.get("data")}
 
 
@@ -81,7 +98,7 @@ def test_handler_returns_none_204() -> None:
 
 
 def test_handler_raises_500() -> None:
-    def boom(ctx: FunctionContext, event: CloudEvent) -> Any:
+    def boom(ctx: FunctionContext, event: CloudEvent[Any]) -> Any:
         raise RuntimeError("kaboom")
 
     with serve(boom) as base:
@@ -110,32 +127,53 @@ def test_health_endpoints() -> None:
         assert get(base, "/nope") == 404
 
 
-def test_contract_valid_passes() -> None:
-    schema = jtd.compile_schema({"optionalProperties": {"hello": {"type": "string"}}})
-    with serve(_echo, schema) as base:
+def test_input_contract_valid_passes() -> None:
+    with serve(_echo, runtime.Validators(input=hello_input)) as base:
         status, _ = post(base, json.dumps({"data": {"hello": "world"}}))
         assert status == 200
 
 
-def test_contract_mismatch_422_and_handler_not_called() -> None:
-    schema = jtd.compile_schema({"optionalProperties": {"hello": {"type": "string"}}})
+def test_input_contract_mismatch_422_and_handler_not_called() -> None:
     called = {"n": 0}
 
-    def counting(ctx: FunctionContext, event: CloudEvent) -> Any:
+    def counting(ctx: FunctionContext, event: CloudEvent[Any]) -> Any:
         called["n"] += 1
         return {}
 
-    with serve(counting, schema) as base:
+    with serve(counting, runtime.Validators(input=hello_input)) as base:
         status, body = post(base, json.dumps({"data": {"hello": 5}}))
         assert status == 422
         payload = json.loads(body)
-        assert payload["error"] == "event data does not match the contract"
+        assert payload["error"] == "event data does not match the input contract"
         assert payload["details"]
         assert called["n"] == 0
 
 
+def test_output_contract_mismatch_500() -> None:
+    with serve(lambda ctx, e: {"wrong": True}, runtime.Validators(output=ok_output)) as base:
+        status, body = post(base, json.dumps({"data": {}}))
+        assert status == 500
+        payload = json.loads(body)
+        assert payload["error"] == "handler result does not match the output contract"
+        assert payload["details"]
+
+
+def test_void_output_contract_empty_204_nonempty_500() -> None:
+    with serve(lambda ctx, e: None, runtime.Validators(output=void_output)) as base:
+        assert post(base, "{}")[0] == 204
+    with serve(lambda ctx, e: {"surprise": True}, runtime.Validators(output=void_output)) as base:
+        assert post(base, "{}")[0] == 500
+
+
+def test_json_input_accepts_anything() -> None:
+    json_input: Validator = lambda data: []  # noqa: E731 - generated from FuncInput = Json ({})
+    with serve(_echo, runtime.Validators(input=json_input)) as base:
+        status, _ = post(base, json.dumps({"data": ["literally", 1, True]}))
+        assert status == 200
+
+
 def test_no_contract_unvalidated() -> None:
-    with serve(_echo, None) as base:
+    with serve(_echo) as base:
         status, _ = post(base, json.dumps({"data": "anything goes"}))
         assert status == 200
 

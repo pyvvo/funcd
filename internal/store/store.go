@@ -3,7 +3,7 @@
 //
 // The store SEMANTICS (resourceVersion minting, generation bumping, optimistic
 // concurrency, in-process watch, filtering, at-rest encryption) live here ONCE,
-// over a minimal key/value Engine seam. Engines (memory, slatedb, bbolt) are
+// over a minimal key/value Engine seam. Engines (memory, badger) are
 // thin and swappable; New wraps any Engine with these semantics.
 package store
 
@@ -114,18 +114,19 @@ func WithEncryptor(kinds []v1.Kind, enc Encryptor) Option {
 	}
 }
 
-// Engine is the minimal key/value seam the store is built on. memory + slatedb
-// implement it; bbolt is the documented fallback.
+// Engine is the minimal key/value seam the store is built on. memory + badger
+// implement it.
 //
-// Update is an ATOMIC WRITE-BATCH (all-or-nothing), NOT a serializable
-// transaction: slatedb gives batch atomicity, not in-txn read-your-writes
-// isolation. Cross-writer serialization (the resourceVersion compare-and-set)
-// is the store wrapper's job (a write mutex), not the engine's — bbolt happens
-// to be serializable, but the store must not rely on that.
+// Update is contractually only an ATOMIC WRITE-BATCH (all-or-nothing); the seam
+// does NOT promise serializable, in-txn read-your-writes isolation, so the store
+// must not rely on it. Cross-writer serialization (the resourceVersion
+// compare-and-set) is the store wrapper's job (a write mutex), not the engine's —
+// an engine may happen to be serializable (badger's txns are), but the store
+// treats the seam conservatively.
 //
-// View runs read-only operations. It is NOT guaranteed to be a consistent
-// point-in-time snapshot across multiple reads on every engine: the memory engine
-// holds a read lock (so it is), but slatedb does not. Consequently List's collection
+// View runs read-only operations. The seam does not guarantee a consistent
+// point-in-time snapshot across multiple reads on every engine (the memory engine
+// holds a read lock, so it is; not all engines must). Consequently List's collection
 // resourceVersion is best-effort under concurrent writes; a caller needing a strict
 // snapshot re-reads at the returned resourceVersion.
 type Engine interface {

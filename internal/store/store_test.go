@@ -68,10 +68,10 @@ func TestScenario_SecretEncryptedAtRest(t *testing.T) {
 		t.Fatal("non-encrypting reader decoded ciphertext-at-rest; value was not encrypted")
 	}
 
-	// With no encryptor configured, a Config (not a Secret) is stored as plaintext
+	// With no encryptor configured, a ConfigMap (not a Secret) is stored as plaintext
 	// — confirming the seam is scoped to the named kinds, not blanket encryption.
-	cfgObj, _ := v1.NewObject(v1.KindConfig)
-	cfg, _ := cfgObj.(*v1.Config)
+	cfgObj, _ := v1.NewObject(v1.KindConfigMap)
+	cfg, _ := cfgObj.(*v1.ConfigMap)
 	cfg.Name = "plain"
 	cfg.Namespace = "default"
 	cfg.ResourceGroup = "rg1"
@@ -79,8 +79,8 @@ func TestScenario_SecretEncryptedAtRest(t *testing.T) {
 	if _, err := s.Create(ctx, cfg); err != nil {
 		t.Fatalf("Create(config): %v", err)
 	}
-	if _, err := plain.Get(ctx, v1.KindConfig.GVK(), "default", "plain"); err != nil {
-		t.Fatalf("non-encrypting reader should read the un-encrypted Config: %v", err)
+	if _, err := plain.Get(ctx, v1.KindConfigMap.GVK(), "default", "plain"); err != nil {
+		t.Fatalf("non-encrypting reader should read the un-encrypted ConfigMap: %v", err)
 	}
 }
 
@@ -90,8 +90,8 @@ func TestScenario_InputNotMutated(t *testing.T) {
 	ctx := context.Background()
 	s := store.New(memory.New())
 
-	in, _ := v1.NewObject(v1.KindConfig)
-	cfg, _ := in.(*v1.Config)
+	in, _ := v1.NewObject(v1.KindConfigMap)
+	cfg, _ := in.(*v1.ConfigMap)
 	cfg.Name = "imm"
 	cfg.Namespace = "default"
 	cfg.ResourceGroup = "rg1"
@@ -109,8 +109,8 @@ func TestScenario_InputNotMutated(t *testing.T) {
 		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d", cm.UID, cm.ResourceVersion, cm.Generation)
 	}
 
-	up, _ := v1.NewObject(v1.KindConfig)
-	uc, _ := up.(*v1.Config)
+	up, _ := v1.NewObject(v1.KindConfigMap)
+	uc, _ := up.(*v1.ConfigMap)
 	uc.Name = "imm"
 	uc.Namespace = "default"
 	uc.ResourceGroup = "rg1"
@@ -165,14 +165,14 @@ func TestScenario_GenerationStatusOnlyNoBump(t *testing.T) {
 func TestScenario_ReturnedObjectIndependentOfWatch(t *testing.T) {
 	ctx := context.Background()
 	s := store.New(memory.New())
-	w, err := s.Watch(ctx, v1.KindConfig.GVK(), store.WatchOptions{})
+	w, err := s.Watch(ctx, v1.KindConfigMap.GVK(), store.WatchOptions{})
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 	defer w.Stop()
 
-	in, _ := v1.NewObject(v1.KindConfig)
-	c, _ := in.(*v1.Config)
+	in, _ := v1.NewObject(v1.KindConfigMap)
+	c, _ := in.(*v1.ConfigMap)
 	c.Name = "ind"
 	c.Namespace = "default"
 	c.ResourceGroup = "rg1"
@@ -190,8 +190,8 @@ func TestScenario_ReturnedObjectIndependentOfWatch(t *testing.T) {
 	}
 
 	// Mutate the returned object; the already-delivered watch event must be unaffected.
-	created.(*v1.Config).Spec.Data["k"] = "MUTATED"
-	if got := ev.Object.(*v1.Config).Spec.Data["k"]; got != "v" {
+	created.(*v1.ConfigMap).Spec.Data["k"] = "MUTATED"
+	if got := ev.Object.(*v1.ConfigMap).Spec.Data["k"]; got != "v" {
 		t.Fatalf("watch event aliased the returned object: got %q, want v", got)
 	}
 }

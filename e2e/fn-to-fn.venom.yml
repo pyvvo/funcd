@@ -1,0 +1,66 @@
+# Venom e2e suite for the fn-to-fn link lane (ADR-0064/0058) — the declarative invoke phase of
+# `just lima-example-fn-to-fn`, run host-side AFTER the self-deploying Lima VM is Ready (it replaced the
+# bash invoke script). All steps are data-plane http against the VM's forwarded :8081 — front declares a
+# link to greeter and brokers a synchronous context.invoke; the link IS the capability (no link ⇒ fails
+# closed). The one exec step reads in-VM state (the invoke sockets) to show the link default-deny.
+#
+# Proves: (1) happy path — front invokes greeter and wraps its greeting; (2) contract propagation — a
+# missing name reaches greeter, whose stricter contract rejects it (422), and that 422 propagates back
+# through front; (3) direct greeter with a bad type — the contract gate (ADR-0058) returns 422 before the
+# handler; (4) only the linked caller (front) has an invoke socket.
+name: fn-to-fn links — invoke + contract propagation (ADR-0064/0058, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: happy path — front invokes greeter (the link is the capability)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/front"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 10            # first call: absorb any warm-up after Ready
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.via ShouldEqual front
+          - result.bodyjson.greeting ShouldContainSubstring venom   # "Hello, venom!" — greeter's reply, wrapped
+
+  - name: contract propagation — missing name → greeter's 422 surfaces in front's error
+    steps:
+      # front is permissive (name optional) and forwards verbatim; greeter's stricter contract rejects the
+      # missing name with 422. front's awaited context.invoke THROWS on that (no try/catch, by design), so
+      # front returns 500 whose body CARRIES the propagated greeter 422 — that is the propagation.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/front"
+        headers: { content-type: application/json }
+        body: '{"data":{}}'
+        info: "front response → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500                         # front's awaited invoke throws
+          - result.body ShouldContainSubstring greeter                # names the failed invoke
+          - result.body ShouldContainSubstring 422                    # greeter's contract status, propagated
+
+  - name: direct greeter, bad type — contract 422 before the handler
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/greeter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":123}}'                                # name must be a string (input schema)
+        assertions:
+          - result.statuscode ShouldEqual 422
+
+  - name: link default-deny — the linked caller (front) has an invoke socket
+    steps:
+      # in-VM read of the per-function local-API sockets (not forwarded) — the link is the capability.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo ls -1 /var/lib/funcd/data/invoke/
+        info: "invoke sockets → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring front

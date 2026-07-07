@@ -1,0 +1,166 @@
+{
+  "profile": "inmem",
+  "keys": 1000000,
+  "funcs": 1000,
+  "valueBytes": 256,
+  "syncWrites": false,
+  "gomaxprocs": 14,
+  "lsmBytes": 0,
+  "vlogBytes": 0,
+  "dirBytes": 0,
+  "runPeakRssMB": 1892.81,
+  "finalRssMB": 1892.88,
+  "results": [
+    {
+      "name": "bulk-write (WriteBatch)",
+      "ops": 1000000,
+      "millis": 929,
+      "opsPerSec": 1076273.0968892716,
+      "rssBeforeMB": 15.11,
+      "rssAfterMB": 751.73,
+      "rssPeakMB": 751.72,
+      "goHeapMB": 460.08
+    },
+    {
+      "name": "get (warm, random)",
+      "ops": 200000,
+      "millis": 1332,
+      "opsPerSec": 150070.50969103765,
+      "rssBeforeMB": 751.8,
+      "rssAfterMB": 821.13,
+      "rssPeakMB": 821.11,
+      "goHeapMB": 666.05,
+      "note": "0 miss"
+    },
+    {
+      "name": "scan (keys only)",
+      "ops": 1000000,
+      "millis": 273,
+      "opsPerSec": 3663003.6630036626,
+      "rssBeforeMB": 821.17,
+      "rssAfterMB": 821.19,
+      "rssPeakMB": 821.19,
+      "goHeapMB": 671.6,
+      "note": "1,000,000 keys"
+    },
+    {
+      "name": "scan (keys+values)",
+      "ops": 1000000,
+      "millis": 529,
+      "opsPerSec": 1890359.1682419658,
+      "rssBeforeMB": 821.2,
+      "rssAfterMB": 821.2,
+      "rssPeakMB": 821.2,
+      "goHeapMB": 673.76,
+      "note": "1,000,000 keys"
+    },
+    {
+      "name": "prefix-scan (one fn)",
+      "ops": 1000,
+      "millis": 0,
+      "opsPerSec": 0,
+      "rssBeforeMB": 821.2,
+      "rssAfterMB": 821.2,
+      "rssPeakMB": 0,
+      "goHeapMB": 673.59,
+      "note": "1,000 keys in fn000500"
+    },
+    {
+      "name": "txn-write (Update, batch=16)",
+      "ops": 100000,
+      "millis": 157,
+      "opsPerSec": 636178.8553233856,
+      "rssBeforeMB": 821.2,
+      "rssAfterMB": 821.2,
+      "rssPeakMB": 821.2,
+      "goHeapMB": 672.48
+    },
+    {
+      "name": "delete (point)",
+      "ops": 100000,
+      "millis": 117,
+      "opsPerSec": 852129.2959981291,
+      "rssBeforeMB": 821.2,
+      "rssAfterMB": 821.22,
+      "rssPeakMB": 821.22,
+      "goHeapMB": 672.26
+    },
+    {
+      "name": "merge-operator (counter)",
+      "ops": 100000,
+      "millis": 596,
+      "opsPerSec": 167580.92535254316,
+      "rssBeforeMB": 821.23,
+      "rssAfterMB": 821.23,
+      "rssPeakMB": 821.23,
+      "goHeapMB": 421.93,
+      "note": "counter=100000"
+    },
+    {
+      "name": "idle-hold (serving, clean)",
+      "ops": 0,
+      "millis": 2006,
+      "opsPerSec": 0,
+      "rssBeforeMB": 821.23,
+      "rssAfterMB": 821.23,
+      "rssPeakMB": 821.23,
+      "goHeapMB": 421.01,
+      "note": "after GC + idle"
+    },
+    {
+      "name": "subscribe (writes under watch)",
+      "ops": 20000,
+      "millis": 179,
+      "opsPerSec": 111716.29254267437,
+      "rssBeforeMB": 821.23,
+      "rssAfterMB": 821.23,
+      "rssPeakMB": 821.23,
+      "goHeapMB": 421.43,
+      "note": "20,000/20,000 notifications delivered"
+    },
+    {
+      "name": "backup (full, since=0)",
+      "ops": 0,
+      "millis": 2785,
+      "opsPerSec": 0,
+      "rssBeforeMB": 821.25,
+      "rssAfterMB": 1559,
+      "rssPeakMB": 1559,
+      "goHeapMB": 421.27,
+      "note": "291.8 MiB out, version=126670"
+    },
+    {
+      "name": "stream (parallel read)",
+      "ops": 1024896,
+      "millis": 3342,
+      "opsPerSec": 306671.4542190305,
+      "rssBeforeMB": 1559,
+      "rssAfterMB": 1892.61,
+      "rssPeakMB": 1892.61,
+      "goHeapMB": 421.73,
+      "note": "1,024,896 kvs"
+    },
+    {
+      "name": "DropPrefix (per-fn wipe)",
+      "ops": 1,
+      "millis": 982,
+      "opsPerSec": 1.0181453870886947,
+      "rssBeforeMB": 1892.64,
+      "rssAfterMB": 1892.77,
+      "rssPeakMB": 1892.77,
+      "goHeapMB": 305.49,
+      "note": "dropped fn000500"
+    },
+    {
+      "name": "idle-hold (after export)",
+      "ops": 0,
+      "millis": 2001,
+      "opsPerSec": 0,
+      "rssBeforeMB": 1892.81,
+      "rssAfterMB": 1892.81,
+      "rssPeakMB": 1892.81,
+      "goHeapMB": 305.37,
+      "note": "after GC + idle"
+    }
+  ]
+}

@@ -2,43 +2,51 @@ package function
 
 import (
 	"context"
-	"strings"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/green-0-rabbit/funcd/internal/envresolve"
+	"github.com/green-0-rabbit/funcd/internal/secrets"
 )
 
 // SecretResolver resolves a function's bound Secret names → an env-var map for worker
 // injection, PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local
-// seam, never on the internal/secrets feature directly (ADR-0002 import discipline) —
-// satisfied by *secrets.Resolver, wired in pkg/funcd. A nil resolver on Deps disables secret
-// injection: a function that declares spec.secrets then fails closed (SecretResolveFailed).
+// seam for resolution (ADR-0002 import discipline) — satisfied by *secrets.Resolver, wired in
+// pkg/funcd; it uses internal/secrets only for the pure reserved-key guard (MergeEnvGuarded,
+// no store dep, ADR-0092). A nil resolver on Deps disables secret injection: a function that
+// declares spec.secrets then fails closed (SecretResolveFailed).
 type SecretResolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
 
-// resolveSecretEnv resolves a function's bound secrets into an env-var map for worker
-// injection (ADR-0057). It returns (nil, nil) when the function declares no secrets. Every
-// other path is fail-closed: an unconfigured resolver, a pooled function (whose shared worker
-// env can't isolate per-function secrets), or any ResolveEnv error (PDP-deny / missing Secret)
-// returns an error so Reconcile holds the function not-Ready (SecretResolveFailed) with no worker.
-func (r *Reconciler) resolveSecretEnv(ctx context.Context, fn *v1.Function, pooled bool) (map[string]string, error) {
-	const op = "function.resolveSecretEnv"
-	if len(fn.Spec.Secrets) == 0 {
+// resolveBindingEnv resolves a function's bound ConfigMaps (spec.config, non-sensitive) +
+// Secrets (spec.secrets, sensitive) into one guarded env-var map for worker injection, via the
+// single shared resolver (ADR-0093, envresolve.ResolveEnv — config first, then secrets). It
+// returns (nil, nil) when the function declares neither. Every other path is fail-closed: a
+// pooled function (whose shared worker env can't isolate per-function bindings) fails closed if
+// EITHER config OR secrets is declared, and any resolver error (a missing ConfigMap → ErrConfig,
+// or a PDP-deny / missing Secret / unconfigured resolver → ErrSecret) returns an error so
+// Reconcile holds the function not-Ready (ConfigResolveFailed / SecretResolveFailed) with no worker.
+func (r *Reconciler) resolveBindingEnv(ctx context.Context, fn *v1.Function, pooled bool) (map[string]string, error) {
+	const op = "function.resolveBindingEnv"
+	if len(fn.Spec.Config) == 0 && len(fn.Spec.Secrets) == 0 {
 		return nil, nil
 	}
-	if r.secrets == nil {
-		return nil, fault.Invalidf(op, "secret injection is not configured but %s/%s declares %d secret(s)",
-			fn.Namespace, fn.Name, len(fn.Spec.Secrets))
-	}
 	if pooled {
-		return nil, fault.Invalidf(op, "secret injection is not supported for pooled functions in V1 (%s/%s); run it solo",
+		// The pooled gate fails closed if EITHER config or secrets is declared (ADR-0093 §3):
+		// per-function env can't isolate in a shared pooled worker.
+		return nil, fault.Invalidf(op, "config/secret injection is not supported for pooled functions in V1 (%s/%s); run it solo",
 			fn.Namespace, fn.Name)
 	}
-	env, err := r.secrets.ResolveEnv(ctx, r.developerFor(fn.Namespace), fn.Namespace, secretNames(fn.Spec.Secrets))
+	env, err := envresolve.ResolveEnv(ctx, envresolve.Deps{
+		Secrets:  r.secrets,
+		Store:    r.store,
+		Identity: r.developerFor,
+		Logger:   r.logger,
+	}, fn.Namespace, fn.Spec.Config, fn.Spec.Secrets)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve secrets")
+		return nil, err
 	}
 	return env, nil
 }
@@ -48,20 +56,8 @@ func (r *Reconciler) resolveSecretEnv(ctx context.Context, fn *v1.Function, pool
 // can never shadow the shim contract (ADR-0057, reserved-env-not-overridable). Pure: it mutates
 // only the passed env map.
 func (r *Reconciler) mergeSecretEnv(env, secretEnv map[string]string) {
-	for k, v := range secretEnv {
-		if isReservedFuncdKey(k) {
-			r.logger.Warn("dropping secret env key that collides with a reserved FUNCD_ key", "key", k)
-			continue
-		}
-		env[k] = v
-	}
+	secrets.MergeEnvGuarded(env, secretEnv, r.logger)
 }
-
-// isReservedFuncdKey reports whether an env key is reserved by the runtime shim contract
-// (FUNCD_ARTIFACT/HANDLER/PORT/POOL_MANIFEST/PORTFILE, …). A prefix guard (not an explicit
-// set) keeps every current and future reserved key protected without editing this function —
-// a resolved secret can never shadow a reserved key (ADR-0057, reserved-env-not-overridable).
-func isReservedFuncdKey(k string) bool { return strings.HasPrefix(k, "FUNCD_") }
 
 // secretNames converts the typed spec field to the []string the Resolver takes.
 func secretNames(names []v1.ObjectName) []string {

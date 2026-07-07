@@ -188,6 +188,68 @@ on its merits; reorder or parallelize work within a build tier; and restructure 
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
 the rules above. The judge advises; it never blocks a sound decision on taste.
 
+## Backlog — un-scoped ideas live on the GitHub Project, not in the docs
+
+The four document layers hold **committed, version-scoped** work (a feat row, an ADR, a roadmap
+item). Raw future ideas that are **not yet scoped into a version** — cross-cutting "someday"
+features, research spikes, anything deferred past the current version — do **not** belong in the
+docs (they would rot the feat/roadmap with un-decided scope). They go to the project's GitHub
+**Project board #4**:
+
+- **Board**: <https://github.com/users/green-0-rabbit/projects/4/views/1> (`@green-0-rabbit's funcd`).
+- **Use the [`/project-management`](skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
+  Its `driver.py` bakes in the project/field/option ids (verified) so there is nothing to discover;
+  it needs the `project` token scope (the `green-0-rabbit` token already has it; otherwise
+  `gh auth refresh -s project`). **List first** to avoid duplicates, then create:
+
+  ```bash
+  python3 .claude/skills/project-management/driver.py list
+  python3 .claude/skills/project-management/driver.py create \
+    --title "<short idea title>" \
+    --body "<why · key trade-offs · what it depends on · scope-when-picked-up>"
+  ```
+
+  `create` defaults the item to **Backlog** (never "No Status"). Write a rich body — match the depth
+  of the existing items (`driver.py show "<substring>"`).
+
+Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
+the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
+artifact-contract registry, and distro packaging P-Z.) **And — see below — a *feature* ADR also
+carries a board card** from the moment it's drafted, so the board shows feature work in flight, not
+only un-scoped ideas.
+
+### A feature ADR carries a board card that natively tracks its lifecycle
+
+A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
+FEAT-0001, FEAT-0003) — **gets a Project #4 tracking card created when it is first drafted**, and its
+**Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
+it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
+
+**Pure-infra / process / refactor ADRs skip the card** — a rename (ADR-0078/0079), a tooling/e2e ADR
+(ADR-0077), the process ADR (ADR-0000): no card. (If a feature ADR was *scoped from a pre-existing
+board idea*, **reuse that card — don't create a second**; `driver.py list` first.) When unsure, read
+the ADR's `Realizes:` header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
+
+The board's three Status options — **Backlog · In Progress · Done** — map onto the five ADR statuses:
+
+| ADR status | Board card | Moved by |
+|---|---|---|
+| `Draft` | **create the card in `Backlog`** | the `adr` skill, at draft |
+| `Proposed` (+ judge) | stays `Backlog` | — |
+| `Accepted` | `→ In Progress` | the `adr` / `adr-batch` accept step |
+| `Reviewing` | stays `In Progress` | — (no move; `adr-impl` just notes it) |
+| `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
+
+The skill gates carry each move as an explicit step. Create/move the card with the
+[`/project-management`](skills/project-management/SKILL.md) skill (it resolves the item by title
+substring — no ids to hand-assemble):
+
+```bash
+python3 .claude/skills/project-management/driver.py create --title "<…> — ADR-NNNN / FEAT-NNNN Fxx" --body "<…>"  # at Draft
+python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
+python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
+```
+
 ## Dev environment — run everything through Nix
 
 The toolchain is pinned by the flake ([flake.nix](../flake.nix) + `flake.lock`) — Go, `just`, and
@@ -235,6 +297,21 @@ go build ./... && go test ./... && go tool golangci-lint run ./... && go mod ver
 When all four pass individually, the implementation is green — the `git diff` gate is
 satisfied by committing the changed tracked files. After `go fmt ./...` is clean and the
 four checks above pass, the implementation is done; `just ci` will pass after commit.
+
+### 3. The containerd Lima lanes need colima (Docker) running — start it if a lane fails early
+
+The `just lima-example-*` lanes (KV, fn-to-fn, …) and `build-runtime-images` build the embedded
+runtime images with `docker build`, so they require **colima to be running** (it provides the
+Docker daemon on macOS — a *separate host daemon* from the flake-pinned Lima). If colima is
+stopped, the lane fails **early in `build-runtime-images`** with a Docker-socket connection error
+(`failed to connect to the docker API … : no such file or directory`) — *before* the VM ever
+boots or the Venom suite runs. This is environmental, **not** a code/test/suite defect; don't
+chase it in the lane's YAML.
+
+**Mitigation**: `colima start`, confirm `docker info` responds (and `docker context show` is
+`colima`), then re-run the lane. colima can stop/die mid-session (sleep, resource pressure); when
+a containerd lane suddenly fails at the image-build step, check colima **first**. Keep it running;
+don't stop it mid-session. (The Venom e2e suites themselves are covered by the `venom-e2e` skill.)
 
 ## Before you finish any skill run — propagation checklist
 

@@ -1,0 +1,199 @@
+{
+  "profile": "default",
+  "keys": 1000000,
+  "funcs": 1000,
+  "valueBytes": 256,
+  "syncWrites": false,
+  "gomaxprocs": 14,
+  "lsmBytes": 0,
+  "vlogBytes": 0,
+  "dirBytes": 2331985406,
+  "runPeakRssMB": 1664.53,
+  "finalRssMB": 1609.78,
+  "results": [
+    {
+      "name": "bulk-write (WriteBatch)",
+      "ops": 1000000,
+      "millis": 1187,
+      "opsPerSec": 841999.3485030042,
+      "rssBeforeMB": 15.75,
+      "rssAfterMB": 867.61,
+      "rssPeakMB": 866.28,
+      "goHeapMB": 430.06
+    },
+    {
+      "name": "get (warm, random)",
+      "ops": 200000,
+      "millis": 1180,
+      "opsPerSec": 169481.25600864016,
+      "rssBeforeMB": 867.72,
+      "rssAfterMB": 831.47,
+      "rssPeakMB": 880.89,
+      "goHeapMB": 622.17,
+      "note": "0 miss"
+    },
+    {
+      "name": "scan (keys only)",
+      "ops": 1000000,
+      "millis": 259,
+      "opsPerSec": 3861003.861003861,
+      "rssBeforeMB": 831.52,
+      "rssAfterMB": 831.56,
+      "rssPeakMB": 831.56,
+      "goHeapMB": 627.16,
+      "note": "1,000,000 keys"
+    },
+    {
+      "name": "scan (keys+values)",
+      "ops": 1000000,
+      "millis": 498,
+      "opsPerSec": 2008032.1285140563,
+      "rssBeforeMB": 831.56,
+      "rssAfterMB": 831.56,
+      "rssPeakMB": 831.56,
+      "goHeapMB": 629.42,
+      "note": "1,000,000 keys"
+    },
+    {
+      "name": "prefix-scan (one fn)",
+      "ops": 1000,
+      "millis": 0,
+      "opsPerSec": 0,
+      "rssBeforeMB": 831.56,
+      "rssAfterMB": 831.56,
+      "rssPeakMB": 0,
+      "goHeapMB": 629.27,
+      "note": "1,000 keys in fn000500"
+    },
+    {
+      "name": "txn-write (Update, batch=16)",
+      "ops": 100000,
+      "millis": 198,
+      "opsPerSec": 504645.78932233294,
+      "rssBeforeMB": 831.56,
+      "rssAfterMB": 859.89,
+      "rssPeakMB": 857.63,
+      "goHeapMB": 628.01
+    },
+    {
+      "name": "delete (point)",
+      "ops": 100000,
+      "millis": 146,
+      "opsPerSec": 684153.8301278057,
+      "rssBeforeMB": 859.89,
+      "rssAfterMB": 863.56,
+      "rssPeakMB": 863.5,
+      "goHeapMB": 628.05
+    },
+    {
+      "name": "merge-operator (counter)",
+      "ops": 100000,
+      "millis": 717,
+      "opsPerSec": 139358.87825423328,
+      "rssBeforeMB": 863.58,
+      "rssAfterMB": 871.41,
+      "rssPeakMB": 871.25,
+      "goHeapMB": 377.25,
+      "note": "counter=100000"
+    },
+    {
+      "name": "idle-hold (serving, clean)",
+      "ops": 0,
+      "millis": 2011,
+      "opsPerSec": 0,
+      "rssBeforeMB": 871.41,
+      "rssAfterMB": 871.41,
+      "rssPeakMB": 871.41,
+      "goHeapMB": 376.52,
+      "note": "after GC + idle"
+    },
+    {
+      "name": "subscribe (writes under watch)",
+      "ops": 20000,
+      "millis": 207,
+      "opsPerSec": 96387.16797632731,
+      "rssBeforeMB": 871.41,
+      "rssAfterMB": 877.73,
+      "rssPeakMB": 877.59,
+      "goHeapMB": 377.14,
+      "note": "20,000/20,000 notifications delivered"
+    },
+    {
+      "name": "backup (full, since=0)",
+      "ops": 0,
+      "millis": 3588,
+      "opsPerSec": 0,
+      "rssBeforeMB": 877.73,
+      "rssAfterMB": 1439.56,
+      "rssPeakMB": 1439.56,
+      "goHeapMB": 377.19,
+      "note": "291.8 MiB out, version=126670"
+    },
+    {
+      "name": "stream (parallel read)",
+      "ops": 1024896,
+      "millis": 2735,
+      "opsPerSec": 374733.4552102377,
+      "rssBeforeMB": 1439.56,
+      "rssAfterMB": 1660.25,
+      "rssPeakMB": 1660.25,
+      "goHeapMB": 377.66,
+      "note": "1,024,896 kvs"
+    },
+    {
+      "name": "DropPrefix (per-fn wipe)",
+      "ops": 1,
+      "millis": 1033,
+      "opsPerSec": 0.9677836513298791,
+      "rssBeforeMB": 1660.25,
+      "rssAfterMB": 1610.58,
+      "rssPeakMB": 1664.53,
+      "goHeapMB": 258.48,
+      "note": "dropped fn000500"
+    },
+    {
+      "name": "idle-hold (after export)",
+      "ops": 0,
+      "millis": 2001,
+      "opsPerSec": 0,
+      "rssBeforeMB": 1610.58,
+      "rssAfterMB": 1610.58,
+      "rssPeakMB": 1610.58,
+      "goHeapMB": 258.52,
+      "note": "after GC + idle"
+    },
+    {
+      "name": "reopen (cold open)",
+      "ops": 1,
+      "millis": 0,
+      "opsPerSec": 144592.24985540775,
+      "rssBeforeMB": 1568.73,
+      "rssAfterMB": 1568.73,
+      "rssPeakMB": 0,
+      "goHeapMB": 88.71,
+      "note": "opened in 11ms"
+    },
+    {
+      "name": "idle-hold (after reopen)",
+      "ops": 0,
+      "millis": 2000,
+      "opsPerSec": 0,
+      "rssBeforeMB": 1568.73,
+      "rssAfterMB": 1568.73,
+      "rssPeakMB": 1568.73,
+      "goHeapMB": 88.77,
+      "note": "after GC + idle"
+    },
+    {
+      "name": "get (cold, random)",
+      "ops": 200000,
+      "millis": 1330,
+      "opsPerSec": 150296.92570464054,
+      "rssBeforeMB": 1568.73,
+      "rssAfterMB": 1609.78,
+      "rssPeakMB": 1609.78,
+      "goHeapMB": 352.49,
+      "note": "19357 miss"
+    }
+  ]
+}

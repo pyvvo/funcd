@@ -1,0 +1,19 @@
+# The lakehouse Bucket for the F48 catalog (ADR-0080). The `gold` prefix holds the Parquet data AND
+# the DuckLake SQLite catalog (under _ducklake/catalog.db). Its `owner` is the single writer — the
+# catalog engine's identity.
+#
+# GATED (see README): the bucket-prefix-owner-exists admission requires `owner` to be a real Function.
+# The ADR-0087 engine is NOT a Function, so `owner: lake` resolves only once the provider-identity
+# follow-up lands (an identity-only Function, or a provider principal in the F47/Cedar model). Until
+# then this prefix can't name the engine as owner.
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold
+      owner: lake          # the CatalogService's provider identity (gated on the identity follow-up)
+  maxObjectBytes: 1073741824

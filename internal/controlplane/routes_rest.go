@@ -139,68 +139,68 @@ func registerEventSource(api huma.API, h Handlers) {
 	})
 }
 
-// ===== Config (namespaced) =====
+// ===== ConfigMap (namespaced) =====
 
-type createConfigInput struct{ Body v1.Config }
-type configOutput struct{ Body v1.Config }
-type listConfigOutput struct{ Body []v1.Config }
+type createConfigMapInput struct{ Body v1.ConfigMap }
+type configMapOutput struct{ Body v1.ConfigMap }
+type listConfigMapOutput struct{ Body []v1.ConfigMap }
 
-func registerConfig(api huma.API, h Handlers) {
-	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/configs"
+func registerConfigMap(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps"
 
 	huma.Register(api, huma.Operation{
-		OperationID: "listConfigs", Method: http.MethodGet, Path: base,
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *namespacedList) (*listConfigOutput, error) {
-		items, err := h.ListConfigs(ctx, in.Namespace)
+		OperationID: "listConfigMaps", Method: http.MethodGet, Path: base,
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *namespacedList) (*listConfigMapOutput, error) {
+		items, err := h.ListConfigMaps(ctx, in.Namespace)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &listConfigOutput{Body: items}, nil
+		return &listConfigMapOutput{Body: items}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "createConfig", Method: http.MethodPost, Path: base,
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *createConfigInput) (*configOutput, error) {
-		item, err := h.CreateConfig(ctx, in.Body)
+		OperationID: "createConfigMap", Method: http.MethodPost, Path: base,
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *createConfigMapInput) (*configMapOutput, error) {
+		item, err := h.CreateConfigMap(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "getConfig", Method: http.MethodGet, Path: base + "/{name}",
-		Tags: []string{"Config"},
-	}, func(ctx context.Context, in *namespacedGet) (*configOutput, error) {
-		item, err := h.GetConfig(ctx, in.Namespace, in.Name)
+		OperationID: "getConfigMap", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
+	}, func(ctx context.Context, in *namespacedGet) (*configMapOutput, error) {
+		item, err := h.GetConfigMap(ctx, in.Namespace, in.Name)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "replaceConfig", Method: http.MethodPut, Path: base + "/{name}",
-		Tags: []string{"Config"},
+		OperationID: "replaceConfigMap", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *struct {
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
-		Body      v1.Config
-	}) (*configOutput, error) {
-		item, err := h.ReplaceConfig(ctx, in.Namespace, in.Name, in.Body)
+		Body      v1.ConfigMap
+	}) (*configMapOutput, error) {
+		item, err := h.ReplaceConfigMap(ctx, in.Namespace, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
 		}
-		return &configOutput{Body: item}, nil
+		return &configMapOutput{Body: item}, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "deleteConfig", Method: http.MethodDelete, Path: base + "/{name}",
-		Tags: []string{"Config"},
+		OperationID: "deleteConfigMap", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteConfig(ctx, in.Namespace, in.Name))
+		return nil, wrapFaultError(h.DeleteConfigMap(ctx, in.Namespace, in.Name))
 	})
 }
 
@@ -331,6 +331,266 @@ func registerGrant(api huma.API, h Handlers) {
 		Tags: []string{"Grant"},
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 		return nil, wrapFaultError(h.DeleteGrant(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== KVStore (namespaced) — ADR-0072 =====
+
+type createKVStoreInput struct{ Body v1.KVStore }
+type kvStoreOutput struct{ Body v1.KVStore }
+type listKVStoreOutput struct{ Body []v1.KVStore }
+
+func registerKVStore(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listKVStores", Method: http.MethodGet, Path: base,
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedList) (*listKVStoreOutput, error) {
+		items, err := h.ListKVStores(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listKVStoreOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createKVStore", Method: http.MethodPost, Path: base,
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *createKVStoreInput) (*kvStoreOutput, error) {
+		item, err := h.CreateKVStore(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getKVStore", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedGet) (*kvStoreOutput, error) {
+		item, err := h.GetKVStore(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceKVStore", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.KVStore
+	}) (*kvStoreOutput, error) {
+		item, err := h.ReplaceKVStore(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteKVStore", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteKVStore(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== Bucket (namespaced) — ADR-0080 =====
+
+type createBucketInput struct{ Body v1.Bucket }
+type bucketOutput struct{ Body v1.Bucket }
+type listBucketOutput struct{ Body []v1.Bucket }
+
+func registerBucket(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listBuckets", Method: http.MethodGet, Path: base,
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedList) (*listBucketOutput, error) {
+		items, err := h.ListBuckets(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listBucketOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createBucket", Method: http.MethodPost, Path: base,
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *createBucketInput) (*bucketOutput, error) {
+		item, err := h.CreateBucket(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getBucket", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedGet) (*bucketOutput, error) {
+		item, err := h.GetBucket(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceBucket", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Bucket
+	}) (*bucketOutput, error) {
+		item, err := h.ReplaceBucket(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &bucketOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteBucket", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Bucket"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteBucket(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== CatalogService (namespaced) — ADR-0086 =====
+
+type createCatalogServiceInput struct{ Body v1.CatalogService }
+type catalogServiceOutput struct{ Body v1.CatalogService }
+type listCatalogServiceOutput struct{ Body []v1.CatalogService }
+
+func registerCatalogService(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listCatalogServices", Method: http.MethodGet, Path: base,
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedList) (*listCatalogServiceOutput, error) {
+		items, err := h.ListCatalogServices(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listCatalogServiceOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createCatalogService", Method: http.MethodPost, Path: base,
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *createCatalogServiceInput) (*catalogServiceOutput, error) {
+		item, err := h.CreateCatalogService(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getCatalogService", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedGet) (*catalogServiceOutput, error) {
+		item, err := h.GetCatalogService(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceCatalogService", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.CatalogService
+	}) (*catalogServiceOutput, error) {
+		item, err := h.ReplaceCatalogService(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &catalogServiceOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteCatalogService", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"CatalogService"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteCatalogService(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== Policy (namespaced) — ADR-0074 =====
+
+type createPolicyInput struct{ Body v1.Policy }
+type policyOutput struct{ Body v1.Policy }
+type listPolicyOutput struct{ Body []v1.Policy }
+
+func registerPolicy(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/policies"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listPolicies", Method: http.MethodGet, Path: base,
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedList) (*listPolicyOutput, error) {
+		items, err := h.ListPolicies(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listPolicyOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createPolicy", Method: http.MethodPost, Path: base,
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *createPolicyInput) (*policyOutput, error) {
+		item, err := h.CreatePolicy(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getPolicy", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedGet) (*policyOutput, error) {
+		item, err := h.GetPolicy(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replacePolicy", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Policy
+	}) (*policyOutput, error) {
+		item, err := h.ReplacePolicy(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &policyOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deletePolicy", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Policy"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeletePolicy(ctx, in.Namespace, in.Name))
 	})
 }
 
@@ -653,5 +913,135 @@ func registerGateway(api huma.API, h Handlers) {
 		Tags: []string{"Gateway"},
 	}, func(ctx context.Context, in *clusterScopedDelete) (*struct{}, error) {
 		return nil, wrapFaultError(h.DeleteGateway(ctx, in.Name))
+	})
+}
+
+// ===== Workflow (namespaced) — ADR-0094 =====
+
+type createWorkflowInput struct{ Body v1.Workflow }
+type workflowOutput struct{ Body v1.Workflow }
+type listWorkflowOutput struct{ Body []v1.Workflow }
+
+func registerWorkflow(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listWorkflows", Method: http.MethodGet, Path: base,
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedList) (*listWorkflowOutput, error) {
+		items, err := h.ListWorkflows(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listWorkflowOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createWorkflow", Method: http.MethodPost, Path: base,
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *createWorkflowInput) (*workflowOutput, error) {
+		item, err := h.CreateWorkflow(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getWorkflow", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedGet) (*workflowOutput, error) {
+		item, err := h.GetWorkflow(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceWorkflow", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Workflow
+	}) (*workflowOutput, error) {
+		item, err := h.ReplaceWorkflow(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteWorkflow", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Workflow"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteWorkflow(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== WorkflowRun (namespaced) — ADR-0094 =====
+
+type createWorkflowRunInput struct{ Body v1.WorkflowRun }
+type workflowRunOutput struct{ Body v1.WorkflowRun }
+type listWorkflowRunOutput struct{ Body []v1.WorkflowRun }
+
+func registerWorkflowRun(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listWorkflowRuns", Method: http.MethodGet, Path: base,
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedList) (*listWorkflowRunOutput, error) {
+		items, err := h.ListWorkflowRuns(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listWorkflowRunOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createWorkflowRun", Method: http.MethodPost, Path: base,
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *createWorkflowRunInput) (*workflowRunOutput, error) {
+		item, err := h.CreateWorkflowRun(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getWorkflowRun", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedGet) (*workflowRunOutput, error) {
+		item, err := h.GetWorkflowRun(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceWorkflowRun", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.WorkflowRun
+	}) (*workflowRunOutput, error) {
+		item, err := h.ReplaceWorkflowRun(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &workflowRunOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteWorkflowRun", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"WorkflowRun"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteWorkflowRun(ctx, in.Namespace, in.Name))
 	})
 }

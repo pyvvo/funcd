@@ -40,7 +40,7 @@ func startPlatform(t *testing.T) *sdk.Client {
 }
 
 // newFunction builds a minimal VALID Function (admission + the shape gate require
-// namespace=default + resourceGroup + runtime + handler + artifact.uri; Replicas=1
+// namespace=default + resourceGroup + runtime + handler + image; Replicas=1
 // provisions one worker replica so the reconciler reaches Ready).
 func newFunction(name string) *v1.Function {
 	obj, _ := v1.NewObject(v1.KindFunction)
@@ -50,7 +50,7 @@ func newFunction(name string) *v1.Function {
 	fn.ResourceGroup = "rg1"
 	fn.Spec.Runtime = "nodejs22"
 	fn.Spec.Handler = "app.handler"
-	fn.Spec.Artifact.URI = "mem://artifact.js"
+	fn.Spec.Image = "mem://artifact.js"
 	fn.Spec.Replicas = 1
 	return fn
 }

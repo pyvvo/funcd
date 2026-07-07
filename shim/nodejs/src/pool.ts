@@ -8,7 +8,7 @@
 // resource group is the placement grouping within it. This shim trusts its single-namespace
 // manifest — boundary enforcement is the placement follow-up ADR's job.
 //
-// Bundled (Hono + jtd inlined) to pool.mjs. Env: FUNCD_POOL_MANIFEST (JSON [{name,artifact,handler?}]),
+// Bundled (Hono inlined) to pool.mjs. Env: FUNCD_POOL_MANIFEST (JSON [{name,artifact,handler?}]),
 // FUNCD_PORT | FUNCD_PORTFILE, FUNCD_POOL_MAX_OLD_MB (64), FUNCD_POOL_MAX_YOUNG_MB (16).
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -16,8 +16,12 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
-import { resolveHandler, resolveSchema, validate } from './runtime.ts';
-import type { CloudEvent, FunctionContext, Handler } from './types.ts';
+import { resolveHandler, resolveValidators } from './runtime.ts';
+import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
+import { makeInvoke } from './invoke.ts';
+import { makeKV } from './kv.ts';
+import { installConsoleCapture, openChannel } from './funclog.ts';
+import { startSpan, parseLinks } from './tracespan.ts';
 
 // --- the wire between host and worker ---
 interface WorkerSpec {
@@ -28,6 +32,9 @@ interface WorkerSpec {
 interface Req {
   id: number;
   event: CloudEvent;
+  traceparent?: string; // ADR-0101: the host forwards the incoming W3C header so the worker's span adopts it
+  spanId?: string; // ADR-0105: the engine-provided span-id the worker's span uses (X-Funcd-Span-Id)
+  links?: string[]; // ADR-0105: fan-in edges (X-Funcd-Span-Links)
 }
 interface Res {
   id: number;
@@ -50,36 +57,56 @@ async function workerMain(): Promise<void> {
   const port = parentPort;
   if (!port) return;
 
+  // ADR-0081 Path B + ADR-0101 traces: open the worker's telemetry channel ONCE and share it between
+  // console capture and the per-invocation span (a single channel per worker). No channel env ⇒ null
+  // ⇒ both no-op. The pool's OWN operational lines go to process.stderr, never the patched console.
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
+
   let handler: Handler;
-  let schema;
+  let validators: { input?: Validator; output?: Validator };
   try {
     const mod = (await import(pathToFileURL(spec.artifact).href)) as Record<string, unknown>;
     handler = resolveHandler(mod, spec.handler ?? 'handle');
-    schema = resolveSchema(mod);
+    validators = resolveValidators(mod);
   } catch (err) {
-    console.error(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)
   }
-  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args) };
+  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke(), kv: makeKV() };
 
   port.on('message', (req: Req) => {
     void (async () => {
       const event = req.event ?? ({} as CloudEvent);
-      if (schema) {
-        const errors = validate(schema, event.data);
+      if (validators.input) {
+        const errors = validators.input(event.data);
         if (errors.length > 0) {
-          port.postMessage({ id: req.id, status: 422, error: 'event data does not match the contract', details: errors });
+          // ADR-0101: input-mismatch short-circuits before the handler → no invocation, no span.
+          port.postMessage({ id: req.id, status: 422, error: 'event data does not match the input contract', details: errors });
           return;
         }
       }
+      // ADR-0101: a real invocation → its SERVER span (adopts req.traceparent or mints a root),
+      // emitted on the worker's channel; the handler runs inside the span's context so logs correlate.
+      const span = startSpan(channel, spec.name, req.traceparent, req.spanId, req.links ?? []);
       try {
-        const result = await handler(ctx, event);
+        const result = await span.run(() => handler(ctx, event));
+        if (validators.output) {
+          const errors = validators.output(result === undefined ? null : result);
+          if (errors.length > 0) {
+            span.end('ERROR', 'handler result does not match the output contract');
+            port.postMessage({ id: req.id, status: 500, error: 'handler result does not match the output contract', details: errors });
+            return;
+          }
+        }
+        span.end('OK');
         if (result === undefined || result === null) {
           port.postMessage({ id: req.id, none: true });
         } else {
           port.postMessage({ id: req.id, result });
         }
       } catch (err) {
+        span.end('ERROR', String(err instanceof Error ? err.message : err));
         port.postMessage({ id: req.id, status: 500, error: String(err instanceof Error ? err.message : err) });
       }
     })();
@@ -163,7 +190,7 @@ class PooledHandler {
     }, 50);
   }
 
-  async invoke(event: CloudEvent): Promise<Res> {
+  async invoke(event: CloudEvent, traceparent?: string, spanId?: string, links?: string[]): Promise<Res> {
     if (!this.healthy) return { id: -1, status: 503, error: `function ${this.spec.name} unavailable` };
     const id = this.nextID++;
     return new Promise<Res>((resolve) => {
@@ -172,7 +199,7 @@ class PooledHandler {
         resolve({ id, status: 503, error: `function ${this.spec.name} timed out` });
       }, requestTimeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.worker.postMessage({ id, event } satisfies Req);
+      this.worker.postMessage({ id, event, traceparent, spanId, links } satisfies Req);
     });
   }
 
@@ -216,10 +243,14 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
     }
-    const res = await h.invoke(event);
+    // ADR-0101/0105: forward the trace + span-id + fan-in links headers to the worker.
+    const res = await h.invoke(
+      event, c.req.header('traceparent'),
+      c.req.header('x-funcd-span-id'), parseLinks(c.req.header('x-funcd-span-links')),
+    );
     if (res.status === 422) return c.json({ error: res.error, details: res.details }, 422);
     if (res.status === 503) return c.json({ error: res.error }, 503);
-    if (res.status === 500) return c.json({ error: res.error }, 500);
+    if (res.status === 500) return c.json({ error: res.error, details: res.details }, 500);
     if (res.none) return c.body(null, 204);
     return c.json(res.result as Record<string, unknown>);
   });
@@ -237,7 +268,7 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
 async function main(): Promise<void> {
   const manifestPath = process.env.FUNCD_POOL_MANIFEST;
   if (!manifestPath) {
-    console.error('funcd-pool: FUNCD_POOL_MANIFEST is required');
+    process.stderr.write('funcd-pool: FUNCD_POOL_MANIFEST is required\n');
     process.exit(2);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as WorkerSpec[];
@@ -245,7 +276,7 @@ async function main(): Promise<void> {
   try {
     await pool.ready;
   } catch (err) {
-    console.error(`funcd-pool: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-pool: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3);
   }
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
@@ -253,7 +284,7 @@ async function main(): Promise<void> {
   const hostname = fixedPort > 0 ? '0.0.0.0' : '127.0.0.1';
   serve({ fetch: pool.app.fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
-    console.log(`funcd-pool: ${manifest.length} handler(s) listening on ${hostname}:${info.port}`);
+    process.stderr.write(`funcd-pool: ${manifest.length} handler(s) listening on ${hostname}:${info.port}\n`);
   });
 }
 

@@ -1,0 +1,22 @@
+# Daemon config for the kv-counter demo on real containerd (ADR-0069). Part of the mounted example bundle —
+# the Lima demo (scripts/lima-kv.yaml + the `just lima-example-kv` recipe) runs funcd against it: file
+# storage, the containerd runtime, and the DURABLE Badger KV engine the function reaches via context.kv.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces:
+    - default
+runtime:
+  mode: containerd
+kvstore:
+  engine: badger   # the durable KV driver at <dataDir>/kv (ADR-0066/0069)
+log:
+  format: text
+  level: info

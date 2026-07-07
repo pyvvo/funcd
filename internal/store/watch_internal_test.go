@@ -66,8 +66,8 @@ func TestWatchSinceTooOldReturnsUnavailable(t *testing.T) {
 	st.ringCap = 3 // shrink the ring so a few creates overflow it
 
 	for i := 1; i <= 5; i++ {
-		obj, _ := v1.NewObject(v1.KindConfig)
-		c, _ := obj.(*v1.Config)
+		obj, _ := v1.NewObject(v1.KindConfigMap)
+		c, _ := obj.(*v1.ConfigMap)
 		c.Name = v1.ObjectName(fmt.Sprintf("c%d", i))
 		c.Namespace = "default"
 		c.ResourceGroup = "rg1"
@@ -76,11 +76,11 @@ func TestWatchSinceTooOldReturnsUnavailable(t *testing.T) {
 		}
 	}
 	// rev is now 5; the cap-3 ring retains rv 3,4,5 — rv 1 was evicted.
-	if _, err := st.Watch(ctx, v1.KindConfig.GVK(), WatchOptions{SinceResourceVersion: "1"}); fault.KindOf(err) != fault.Unavailable {
+	if _, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: "1"}); fault.KindOf(err) != fault.Unavailable {
 		t.Fatalf("Watch(since=1, evicted): kind=%v want unavailable", fault.KindOf(err))
 	}
 	// a since at the current revision needs no replay → no error.
-	w, err := st.Watch(ctx, v1.KindConfig.GVK(), WatchOptions{SinceResourceVersion: "5"})
+	w, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: "5"})
 	if err != nil {
 		t.Fatalf("Watch(since=current): %v", err)
 	}

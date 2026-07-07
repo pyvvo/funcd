@@ -1,0 +1,5 @@
+# local bench scratch (temp data dirs created with -dir/-keep)
+data/
+*.badger/
+# compiled binary
+/badger

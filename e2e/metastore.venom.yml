@@ -1,0 +1,58 @@
+# Venom e2e suite for the metastore containerd lane (ADR-0065/0077) — the declarative smoke phase of
+# `just lima-example-metastore` (it replaced scripts/lima-metastore-smoke.sh). Unlike the kv/fn-to-fn lanes
+# this is NOT data-plane http — it is a control-plane DAEMON-LIFECYCLE test (start funcd, apply a ConfigMap,
+# RESTART funcd, read it back), so every step is an in-VM `exec` (limactl shell, co-located with the daemon
+# the suite itself starts). There is no host-side http: the daemon is brought up by the suite, and the base
+# bench VM (scripts/lima.yaml) doesn't forward :8080. Venom's value here is the structure + JUnit + retry.
+#
+# The WAIT is Venom's retry/delay on the steps that need the daemon (no poll loops in a script): the `apply`
+# retries until funcd #1 is up and accepts it; the post-restart `get` retries until funcd is back and the
+# ConfigMap is recovered. Proves: the pure-Go Badger metastore (storage.mode file) persists a ConfigMap across a
+# real daemon restart under containerd. {{.vm}} is injected by the recipe (--var).
+name: metastore durability — a ConfigMap survives a daemon restart (ADR-0065, containerd lane)
+
+testcases:
+  - name: boot #1 — start funcd (containerd + file/Badger metastore) and apply a ConfigMap
+    steps:
+      # start funcd #1 with the REAL production config (transient systemd unit). systemd-run returns at once.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'mkdir -p /var/lib/funcd/data && systemd-run --unit funcd-meta /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      # apply the ConfigMap — retry/delay IS the wait: it re-issues until the daemon is up and accepts it.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl apply -f /mnt/funcd-deps/metastore-configmap.yaml
+        retry: 30
+        delay: 1
+        assertions:
+          - result.code ShouldEqual 0
+      # read it back from the running daemon — the value must be what we applied.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl get configmap persisted -n default -o json
+        info: "applied config → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring containerd-metastore
+
+  - name: the ConfigMap is recovered from the durable Badger metastore after a daemon restart
+    steps:
+      # restart funcd (stop → start, SAME dataDir) — the transient unit is GC'd on stop, so re-run is clean.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'systemctl stop funcd-meta; sleep 2; mkdir -p /var/lib/funcd/data; systemd-run --unit funcd-meta /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      # read the ConfigMap back — retry/delay IS the wait: re-issues until funcd is back up AND the ConfigMap is
+      # recovered from <dataDir>/store. A persisted value here is the durability proof.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token /mnt/funcd-deps/funcdctl get configmap persisted -n default -o json
+        retry: 30
+        delay: 1
+        info: "recovered config → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring containerd-metastore

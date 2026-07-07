@@ -1,0 +1,302 @@
+# The funcd example-lane REGISTRY (ADR-0077 declarative e2e). One section per lane; the single generic
+# recipe `just lima-example <name>` (host side) and the single generic VM `scripts/lima-lane.yaml`
+# (guest side) read the section for the lane being launched and drive it entirely from this data — so a
+# new lane is just a section here + its manifests + a Venom suite, with NO per-lane recipe or VM YAML.
+#
+# Per lane:
+#   dir     — the example directory (host-relative), source of the staged files + the build.
+#   build   — host shell commands (run from the repo root, in order) that produce the artifacts to push.
+#   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts).
+#   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
+#             optional schema (single-file --schema) or entry (bundle --entry).
+#   apply   — `funcdctl apply -f` order in the guest (after the pushes).
+#   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s).
+#   venom   — the host-side Venom suite the recipe runs once the VM is up.
+
+env-echo:
+  description: A JS function receiving spec.config (ConfigMap) + spec.secrets (Secret) env (ADR-0093/0057).
+  dir: examples/js/env-echo
+  build:
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/env-echo/node_modules
+    - cd examples/js/env-echo && node --experimental-strip-types build.ts
+  stage:
+    - env-echo.mjs
+    - env-echo.schema.json
+    - configmap.yaml
+    - secret.yaml
+    - function.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: env-echo.mjs
+      ref: env-echo
+      schema: env-echo.schema.json
+  apply:
+    - configmap.yaml
+    - secret.yaml
+    - function.yaml
+  ready:
+    kind: function
+    names:
+      - env-echo
+    tries: 60
+  venom: e2e/env-echo.venom.yml
+
+fn-to-fn:
+  description: Two JS functions with a declared synchronous fn-to-fn link (ADR-0064/0058).
+  dir: examples/js/fn-to-fn
+  build:
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/fn-to-fn/node_modules
+    - cd examples/js/fn-to-fn && node --experimental-strip-types build.ts
+  stage:
+    - greeter.mjs
+    - front.mjs
+    - greeter.schema.json
+    - front.schema.json
+    - greeter.yaml
+    - front.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: greeter.mjs
+      ref: greeter
+      schema: greeter.schema.json
+    - artifact: front.mjs
+      ref: front
+      schema: front.schema.json
+  apply:
+    - greeter.yaml
+    - front.yaml
+  ready:
+    kind: function
+    names:
+      - greeter
+      - front
+    tries: 40
+  venom: e2e/fn-to-fn.venom.yml
+
+duckdb:
+  description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
+  dir: examples/python/catalog-quack
+  build:
+    - cd examples/python/catalog-quack && uv run --group build python build.py
+  stage:
+    - configmap.yaml
+    - secret.yaml
+    - bucket-base.yaml
+    - bucket.yaml
+    - catalogservice.yaml
+    - funcdconfig.yaml
+    - consumer.yaml
+    - bundle
+  push:
+    - artifact: bundle
+      ref: catalog-reader
+      entry: handler.py
+  apply:
+    - configmap.yaml
+    - secret.yaml
+    - bucket-base.yaml
+    - catalogservice.yaml
+    - bucket.yaml
+    - consumer.yaml
+  ready:
+    kind: catalogservice
+    names:
+      - lake
+    tries: 90
+  venom: e2e/duckdb.venom.yml
+
+s3:
+  description: The s3-roundtrip JS function round-trips S3 with its funcd-injected keypair + a PEP deny (ADR-0080/0085, F47).
+  dir: examples/js/s3-roundtrip
+  build:
+    # This example DEPENDS on @aws-sdk/client-s3 (not in the shim node_modules), so install its own deps
+    # first (a repo-local npm cache keeps it hermetic), then the contract build bundles the SDK + bakes
+    # the ADR-0090 {input,output} schema (roundtrip.schema.json) into a self-contained roundtrip.mjs.
+    - cd examples/js/s3-roundtrip && npm install --silent --no-audit --no-fund --cache "$(pwd)/.npm-cache" && node --experimental-strip-types build.ts
+  stage:
+    - roundtrip.mjs
+    - roundtrip.schema.json
+    - function-base.yaml
+    - bucket.yaml
+    - function.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: roundtrip.mjs
+      ref: s3-roundtrip
+      schema: roundtrip.schema.json
+  # Apply order resolves the admission cycle (ADR-0080 / ADR-0073): the Function WITHOUT spec.blob first
+  # (so the Bucket's gold.owner=s3-roundtrip exists), then the Bucket, then re-apply the Function WITH blob.
+  apply:
+    - function-base.yaml
+    - bucket.yaml
+    - function.yaml
+  ready:
+    kind: function
+    names:
+      - s3-roundtrip
+    tries: 60
+  venom: e2e/s3.venom.yml
+
+kv:
+  description: The kv-counter JS + Python functions increment a per-name counter via context.kv on a durable Badger store (ADR-0069/0073/0076).
+  dir: examples/js/kv-counter
+  build:
+    # JS kv-counter → counter.mjs + I/O schemas (esbuild + contract toolchain via the shim node_modules).
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/kv-counter/node_modules
+    - cd examples/js/kv-counter && node --experimental-strip-types build.ts
+    # Python kv-counter → counter.py (baked validators) + I/O schemas (funcd_shim.build via uv).
+    - cd examples/python/kv-counter && uv run --group build python build.py
+  # Both sides collide on the schema-file basenames, so the Python side is staged under a py/ subdir via
+  # the {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root.
+  stage:
+    - counter.mjs
+    - counter.schema.json
+    - counter.yaml
+    - counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
+    - store.yaml
+    - funcdconfig.yaml
+    - from: examples/python/kv-counter/counter.py
+      to: py/counter.py
+    - from: examples/python/kv-counter/counter.schema.json
+      to: py/counter.schema.json
+    - from: examples/python/kv-counter/counter.yaml
+      to: py/counter.yaml
+    - from: examples/python/kv-counter/store.yaml
+      to: py/store.yaml
+  push:
+    - artifact: counter.mjs
+      ref: counter
+      schema: counter.schema.json
+    - artifact: py/counter.py
+      ref: pycounter
+      schema: py/counter.schema.json
+  # ADR-0073 cycle break: apply each function WITHOUT spec.kv (owner exists), then the owned store, then
+  # re-apply WITH spec.kv (the binding IS the capability — default-deny; ADR-0076: no read Policy needed).
+  apply:
+    - file: counter.yaml
+      transform: python3 -c 'import sys,yaml;d=yaml.safe_load(sys.stdin);d["spec"].pop("kv",None);print(yaml.safe_dump(d))'
+    - file: py/counter.yaml
+      transform: python3 -c 'import sys,yaml;d=yaml.safe_load(sys.stdin);d["spec"].pop("kv",None);print(yaml.safe_dump(d))'
+    - store.yaml
+    - py/store.yaml
+    - counter.yaml
+    - py/counter.yaml
+  ready:
+    kind: function
+    names:
+      - counter
+      - pycounter
+    tries: 60
+  venom: e2e/kv-counter.venom.yml
+
+workflow:
+  description: A Workflow (ingest→score→{hi|lo}→report→wait→pass) mixing materialized function steps with engine-native built-ins (a blocking wait + a pass transform), driven on real containerd (ADR-0094 + ADR-0096).
+  dir: examples/js/workflow
+  build:
+    # Each step is an ordinary contract-bearing function; build.ts bakes each contract and emits
+    # <step>.mjs + <step>.schema.json (esbuild + the shim's contract toolchain via node_modules).
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/workflow/node_modules
+    - cd examples/js/workflow && node --experimental-strip-types build.ts
+  stage:
+    - ingest.mjs
+    - score.mjs
+    - hi.mjs
+    - lo.mjs
+    - report.mjs
+    - ingest.schema.json
+    - score.schema.json
+    - hi.schema.json
+    - lo.schema.json
+    - report.schema.json
+    - workflow.yaml
+    - child.yaml
+    - parent.yaml
+    - run-pause.yaml
+    - run-cancel.yaml
+    - funcdconfig.yaml
+  # Each step image carries --runtime nodejs22 (the dev.funcd.runtime.v1 annotation) so the workflow
+  # materializer resolves its runtime from the manifest alone (ADR-0094).
+  push:
+    - artifact: ingest.mjs
+      ref: ingest
+      schema: ingest.schema.json
+      runtime: nodejs22
+    - artifact: score.mjs
+      ref: score
+      schema: score.schema.json
+      runtime: nodejs22
+    - artifact: hi.mjs
+      ref: hi
+      schema: hi.schema.json
+      runtime: nodejs22
+    - artifact: lo.mjs
+      ref: lo
+      schema: lo.schema.json
+      runtime: nodejs22
+    - artifact: report.mjs
+      ref: report
+      schema: report.schema.json
+      runtime: nodejs22
+  # Apply the Workflows — orders (the main lane), plus the F70 sub-workflow pair: `scorer` (child) and
+  # `pipeline` (parent, whose `sub` step runs scorer inline). The engine materializes each's owned step
+  # Functions. The run manifests (run-pause/run-cancel) are applied IN-VM by the Venom suite.
+  apply:
+    - workflow.yaml
+    - child.yaml
+    - parent.yaml
+  # Readiness gate: the materialized step Functions pull + serve on containerd (they appear only after
+  # each Workflow reconciles, so `funcdctl get function` tolerates a transient not-found).
+  ready:
+    kind: function
+    names:
+      - orders-ingest
+      - orders-score
+      - orders-hi
+      - orders-lo
+      - orders-report
+      - scorer-s
+      - pipeline-feed
+    tries: 90
+  venom: e2e/workflow.venom.yml
+
+funclog:
+  description: The log-burst JS + Python functions each emit >=100 logs; funcd captures them as OTLP-JSONL (ADR-0081/0084).
+  dir: examples/js/log-burst
+  build:
+    # JS log-burst → burst.mjs + burst.schema.json (ADR-0090 void-vs-typed: burst.ts declares a real
+    # {items,batch}->{emitted} shape the e2e reads, so its contract is that typed shape, baked in).
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/log-burst/node_modules
+    - cd examples/js/log-burst && node --experimental-strip-types build.ts
+    # Python log-burst → handler.py (baked validators) + handler.schema.json (same typed contract).
+    - cd examples/python/log-burst && uv run --group build python build.py
+  stage:
+    - burst.mjs
+    - burst.schema.json
+    - burst.yaml
+    - funcdconfig.yaml
+    - from: examples/python/log-burst/handler.py
+      to: py/handler.py
+    - from: examples/python/log-burst/handler.schema.json
+      to: py/handler.schema.json
+    - from: examples/python/log-burst/handler.yaml
+      to: py/handler.yaml
+  # Both examples are named "log-burst"; the Python one deploys as "pylog-burst" (transform rewrites both
+  # the metadata.name and the artifact ref) so they coexist on one daemon.
+  push:
+    - artifact: burst.mjs
+      ref: log-burst
+      schema: burst.schema.json
+    - artifact: py/handler.py
+      ref: pylog-burst
+      schema: py/handler.schema.json
+  apply:
+    - burst.yaml
+    - file: py/handler.yaml
+      transform: "sed -e 's/name: log-burst/name: pylog-burst/' -e 's#:log-burst#:pylog-burst#'"
+  ready:
+    kind: function
+    names:
+      - log-burst
+      - pylog-burst
+    tries: 60
+  venom: e2e/funclog.venom.yml

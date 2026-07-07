@@ -67,14 +67,14 @@ linters:
             - pkg: "github.com/green-0-rabbit/funcd/internal"
               desc: "tests/e2e must only import pkg/** + api/**"
         # ADR-0051/0055: gopsutil + fortio are confined to the bench harness. Deny them
-        # EVERYWHERE except internal/bench/** (negated from $all), so an accidental cross-import
+        # EVERYWHERE except internal/testkit/bench/** (negated from $all), so an accidental cross-import
         # into a shipped package fails CI, not just review. cmd/funcd's bench verb (ADR-0055)
-        # imports internal/bench, not the libs directly, so it needs no exception.
+        # imports internal/testkit/bench, not the libs directly, so it needs no exception.
         bench-libs:
           list-mode: original
           files:
             - $all
-            - "!**/internal/bench/**"
+            - "!**/internal/testkit/bench/**"
           deny:
             - pkg: "github.com/shirou/gopsutil"
               desc: "gopsutil is bench-only (ADR-0051); must not reach the shipped platform"

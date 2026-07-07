@@ -36,7 +36,7 @@ func seedFunction(t *testing.T, st store.Store, name string) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact.URI = "file:///tmp/x"
+	fn.Spec.Image = "file:///tmp/x"
 	_, err := st.Create(context.Background(), fn)
 	require.NoError(t, err)
 }

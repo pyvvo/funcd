@@ -1,0 +1,101 @@
+# Venom e2e for the catalog-quack lane (ADR-0086 + ADR-0087 + ADR-0088, F48/F57/F58) — the assert phase
+# of `just lima-example-duckdb`, run host-side after the self-deploying Lima VM is Ready.
+#
+# It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
+# add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
+# engine, the engine gets its F47/Cedar identity (ADR-0088 — its spec.blob are its blobBindings, it owns
+# its catalog prefix) so its keypair reads/writes S3 through the F47 PEP, and it reaches Ready on its own
+# HTTP readiness probe.
+#
+# The CONSUMER is a funcd FUNCTION (examples/python/catalog-quack/src/handler.py + consumer.yaml) — the
+# funcd-native shape. It runs on the STOCK `python314` runtime: its duckdb dep travels IN the artifact as
+# an ADR-0089 dependency BUNDLE (vendored duckdb wheel + duckdb-ext/). Testcase 3 deploys it, asserts it
+# reaches Ready (bundle materialized + `import duckdb` at module load), and then does a LIVE SQL round-trip:
+# it POSTs to the function's data-plane route, the handler reads the `spec.catalogs` consumer binding
+# (ADR-0091 — FUNCD_CATALOG_LAKE_URL/_TOKEN injected from the `lake` catalog's status.endpoint + QUACK_TOKEN),
+# runs the SQL on `lake` over Quack, and returns the rows. Ready alone proves the binding injected the
+# endpoint/token and `lake` is reachable; the invoke proves the whole consumer loop end-to-end on containerd.
+name: catalog-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
+
+testcases:
+  - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
+    steps:
+      - type: exec
+        # The provider-runtime brings up the duckdb engine; with its F47/Cedar identity (ADR-0088) the
+        # engine reads/writes S3 (HEAD 404 fresh, not 403), serves Quack, and the readiness probe passes
+        # — the CatalogService auto-progresses to Ready (the reconciler requeues while it boots). Assert
+        # Ready + the published status.endpoint, and that NO backing Function exists (it's a provider).
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            cs=$(funcdctl get catalogservice lake -n default -o json)
+            phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
+            fns=$(funcdctl get function -n default -o json 2>/dev/null | python3 -c "import sys,json;print(len(json.load(sys.stdin).get(\"items\",[])))" 2>/dev/null || echo 0)
+            echo "PHASE=$phase ENDPOINT=$ep FUNCTIONS=$fns"'
+        retry: 30
+        delay: 2
+        info: "catalogservice lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PHASE=Ready"
+          - result.systemout ShouldContainSubstring ":8080"          # serving Quack on the fixed netns port
+          - result.systemout ShouldContainSubstring "FUNCTIONS=0"     # a provider, NOT a Function
+
+  - name: the engine serves Quack and its S3 access is authorized (ADR-0088, not 403)
+    steps:
+      - type: exec
+        # Directly hit the engine: GET / is the Quack RPC endpoint (200), and the daemon's S3 vgw log
+        # shows the catalog HEAD authorized as 404 (fresh) — proving the provider's F47/Cedar identity.
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$addr/")
+            denied=$(sudo journalctl -u funcd-demo --no-pager 2>/dev/null | grep -c " 403 .* /lakehouse/gold/" || echo 0)
+            echo "QUACK_HTTP=$code S3_403_COUNT=$denied"'
+        retry: 10
+        delay: 2
+        info: "engine → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "QUACK_HTTP=200"  # the engine serves Quack
+          - result.systemout ShouldContainSubstring "S3_403_COUNT=0"  # no S3 denial — ADR-0088 authorized it
+
+  - name: the catalog-reader CONSUMER Function reaches Ready and round-trips SQL over the spec.catalogs binding
+    steps:
+      # (a) Ready. The consumer is a funcd Function whose artifact is an ADR-0089 dependency BUNDLE carrying
+      # the vendored duckdb wheel + duckdb-ext/. It runs on the STOCK `python314` runtime (no python-duckdb
+      # image). handler.py does `import duckdb` at module load, so Ready ⇒ the bundle materialized and the
+      # vendored native dep loaded on the stock runtime. Ready ALSO proves the ADR-0091 spec.catalogs binding
+      # resolved: the reconcile requeues catalog-reader until `lake` is Ready and injects FUNCD_CATALOG_LAKE_URL
+      # (= lake's status.endpoint) + FUNCD_CATALOG_LAKE_TOKEN (= its QUACK_TOKEN).
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            fn=$(funcdctl get function catalog-reader -n default -o json)
+            phase=$(echo "$fn" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            echo "PHASE=$phase"'
+        retry: 60
+        delay: 2
+        info: "function catalog-reader → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PHASE=Ready"     # bundle materialized + import duckdb OK + binding resolved
+      # (b) LIVE SQL round-trip. POST to the function's data-plane route (127.0.0.1:8081, forwarded from the
+      # guest like the kv/fn-to-fn lanes). The handler reads the injected FUNCD_CATALOG_LAKE_URL/_TOKEN, loads
+      # the offline quack extension from FUNCD_BUNDLE_DIR/duckdb-ext, and runs the SQL on `lake` over Quack —
+      # returning {"rows": [...]}. `SELECT 42 AS answer` ⇒ [[42]]. retry/delay absorbs first-invoke warm-up.
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers: { content-type: application/json }
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 20
+        delay: 2
+        info: "sql round-trip → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "rows"                 # the handler's FuncOutput shape
+          - result.body ShouldContainSubstring "[[42]]"               # rows == [[42]] — real Quack round-trip on lake

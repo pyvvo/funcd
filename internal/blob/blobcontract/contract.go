@@ -21,6 +21,42 @@ func RunContract(t *testing.T, newBucket func(t *testing.T) blob.Bucket) {
 	t.Run("delete-removes", func(t *testing.T) { testDeleteRemoves(t, newBucket(t)) })
 	t.Run("list-by-prefix", func(t *testing.T) { testListByPrefix(t, newBucket(t)) })
 	t.Run("signed-url-unsupported-locally", func(t *testing.T) { testSignedURLUnsupported(t, newBucket(t)) })
+	// Additive (ADR-0080): RangeReader is an OPTIONAL capability — skipped for a driver
+	// that does not implement it, so existing backends keep passing unchanged.
+	t.Run("range-reader-optional", func(t *testing.T) { testRangeReader(t, newBucket(t)) })
+}
+
+// testRangeReader exercises the optional blob.RangeReader capability (ADR-0080): a
+// ranged read returns exactly bytes [offset, offset+length), a negative length reads to
+// end, and an absent key is fault.NotFound. The case SKIPS a driver that does not
+// implement RangeReader (the fallback path is tested at the s3gateway, not the port).
+func testRangeReader(t *testing.T, b blob.Bucket) {
+	rr, ok := b.(blob.RangeReader)
+	if !ok {
+		t.Skip("driver does not implement blob.RangeReader (optional capability)")
+	}
+	ctx := context.Background()
+	val := []byte("0123456789")
+	if err := b.Put(ctx, "r", val); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := rr.GetRange(ctx, "r", 2, 4)
+	if err != nil {
+		t.Fatalf("GetRange(2,4): %v", err)
+	}
+	if !bytes.Equal(got, []byte("2345")) {
+		t.Fatalf("GetRange(2,4): got %q want %q", got, "2345")
+	}
+	toEnd, err := rr.GetRange(ctx, "r", 7, -1)
+	if err != nil {
+		t.Fatalf("GetRange(7,-1): %v", err)
+	}
+	if !bytes.Equal(toEnd, []byte("789")) {
+		t.Fatalf("GetRange(7,-1): got %q want %q", toEnd, "789")
+	}
+	if _, err := rr.GetRange(ctx, "absent", 0, 1); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("GetRange(absent): kind=%v want not_found", fault.KindOf(err))
+	}
 }
 
 func testRoundtrip(t *testing.T, b blob.Bucket) {

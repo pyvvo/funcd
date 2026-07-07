@@ -10,6 +10,7 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
@@ -19,11 +20,13 @@ import (
 type storeHandlers struct {
 	store store.Store
 	authz auth.Authorizer
+	admit *admission.Pipeline
 }
 
-// NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018).
-func NewStoreHandlers(st store.Store, authz auth.Authorizer) Handlers {
-	return &storeHandlers{store: st, authz: authz}
+// NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018). The admission
+// pipeline (ADR-0063) is the admit step on every write; pass admission.NewPipeline(...).
+func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline) Handlers {
+	return &storeHandlers{store: st, authz: authz, admit: admit}
 }
 
 // --- the six shared helpers (one authz + admission + store path) ---
@@ -65,11 +68,15 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	if err := h.authorize(ctx, auth.VerbCreate, kind, obj.GetObjectMeta().Namespace); err != nil {
 		return nil, err
 	}
-	stampTypeMeta(obj, kind)               // the route's kind owns TypeMeta (k8s-style)
-	if err := obj.Validate(); err != nil { // admission: envelope + resourceGroup-required (ADR-0003)
+	stampTypeMeta(obj, kind) // the route's kind owns TypeMeta (k8s-style)
+	id, _ := middleware.IdentityFrom(ctx)
+	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
+		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,
+	})
+	if err != nil {
 		return nil, err
 	}
-	return h.store.Create(ctx, obj)
+	return h.store.Create(ctx, admitted)
 }
 
 // stampTypeMeta sets the object's apiVersion/kind from the route's kind. The control-plane
@@ -92,7 +99,7 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.EventSource:
 		o.TypeMeta = tm
-	case *v1.Config:
+	case *v1.ConfigMap:
 		o.TypeMeta = tm
 	case *v1.Secret:
 		o.TypeMeta = tm
@@ -108,6 +115,18 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Gateway:
 		o.TypeMeta = tm
+	case *v1.KVStore:
+		o.TypeMeta = tm
+	case *v1.Bucket:
+		o.TypeMeta = tm
+	case *v1.CatalogService:
+		o.TypeMeta = tm
+	case *v1.Policy:
+		o.TypeMeta = tm
+	case *v1.Workflow:
+		o.TypeMeta = tm
+	case *v1.WorkflowRun:
+		o.TypeMeta = tm
 	}
 }
 
@@ -122,21 +141,39 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	if meta.Name != name {
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
 	}
-	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
-	if err := obj.Validate(); err != nil {
-		return nil, err
-	}
-	cur, err := h.store.Get(ctx, kind.GVK(), ns, name)
+	stampTypeMeta(obj, kind)                           // route's kind owns TypeMeta (see createObj)
+	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
 	if err != nil {
 		return nil, err
 	}
-	meta.ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
-	return h.store.Update(ctx, obj)
+	id, _ := middleware.IdentityFrom(ctx)
+	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
+		Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id,
+	})
+	if err != nil {
+		return nil, err
+	}
+	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
+	return h.store.Update(ctx, admitted)
 }
 
 func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
+	}
+	// Run the admit step on Delete only when an admission handles it (e.g. ADR-0064 deletion-protection),
+	// so a build with no Delete admission does no extra store fetch.
+	if h.admit.Handles(kind.GVK(), admission.Delete) {
+		old, err := h.store.Get(ctx, kind.GVK(), ns, name)
+		if err != nil {
+			return err
+		}
+		id, _ := middleware.IdentityFrom(ctx)
+		if _, err := h.admit.Admit(ctx, admission.Request{
+			Operation: admission.Delete, GVK: kind.GVK(), Old: old, Identity: id,
+		}); err != nil {
+			return err
+		}
 	}
 	return h.store.Delete(ctx, kind.GVK(), ns, name, "")
 }
@@ -435,46 +472,46 @@ func (h *storeHandlers) DeleteEventSource(ctx context.Context, ns v1.NamespaceNa
 	return h.deleteObj(ctx, v1.KindEventSource, ns, name)
 }
 
-// --- Config (namespaced) ---
+// --- ConfigMap (namespaced) ---
 
-func (h *storeHandlers) GetConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Config, error) {
-	o, err := h.getObj(ctx, v1.KindConfig, ns, name)
+func (h *storeHandlers) GetConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error) {
+	o, err := h.getObj(ctx, v1.KindConfigMap, ns, name)
 	if err != nil {
-		return v1.Config{}, err
+		return v1.ConfigMap{}, err
 	}
-	return *o.(*v1.Config), nil
+	return *o.(*v1.ConfigMap), nil
 }
 
-func (h *storeHandlers) CreateConfig(ctx context.Context, cfg v1.Config) (v1.Config, error) {
-	o, err := h.createObj(ctx, v1.KindConfig, &cfg)
+func (h *storeHandlers) CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
+	o, err := h.createObj(ctx, v1.KindConfigMap, &cfg)
 	if err != nil {
-		return v1.Config{}, err
+		return v1.ConfigMap{}, err
 	}
-	return *o.(*v1.Config), nil
+	return *o.(*v1.ConfigMap), nil
 }
 
-func (h *storeHandlers) ListConfigs(ctx context.Context, ns v1.NamespaceName) ([]v1.Config, error) {
-	objs, err := h.listObj(ctx, v1.KindConfig, ns)
+func (h *storeHandlers) ListConfigMaps(ctx context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error) {
+	objs, err := h.listObj(ctx, v1.KindConfigMap, ns)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]v1.Config, len(objs))
+	out := make([]v1.ConfigMap, len(objs))
 	for i, o := range objs {
-		out[i] = *o.(*v1.Config)
+		out[i] = *o.(*v1.ConfigMap)
 	}
 	return out, nil
 }
 
-func (h *storeHandlers) ReplaceConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.Config) (v1.Config, error) {
-	o, err := h.replaceObj(ctx, v1.KindConfig, ns, name, &cfg)
+func (h *storeHandlers) ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
+	o, err := h.replaceObj(ctx, v1.KindConfigMap, ns, name, &cfg)
 	if err != nil {
-		return v1.Config{}, err
+		return v1.ConfigMap{}, err
 	}
-	return *o.(*v1.Config), nil
+	return *o.(*v1.ConfigMap), nil
 }
 
-func (h *storeHandlers) DeleteConfig(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindConfig, ns, name)
+func (h *storeHandlers) DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindConfigMap, ns, name)
 }
 
 // --- Secret (namespaced) ---
@@ -559,6 +596,174 @@ func (h *storeHandlers) ReplaceGrant(ctx context.Context, ns v1.NamespaceName, n
 
 func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindGrant, ns, name)
+}
+
+// --- KVStore (namespaced) — ADR-0072 ---
+
+func (h *storeHandlers) GetKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error) {
+	o, err := h.getObj(ctx, v1.KindKVStore, ns, name)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) CreateKVStore(ctx context.Context, ks v1.KVStore) (v1.KVStore, error) {
+	o, err := h.createObj(ctx, v1.KindKVStore, &ks)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error) {
+	objs, err := h.listObj(ctx, v1.KindKVStore, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.KVStore, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.KVStore)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
+	o, err := h.replaceObj(ctx, v1.KindKVStore, ns, name, &ks)
+	if err != nil {
+		return v1.KVStore{}, err
+	}
+	return *o.(*v1.KVStore), nil
+}
+
+func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindKVStore, ns, name)
+}
+
+// --- Bucket (namespaced) — ADR-0080 ---
+
+func (h *storeHandlers) GetBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error) {
+	o, err := h.getObj(ctx, v1.KindBucket, ns, name)
+	if err != nil {
+		return v1.Bucket{}, err
+	}
+	return *o.(*v1.Bucket), nil
+}
+
+func (h *storeHandlers) CreateBucket(ctx context.Context, b v1.Bucket) (v1.Bucket, error) {
+	o, err := h.createObj(ctx, v1.KindBucket, &b)
+	if err != nil {
+		return v1.Bucket{}, err
+	}
+	return *o.(*v1.Bucket), nil
+}
+
+func (h *storeHandlers) ListBuckets(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+	objs, err := h.listObj(ctx, v1.KindBucket, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Bucket, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Bucket)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error) {
+	o, err := h.replaceObj(ctx, v1.KindBucket, ns, name, &b)
+	if err != nil {
+		return v1.Bucket{}, err
+	}
+	return *o.(*v1.Bucket), nil
+}
+
+func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindBucket, ns, name)
+}
+
+// --- CatalogService (namespaced) — ADR-0086 ---
+
+func (h *storeHandlers) GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
+	o, err := h.getObj(ctx, v1.KindCatalogService, ns, name)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
+	o, err := h.createObj(ctx, v1.KindCatalogService, &cs)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
+	objs, err := h.listObj(ctx, v1.KindCatalogService, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.CatalogService, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.CatalogService)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
+	o, err := h.replaceObj(ctx, v1.KindCatalogService, ns, name, &cs)
+	if err != nil {
+		return v1.CatalogService{}, err
+	}
+	return *o.(*v1.CatalogService), nil
+}
+
+func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindCatalogService, ns, name)
+}
+
+// --- Policy (namespaced) — ADR-0074 ---
+
+func (h *storeHandlers) GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error) {
+	o, err := h.getObj(ctx, v1.KindPolicy, ns, name)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error) {
+	o, err := h.createObj(ctx, v1.KindPolicy, &pol)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) ListPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.Policy, error) {
+	objs, err := h.listObj(ctx, v1.KindPolicy, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Policy, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Policy)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplacePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error) {
+	o, err := h.replaceObj(ctx, v1.KindPolicy, ns, name, &pol)
+	if err != nil {
+		return v1.Policy{}, err
+	}
+	return *o.(*v1.Policy), nil
+}
+
+func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindPolicy, ns, name)
 }
 
 // --- EgressPolicy (namespaced) ---
@@ -769,4 +974,80 @@ func (h *storeHandlers) ReplaceGateway(ctx context.Context, name v1.ObjectName, 
 
 func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindGateway, "", name)
+}
+
+// ---- Workflow (ADR-0094) ----
+
+func (h *storeHandlers) GetWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error) {
+	o, err := h.getObj(ctx, v1.KindWorkflow, ns, name)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) CreateWorkflow(ctx context.Context, wf v1.Workflow) (v1.Workflow, error) {
+	o, err := h.createObj(ctx, v1.KindWorkflow, &wf)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) ListWorkflows(ctx context.Context, ns v1.NamespaceName) ([]v1.Workflow, error) {
+	objs, err := h.listObj(ctx, v1.KindWorkflow, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Workflow, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Workflow)
+	}
+	return out, nil
+}
+func (h *storeHandlers) ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error) {
+	o, err := h.replaceObj(ctx, v1.KindWorkflow, ns, name, &wf)
+	if err != nil {
+		return v1.Workflow{}, err
+	}
+	return *o.(*v1.Workflow), nil
+}
+func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindWorkflow, ns, name)
+}
+
+// ---- WorkflowRun (ADR-0094) ----
+
+func (h *storeHandlers) GetWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error) {
+	o, err := h.getObj(ctx, v1.KindWorkflowRun, ns, name)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) CreateWorkflowRun(ctx context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	o, err := h.createObj(ctx, v1.KindWorkflowRun, &run)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error) {
+	objs, err := h.listObj(ctx, v1.KindWorkflowRun, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.WorkflowRun, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.WorkflowRun)
+	}
+	return out, nil
+}
+func (h *storeHandlers) ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	o, err := h.replaceObj(ctx, v1.KindWorkflowRun, ns, name, &run)
+	if err != nil {
+		return v1.WorkflowRun{}, err
+	}
+	return *o.(*v1.WorkflowRun), nil
+}
+func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindWorkflowRun, ns, name)
 }

@@ -18,7 +18,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerRoute(api, h)
 	registerService(api, h)
 	registerEventSource(api, h)
-	registerConfig(api, h)
+	registerConfigMap(api, h)
 	registerSecret(api, h)
 	registerGrant(api, h)
 	registerEgressPolicy(api, h)
@@ -26,6 +26,12 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerRuntimeClass(api, h)
 	registerWorker(api, h)
 	registerGateway(api, h)
+	registerKVStore(api, h)
+	registerBucket(api, h)
+	registerCatalogService(api, h)
+	registerPolicy(api, h)
+	registerWorkflow(api, h)
+	registerWorkflowRun(api, h)
 }
 
 // ---- shared input types ----

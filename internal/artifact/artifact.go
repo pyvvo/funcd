@@ -1,12 +1,12 @@
 // Package artifact is OCI artifact distribution (ADR-0031): how a function source
-// bundle reaches the platform. funcdcli pushes a bundle as an OCI artifact to a target
+// bundle reaches the platform. funcdctl pushes a bundle as an OCI artifact to a target
 // (a local OCI layout for dev, or a registry for prod) and the platform pulls it by
 // digest. It provides the producer side (Push/Pull/Login/Logout) and the consumer side —
 // an OrasMaterializer that is a driver of ADR-0030's internal/function.Materializer seam.
 //
 // The artifact is one digest-addressed OCI artifact: a manifest of artifactType
 // application/vnd.funcd.function.artifact.v1 with a single bundle-blob layer. The
-// ArtifactRef.Digest is the manifest descriptor digest and is the authority — pulls are
+// imageDigest is the manifest descriptor digest and is the authority — pulls are
 // by digest, an empty digest is rejected, and a mutable tag is only a locator.
 package artifact
 
@@ -40,12 +40,69 @@ const (
 	bundleMediaType = "application/vnd.funcd.function.bundle"
 	// ociLayoutScheme marks a local OCI layout ref: oci-layout://<dir>[:<tag>].
 	ociLayoutScheme = "oci-layout://"
+	// contractMediaType is the dedicated contract-blob layer (ADR-0059): the generated I/O JSON
+	// Schema(s), statically inspectable from the manifest without pulling the bundle or running code.
+	contractMediaType = "application/vnd.funcd.contract.v1+json"
+	// contractAnnotation flags the manifest as carrying a contract (value = the contract blob digest).
+	contractAnnotation = "dev.funcd.contract.v1"
+	// runtimeAnnotation records the function's runtime class on the manifest (ADR-0094): a
+	// self-describing artifact so the workflow materializer reads the runtime from the manifest
+	// alone — never pulling the bundle or running code. Empty ⇒ no runtime is asserted.
+	runtimeAnnotation = "dev.funcd.runtime.v1"
+	// contractDialect is the JSON Schema dialect the generated contracts use (ADR-0058 profile).
+	contractDialect = "https://json-schema.org/draft/2020-12/schema"
 )
+
+// VoidSchema is the canonical void side (ADR-0090): a side that carries no meaningful payload is the
+// explicit JSON Schema {"type":"null"} — never an omission. Both sides are always present in the blob;
+// a void side declares itself with this schema, and its validator is compiled from it like any other.
+const VoidSchema = `{"type":"null"}`
+
+// ContractBlob assembles the mandatory {dialect, input, output} contract blob (ADR-0090, supersedes
+// ADR-0059's optional form). BOTH input and output must be present and non-empty — a void side is
+// VoidSchema, never nil. Returns fault.Invalid if either is missing; there is no contract-less
+// artifact. The marshaled JSON always serializes both fields (no omitempty).
+func ContractBlob(input, output []byte) ([]byte, error) {
+	const op = "artifact.ContractBlob"
+	if len(input) == 0 {
+		return nil, fault.Invalidf(op, "every function must declare an input contract (a void side is %s)", VoidSchema)
+	}
+	if len(output) == 0 {
+		return nil, fault.Invalidf(op, "every function must declare an output contract (a void side is %s)", VoidSchema)
+	}
+	payload := struct {
+		Input   json.RawMessage `json:"input"`
+		Output  json.RawMessage `json:"output"`
+		Dialect string          `json:"dialect"`
+	}{
+		Input:   json.RawMessage(input),
+		Output:  json.RawMessage(output),
+		Dialect: contractDialect,
+	}
+	blob, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fault.Internalf(op, "marshal contract blob: %v", err)
+	}
+	return blob, nil
+}
+
+// layerByMediaType returns the first layer with media type mt (false if none) — pull/inspect select
+// a layer by what it IS, not by index, so an added contract layer never shifts the bundle (ADR-0059).
+func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descriptor, bool) {
+	for _, l := range layers {
+		if l.MediaType == mt {
+			return l, true
+		}
+	}
+	return ocispec.Descriptor{}, false
+}
 
 // Push packages file as the §1 OCI artifact and pushes it to ref's target (a local OCI
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
-// rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030).
-func Push(ctx context.Context, ref, file string) (digest string, err error) {
+// rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
+// contract is non-nil (ADR-0059), it adds a content-addressed contract blob layer +
+// the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact.
+func Push(ctx context.Context, ref, file string, contract []byte, runtime string) (digest string, err error) {
 	const op = "artifact.Push"
 	data, rerr := os.ReadFile(file) //nolint:gosec // file is a user-supplied CLI argument
 	if rerr != nil {
@@ -64,9 +121,22 @@ func Push(ctx context.Context, ref, file string) (digest string, err error) {
 	if perr := target.Push(ctx, layer, bytes.NewReader(data)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
 		return "", fault.Wrapf(perr, fault.Internal, op, "push bundle blob")
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, oras.PackManifestOptions{
-		Layers: []ocispec.Descriptor{layer},
-	})
+	opts := oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}}
+	if len(contract) > 0 {
+		contractLayer := content.NewDescriptorFromBytes(contractMediaType, contract)
+		if perr := target.Push(ctx, contractLayer, bytes.NewReader(contract)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
+			return "", fault.Wrapf(perr, fault.Internal, op, "push contract blob")
+		}
+		opts.Layers = append(opts.Layers, contractLayer)
+		opts.ManifestAnnotations = map[string]string{contractAnnotation: contractLayer.Digest.String()}
+	}
+	if runtime != "" {
+		if opts.ManifestAnnotations == nil {
+			opts.ManifestAnnotations = map[string]string{}
+		}
+		opts.ManifestAnnotations[runtimeAnnotation] = runtime
+	}
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}
@@ -101,10 +171,18 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
 		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
 	}
-	if len(manifest.Layers) == 0 {
-		return "", fault.Invalidf(op, "artifact %s has no bundle layer", digest)
+	// A multi-file bundle (ADR-0089) is a BundleTarMediaType layer: untar it into dir (traversal-safe)
+	// and return dir/<entry>. This is selected before the single-blob layer so a bundle artifact takes
+	// the tar path; a single-blob artifact keeps the ADR-0031 behavior below unchanged.
+	if bundleLayer, ok := layerByMediaType(manifest.Layers, BundleTarMediaType); ok {
+		return pullBundle(ctx, op, target, bundleLayer, dir)
 	}
-	layer := manifest.Layers[0]
+	// Select the bundle layer by media type (not Layers[0]) so a contract layer (ADR-0059) never
+	// changes which bytes materialize.
+	layer, ok := layerByMediaType(manifest.Layers, bundleMediaType)
+	if !ok {
+		return "", fault.Invalidf(op, "artifact %s has no bundle layer (media type %s)", digest, bundleMediaType)
+	}
 	blob, berr := content.FetchAll(ctx, target, layer) // verifies the blob against its descriptor digest
 	if berr != nil {
 		return "", fault.Wrapf(berr, fault.Internal, op, "fetch bundle blob")
@@ -126,6 +204,113 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 		return "", fault.Wrapf(werr, fault.Internal, op, "write bundle")
 	}
 	return path, nil
+}
+
+// Inspect reads a function's I/O contract straight from its OCI manifest (ADR-0059): it fetches the
+// manifest + the small contract blob ONLY — never the bundle layer, never executing code — and
+// returns the raw contract JSON ({input?, output?, dialect}). It resolves by digest when one is
+// supplied (tamper-evident: the inspected contract == the deployed one); a bare tag is resolved to
+// its current manifest. fault.NotFound when the artifact carries no contract.
+func Inspect(ctx context.Context, ref, digest string) (contract []byte, err error) {
+	const op = "artifact.Inspect"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference // no digest given → resolve the tag to its current manifest
+	}
+	if fetchRef == "" {
+		return nil, fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
+	blob, _, ierr := inspectFrom(ctx, target, fetchRef, digest)
+	return blob, ierr
+}
+
+// InspectContract is Inspect that also returns the resolved manifest descriptor digest (ADR-0098): the
+// single metadata fetch already yields it, so a caller (the workflow contract-check gate) can record the
+// pinned ref@digest alongside the contract without a second round-trip. Same static-inspection invariant
+// — the bundle bytes are never fetched.
+func InspectContract(ctx context.Context, ref, digest string) (contract []byte, resolvedDigest string, err error) {
+	const op = "artifact.InspectContract"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return nil, "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference
+	}
+	if fetchRef == "" {
+		return nil, "", fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
+	return inspectFrom(ctx, target, fetchRef, digest)
+}
+
+// InspectRuntime reads a function's runtime class straight from its OCI manifest annotation
+// (dev.funcd.runtime.v1, ADR-0094): it fetches the manifest ONLY — never the bundle, never the
+// contract, never executing code — so the workflow materializer can resolve a step image's runtime
+// without pulling it. It resolves by digest when supplied (tamper-evident), else a bare tag.
+// fault.NotFound when the artifact asserts no runtime.
+func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, err error) {
+	const op = "artifact.InspectRuntime"
+	target, reference, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
+	fetchRef := digest
+	if fetchRef == "" {
+		fetchRef = reference
+	}
+	if fetchRef == "" {
+		return "", fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
+	}
+	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	if ferr != nil {
+		return "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
+	}
+	if digest != "" && manifestDesc.Digest.String() != digest {
+		return "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
+	}
+	var manifest ocispec.Manifest
+	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
+		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
+	}
+	rt := manifest.Annotations[runtimeAnnotation]
+	if rt == "" {
+		return "", fault.NotFoundf(op, "artifact %s asserts no runtime", fetchRef)
+	}
+	return rt, nil
+}
+
+// inspectFrom is Inspect's core over an already-resolved target (the white-box seam the
+// inspect-without-pull invariant test drives with a counting target). It fetches the manifest +
+// contract blob ONLY; wantDigest (if non-empty) pins the manifest.
+func inspectFrom(ctx context.Context, target oras.ReadOnlyTarget, fetchRef, wantDigest string) ([]byte, string, error) {
+	const op = "artifact.Inspect"
+	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	if ferr != nil {
+		return nil, "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
+	}
+	resolved := manifestDesc.Digest.String()
+	if wantDigest != "" && resolved != wantDigest {
+		return nil, "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", resolved, wantDigest)
+	}
+	var manifest ocispec.Manifest
+	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
+		return nil, "", fault.Invalidf(op, "decode manifest: %v", jerr)
+	}
+	contractLayer, ok := layerByMediaType(manifest.Layers, contractMediaType)
+	if !ok {
+		return nil, "", fault.NotFoundf(op, "artifact %s carries no contract", fetchRef)
+	}
+	// Fetch ONLY the contract blob — the bundle layer is never fetched (the static-inspection invariant).
+	blob, berr := content.FetchAll(ctx, target, contractLayer) // verifies the blob against its descriptor digest
+	if berr != nil {
+		return nil, "", fault.Wrapf(berr, fault.Internal, op, "fetch contract blob")
+	}
+	return blob, resolved, nil
 }
 
 // Login stores registry credentials via oras-go's credential store (the local OCI layout
@@ -216,21 +401,27 @@ func NewOrasMaterializer(artifactDir string) *OrasMaterializer {
 	return &OrasMaterializer{artifactDir: artifactDir}
 }
 
-// Materialize resolves fn.spec.artifact.uri → target, pulls by fn.spec.artifact.digest
+// Materialize resolves fn.spec.image → target, pulls by fn.spec.imageDigest
 // (the authority; empty → fault.Invalid), and returns the cached local path.
 func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "artifact.OrasMaterializer.Materialize"
-	ref := fn.Spec.Artifact.URI
-	digest := fn.Spec.Artifact.Digest
+	ref := fn.Spec.Image
+	digest := fn.Spec.ImageDigest
 	if ref == "" {
-		return "", fault.Invalidf(op, "function %s/%s has no spec.artifact.uri", fn.Namespace, fn.Name)
+		return "", fault.Invalidf(op, "function %s/%s has no spec.image", fn.Namespace, fn.Name)
 	}
 	if digest == "" {
-		return "", fault.Invalidf(op, "function %s/%s has no spec.artifact.digest (the digest is the authority)", fn.Namespace, fn.Name)
+		return "", fault.Invalidf(op, "function %s/%s has no spec.imageDigest (the digest is the authority)", fn.Namespace, fn.Name)
 	}
 	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest))
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
-		return filepath.Join(cacheDir, entries[0].Name()), nil // cached (immutable per digest)
+		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
+		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
+		// single-file cache has no sidecar → fall back to the lone file (entries[0]).
+		if entry := bundleEntryFromCache(cacheDir); entry != "" {
+			return filepath.Join(cacheDir, filepath.FromSlash(entry)), nil
+		}
+		return filepath.Join(cacheDir, entries[0].Name()), nil // cached single-file (immutable per digest)
 	}
 	path, perr := Pull(ctx, ref, digest, cacheDir)
 	if perr != nil {

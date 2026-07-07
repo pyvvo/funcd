@@ -1,6 +1,6 @@
 // Package storecontract is the shared conformance suite for the store port
 // (ADR-0006). RunContract asserts the store SEMANTICS that must hold identically
-// for every Engine — memory and slatedb run it, proving the in-memory fake
+// for every Engine — memory and badger run it, proving the in-memory fake
 // behaves like the real engine (the driver-conformance-parity scenario).
 package storecontract
 
@@ -29,15 +29,15 @@ func RunContract(t *testing.T, newStore func(t *testing.T) store.Store) {
 	t.Run("watch-replays-from-resourceversion", func(t *testing.T) { testWatchReplays(t, newStore(t)) })
 }
 
-func mkConfig(t *testing.T, ns, name, rg string, data map[string]string) *v1.Config {
+func mkConfigMap(t *testing.T, ns, name, rg string, data map[string]string) *v1.ConfigMap {
 	t.Helper()
-	obj, ok := v1.NewObject(v1.KindConfig)
+	obj, ok := v1.NewObject(v1.KindConfigMap)
 	if !ok {
-		t.Fatal("NewObject(Config) returned false")
+		t.Fatal("NewObject(ConfigMap) returned false")
 	}
-	c, ok := obj.(*v1.Config)
+	c, ok := obj.(*v1.ConfigMap)
 	if !ok {
-		t.Fatalf("NewObject(Config) is %T, want *Config", obj)
+		t.Fatalf("NewObject(ConfigMap) is %T, want *ConfigMap", obj)
 	}
 	c.Name = v1.ObjectName(name)
 	c.Namespace = v1.NamespaceName(ns)
@@ -48,7 +48,7 @@ func mkConfig(t *testing.T, ns, name, rg string, data map[string]string) *v1.Con
 
 func testCrudRoundtrip(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	created, err := s.Create(ctx, mkConfig(t, "default", "cfg1", "rg1", map[string]string{"k": "v"}))
+	created, err := s.Create(ctx, mkConfigMap(t, "default", "cfg1", "rg1", map[string]string{"k": "v"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -62,11 +62,11 @@ func testCrudRoundtrip(t *testing.T, s store.Store) {
 	if m.UID == "" {
 		t.Error("Create: empty uid")
 	}
-	got, err := s.Get(ctx, v1.KindConfig.GVK(), "default", "cfg1")
+	got, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", "cfg1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	gc, _ := got.(*v1.Config)
+	gc, _ := got.(*v1.ConfigMap)
 	if gc == nil || gc.Spec.Data["k"] != "v" {
 		t.Fatalf("Get: data roundtrip mismatch: %+v", got)
 	}
@@ -77,13 +77,13 @@ func testCrudRoundtrip(t *testing.T, s store.Store) {
 
 func testNotFound(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	if _, err := s.Get(ctx, v1.KindConfig.GVK(), "default", "nope"); fault.KindOf(err) != fault.NotFound {
+	if _, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", "nope"); fault.KindOf(err) != fault.NotFound {
 		t.Fatalf("Get(absent): kind=%v want not_found", fault.KindOf(err))
 	}
-	if err := s.Delete(ctx, v1.KindConfig.GVK(), "default", "nope", ""); fault.KindOf(err) != fault.NotFound {
+	if err := s.Delete(ctx, v1.KindConfigMap.GVK(), "default", "nope", ""); fault.KindOf(err) != fault.NotFound {
 		t.Fatalf("Delete(absent): kind=%v want not_found", fault.KindOf(err))
 	}
-	stale := mkConfig(t, "default", "nope", "rg1", nil)
+	stale := mkConfigMap(t, "default", "nope", "rg1", nil)
 	stale.ResourceVersion = "1"
 	if _, err := s.Update(ctx, stale); fault.KindOf(err) != fault.NotFound {
 		t.Fatalf("Update(absent): kind=%v want not_found", fault.KindOf(err))
@@ -92,7 +92,7 @@ func testNotFound(t *testing.T, s store.Store) {
 
 func testOptimisticConcurrency(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	created, err := s.Create(ctx, mkConfig(t, "default", "race", "rg1", map[string]string{"n": "0"}))
+	created, err := s.Create(ctx, mkConfigMap(t, "default", "race", "rg1", map[string]string{"n": "0"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -104,7 +104,7 @@ func testOptimisticConcurrency(t *testing.T, s store.Store) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			u := mkConfig(t, "default", "race", "rg1", map[string]string{"n": fmt.Sprintf("%d", i+1)})
+			u := mkConfigMap(t, "default", "race", "rg1", map[string]string{"n": fmt.Sprintf("%d", i+1)})
 			u.ResourceVersion = rv
 			_, errs[i] = s.Update(ctx, u)
 		}(i)
@@ -129,7 +129,7 @@ func testOptimisticConcurrency(t *testing.T, s store.Store) {
 
 func testGenerationBumps(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	created, err := s.Create(ctx, mkConfig(t, "default", "gen", "rg1", map[string]string{"k": "v1"}))
+	created, err := s.Create(ctx, mkConfigMap(t, "default", "gen", "rg1", map[string]string{"k": "v1"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -138,7 +138,7 @@ func testGenerationBumps(t *testing.T, s store.Store) {
 	}
 
 	// spec change -> generation increments
-	specChange := mkConfig(t, "default", "gen", "rg1", map[string]string{"k": "v2"})
+	specChange := mkConfigMap(t, "default", "gen", "rg1", map[string]string{"k": "v2"})
 	specChange.ResourceVersion = created.GetObjectMeta().ResourceVersion
 	afterSpec, err := s.Update(ctx, specChange)
 	if err != nil {
@@ -149,7 +149,7 @@ func testGenerationBumps(t *testing.T, s store.Store) {
 	}
 
 	// metadata-only change (tags) -> generation unchanged
-	metaOnly := mkConfig(t, "default", "gen", "rg1", map[string]string{"k": "v2"})
+	metaOnly := mkConfigMap(t, "default", "gen", "rg1", map[string]string{"k": "v2"})
 	metaOnly.Tags = v1.Tags{"team": "core"}
 	metaOnly.ResourceVersion = afterSpec.GetObjectMeta().ResourceVersion
 	afterMeta, err := s.Update(ctx, metaOnly)
@@ -163,13 +163,13 @@ func testGenerationBumps(t *testing.T, s store.Store) {
 
 func testListFilter(t *testing.T, s store.Store) {
 	ctx := context.Background()
-	cfgA := mkConfig(t, "ns1", "a", "rga", nil)
+	cfgA := mkConfigMap(t, "ns1", "a", "rga", nil)
 	cfgA.Tags = v1.Tags{"t": "1"}
 	mustCreate(t, s, cfgA)
-	mustCreate(t, s, mkConfig(t, "ns1", "b", "rgb", nil))
-	mustCreate(t, s, mkConfig(t, "ns2", "c", "rga", nil))
+	mustCreate(t, s, mkConfigMap(t, "ns1", "b", "rgb", nil))
+	mustCreate(t, s, mkConfigMap(t, "ns2", "c", "rga", nil))
 
-	all, err := s.List(ctx, v1.KindConfig.GVK(), store.ListOptions{})
+	all, err := s.List(ctx, v1.KindConfigMap.GVK(), store.ListOptions{})
 	if err != nil {
 		t.Fatalf("List(all): %v", err)
 	}
@@ -192,17 +192,17 @@ func testListFilter(t *testing.T, s store.Store) {
 
 func testWatchStreams(t *testing.T, s store.Store) {
 	ctx, cancel := context.WithCancel(context.Background())
-	w, err := s.Watch(ctx, v1.KindConfig.GVK(), store.WatchOptions{})
+	w, err := s.Watch(ctx, v1.KindConfigMap.GVK(), store.WatchOptions{})
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 
-	created := mustCreate(t, s, mkConfig(t, "default", "w", "rg1", map[string]string{"k": "v1"}))
+	created := mustCreate(t, s, mkConfigMap(t, "default", "w", "rg1", map[string]string{"k": "v1"}))
 	if ev := recv(t, w); ev.Type != store.Added || ev.Object.GetName() != "w" {
 		t.Fatalf("expected Added w, got %s %s", ev.Type, ev.Object.GetName())
 	}
 
-	upd := mkConfig(t, "default", "w", "rg1", map[string]string{"k": "v2"})
+	upd := mkConfigMap(t, "default", "w", "rg1", map[string]string{"k": "v2"})
 	upd.ResourceVersion = created.GetObjectMeta().ResourceVersion
 	updated, err := s.Update(ctx, upd)
 	if err != nil {
@@ -212,7 +212,7 @@ func testWatchStreams(t *testing.T, s store.Store) {
 		t.Fatalf("expected Modified, got %s", ev.Type)
 	}
 
-	if err := s.Delete(ctx, v1.KindConfig.GVK(), "default", "w", updated.GetObjectMeta().ResourceVersion); err != nil {
+	if err := s.Delete(ctx, v1.KindConfigMap.GVK(), "default", "w", updated.GetObjectMeta().ResourceVersion); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if ev := recv(t, w); ev.Type != store.Deleted {
@@ -238,11 +238,11 @@ func testWatchReplays(t *testing.T, s store.Store) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a := mustCreate(t, s, mkConfig(t, "default", "a", "rg1", nil))
+	a := mustCreate(t, s, mkConfigMap(t, "default", "a", "rg1", nil))
 	rvA := a.GetObjectMeta().ResourceVersion
-	mustCreate(t, s, mkConfig(t, "default", "b", "rg1", nil)) // rv > rvA
+	mustCreate(t, s, mkConfigMap(t, "default", "b", "rg1", nil)) // rv > rvA
 
-	w, err := s.Watch(ctx, v1.KindConfig.GVK(), store.WatchOptions{SinceResourceVersion: rvA})
+	w, err := s.Watch(ctx, v1.KindConfigMap.GVK(), store.WatchOptions{SinceResourceVersion: rvA})
 	if err != nil {
 		t.Fatalf("Watch(since): %v", err)
 	}
@@ -253,13 +253,13 @@ func testWatchReplays(t *testing.T, s store.Store) {
 		t.Fatalf("replay: got %s want b", ev.Object.GetName())
 	}
 	// then live:
-	mustCreate(t, s, mkConfig(t, "default", "c", "rg1", nil))
+	mustCreate(t, s, mkConfigMap(t, "default", "c", "rg1", nil))
 	if ev := recv(t, w); ev.Type != store.Added || ev.Object.GetName() != "c" {
 		t.Fatalf("live after replay: got %s %s want Added c", ev.Type, ev.Object.GetName())
 	}
 
 	// an invalid resourceVersion is rejected.
-	if _, err := s.Watch(ctx, v1.KindConfig.GVK(), store.WatchOptions{SinceResourceVersion: "not-a-number"}); fault.KindOf(err) != fault.Invalid {
+	if _, err := s.Watch(ctx, v1.KindConfigMap.GVK(), store.WatchOptions{SinceResourceVersion: "not-a-number"}); fault.KindOf(err) != fault.Invalid {
 		t.Fatalf("Watch(bad rv): kind=%v want invalid", fault.KindOf(err))
 	}
 }
@@ -277,7 +277,7 @@ func mustCreate(t *testing.T, s store.Store, obj v1.Object) v1.Object {
 
 func count(t *testing.T, s store.Store, opts store.ListOptions) int {
 	t.Helper()
-	l, err := s.List(context.Background(), v1.KindConfig.GVK(), opts)
+	l, err := s.List(context.Background(), v1.KindConfigMap.GVK(), opts)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

@@ -8,7 +8,7 @@ Reads ``FUNCD_POOL_MANIFEST`` (the SAME ``[{name, artifact, handler}]`` contract
 serves ``POST /function/<name>`` by submitting the request to the named handler's interpreter — with
 the byte-identical wire contract + RFC 8927 event-data validation as the solo shim (ADR-0049) — plus
 ``GET /health/{readiness,liveness}``. Bind: ``FUNCD_PORT`` → ``0.0.0.0:PORT`` (container) else
-``FUNCD_PORTFILE`` → loopback + write the port (process). A member whose handler/``event_schema``
+``FUNCD_PORTFILE`` → loopback + write the port (process). A member whose handler/contract
 fails to load makes the host exit 3 (the shape-gate). Stdlib only — no runtime dependency.
 """
 
@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from funcd_shim import _poolworker
+from funcd_shim.tracespan import parse_links
 
 
 class _Pooled:
@@ -38,8 +39,17 @@ class _Pooled:
         """Force the initializer to run and surface a load failure as an exception (→ host exit 3)."""
         self.ex.submit(_poolworker.ready).result()
 
-    def invoke(self, body: bytes) -> dict[str, Any]:
-        result: dict[str, Any] = self.ex.submit(_poolworker.invoke, body.decode()).result()
+    def invoke(
+        self,
+        body: bytes,
+        traceparent: str | None = None,
+        fn_name: str = "invoke",
+        span_id: str | None = None,
+        links: list[str] | None = None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = self.ex.submit(
+            _poolworker.invoke, body.decode(), traceparent, fn_name, span_id, links
+        ).result()
         return result
 
     def close(self) -> None:
@@ -103,7 +113,15 @@ def make_request_handler(handlers: dict[str, _Pooled]) -> type[BaseHTTPRequestHa
             if pooled is None:
                 self._empty(404)
                 return
-            res = pooled.invoke(raw)
+            # ADR-0101: forward the trace header + function name so the worker's span adopts/names.
+            # ADR-0101/0105: forward the trace + span-id + fan-in links headers to the worker.
+            res = pooled.invoke(
+                raw,
+                self.headers.get("traceparent"),
+                name,
+                self.headers.get("X-Funcd-Span-Id"),
+                parse_links(self.headers.get("X-Funcd-Span-Links")),
+            )
             status = int(res["status"])
             if status == 204:
                 self._empty(204)

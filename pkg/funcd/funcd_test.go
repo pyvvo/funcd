@@ -41,16 +41,16 @@ func TestScenarioInMemoryPortsRoundtrip(t *testing.T) {
 	t.Cleanup(func() { _ = p.Shutdown(ctx) })
 
 	// store: Create + Get a typed object.
-	obj, ok := v1.NewObject(v1.KindConfig)
+	obj, ok := v1.NewObject(v1.KindConfigMap)
 	require.True(t, ok)
-	cfg, ok := obj.(*v1.Config)
+	cfg, ok := obj.(*v1.ConfigMap)
 	require.True(t, ok)
 	cfg.Name = "harness"
 	cfg.Namespace = "default"
 	cfg.ResourceGroup = "rg1"
 	_, err = p.cfg.store.Create(ctx, cfg)
 	require.NoError(t, err)
-	got, err := p.cfg.store.Get(ctx, v1.KindConfig.GVK(), "default", "harness")
+	got, err := p.cfg.store.Get(ctx, v1.KindConfigMap.GVK(), "default", "harness")
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("harness"), got.GetObjectMeta().Name)
 

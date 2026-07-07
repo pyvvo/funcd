@@ -1,0 +1,14 @@
+# Step 1 of the apply order — the lakehouse Bucket with the `gold` prefix but NO owner yet (it can't
+# name the CatalogService `lake` as owner before `lake` exists). This breaks the admission cycle
+# (bucket-owner needs the CatalogService; the CatalogService's catalog-blob-validity needs the
+# bucket/prefix): apply this first, then the CatalogService, then bucket.yaml (the owner Update).
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold          # owner added by bucket.yaml once the CatalogService exists
+  maxObjectBytes: 1073741824

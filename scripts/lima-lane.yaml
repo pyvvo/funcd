@@ -1,0 +1,93 @@
+# GENERIC self-deploying Lima VM for EVERY funcd example lane on REAL containerd — one file for all lanes.
+# `base: lima.yaml` inherits the image/arch, resources, the `funcd install` provision + runtime probe; this
+# file adds the identical boilerplate every lane shared (install funcdctl, extract the staged tgz, run funcd
+# in containerd mode, health-gate) and then drives the only per-lane variation from DATA: it reads the
+# lane's section of the staged `scripts/lanes.yaml` (the lane name is in /opt/lane/LANE) and runs its
+# `push` + `apply`; the probe polls its `ready` target. No per-lane VM YAML and no per-lane shell — a new
+# lane is just a section in lanes.yaml. Booted by `just lima-example <name>` with `--name funcd-bench-<name>`.
+# Lima merge (2.1.x): provision + probes APPEND after base's; mounts dedup by mountPoint (child wins).
+base: lima.yaml
+
+# Writable so the guest pushes the OCI layout into /mnt/funcd-deps/registry (the manifests' artifact.uri).
+mounts:
+  - location: "~/.cache/funcd-lima"
+    mountPoint: "/mnt/funcd-deps"
+    writable: true
+
+# Appended after `funcd install`: the shared bootstrap, then interpret the lane's registry section (push+apply).
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      d=/opt/lane; reg=/mnt/funcd-deps/registry
+      install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
+      # PyYAML so the guest reads the registry directly (the base image is python3 stdlib-only).
+      apt-get update -qq && apt-get install -y -qq python3-yaml
+      mkdir -p "$d" /var/lib/funcd/data
+      rm -rf "$reg"
+      tar xzf /mnt/funcd-deps/lane.tgz -C "$d"   # staged files + lanes.yaml + a LANE marker
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+      curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
+      # DATA-DRIVEN deploy: read this lane's section and run its push(es) then its apply order.
+      python3 - <<'PY'
+      import json, os, subprocess, yaml
+      d, reg = "/opt/lane", "/mnt/funcd-deps/registry"
+      lane = open(d + "/LANE").read().strip()
+      spec = yaml.safe_load(open(d + "/lanes.yaml"))[lane]
+      os.chdir(d)
+      for p in spec.get("push", []):
+          cmd = ["funcdctl", "push", p["artifact"], f"oci-layout://{reg}:{p['ref']}"]
+          if p.get("schema"):
+              cmd += ["--schema", p["schema"]]
+          if p.get("entry"):
+              cmd += ["--entry", p["entry"]]
+          if p.get("runtime"):  # dev.funcd.runtime.v1 annotation — a workflow step image is self-describing (ADR-0094)
+              cmd += ["--runtime", p["runtime"]]
+          print("+", *cmd)
+          subprocess.run(cmd, check=True)
+      for m in spec.get("apply", []):
+          # An apply entry is either a plain string (`funcdctl apply -f <file>`) OR a
+          # `{file: <path>, transform: <shell-cmd>}` mapping meaning `cat <file> | <transform> |
+          # funcdctl apply -f -` — the transform (a sed/python one-liner; python3-yaml is present in
+          # the guest) reads the manifest on stdin and writes the mutated manifest on stdout.
+          if isinstance(m, dict):
+              file, transform = m["file"], m["transform"]
+              print("+ cat", file, "|", transform, "| funcdctl apply -f -")
+              src = subprocess.run(["cat", file], check=True, capture_output=True)
+              xf = subprocess.run(transform, shell=True, check=True, input=src.stdout,
+                                  capture_output=True)
+              subprocess.run(["funcdctl", "apply", "-f", "-"], check=True, input=xf.stdout)
+          else:
+              print("+ funcdctl apply -f", m)
+              subprocess.run(["funcdctl", "apply", "-f", m], check=True)
+      PY
+
+# Appended after the runtime probe: gate `limactl start` on the lane's `ready` target reaching Ready.
+probes:
+  - description: "the lane's resources reach Ready on a real containerd sandbox (from lanes.yaml `ready`)"
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      python3 - <<'PY'
+      import json, subprocess, sys, time, yaml
+      d = "/opt/lane"
+      lane = open(d + "/LANE").read().strip()
+      r = yaml.safe_load(open(d + "/lanes.yaml"))[lane]["ready"]
+      kind, names, tries = r["kind"], r["names"], int(r.get("tries", 60))
+      def phase(n):
+          out = subprocess.run(["funcdctl", "get", kind, n, "-n", "default", "-o", "json"],
+                               capture_output=True, text=True)
+          try:
+              return json.loads(out.stdout).get("status", {}).get("phase", "?")
+          except Exception:
+              return "?"
+      for _ in range(tries):
+          if all(phase(n) == "Ready" for n in names):
+              sys.exit(0)
+          time.sleep(2)
+      sys.exit(1)
+      PY
+    hint: "the lane did not reach Ready — see `sudo journalctl -u funcd-demo` in `limactl shell funcd-bench-<name>`; check the lane's `ready` target in scripts/lanes.yaml (a binding may be unresolved: ConfigResolveFailed / SecretResolveFailed / a provider probe)"

@@ -12,7 +12,7 @@ ExecStart=/usr/local/bin/funcd
 Restart=on-failure
 RestartSec=2
 
-# Writable state — the slatedb file backend writes here (file:///var/lib/funcd, ADR-0006).
+# Writable state — the Badger metastore writes here (<dataDir>/store, ADR-0065).
 StateDirectory=funcd
 StateDirectoryMode=0750
 

@@ -17,8 +17,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/bench"
 	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
+	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
 	shimpython "github.com/green-0-rabbit/funcd/shim/python"
 )
 
@@ -58,7 +58,7 @@ type benchConfig struct {
 // harness folded into the funcd binary. Mode is chosen by mutually-exclusive flags — bare
 // = the in-process embed lane (memory+file substrate, RSS — ADR-0040, the default);
 // --containerd = the cgroup-footprint lane (ADR-0052); --doctor = a component check + guidance
-// (never installs, spins a VM, or ships Lima). It reuses internal/bench unchanged. Status is
+// (never installs, spins a VM, or ships Lima). It reuses internal/testkit/bench unchanged. Status is
 // written to out (the test seam); errors are returned, not os.Exit'd.
 func newBenchCmd(out io.Writer) *cobra.Command {
 	var c benchConfig
@@ -415,4 +415,25 @@ func percent(num, den float64) float64 {
 // logf writes a status line to out (the bench command's user-facing output seam).
 func logf(out io.Writer, format string, a ...any) {
 	_, _ = fmt.Fprintf(out, format, a...)
+}
+
+// imageOverrides parses FUNCD_IMAGE_OVERRIDE ("runtime=ref,runtime=ref") into the Manager's
+// --image override map (ADR-0054) for the bench --containerd lane: a listed runtime is pulled from
+// its registry ref instead of imported from the embedded curated tar. Empty/malformed entries are
+// skipped. (The daemon resolves the same env via internal/platform/config; the bench is its own harness.)
+func imageOverrides() map[string]string {
+	raw := os.Getenv("FUNCD_IMAGE_OVERRIDE")
+	if raw == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		if rt, ref, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && rt != "" && ref != "" {
+			out[rt] = ref
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -43,7 +43,7 @@ type recordingMaterializer struct {
 
 func (m *recordingMaterializer) Materialize(_ context.Context, fn *v1.Function) (string, error) {
 	m.mu.Lock()
-	m.seen = fn.Spec.Artifact.Digest
+	m.seen = fn.Spec.ImageDigest
 	m.mu.Unlock()
 	return "/tmp/x", nil
 }
@@ -81,7 +81,7 @@ func (h *digestHarness) applyFn(t *testing.T, name, uri, digest string) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: uri, Digest: digest}
+	fn.Spec.Image, fn.Spec.ImageDigest = uri, digest
 	fn.Spec.Replicas = 1
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
 	_, err := h.st.Create(context.Background(), fn)
@@ -98,14 +98,14 @@ func (h *digestHarness) revisionDigest(t *testing.T, fn string, gen int) string 
 	t.Helper()
 	obj, err := h.st.Get(context.Background(), v1.KindRevision.GVK(), "default", v1.ObjectName(fnRev(fn, gen)))
 	require.NoError(t, err)
-	return obj.(*v1.Revision).Spec.Artifact.Digest
+	return obj.(*v1.Revision).Spec.ImageDigest
 }
 
 func (h *digestHarness) specDigest(t *testing.T, name string) string {
 	t.Helper()
 	obj, err := h.st.Get(context.Background(), v1.KindFunction.GVK(), "default", v1.ObjectName(name))
 	require.NoError(t, err)
-	return obj.(*v1.Function).Spec.Artifact.Digest
+	return obj.(*v1.Function).Spec.ImageDigest
 }
 
 func fnRev(name string, gen int) string { return name + "-" + strconv.Itoa(gen) }

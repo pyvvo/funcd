@@ -1,0 +1,20 @@
+# The lakehouse Bucket — the S3 endpoint's declared data domain (ADR-0080), the exact parallel of a KVStore.
+# A Bucket is a domain; each spec.prefixes[] entry is a sub-domain (a medallion layer) whose `owner` is the
+# single writer (the consistency invariant, mirroring KVStore.spec.tables[].owner — ADR-0073). Deletion-
+# protected (bound by a Function's spec.blob) and quota-bounded. Reached over the S3 endpoint as
+# s3://lakehouse/<prefix>/<key> (path-style; DuckDB s3_url_style='path').
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: bronze          # raw ingest layer — written by the ingest function
+      owner: ingest
+    - name: silver          # cleaned / conformed — written by the transform function
+      owner: transform
+    - name: gold            # serving marts — written by transform, read by reporters
+      owner: transform
+  maxObjectBytes: 1073741824   # per-object cap (1 GiB; optional — defaults apply if omitted)

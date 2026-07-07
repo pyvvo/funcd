@@ -1,6 +1,10 @@
 # ADR-0038: Event-data contract — a JTD schema in the artifact, the engine in the shim (refines ADR-0037)
 
 - **Status**: Implemented
+- **Superseded by**: [ADR-0058](0058-contract-codegen-from-code-types.md) (2026-06-19) — the contract becomes **JSON
+  Schema generated from the author's code type** (input *and* output), validated **eval-free** by a precompiled
+  validator. The frame (opt-in, in the artifact, reject-before-invoke) stands; the **format (JTD → JSON Schema), the
+  authoring (hand-written → generated), and the engine (jtd interpreter → precompiled)** are superseded.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** — judge folded: noted the opt-in-contract `{data:…}` envelope +
   absent-data caveat in Consequences and §3; fixed list numbering; trimmed a repeated codegen line. **Implemented 2026-06-16**.)
 - **Deciders**: green-0-rabbit

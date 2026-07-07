@@ -1,0 +1,81 @@
+# Venom e2e suite for the KV containerd lane (ADR-0069/0076) — the declarative invoke phase of
+# `just lima-example-kv`, run host-side AFTER the self-deploying Lima VM is Ready (it replaced the bash
+# invoke script). The http steps hit the VM's forwarded 127.0.0.1 ports; the one exec step does the
+# in-VM mutation via `limactl shell` (co-located with the daemon, so it doesn't race the redeploy).
+#
+# It proves two properties declaratively:
+#   1. binding-as-read-grant — each counter reads 1→2 with NO read Policy (the spec.kv binding grants it).
+#   2. fail-closed — applying counter-unbound.yaml (no spec.kv) makes context.kv.get Forbidden
+#      (bound-only, not default-allow).
+name: kv-counter binding-as-read-grant (ADR-0076, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: js-counter reads 1 then 2 with no read Policy (binding grants read)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        assertions:
+          - result.bodyjson.count ShouldEqual 2
+
+  - name: py-counter reads 1 then 2 with no read Policy (binding grants read)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pycounter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pycounter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        assertions:
+          - result.bodyjson.count ShouldEqual 2
+
+  # The fail-closed NEGATIVE, HYBRID style: the mutation runs IN the VM (co-located with the daemon, so it
+  # does not race the redeploy the way a host-side funcdctl does), the assertion runs host-side. {{.vm}} is
+  # injected by the recipe (--var) so no machine-specific path lives in this tracked file. No helper script —
+  # the apply is one inline exec line; the WAIT is the negative http step's retry/delay (Venom's job).
+  - name: removing the spec.kv binding denies the read (fail-closed)
+    steps:
+      # apply the static no-binding config IN the VM (counter-unbound.yaml = counter.yaml minus spec.kv).
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl apply -f /opt/lane/counter-unbound.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      # with the binding gone, the PDP's kvBindings Set no longer contains the table ⇒ default-deny. The
+      # denied response is funcd's forbidden problem+json; retry/delay absorbs the reconcile — once the new
+      # revision is serving, every read is denied (fail-closed), not 200-with-a-count.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers: { content-type: application/json }
+        body: '{"data":{"name":"venom"}}'
+        retry: 30
+        delay: 2
+        info: "denied response → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.body ShouldContainSubstring forbidden

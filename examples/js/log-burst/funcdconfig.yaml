@@ -1,0 +1,21 @@
+# Operator config for the log-burst containerd lane (ADR-0081): file-backed substrate (so the
+# captured logs land on disk under <dataDir>/blob/logs/ for the e2e to read back) + the containerd
+# runtime (the curated nodejs22/python314 images, whose embedded shim writes Path B over the UDS).
+# funclog Path B capture is on by default whenever the runtime supports it + a blob is present.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  token: funcd-dev-token
+  namespaces:
+    - default
+runtime:
+  mode: containerd
+log:
+  format: text
+  level: info

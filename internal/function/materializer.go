@@ -24,7 +24,7 @@ type ArtifactResolver interface {
 	Resolve(ctx context.Context, uri string) (digest string, err error)
 }
 
-// FileMaterializer resolves a "file://" (or bare-path) ArtifactRef.URI to a local path.
+// FileMaterializer resolves a "file://" (or bare-path) spec.image ref to a local path.
 // It is the no-dependency dev/test driver; production uses the oras driver (ADR-0031).
 type FileMaterializer struct{}
 
@@ -35,9 +35,9 @@ func NewFileMaterializer() *FileMaterializer { return &FileMaterializer{} }
 // exists. It accepts "file:///abs/path", "file://abs/path", or a bare local path.
 func (FileMaterializer) Materialize(_ context.Context, fn *v1.Function) (string, error) {
 	const op = "function.FileMaterializer.Materialize"
-	uri := string(fn.Spec.Artifact.URI)
+	uri := string(fn.Spec.Image)
 	if uri == "" {
-		return "", fault.Invalidf(op, "function %s/%s has no spec.artifact.uri", fn.Namespace, fn.Name)
+		return "", fault.Invalidf(op, "function %s/%s has no spec.image", fn.Namespace, fn.Name)
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	if path == "" {

@@ -13,14 +13,31 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import fastjsonschema
 import pytest
 
 pytest.importorskip("concurrent.interpreters")  # Python 3.14+ only
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 
+# A REAL fastjsonschema-compiled __funcd_validate_input (what the build bakes) — this proves
+# fastjsonschema's compiled validator runs end-to-end inside the subinterpreter pool (the whole
+# reason we chose it over pydantic-core, which crashes a subinterpreter).
+_SCHEMA = {
+    "type": "object",
+    "properties": {"hello": {"type": "string"}},
+    "required": ["hello"],
+    "additionalProperties": False,
+}
+_VALIDATOR = fastjsonschema.compile_to_code(_SCHEMA)
 ECHO = (
-    "event_schema = {'optionalProperties': {'hello': {'type': 'string'}}}\n"
+    _VALIDATOR + "\n"
+    "def __funcd_validate_input(d):\n"
+    "    try:\n"
+    "        validate(d)\n"
+    "        return []\n"
+    "    except JsonSchemaValueException as e:\n"
+    "        return [str(e)]\n"
     "def handle(context, event):\n"
     "    return {'echoed': event.get('data')}\n"
 )
@@ -95,10 +112,10 @@ def test_pool_colocates_and_contract(tmp_path: Path) -> None:
             st, body = _post(port, name, json.dumps({"data": {"hello": "world"}}))
             assert st == 200, body
             assert json.loads(body) == {"echoed": {"hello": "world"}}
-        # contract mismatch → 422 (the ADR-0049 validator, per handler)
+        # input-contract mismatch → 422 (the per-handler pydantic validator, ADR-0058)
         st, body = _post(port, "f0", json.dumps({"data": {"hello": 5}}))
         assert st == 422
-        assert json.loads(body)["error"] == "event data does not match the contract"
+        assert json.loads(body)["error"] == "event data does not match the input contract"
         # health + unknown route
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/readiness", timeout=5) as r:  # noqa: S310
             assert r.status == 200

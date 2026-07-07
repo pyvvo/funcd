@@ -3,15 +3,6 @@
 
 components:
   schemas:
-    ArtifactRef:
-      additionalProperties: false
-      properties:
-        digest:
-          pattern: ^sha256:[a-f0-9]{64}$
-          type: string
-        uri:
-          type: string
-      type: object
     BlobServiceSpec:
       additionalProperties: false
       properties:
@@ -20,6 +11,139 @@ components:
           type: string
       required:
         - binding
+      type: object
+    Bucket:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/BucketSpec"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    BucketPrefix:
+      additionalProperties: false
+      properties:
+        name:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        owner:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+      type: object
+    BucketSpec:
+      additionalProperties: false
+      properties:
+        maxObjectBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        prefixes:
+          items:
+            $ref: "#/components/schemas/BucketPrefix"
+          type:
+            - array
+            - "null"
+      required:
+        - prefixes
+      type: object
+    BuiltinStep:
+      additionalProperties: false
+      properties:
+        pass:
+          type: string
+        wait:
+          type: string
+      type: object
+    CatalogRef:
+      additionalProperties: false
+      properties:
+        bucket:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        prefix:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - bucket
+        - prefix
+      type: object
+    CatalogService:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/CatalogServiceSpec"
+        status:
+          $ref: "#/components/schemas/CatalogServiceStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    CatalogServiceSpec:
+      additionalProperties: false
+      properties:
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalog:
+          $ref: "#/components/schemas/CatalogRef"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        resources:
+          $ref: "#/components/schemas/ResourceSpec"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - blob
+        - catalog
+      type: object
+    CatalogServiceStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        endpoint:
+          type: string
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - Status
       type: object
     Condition:
       additionalProperties: false
@@ -42,7 +166,7 @@ components:
         - type
         - status
       type: object
-    Config:
+    ConfigMap:
       additionalProperties: false
       properties:
         TypeMeta:
@@ -50,13 +174,13 @@ components:
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
-          $ref: "#/components/schemas/ConfigSpec"
+          $ref: "#/components/schemas/ConfigMapSpec"
       required:
         - TypeMeta
         - metadata
         - spec
       type: object
-    ConfigSpec:
+    ConfigMapSpec:
       additionalProperties: false
       properties:
         data:
@@ -189,14 +313,123 @@ components:
         - metadata
         - spec
       type: object
+    FunctionBlob:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        bucket:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        prefix:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - bucket
+        - prefix
+      type: object
+    FunctionCatalog:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        catalog:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - catalog
+      type: object
+    FunctionKV:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        store:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        table:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - store
+        - table
+      type: object
+    FunctionLink:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        target:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        timeout:
+          format: int64
+          maximum: 300000000000
+          minimum: 0
+          type: integer
+      required:
+        - alias
+        - target
+      type: object
     FunctionSpec:
       additionalProperties: false
       properties:
-        artifact:
-          $ref: "#/components/schemas/ArtifactRef"
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            $ref: "#/components/schemas/FunctionCatalog"
+          type:
+            - array
+            - "null"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
           type: string
+        image:
+          type: string
+        imageDigest:
+          pattern: ^sha256:[a-f0-9]{64}$
+          type: string
+        kv:
+          items:
+            $ref: "#/components/schemas/FunctionKV"
+          type:
+            - array
+            - "null"
+        links:
+          items:
+            $ref: "#/components/schemas/FunctionLink"
+          type:
+            - array
+            - "null"
         pooling:
           $ref: "#/components/schemas/Pooling"
         replicas:
@@ -233,6 +466,62 @@ components:
           type: integer
       required:
         - Status
+      type: object
+    FunctionStep:
+      additionalProperties: false
+      properties:
+        blob:
+          items:
+            $ref: "#/components/schemas/FunctionBlob"
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            $ref: "#/components/schemas/FunctionCatalog"
+          type:
+            - array
+            - "null"
+        config:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        image:
+          type: string
+        kv:
+          items:
+            $ref: "#/components/schemas/FunctionKV"
+          type:
+            - array
+            - "null"
+        pooling:
+          $ref: "#/components/schemas/WorkflowPooling"
+        ref:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        retry:
+          $ref: "#/components/schemas/StepRetry"
+        secrets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        timeout:
+          format: int64
+          maximum: 86400000000000
+          minimum: 0
+          type: integer
       type: object
     Gateway:
       additionalProperties: false
@@ -309,6 +598,118 @@ components:
           type: string
       required:
         - binding
+      type: object
+    KVStore:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/KVStoreSpec"
+        status:
+          $ref: "#/components/schemas/KVStoreStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    KVStoreSpec:
+      additionalProperties: false
+      properties:
+        maxKeyBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        maxValueBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        tables:
+          items:
+            $ref: "#/components/schemas/KVTable"
+          type:
+            - array
+            - "null"
+      type: object
+    KVStoreStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        bindings:
+          format: int64
+          type: integer
+        tables:
+          format: int64
+          type: integer
+      required:
+        - Status
+      type: object
+    KVTable:
+      additionalProperties: false
+      properties:
+        name:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        owner:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
+      type: object
+    Line:
+      additionalProperties: false
+      properties:
+        attrs: {}
+        body:
+          type: string
+        function:
+          type: string
+        inv:
+          type: string
+        namespace:
+          type: string
+        replica:
+          type: string
+        severity:
+          type: string
+        severityNumber:
+          format: int32
+          type: integer
+        source:
+          type: string
+        spanId:
+          type: string
+        time:
+          format: date-time
+          type: string
+        traceId:
+          type: string
+      required:
+        - time
+        - severity
+        - severityNumber
+        - body
+        - namespace
+        - function
+        - replica
+        - source
+      type: object
+    LogsOutputBody:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/Line"
+          type:
+            - array
+            - "null"
+      required:
+        - items
       type: object
     Namespace:
       additionalProperties: false
@@ -415,6 +816,28 @@ components:
         - ObjectRef
         - uid
       type: object
+    Policy:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/PolicySpec"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    PolicySpec:
+      additionalProperties: false
+      properties:
+        cedar:
+          type: string
+      required:
+        - cedar
+      type: object
     Pooling:
       additionalProperties: false
       properties:
@@ -451,6 +874,14 @@ components:
       required:
         - Status
       type: object
+    ResourceSpec:
+      additionalProperties: false
+      properties:
+        cpu:
+          type: string
+        memory:
+          type: string
+      type: object
     Revision:
       additionalProperties: false
       properties:
@@ -470,12 +901,15 @@ components:
     RevisionSpec:
       additionalProperties: false
       properties:
-        artifact:
-          $ref: "#/components/schemas/ArtifactRef"
         function:
           $ref: "#/components/schemas/ObjectRef"
         handler:
           pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+          type: string
+        image:
+          type: string
+        imageDigest:
+          pattern: ^sha256:[a-f0-9]{64}$
           type: string
         number:
           format: int64
@@ -524,6 +958,39 @@ components:
           $ref: "#/components/schemas/Status"
       required:
         - Status
+      type: object
+    RunStepStatus:
+      additionalProperties: false
+      properties:
+        attempts:
+          format: int64
+          type: integer
+        endedAt:
+          format: int64
+          type: integer
+        error:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        phase:
+          enum:
+            - Pending
+            - Running
+            - Succeeded
+            - Failed
+            - Skipped
+            - Cancelled
+          type: string
+        revision:
+          type: string
+        startedAt:
+          format: int64
+          type: integer
+      required:
+        - name
       type: object
     RuntimeClass:
       additionalProperties: false
@@ -662,6 +1129,28 @@ components:
             - Terminating
           type: string
       type: object
+    StepRetry:
+      additionalProperties: false
+      properties:
+        backoff:
+          format: int64
+          maximum: 3600000000000
+          minimum: 0
+          type: integer
+        maxAttempts:
+          format: int64
+          maximum: 100
+          minimum: 1
+          type: integer
+      type: object
+    StepWhen:
+      additionalProperties: false
+      properties:
+        condition:
+          type: string
+      required:
+        - condition
+      type: object
     TimerSpec:
       additionalProperties: false
       properties:
@@ -702,6 +1191,248 @@ components:
           $ref: "#/components/schemas/Status"
       required:
         - Status
+      type: object
+    Workflow:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/WorkflowSpec"
+        status:
+          $ref: "#/components/schemas/WorkflowStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    WorkflowContract:
+      additionalProperties: false
+      properties:
+        dialect:
+          type: string
+        input: {}
+        output: {}
+      type: object
+    WorkflowKVStore:
+      additionalProperties: false
+      properties:
+        deletion:
+          enum:
+            - retain
+            - delete
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        tables:
+          items:
+            $ref: "#/components/schemas/KVTable"
+          type:
+            - array
+            - "null"
+      required:
+        - name
+        - tables
+      type: object
+    WorkflowPooling:
+      additionalProperties: false
+      properties:
+        minReplicas:
+          format: int64
+          maximum: 15
+          minimum: 0
+          type: integer
+        mode:
+          enum:
+            - shared
+            - isolated
+          type: string
+        worker:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
+    WorkflowRef:
+      additionalProperties: false
+      properties:
+        ref:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
+    WorkflowRun:
+      additionalProperties: false
+      properties:
+        TypeMeta:
+          $ref: "#/components/schemas/TypeMeta"
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/WorkflowRunSpec"
+        status:
+          $ref: "#/components/schemas/WorkflowRunStatus"
+      required:
+        - TypeMeta
+        - metadata
+        - spec
+      type: object
+    WorkflowRunLinks:
+      additionalProperties: false
+      properties:
+        active:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        cancelled:
+          format: int64
+          type: integer
+        failed:
+          format: int64
+          type: integer
+        succeeded:
+          format: int64
+          type: integer
+      type: object
+    WorkflowRunSpec:
+      additionalProperties: false
+      properties:
+        cancel:
+          type: boolean
+        input: {}
+        paused:
+          type: boolean
+        workflow:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - workflow
+      type: object
+    WorkflowRunStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        steps:
+          items:
+            $ref: "#/components/schemas/RunStepStatus"
+          type:
+            - array
+            - "null"
+        traceId:
+          type: string
+      required:
+        - Status
+      type: object
+    WorkflowSpec:
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        kv:
+          items:
+            $ref: "#/components/schemas/WorkflowKVStore"
+          type:
+            - array
+            - "null"
+        onFailure:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        pooling:
+          $ref: "#/components/schemas/WorkflowPooling"
+        steps:
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+          type:
+            - array
+            - "null"
+        timeout:
+          format: int64
+          maximum: 604800000000000
+          minimum: 0
+          type: integer
+      required:
+        - steps
+      type: object
+    WorkflowStatus:
+      additionalProperties: false
+      properties:
+        Status:
+          $ref: "#/components/schemas/Status"
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        runs:
+          $ref: "#/components/schemas/WorkflowRunLinks"
+        steps:
+          items:
+            $ref: "#/components/schemas/WorkflowStepStatus"
+          type:
+            - array
+            - "null"
+      required:
+        - Status
+      type: object
+    WorkflowStep:
+      additionalProperties: false
+      properties:
+        builtin:
+          $ref: "#/components/schemas/BuiltinStep"
+        dependsOn:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        function:
+          $ref: "#/components/schemas/FunctionStep"
+        join:
+          enum:
+            - all
+            - any
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        params: {}
+        when:
+          $ref: "#/components/schemas/StepWhen"
+        workflow:
+          $ref: "#/components/schemas/WorkflowRef"
+      required:
+        - name
+      type: object
+    WorkflowStepStatus:
+      additionalProperties: false
+      properties:
+        contract:
+          $ref: "#/components/schemas/WorkflowContract"
+        image:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - name
       type: object
 info:
   description: funcd control-plane API — code-first via huma. Generated from typed Go operations; not hand-authored.
@@ -880,9 +1611,9 @@ paths:
           description: Error
       tags:
         - Namespace
-  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configs:
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets:
     get:
-      operationId: listConfigs
+      operationId: listBuckets
       parameters:
         - in: path
           name: namespace
@@ -898,7 +1629,7 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: "#/components/schemas/Config"
+                  $ref: "#/components/schemas/Bucket"
                 type:
                   - array
                   - "null"
@@ -910,21 +1641,21 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - Bucket
     post:
-      operationId: createConfig
+      operationId: createBucket
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Config"
+              $ref: "#/components/schemas/Bucket"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/Bucket"
           description: OK
         default:
           content:
@@ -933,10 +1664,10 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
-  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configs/{name}:
+        - Bucket
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets/{name}:
     delete:
-      operationId: deleteConfig
+      operationId: deleteBucket
       parameters:
         - in: path
           name: namespace
@@ -964,9 +1695,9 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - Bucket
     get:
-      operationId: getConfig
+      operationId: getBucket
       parameters:
         - in: path
           name: namespace
@@ -989,7 +1720,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/Bucket"
           description: OK
         default:
           content:
@@ -998,9 +1729,9 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - Bucket
     put:
-      operationId: replaceConfig
+      operationId: replaceBucket
       parameters:
         - in: path
           name: namespace
@@ -1022,14 +1753,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Config"
+              $ref: "#/components/schemas/Bucket"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/Bucket"
           description: OK
         default:
           content:
@@ -1038,7 +1769,325 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       tags:
-        - Config
+        - Bucket
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices:
+    get:
+      operationId: listCatalogServices
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CatalogService"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    post:
+      operationId: createCatalogService
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogService"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/catalogservices/{name}:
+    delete:
+      operationId: deleteCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    get:
+      operationId: getCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+    put:
+      operationId: replaceCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogService"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogService"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - CatalogService
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps:
+    get:
+      operationId: listConfigMaps
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/ConfigMap"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - ConfigMap
+    post:
+      operationId: createConfigMap
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigMap"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigMap"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - ConfigMap
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/configmaps/{name}:
+    delete:
+      operationId: deleteConfigMap
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - ConfigMap
+    get:
+      operationId: getConfigMap
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigMap"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - ConfigMap
+    put:
+      operationId: replaceConfigMap
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigMap"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigMap"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - ConfigMap
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/egresspolicies:
     get:
       operationId: listEgressPolicies
@@ -1516,6 +2565,63 @@ paths:
           description: Error
       tags:
         - Function
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}/logs:
+    get:
+      operationId: getFunctionLogs
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+            type: string
+        - description: "minimum level: trace|debug|info|warn|error|fatal"
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "minimum level: trace|debug|info|warn|error|fatal"
+            type: string
+        - description: max records returned, most-recent first-bounded; default 1000, capped 10000
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: max records returned, most-recent first-bounded; default 1000, capped 10000
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Function
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/grants:
     get:
       operationId: listGrants
@@ -1834,6 +2940,324 @@ paths:
           description: Error
       tags:
         - Invocation
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores:
+    get:
+      operationId: listKVStores
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/KVStore"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - KVStore
+    post:
+      operationId: createKVStore
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KVStore"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KVStore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - KVStore
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/kvstores/{name}:
+    delete:
+      operationId: deleteKVStore
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - KVStore
+    get:
+      operationId: getKVStore
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KVStore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - KVStore
+    put:
+      operationId: replaceKVStore
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KVStore"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KVStore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - KVStore
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies:
+    get:
+      operationId: listPolicies
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Policy"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    post:
+      operationId: createPolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Policy"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/policies/{name}:
+    delete:
+      operationId: deletePolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    get:
+      operationId: getPolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
+    put:
+      operationId: replacePolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Policy"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Policy
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/resourcegroups:
     get:
       operationId: listResourceGroups
@@ -2629,6 +4053,388 @@ paths:
           description: Error
       tags:
         - Service
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns:
+    get:
+      operationId: listWorkflowRuns
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/WorkflowRun"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    post:
+      operationId: createWorkflowRun
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}:
+    delete:
+      operationId: deleteWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    get:
+      operationId: getWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+    put:
+      operationId: replaceWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowRun"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowRun"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}/logs:
+    get:
+      operationId: getWorkflowRunLogs
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+            type: string
+        - description: "minimum level: trace|debug|info|warn|error|fatal"
+          explode: false
+          in: query
+          name: severity
+          schema:
+            description: "minimum level: trace|debug|info|warn|error|fatal"
+            type: string
+        - description: max records returned, most-recent first-bounded; default 1000, capped 10000
+          explode: false
+          in: query
+          name: limit
+          schema:
+            description: max records returned, most-recent first-bounded; default 1000, capped 10000
+            format: int64
+            type: integer
+        - description: narrow to one step's function (the --step drill-down)
+          explode: false
+          in: query
+          name: step
+          schema:
+            description: narrow to one step's function (the --step drill-down)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - WorkflowRun
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows:
+    get:
+      operationId: listWorkflows
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Workflow"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    post:
+      operationId: createWorkflow
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workflow"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflows/{name}:
+    delete:
+      operationId: deleteWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    get:
+      operationId: getWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
+    put:
+      operationId: replaceWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Workflow"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      tags:
+        - Workflow
   /apis/funcd.io/v1alpha1/namespaces/{name}:
     delete:
       operationId: deleteNamespace

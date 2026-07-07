@@ -7,11 +7,14 @@ package funcd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,24 +24,39 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/activator/storescaler"
 	"github.com/green-0-rabbit/funcd/internal/artifact"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	cedarauth "github.com/green-0-rabbit/funcd/internal/auth/cedar"
 	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
 	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/green-0-rabbit/funcd/internal/blob/s3gateway"
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/controlplane"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/dataplane"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
+	"github.com/green-0-rabbit/funcd/internal/funclog"
+	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
+	"github.com/green-0-rabbit/funcd/internal/funclog/logread"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/observability"
+	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/green-0-rabbit/funcd/internal/platform/clock"
+	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
 	"github.com/green-0-rabbit/funcd/internal/secrets"
 	"github.com/green-0-rabbit/funcd/internal/services"
 	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
+	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/green-0-rabbit/funcd/internal/workernode/local"
+	"github.com/green-0-rabbit/funcd/internal/workflow"
+	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	wbadger "github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
 )
 
 // DevToken is the default control-plane credential token wired by InMemory(). It
@@ -51,17 +69,43 @@ const (
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
 	defaultLocalNode     = "local"
 	shutdownTimeout      = 15 * time.Second
+	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
+	defaultKVStoresPerNamespace = 100
+	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
+	defaultBucketsPerNamespace = 100
 )
 
 // config holds the injected world — validated by validate() before New returns.
 type config struct {
-	store     store.Store
-	blob      blob.Bucket
-	bus       bus.Bus
-	runtime   runtime.Runtime
-	gateway   gateway.Gateway
-	logger    *slog.Logger
-	telemetry *observability.Telemetry
+	store   store.Store
+	kvStore kvstore.KV // the function-facing KV driver (ADR-0066/0069); nil ⇒ in-memory default
+	// kvMaxStoresPerNamespace is the per-namespace KVStore count cap at admission (ADR-0072); 0 ⇒
+	// the default (100); negative disables the quota.
+	kvMaxStoresPerNamespace int
+	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
+	// the default (100); negative disables the quota.
+	bucketMaxPerNamespace int
+	blob                  blob.Bucket
+	// funclog structured function-log capture (ADR-0081): on by default when the runtime supports it.
+	funclogDisabled bool
+	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
+	funclogMaxBytes int           // segment seal size; 0 ⇒ sink default (8 MiB)
+	// funclog traces signal (ADR-0101): per-invocation spans on the same channel; on by default,
+	// subordinate to the funclog channel (no channel ⇒ moot). WithoutFunclogTraces disables it.
+	funclogTracesDisabled bool
+	// funclog compacted compaction (ADR-0083): on by default when a blob substrate is present. When
+	// logCompactConfigured is false the defaults apply (window 1h / interval 5m / retention 30d);
+	// WithLogCompaction sets explicit values (retention <= 0 ⇒ keep forever); WithoutLogCompaction disables it.
+	logCompactDisabled   bool
+	logCompactConfigured bool
+	logCompactWindow     time.Duration
+	logCompactInterval   time.Duration
+	logCompactRetention  time.Duration
+	bus                  bus.Bus
+	runtime              runtime.Runtime
+	gateway              gateway.Gateway
+	logger               *slog.Logger
+	telemetry            *observability.Telemetry
 
 	// control plane (ADR-0028)
 	listenAddr  string
@@ -80,6 +124,7 @@ type config struct {
 	runtimeShimByFamily map[string][]string // runtime-family prefix → shim cmd (ADR-0049)
 	materializer        function.Materializer
 	artifactDir         string // OCI artifact cache dir (ADR-0031); enables the oras Materializer
+	invokeSocketDir     string // dir for per-function worker-node local API UDS (ADR-0064); empty → a temp dir
 
 	// container execution (ADR-0032): when imageFor is set the reconciler runs functions
 	// in the curated-image containerd worker (shim = image entrypoint, fixed netns port,
@@ -92,6 +137,25 @@ type config struct {
 	poolShim          []string
 	poolShimsByFamily map[string][]string // runtime-family prefix → pool-host cmd (ADR-0050)
 	poolLimit         int
+
+	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over c.blob. Disabled ⇒ no
+	// listener, no IAM, no keypair injection. master is loaded/generated by buildControlPlane.
+	s3gwEnabled        bool
+	s3gwListenAddr     string
+	s3gwEndpoint       string // sandbox-facing S3 URL (ADR-0085); empty ⇒ http://<listenAddr>
+	s3gwMaxUploadBytes int64
+	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
+	s3gwDataDir        string // where the master.key is persisted when no master file is set
+
+	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
+	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
+	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core;
+	// retention + payloadLimit are declared here but enforced by later gates (run GC / admission).
+	workflowDataDir      string
+	workflowStepTimeout  time.Duration
+	workflowRetention    time.Duration
+	workflowDefaultRetry int
+	workflowPayloadLimit int64
 }
 
 // validate returns the first missing required dependency as a fault.Invalid.
@@ -116,8 +180,9 @@ func (c *config) validate() error {
 
 // Platform is the assembled funcd runtime — the composition root built by New.
 type Platform struct {
-	cfg    *config
-	logger *slog.Logger
+	cfg       *config
+	logger    *slog.Logger
+	providers *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller *controller.Controller
 	eventing   *eventing.Source
@@ -129,6 +194,15 @@ type Platform struct {
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
+
+	invokeMgr         *local.Manager         // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store         // durable workflow run state (ADR-0094); closed on shutdown
+	workflowEngine    *workflow.Engine       // the run engine (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration          // terminal-run retention horizon (0 ⇒ no sweep)
+	logSink           *funclog.BlobSink      // structured function-log capture sink (ADR-0081); nil if unwired
+	traceSink         *funclog.BlobTraceSink // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	compactor         *compact.Compactor     // funclog compacted compaction pipeline (ADR-0083); nil if unwired
+	s3gw              *s3gateway.Server      // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -158,7 +232,12 @@ func New(opts ...Option) (*Platform, error) {
 		cfg.logger = lg.Root()
 	}
 
-	p := &Platform{cfg: cfg, logger: cfg.logger}
+	pc, err := providerCatalog()
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, "funcd.New", "build provider catalog")
+	}
+
+	p := &Platform{cfg: cfg, logger: cfg.logger, providers: pc}
 	if err := p.buildControlPlane(); err != nil {
 		return nil, err
 	}
@@ -182,6 +261,16 @@ func (p *Platform) buildControlPlane() error {
 	}
 	if c.dataPlaneAddr == "" {
 		c.dataPlaneAddr = defaultDataPlaneAddr
+	}
+	// KVStore per-namespace count quota (ADR-0072): 0 ⇒ the default (100); negative disables it.
+	kvMaxStores := c.kvMaxStoresPerNamespace
+	if kvMaxStores == 0 {
+		kvMaxStores = defaultKVStoresPerNamespace
+	}
+	// Bucket per-namespace count quota (ADR-0080): 0 ⇒ the default (100); negative disables it.
+	bucketMax := c.bucketMaxPerNamespace
+	if bucketMax == 0 {
+		bucketMax = defaultBucketsPerNamespace
 	}
 
 	sched, err := singlenode.New(c.localNode)
@@ -212,8 +301,92 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
+	// Worker-node local API (ADR-0064): the per-function fn-to-fn invoke broker. Its Invoker
+	// forwards through the data-plane handler built below, so wire that handler via a holder set
+	// after it exists (the reconciler is constructed before the data plane, which wraps its activator).
+	dpHolder := &local.HandlerHolder{}
+	invokeSockDir := c.invokeSocketDir // config-derived (<dataDir>/invoke); empty ⇒ a temp dir (InMemory/tests)
+	if invokeSockDir == "" {
+		tmp, terr := os.MkdirTemp("", "funcd-invoke")
+		if terr != nil {
+			return fault.Wrapf(terr, fault.Internal, op, "create invoke socket dir")
+		}
+		invokeSockDir = tmp
+	}
+	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
+	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
+	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via
+	// the caller's Function.spec.kv over the metastore (default-deny); reads are coarse-allowed for any
+	// bound caller, writes are owner-only (ADR-0073).
+	if c.kvStore == nil {
+		c.kvStore = kvmemory.New()
+	}
+	kvResolver, err := kvsvc.NewResolver(metaReader{c.store})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binding resolver")
+	}
+	// Cedar PDP driver (ADR-0074): the per-object authorization engine the KV facade (PEP) calls for
+	// kv::read/kv::write. Entities are materialized per call from the metastore (principal Function +
+	// resource KVTable + parent KVStore); policies are the v1.Policy resources, compiled + cached
+	// (recompiled on a store-revision change). DEFAULT-DENY — a read needs a permitting Policy; the
+	// owner-write forbid is built in. rbac still decides control-plane CRUD (c.authorizer, unchanged).
+	cedarEntities, err := cedarauth.NewEntityProvider(cedarMetaReader{c.store})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar entity provider")
+	}
+	cedarPDP, err := cedarauth.New(cedarauth.Deps{
+		Entities: cedarEntities,
+		Policies: policySource{c.store},
+		Logger:   p.logger,
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar PDP driver")
+	}
+	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Authorizer: cedarPDP, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
+	}
+	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
+	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, p.logger)
+
+	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
+	// cedar PDP as the PEP. When enabled, load/generate the node master secret, build the server, and
+	// expose the per-function keypair deriver to the reconciler for worker-env injection. Disabled ⇒
+	// nothing is built (no listener, no IAM, no injection) — zero-config unchanged.
+	var s3Injection function.S3GatewayInjection
+	if c.s3gwEnabled {
+		master, merr := s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir)
+		if merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "load s3gateway master secret")
+		}
+		bucketFor := s3BucketFor(c.blob, c.store)
+		srv, gerr := s3gateway.New(s3gateway.Deps{
+			BucketFor:      bucketFor,
+			PDP:            cedarPDP,
+			Master:         master,
+			Listen:         c.s3gwListenAddr,
+			MaxUploadBytes: c.s3gwMaxUploadBytes,
+			Logger:         p.logger,
+		})
+		if gerr != nil {
+			return fault.Wrapf(gerr, fault.KindOf(gerr), op, "build s3gateway")
+		}
+		p.s3gw = srv
+		s3Injection = function.S3GatewayInjection{
+			Enabled:    true,
+			ListenAddr: c.s3gwListenAddr,
+			Endpoint:   c.s3gwEndpoint,
+			Derive: func(ns, fn string) (string, string) {
+				kp := s3gateway.DeriveKeypair(master, ns, fn)
+				return kp.AccessKey, kp.SecretKey
+			},
+		}
+	}
+
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
+		InvokeSockets:        p.invokeMgr,
 		Runtime:              c.runtime,
 		Scheduler:            sched,
 		Gateway:              c.gateway,
@@ -228,6 +401,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolShimCommand:      c.poolShim,
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolLimit:            c.poolLimit,
+		S3Gateway:            s3Injection,
 		Secrets:              secretResolver,
 	})
 	if err != nil {
@@ -267,13 +441,160 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
+	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
+	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
+	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
+	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
+	}
+	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
+	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
+	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
+	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
+	// the provider identity (ADR-0085) and resolves spec.secrets/spec.config (the Quack token + engine
+	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
+	providerRuntime, err := provider.NewRuntime(provider.Deps{Runtime: c.runtime, Gateway: c.gateway, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build provider runtime")
+	}
+	catalogDeps := catalogsvc.ReconcilerDeps{
+		Store:      c.store,
+		Provider:   providerRuntime,
+		Secrets:    secretResolver,
+		S3Endpoint: c.s3gwEndpoint,
+		ImageFor:   c.imageFor,
+		Logger:     p.logger,
+	}
+	// The engine's S3 keypair is derived over the PROVIDER identity (ADR-0085), the same deriver the
+	// Function reconciler uses — present only when the S3 gateway is enabled.
+	if s3Injection.Enabled {
+		catalogDeps.Derive = s3Injection.Derive
+		if catalogDeps.S3Endpoint == "" {
+			catalogDeps.S3Endpoint = "http://" + s3Injection.ListenAddr
+		}
+	}
+	catalogReconciler, err := catalogsvc.NewReconciler(catalogDeps)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
+	}
+	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
+
+	// ADR-0101/0103: one shared funclog trace sink — the F51 per-invocation step spans AND the
+	// engine's per-run root span (ADR-0103) both persist here, so a run's spans form one coherent
+	// trace. Built whenever a blob substrate is present and traces are enabled (NOT gated on
+	// LogCapturer: the run-root span is emitted in-process, not over the shim channel). traceSink is
+	// a nil INTERFACE when disabled (never a typed-nil *BlobTraceSink), so the reconciler's nil-check
+	// holds. pkg/funcd owns its lifecycle (closed once at shutdown); consumers only hold a reference.
+	var traceSink funclog.TraceSink
+	if c.blob != nil && !c.funclogDisabled && !c.funclogTracesDisabled {
+		ts, terr := funclog.NewBlobTraceSink(funclog.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
+		})
+		if terr != nil {
+			return fault.Wrapf(terr, fault.Internal, op, "build funclog trace sink")
+		}
+		p.traceSink = ts
+		traceSink = ts
+	}
+
+	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
+	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
+	// waker (fail-closed to targets that resolve to a real Function), and two reconcilers — the
+	// Workflow reconciler materializes the owned step Function/KVStore fleet, the WorkflowRun
+	// reconciler drives a run through the engine and mirrors its status + status.runs link.
+	runs, rerr := wbadger.New(wbadger.Config{InMemory: c.workflowDataDir == "", Dir: c.workflowDataDir})
+	if rerr != nil {
+		return fault.Wrapf(rerr, fault.KindOf(rerr), op, "build workflow run store")
+	}
+	p.workflowRuns = runs
+	wfDispatcher, derr := workflow.NewHTTPDispatcher(workflow.DispatchDeps{
+		Endpoints: fnReconciler.Endpoints(),
+		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
+		Grant:     storeGranter{store: c.store},
+		Client:    &http.Client{Timeout: 30 * time.Second},
+		Logger:    p.logger,
+	})
+	if derr != nil {
+		return fault.Wrapf(derr, fault.KindOf(derr), op, "build workflow dispatcher")
+	}
+	maxAttempts := c.workflowDefaultRetry
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	wfEngine, eerr := workflow.New(workflow.Deps{
+		Runs:     runs,
+		Dispatch: wfDispatcher,
+		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit},
+		Children: childResolver{c.store}, // ADR-0099: resolve a child workflow's spec for a `workflow:` step
+		Traces:   traceSink,              // ADR-0104: the engine emits the run-root span for inline sub-workflow child runs
+		Logger:   p.logger,
+	})
+	if eerr != nil {
+		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
+	}
+	p.workflowEngine = wfEngine
+	p.workflowRetention = c.workflowRetention
+	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
+	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, contractResolver{}, p.logger))
+	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger))
 	p.controller = ctrl
 
+	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
+	// whenever a blob substrate is — nil leaves the route unregistered. ADR-0106: the run-scoped querier
+	// (GET …/workflowruns/{name}/logs) reuses the same reader + the metastore (to resolve status.traceId).
+	var logReader controlplane.LogQuerier
+	var runLogQuerier controlplane.WorkflowRunLogQuerier
+	if c.blob != nil {
+		reader := logread.NewBlobReader(c.blob)
+		logReader = reader
+		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, reader)
+	}
 	handler, err := controlplane.NewServer(controlplane.Deps{
 		Store:       c.store,
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
 		Logger:      p.logger,
+		Logs:        logReader,
+		RunLogs:     runLogQuerier,
+		Admissions: []admission.Admission{
+			// ADR-0064 fn-to-fn link rules on the write path.
+			admission.NewLinkValidityAdmission(storeReader{c.store}),
+			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
+			// ADR-0072/0073 KV resource rules: store-count quota; kv-binding-validity (Function.spec.kv
+			// names an existing store/table); kv-owner-exists (KVStore tables[].owner is a real Function);
+			// KVStore deletion-protection (bound by spec.kv or non-empty data on Delete; still-bound table
+			// removal on Update).
+			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
+			admission.NewKVBindingValidityAdmission(storeReader{c.store}),
+			admission.NewKVOwnerExistsAdmission(storeReader{c.store}),
+			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
+			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota; blob-binding-validity
+			// (Function.spec.blob names an existing bucket/prefix); bucket-prefix-owner-exists (Bucket
+			// prefixes[].owner is a real Function); bucket-deletion-protection (bound by spec.blob or non-empty
+			// data on Delete; still-bound prefix removal on Update). The data-emptiness prober is nil until the
+			// s3gateway data plane lands (a later slice) — binding-protection still applies (nil ⇒ skip the
+			// data check, the optional-prober pattern KVStore uses).
+			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
+			admission.NewBlobBindingValidityAdmission(storeReader{c.store}),
+			admission.NewBucketPrefixOwnerExistsAdmission(storeReader{c.store}),
+			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
+			// ADR-0086 CatalogService validity: spec.blob + spec.catalog name real Buckets/prefixes
+			// in the namespace (cloned from blob-binding-validity).
+			admission.NewCatalogBlobValidityAdmission(storeReader{c.store}),
+			// ADR-0091 catalog consumer-binding validity: Function.spec.catalogs names a real
+			// CatalogService in the namespace (cloned from blob-binding-validity).
+			admission.NewCatalogBindingValidityAdmission(storeReader{c.store}),
+			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
+			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
+			admission.NewPolicyValidityAdmission(),
+			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
+			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
+			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
+			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
+		},
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
@@ -290,6 +611,7 @@ func (p *Platform) buildControlPlane() error {
 	// Data plane (ADR-0033): a SEPARATE listener serving function invocations through the
 	// activator (path+store → activator), distinct from the authenticated control plane.
 	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.logger), gateway.Recover, gateway.RequestID)
+	dpHolder.Set(dpHandler) // late-bind the data-plane handler into the worker-node local API invoker (ADR-0064)
 	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
@@ -297,6 +619,55 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.dataPlaneListener = dln
 	p.dataPlaneAddr = dln.Addr().String()
+
+	// ADR-0081: structured function-log capture (Path B). If the runtime driver implements the
+	// LogCapturer capability and a blob substrate is present, build the funclog sink and install the
+	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink.
+	// (Path A, raw stdout/stderr, stays the runtime's own log file.)
+	if lc, ok := c.runtime.(runtime.LogCapturer); ok && c.blob != nil && !c.funclogDisabled {
+		sink, serr := funclog.NewBlobSink(funclog.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
+		})
+		if serr != nil {
+			return fault.Wrapf(serr, fault.Internal, op, "build funclog sink")
+		}
+		p.logSink = sink
+		// ADR-0101: the traces signal rides the same channel. Reuse the shared trace sink built above
+		// (ADR-0103) so step spans + the run-root span land in one trace store; the demux (Route) sends
+		// span-tagged lines to it and untagged lines to the logs sink. nil ⇒ span lines are dropped.
+		sinks := funclog.Sinks{Logs: sink, Traces: traceSink}
+		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
+			res := funclog.Resource{
+				Namespace: string(spec.Namespace),
+				Function:  string(spec.Name),
+				Replica:   strconv.Itoa(spec.Replica),
+			}
+			go func() {
+				defer func() { _ = r.Close() }()
+				_ = funclog.Route(context.Background(), r, sinks, res, p.logger)
+			}()
+		})
+	}
+
+	// ADR-0083: funclog compacted compaction. When a blob substrate is present and compaction is not disabled,
+	// build the daemon-internal compactor that folds raw OTLP-JSONL into partitioned Parquet. Defaults
+	// (window 1h / interval 5m / retention 30d) unless WithLogCompaction set explicit values.
+	if c.blob != nil && !c.logCompactDisabled {
+		retention := compact.DefaultRetention
+		if c.logCompactConfigured {
+			retention = c.logCompactRetention
+		}
+		comp, cerr := compact.New(compact.Deps{
+			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
+			Window: c.logCompactWindow, Interval: c.logCompactInterval, Retention: retention,
+		})
+		if cerr != nil {
+			return fault.Wrapf(cerr, fault.Internal, op, "build funclog compactor")
+		}
+		p.compactor = comp
+	}
+
 	return nil
 }
 
@@ -312,6 +683,7 @@ func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 // lifecycle (ADR-0028).
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
+	p.logProviders(ctx)
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -333,6 +705,31 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "activator stopped", "error", err)
 		}
 	}()
+	if p.compactor != nil { // ADR-0083: funclog compacted compaction loop (stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.compactor.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "funclog compactor stopped", "error", err)
+			}
+		}()
+	}
+	if p.workflowEngine != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.runWorkflowRetention(ctx)
+		}()
+	}
+	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
+			}
+		}()
+	}
 	go func() {
 		if err := p.httpServer.Serve(p.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.logger.ErrorContext(ctx, "control-plane server stopped", "error", err)
@@ -369,12 +766,39 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.dataPlaneListener != nil {
 			_ = p.dataPlaneListener.Close() // best-effort; may already be closed by dataPlaneServer.Shutdown
 		}
+		if p.invokeMgr != nil {
+			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
+		}
+		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
+			_ = cl.Close()
+		}
+		// Stop the S3 gateway (ADR-0080/0085) before blob.Close — it serves from the blob substrate.
+		var s3gwErr error
+		if p.s3gw != nil {
+			s3gwErr = p.s3gw.Close()
+		}
+		// Close the runtime first (stops instances → log channels EOF → pumps flush), then seal any
+		// remaining funclog segments, all before blob.Close() (the sink writes to blob) — ADR-0081.
+		runtimeErr := p.cfg.runtime.Close()
+		var logSinkErr, traceSinkErr error
+		if p.logSink != nil {
+			logSinkErr = p.logSink.Close()
+		}
+		if p.traceSink != nil { // ADR-0101: seal remaining trace segments before blob.Close()
+			traceSinkErr = p.traceSink.Close()
+		}
 		errs := []error{
+			s3gwErr,
 			p.cfg.bus.Close(),
 			p.cfg.gateway.Close(),
-			p.cfg.runtime.Close(),
+			runtimeErr,
+			logSinkErr,
+			traceSinkErr,
 			p.cfg.blob.Close(),
 			p.cfg.store.Close(),
+		}
+		if p.workflowRuns != nil {
+			errs = append(errs, p.workflowRuns.Close())
 		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))
@@ -382,4 +806,169 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		p.shutdownErr = errors.Join(errs...)
 	})
 	return p.shutdownErr
+}
+
+// runtimeResolver is the production workflow.RuntimeResolver: it reads a step image's runtime
+// class from the OCI manifest annotation (dev.funcd.runtime.v1, ADR-0094) without pulling the
+// bundle. The image string is the OCI ref; no digest is pinned here (the manifest is the truth).
+type runtimeResolver struct{}
+
+func (runtimeResolver) Runtime(ctx context.Context, image string) (v1.RuntimeName, error) {
+	rt, err := artifact.InspectRuntime(ctx, image, "")
+	if err != nil {
+		return "", err
+	}
+	return v1.RuntimeName(rt), nil
+}
+
+// contractResolver is the production workflow.ContractResolver (ADR-0098): it reads a step image's I/O
+// contract from OCI metadata (never the bundle) and the resolved manifest digest, for the typed-edge gate.
+type contractResolver struct{}
+
+func (contractResolver) Contract(ctx context.Context, image string) (v1.WorkflowContract, string, error) {
+	blob, digest, err := artifact.InspectContract(ctx, image, "")
+	if err != nil {
+		return v1.WorkflowContract{}, "", err
+	}
+	var c v1.WorkflowContract
+	if uerr := json.Unmarshal(blob, &c); uerr != nil {
+		return v1.WorkflowContract{}, "", uerr
+	}
+	return c, digest, nil
+}
+
+// childResolver is the production workflow.ChildResolver (ADR-0099): it reads a child Workflow's pinned
+// spec from the store for a `workflow:` sub-workflow step's inline execution.
+type childResolver struct{ s store.Store }
+
+func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, error) {
+	obj, err := r.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name) // V1: same-namespace children (ADR-0099 scope)
+	if err != nil {
+		return v1.WorkflowSpec{}, err
+	}
+	return obj.(*v1.Workflow).Spec, nil
+}
+
+// storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.
+// The engine only ever dispatches steps of a run's pinned spec to their declared/materialized
+// targets; this gate additionally requires the target to resolve to a real Function, so an
+// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.)
+type storeGranter struct{ store store.Store }
+
+func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
+	_, err := g.store.Get(context.Background(), v1.KindFunction.GVK(), ns, target)
+	return err == nil
+}
+
+// runWorkflowRetention periodically reclaims terminal WorkflowRun records older than the retention
+// horizon (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
+// cancel. A sweep failure is logged, not fatal — the next tick retries.
+func (p *Platform) runWorkflowRetention(ctx context.Context) {
+	interval := p.workflowRetention
+	if interval > time.Hour {
+		interval = time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := p.workflowEngine.SweepExpired(ctx, p.workflowRetention)
+			if err != nil {
+				p.logger.WarnContext(ctx, "workflow retention sweep failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				p.logger.InfoContext(ctx, "workflow retention sweep reclaimed runs", "count", n)
+			}
+		}
+	}
+}
+
+// storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions and the
+// ADR-0072 KV admissions (the admission package stays a near-leaf and does not import store).
+type storeReader struct{ s store.Store }
+
+func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
+}
+
+// Get adapts store.Store.Get for the ADR-0098 WorkflowRun contract admission (reads the parent Workflow).
+func (r storeReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// metaReader adapts store.Store to kvsvc.MetaReader for the ADR-0073 KV BindingResolver (the kv package
+// stays near-leaf and does not import store). The resolver reads the caller Function + target KVStore.
+type metaReader struct{ s store.Store }
+
+func (r metaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// cedarMetaReader adapts store.Store to cedarauth.MetaReader (ADR-0074): the cedar EntityProvider
+// reads the caller Function (principal attrs) + the target KVStore (the table's owner + attrs) per
+// Authorize call — only the request-relevant entities, never a full-store rebuild.
+type cedarMetaReader struct{ s store.Store }
+
+func (r cedarMetaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	return r.s.Get(ctx, gvk, ns, name)
+}
+
+// policySource adapts store.Store to cedarauth.PolicySource (ADR-0074): it lists every v1.Policy
+// (cluster-wide — namespace is encoded in the Cedar entity IDs) and returns the store-wide
+// resourceVersion as the cache revision, so the cedar driver recompiles only on a Policy change.
+type policySource struct{ s store.Store }
+
+func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error) {
+	const op = "funcd.policySource.Policies"
+	res, err := p.s.List(ctx, v1.KindPolicy.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "list policies")
+	}
+	out := make([]v1.Policy, 0, len(res.Items))
+	for _, o := range res.Items {
+		if pol, ok := o.(*v1.Policy); ok {
+			out = append(out, *pol)
+		}
+	}
+	return out, res.ResourceVersion, nil
+}
+
+// s3BucketFor builds the s3gateway BucketFor resolver (ADR-0080): it maps an S3
+// (namespace, bucket-name) to a prefixed view of the single shared blob substrate,
+// resolving ok=true only when a Bucket of that name exists in that namespace. The
+// namespacing scheme is a key-prefix view `s3/<ns>/<bucket>/` over the shared bucket —
+// one substrate bucket, many logical S3 buckets — so distinct namespaces and buckets
+// never collide. Existence-by-namespace here gives tenancy a second guard (a missing /
+// cross-namespace bucket is NoSuchBucket); the binding-as-grant Cedar PEP is the
+// authorization gate on every object op.
+func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
+	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
+		if bucket == "" {
+			return nil, false
+		}
+		if _, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket)); err != nil {
+			return nil, false
+		}
+		return blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), true
+	}
+}
+
+// kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):
+// HasAny reports whether any key exists under the store's prefix.
+type kvProber struct{ kv kvstore.KV }
+
+func (p kvProber) HasAny(ctx context.Context, prefix string) (bool, error) {
+	keys, err := p.kv.List(ctx, prefix)
+	if err != nil {
+		return false, err
+	}
+	return len(keys) > 0, nil
 }

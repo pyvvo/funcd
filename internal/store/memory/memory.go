@@ -1,6 +1,6 @@
 // Package memory is the pure-Go, cgo-free store.Engine: a process-local map
 // guarded by a RWMutex. It is the in-memory test double and the engine behind
-// the funcd.InMemory() e2e harness (ADR-0006 §4); slatedb is the persistent
+// the funcd.InMemory() e2e harness (ADR-0006 §4); badger is the persistent
 // production engine. Update applies its writes atomically on commit.
 package memory
 

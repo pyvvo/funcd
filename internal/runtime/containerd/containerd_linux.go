@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,15 +70,66 @@ type worker struct {
 	port      int // the fixed FUNCD_PORT the shim binds in this netns (ADR-0032); 0 if unset
 	logPath   string
 	createdAt time.Time
+
+	// Path B structured-log channel (ADR-0081): a per-instance host UDS bind-mounted into the
+	// sandbox; the shim connects and writes NDJSON, the accept loop hands each conn to the hook.
+	logListener net.Listener
+	logDir      string
 }
 
 type driver struct {
 	cfg    Config
 	client *containerd.Client
 	cni    gocni.CNI
+	mu     sync.Mutex
 
-	mu        sync.Mutex
+	capture   runtime.LogCaptureFunc // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
 	instances map[runtime.InstanceID]*worker
+}
+
+// SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
+// set, Create gives each sandbox a bind-mounted UDS (FUNCD_LOG_SOCK) the shim writes NDJSON to; the
+// accept loop hands each connection to the hook.
+func (d *driver) SetLogCapture(fn runtime.LogCaptureFunc) {
+	d.mu.Lock()
+	d.capture = fn
+	d.mu.Unlock()
+}
+
+// setupLogChannel creates the per-instance host UDS + accept loop and returns the OCI mount + the
+// augmented env (FUNCD_LOG_SOCK at /run/funcd-log/log.sock). The caller stores ln/dir on the worker
+// for teardown. capture must be non-nil.
+func setupLogChannel(ctrID string, spec runtime.WorkerSpec, capture runtime.LogCaptureFunc) (mount runtime.Mount, env map[string]string, ln net.Listener, dir string, err error) {
+	const op = "runtime.containerd.setupLogChannel"
+	dir, err = os.MkdirTemp("", "funcd-log-"+ctrID+"-")
+	if err != nil {
+		return runtime.Mount{}, nil, nil, "", fault.Wrapf(err, fault.Internal, op, "create log dir")
+	}
+	sock := filepath.Join(dir, "log.sock")
+	ln, err = net.Listen("unix", sock)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return runtime.Mount{}, nil, nil, "", fault.Wrapf(err, fault.Internal, op, "listen on log socket")
+	}
+	// The distroless sandbox runs as a non-root uid; let it connect to the node-local per-instance socket.
+	_ = os.Chmod(sock, 0o777) //nolint:gosec // node-local, per-instance ephemeral log socket (ADR-0081)
+
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return // listener closed on teardown
+			}
+			capture(spec, conn)
+		}
+	}()
+
+	env = map[string]string{}
+	for k, v := range spec.Env {
+		env[k] = v
+	}
+	env["FUNCD_LOG_SOCK"] = "/run/funcd-log/log.sock"
+	return runtime.Mount{Source: dir, Target: "/run/funcd-log", ReadOnly: false}, env, ln, dir, nil
 }
 
 // New connects to containerd and loads the CNI config, returning a Linux
@@ -151,6 +203,30 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		return runtime.Instance{}, fault.Wrapf(err, fault.Internal, op, "create log dir")
 	}
 
+	// Path B structured-log channel (ADR-0081): when a capture hook is set, give the sandbox a
+	// bind-mounted UDS (FUNCD_LOG_SOCK) the shim writes NDJSON to. Torn down on any failure below.
+	d.mu.Lock()
+	capture := d.capture
+	d.mu.Unlock()
+	var logLn net.Listener
+	var logDir string
+	if capture != nil {
+		mount, env, ln, dir, lerr := setupLogChannel(ctrID, spec, capture)
+		if lerr != nil {
+			return runtime.Instance{}, lerr
+		}
+		spec.Env = env
+		spec.Mounts = append(spec.Mounts, mount)
+		logLn, logDir = ln, dir
+	}
+	success := false
+	defer func() {
+		if !success && logLn != nil {
+			_ = logLn.Close()
+			_ = os.RemoveAll(logDir)
+		}
+	}()
+
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(ctrID+"-snap", image),
@@ -184,11 +260,13 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, replica: spec.Replica,
 		cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
 		logPath: logPath, createdAt: time.Now(),
+		logListener: logLn, logDir: logDir,
 	}
 	d.mu.Lock()
 	d.instances[id] = sb
 	d.mu.Unlock()
 
+	success = true // keep the log channel; teardown is owned by Stop now
 	return runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, Replica: spec.Replica,
 		PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
@@ -244,7 +322,19 @@ func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
 	}
 	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
 	_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
+	closeLogChannel(sb) // close the Path B UDS listener + remove its dir (ADR-0081)
 	return nil
+}
+
+// closeLogChannel tears down a worker's Path B log channel (ADR-0081): closes the accept loop's
+// listener and removes the per-instance socket dir. Idempotent / nil-safe.
+func closeLogChannel(sb *worker) {
+	if sb.logListener != nil {
+		_ = sb.logListener.Close()
+	}
+	if sb.logDir != "" {
+		_ = os.RemoveAll(sb.logDir)
+	}
 }
 
 // Sweep force-removes EVERY container in the namespace's containerd namespace — including ones
@@ -279,6 +369,7 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 		d.mu.Lock()
 		for id, sb := range d.instances {
 			if sb.ctrID == c.ID() {
+				closeLogChannel(sb)
 				delete(d.instances, id)
 			}
 		}

@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"log/slog"
+	"time"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
@@ -10,7 +11,8 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/observability"
+	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
@@ -25,6 +27,17 @@ func WithStore(s store.Store) Option {
 	return func(c *config) error { c.store = s; return nil }
 }
 
+// WithKVStore injects the function-facing KV driver (ADR-0066/0069). Absent ⇒ the in-memory driver.
+func WithKVStore(kv kvstore.KV) Option {
+	return func(c *config) error { c.kvStore = kv; return nil }
+}
+
+// WithKVStoreQuota sets the per-namespace KVStore count cap enforced at admission (ADR-0072,
+// kvstore.maxStoresPerNamespace). 0 ⇒ the default (100); a negative value disables the quota.
+func WithKVStoreQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.kvMaxStoresPerNamespace = maxPerNamespace; return nil }
+}
+
 // WithBlob injects the blob (storage layer) port.
 func WithBlob(b blob.Bucket) Option {
 	return func(c *config) error { c.blob = b; return nil }
@@ -33,6 +46,85 @@ func WithBlob(b blob.Bucket) Option {
 // WithBus injects the messaging port.
 func WithBus(b bus.Bus) Option {
 	return func(c *config) error { c.bus = b; return nil }
+}
+
+// WithFunclog tunes structured function-log capture (ADR-0081): the segment seal age and size
+// (either 0 keeps the sink default — 10s / 8 MiB). Capture is on by default when the runtime
+// supports it; use WithoutFunclog to disable.
+func WithFunclog(segmentMaxAge time.Duration, segmentMaxBytes int) Option {
+	return func(c *config) error {
+		c.funclogMaxAge, c.funclogMaxBytes = segmentMaxAge, segmentMaxBytes
+		return nil
+	}
+}
+
+// WithoutFunclog disables structured function-log capture (Path B); raw stdout/stderr still flows.
+func WithoutFunclog() Option {
+	return func(c *config) error { c.funclogDisabled = true; return nil }
+}
+
+// WithoutFunclogTraces disables the traces signal (ADR-0101, per-invocation spans) while keeping the
+// logs signal. Subordinate to WithoutFunclog: with the whole funclog channel off, there is no channel
+// and this is moot. With the channel on but traces off, the host's trace sink is nil and span lines
+// are read off the channel and dropped. Traces are on by default when the runtime supports capture.
+func WithoutFunclogTraces() Option {
+	return func(c *config) error { c.funclogTracesDisabled = true; return nil }
+}
+
+// WithLogCompaction tunes function-log compacted compaction (ADR-0083): the window (bucket size + close
+// threshold), the pass interval, and the compacted retention. A zero window/interval keeps the default
+// (1h / 5m); retention <= 0 keeps compacted forever. Compaction is on by default when a blob substrate is
+// present; use WithoutLogCompaction to disable.
+func WithLogCompaction(window, interval, retention time.Duration) Option {
+	return func(c *config) error {
+		c.logCompactWindow, c.logCompactInterval, c.logCompactRetention = window, interval, retention
+		c.logCompactConfigured = true
+		return nil
+	}
+}
+
+// WithoutLogCompaction disables compacted compaction: no compactor goroutine runs and raw OTLP-JSONL is left
+// untouched (capture itself still runs).
+func WithoutLogCompaction() Option {
+	return func(c *config) error { c.logCompactDisabled = true; return nil }
+}
+
+// WithS3Gateway enables the opt-in S3-protocol frontend over the blob substrate
+// (ADR-0080/0085): a node-private TCP listener serving GET(+range)/PUT(+multipart)/
+// HEAD/DELETE/ListObjectsV2 governed by the cedar spec.blob binding-as-grant PEP, with
+// per-function SigV4 keypairs derived from a node master secret and injected into a
+// spec.blob function's worker env. listenAddr is node-private (e.g. 127.0.0.1:9000);
+// maxUploadBytes (0 ⇒ 1 GiB) caps a single buffered object; masterSecretFile (empty ⇒
+// generate+persist 0600 under dataDir/s3gateway/master.key) supplies the node master.
+// Without this option no listener, IAM, or keypair injection exists.
+func WithS3Gateway(listenAddr, endpoint string, maxUploadBytes int64, masterSecretFile, dataDir string) Option {
+	return func(c *config) error {
+		c.s3gwEnabled = true
+		c.s3gwListenAddr = listenAddr
+		c.s3gwEndpoint = endpoint
+		c.s3gwMaxUploadBytes = maxUploadBytes
+		c.s3gwMasterFile = masterSecretFile
+		c.s3gwDataDir = dataDir
+		return nil
+	}
+}
+
+// WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; this option
+// sets its persistence + tunables: dataDir is the Badger run-state directory (empty ⇒ in-memory,
+// the default / InMemory-preset path), defaultStepTimeout bounds a single step invocation
+// (0 ⇒ none), retention is how long terminal runs survive before the periodic sweep reclaims them
+// (0 ⇒ never), defaultRetry is the per-step attempt cap when a step declares no retry (< 1 ⇒ 1),
+// and payloadLimit caps a run's input (at admission) and a step's output in bytes (0 ⇒ unbounded).
+// cmd/funcd derives dataDir as <dataDir>/workflow from config.
+func WithWorkflow(dataDir string, defaultStepTimeout, retention time.Duration, defaultRetry int, payloadLimit int64) Option {
+	return func(c *config) error {
+		c.workflowDataDir = dataDir
+		c.workflowStepTimeout = defaultStepTimeout
+		c.workflowRetention = retention
+		c.workflowDefaultRetry = defaultRetry
+		c.workflowPayloadLimit = payloadLimit
+		return nil
+	}
 }
 
 // WithRuntime injects the function runtime (worker) port.
@@ -106,11 +198,18 @@ func WithMaterializer(m function.Materializer) Option {
 }
 
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are
-// pulled by digest from their `artifact.uri` into a per-digest cache under dir. When a
+// pulled by digest from their `spec.image` into a per-digest cache under dir. When a
 // runtime shim is configured and no explicit Materializer is set, this selects the oras
 // driver over the local-file stand-in.
 func WithArtifactStore(dir string) Option {
 	return func(c *config) error { c.artifactDir = dir; return nil }
+}
+
+// WithInvokeSocketDir sets the directory for the per-function worker-node local API sockets
+// (ADR-0064, fn-to-fn invoke). cmd/funcd sets it to <dataDir>/invoke from config; unset
+// (InMemory()/tests) ⇒ a temp dir.
+func WithInvokeSocketDir(dir string) Option {
+	return func(c *config) error { c.invokeSocketDir = dir; return nil }
 }
 
 // WithDataPlaneAddr sets the data-plane (function-invocation) listen address (ADR-0033).

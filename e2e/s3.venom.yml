@@ -1,0 +1,55 @@
+# Venom e2e for the s3-roundtrip containerd lane (ADR-0080/0085, F47) — the declarative invoke +
+# assert phase of `just lima-example-s3`, run host-side AFTER the self-deploying Lima VM is Ready.
+#
+# It proves the whole S3 frontend loop end to end on REAL containerd, IN-PLATFORM (a deployed JS
+# function, not a host client): a single invoke of s3-roundtrip uses the function's funcd-INJECTED
+# keypair (AWS_* env — ADR-0085) + a bundled @aws-sdk/client-s3 to:
+#   * PutObject  lakehouse/gold/roundtrip-<inv>.txt  (the fn OWNS gold)        → put=true
+#   * GetObject  it back, body matches                                         → get=true
+#   * ListObjectsV2 prefix lakehouse/gold/, the key present                    → list>=1
+#   * PutObject  lakehouse/other/x.txt (unbound prefix) → 403 AccessDenied     → denied=true
+# i.e. keypair-injection → SigV4 over TCP → the Cedar PEP (deny on `other`) → blob.Bucket, live.
+name: s3-roundtrip frontend (ADR-0080/0085, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081 # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: s3-roundtrip round-trips S3 and the PEP denies the unbound prefix
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/s3-roundtrip"
+        headers: { content-type: application/json }
+        body: '{"data":{}}'
+        # retry-as-wait: the first invoke may land before the sandbox is fully warm; retry to 200.
+        retry: 20
+        delay: 2
+        info: "s3-roundtrip → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.put ShouldEqual true   # PutObject into the OWNED gold prefix succeeded
+          - result.bodyjson.get ShouldEqual true   # GetObject read it back, body matched
+          - result.bodyjson.list ShouldBeGreaterThan 0 # ListObjectsV2 saw the key under gold/
+          - result.bodyjson.denied ShouldEqual true # PutObject into unbound `other` was 403-denied by the PEP
+
+  # A DIRECT, wire-level negative (not via the function's self-report): a request carrying a forged
+  # SigV4 credential (an access key the in-process IAM resolves to no account) must be rejected by the
+  # gateway with a raw 403 — proving SigV4 is enforced at the edge, independent of the in-platform path.
+  # (The Go identity_test.go asserts the same for a real-key/wrong-secret forgery; this is the live wire.)
+  - name: the gateway rejects a forged SigV4 signature with a raw 403
+    steps:
+      - type: exec
+        # Run inside the VM against the node-private gateway (bound 0.0.0.0:9000 ⇒ reachable on loopback).
+        # FORGED403 / FORGEDBAD are disjoint markers (success is not a substring of the failure line).
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc 'code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -X PUT \
+            -H "Authorization: AWS4-HMAC-SHA256 Credential=AKIAFORGED0000000000/20260630/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=0000000000000000000000000000000000000000000000000000000000000000" \
+            -H "x-amz-date: 20260630T000000Z" -H "x-amz-content-sha256: UNSIGNED-PAYLOAD" \
+            "http://127.0.0.1:9000/lakehouse/gold/forged.txt"); [ "$code" = 403 ] && echo "FORGED403 $code" || echo "FORGEDBAD $code"'
+        retry: 5
+        delay: 2
+        info: "forged-sig → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring FORGED403"

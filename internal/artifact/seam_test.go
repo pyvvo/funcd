@@ -42,7 +42,7 @@ func TestScenarioMaterializerSatisfiesADR0030SeamNode(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle(_, e) { return { echoed: e }; }\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	digest, err := artifact.Push(context.Background(), ref, bundle)
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
 	require.NoError(t, err)
 
 	st := store.New(memory.New())
@@ -63,7 +63,7 @@ func TestScenarioMaterializerSatisfiesADR0030SeamNode(t *testing.T) {
 	fn.Name, fn.Namespace, fn.ResourceGroup = "echo", "default", "rg1"
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: ref, Digest: digest} // pulled by digest
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest // pulled by digest
 	_, err = st.Create(context.Background(), fn)
 	require.NoError(t, err)
 

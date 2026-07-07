@@ -1,5 +1,5 @@
 // Command demo-server starts an embedded funcd wired for real function execution, on
-// fixed local ports, so a CLI demo (docs/demo/journey.sh) can drive `funcdcli` against
+// fixed local ports, so a CLI demo (docs/demo/journey.sh) can drive `funcdctl` against
 // it and invoke functions over HTTP. It is demo tooling — NOT the production daemon
 // (that is cmd/funcd). The production daemon's execution wiring is a separate decision;
 // this launcher uses the ADR-0014 embed path with the ADR-0030 shim + ADR-0031 oras
@@ -44,7 +44,7 @@ func main() {
 
 	p, err := funcd.New(
 		funcd.InMemory(),                  // mem store/blob/bus + process runtime + dev auth
-		funcd.WithListenAddr(controlAddr), // fixed control-plane port for `funcdcli --server`
+		funcd.WithListenAddr(controlAddr), // fixed control-plane port for `funcdctl --server`
 		funcd.WithDataPlaneAddr(dataAddr), // fixed data-plane port for `curl`
 		funcd.WithRuntimeShim(node, shim), // execute functions on the Node shim (ADR-0030)
 		funcd.WithArtifactStore(cache),    // pull artifacts by digest via oras (ADR-0031)

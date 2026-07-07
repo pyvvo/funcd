@@ -1,10 +1,12 @@
 [project]
 name = "funcd-shim"
 version = "0.1.0"
-description = "funcd Python runtime shim — serves the runtime-shim HTTP contract and validates event.data against a JTD (RFC 8927) event_schema. Stdlib-only, zero runtime dependencies (ADR-0049)."
+description = "funcd Python runtime shim — serves the runtime-shim HTTP contract and validates event.data / the result against the artifact's precompiled fastjsonschema validator (ADR-0058; generated at build from the author's FuncInput/FuncOutput pydantic model -> JSON Schema -> fastjsonschema.compile_to_code). Pure-Python, compute-agnostic (solo + subinterpreter pool)."
 authors = [{ name = "The funcd Authors" }]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastjsonschema>=2.21.2",
+]
 
 [project.scripts]
 funcd-shim = "funcd_shim.shim:main"
@@ -17,12 +19,21 @@ build-backend = "hatchling.build"
 packages = ["src/funcd_shim"]
 
 [dependency-groups]
-dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+dev = [
+    "mypy>=1.13",
+    "pydantic>=2.13.4",
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = "fastjsonschema.*"  # ships no type stubs; used only as a build-time validator generator
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 110

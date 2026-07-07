@@ -14,10 +14,8 @@ sudo install -m0755 dist/funcd /usr/local/bin/funcd
 funcd version                      # prints the stamped build identity
 ```
 
-> **Release build (slatedb engine).** The production single binary static-links the slatedb
-> native engine (cgo, ADR-0006) and is no longer a pure-Go static binary (~24 MB). Build it with
-> `just slatedb-lib` then `CGO_ENABLED=1 go build -tags slatedb -o dist/funcd ./cmd/funcd`
-> (see the release note in `scripts/build.sh`).
+> **Release build.** The production binary is the same pure-Go static build (`CGO_ENABLED=0`) — ADR-0065
+> made the metastore engine pure-Go Badger, so there is no cgo/`-tags slatedb` lane anymore.
 
 ## 2. Create the service user and state directory
 
@@ -27,7 +25,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin funcd   # Debia
 ```
 
 `systemd` creates and owns `/var/lib/funcd` automatically via `StateDirectory=funcd`
-(the slatedb file backend writes there — `file:///var/lib/funcd`, ADR-0006).
+(the Badger metastore writes there — `<dataDir>/store`, ADR-0065).
 
 ## 3. Install and enable the unit
 
@@ -45,10 +43,10 @@ The unit runs as the unprivileged `funcd` user, restarts on failure, and ships h
 
 ## 4. Drive it
 
-Use the CLI (built alongside via `go build ./cmd/funcdcli`, ADR-0024):
+Use the CLI (built alongside via `go build ./cmd/funcdctl`, ADR-0024):
 
 ```sh
-funcdcli --server http://localhost:8080 get functions -n default
+funcdctl --server http://localhost:8080 get functions -n default
 ```
 
 ## Uninstall

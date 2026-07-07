@@ -1,0 +1,21 @@
+# env-echo — a void-input function that echoes the env injected by its bindings. spec.config binds the
+# app-config ConfigMap (ADR-0093) and spec.secrets binds the app-secret Secret (ADR-0057); both sets of
+# Data are materialized as worker env. Ready requires BOTH bindings to resolve (fail-closed otherwise), so
+# Ready already proves resolution — the invoke then proves the values reach the running handler.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: env-echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo   # funcdctl push env-echo.mjs (built from src/handler.ts)
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  config:
+    - app-config    # ConfigMap → non-sensitive env (APP_MODE, SHARED)
+  secrets:
+    - app-secret    # Secret → sensitive env (API_KEY, SHARED — wins the shared key)

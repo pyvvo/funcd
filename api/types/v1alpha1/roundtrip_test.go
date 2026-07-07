@@ -126,10 +126,10 @@ func TestScenario_PoolingRoundtripAndValidate(t *testing.T) {
 		TypeMeta:   TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: KindFunction},
 		ObjectMeta: ObjectMeta{Name: "agent", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: FunctionSpec{
-			Runtime:  "nodejs22",
-			Handler:  "h",
-			Artifact: ArtifactRef{URI: "oci://example/app:v1"},
-			Pooling:  Pooling{Worker: "agents"},
+			Runtime: "nodejs22",
+			Handler: "h",
+			Image:   "oci://example/app:v1",
+			Pooling: Pooling{Worker: "agents"},
 		},
 	}
 	data, err := json.Marshal(fn)

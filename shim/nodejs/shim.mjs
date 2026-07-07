@@ -1,635 +1,4 @@
 // GENERATED from shim/nodejs/src/shim.ts by 'npm run build' (esbuild). Do not edit by hand.
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJS = (cb, mod) => function __require() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
-  }
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
-
-// node_modules/jtd/lib/schema.js
-var require_schema = __commonJS({
-  "node_modules/jtd/lib/schema.js"(exports) {
-    "use strict";
-    var __rest = exports && exports.__rest || function(s, e) {
-      var t = {};
-      for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
-        t[p] = s[p];
-      if (s != null && typeof Object.getOwnPropertySymbols === "function")
-        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
-          if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
-            t[p[i]] = s[p[i]];
-        }
-      return t;
-    };
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.isSchema = exports.isValidSchema = exports.isDiscriminatorForm = exports.isValuesForm = exports.isPropertiesForm = exports.isElementsForm = exports.isEnumForm = exports.isTypeForm = exports.isRefForm = exports.isEmptyForm = void 0;
-    function isEmptyForm(schema) {
-      const { definitions, nullable, metadata } = schema, rest = __rest(schema, ["definitions", "nullable", "metadata"]);
-      return Object.keys(rest).length === 0;
-    }
-    exports.isEmptyForm = isEmptyForm;
-    function isRefForm(schema) {
-      return "ref" in schema;
-    }
-    exports.isRefForm = isRefForm;
-    function isTypeForm(schema) {
-      return "type" in schema;
-    }
-    exports.isTypeForm = isTypeForm;
-    function isEnumForm(schema) {
-      return "enum" in schema;
-    }
-    exports.isEnumForm = isEnumForm;
-    function isElementsForm(schema) {
-      return "elements" in schema;
-    }
-    exports.isElementsForm = isElementsForm;
-    function isPropertiesForm(schema) {
-      return "properties" in schema || "optionalProperties" in schema;
-    }
-    exports.isPropertiesForm = isPropertiesForm;
-    function isValuesForm(schema) {
-      return "values" in schema;
-    }
-    exports.isValuesForm = isValuesForm;
-    function isDiscriminatorForm(schema) {
-      return "discriminator" in schema;
-    }
-    exports.isDiscriminatorForm = isDiscriminatorForm;
-    function isValidSchema(schema, root) {
-      if (root === void 0) {
-        root = schema;
-      }
-      if (schema.definitions !== void 0) {
-        if (root !== schema) {
-          return false;
-        }
-        for (const subSchema of Object.values(schema.definitions)) {
-          if (!isValidSchema(subSchema, root)) {
-            return false;
-          }
-        }
-      }
-      if (isRefForm(schema)) {
-        if (!(schema.ref in (root.definitions || {}))) {
-          return false;
-        }
-      }
-      if (isEnumForm(schema)) {
-        if (schema.enum.length === 0) {
-          return false;
-        }
-        if (schema.enum.length !== new Set(schema.enum).size) {
-          return false;
-        }
-      }
-      if (isElementsForm(schema)) {
-        return isValidSchema(schema.elements, root);
-      }
-      if (isPropertiesForm(schema)) {
-        for (const subSchema of Object.values(schema.properties || {})) {
-          if (!isValidSchema(subSchema, root)) {
-            return false;
-          }
-        }
-        for (const subSchema of Object.values(schema.optionalProperties || {})) {
-          if (!isValidSchema(subSchema, root)) {
-            return false;
-          }
-        }
-        for (const key of Object.keys(schema.properties || {})) {
-          if (key in (schema.optionalProperties || {})) {
-            return false;
-          }
-        }
-      }
-      if (isValuesForm(schema)) {
-        return isValidSchema(schema.values, root);
-      }
-      if (isDiscriminatorForm(schema)) {
-        for (const subSchema of Object.values(schema.mapping)) {
-          if (!isValidSchema(subSchema, root) || !isPropertiesForm(subSchema)) {
-            return false;
-          }
-          if (subSchema.nullable) {
-            return false;
-          }
-          if (schema.discriminator in (subSchema.properties || {})) {
-            return false;
-          }
-          if (schema.discriminator in (subSchema.optionalProperties || {})) {
-            return false;
-          }
-        }
-      }
-      return true;
-    }
-    exports.isValidSchema = isValidSchema;
-    var VALID_FORMS = [
-      // Empty form
-      [false, false, false, false, false, false, false, false, false, false],
-      // Ref form
-      [true, false, false, false, false, false, false, false, false, false],
-      // Type form
-      [false, true, false, false, false, false, false, false, false, false],
-      // Enum form
-      [false, false, true, false, false, false, false, false, false, false],
-      // Elements form
-      [false, false, false, true, false, false, false, false, false, false],
-      // Properties form -- properties or optional properties or both, and never
-      // additional properties on its own
-      [false, false, false, false, true, false, false, false, false, false],
-      [false, false, false, false, false, true, false, false, false, false],
-      [false, false, false, false, true, true, false, false, false, false],
-      [false, false, false, false, true, false, true, false, false, false],
-      [false, false, false, false, false, true, true, false, false, false],
-      [false, false, false, false, true, true, true, false, false, false],
-      // Values form
-      [false, false, false, false, false, false, false, true, false, false],
-      // Discriminator form
-      [false, false, false, false, false, false, false, false, true, true]
-    ];
-    var VALID_TYPES = [
-      "boolean",
-      "float32",
-      "float64",
-      "int8",
-      "uint8",
-      "int16",
-      "uint16",
-      "int32",
-      "uint32",
-      "string",
-      "timestamp"
-    ];
-    function isSchema2(data) {
-      if (typeof data !== "object" || Array.isArray(data) || data === null) {
-        return false;
-      }
-      const obj = data;
-      const { definitions = void 0, nullable = void 0, metadata = void 0, ref = void 0, type = void 0, enum: enum_ = void 0, elements = void 0, properties = void 0, optionalProperties = void 0, additionalProperties = void 0, values = void 0, discriminator = void 0, mapping = void 0 } = obj, rest = __rest(obj, ["definitions", "nullable", "metadata", "ref", "type", "enum", "elements", "properties", "optionalProperties", "additionalProperties", "values", "discriminator", "mapping"]);
-      const formSignature = [
-        ref !== void 0,
-        type !== void 0,
-        enum_ !== void 0,
-        elements !== void 0,
-        properties !== void 0,
-        optionalProperties !== void 0,
-        additionalProperties !== void 0,
-        values !== void 0,
-        discriminator !== void 0,
-        mapping !== void 0
-      ];
-      let formOk = false;
-      for (const validForm of VALID_FORMS) {
-        formOk = formOk || validForm.every((value, index) => value === formSignature[index]);
-      }
-      if (!formOk) {
-        return false;
-      }
-      if (definitions !== void 0) {
-        if (typeof definitions !== "object" || Array.isArray(definitions) || definitions === null) {
-          return false;
-        }
-        for (const value of Object.values(definitions)) {
-          if (!isSchema2(value)) {
-            return false;
-          }
-        }
-      }
-      if (nullable !== void 0) {
-        if (typeof nullable !== "boolean") {
-          return false;
-        }
-      }
-      if (metadata !== void 0) {
-        if (typeof metadata !== "object" || Array.isArray(metadata) || metadata === null) {
-          return false;
-        }
-      }
-      if (ref !== void 0) {
-        if (typeof ref !== "string") {
-          return false;
-        }
-      }
-      if (type !== void 0) {
-        if (typeof type !== "string" || !VALID_TYPES.includes(type)) {
-          return false;
-        }
-      }
-      if (enum_ !== void 0) {
-        if (!Array.isArray(enum_)) {
-          return false;
-        }
-        if (!enum_.every((elem) => typeof elem === "string")) {
-          return false;
-        }
-      }
-      if (elements !== void 0) {
-        if (!isSchema2(elements)) {
-          return false;
-        }
-      }
-      if (properties !== void 0) {
-        if (typeof properties !== "object" || Array.isArray(properties) || properties === null) {
-          return false;
-        }
-        for (const value of Object.values(properties)) {
-          if (!isSchema2(value)) {
-            return false;
-          }
-        }
-      }
-      if (optionalProperties !== void 0) {
-        if (typeof optionalProperties !== "object" || Array.isArray(optionalProperties) || optionalProperties === null) {
-          return false;
-        }
-        for (const value of Object.values(optionalProperties)) {
-          if (!isSchema2(value)) {
-            return false;
-          }
-        }
-      }
-      if (additionalProperties !== void 0) {
-        if (typeof additionalProperties !== "boolean") {
-          return false;
-        }
-      }
-      if (values !== void 0) {
-        if (!isSchema2(values)) {
-          return false;
-        }
-      }
-      if (discriminator !== void 0) {
-        if (typeof discriminator !== "string") {
-          return false;
-        }
-      }
-      if (mapping !== void 0) {
-        if (typeof mapping !== "object" || Array.isArray(mapping) || mapping === null) {
-          return false;
-        }
-        for (const value of Object.values(mapping)) {
-          if (!isSchema2(value)) {
-            return false;
-          }
-        }
-      }
-      if (Object.keys(rest).length !== 0) {
-        return false;
-      }
-      return true;
-    }
-    exports.isSchema = isSchema2;
-  }
-});
-
-// node_modules/jtd/lib/rfc3339.js
-var require_rfc3339 = __commonJS({
-  "node_modules/jtd/lib/rfc3339.js"(exports) {
-    "use strict";
-    Object.defineProperty(exports, "__esModule", { value: true });
-    var pattern = /^(\d{4})-(\d{2})-(\d{2})[tT](\d{2}):(\d{2}):(\d{2})(\.\d+)?([zZ]|((\+|-)(\d{2}):(\d{2})))$/;
-    function isRFC3339(s) {
-      const matches = s.match(pattern);
-      if (matches === null) {
-        return false;
-      }
-      const year = parseInt(matches[1], 10);
-      const month = parseInt(matches[2], 10);
-      const day = parseInt(matches[3], 10);
-      const hour = parseInt(matches[4], 10);
-      const minute = parseInt(matches[5], 10);
-      const second = parseInt(matches[6], 10);
-      if (month > 12) {
-        return false;
-      }
-      if (day > maxDay(year, month)) {
-        return false;
-      }
-      if (hour > 23) {
-        return false;
-      }
-      if (minute > 59) {
-        return false;
-      }
-      if (second > 60) {
-        return false;
-      }
-      return true;
-    }
-    exports.default = isRFC3339;
-    function maxDay(year, month) {
-      if (month === 2) {
-        return isLeapYear(year) ? 29 : 28;
-      }
-      return MONTH_LENGTHS[month];
-    }
-    function isLeapYear(n) {
-      return n % 4 === 0 && (n % 100 !== 0 || n % 400 === 0);
-    }
-    var MONTH_LENGTHS = [
-      0,
-      31,
-      0,
-      31,
-      30,
-      31,
-      30,
-      31,
-      31,
-      30,
-      31,
-      30,
-      31
-    ];
-  }
-});
-
-// node_modules/jtd/lib/validate.js
-var require_validate = __commonJS({
-  "node_modules/jtd/lib/validate.js"(exports) {
-    "use strict";
-    var __importDefault = exports && exports.__importDefault || function(mod) {
-      return mod && mod.__esModule ? mod : { "default": mod };
-    };
-    Object.defineProperty(exports, "__esModule", { value: true });
-    exports.validate = exports.MaxDepthExceededError = void 0;
-    var rfc3339_1 = __importDefault(require_rfc3339());
-    var schema_1 = require_schema();
-    var MaxDepthExceededError = class extends Error {
-    };
-    exports.MaxDepthExceededError = MaxDepthExceededError;
-    var MaxErrorsReachedError = class extends Error {
-    };
-    function validate2(schema, instance, config) {
-      const state = {
-        errors: [],
-        instanceTokens: [],
-        schemaTokens: [[]],
-        root: schema,
-        config: config || { maxDepth: 0, maxErrors: 0 }
-      };
-      try {
-        validateWithState(state, schema, instance);
-      } catch (err) {
-        if (err instanceof MaxErrorsReachedError) {
-        } else {
-          throw err;
-        }
-      }
-      return state.errors;
-    }
-    exports.validate = validate2;
-    function validateWithState(state, schema, instance, parentTag) {
-      if (schema.nullable && instance === null) {
-        return;
-      }
-      if (schema_1.isRefForm(schema)) {
-        if (state.schemaTokens.length === state.config.maxDepth) {
-          throw new MaxDepthExceededError();
-        }
-        state.schemaTokens.push(["definitions", schema.ref]);
-        validateWithState(state, state.root.definitions[schema.ref], instance);
-        state.schemaTokens.pop();
-      } else if (schema_1.isTypeForm(schema)) {
-        pushSchemaToken(state, "type");
-        switch (schema.type) {
-          case "boolean":
-            if (typeof instance !== "boolean") {
-              pushError(state);
-            }
-            break;
-          case "float32":
-          case "float64":
-            if (typeof instance !== "number") {
-              pushError(state);
-            }
-            break;
-          case "int8":
-            validateInt(state, instance, -128, 127);
-            break;
-          case "uint8":
-            validateInt(state, instance, 0, 255);
-            break;
-          case "int16":
-            validateInt(state, instance, -32768, 32767);
-            break;
-          case "uint16":
-            validateInt(state, instance, 0, 65535);
-            break;
-          case "int32":
-            validateInt(state, instance, -2147483648, 2147483647);
-            break;
-          case "uint32":
-            validateInt(state, instance, 0, 4294967295);
-            break;
-          case "string":
-            if (typeof instance !== "string") {
-              pushError(state);
-            }
-            break;
-          case "timestamp":
-            if (typeof instance !== "string") {
-              pushError(state);
-            } else {
-              if (!rfc3339_1.default(instance)) {
-                pushError(state);
-              }
-            }
-            break;
-        }
-        popSchemaToken(state);
-      } else if (schema_1.isEnumForm(schema)) {
-        pushSchemaToken(state, "enum");
-        if (typeof instance !== "string" || !schema.enum.includes(instance)) {
-          pushError(state);
-        }
-        popSchemaToken(state);
-      } else if (schema_1.isElementsForm(schema)) {
-        pushSchemaToken(state, "elements");
-        if (Array.isArray(instance)) {
-          for (const [index, subInstance] of instance.entries()) {
-            pushInstanceToken(state, index.toString());
-            validateWithState(state, schema.elements, subInstance);
-            popInstanceToken(state);
-          }
-        } else {
-          pushError(state);
-        }
-        popSchemaToken(state);
-      } else if (schema_1.isPropertiesForm(schema)) {
-        if (typeof instance === "object" && instance !== null && !Array.isArray(instance)) {
-          if (schema.properties !== void 0) {
-            pushSchemaToken(state, "properties");
-            for (const [name, subSchema] of Object.entries(schema.properties)) {
-              pushSchemaToken(state, name);
-              if (instance.hasOwnProperty(name)) {
-                pushInstanceToken(state, name);
-                validateWithState(state, subSchema, instance[name]);
-                popInstanceToken(state);
-              } else {
-                pushError(state);
-              }
-              popSchemaToken(state);
-            }
-            popSchemaToken(state);
-          }
-          if (schema.optionalProperties !== void 0) {
-            pushSchemaToken(state, "optionalProperties");
-            for (const [name, subSchema] of Object.entries(schema.optionalProperties)) {
-              pushSchemaToken(state, name);
-              if (instance.hasOwnProperty(name)) {
-                pushInstanceToken(state, name);
-                validateWithState(state, subSchema, instance[name]);
-                popInstanceToken(state);
-              }
-              popSchemaToken(state);
-            }
-            popSchemaToken(state);
-          }
-          if (schema.additionalProperties !== true) {
-            for (const name of Object.keys(instance)) {
-              const inRequired = schema.properties && name in schema.properties;
-              const inOptional = schema.optionalProperties && name in schema.optionalProperties;
-              if (!inRequired && !inOptional && name !== parentTag) {
-                pushInstanceToken(state, name);
-                pushError(state);
-                popInstanceToken(state);
-              }
-            }
-          }
-        } else {
-          if (schema.properties !== void 0) {
-            pushSchemaToken(state, "properties");
-          } else {
-            pushSchemaToken(state, "optionalProperties");
-          }
-          pushError(state);
-          popSchemaToken(state);
-        }
-      } else if (schema_1.isValuesForm(schema)) {
-        pushSchemaToken(state, "values");
-        if (typeof instance === "object" && instance !== null && !Array.isArray(instance)) {
-          for (const [name, subInstance] of Object.entries(instance)) {
-            pushInstanceToken(state, name);
-            validateWithState(state, schema.values, subInstance);
-            popInstanceToken(state);
-          }
-        } else {
-          pushError(state);
-        }
-        popSchemaToken(state);
-      } else if (schema_1.isDiscriminatorForm(schema)) {
-        if (typeof instance === "object" && instance !== null && !Array.isArray(instance)) {
-          if (instance.hasOwnProperty(schema.discriminator)) {
-            const tag = instance[schema.discriminator];
-            if (typeof tag === "string") {
-              if (tag in schema.mapping) {
-                pushSchemaToken(state, "mapping");
-                pushSchemaToken(state, tag);
-                validateWithState(state, schema.mapping[tag], instance, schema.discriminator);
-                popSchemaToken(state);
-                popSchemaToken(state);
-              } else {
-                pushSchemaToken(state, "mapping");
-                pushInstanceToken(state, schema.discriminator);
-                pushError(state);
-                popInstanceToken(state);
-                popSchemaToken(state);
-              }
-            } else {
-              pushSchemaToken(state, "discriminator");
-              pushInstanceToken(state, schema.discriminator);
-              pushError(state);
-              popInstanceToken(state);
-              popSchemaToken(state);
-            }
-          } else {
-            pushSchemaToken(state, "discriminator");
-            pushError(state);
-            popSchemaToken(state);
-          }
-        } else {
-          pushSchemaToken(state, "discriminator");
-          pushError(state);
-          popSchemaToken(state);
-        }
-      }
-    }
-    function validateInt(state, instance, min, max) {
-      if (typeof instance !== "number" || !Number.isInteger(instance) || instance < min || instance > max) {
-        pushError(state);
-      }
-    }
-    function pushInstanceToken(state, token) {
-      state.instanceTokens.push(token);
-    }
-    function popInstanceToken(state) {
-      state.instanceTokens.pop();
-    }
-    function pushSchemaToken(state, token) {
-      state.schemaTokens[state.schemaTokens.length - 1].push(token);
-    }
-    function popSchemaToken(state) {
-      state.schemaTokens[state.schemaTokens.length - 1].pop();
-    }
-    function pushError(state) {
-      state.errors.push({
-        instancePath: [...state.instanceTokens],
-        schemaPath: [...state.schemaTokens[state.schemaTokens.length - 1]]
-      });
-      if (state.errors.length === state.config.maxErrors) {
-        throw new MaxErrorsReachedError();
-      }
-    }
-  }
-});
-
-// node_modules/jtd/lib/index.js
-var require_lib = __commonJS({
-  "node_modules/jtd/lib/index.js"(exports) {
-    "use strict";
-    var __createBinding = exports && exports.__createBinding || (Object.create ? (function(o, m, k, k2) {
-      if (k2 === void 0) k2 = k;
-      Object.defineProperty(o, k2, { enumerable: true, get: function() {
-        return m[k];
-      } });
-    }) : (function(o, m, k, k2) {
-      if (k2 === void 0) k2 = k;
-      o[k2] = m[k];
-    }));
-    var __exportStar = exports && exports.__exportStar || function(m, exports2) {
-      for (var p in m) if (p !== "default" && !exports2.hasOwnProperty(p)) __createBinding(exports2, m, p);
-    };
-    Object.defineProperty(exports, "__esModule", { value: true });
-    __exportStar(require_schema(), exports);
-    __exportStar(require_validate(), exports);
-  }
-});
 
 // node_modules/@hono/node-server/dist/constants-BLSFu_RU.mjs
 var X_ALREADY_SENT = "x-hono-already-sent";
@@ -768,15 +137,15 @@ var rejectBodyUnusable = () => {
   return Promise.reject(newBodyUnusableError());
 };
 var textDecoder = new TextDecoder();
-var consumeBodyDirectOnce = (request) => {
-  if (request[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
-  request[bodyConsumedDirectlyKey] = true;
+var consumeBodyDirectOnce = (request2) => {
+  if (request2[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
+  request2[bodyConsumedDirectlyKey] = true;
 };
 var toArrayBuffer = (buf) => {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 };
-var contentType = (request) => {
-  return (request[headersKey] ||= newHeadersFromIncoming(request[incomingKey])).get("content-type") || "";
+var contentType = (request2) => {
+  return (request2[headersKey] ||= newHeadersFromIncoming(request2[incomingKey])).get("content-type") || "";
 };
 var methodTokenRegExp = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 var normalizeIncomingMethod = (method) => {
@@ -808,37 +177,37 @@ var validateDirectReadMethod = (method) => {
   const normalized = method.toUpperCase();
   if (normalized === "CONNECT" || normalized === "TRACK" || normalized === "TRACE" && method !== "TRACE") return /* @__PURE__ */ new TypeError(`'${method}' HTTP method is unsupported.`);
 };
-var readBodyWithFastPath = (request, method, fromBuffer) => {
-  if (request[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
-  const methodName = request.method;
-  if (methodName === "GET" || methodName === "HEAD") return request[getRequestCache]()[method]();
+var readBodyWithFastPath = (request2, method, fromBuffer) => {
+  if (request2[bodyConsumedDirectlyKey]) return rejectBodyUnusable();
+  const methodName = request2.method;
+  if (methodName === "GET" || methodName === "HEAD") return request2[getRequestCache]()[method]();
   const methodValidationError = validateDirectReadMethod(methodName);
   if (methodValidationError) return Promise.reject(methodValidationError);
-  if (request[requestCache]) {
-    if (methodName !== "TRACE") return request[requestCache][method]();
+  if (request2[requestCache]) {
+    if (methodName !== "TRACE") return request2[requestCache][method]();
   }
-  const alreadyUsedError = consumeBodyDirectOnce(request);
+  const alreadyUsedError = consumeBodyDirectOnce(request2);
   if (alreadyUsedError) return alreadyUsedError;
-  const raw2 = readRawBodyIfAvailable(request);
+  const raw2 = readRawBodyIfAvailable(request2);
   if (raw2) {
-    const result = Promise.resolve(fromBuffer(raw2, request));
-    request[bodyBufferKey] = void 0;
+    const result = Promise.resolve(fromBuffer(raw2, request2));
+    request2[bodyBufferKey] = void 0;
     return result;
   }
-  return readBodyDirect(request).then((buf) => {
-    const result = fromBuffer(buf, request);
-    request[bodyBufferKey] = void 0;
+  return readBodyDirect(request2).then((buf) => {
+    const result = fromBuffer(buf, request2);
+    request2[bodyBufferKey] = void 0;
     return result;
   });
 };
-var readRawBodyIfAvailable = (request) => {
-  const incoming = request[incomingKey];
+var readRawBodyIfAvailable = (request2) => {
+  const incoming = request2[incomingKey];
   if ("rawBody" in incoming && incoming.rawBody instanceof Buffer) return incoming.rawBody;
 };
-var readBodyDirect = (request) => {
-  if (request[bodyBufferKey]) return Promise.resolve(request[bodyBufferKey]);
-  if (request[bodyReadPromiseKey]) return request[bodyReadPromiseKey];
-  const incoming = request[incomingKey];
+var readBodyDirect = (request2) => {
+  if (request2[bodyBufferKey]) return Promise.resolve(request2[bodyBufferKey]);
+  if (request2[bodyReadPromiseKey]) return request2[bodyReadPromiseKey];
+  const incoming = request2[incomingKey];
   if (Readable.isDisturbed(incoming)) return rejectBodyUnusable();
   const promise = new Promise((resolve, reject) => {
     const chunks = [];
@@ -855,7 +224,7 @@ var readBodyDirect = (request) => {
     const onEnd = () => {
       finish(() => {
         const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
-        request[bodyBufferKey] = buffer;
+        request2[bodyBufferKey] = buffer;
         resolve(buffer);
       });
     };
@@ -874,7 +243,7 @@ var readBodyDirect = (request) => {
           reject(incoming.errored);
           return;
         }
-        const reason = request[abortReasonKey];
+        const reason = request2[abortReasonKey];
         if (reason !== void 0) {
           reject(reason instanceof Error ? reason : new Error(String(reason)));
           return;
@@ -887,7 +256,7 @@ var readBodyDirect = (request) => {
       incoming.off("end", onEnd);
       incoming.off("error", onError);
       incoming.off("close", onClose);
-      request[bodyReadPromiseKey] = void 0;
+      request2[bodyReadPromiseKey] = void 0;
     };
     incoming.on("data", onData);
     incoming.on("end", onEnd);
@@ -900,7 +269,7 @@ var readBodyDirect = (request) => {
       else if (incoming.destroyed) onClose();
     });
   });
-  request[bodyReadPromiseKey] = promise;
+  request2[bodyReadPromiseKey] = promise;
   return promise;
 };
 var requestPrototype = {
@@ -950,9 +319,9 @@ var requestPrototype = {
   },
   get body() {
     if (!this[bodyConsumedDirectlyKey]) return this[getRequestCache]().body;
-    const request = this[getRequestCache]();
-    if (!this[bodyLockReaderKey] && request.body) this[bodyLockReaderKey] = request.body.getReader();
-    return request.body;
+    const request2 = this[getRequestCache]();
+    if (!this[bodyLockReaderKey] && request2.body) this[bodyLockReaderKey] = request2.body.getReader();
+    return request2.body;
   },
   get bodyUsed() {
     if (this[bodyConsumedDirectlyKey]) return true;
@@ -994,8 +363,8 @@ Object.defineProperty(requestPrototype, "arrayBuffer", { value: function() {
   return readBodyWithFastPath(this, "arrayBuffer", (buf) => toArrayBuffer(buf));
 } });
 Object.defineProperty(requestPrototype, "blob", { value: function() {
-  return readBodyWithFastPath(this, "blob", (buf, request) => {
-    const type = contentType(request);
+  return readBodyWithFastPath(this, "blob", (buf, request2) => {
+    const type = contentType(request2);
     const init = type ? { headers: { "content-type": type } } : void 0;
     return new Response(buf, init).blob();
   });
@@ -1515,12 +884,12 @@ ${responseLines.join("\r\n")}\r
 \r
 `);
 };
-var createUpgradeRequest = (request) => {
-  const protocol = request.socket.encrypted ? "https" : "http";
-  const url = new URL(request.url ?? "/", `${protocol}://${request.headers.host ?? "localhost"}`);
+var createUpgradeRequest = (request2) => {
+  const protocol = request2.socket.encrypted ? "https" : "http";
+  const url = new URL(request2.url ?? "/", `${protocol}://${request2.headers.host ?? "localhost"}`);
   const headers = new Headers();
-  for (const key in request.headers) {
-    const value = request.headers[key];
+  for (const key in request2.headers) {
+    const value = request2.headers[key];
     if (!value) continue;
     headers.append(key, Array.isArray(value) ? value[0] : value);
   }
@@ -1529,25 +898,25 @@ var createUpgradeRequest = (request) => {
 var setupWebSocket = (options) => {
   const { server, fetchCallback, wss } = options;
   const waiterMap = /* @__PURE__ */ new Map();
-  wss.on("connection", (ws, request) => {
-    const waiter = waiterMap.get(request);
+  wss.on("connection", (ws, request2) => {
+    const waiter = waiterMap.get(request2);
     if (waiter) {
       waiter.resolve(ws);
-      waiterMap.delete(request);
+      waiterMap.delete(request2);
     }
   });
-  const waitForWebSocket = (request, connectionSymbol) => {
+  const waitForWebSocket = (request2, connectionSymbol) => {
     return new Promise((resolve) => {
-      waiterMap.set(request, {
+      waiterMap.set(request2, {
         resolve,
         connectionSymbol
       });
     });
   };
-  server.on("upgrade", async (request, socket, head) => {
-    if (request.headers.upgrade?.toLowerCase() !== "websocket") return;
+  server.on("upgrade", async (request2, socket, head) => {
+    if (request2.headers.upgrade?.toLowerCase() !== "websocket") return;
     const env = {
-      incoming: request,
+      incoming: request2,
       outgoing: void 0,
       wss,
       [WAIT_FOR_WEBSOCKET_SYMBOL]: waitForWebSocket
@@ -1555,7 +924,7 @@ var setupWebSocket = (options) => {
     let status = 400;
     let responseHeaders;
     try {
-      const response = await fetchCallback(createUpgradeRequest(request), env);
+      const response = await fetchCallback(createUpgradeRequest(request2), env);
       if (response instanceof Response) {
         status = response.status;
         responseHeaders = response.headers;
@@ -1564,9 +933,9 @@ var setupWebSocket = (options) => {
       if (server.listenerCount("upgrade") === 1) rejectUpgradeRequest(socket, 500);
       return;
     }
-    const waiter = waiterMap.get(request);
+    const waiter = waiterMap.get(request2);
     if (!waiter || waiter.connectionSymbol !== env[CONNECTION_SYMBOL_KEY]) {
-      waiterMap.delete(request);
+      waiterMap.delete(request2);
       if (server.listenerCount("upgrade") === 1) rejectUpgradeRequest(socket, status, responseHeaders);
       return;
     }
@@ -1575,8 +944,8 @@ var setupWebSocket = (options) => {
     };
     wss.on("headers", addResponseHeaders);
     try {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
+      wss.handleUpgrade(request2, socket, head, (ws) => {
+        wss.emit("connection", ws, request2);
       });
     } finally {
       wss.off("headers", addResponseHeaders);
@@ -1728,17 +1097,17 @@ var compose = (middleware, onError, onNotFound) => {
 var GET_MATCH_RESULT = /* @__PURE__ */ Symbol();
 
 // node_modules/hono/dist/utils/body.js
-var parseBody = async (request, options = /* @__PURE__ */ Object.create(null)) => {
+var parseBody = async (request2, options = /* @__PURE__ */ Object.create(null)) => {
   const { all = false, dot = false } = options;
-  const headers = request instanceof HonoRequest ? request.raw.headers : request.headers;
+  const headers = request2 instanceof HonoRequest ? request2.raw.headers : request2.headers;
   const contentType2 = headers.get("Content-Type");
   if (contentType2?.startsWith("multipart/form-data") || contentType2?.startsWith("application/x-www-form-urlencoded")) {
-    return parseFormData(request, { all, dot });
+    return parseFormData(request2, { all, dot });
   }
   return {};
 };
-async function parseFormData(request, options) {
-  const formData = await request.formData();
+async function parseFormData(request2, options) {
+  const formData = await request2.formData();
   if (formData) {
     return convertFormDataToBodyData(formData, options);
   }
@@ -1866,8 +1235,8 @@ var tryDecode = (str, decoder) => {
   }
 };
 var tryDecodeURI = (str) => tryDecode(str, decodeURI);
-var getPath = (request) => {
-  const url = request.url;
+var getPath = (request2) => {
+  const url = request2.url;
   const start = url.indexOf("/", url.indexOf(":") + 4);
   let i = start;
   for (; i < url.length; i++) {
@@ -1884,8 +1253,8 @@ var getPath = (request) => {
   }
   return url.slice(start, i);
 };
-var getPathNoStrict = (request) => {
-  const result = getPath(request);
+var getPathNoStrict = (request2) => {
+  const result = getPath(request2);
   return result.length > 1 && result.at(-1) === "/" ? result.slice(0, -1) : result;
 };
 var mergePath = (base, sub, ...rest) => {
@@ -2039,8 +1408,8 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path = "/", matchResult = [[]]) {
-    this.raw = request;
+  constructor(request2, path = "/", matchResult = [[]]) {
+    this.raw = request2;
     this.path = path;
     this.#matchResult = matchResult;
     this.#validatedData = {};
@@ -2963,7 +2332,7 @@ var Hono = class _Hono {
       } else {
         optionHandler = options.optionHandler;
         if (options.replaceRequest === false) {
-          replaceRequest = (request) => request;
+          replaceRequest = (request2) => request2;
         } else {
           replaceRequest = options.replaceRequest;
         }
@@ -2983,10 +2352,10 @@ var Hono = class _Hono {
     replaceRequest ||= (() => {
       const mergedPath = mergePath(this._basePath, path);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
-      return (request) => {
-        const url = new URL(request.url);
-        url.pathname = this.getPath(request).slice(pathPrefixLength) || "/";
-        return new Request(url, request);
+      return (request2) => {
+        const url = new URL(request2.url);
+        url.pathname = this.getPath(request2).slice(pathPrefixLength) || "/";
+        return new Request(url, request2);
       };
     })();
     const handler = async (c, next) => {
@@ -3017,13 +2386,13 @@ var Hono = class _Hono {
     }
     throw err;
   }
-  #dispatch(request, executionCtx, env, method) {
+  #dispatch(request2, executionCtx, env, method) {
     if (method === "HEAD") {
-      return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
+      return (async () => new Response(null, await this.#dispatch(request2, executionCtx, env, "GET")))();
     }
-    const path = this.getPath(request, { env });
+    const path = this.getPath(request2, { env });
     const matchResult = this.router.match(method, path);
-    const c = new Context(request, {
+    const c = new Context(request2, {
       path,
       matchResult,
       env,
@@ -3069,8 +2438,8 @@ var Hono = class _Hono {
    * @returns {Response | Promise<Response>} response of request
    *
    */
-  fetch = (request, ...rest) => {
-    return this.#dispatch(request, rest[1], rest[0], request.method);
+  fetch = (request2, ...rest) => {
+    return this.#dispatch(request2, rest[1], rest[0], request2.method);
   };
   /**
    * `.request()` is a useful method for testing.
@@ -3754,12 +3123,10 @@ var Hono2 = class extends Hono {
 };
 
 // src/shim.ts
-var import_jtd2 = __toESM(require_lib(), 1);
 import { realpathSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // src/runtime.ts
-var import_jtd = __toESM(require_lib(), 1);
 function resolveHandler(mod, name) {
   const candidate = mod?.[name] ?? mod?.default?.[name] ?? mod?.default;
   if (typeof candidate !== "function") {
@@ -3767,19 +3134,293 @@ function resolveHandler(mod, name) {
   }
   return candidate;
 }
-function resolveSchema(mod) {
-  const schema = mod?.eventSchema;
-  if (schema === void 0) return void 0;
-  if (!(0, import_jtd.isSchema)(schema)) {
-    throw new Error('export "eventSchema" is not a valid JTD schema');
+function resolveValidators(mod) {
+  const pick = (v) => typeof v === "function" ? v : void 0;
+  return { input: pick(mod?.__funcdValidateInput), output: pick(mod?.__funcdValidateOutput) };
+}
+
+// src/invoke.ts
+import http from "node:http";
+function makeInvoke() {
+  return (alias, input) => new Promise((resolve, reject) => {
+    const socketPath = process.env.FUNCD_INVOKE_SOCKET;
+    if (!socketPath) {
+      reject(new Error("context.invoke: worker-node local API socket unavailable (FUNCD_INVOKE_SOCKET unset)"));
+      return;
+    }
+    const body = JSON.stringify(input ?? null);
+    const req = http.request(
+      {
+        socketPath,
+        path: `/invoke/${encodeURIComponent(alias)}`,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) {
+            resolve(text ? JSON.parse(text) : null);
+          } else {
+            reject(new Error(`context.invoke("${alias}") failed: ${status} ${text}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+// src/kv.ts
+import http2 from "node:http";
+function request(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const socketPath = process.env.FUNCD_INVOKE_SOCKET;
+    if (!socketPath) {
+      reject(new Error("context.kv: worker-node local API socket unavailable (FUNCD_INVOKE_SOCKET unset)"));
+      return;
+    }
+    const headers = {};
+    if (body) headers["content-length"] = body.byteLength;
+    const req = http2.request({ socketPath, path, method, headers }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+    });
+    req.on("error", reject);
+    if (body) req.end(body);
+    else req.end();
+  });
+}
+var enc = encodeURIComponent;
+var keyPath = (binding, key) => `/kv/${enc(binding)}/${key.split("/").map(enc).join("/")}`;
+var fail = (verb, r) => new Error(`context.kv.${verb} failed: ${r.status} ${r.body.toString("utf8")}`);
+var ok = (r) => r.status >= 200 && r.status < 300;
+function makeKV() {
+  return {
+    async get(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return new Uint8Array(r.body);
+    },
+    async getText(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return r.body.toString("utf8");
+    },
+    async getJSON(binding, key) {
+      const r = await request("GET", keyPath(binding, key));
+      if (r.status === 404) return null;
+      if (!ok(r)) throw fail("get", r);
+      return JSON.parse(r.body.toString("utf8"));
+    },
+    async put(binding, key, value) {
+      const buf = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
+      const r = await request("PUT", keyPath(binding, key), buf);
+      if (!ok(r)) throw fail("put", r);
+    },
+    async del(binding, key) {
+      const r = await request("DELETE", keyPath(binding, key));
+      if (!ok(r)) throw fail("del", r);
+    },
+    async list(binding, prefix) {
+      const q = prefix ? `?prefix=${enc(prefix)}` : "";
+      const r = await request("GET", `/kv/${enc(binding)}${q}`);
+      if (!ok(r)) throw fail("list", r);
+      return JSON.parse(r.body.toString("utf8") || "[]");
+    }
+  };
+}
+
+// src/funclog.ts
+import { writeSync } from "node:fs";
+import { connect } from "node:net";
+
+// src/invcontext.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+var invStore = new AsyncLocalStorage();
+function currentInv() {
+  return invStore.getStore();
+}
+
+// src/funclog.ts
+var SEVERITY = {
+  debug: "DEBUG",
+  log: "INFO",
+  info: "INFO",
+  warn: "WARN",
+  error: "ERROR"
+};
+function safeStringify(value) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  try {
+    return JSON.stringify(value, (_k, v) => {
+      if (typeof v === "bigint") return v.toString();
+      if (typeof v === "object" && v !== null) {
+        if (seen.has(v)) return "[Circular]";
+        seen.add(v);
+      }
+      return v;
+    });
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return "[Unserializable]";
+    }
   }
-  return schema;
+}
+function isPlainObject(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+function buildRecord(method, args) {
+  const body = typeof args[0] === "string" ? args[0] : "";
+  const attrs = { args: safeStringify(args) };
+  for (const arg of args) {
+    if (!isPlainObject(arg)) continue;
+    for (const [k, v] of Object.entries(arg)) {
+      if (k === "args") continue;
+      attrs[k] = typeof v === "string" ? v : safeStringify(v);
+    }
+  }
+  const inv = currentInv();
+  return {
+    ts: Date.now() * 1e6,
+    sev: SEVERITY[method],
+    body,
+    attrs,
+    inv: inv?.inv ?? "",
+    trace_id: inv?.traceId ?? "",
+    span_id: inv?.spanId ?? "",
+    "funcd.source": "console"
+  };
+}
+function openChannel(env) {
+  const fdRaw = env.FUNCD_LOG_FD;
+  if (fdRaw !== void 0 && fdRaw !== "") {
+    const fd = Number(fdRaw);
+    if (!Number.isInteger(fd) || fd < 0) return null;
+    return (line) => {
+      try {
+        writeSync(fd, line);
+      } catch {
+      }
+    };
+  }
+  const sockPath = env.FUNCD_LOG_SOCK;
+  if (sockPath !== void 0 && sockPath !== "") {
+    let sock = connect(sockPath);
+    sock.on("error", () => {
+      sock = null;
+    });
+    sock.unref();
+    return (line) => {
+      try {
+        sock?.write(line);
+      } catch {
+      }
+    };
+  }
+  return null;
+}
+function installConsoleCapture(env = process.env, sink = openChannel(env)) {
+  if (!sink) return false;
+  const methods = ["debug", "log", "info", "warn", "error"];
+  for (const method of methods) {
+    console[method] = (...args) => {
+      try {
+        sink(JSON.stringify(buildRecord(method, args)) + "\n");
+      } catch {
+      }
+    };
+  }
+  return true;
+}
+
+// src/tracespan.ts
+import { randomBytes } from "node:crypto";
+var ZERO_TRACE = "0".repeat(32);
+var ZERO_SPAN = "0".repeat(16);
+function parseTraceparent(tp) {
+  if (!tp) return null;
+  const parts = tp.trim().split("-");
+  if (parts.length < 4) return null;
+  const [version, traceId, parentId] = parts;
+  if (!/^[0-9a-f]{2}$/.test(version) || version === "ff") return null;
+  if (!/^[0-9a-f]{32}$/.test(traceId) || traceId === ZERO_TRACE) return null;
+  if (!/^[0-9a-f]{16}$/.test(parentId) || parentId === ZERO_SPAN) return null;
+  return { traceId, parentId };
+}
+function newInvContext(tp, providedSpanId) {
+  const adopted = parseTraceparent(tp);
+  const spanId = providedSpanId && /^[0-9a-f]{16}$/.test(providedSpanId) ? providedSpanId : randomBytes(8).toString("hex");
+  return {
+    inv: randomBytes(8).toString("hex"),
+    traceId: adopted ? adopted.traceId : randomBytes(16).toString("hex"),
+    spanId,
+    parentId: adopted ? adopted.parentId : ""
+  };
+}
+function emitSpan(sink, ctx, name, start, end, status, statusMsg, links) {
+  const rec = {
+    "funcd.signal": "traces",
+    trace_id: ctx.traceId,
+    span_id: ctx.spanId,
+    parent_id: ctx.parentId,
+    name,
+    kind: "SERVER",
+    start,
+    end,
+    status,
+    status_msg: statusMsg,
+    attrs: {},
+    inv: ctx.inv,
+    links
+  };
+  try {
+    sink(JSON.stringify(rec) + "\n");
+  } catch {
+  }
+}
+function startSpan(sink, name, tp, spanId, links = []) {
+  const inv = newInvContext(tp, spanId);
+  const startNs = Date.now() * 1e6;
+  const t0 = process.hrtime.bigint();
+  const validLinks = links.filter((l) => /^[0-9a-f]{16}$/.test(l));
+  let ended = false;
+  return {
+    inv,
+    run(fn) {
+      return invStore.run(inv, async () => fn());
+    },
+    end(status, statusMsg = "") {
+      if (ended) return;
+      ended = true;
+      if (!sink) return;
+      const endNs = startNs + Number(process.hrtime.bigint() - t0);
+      emitSpan(sink, inv, name, startNs, endNs, status, statusMsg, validLinks);
+    }
+  };
+}
+function parseLinks(header) {
+  if (!header) return [];
+  return header.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 // src/shim.ts
-function createApp(handler, schema) {
+function createApp(handler, validators = {}, trace = {}) {
   const app = new Hono2();
-  const ctx = { log: (...args) => console.log(...args) };
+  const ctx = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
+  const traceSink = trace.sink ?? null;
+  const fnName = trace.fnName ?? "invoke";
   app.get("/health/liveness", (c) => c.text("ok"));
   app.get("/health/readiness", (c) => c.text("ready"));
   app.post("/", async (c) => {
@@ -3790,45 +3431,67 @@ function createApp(handler, schema) {
     } catch {
       return c.text("invalid CloudEvent JSON", 400);
     }
-    if (schema !== void 0) {
-      const errors = (0, import_jtd.validate)(schema, event.data);
+    if (validators.input) {
+      const errors = validators.input(event.data);
       if (errors.length > 0) {
-        return c.json({ error: "event data does not match the contract", details: errors }, 422);
+        return c.json({ error: "event data does not match the input contract", details: errors }, 422);
       }
     }
+    const span = startSpan(
+      traceSink,
+      fnName,
+      c.req.header("traceparent"),
+      c.req.header("x-funcd-span-id"),
+      parseLinks(c.req.header("x-funcd-span-links"))
+    );
     try {
-      const result = await handler(ctx, event);
+      const result = await span.run(() => handler(ctx, event));
+      if (validators.output) {
+        const errors = validators.output(result === void 0 ? null : result);
+        if (errors.length > 0) {
+          span.end("ERROR", "handler result does not match the output contract");
+          return c.json({ error: "handler result does not match the output contract", details: errors }, 500);
+        }
+      }
+      span.end("OK");
       if (result === void 0 || result === null) return c.body(null, 204);
       return c.json(result);
     } catch (err) {
+      span.end("ERROR", String(err instanceof Error ? err.message : err));
       return c.json({ error: String(err instanceof Error ? err.message : err) }, 500);
     }
   });
   return app;
 }
 async function main() {
+  const channel = openChannel(process.env);
+  installConsoleCapture(process.env, channel);
   const artifact = process.env.FUNCD_ARTIFACT;
   const handlerName = process.env.FUNCD_HANDLER ?? "handle";
   const fixedPort = process.env.FUNCD_PORT ? Number(process.env.FUNCD_PORT) : 0;
   const portFile = process.env.FUNCD_PORTFILE;
   if (!artifact) {
-    console.error("funcd-shim: FUNCD_ARTIFACT is required");
+    process.stderr.write("funcd-shim: FUNCD_ARTIFACT is required\n");
     process.exit(2);
   }
   let handler;
-  let schema;
+  let validators;
   try {
     const mod = await import(pathToFileURL(artifact).href);
     handler = resolveHandler(mod, handlerName);
-    schema = resolveSchema(mod);
+    validators = resolveValidators(mod);
   } catch (err) {
-    console.error(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}`);
+    process.stderr.write(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}
+`);
     process.exit(3);
   }
   const hostname = fixedPort > 0 ? "0.0.0.0" : "127.0.0.1";
-  serve({ fetch: createApp(handler, schema).fetch, hostname, port: fixedPort }, (info) => {
+  const fnName = process.env.FUNCD_FUNCTION ?? "invoke";
+  const appTrace = { sink: channel, fnName };
+  serve({ fetch: createApp(handler, validators, appTrace).fetch, hostname, port: fixedPort }, (info) => {
     if (portFile) writeFileSync(portFile, String(info.port));
-    console.log(`funcd-shim: listening on ${hostname}:${info.port}`);
+    process.stderr.write(`funcd-shim: listening on ${hostname}:${info.port}
+`);
   });
 }
 var entry = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : "";
@@ -3838,5 +3501,5 @@ if (import.meta.url === entry) {
 export {
   createApp,
   resolveHandler,
-  resolveSchema
+  resolveValidators
 };

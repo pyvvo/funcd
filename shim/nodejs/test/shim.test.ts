@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp, type EventSchema, resolveHandler, resolveSchema } from '../src/shim.ts';
+import { createApp, resolveHandler, resolveValidators, type Validator } from '../src/shim.ts';
 
 const jsonReq = (body: string) =>
   ({ method: 'POST', headers: { 'content-type': 'application/json' }, body }) as const;
@@ -57,40 +57,91 @@ test('the handler context exposes log()', async () => {
   assert.equal((await app.request('/', jsonReq('{}'))).status, 200);
 });
 
-// The event-data contract (JTD schema bundled in the artifact, engine in the shim).
-const helloSchema: EventSchema = { optionalProperties: { hello: { type: 'string' } } };
+// The I/O contract (ADR-0058): precompiled, eval-free validators generated at push from the
+// author's FuncInput/FuncOutput types. The tests supply fakes standing in for the generated fns.
 const ce = (data: unknown) => jsonReq(JSON.stringify({ id: '1', source: 's', type: 't', data }));
 
-// scenario: contract-valid → handler runs (200).
-test('POST / with a schema and matching event.data runs the handler', async () => {
-  const app = createApp((_ctx, event) => ({ echoed: event.data }), helloSchema);
+// requires event.data.hello to be a string (a stand-in for a generated FuncInput validator).
+const helloInput: Validator = (data) => {
+  const d = data as { hello?: unknown } | null;
+  return d != null && typeof d.hello === 'string' ? [] : [{ message: 'hello must be a string' }];
+};
+// requires the result to be { ok: boolean } (a stand-in for a generated FuncOutput validator).
+const okOutput: Validator = (r) => {
+  const o = r as { ok?: unknown } | null;
+  return o != null && typeof o.ok === 'boolean' ? [] : [{ message: 'ok must be a boolean' }];
+};
+// a `void`/`None` output contract: only an empty result is valid.
+const voidOutput: Validator = (r) => (r === null || r === undefined ? [] : [{ message: 'expected no body' }]);
+
+// scenario: generated-input-contract (valid) → handler runs (200).
+test('input validator + matching event.data runs the handler', async () => {
+  const app = createApp((_ctx, event) => ({ echoed: event.data }), { input: helloInput });
   const res = await app.request('/', ce({ hello: 'funcd' }));
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { echoed: { hello: 'funcd' } });
 });
 
-// scenario: contract-mismatch → 422, handler never runs.
-test('POST / with a schema and mismatching event.data → 422 (handler not called)', async () => {
+// scenario: generated-input-contract (mismatch) → 422, handler never runs.
+test('input validator + mismatching event.data → 422 (handler not called)', async () => {
   let called = false;
-  const app = createApp(() => { called = true; return { ok: true }; }, helloSchema);
+  const app = createApp(() => { called = true; return { ok: true }; }, { input: helloInput });
   const res = await app.request('/', ce({ hello: 123 }));
   assert.equal(res.status, 422);
   const body = (await res.json()) as { error: string; details: unknown[] };
-  assert.match(body.error, /contract/);
-  assert.ok(body.details.length > 0, 'carries the JTD validation errors');
+  assert.match(body.error, /input contract/);
+  assert.ok(body.details.length > 0, 'carries the validation errors');
   assert.equal(called, false, 'a bad-shaped event never reaches user code');
 });
 
-// scenario: no-schema → no validation (backward compatible).
-test('POST / without a schema validates nothing (today’s behavior)', async () => {
+// scenario: generated-output-contract → 500 on a bad result (never emitted as 200).
+test('output validator + bad result → 500 (result not emitted)', async () => {
+  const app = createApp(() => ({ wrong: true }), { output: okOutput });
+  const res = await app.request('/', ce({}));
+  assert.equal(res.status, 500);
+  const body = (await res.json()) as { error: string; details: unknown[] };
+  assert.match(body.error, /output contract/);
+  assert.ok(body.details.length > 0);
+});
+
+test('output validator + good result → 200', async () => {
+  const app = createApp(() => ({ ok: true }), { output: okOutput });
+  const res = await app.request('/', ce({}));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
+
+// scenario: returns-nothing-void → empty → 204, non-empty → 500.
+test('void output contract: empty return → 204, non-empty return → 500', async () => {
+  const empty = createApp(() => undefined, { output: voidOutput });
+  assert.equal((await empty.request('/', ce({}))).status, 204);
+  const nonEmpty = createApp(() => ({ surprise: true }), { output: voidOutput });
+  assert.equal((await nonEmpty.request('/', ce({}))).status, 500);
+});
+
+// scenario: json-input-accepts-anything → the `Json` validator ({}) passes any event.data.
+test('a Json input validator accepts any event.data → 200', async () => {
+  const jsonInput: Validator = () => []; // generated from `FuncInput = Json` → schema {} → accepts all
+  const app = createApp((_ctx, event) => ({ echoed: event.data }), { input: jsonInput });
+  const res = await app.request('/', ce({ literally: ['anything', 1, true] }));
+  assert.equal(res.status, 200);
+});
+
+// scenario: no-types-no-validation → no validators, nothing is validated (V1 behavior).
+test('no validators → unvalidated (backward compatible)', async () => {
   const app = createApp((_ctx, event) => ({ echoed: event.data }));
   const res = await app.request('/', ce({ anything: [1, 2, 3] }));
   assert.equal(res.status, 200);
 });
 
-// scenario: schema-shape-gate — a malformed eventSchema export is rejected (like a missing handler).
-test('resolveSchema returns the schema, undefined when absent, throws when malformed', () => {
-  assert.deepEqual(resolveSchema({ eventSchema: helloSchema }), helloSchema);
-  assert.equal(resolveSchema({}), undefined);
-  assert.throws(() => resolveSchema({ eventSchema: { type: 'not-a-jtd-type' } }), /not a valid JTD schema/);
+// resolveValidators reads the precompiled __funcdValidateInput/Output exports; undefined when absent.
+test('resolveValidators reads __funcdValidateInput/Output, undefined when absent', () => {
+  const v = resolveValidators({ __funcdValidateInput: helloInput, __funcdValidateOutput: okOutput });
+  assert.equal(typeof v.input, 'function');
+  assert.equal(typeof v.output, 'function');
+  const none = resolveValidators({});
+  assert.equal(none.input, undefined);
+  assert.equal(none.output, undefined);
+  // a non-function export is ignored (treated as absent), not trusted.
+  assert.equal(resolveValidators({ __funcdValidateInput: 'nope' }).input, undefined);
 });

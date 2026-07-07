@@ -13,41 +13,53 @@ import (
 type StubHandlers struct {
 	mu sync.RWMutex
 
-	namespaces     map[string]v1.Namespace
-	resourceGroups map[string]v1.ResourceGroup
-	functions      map[string]v1.Function
-	revisions      map[string]v1.Revision
-	routes         map[string]v1.Route
-	services       map[string]v1.Service
-	eventSources   map[string]v1.EventSource
-	configs        map[string]v1.Config
-	secrets        map[string]v1.Secret
-	grants         map[string]v1.Grant
-	egressPolicies map[string]v1.EgressPolicy
-	invocations    map[string]v1.Invocation
-	runtimeClasses map[string]v1.RuntimeClass
-	workerNodes    map[string]v1.WorkerNode
-	gateways       map[string]v1.Gateway
+	namespaces      map[string]v1.Namespace
+	resourceGroups  map[string]v1.ResourceGroup
+	functions       map[string]v1.Function
+	revisions       map[string]v1.Revision
+	routes          map[string]v1.Route
+	services        map[string]v1.Service
+	eventSources    map[string]v1.EventSource
+	configMaps      map[string]v1.ConfigMap
+	secrets         map[string]v1.Secret
+	grants          map[string]v1.Grant
+	egressPolicies  map[string]v1.EgressPolicy
+	invocations     map[string]v1.Invocation
+	runtimeClasses  map[string]v1.RuntimeClass
+	workerNodes     map[string]v1.WorkerNode
+	gateways        map[string]v1.Gateway
+	kvstores        map[string]v1.KVStore
+	buckets         map[string]v1.Bucket
+	catalogServices map[string]v1.CatalogService
+	policies        map[string]v1.Policy
+	workflows       map[string]v1.Workflow
+	workflowRuns    map[string]v1.WorkflowRun
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
 func NewStubHandlers() *StubHandlers {
 	return &StubHandlers{
-		namespaces:     make(map[string]v1.Namespace),
-		resourceGroups: make(map[string]v1.ResourceGroup),
-		functions:      make(map[string]v1.Function),
-		revisions:      make(map[string]v1.Revision),
-		routes:         make(map[string]v1.Route),
-		services:       make(map[string]v1.Service),
-		eventSources:   make(map[string]v1.EventSource),
-		configs:        make(map[string]v1.Config),
-		secrets:        make(map[string]v1.Secret),
-		grants:         make(map[string]v1.Grant),
-		egressPolicies: make(map[string]v1.EgressPolicy),
-		invocations:    make(map[string]v1.Invocation),
-		runtimeClasses: make(map[string]v1.RuntimeClass),
-		workerNodes:    make(map[string]v1.WorkerNode),
-		gateways:       make(map[string]v1.Gateway),
+		namespaces:      make(map[string]v1.Namespace),
+		resourceGroups:  make(map[string]v1.ResourceGroup),
+		functions:       make(map[string]v1.Function),
+		revisions:       make(map[string]v1.Revision),
+		routes:          make(map[string]v1.Route),
+		services:        make(map[string]v1.Service),
+		eventSources:    make(map[string]v1.EventSource),
+		configMaps:      make(map[string]v1.ConfigMap),
+		secrets:         make(map[string]v1.Secret),
+		grants:          make(map[string]v1.Grant),
+		egressPolicies:  make(map[string]v1.EgressPolicy),
+		invocations:     make(map[string]v1.Invocation),
+		runtimeClasses:  make(map[string]v1.RuntimeClass),
+		workerNodes:     make(map[string]v1.WorkerNode),
+		gateways:        make(map[string]v1.Gateway),
+		kvstores:        make(map[string]v1.KVStore),
+		buckets:         make(map[string]v1.Bucket),
+		catalogServices: make(map[string]v1.CatalogService),
+		policies:        make(map[string]v1.Policy),
+		workflows:       make(map[string]v1.Workflow),
+		workflowRuns:    make(map[string]v1.WorkflowRun),
 	}
 }
 
@@ -222,7 +234,7 @@ func (s *StubHandlers) DeleteFunction(_ context.Context, ns v1.NamespaceName, na
 	return nil
 }
 
-// ---- Revision, Route, Service, EventSource, Config, Secret, Grant, EgressPolicy, Invocation (namespaced) ----
+// ---- Revision, Route, Service, EventSource, ConfigMap, Secret, Grant, EgressPolicy, Invocation (namespaced) ----
 // All namespaced kinds follow the same pattern: map key = "namespace/name".
 
 func (s *StubHandlers) GetRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Revision, error) {
@@ -447,33 +459,33 @@ func (s *StubHandlers) DeleteEventSource(_ context.Context, ns v1.NamespaceName,
 	return nil
 }
 
-// ---- Config ----
+// ---- ConfigMap ----
 
-func (s *StubHandlers) GetConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Config, error) {
+func (s *StubHandlers) GetConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if v, ok := s.configs[nsKey(ns, name)]; ok {
+	if v, ok := s.configMaps[nsKey(ns, name)]; ok {
 		return v, nil
 	}
-	return v1.Config{}, fault.NotFoundf("StubHandlers.GetConfig", "Config %s/%s not found", ns, name)
+	return v1.ConfigMap{}, fault.NotFoundf("StubHandlers.GetConfigMap", "ConfigMap %s/%s not found", ns, name)
 }
 
-func (s *StubHandlers) CreateConfig(_ context.Context, cfg v1.Config) (v1.Config, error) {
+func (s *StubHandlers) CreateConfigMap(_ context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(cfg.Namespace, cfg.Name)
-	if _, exists := s.configs[key]; exists {
-		return v1.Config{}, fault.Conflictf("StubHandlers.CreateConfig", "Config %s already exists", key)
+	if _, exists := s.configMaps[key]; exists {
+		return v1.ConfigMap{}, fault.Conflictf("StubHandlers.CreateConfigMap", "ConfigMap %s already exists", key)
 	}
-	s.configs[key] = cfg
+	s.configMaps[key] = cfg
 	return cfg, nil
 }
 
-func (s *StubHandlers) ListConfigs(_ context.Context, ns v1.NamespaceName) ([]v1.Config, error) {
+func (s *StubHandlers) ListConfigMaps(_ context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]v1.Config, 0)
-	for _, v := range s.configs {
+	out := make([]v1.ConfigMap, 0)
+	for _, v := range s.configMaps {
 		if v.Namespace == ns {
 			out = append(out, v)
 		}
@@ -481,25 +493,25 @@ func (s *StubHandlers) ListConfigs(_ context.Context, ns v1.NamespaceName) ([]v1
 	return out, nil
 }
 
-func (s *StubHandlers) ReplaceConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.Config) (v1.Config, error) {
+func (s *StubHandlers) ReplaceConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
-	if _, exists := s.configs[key]; !exists {
-		return v1.Config{}, fault.NotFoundf("StubHandlers.ReplaceConfig", "Config %s not found", key)
+	if _, exists := s.configMaps[key]; !exists {
+		return v1.ConfigMap{}, fault.NotFoundf("StubHandlers.ReplaceConfigMap", "ConfigMap %s not found", key)
 	}
-	s.configs[key] = cfg
+	s.configMaps[key] = cfg
 	return cfg, nil
 }
 
-func (s *StubHandlers) DeleteConfig(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
-	if _, exists := s.configs[key]; !exists {
-		return fault.NotFoundf("StubHandlers.DeleteConfig", "Config %s not found", key)
+	if _, exists := s.configMaps[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteConfigMap", "ConfigMap %s not found", key)
 	}
-	delete(s.configs, key)
+	delete(s.configMaps, key)
 	return nil
 }
 
@@ -556,6 +568,230 @@ func (s *StubHandlers) DeleteSecret(_ context.Context, ns v1.NamespaceName, name
 		return fault.NotFoundf("StubHandlers.DeleteSecret", "Secret %s not found", key)
 	}
 	delete(s.secrets, key)
+	return nil
+}
+
+// ---- KVStore (ADR-0072) ----
+
+func (s *StubHandlers) GetKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.kvstores[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.KVStore{}, fault.NotFoundf("StubHandlers.GetKVStore", "KVStore %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateKVStore(_ context.Context, ks v1.KVStore) (v1.KVStore, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ks.Namespace, ks.Name)
+	if _, exists := s.kvstores[key]; exists {
+		return v1.KVStore{}, fault.Conflictf("StubHandlers.CreateKVStore", "KVStore %s already exists", key)
+	}
+	s.kvstores[key] = ks
+	return ks, nil
+}
+
+func (s *StubHandlers) ListKVStores(_ context.Context, ns v1.NamespaceName) ([]v1.KVStore, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.KVStore, 0)
+	for _, v := range s.kvstores {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.kvstores[key]; !exists {
+		return v1.KVStore{}, fault.NotFoundf("StubHandlers.ReplaceKVStore", "KVStore %s not found", key)
+	}
+	s.kvstores[key] = ks
+	return ks, nil
+}
+
+func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.kvstores[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteKVStore", "KVStore %s not found", key)
+	}
+	delete(s.kvstores, key)
+	return nil
+}
+
+// ---- Bucket (ADR-0080) ----
+
+func (s *StubHandlers) GetBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.buckets[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Bucket{}, fault.NotFoundf("StubHandlers.GetBucket", "Bucket %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateBucket(_ context.Context, b v1.Bucket) (v1.Bucket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(b.Namespace, b.Name)
+	if _, exists := s.buckets[key]; exists {
+		return v1.Bucket{}, fault.Conflictf("StubHandlers.CreateBucket", "Bucket %s already exists", key)
+	}
+	s.buckets[key] = b
+	return b, nil
+}
+
+func (s *StubHandlers) ListBuckets(_ context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Bucket, 0)
+	for _, v := range s.buckets {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.buckets[key]; !exists {
+		return v1.Bucket{}, fault.NotFoundf("StubHandlers.ReplaceBucket", "Bucket %s not found", key)
+	}
+	s.buckets[key] = b
+	return b, nil
+}
+
+func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.buckets[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteBucket", "Bucket %s not found", key)
+	}
+	delete(s.buckets, key)
+	return nil
+}
+
+// ---- CatalogService (ADR-0086) ----
+
+func (s *StubHandlers) GetCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.catalogServices[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.CatalogService{}, fault.NotFoundf("StubHandlers.GetCatalogService", "CatalogService %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateCatalogService(_ context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(cs.Namespace, cs.Name)
+	if _, exists := s.catalogServices[key]; exists {
+		return v1.CatalogService{}, fault.Conflictf("StubHandlers.CreateCatalogService", "CatalogService %s already exists", key)
+	}
+	s.catalogServices[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) ListCatalogServices(_ context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.CatalogService, 0)
+	for _, v := range s.catalogServices {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.catalogServices[key]; !exists {
+		return v1.CatalogService{}, fault.NotFoundf("StubHandlers.ReplaceCatalogService", "CatalogService %s not found", key)
+	}
+	s.catalogServices[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.catalogServices[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteCatalogService", "CatalogService %s not found", key)
+	}
+	delete(s.catalogServices, key)
+	return nil
+}
+
+// ---- Policy (ADR-0074) ----
+
+func (s *StubHandlers) GetPolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.policies[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Policy{}, fault.NotFoundf("StubHandlers.GetPolicy", "Policy %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreatePolicy(_ context.Context, pol v1.Policy) (v1.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(pol.Namespace, pol.Name)
+	if _, exists := s.policies[key]; exists {
+		return v1.Policy{}, fault.Conflictf("StubHandlers.CreatePolicy", "Policy %s already exists", key)
+	}
+	s.policies[key] = pol
+	return pol, nil
+}
+
+func (s *StubHandlers) ListPolicies(_ context.Context, ns v1.NamespaceName) ([]v1.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Policy, 0)
+	for _, v := range s.policies {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplacePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.policies[key]; !exists {
+		return v1.Policy{}, fault.NotFoundf("StubHandlers.ReplacePolicy", "Policy %s not found", key)
+	}
+	s.policies[key] = pol
+	return pol, nil
+}
+
+func (s *StubHandlers) DeletePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.policies[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeletePolicy", "Policy %s not found", key)
+	}
+	delete(s.policies, key)
 	return nil
 }
 
@@ -891,3 +1127,115 @@ func (s *StubHandlers) DeleteGateway(_ context.Context, name v1.ObjectName) erro
 
 // Compile-time check: StubHandlers implements Handlers.
 var _ Handlers = (*StubHandlers)(nil)
+
+// ---- Workflow (ADR-0094) ----
+
+func (s *StubHandlers) GetWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.workflows[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Workflow{}, fault.NotFoundf("StubHandlers.GetWorkflow", "Workflow %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateWorkflow(_ context.Context, wf v1.Workflow) (v1.Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(wf.Namespace, wf.Name)
+	if _, exists := s.workflows[key]; exists {
+		return v1.Workflow{}, fault.Conflictf("StubHandlers.CreateWorkflow", "Workflow %s already exists", key)
+	}
+	s.workflows[key] = wf
+	return wf, nil
+}
+
+func (s *StubHandlers) ListWorkflows(_ context.Context, ns v1.NamespaceName) ([]v1.Workflow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Workflow, 0)
+	for _, v := range s.workflows {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflows[key]; !exists {
+		return v1.Workflow{}, fault.NotFoundf("StubHandlers.ReplaceWorkflow", "Workflow %s not found", key)
+	}
+	s.workflows[key] = wf
+	return wf, nil
+}
+
+func (s *StubHandlers) DeleteWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflows[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteWorkflow", "Workflow %s not found", key)
+	}
+	delete(s.workflows, key)
+	return nil
+}
+
+// ---- WorkflowRun (ADR-0094) ----
+
+func (s *StubHandlers) GetWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.workflowRuns[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.WorkflowRun{}, fault.NotFoundf("StubHandlers.GetWorkflowRun", "WorkflowRun %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateWorkflowRun(_ context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(run.Namespace, run.Name)
+	if _, exists := s.workflowRuns[key]; exists {
+		return v1.WorkflowRun{}, fault.Conflictf("StubHandlers.CreateWorkflowRun", "WorkflowRun %s already exists", key)
+	}
+	s.workflowRuns[key] = run
+	return run, nil
+}
+
+func (s *StubHandlers) ListWorkflowRuns(_ context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.WorkflowRun, 0)
+	for _, v := range s.workflowRuns {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflowRuns[key]; !exists {
+		return v1.WorkflowRun{}, fault.NotFoundf("StubHandlers.ReplaceWorkflowRun", "WorkflowRun %s not found", key)
+	}
+	s.workflowRuns[key] = run
+	return run, nil
+}
+
+func (s *StubHandlers) DeleteWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.workflowRuns[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteWorkflowRun", "WorkflowRun %s not found", key)
+	}
+	delete(s.workflowRuns, key)
+	return nil
+}

@@ -60,8 +60,10 @@ ARCH := `go env GOARCH`
 build-runtime-images:
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/duckdb/Dockerfile -t funcd/runtime-duckdb:latest .
     docker save funcd/runtime-nodejs22:latest | gzip -9 > internal/runtime/embedimg/nodejs22.tar
     docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
+    docker save funcd/runtime-duckdb:latest | gzip -9 > internal/runtime/embedimg/duckdb.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
 
 # regenerate the Node runtime shims from TypeScript (ADR-0037/0044): typecheck + self-test +
@@ -87,6 +89,13 @@ check-shim-python:
 [group('runtime')]
 bench:
     go run ./cmd/funcd bench --out docs/reports --density 8
+
+# characterize Badger's RSS + throughput limits for the slatedb → pure-Go engine question (an ADR-0006
+# follow-up). Standalone module (bench/badger) — Badger is NOT a funcd dependency. Writes JSON to
+# bench/badger/results/. See bench/badger/FINDINGS.md. Override scale/profile: `just bench-badger 5000000 default`.
+[group('runtime')]
+bench-badger keys="1000000" profile="lowmem":
+    cd bench/badger && go run . -keys {{keys}} -profile {{profile}} -json results/badger-{{keys}}-{{profile}}.json
 
 # --- reproducible Lima bench harness (ADR-0052/0054) on macOS ----------------------------------
 # The containerd cgroup-footprint lane (`funcd bench --containerd`) needs Linux + root (cgroup +
@@ -126,6 +135,86 @@ lima-down:
     -limactl stop -f {{lima_name}}
     -limactl delete {{lima_name}}
 
+
+# GENERIC data-driven example lane (ADR-0077). `just lima-example <name>` reads the lane's section from
+# scripts/lanes.yaml (the REGISTRY), runs scripts/lane.py to execute its `build` + stage its files + the
+# registry into lane.tgz, boots the ONE generic VM (scripts/lima-lane.yaml — which reads the same section
+# in-guest to push + apply + probe Ready), and runs the lane's Venom suite. Add a lane by adding a section
+# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ node/uv per the lane's `build`).
+# Examples: `just lima-example env-echo` · `just lima-example duckdb`.
+[group('example')]
+lima-example name: build-runtime-images build-shim
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name='{{name}}'; deps='{{lima_deps}}'; vm='{{lima_name}}-{{name}}'
+    mkdir -p "$deps"
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcdctl" ./cmd/funcdctl
+    # host driver: run the lane's `build`, stage lane.tgz (files + registry + LANE marker), print its suite.
+    suite="$(python3 scripts/lane.py "$name" "$deps")"
+    trap "limactl stop -f '$vm' >/dev/null 2>&1 || true; limactl delete -f '$vm' >/dev/null 2>&1 || true" EXIT
+    limactl delete -f "$vm" >/dev/null 2>&1 || true
+    limactl start --name "$vm" --tty=false scripts/lima-lane.yaml
+    # Declarative e2e via OVH Venom (ADR-0077) — the generic VM already gated `limactl start` on the lane's
+    # `ready` target, so we invoke immediately. Run from the scratch dir with the absolute suite path.
+    ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
+    echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
+
+# Prime the local Lima cache with the pinned Debian VM image so lanes boot with NO upstream dependency (the
+# digest pin already skips the freshness HEAD on repeat boots; this seeds a COLD cache). Downloads the
+# host-arch image from the pinned mirror in scripts/lima.yaml, verifies the sha512 digest, and places it in
+# Lima's download cache. Idempotent. Use `from=<url>` to pull from an alternate reachable source (still
+# digest-verified) if the pinned host is unreachable. `just lima-cache-image` · `just lima-cache-image from=https://…`
+[group('example')]
+lima-cache-image from="":
+    python3 scripts/lima-cache.py {{ if from == "" { "" } else { "--from " + from } }}
+
+# Run EVERY Venom e2e lane back-to-back: the data-driven lanes from scripts/lanes.yaml (each has its own
+# `venom:` suite, ADR-0077) PLUS the metastore lane. Lanes are enumerated from the registry, so a new lane
+# is covered automatically. Continues past a failing lane and prints a PASS/FAIL summary, exiting non-zero
+# if any lane failed. Needs docker (colima) up. `just lima-example-all`.
+[group('example')]
+lima-example-all:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    lanes=$(python3 -c "import yaml; d=yaml.safe_load(open('scripts/lanes.yaml')); print(' '.join(k for k,v in d.items() if isinstance(v,dict) and v.get('venom')))")
+    echo "venom lanes: $lanes metastore"
+    passed=""; failed=""
+    for lane in $lanes; do
+        echo "═════════════ venom lane: $lane ═════════════"
+        if just lima-example "$lane"; then passed="$passed $lane"; else failed="$failed $lane"; fi
+    done
+    echo "═════════════ venom lane: metastore ═════════════"
+    if just lima-example-metastore; then passed="$passed metastore"; else failed="$failed metastore"; fi
+    echo "═════════════════════════════════════════════════"
+    echo "PASSED:$passed"
+    [ -n "$failed" ] && { echo "FAILED:$failed"; exit 1; }
+    echo "ALL VENOM E2E LANES PASSED ✅"
+
+# the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime
+# containerd + storage file = the pure-Go Badger metastore), apply a ConfigMap, RESTART the daemon, and read
+# it back — proving the new engine persists control-plane state across a real daemon restart under
+# containerd. Reuses the bench VM (scripts/lima.yaml, which provisions containerd via `funcd install`);
+# the smoke runs inside it (scripts/lima-metastore-smoke.sh). Needs docker (embedded-image build).
+lima_meta_vm := lima_name + "-meta"
+[group('example')]
+lima-example-metastore: build-runtime-images
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{lima_deps}}
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
+    # bundle the static fixtures (daemon config + the ConfigMap resource) into the mounted deps dir (→ /mnt/funcd-deps)
+    cp e2e/fixtures/metastore-daemon.yaml e2e/fixtures/metastore-configmap.yaml {{lima_deps}}/
+    trap 'limactl stop -f {{lima_meta_vm}} >/dev/null 2>&1 || true; limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true' EXIT
+    limactl delete -f {{lima_meta_vm}} >/dev/null 2>&1 || true
+    limactl start --name {{lima_meta_vm}} --tty=false scripts/lima.yaml
+    # the declarative metastore smoke (ADR-0077): an in-VM daemon-lifecycle suite (start → apply → restart →
+    # recover), run via the flake-pinned venom; see e2e/metastore.venom.yml + the venom-e2e skill.
+    suite="$(pwd)/e2e/metastore.venom.yml"
+    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_meta_vm}}" "$suite" )
+    echo "venom results: {{lima_deps}}/test_results_metastore.venom.xml"
+
 # run the CLI demo end to end (build → boot → push/apply/get/invoke → teardown).
 # Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: examples/js/hello-world.
 # Needs node + npm + yq on PATH.
@@ -140,8 +229,24 @@ demo:
 demo-record:
     vhs docs/demo/cli-demo.tape
 
+# launch funcd locally with the example config (examples/funcdconfig.yaml, ADR-0061): a zero-infra
+# dev daemon — in-memory substrate + process runtime, control plane on 127.0.0.1:8080, data plane on
+# :8081. Runs until Ctrl-C. With node / python3 on PATH, pushed functions actually execute — then in
+# another shell `funcdctl push` + `apply` an example (see examples/*/hello-world/README.md).
+[group('example')]
+funcd-example:
+    go run ./cmd/funcd --config examples/funcdconfig.yaml
+
+# run the fn-to-fn link example end-to-end (ADR-0064/0058): builds the shim + the TS example with its
+# CONTRACT build (generated JSON Schema + baked validators), pushes to an OCI layout, applies the
+# manifests, and drives the real broker round-trip + contract-422 + invoke-propagation + default-deny.
+# Needs node on PATH (the tests skip without it).
+[group('example')]
+example-fn-to-fn: build-shim
+    go test ./pkg/funcd/ -run 'TestScenario(HandlerInvokesLinkedFunction|ContractRejectsBadInput|InvokePropagatesContract422|UnlinkedAliasDeniedE2E)' -v
+
 # build the version-stamped single binary (ADR-0026) → dist/funcd.
-# Default is the pure-Go dev build; see scripts/build.sh for the cgo/slatedb release path.
+# Pure-Go static (CGO_ENABLED=0) — ADR-0065 made the metastore engine pure-Go Badger (no cgo lane).
 [group('release')]
 release:
     ./scripts/build.sh
@@ -156,9 +261,32 @@ generate:
 tidy:
     go mod tidy
 
+# guard against accidentally committing build artifacts: the ADR-0054 embedimg curated-image tars must
+# stay <1 KB placeholders in git (the real per-arch images are `just build-runtime-images` output, NEVER
+# committed — see internal/runtime/embedimg/README.md), and no compiled bench binary is tracked. Checks
+# the STAGED/committed blob (not the working tree, which may hold a locally-built real image).
+[group('go')]
+check-hygiene:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fail=0
+    for f in internal/runtime/embedimg/*.tar; do
+        sz=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+        if [ "$sz" -gt 4096 ]; then
+            echo "hygiene: $f is ${sz}B staged — commit the <1KB placeholder, not the built image (just build-runtime-images output)"
+            fail=1
+        fi
+    done
+    if git ls-files --error-unmatch bench/expr-engine/expr-engine >/dev/null 2>&1; then
+        echo "hygiene: bench/expr-engine/expr-engine is tracked — it is a compiled build output; keep it gitignored"
+        fail=1
+    fi
+    if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
+    exit "$fail"
+
 # CI pipeline (generate staleness + fmt check + lint + test + build + tidy-diff check)
 [group('go')]
-ci: tidy generate
+ci: tidy generate check-hygiene
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
@@ -166,25 +294,9 @@ ci: tidy generate
     go build ./...
     go mod verify
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
-
-# build the slatedb_uniffi native lib (cgo) from pinned source — required for the slatedb engine lane (ADR-0006 §5)
-[group('slatedb')]
-slatedb-lib:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src=".cache/slatedb"
-    if [ ! -d "$src" ]; then
-      git clone --depth 1 --branch bindings/go/v0.13.1 https://github.com/slatedb/slatedb "$src"
-    fi
-    cargo build --release --manifest-path "$src/Cargo.toml" -p slatedb-uniffi
-    echo "built $src/target/release/libslatedb_uniffi.*"
-
-# run the slatedb (cgo) engine lane — run `just slatedb-lib` first. The default `just ci` stays pure-Go.
-[group('slatedb')]
-test-slatedb:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    lib="$(pwd)/.cache/slatedb/target/release"
-    if [ ! -d "$lib" ]; then echo "run 'just slatedb-lib' first (native lib not built)"; exit 1; fi
-    CGO_ENABLED=1 CGO_LDFLAGS="-L$lib" DYLD_LIBRARY_PATH="$lib" LD_LIBRARY_PATH="$lib" \
-      go test -tags slatedb ./internal/store/slatedb/...
+# run the KV example end-to-end (ADR-0069): build the shim + the kv-counter example, push it, apply it,
+# and POST twice — the handler increments a per-name counter via context.kv (→ worker-node local API →
+# PDP Facade → durable driver), so the count goes 1 then 2. Needs node on PATH (the test skips without it).
+[group('example')]
+example-kv: build-shim
+    go test ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v

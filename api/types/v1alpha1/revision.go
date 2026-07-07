@@ -10,14 +10,15 @@ type Revision struct {
 }
 
 // RevisionSpec holds the immutable identity + frozen snapshot of a revision.
-// Number is the revision sequence number. The Runtime/Handler/Artifact snapshot
-// (F13/ADR-0020) pins "what was validated ships" — immutable once stamped.
+// Number is the revision sequence number. The Runtime/Handler/Image snapshot
+// (F13/ADR-0020, flattened by ADR-0097) pins "what was validated ships" — immutable once stamped.
 type RevisionSpec struct {
-	Function ObjectRef   `json:"function"`
-	Number   int64       `json:"number" minimum:"1"`
-	Runtime  RuntimeName `json:"runtime,omitempty"`
-	Handler  string      `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
-	Artifact ArtifactRef `json:"artifact,omitempty"`
+	Function    ObjectRef   `json:"function"`
+	Number      int64       `json:"number" minimum:"1"`
+	Runtime     RuntimeName `json:"runtime,omitempty"`
+	Handler     string      `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
+	Image       string      `json:"image,omitempty"`
+	ImageDigest string      `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$"`
 }
 
 // RevisionStatus holds the observed state.

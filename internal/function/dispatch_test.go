@@ -50,7 +50,7 @@ func TestScenarioRuntimeSelectsShim(t *testing.T) {
 		fn.Spec.Replicas = 1
 		fn.Spec.Runtime = v1.RuntimeName(runtimeName)
 		fn.Spec.Handler = "handle"
-		fn.Spec.Artifact = v1.ArtifactRef{URI: "file://" + art}
+		fn.Spec.Image = "file://" + art
 		_, cerr := st.Create(context.Background(), fn)
 		require.NoError(t, cerr)
 		// One reconcile provisions the worker (records the WorkerSpec); readiness then requeues.

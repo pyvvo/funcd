@@ -49,9 +49,9 @@ func functionBody(t *testing.T, ns, name, rg string) []byte {
 		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "Function"},
 		"metadata": map[string]interface{}{"name": name, "namespace": ns, "resourceGroup": rg},
 		"spec": map[string]interface{}{
-			"runtime":  "nodejs22",
-			"handler":  "app.handler",
-			"artifact": map[string]interface{}{"uri": "oci://example/app:v1"},
+			"runtime": "nodejs22",
+			"handler": "app.handler",
+			"image":   "oci://example/app:v1",
 		},
 	}
 	b, err := json.Marshal(m)

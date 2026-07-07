@@ -55,7 +55,7 @@ func (h *harness) createSecretFn(t *testing.T, name string, secrets ...v1.Object
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Replicas = 1
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "app.handler"
-	fn.Spec.Artifact = v1.ArtifactRef{URI: "blob://artifacts/" + name}
+	fn.Spec.Image = "blob://artifacts/" + name
 	fn.Spec.Secrets = secrets
 	_, err := h.st.Create(context.Background(), fn)
 	require.NoError(t, err)
@@ -103,6 +103,33 @@ func TestScenarioSecretsNotConfiguredFails(t *testing.T) {
 	cond, _ := fn.Status.Conditions.Get("Ready")
 	require.Equal(t, "SecretResolveFailed", cond.Reason)
 	require.Equal(t, 0, h.running(t, "echo"))
+}
+
+// scenario: config-missing-fails-closed (reconcile level) — a function declaring spec.config that
+// names an absent ConfigMap is held Ready=False with reason ConfigResolveFailed (NOT
+// SecretResolveFailed — the side-attributed reason, ADR-0093 §4) and starts no worker.
+func TestScenarioConfigMissingFailsClosedReconcile(t *testing.T) {
+	t.Parallel()
+	h := newSecretHarness(t, nil) // no secret resolver needed for a config-only function
+	obj, ok := v1.NewObject(v1.KindFunction)
+	require.True(t, ok)
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "cfg", "default", "rg1"
+	fn.Spec.Replicas = 1
+	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "app.handler"
+	fn.Spec.Image = "blob://artifacts/cfg"
+	fn.Spec.Config = []v1.ObjectName{"absent"}
+	_, err := h.st.Create(context.Background(), fn)
+	require.NoError(t, err)
+
+	h.reconcile(t, "cfg")
+
+	got := h.getFn(t, "cfg")
+	require.Equal(t, v1.PhaseFailed, got.Status.Phase)
+	cond, _ := got.Status.Conditions.Get("Ready")
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "ConfigResolveFailed", cond.Reason, "a missing ConfigMap reports the config-side reason, not the secret one")
+	require.Equal(t, 0, h.running(t, "cfg"), "no worker starts when a bound ConfigMap is missing")
 }
 
 // scenario: secret-value-not-persisted — after reconcile the stored Function holds only the

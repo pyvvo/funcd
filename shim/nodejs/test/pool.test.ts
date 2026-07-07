@@ -94,12 +94,13 @@ test('a handler over its memory quota OOMs its thread, not the pool', async () =
   }
 });
 
-// scenario: pool-contract — each pooled handler keeps the ADR-0038 JTD contract: a mismatching
-// event.data is rejected with 422 before the handler runs.
-test('a pooled handler enforces its embedded eventSchema (422 on mismatch)', async () => {
+// scenario: pool-contract — each pooled handler keeps its ADR-0058 input contract: the precompiled
+// __funcdValidateInput (generated at push from FuncInput) rejects a mismatching event.data with 422
+// before the handler runs.
+test('a pooled handler enforces its embedded input validator (422 on mismatch)', async () => {
   const pool = createPool(
     writeHandlers({
-      c: 'export const eventSchema = { optionalProperties: { hello: { type: "string" } } };\n' +
+      c: 'export const __funcdValidateInput = (d) => (d && typeof d.hello === "string" ? [] : [{ message: "hello must be a string" }]);\n' +
         'export function handle(_, e) { return { echoed: e.data }; }',
     }),
   );
@@ -108,7 +109,7 @@ test('a pooled handler enforces its embedded eventSchema (422 on mismatch)', asy
     assert.equal((await post(pool.app, 'c', { hello: 'world' })).status, 200);
     const bad = await post(pool.app, 'c', { hello: 123 });
     assert.equal(bad.status, 422);
-    assert.match(((await bad.json()) as { error: string }).error, /contract/);
+    assert.match(((await bad.json()) as { error: string }).error, /input contract/);
   } finally {
     await pool.close();
   }

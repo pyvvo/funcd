@@ -7,9 +7,9 @@ API, and invoke it over HTTP — all through the public CLI + HTTP surface. A sh
 [WebM](cli-demo.webm) is rendered alongside the GIF (for docs sites / PRs).
 
 ```
-funcdcli push handler.mjs oci-layout://…:v1     # package + push the source artifact (ADR-0031)
-funcdcli apply -f function.yaml                 # deploy, pinned by digest
-funcdcli get function echo -o json              # reconcile to Ready
+funcdctl push handler.mjs oci-layout://…:v1     # package + push the source artifact (ADR-0031)
+funcdctl apply -f function.yaml                 # deploy, pinned by digest
+funcdctl get function echo -o json              # reconcile to Ready
 curl -XPOST :8081/function/echo -d '{…}'        # invoke over the data plane (ADR-0033)
 ```
 
@@ -30,7 +30,7 @@ setup); `just demo-record` also needs `vhs` + `ffmpeg` +
 | File | What it is |
 |---|---|
 | `demo.yaml` | the demo **inputs** (`demoDir`, `server`, `dataPlane`, `token`, `function`) — the scripts read these via `yq` |
-| `function.yaml` | the deployed **Function CRD**; `spec.artifact.{uri,digest}` are filled at apply time from the push output |
+| `function.yaml` | the deployed **Function CRD**; `spec.image` + `spec.imageDigest` are filled at apply time from the push output |
 | the function | authored in TypeScript at [`examples/js/hello-world`](../../examples/js/hello-world) (`handle(context, event)`, typed against `@funcd/shim-nodejs`); bundled to `handler.mjs` at setup |
 | `server/main.go` | a tiny **embedded** funcd wired for execution (ADR-0014 + shim + oras), fixed ports `:8080`/`:8081` — demo tooling, *not* the production daemon (`cmd/funcd`) |
 | `cli-demo.tape` | the VHS script — the reproducible source of the recordings |

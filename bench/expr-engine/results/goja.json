@@ -1,0 +1,11 @@
+{
+  "cold_per_eval_us": 1.27,
+  "compile_program_us": 183,
+  "iterations": 20000,
+  "parse_ast_us": 1.1,
+  "per_runtime_heap_KB": 3.48,
+  "rss_MB": 15.59,
+  "stack": "goja (pure-Go ECMAScript)",
+  "throughput_eval_s": 1848193,
+  "warm_per_eval_us": 0.54
+}

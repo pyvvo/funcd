@@ -99,6 +99,21 @@ type Runtime interface {
 	Close() error
 }
 
+// LogCaptureFunc receives one instance's structured telemetry channel (ADR-0081 Path B): r yields
+// the NDJSON records the runtime shim writes to its log channel. The composition root supplies it
+// (wiring a funclog Pump); the implementation owns reading and closing r. spec identifies the
+// instance whose logs these are.
+type LogCaptureFunc func(spec WorkerSpec, r io.ReadCloser)
+
+// LogCapturer is the OPTIONAL capability a runtime driver implements to deliver per-instance
+// structured logs (ADR-0081). funcd sets the hook after building the funclog sink; a driver that
+// does not implement it simply captures no Path B telemetry. Keeping it off the Runtime port keeps
+// the port free of the observability concern (the port imports no observability package).
+type LogCapturer interface {
+	// SetLogCapture installs (or clears, with nil) the per-instance log-channel hook.
+	SetLogCapture(LogCaptureFunc)
+}
+
 // NewInstanceID builds the canonical id "<ns>/<name>/r<replica>".
 func NewInstanceID(ns v1alpha1.NamespaceName, name v1alpha1.ObjectName, replica int) InstanceID {
 	return InstanceID(fmt.Sprintf("%s/%s/r%d", ns, name, replica))

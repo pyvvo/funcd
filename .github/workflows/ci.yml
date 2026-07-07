@@ -17,21 +17,7 @@ jobs:
 
       - name: Run CI (fmt check + lint + test + build)
         run: nix develop --command just ci
-
-  # The slatedb (cgo) engine lane: builds the slatedb_uniffi native lib from the pinned
-  # source and runs the tag-gated tests (RunContract + crash-recovery on the real engine),
-  # so funcd's production store engine is exercised on every change — not just the
-  # pure-Go memory fake that `just ci` covers (ADR-0006 §5).
-  slatedb:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: "go.mod" # single source of truth; cannot drift from the module's Go version
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: extractions/setup-just@v2
-      - name: Build slatedb_uniffi + run the cgo engine lane
-        run: |
-          just slatedb-lib
-          just test-slatedb
+        # The metastore engine is pure-Go Badger (ADR-0065), exercised by `just ci` itself
+        # (internal/store/badger passes the same storecontract as the memory engine). The old
+        # slatedb cgo lane (a separate rust-toolchain job running just slatedb-lib/test-slatedb)
+        # was removed together with slatedb.

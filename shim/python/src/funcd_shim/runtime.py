@@ -1,23 +1,36 @@
 """Handler/contract resolution for the funcd Python shim (the materialization shape-gate).
 
-No HTTP here — just loading the artifact module and resolving the handler + optional event-data
-contract, mirroring the Node shim's ``runtime.ts`` (ADR-0030 §3 / ADR-0038). A shape failure
+No HTTP here — just loading the artifact module and resolving the handler + optional I/O
+validators, mirroring the Node shim's ``runtime.ts`` (ADR-0030 §3 / ADR-0058). A shape failure
 raises :class:`ShapeError`; the shim turns that into exit code 3.
+
+The contract is a **precompiled validator** baked into the artifact at build time
+(``__funcd_validate_input`` / ``__funcd_validate_output``), generated from the author's
+``FuncInput``/``FuncOutput`` pydantic model → JSON Schema → ``fastjsonschema.compile_to_code`` on
+the push box (ADR-0058). Each is a callable ``(data) -> list`` ([] ⇒ valid). The shim just calls
+it — pure-Python (fastjsonschema, no Rust), so it behaves identically in the solo shim and the
+ADR-0050 subinterpreter pool (compute-agnostic). Exactly the shape of the Node shim's
+``__funcdValidate*`` (AJV-standalone).
 """
 
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import dataclass
 from types import ModuleType
-from typing import Any, cast
+from typing import cast
 
-from . import jtd
-from .types import Handler
+from .types import Handler, Validator
+
+#: artifact exports the build bakes the precompiled validators into. Absent (or non-callable) ⇒
+#: that side is unchecked.
+_INPUT = "__funcd_validate_input"
+_OUTPUT = "__funcd_validate_output"
 
 
 class ShapeError(Exception):
     """The artifact does not satisfy the runtime shape-gate (ADR-0030 §3): a missing/non-callable
-    handler, or a malformed ``event_schema``. The shim exits 3 on this."""
+    handler. The shim exits 3."""
 
 
 def load_module(artifact: str) -> ModuleType:
@@ -43,22 +56,27 @@ def resolve_handler(module: ModuleType, name: str) -> Handler:
     return cast(Handler, candidate)
 
 
-def resolve_schema(module: ModuleType) -> jtd.Schema | None:
-    """Pick the optional ``event_schema`` export — the function's event-data contract (JTD,
-    RFC 8927). Absent → no contract; present-but-malformed raises :class:`ShapeError`
-    (ADR-0038's schema shape-gate)."""
-    schema = getattr(module, "event_schema", None)
-    if schema is None:
-        return None
-    try:
-        return jtd.compile_schema(schema)
-    except jtd.SchemaError as err:
-        raise ShapeError(f'export "event_schema" is not a valid JTD schema: {err}') from err
+@dataclass
+class Validators:
+    """The optional I/O validators resolved from the artifact (ADR-0058). ``None`` ⇒ that side is
+    unchecked. ``input`` validates ``event.data`` before invoke (mismatch → 422); ``output``
+    validates the result after (mismatch → 500); a void contract is just an output validator that
+    accepts only an empty result."""
+
+    input: Validator | None = None
+    output: Validator | None = None
 
 
-def validate(schema: jtd.Schema, data: Any) -> list[jtd.Error]:
-    """Validate the CloudEvent ``data`` against the contract; empty list ⇒ valid."""
-    return jtd.validate(schema, data)
+def resolve_validators(module: ModuleType) -> Validators:
+    """Resolve the optional precompiled ``__funcd_validate_input`` / ``__funcd_validate_output``
+    callables (ADR-0058). Absent or non-callable ⇒ that side is unchecked. The shim runs no schema
+    compiler — the validator was compiled at push (fastjsonschema), exactly like Node's bundle."""
+    return Validators(input=_pick(module, _INPUT), output=_pick(module, _OUTPUT))
 
 
-__all__ = ["ShapeError", "load_module", "resolve_handler", "resolve_schema", "validate"]
+def _pick(module: ModuleType, name: str) -> Validator | None:
+    fn = getattr(module, name, None)
+    return cast(Validator, fn) if callable(fn) else None
+
+
+__all__ = ["ShapeError", "Validators", "load_module", "resolve_handler", "resolve_validators"]

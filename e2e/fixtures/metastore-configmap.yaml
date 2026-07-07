@@ -1,0 +1,6 @@
+# The Config resource the metastore lane applies, then reads back across a daemon restart (ADR-0065/0077)
+# to prove the durable Badger metastore persists control-plane state. Bundled into the VM at /mnt/funcd-deps.
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata: { name: persisted, namespace: default, resourceGroup: rg1 }
+spec: { data: { hello: containerd-metastore } }

@@ -1,0 +1,19 @@
+# lakehouse Bucket (step 2 of the apply order) — the S3 endpoint's declared data domain (ADR-0080).
+# Each spec.prefixes[] entry is a sub-domain whose `owner` is the single writer (mirroring
+# KVStore.spec.tables[].owner — ADR-0073). Applied AFTER function-base.yaml so the gold prefix's
+# owner (s3-roundtrip) already exists (the `bucket-prefix-owner-exists` admission).
+#   * gold  — OWNED by s3-roundtrip → it is the single WRITER (PutObject allowed by the PEP);
+#   * other — NO owner, and nothing binds it → s3-roundtrip's PutObject into it is DENIED (403),
+#             proving the Cedar PEP fail-closed on the live daemon.
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold            # serving layer — written by s3-roundtrip (its owner → single writer)
+      owner: s3-roundtrip
+    - name: other           # an unowned, unbound prefix — s3-roundtrip must be DENIED here
+  maxObjectBytes: 1073741824   # per-object cap (1 GiB)
