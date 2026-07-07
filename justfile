@@ -261,9 +261,32 @@ generate:
 tidy:
     go mod tidy
 
+# guard against accidentally committing build artifacts: the ADR-0054 embedimg curated-image tars must
+# stay <1 KB placeholders in git (the real per-arch images are `just build-runtime-images` output, NEVER
+# committed — see internal/runtime/embedimg/README.md), and no compiled bench binary is tracked. Checks
+# the STAGED/committed blob (not the working tree, which may hold a locally-built real image).
+[group('go')]
+check-hygiene:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fail=0
+    for f in internal/runtime/embedimg/*.tar; do
+        sz=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+        if [ "$sz" -gt 4096 ]; then
+            echo "hygiene: $f is ${sz}B staged — commit the <1KB placeholder, not the built image (just build-runtime-images output)"
+            fail=1
+        fi
+    done
+    if git ls-files --error-unmatch bench/expr-engine/expr-engine >/dev/null 2>&1; then
+        echo "hygiene: bench/expr-engine/expr-engine is tracked — it is a compiled build output; keep it gitignored"
+        fail=1
+    fi
+    if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
+    exit "$fail"
+
 # CI pipeline (generate staleness + fmt check + lint + test + build + tidy-diff check)
 [group('go')]
-ci: tidy generate
+ci: tidy generate check-hygiene
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi

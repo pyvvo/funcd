@@ -35,6 +35,9 @@ cmd/**/kv/
 /funcdctl
 /funcd-bench
 
+# compiled bench harnesses — build outputs of their own module, never committed (regenerate with `go build`)
+/bench/expr-engine/expr-engine
+
 __pycache__
 .venv/
 .mypy_cache/
