@@ -1,14 +1,19 @@
 // Package dataplane is the function-invocation data plane (ADR-0033): the HTTP handler
-// that serves function traffic, separate from the control-plane API (ADR-0028). It
-// resolves a request to its FunctionRef from the path /function/<name> (+ the
-// X-Funcd-Namespace header, default "default"), validates the function exists in the
-// store, and serves it through the activator — warm → proxy to the ready upstream now;
-// cold → buffer, wake (ScaleTo 1), poll readiness, forward (ADR-0016). It does NOT use the
-// gateway's route table or Handler() — resolving from the path + store keeps a
-// scaled-to-zero function reachable while Idle without a programmed placeholder route.
+// that serves function traffic, separate from the control-plane API (ADR-0028).
+//
+// Front door (ADR-0110, F79): it first consults the edge Router — a compiled Route matcher —
+// to resolve a request to a (namespace, function). On a hit it runs the existing activator hop
+// (it resolves, it does not proxy — scale-to-zero is preserved). On a miss it falls back to the
+// path form /function/<name> (+ X-Funcd-Namespace, default "default"): if the target namespace
+// is `explicit` the request is 404ed BEFORE any activator call (default-deny ingress, no wake);
+// otherwise it is served by name exactly as before. Internal fn-to-fn invoke (ADR-0064) reuses this
+// same in-process handler but marks its context WithInternal, which bypasses the Route front door and
+// the exposure gate — internal invocation is by name and is never gated (spoof-proof: the marker is a
+// context value set in-process, unreachable from the public listener).
 package dataplane
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -16,8 +21,24 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/activator"
+	"github.com/green-0-rabbit/funcd/internal/edge/authn"
+	"github.com/green-0-rabbit/funcd/internal/edge/observ"
+	"github.com/green-0-rabbit/funcd/internal/edge/router"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
+
+// internalKey marks a request context as originating from an internal caller.
+type internalKey struct{}
+
+// WithInternal marks ctx as an internal (fn-to-fn, ADR-0064) invocation so the exposure gate is
+// bypassed — internal invocation is never gated by a namespace's exposure mode (ADR-0110). It is a
+// context value set only in-process by the worker-node local API broker; an external request on the
+// public listener gets a fresh context and can never spoof it.
+func WithInternal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, internalKey{}, true)
+}
+
+func isInternal(ctx context.Context) bool { v, _ := ctx.Value(internalKey{}).(bool); return v }
 
 // pathPrefix is the function-invocation route prefix: /function/<name>[/...].
 const pathPrefix = "/function/"
@@ -29,51 +50,145 @@ const namespaceHeader = "X-Funcd-Namespace"
 type Server struct {
 	store     store.Store
 	activator *activator.Activator
+	router    router.Router
+	enforcer  *authn.Enforcer
 	logger    *slog.Logger
 }
 
 // Handler builds the data-plane HTTP handler. The activator is the sole serving path;
-// gateway.Handler() is not mounted here (ADR-0033).
-func Handler(st store.Store, act *activator.Activator, logger *slog.Logger) http.Handler {
+// gateway.Handler() is not mounted here (ADR-0033). rtr is the F79 edge router (may be nil, in
+// which case only the /function/<name> path is served — implicit-only, pre-F79 behavior). enf is the
+// F77 edge authn PEP (may be nil ⇒ no enforcement for `open`; an `authenticated` stance fails closed).
+func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{store: st, activator: act, logger: logger.With("component", "dataplane")}
+	return &Server{store: st, activator: act, router: rtr, enforcer: enf, logger: logger.With("component", "dataplane")}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const op = "dataplane.ServeHTTP"
+
+	// Internal fn-to-fn invoke (ADR-0064) is addressed by name and is NEVER gated or re-routed by
+	// exposure (ADR-0110): it skips the Route front door entirely and serves the /function/<name> form.
+	internal := isInternal(r.Context())
+
+	// Front door: try the Route matcher first (both exposure modes) — public requests only.
+	if s.router != nil && !internal {
+		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok {
+			stance := s.authStance(r, m.Auth, m.Namespace)
+			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, op)
+			return
+		}
+	}
+
+	// The /function/<name> path form. Gate on the target namespace's exposure mode (public only).
 	name, rest, ok := parseFunctionPath(r.URL.Path)
 	if !ok {
-		fault.WriteProblem(w, fault.NotFoundf(op, "no function route for %q", r.URL.Path))
+		fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
 		return
 	}
 	ns := v1.NamespaceName(r.Header.Get(namespaceHeader))
 	if ns == "" {
 		ns = "default"
 	}
-	// Validate the function exists, so a wake never targets a phantom.
-	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, v1.ObjectName(name))
+	if s.router != nil && !internal && s.exposureMode(r, ns) == v1.ExposureExplicit {
+		// Default-deny ingress: refuse BEFORE any activator call — no sandbox is woken.
+		fault.WriteProblem(w, fault.NotFoundf(op, "no route exposes %s/%s (namespace is explicit)", ns, name))
+		return
+	}
+	stance := s.authStance(r, "", ns)
+	s.serveFunction(w, r, ns, v1.ObjectName(name), rest, stance, internal, op)
+}
+
+// serveFunction addresses the resolved function and hands off to the activator (the existing
+// warm-proxy / cold-wake path). remainder is the function-relative path (matched prefix already
+// stripped for a Route hit; the /function/<name> remainder for the path form). The F77 edge authn
+// PEP is enforced FIRST — before store.Get (no function-enumeration oracle) and before the activator
+// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated.
+func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string, stance v1.AuthMode, internal bool, op string) {
+	if remainder == "" {
+		remainder = "/"
+	}
+	// Fill the F76 observability holder (if any) with the resolved target — so the metric/access-log
+	// function label is correct even for a Route hit (observ runs outside this handler, ADR-0114).
+	if t, ok := observ.TargetFrom(r.Context()); ok {
+		t.Namespace, t.Function = string(ns), string(name)
+	}
+	if !internal {
+		if s.enforcer != nil {
+			if err := s.enforcer.Enforce(r.Context(), r, activator.FunctionRef{Namespace: ns, Name: name}, stance); err != nil {
+				fault.WriteProblem(w, err)
+				return
+			}
+		} else if stance == v1.AuthAuthenticated {
+			// Fail-closed: an authenticated stance with no PEP wired cannot authenticate ⇒ 401.
+			fault.WriteProblem(w, fault.Unauthorizedf(op, "authentication required but no authenticator is configured"))
+			return
+		}
+	}
+	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
 	if err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 		return
 	}
 	// Address the function. A SOLO function's shim serves POST / (strip the prefix). A POOLED
 	// function (spec.pooling.worker set, ADR-0046) shares a pool worker that routes by name at
-	// POST /function/<name>, so the prefix is PRESERVED (Decision 5) and the pool routes by name.
+	// POST /function/<name>, so the prefix is PRESERVED and the pool routes by name.
 	out := r.Clone(r.Context())
 	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Pooling.Worker != "" {
-		// pool.mjs routes by /function/<name> (no trailing slash for the bare invocation);
-		// rest is the shim-root remainder ("/" for the bare call), appended for sub-paths.
-		out.URL.Path = pathPrefix + name
-		if rest != "/" {
-			out.URL.Path += rest
+		out.URL.Path = pathPrefix + string(name)
+		if remainder != "/" {
+			out.URL.Path += remainder
 		}
 	} else {
-		out.URL.Path = rest
+		out.URL.Path = remainder
 	}
-	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: v1.ObjectName(name)})
+	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
 	s.activator.ServeHTTP(w, out)
+}
+
+// authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the
+// namespace's edgeDefaults.auth.mode, else `open` (the phased default). routeMode is "" for the path
+// form or a Route with no auth set. It short-circuits without a store read when routeMode is set.
+func (s *Server) authStance(r *http.Request, routeMode v1.AuthMode, ns v1.NamespaceName) v1.AuthMode {
+	if routeMode != "" {
+		return routeMode
+	}
+	obj, err := s.store.Get(r.Context(), v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+	if err != nil {
+		return v1.AuthOpen
+	}
+	if n, ok := obj.(*v1.Namespace); ok && n.Spec.EdgeDefaults != nil && n.Spec.EdgeDefaults.Auth != nil && n.Spec.EdgeDefaults.Auth.Mode != "" {
+		return n.Spec.EdgeDefaults.Auth.Mode
+	}
+	return v1.AuthOpen
+}
+
+// exposureMode reads the target namespace's normalized exposure mode; an absent Namespace (or a
+// read error) is implicit — so a Spec-less namespace still serves by name.
+func (s *Server) exposureMode(r *http.Request, ns v1.NamespaceName) v1.ExposureMode {
+	obj, err := s.store.Get(r.Context(), v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+	if err != nil {
+		return v1.ExposureImplicit
+	}
+	if n, ok := obj.(*v1.Namespace); ok {
+		return n.Spec.DefaultExposure.Normalized()
+	}
+	return v1.ExposureImplicit
+}
+
+// stripMatched removes the matched route prefix to get the function-relative remainder,
+// mirroring the gateway stripPrefix ("/orders" + "/orders/x" → "/x"; exact ⇒ prefix "" ⇒ "/").
+func stripMatched(path, prefix string) string {
+	if prefix == "" {
+		return "/"
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" {
+		return "/"
+	}
+	return rest
 }
 
 // parseFunctionPath splits "/function/<name>[/rest]" into the name and the remainder path

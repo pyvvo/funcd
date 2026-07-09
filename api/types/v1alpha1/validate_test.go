@@ -247,3 +247,85 @@ func TestSensorValidateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestRouteValidateMatrix covers the F79 Route semantic rules (ADR-0110).
+func TestRouteValidateMatrix(t *testing.T) {
+	rt := func(host string, rules ...RouteRule) *Route {
+		r := &Route{}
+		r.TypeMeta = TypeMeta{APIVersion: KindRoute.GVK().APIVersion(), Kind: KindRoute}
+		r.Name, r.Namespace, r.ResourceGroup = "r", "default", "rg1"
+		r.Spec = RouteSpec{Host: host, Rules: rules}
+		return r
+	}
+	rule := func(path string, pt PathType, fn string, ms ...HTTPMethod) RouteRule {
+		return RouteRule{Path: path, PathType: pt, Methods: ms, Backend: RouteBackend{Function: ObjectName(fn)}}
+	}
+	for _, tc := range []struct {
+		name  string
+		route *Route
+		valid bool
+	}{
+		{"minimal prefix", rt("", rule("/orders", "", "orders-fn")), true},
+		{"exact + methods", rt("api.example.com", rule("/x", PathTypeExact, "fn", MethodGet, MethodPost)), true},
+		{"no rules", rt(""), false},
+		{"path not slash-prefixed", rt("", rule("orders", "", "fn")), false},
+		{"bad pathType", rt("", rule("/x", PathType("Regex"), "fn")), false},
+		{"bad backend label", rt("", rule("/x", "", "Bad_Fn")), false},
+		{"empty backend", rt("", rule("/x", "", "")), false},
+		{"invalid method", rt("", RouteRule{Path: "/x", Methods: []HTTPMethod{"FETCH"}, Backend: RouteBackend{Function: "fn"}}), false},
+		{"duplicate (path,methods)", rt("", rule("/x", "", "a"), rule("/x", "", "b")), false},
+		{"same path different methods ok", rt("", rule("/x", "", "a", MethodGet), rule("/x", "", "b", MethodPost)), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.route.Validate()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed Route must be fault.Invalid")
+		})
+	}
+}
+
+// TestNamespaceExposureValidate covers the F79 exposure enum incl. the absent/empty case.
+func TestNamespaceExposureValidate(t *testing.T) {
+	ns := func(mode ExposureMode) *Namespace {
+		n := &Namespace{}
+		n.TypeMeta = TypeMeta{APIVersion: KindNamespace.GVK().APIVersion(), Kind: KindNamespace}
+		n.Name = "team"
+		n.Spec.DefaultExposure = mode
+		return n
+	}
+	require.NoError(t, ns("").Validate(), "absent/empty exposure is accepted")
+	require.Equal(t, ExposureImplicit, ExposureMode("").Normalized(), "empty normalizes to implicit")
+	require.NoError(t, ns(ExposureImplicit).Validate())
+	require.NoError(t, ns(ExposureExplicit).Validate())
+	require.Equal(t, ExposureExplicit, ExposureExplicit.Normalized())
+	require.Equal(t, fault.Invalid, fault.KindOf(ns(ExposureMode("public")).Validate()))
+}
+
+// TestRouteAndNamespaceAuthValidate covers the F77 AuthMode enum (ADR-0113).
+func TestRouteAndNamespaceAuthValidate(t *testing.T) {
+	rt := func(mode AuthMode) *Route {
+		r := &Route{}
+		r.TypeMeta = TypeMeta{APIVersion: KindRoute.GVK().APIVersion(), Kind: KindRoute}
+		r.Name, r.Namespace, r.ResourceGroup = "r", "default", "rg1"
+		r.Spec = RouteSpec{Rules: []RouteRule{{Path: "/x", Backend: RouteBackend{Function: "fn"}}}, Auth: &RouteAuth{Mode: mode}}
+		return r
+	}
+	require.NoError(t, rt(AuthAuthenticated).Validate())
+	require.NoError(t, rt(AuthOpen).Validate())
+	require.NoError(t, rt("").Validate(), "empty auth mode is accepted (inherits/open)")
+	require.Equal(t, fault.Invalid, fault.KindOf(rt(AuthMode("public")).Validate()))
+
+	ns := func(mode AuthMode) *Namespace {
+		n := &Namespace{}
+		n.TypeMeta = TypeMeta{APIVersion: KindNamespace.GVK().APIVersion(), Kind: KindNamespace}
+		n.Name = "team"
+		n.Spec.EdgeDefaults = &EdgeDefaults{Auth: &EdgeAuth{Mode: mode}}
+		return n
+	}
+	require.NoError(t, ns(AuthAuthenticated).Validate())
+	require.NoError(t, ns(AuthOpen).Validate())
+	require.Equal(t, fault.Invalid, fault.KindOf(ns(AuthMode("nope")).Validate()))
+}

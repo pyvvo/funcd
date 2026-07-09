@@ -88,6 +88,20 @@ func logHandlerFor(lp otellog.LoggerProvider) slog.Handler {
 	return otelslog.NewHandler(defaultServiceName, otelslog.WithLoggerProvider(lp))
 }
 
+// NewFromProviders builds a Telemetry from explicit OTel providers (a nil provider falls back to the
+// no-op). It is the seam for injecting SDK providers directly — e.g. an in-memory reader/recorder in
+// tests, or a custom-wired pipeline — without going through the OTLP-exporter constructor.
+func NewFromProviders(mp metric.MeterProvider, tp trace.TracerProvider) *Telemetry {
+	t := noopTelemetry()
+	if mp != nil {
+		t.meterProvider = mp
+	}
+	if tp != nil {
+		t.tracerProvider = tp
+	}
+	return t
+}
+
 // TracerProvider returns the tracer provider (SDK-backed or no-op).
 func (t *Telemetry) TracerProvider() trace.TracerProvider { return t.tracerProvider }
 

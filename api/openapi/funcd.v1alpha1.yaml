@@ -239,6 +239,22 @@ components:
         - source
         - event
       type: object
+    EdgeAuth:
+      additionalProperties: false
+      properties:
+        mode:
+          enum:
+            - ""
+            - authenticated
+            - open
+          type: string
+      type: object
+    EdgeDefaults:
+      additionalProperties: false
+      properties:
+        auth:
+          $ref: "#/components/schemas/EdgeAuth"
+      type: object
     EgressPolicy:
       additionalProperties: false
       properties:
@@ -759,11 +775,25 @@ components:
           $ref: "#/components/schemas/TypeMeta"
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/NamespaceSpec"
         status:
           $ref: "#/components/schemas/NamespaceStatus"
       required:
         - TypeMeta
         - metadata
+      type: object
+    NamespaceSpec:
+      additionalProperties: false
+      properties:
+        defaultExposure:
+          enum:
+            - ""
+            - implicit
+            - explicit
+          type: string
+        edgeDefaults:
+          $ref: "#/components/schemas/EdgeDefaults"
       type: object
     NamespaceStatus:
       additionalProperties: false
@@ -1008,8 +1038,73 @@ components:
         - metadata
         - spec
       type: object
+    RouteAuth:
+      additionalProperties: false
+      properties:
+        mode:
+          enum:
+            - ""
+            - authenticated
+            - open
+          type: string
+      type: object
+    RouteBackend:
+      additionalProperties: false
+      properties:
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - function
+      type: object
+    RouteRule:
+      additionalProperties: false
+      properties:
+        backend:
+          $ref: "#/components/schemas/RouteBackend"
+        methods:
+          items:
+            enum:
+              - GET
+              - HEAD
+              - POST
+              - PUT
+              - PATCH
+              - DELETE
+              - OPTIONS
+            type: string
+          type:
+            - array
+            - "null"
+        path:
+          type: string
+        pathType:
+          enum:
+            - ""
+            - Prefix
+            - Exact
+          type: string
+      required:
+        - path
+        - backend
+      type: object
     RouteSpec:
       additionalProperties: false
+      properties:
+        auth:
+          $ref: "#/components/schemas/RouteAuth"
+        host:
+          type: string
+        rules:
+          items:
+            $ref: "#/components/schemas/RouteRule"
+          type:
+            - array
+            - "null"
+      required:
+        - rules
       type: object
     RouteStatus:
       additionalProperties: false

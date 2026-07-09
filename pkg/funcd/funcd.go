@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -34,6 +35,12 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/dataplane"
+	"github.com/green-0-rabbit/funcd/internal/edge/authn"
+	"github.com/green-0-rabbit/funcd/internal/edge/limit"
+	"github.com/green-0-rabbit/funcd/internal/edge/observ"
+	"github.com/green-0-rabbit/funcd/internal/edge/router"
+	"github.com/green-0-rabbit/funcd/internal/edge/shape"
+	edgetls "github.com/green-0-rabbit/funcd/internal/edge/tls"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
 	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
@@ -45,6 +52,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/provider"
+	"github.com/green-0-rabbit/funcd/internal/route"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
 	"github.com/green-0-rabbit/funcd/internal/secrets"
@@ -117,6 +125,24 @@ type config struct {
 	// data plane (ADR-0033): the function-invocation listener address.
 	dataPlaneAddr string
 
+	// TLS termination (ADR-0111, F74): when set, both listeners serve HTTPS via ServeTLS. nil ⇒
+	// plaintext (the back-compat default). The zero Mode defaults to selfsigned (stdlib, offline).
+	tlsSpec *edgetls.Spec
+
+	// ingress protection (ADR-0112, F75): rate/size/concurrency limits on the data-plane chain. The
+	// zero value is a pass-through (limits off by default).
+	limits limit.Config
+
+	// edge authn PEP (ADR-0113, F77): when true, the data-plane enforces the per-target auth stance
+	// (reusing the control-plane credentials + authorizer). false ⇒ no PEP (open-only; an
+	// authenticated stance then fails closed).
+	edgeAuthEnabled bool
+
+	// edge observability (ADR-0114, F76) + shaping (F78): RED metrics/trace/access-log; CORS/headers/
+	// compression. Zero values are pass-throughs (off by default).
+	observ  observ.Config
+	shaping shape.Config
+
 	// function execution (ADR-0030): the runtime shim launch prefix + the artifact
 	// Materializer. When runtimeShim is set the reconciler runs functions via the shim
 	// (defaulting to the local-file Materializer if none is supplied); when empty the
@@ -188,6 +214,8 @@ type Platform struct {
 	controller  *controller.Controller
 	eventing    *eventing.Source
 	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	edgeRouter  router.Router    // ADR-0110 (F79): the Route matcher the data-plane front door consults
+	tlsProvider edgetls.Provider // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
 	activator   *activator.Activator
 	httpServer  *http.Server
 	listener    net.Listener
@@ -442,6 +470,7 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
+	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
@@ -457,6 +486,14 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
 	}
 	ctrl.Register(v1.KindSensor.GVK(), sensorReconciler)
+	// ADR-0110 (F79): the Route reconciler validates backends + multi-tenancy rules and programs the
+	// edge router (replace-all) the data-plane front door consults. p.edgeRouter is created up front so
+	// both the reconciler and the data-plane handler share the one live table.
+	routeReconciler, err := route.NewReconciler(route.Deps{Store: c.store, Router: p.edgeRouter, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build route reconciler")
+	}
+	ctrl.Register(v1.KindRoute.GVK(), routeReconciler)
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
@@ -626,7 +663,28 @@ func (p *Platform) buildControlPlane() error {
 
 	// Data plane (ADR-0033): a SEPARATE listener serving function invocations through the
 	// activator (path+store → activator), distinct from the authenticated control plane.
-	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.logger), gateway.Recover, gateway.RequestID)
+	// ADR-0112 (F75): the ingress-protection limiter is the INNERMOST middleware (last vararg) so
+	// runtime order is Recover → RequestID → limit → dataplane.Handler — rejects (429/413/503) precede
+	// the activator (zero wake) yet stay panic-guarded + X-Request-Id-correlated. A zero Config is a
+	// pass-through (limits off by default).
+	// ADR-0113 (F77): the edge authn PEP runs INSIDE dataplane.Handler (after the target resolves,
+	// before store.Get + the activator). Built from the control-plane credentials + authorizer; nil
+	// unless enabled (an authenticated stance then fails closed).
+	var edgeEnforcer *authn.Enforcer
+	if c.edgeAuthEnabled {
+		edgeEnforcer, err = authn.New(authn.Deps{Creds: c.credentials, Authz: c.authorizer})
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "build edge authn PEP")
+		}
+	}
+	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
+	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
+	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
+	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, p.logger),
+		gateway.Recover, gateway.RequestID,
+		observ.Chain(c.observ, c.telemetry, p.logger),
+		limit.Chain(c.limits),
+		shape.Chain(c.shaping))
 	dpHolder.Set(dpHandler) // late-bind the data-plane handler into the worker-node local API invoker (ADR-0064)
 	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
@@ -746,13 +804,44 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	// TLS termination (ADR-0111, F74): when configured, both listeners serve HTTPS. The provider is
+	// given the F79 Route hosts (+ configured hosts) for its cert set; plaintext otherwise.
+	serve := func(srv *http.Server, ln net.Listener) error { return srv.Serve(ln) }
+	if p.cfg.tlsSpec != nil {
+		const top = "funcd.Run.tls"
+		spec := *p.cfg.tlsSpec
+		if spec.StorageDir == "" {
+			base := p.cfg.artifactDir
+			if base == "" {
+				base = os.TempDir()
+			}
+			spec.StorageDir = filepath.Join(base, "funcd-tls")
+		}
+		prov, terr := edgetls.New(spec, p.logger)
+		if terr != nil {
+			return fault.Wrapf(terr, fault.KindOf(terr), top, "build tls provider")
+		}
+		hosts := append(append([]string{}, spec.Hosts...), p.edgeRouter.Hosts()...)
+		if terr := prov.Manage(ctx, hosts); terr != nil {
+			return fault.Wrapf(terr, fault.KindOf(terr), top, "provision tls certs")
+		}
+		cfg, terr := prov.TLSConfig()
+		if terr != nil {
+			return fault.Wrapf(terr, fault.KindOf(terr), top, "build tls config")
+		}
+		p.httpServer.TLSConfig = cfg
+		p.dataPlaneServer.TLSConfig = cfg
+		p.tlsProvider = prov
+		serve = func(srv *http.Server, ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
+		p.logger.InfoContext(ctx, "TLS enabled", "mode", string(spec.Mode), "hosts", hosts)
+	}
 	go func() {
-		if err := p.httpServer.Serve(p.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve(p.httpServer, p.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.logger.ErrorContext(ctx, "control-plane server stopped", "error", err)
 		}
 	}()
 	go func() {
-		if err := p.dataPlaneServer.Serve(p.dataPlaneListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve(p.dataPlaneServer, p.dataPlaneListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.logger.ErrorContext(ctx, "data-plane server stopped", "error", err)
 		}
 	}()
@@ -784,6 +873,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.invokeMgr != nil {
 			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
+		}
+		if p.tlsProvider != nil {
+			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
 		}
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()

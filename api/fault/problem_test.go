@@ -52,6 +52,18 @@ func TestScenario_ErrorMapsToProblem(t *testing.T) {
 			wantType:   "urn:funcd:problem:unavailable",
 		},
 		{
+			name:       "ResourceExhausted maps to 429",
+			err:        ResourceExhaustedf("edge.limit", "rate limit exceeded"),
+			wantStatus: http.StatusTooManyRequests,
+			wantType:   "urn:funcd:problem:resource-exhausted",
+		},
+		{
+			name:       "PayloadTooLarge maps to 413",
+			err:        PayloadTooLargef("edge.limit", "body exceeds %d bytes", 1024),
+			wantStatus: http.StatusRequestEntityTooLarge,
+			wantType:   "urn:funcd:problem:payload-too-large",
+		},
+		{
 			name:       "Internal maps to 500",
 			err:        Internalf("controller.refresh", "unexpected nil pointer"),
 			wantStatus: http.StatusInternalServerError,

@@ -25,6 +25,10 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/bus/nats"
+	"github.com/green-0-rabbit/funcd/internal/edge/limit"
+	"github.com/green-0-rabbit/funcd/internal/edge/observ"
+	"github.com/green-0-rabbit/funcd/internal/edge/shape"
+	edgetls "github.com/green-0-rabbit/funcd/internal/edge/tls"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
@@ -193,6 +197,52 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 			return nil, noopClose, nil, "", fmt.Errorf("build telemetry: %w", terr)
 		}
 		opts = append(opts, funcd.WithTelemetry(tel))
+	}
+
+	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. Storage defaults to
+	// <dataDir>/funcd-tls via the platform when StorageDir is empty.
+	if cfg.Server.TLS.Enabled {
+		opts = append(opts, funcd.WithTLS(edgetls.Spec{
+			Mode:       edgetls.Mode(cfg.Server.TLS.Mode),
+			Hosts:      cfg.Server.TLS.Hosts,
+			CertFile:   cfg.Server.TLS.CertFile,
+			KeyFile:    cfg.Server.TLS.KeyFile,
+			Email:      cfg.Server.TLS.Email,
+			CADir:      cfg.Server.TLS.CADir,
+			StorageDir: filepath.Join(cfg.Storage.DataDir, "tls"),
+		}))
+	}
+
+	// Ingress protection (ADR-0112, F75): opt-in rate/size/concurrency limits on the data-plane chain.
+	if l := cfg.Server.Limits; l.RatePerMin > 0 || l.MaxBodyBytes > 0 || l.MaxInFlight > 0 {
+		opts = append(opts, funcd.WithLimits(limit.Config{
+			RatePerMin:   l.RatePerMin,
+			Burst:        l.Burst,
+			Key:          limit.Key(l.Key),
+			MaxBodyBytes: l.MaxBodyBytes,
+			MaxInFlight:  l.MaxInFlight,
+		}))
+	}
+
+	// Edge authn PEP (ADR-0113, F77): opt-in per-target auth-stance enforcement on the data plane.
+	if cfg.Server.Auth.Edge {
+		opts = append(opts, funcd.WithEdgeAuth())
+	}
+
+	// Edge observability (ADR-0114, F76): opt-in RED metrics + edge trace span + access log.
+	if o := cfg.Server.Observability; o.Metrics || o.AccessLog || o.Trace {
+		opts = append(opts, funcd.WithEdgeObservability(observ.Config{Metrics: o.Metrics, AccessLog: o.AccessLog, Trace: o.Trace}))
+	}
+	// Edge shaping (ADR-0114, F78): opt-in CORS / response headers / gzip compression.
+	if sh := cfg.Server.Shaping; len(sh.CORS.AllowOrigins) > 0 || len(sh.Headers.Set) > 0 || len(sh.Headers.Remove) > 0 || sh.Compression {
+		shCfg := shape.Config{Compression: sh.Compression}
+		if len(sh.CORS.AllowOrigins) > 0 {
+			shCfg.CORS = &shape.CORS{AllowOrigins: sh.CORS.AllowOrigins, AllowMethods: sh.CORS.AllowMethods, AllowHeaders: sh.CORS.AllowHeaders, MaxAgeSeconds: sh.CORS.MaxAgeSeconds}
+		}
+		if len(sh.Headers.Set) > 0 || len(sh.Headers.Remove) > 0 {
+			shCfg.Headers = &shape.Headers{Set: sh.Headers.Set, Remove: sh.Headers.Remove}
+		}
+		opts = append(opts, funcd.WithEdgeShaping(shCfg))
 	}
 
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate.

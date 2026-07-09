@@ -40,6 +40,49 @@ type Config struct {
 	Server     struct {
 		ListenAddr    string `json:"listenAddr,omitempty" env:"FUNCD_LISTEN_ADDR"`
 		DataPlaneAddr string `json:"dataPlaneAddr,omitempty" env:"FUNCD_DATA_PLANE_ADDR"`
+		// TLS termination (ADR-0111, F74). When Enabled, both listeners serve HTTPS via ServeTLS.
+		// Mode defaults to selfsigned (stdlib, offline). Empty/Enabled=false ⇒ plaintext (default).
+		TLS struct {
+			Enabled  bool     `json:"enabled,omitempty" env:"FUNCD_TLS_ENABLED"`
+			Mode     string   `json:"mode,omitempty" env:"FUNCD_TLS_MODE" validate:"omitempty,oneof=selfsigned provided acme"`
+			Hosts    []string `json:"hosts,omitempty"`
+			CertFile string   `json:"certFile,omitempty" env:"FUNCD_TLS_CERT_FILE"`
+			KeyFile  string   `json:"keyFile,omitempty" env:"FUNCD_TLS_KEY_FILE"`
+			Email    string   `json:"email,omitempty" env:"FUNCD_TLS_EMAIL"`
+			CADir    string   `json:"caDir,omitempty" env:"FUNCD_TLS_CA_DIR"`
+		} `json:"tls,omitempty"`
+		// Ingress protection limits (ADR-0112, F75). Absent/zero ⇒ off (pass-through).
+		Limits struct {
+			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN"`
+			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST"`
+			Key          string `json:"key,omitempty" env:"FUNCD_LIMITS_KEY" validate:"omitempty,oneof=clientIP function"`
+			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES"`
+			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT"`
+		} `json:"limits,omitempty"`
+		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
+		Auth struct {
+			Edge bool `json:"edge,omitempty" env:"FUNCD_AUTH_EDGE"`
+		} `json:"auth,omitempty"`
+		// Edge observability (ADR-0114, F76): RED metrics + edge trace span + access log. Off by default.
+		Observability struct {
+			Metrics   bool `json:"metrics,omitempty" env:"FUNCD_OBS_METRICS"`
+			AccessLog bool `json:"accessLog,omitempty" env:"FUNCD_OBS_ACCESS_LOG"`
+			Trace     bool `json:"trace,omitempty" env:"FUNCD_OBS_TRACE"`
+		} `json:"observability,omitempty"`
+		// Edge shaping (ADR-0114, F78): CORS / response headers / gzip compression. Off by default.
+		Shaping struct {
+			CORS struct {
+				AllowOrigins  []string `json:"allowOrigins,omitempty"`
+				AllowMethods  []string `json:"allowMethods,omitempty"`
+				AllowHeaders  []string `json:"allowHeaders,omitempty"`
+				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty"`
+			} `json:"cors,omitempty"`
+			Headers struct {
+				Set    map[string]string `json:"set,omitempty"`
+				Remove []string          `json:"remove,omitempty"`
+			} `json:"headers,omitempty"`
+			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION"`
+		} `json:"shaping,omitempty"`
 	} `json:"server,omitempty"`
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`

@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/websocket"
 
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 )
@@ -98,5 +100,41 @@ func RunContract(t *testing.T, newGateway func(t *testing.T) gateway.Gateway) {
 		routes, err := gw.Routes(ctx)
 		require.NoError(t, err)
 		require.Len(t, routes, 1)
+	})
+
+	t.Run("ws-passthrough", func(t *testing.T) {
+		ctx := context.Background()
+
+		// A WebSocket echo upstream — the gateway must proxy the upgrade end to end.
+		wsUpstream := httptest.NewServer(websocket.Handler(func(c *websocket.Conn) {
+			var msg string
+			for {
+				if err := websocket.Message.Receive(c, &msg); err != nil {
+					return
+				}
+				_ = websocket.Message.Send(c, "echo:"+msg)
+			}
+		}))
+		t.Cleanup(wsUpstream.Close)
+
+		gw := newGateway(t)
+		t.Cleanup(func() { _ = gw.Close() })
+		require.NoError(t, gw.ProgramRoutes(ctx, []gateway.Route{
+			{ID: "default/ws", PathPrefix: "/function/ws", Upstream: wsUpstream.URL},
+		}))
+
+		// Front the gateway with a real server so the response writer can be hijacked for the upgrade.
+		front := httptest.NewServer(gw.Handler())
+		t.Cleanup(front.Close)
+
+		wsURL := "ws" + strings.TrimPrefix(front.URL, "http") + "/function/ws"
+		conn, err := websocket.Dial(wsURL, "", front.URL)
+		require.NoError(t, err, "the WebSocket upgrade proxies through the gateway")
+		t.Cleanup(func() { _ = conn.Close() })
+
+		require.NoError(t, websocket.Message.Send(conn, "hello"))
+		var reply string
+		require.NoError(t, websocket.Message.Receive(conn, &reply))
+		require.Equal(t, "echo:hello", reply, "the WS frame round-trips through the proxied upgrade")
 	})
 }

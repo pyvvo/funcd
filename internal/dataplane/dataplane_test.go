@@ -46,7 +46,7 @@ func newHandler(t *testing.T, upstream string) (http.Handler, store.Store) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: upstream}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	return dataplane.Handler(st, act, nil), st
+	return dataplane.Handler(st, act, nil, nil, nil), st
 }
 
 // scenario: http-invokes-warm-function — the data-plane handler resolves /function/<name>

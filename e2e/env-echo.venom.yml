@@ -10,6 +10,7 @@
 name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
 
 vars:
+  filler: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
 
 testcases:
@@ -45,3 +46,152 @@ testcases:
           - result.bodyjson.config ShouldEqual prod          # spec.config ConfigMap value → env
           - result.bodyjson.secret ShouldEqual s3cr3t        # spec.secrets Secret value → env
           - result.bodyjson.shared ShouldEqual from-secret   # in both: the secret wins (config-then-secrets)
+
+  # ADR-0110 (F79): the declarative front door. A Route exposes env-echo at path /echo (host-less);
+  # a request there is resolved by the edge router to the env-echo Function and served
+  # through the activator (the matched /echo prefix is stripped → the solo shim sees "/"). Proves
+  # Route-based serving works on real containerd — the same handler the config/secret case invokes
+  # via /function/env-echo, now reached by path instead of by name.
+  - name: F79 Route — path resolves to the function and serves (ADR-0110)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl get route env-echo -n default -o json \
+            | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
+        retry: 30
+        delay: 2
+        info: "route status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+      - type: http
+        method: POST
+        url: "{{.dp}}/echo"
+        headers: { content-type: application/json }
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "routed invoke → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual prod
+          - result.bodyjson.secret ShouldEqual s3cr3t
+
+  # ADR-0112 (F75): the ingress-protection body-size cap on real containerd. funcdconfig sets
+  # server.limits.maxBodyBytes: 1024; a POST whose body exceeds it is rejected with 413 (RFC 9457)
+  # BEFORE the handler — never reaching the function. The tiny invokes above (<1 KB) are unaffected.
+  - name: F75 ingress protection — an oversized body is 413'd (ADR-0112)
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers: { content-type: application/json }
+        # a body well over the 1024-byte cap (a ~2 KB filler string).
+        body: '{"data":"{{.filler}}"}'
+        info: "oversized invoke → status {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 413
+
+  # ADR-0113 (F77): the edge authn PEP. The `secure-echo` Route marks /secure `authenticated`
+  # (server.auth.edge is on). An anonymous request is 401'd BEFORE the activator; a request bearing
+  # the dev token (developer scoped to `default`) is authorized by the delegated PDP and served. The
+  # default namespace stays `open`, so the earlier /echo + /function/env-echo cases are unaffected.
+  - name: F77 edge authn PEP — /secure is 401 anonymous, served with a bearer (ADR-0113)
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl get route secure-echo -n default -o json \
+            | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
+        retry: 30
+        delay: 2
+        info: "secure route status → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring READY=True
+      - type: http
+        method: POST
+        url: "{{.dp}}/secure"
+        headers: { content-type: application/json }
+        body: '{"data":null}'
+        info: "anonymous /secure → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 401
+      - type: http
+        method: POST
+        url: "{{.dp}}/secure"
+        headers: { content-type: application/json, Authorization: "Bearer funcd-dev-token" }
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "authenticated /secure → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual prod
+
+  # ADR-0114 (F78): the edge shaping middleware on real containerd. funcdconfig enables
+  # server.shaping.cors (allowOrigins: https://demo.example) + server.shaping.compression. A CORS
+  # preflight from the allowed origin is answered at the edge with Access-Control-Allow-Origin (no
+  # function wake); a gzip-accepting invoke gets a `Content-Encoding: gzip` response. curl (host-side,
+  # against the forwarded data plane) dumps the headers so the shaping is directly observable.
+  - name: F78 edge shaping — CORS preflight header + gzip response (ADR-0114)
+    steps:
+      # The match is done INSIDE the script (grep) and a space-less sentinel is printed, because venom's
+      # assertion parser splits ShouldContainSubstring's operand on spaces — a quoted "a: b" substring
+      # would be misread as two operands. So we grep here and assert a single-token CORS_OK / GZIP_OK.
+      - type: exec
+        script: |
+          curl -s -o /dev/null -D - -X OPTIONS \
+            -H 'Origin: https://demo.example' \
+            -H 'Access-Control-Request-Method: POST' \
+            {{.dp}}/function/env-echo \
+            | tr -d '\r' | grep -qi '^access-control-allow-origin: https://demo.example$' \
+            && echo CORS_OK || echo CORS_MISSING
+        info: "CORS preflight → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CORS_OK
+      # A gzip-accepting invoke: the JSON response body is compressible + non-streaming, so the shaping
+      # gzipWriter sets Content-Encoding: gzip. retry/delay absorbs first-invoke warm-up.
+      - type: exec
+        script: |
+          curl -s -o /dev/null -D - -X POST \
+            -H 'content-type: application/json' \
+            -H 'Accept-Encoding: gzip' \
+            --data '{"data":null}' \
+            {{.dp}}/function/env-echo \
+            | tr -d '\r' | grep -qi '^content-encoding: gzip$' \
+            && echo GZIP_OK || echo GZIP_MISSING
+        retry: 15
+        delay: 2
+        info: "gzip response → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring GZIP_OK
+
+  # ADR-0114 (F76): the edge observability middleware on real containerd. funcdconfig enables
+  # server.observability.accessLog — the observ middleware emits a structured `edge request` slog line
+  # per hop, correlated by X-Request-Id and labelled with the dataplane-resolved function. The daemon
+  # runs under `systemd-run --unit funcd-demo`, so the access log lands in the journal; by now the
+  # earlier invokes have produced lines, so a matching line with `function=env-echo` must be present.
+  # (RED metrics go to the no-op meter in the VM — no OTLP collector — so only the access log is
+  # observable here; the metric emission is covered by the Go e2e's in-memory reader.)
+  - name: F76 edge observability — the access log is emitted with the function label (ADR-0114)
+    steps:
+      # Ensure at least one edge hop with a resolved function label exists, then read the journal.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers: { content-type: application/json }
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # Match inside the script and print a space-less sentinel (see the F78 note on venom operand
+      # splitting): assert one `edge request` access-log line carries function=env-echo.
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo journalctl -u funcd-demo --no-pager \
+            | grep 'edge request' | grep -q 'function=env-echo' \
+            && echo ACCESSLOG_OK || echo ACCESSLOG_MISSING
+        info: "edge access log → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring ACCESSLOG_OK

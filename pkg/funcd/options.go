@@ -9,6 +9,10 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob"
 	"github.com/green-0-rabbit/funcd/internal/bus"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
+	"github.com/green-0-rabbit/funcd/internal/edge/limit"
+	"github.com/green-0-rabbit/funcd/internal/edge/observ"
+	"github.com/green-0-rabbit/funcd/internal/edge/shape"
+	edgetls "github.com/green-0-rabbit/funcd/internal/edge/tls"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
@@ -216,6 +220,40 @@ func WithInvokeSocketDir(dir string) Option {
 // Default is 0.0.0.0:8081 (Production); InMemory() uses an ephemeral 127.0.0.1:0.
 func WithDataPlaneAddr(addr string) Option {
 	return func(c *config) error { c.dataPlaneAddr = addr; return nil }
+}
+
+// WithTLS enables TLS termination (ADR-0111, F74) on BOTH listeners (control-plane + data-plane) via
+// ServeTLS — funcd keeps its own http.Servers (no handover). The zero Mode defaults to `selfsigned`
+// (stdlib, offline, generated+persisted). Omit it entirely for plaintext (the back-compat default).
+func WithTLS(spec edgetls.Spec) Option {
+	return func(c *config) error { s := spec; c.tlsSpec = &s; return nil }
+}
+
+// WithLimits enables the ingress-protection middleware (ADR-0112, F75) on the data-plane chain: a
+// token-bucket rate limit (429), a Content-Length body-size cap (413), and an in-flight concurrency
+// ceiling (503), all rejecting BEFORE the activator (zero wake). A zero Config is a pass-through.
+func WithLimits(cfg limit.Config) Option {
+	return func(c *config) error { c.limits = cfg; return nil }
+}
+
+// WithEdgeAuth enables the edge authn PEP (ADR-0113, F77) on the data plane: for a target whose
+// stance is `authenticated`, the caller's bearer is authenticated (reusing the control-plane
+// credentials) and the decision delegated to the authorizer, rejecting 401/403 before the activator.
+// Without it, an `authenticated` stance fails closed (401); `open` targets are unaffected.
+func WithEdgeAuth() Option {
+	return func(c *config) error { c.edgeAuthEnabled = true; return nil }
+}
+
+// WithEdgeObservability enables edge observability (ADR-0114, F76): RED metrics + an edge trace span
+// (traceparent) + an access log. Uses the injected Telemetry (no-op by default). Zero Config ⇒ off.
+func WithEdgeObservability(cfg observ.Config) Option {
+	return func(c *config) error { c.observ = cfg; return nil }
+}
+
+// WithEdgeShaping enables edge shaping (ADR-0114, F78): CORS, response header inject/strip, and gzip
+// compression (skipping streaming/upgrades). Zero Config ⇒ off (pass-through).
+func WithEdgeShaping(cfg shape.Config) Option {
+	return func(c *config) error { c.shaping = cfg; return nil }
 }
 
 // WithContainerExecution enables curated-image container execution (ADR-0032): functions

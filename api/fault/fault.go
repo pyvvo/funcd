@@ -27,6 +27,10 @@ const (
 	Forbidden Kind = "forbidden"
 	// Unavailable means the service is temporarily unable to handle the request.
 	Unavailable Kind = "unavailable"
+	// ResourceExhausted means a rate/quota limit was exceeded (429 Too Many Requests).
+	ResourceExhausted Kind = "resource_exhausted"
+	// PayloadTooLarge means the request body exceeds the allowed size (413 Content Too Large).
+	PayloadTooLarge Kind = "payload_too_large"
 	// Internal means an unexpected internal error occurred.
 	Internal Kind = "internal"
 )
@@ -97,6 +101,16 @@ func Forbiddenf(op, format string, a ...any) *Error {
 // Unavailablef builds an Unavailable error with a formatted message.
 func Unavailablef(op, format string, a ...any) *Error {
 	return &Error{Kind: Unavailable, Op: op, Msg: fmt.Sprintf(format, a...)}
+}
+
+// ResourceExhaustedf builds a ResourceExhausted error (429) with a formatted message.
+func ResourceExhaustedf(op, format string, a ...any) *Error {
+	return &Error{Kind: ResourceExhausted, Op: op, Msg: fmt.Sprintf(format, a...)}
+}
+
+// PayloadTooLargef builds a PayloadTooLarge error (413) with a formatted message.
+func PayloadTooLargef(op, format string, a ...any) *Error {
+	return &Error{Kind: PayloadTooLarge, Op: op, Msg: fmt.Sprintf(format, a...)}
 }
 
 // Internalf builds an Internal error with a formatted message.

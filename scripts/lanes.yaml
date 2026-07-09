@@ -25,6 +25,8 @@ env-echo:
     - configmap.yaml
     - secret.yaml
     - function.yaml
+    - route.yaml
+    - secure-route.yaml
     - funcdconfig.yaml
   push:
     - artifact: env-echo.mjs
@@ -34,6 +36,11 @@ env-echo:
     - configmap.yaml
     - secret.yaml
     - function.yaml
+    # ADR-0110 (F79): a Route exposing env-echo at host env.example.com /echo (namespace stays
+    # implicit, so /function/env-echo also keeps working) — proves the declarative front door.
+    - route.yaml
+    # ADR-0113 (F77): a Route at /secure with an `authenticated` stance — 401 without a bearer.
+    - secure-route.yaml
   ready:
     kind: function
     names:

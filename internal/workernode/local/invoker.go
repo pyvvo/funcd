@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"time"
+
+	"github.com/green-0-rabbit/funcd/internal/dataplane"
 )
 
 // namespaceHeader matches the data-plane's target-namespace header (internal/dataplane).
@@ -26,6 +28,10 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Mark the request internal so the data-plane exposure gate (ADR-0110) never blocks fn-to-fn:
+	// internal invoke is by name and is not subject to a namespace's exposure mode. Spoof-proof — the
+	// value is set here in-process; an external request on the public listener can't carry it.
+	cctx = dataplane.WithInternal(cctx)
 	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Function), bytes.NewReader(input)).WithContext(cctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(namespaceHeader, string(target.Namespace))

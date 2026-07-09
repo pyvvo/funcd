@@ -21,13 +21,15 @@ var kindProblem = map[Kind]struct {
 	title   string
 	status  int
 }{
-	Invalid:      {typeURI: "urn:funcd:problem:invalid", title: "Invalid Request", status: http.StatusBadRequest},
-	NotFound:     {typeURI: "urn:funcd:problem:not-found", title: "Not Found", status: http.StatusNotFound},
-	Conflict:     {typeURI: "urn:funcd:problem:conflict", title: "Conflict", status: http.StatusConflict},
-	Unauthorized: {typeURI: "urn:funcd:problem:unauthorized", title: "Unauthorized", status: http.StatusUnauthorized},
-	Forbidden:    {typeURI: "urn:funcd:problem:forbidden", title: "Forbidden", status: http.StatusForbidden},
-	Unavailable:  {typeURI: "urn:funcd:problem:unavailable", title: "Service Unavailable", status: http.StatusServiceUnavailable},
-	Internal:     {typeURI: "urn:funcd:problem:internal", title: "Internal Server Error", status: http.StatusInternalServerError},
+	Invalid:           {typeURI: "urn:funcd:problem:invalid", title: "Invalid Request", status: http.StatusBadRequest},
+	NotFound:          {typeURI: "urn:funcd:problem:not-found", title: "Not Found", status: http.StatusNotFound},
+	Conflict:          {typeURI: "urn:funcd:problem:conflict", title: "Conflict", status: http.StatusConflict},
+	Unauthorized:      {typeURI: "urn:funcd:problem:unauthorized", title: "Unauthorized", status: http.StatusUnauthorized},
+	Forbidden:         {typeURI: "urn:funcd:problem:forbidden", title: "Forbidden", status: http.StatusForbidden},
+	Unavailable:       {typeURI: "urn:funcd:problem:unavailable", title: "Service Unavailable", status: http.StatusServiceUnavailable},
+	ResourceExhausted: {typeURI: "urn:funcd:problem:resource-exhausted", title: "Too Many Requests", status: http.StatusTooManyRequests},
+	PayloadTooLarge:   {typeURI: "urn:funcd:problem:payload-too-large", title: "Content Too Large", status: http.StatusRequestEntityTooLarge},
+	Internal:          {typeURI: "urn:funcd:problem:internal", title: "Internal Server Error", status: http.StatusInternalServerError},
 }
 
 // ToProblem maps an error to an RFC 9457 Problem using KindOf to select the
