@@ -53,3 +53,32 @@ testcases:
         assertions:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring FORGED403"
+
+  # ADR-0119 (F83) — REACTIVE INGESTION: the first case's s3-roundtrip invoke PUT an object into
+  # lakehouse/gold/ over the S3 frontend (an external SigV4 write). The `gold-drops` blob EventSource polls
+  # that prefix (eventing.blobPollInterval=3s) and fires `arrived`; the `gold-ingest` Sensor starts an
+  # `ingest` WorkflowRun projecting the object key. This proves DROP → RUN on real containerd: an external
+  # object write, detected by the poll over blob.Bucket.List (writer-agnostic), starts a workflow.
+  - name: an external S3 write into gold/ reactively starts an ingest WorkflowRun
+    steps:
+      - type: exec
+        # Poll for an `ingest` run (created by the Sensor). Runs are named <sensor>-<action>-<hex>; we key
+        # on spec.workflow == ingest. Retry-as-wait covers the 3s poll + reconcile latency.
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl get workflowrun -n default -o json | python3 -c '
+          import sys,json
+          d=json.load(sys.stdin)
+          runs=d.get("items",d) if isinstance(d,dict) else d
+          ing=[r for r in runs if r.get("spec",{}).get("workflow")=="ingest"]
+          if not ing:
+              print("INGESTNONE runs="+str(len(runs))); sys.exit(0)
+          r=ing[0]
+          key=json.loads(r.get("spec",{}).get("input","{}") or "{}").get("file","")
+          print("INGESTOK count="+str(len(ing))+" phase="+r.get("status",{}).get("phase","")+" key="+key)'
+        retry: 20
+        delay: 3
+        info: "reactive drop → run: {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring INGESTOK"
+          - "result.systemout ShouldContainSubstring key=gold/"

@@ -85,7 +85,7 @@ func frontDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Ent
 	require.NoError(t, err)
 	rtr := router.New()
 	require.NoError(t, rtr.Program(context.Background(), entries))
-	return dataplane.Handler(st, act, rtr, nil, nil), st, scaler, &gotPath
+	return dataplane.Handler(st, act, rtr, nil, nil, nil), st, scaler, &gotPath
 }
 
 func do(t *testing.T, h http.Handler, method, host, path string, nsHeader string) *http.Response {

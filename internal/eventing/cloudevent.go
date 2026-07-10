@@ -55,6 +55,40 @@ func NewNamedEvent(ns v1.NamespaceName, source, event v1.ObjectName) (CloudEvent
 	}, nil
 }
 
+// BlobEventData is the `data` payload of a blob CloudEvent (ADR-0119, F83): what landed under a watched
+// Bucket prefix, for a Sensor to project (e.g. `${{ event.data.key }}`). Version is a (ModTime,Size)
+// fingerprint of the observed object version — NOT a content ETag (blob.Attributes exposes none in V1).
+type BlobEventData struct {
+	Bucket  string    `json:"bucket"`
+	Key     string    `json:"key"`
+	Size    int64     `json:"size"`
+	Version string    `json:"version"`
+	Time    time.Time `json:"time"`
+}
+
+// NewBlobEvent builds a named CloudEvent for a landed object (ADR-0119): the same envelope as
+// NewNamedEvent (source URI carries ns+source, type carries the event name), but `data` is the object
+// descriptor instead of the timer's empty `{}`. It flows the unchanged Fanout → Sensor path.
+func NewBlobEvent(ns v1.NamespaceName, source, event v1.ObjectName, d BlobEventData) (CloudEvent, error) {
+	id, err := randomID()
+	if err != nil {
+		return CloudEvent{}, err
+	}
+	payload, err := json.Marshal(d)
+	if err != nil {
+		return CloudEvent{}, fault.Internalf("eventing.NewBlobEvent", "marshal blob event data: %v", err)
+	}
+	return CloudEvent{
+		SpecVersion:     specVersion,
+		ID:              id,
+		Source:          SourceURI(ns, source),
+		Type:            string(event),
+		Time:            time.Now().UTC(),
+		DataContentType: "application/json",
+		Data:            json.RawMessage(payload),
+	}, nil
+}
+
 // SourceURI is the canonical CloudEvent `source` for an EventSource (ADR-0108).
 func SourceURI(ns v1.NamespaceName, source v1.ObjectName) string {
 	return fmt.Sprintf("%s%s/eventsource/%s", sourceURIScheme, ns, source)

@@ -48,6 +48,26 @@ func TestScenarioMatchExactVsPrefix(t *testing.T) {
 	require.False(t, ok, "exact must not match sub-paths")
 }
 
+// ADR-0120 (F82): a "/" Prefix rule is a catch-all subtree, and a static backend is carried through
+// Program → Resolve into the Match (nil for a function backend).
+func TestStaticRootCatchAllAndBackendCarried(t *testing.T) {
+	back := &v1.StaticBackend{Bucket: "reports", Prefix: "bi/", Index: "index.html", SPA: true}
+	r := prog(t, router.Entry{Namespace: "analytics", Host: "bi.example.com", Rules: []router.CompiledRule{
+		{Path: "/", Exact: false, Static: back},
+	}})
+	for _, p := range []string{"/", "/index.html", "/img/logo.png", "/dashboard/orders"} {
+		m, ok := r.Resolve("bi.example.com", p, "GET")
+		require.True(t, ok, "the root static route catches %q", p)
+		require.NotNil(t, m.Static, "the static backend is carried into the Match for %q", p)
+		require.Equal(t, v1.ObjectName("reports"), m.Static.Bucket)
+	}
+	// A function match carries a nil Static.
+	rf := prog(t, router.Entry{Namespace: "default", Rules: []router.CompiledRule{rule("/orders", false, "orders-fn")}})
+	m, ok := rf.Resolve("any", "/orders", "GET")
+	require.True(t, ok)
+	require.Nil(t, m.Static)
+}
+
 // scenario: match-host
 func TestScenarioMatchHost(t *testing.T) {
 	r := prog(t,

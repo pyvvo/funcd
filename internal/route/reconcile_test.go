@@ -69,6 +69,53 @@ func readyCond(t *testing.T, st store.Store, ns v1.NamespaceName, name string) (
 	return c.Status, c.Reason
 }
 
+func seedBucket(t *testing.T, st store.Store, ns v1.NamespaceName, name string) {
+	t.Helper()
+	b := &v1.Bucket{}
+	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
+	b.Name, b.Namespace, b.ResourceGroup = v1.ObjectName(name), ns, "rg1"
+	_, err := st.Create(context.Background(), b)
+	require.NoError(t, err)
+}
+
+func seedStaticRoute(t *testing.T, st store.Store, ns v1.NamespaceName, name, host, path, bucket string) {
+	t.Helper()
+	r := &v1.Route{}
+	r.TypeMeta = v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}
+	r.Name, r.Namespace, r.ResourceGroup = v1.ObjectName(name), ns, "rg1"
+	r.Spec = v1.RouteSpec{Host: host, Rules: []v1.RouteRule{{
+		Path:    path,
+		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: v1.ObjectName(bucket), Prefix: "bi/", Index: "index.html"}},
+	}}}
+	_, err := st.Create(context.Background(), r)
+	require.NoError(t, err)
+}
+
+// scenario: bucket-not-found-not-ready (ADR-0120, F82) — a static Route whose Bucket is missing is
+// NotReady (BucketNotFound) and not programmed; once the Bucket exists it becomes Ready + programmed.
+func TestScenarioBucketNotFoundNotReady(t *testing.T) {
+	ctx, st, rtr, rec := setup(t)
+	seedStaticRoute(t, st, "default", "bi", "", "/", "reports") // no such Bucket yet
+	reconcile(t, rec, "default", "bi")
+
+	status, reason := readyCond(t, st, "default", "bi")
+	require.Equal(t, v1.ConditionFalse, status)
+	require.Equal(t, "BucketNotFound", reason)
+	_, ok := rtr.Resolve("any", "/", "GET")
+	require.False(t, ok, "a NotReady static route is not programmed")
+
+	// Create the Bucket → the static Route becomes Ready + programmed with its Static backend.
+	seedBucket(t, st, "default", "reports")
+	reconcile(t, rec, "default", "bi")
+	status, _ = readyCond(t, st, "default", "bi")
+	require.Equal(t, v1.ConditionTrue, status)
+	m, ok := rtr.Resolve("any", "/anything", "GET") // a "/" static route is a catch-all subtree (ADR-0120)
+	require.True(t, ok, "a Ready static route is programmed")
+	require.NotNil(t, m.Static, "the compiled match carries the static backend")
+	require.Equal(t, v1.ObjectName("reports"), m.Static.Bucket)
+	_ = ctx
+}
+
 // scenario: route-reconciles-ready
 func TestScenarioRouteReconcilesReady(t *testing.T) {
 	ctx, st, rtr, rec := setup(t)

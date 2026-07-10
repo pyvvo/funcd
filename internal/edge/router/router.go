@@ -42,6 +42,9 @@ type CompiledRule struct {
 	Exact    bool            // pathType == Exact
 	Methods  map[string]bool // nil/empty ⇒ all methods
 	Function v1.ObjectName
+	// Static, when non-nil, is a static Bucket-prefix backend (ADR-0120, F82); Function is then unused
+	// and the data-plane serves it via internal/edge/static (no activator hop).
+	Static *v1.StaticBackend
 }
 
 // Match is the resolved target. StripPrefix is the matched rule's prefix the handler strips from
@@ -51,6 +54,8 @@ type Match struct {
 	Function    v1.ObjectName
 	StripPrefix string
 	Auth        v1.AuthMode // the matched Route's auth stance (ADR-0113); "" ⇒ namespace default
+	// Static is non-nil for a static backend (ADR-0120, F82): serve via internal/edge/static, no wake.
+	Static *v1.StaticBackend
 }
 
 // compiled is one flattened matcher row (host + rule), sorted longest-path-first.
@@ -61,6 +66,7 @@ type compiled struct {
 	methods   map[string]bool
 	namespace v1.NamespaceName
 	function  v1.ObjectName
+	static    *v1.StaticBackend
 	auth      v1.AuthMode
 }
 
@@ -84,6 +90,7 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 				methods:   r.Methods,
 				namespace: e.Namespace,
 				function:  r.Function,
+				static:    r.Static,
 				auth:      e.Auth,
 			})
 		}
@@ -121,7 +128,7 @@ func (t *table) Resolve(host, path, method string) (Match, bool) {
 		if !row.exact {
 			strip = row.path
 		}
-		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Auth: row.auth}, true
+		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Auth: row.auth, Static: row.static}, true
 	}
 	return Match{}, false
 }
@@ -143,10 +150,15 @@ func (t *table) Hosts() []string {
 }
 
 // matchPath is exact equality (Exact) or segment-aware prefix ("/x" matches "/x" and "/x/y",
-// not "/x-2"), mirroring the gateway embedded matcher.
+// not "/x-2"), mirroring the gateway embedded matcher. The root prefix "/" is a catch-all: it roots
+// a subtree, so it matches every path (a static site or a catch-all Route mounted at "/" — ADR-0120 §2;
+// the naive prefix+"/" test would otherwise wrongly reduce "/" to matching only "/" itself).
 func matchPath(path, prefix string, exact bool) bool {
 	if exact {
 		return path == prefix
+	}
+	if prefix == "/" {
+		return true
 	}
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }

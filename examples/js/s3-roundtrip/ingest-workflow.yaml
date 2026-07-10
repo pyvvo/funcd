@@ -1,0 +1,15 @@
+# ingest — a minimal engine-native Workflow (ADR-0096 builtin `pass`) started reactively when an object
+# lands under the watched Bucket prefix (ADR-0119, F83). It has no function step (no image/materialization):
+# a single `pass` step echoes its input — the projected object key — so the run reaches Succeeded purely
+# in-process. The point of this lane is the TRIGGER (drop → run start), not the ingest logic itself.
+apiVersion: funcd.io/v1alpha1
+kind: Workflow
+metadata:
+  name: ingest
+  namespace: default
+  resourceGroup: rg1
+spec:
+  steps:
+    - name: echo
+      builtin:
+        pass: "${{ input }}"

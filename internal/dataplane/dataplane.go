@@ -24,6 +24,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/edge/authn"
 	"github.com/green-0-rabbit/funcd/internal/edge/observ"
 	"github.com/green-0-rabbit/funcd/internal/edge/router"
+	"github.com/green-0-rabbit/funcd/internal/edge/static"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
 
@@ -52,6 +53,7 @@ type Server struct {
 	activator *activator.Activator
 	router    router.Router
 	enforcer  *authn.Enforcer
+	static    *static.Handler
 	logger    *slog.Logger
 }
 
@@ -59,11 +61,12 @@ type Server struct {
 // gateway.Handler() is not mounted here (ADR-0033). rtr is the F79 edge router (may be nil, in
 // which case only the /function/<name> path is served — implicit-only, pre-F79 behavior). enf is the
 // F77 edge authn PEP (may be nil ⇒ no enforcement for `open`; an `authenticated` stance fails closed).
-func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, logger *slog.Logger) http.Handler {
+// stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s).
+func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, stat *static.Handler, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{store: st, activator: act, router: rtr, enforcer: enf, logger: logger.With("component", "dataplane")}
+	return &Server{store: st, activator: act, router: rtr, enforcer: enf, static: stat, logger: logger.With("component", "dataplane")}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +79,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Front door: try the Route matcher first (both exposure modes) — public requests only.
 	if s.router != nil && !internal {
 		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok {
+			if m.Static != nil {
+				// Static backend (ADR-0120, F82): serve the Bucket prefix directly — no activator hop.
+				s.serveStatic(w, r, m, op)
+				return
+			}
 			stance := s.authStance(r, m.Auth, m.Namespace)
 			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, op)
 			return
@@ -146,6 +154,41 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	}
 	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
 	s.activator.ServeHTTP(w, out)
+}
+
+// serveStatic serves a static Bucket-prefix backend (ADR-0120, F82). It resolves the auth stance
+// with the §4 public-vs-authenticated precedence (an explicit `authenticated` wins; `public: true`
+// otherwise relaxes an unset/default stance to `open` — public NEVER silently opens an explicit
+// authenticated site), enforces the PEP BEFORE any byte is read (namespace-scope authz, no function
+// to name), fills the F76 observ Target (function label carries the bucket — an intentional V1
+// overload), and dispatches to the static handler with the stripped remainder — no activator hop.
+func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
+	ns := m.Namespace
+	stance := s.authStance(r, m.Auth, ns)
+	if m.Static.Public && stance != v1.AuthAuthenticated {
+		stance = v1.AuthOpen
+	}
+	// Fill the F76 observability holder with (ns, bucket) — the function label is overloaded with the
+	// bucket name for a static route (a distinct backend/kind label is a named follow-on, ADR-0120 §5).
+	if t, ok := observ.TargetFrom(r.Context()); ok {
+		t.Namespace, t.Function = string(ns), string(m.Static.Bucket)
+	}
+	// Enforce reject-before-read: the PEP runs before any blob Get (no existence oracle, mirroring
+	// ADR-0113). A static route has no function, so authz is namespace-scoped (FunctionRef{Namespace: ns}).
+	if s.enforcer != nil {
+		if err := s.enforcer.Enforce(r.Context(), r, activator.FunctionRef{Namespace: ns}, stance); err != nil {
+			fault.WriteProblem(w, err)
+			return
+		}
+	} else if stance == v1.AuthAuthenticated {
+		fault.WriteProblem(w, fault.Unauthorizedf(op, "authentication required but no authenticator is configured"))
+		return
+	}
+	if s.static == nil {
+		fault.WriteProblem(w, fault.NotFoundf(op, "static serving is not configured"))
+		return
+	}
+	s.static.Serve(w, r, ns, m.Static, stripMatched(r.URL.Path, m.StripPrefix))
 }
 
 // authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the

@@ -114,10 +114,10 @@ func (r *Reconciler) evaluate(ctx context.Context) (map[routeKey]evalResult, []r
 
 	for _, rt := range routes {
 		key := routeKey{rt.Namespace, rt.Name}
-		if miss, err := r.firstMissingBackend(ctx, rt); err != nil {
+		if reason, message, err := r.firstBackendProblem(ctx, rt); err != nil {
 			return nil, nil, err
-		} else if miss != "" {
-			results[key] = evalResult{reason: "BackendNotFound", message: "backend function \"" + miss + "\" not found"}
+		} else if reason != "" {
+			results[key] = evalResult{reason: reason, message: message}
 			continue
 		}
 		mode, ok := modes[rt.Namespace]
@@ -150,19 +150,33 @@ func (r *Reconciler) evaluate(ctx context.Context) (map[routeKey]evalResult, []r
 	return results, entries, nil
 }
 
-// firstMissingBackend returns the name of the first rule backend Function that does not exist
-// (or "" if all exist). A non-NotFound store error is propagated.
-func (r *Reconciler) firstMissingBackend(ctx context.Context, rt *v1.Route) (string, error) {
+// firstBackendProblem returns the NotReady reason+message for the first rule whose backend does not
+// exist (or "","" if all exist). A function arm checks the Function exists (BackendNotFound); a
+// static arm (ADR-0120, F82) checks the Bucket exists in the Route's namespace (BucketNotFound),
+// mirroring BackendNotFound — cross-resource state the reconciler owns, not Validate. A non-NotFound
+// store error is propagated.
+func (r *Reconciler) firstBackendProblem(ctx context.Context, rt *v1.Route) (reason, message string, err error) {
 	for i := range rt.Spec.Rules {
-		fn := rt.Spec.Rules[i].Backend.Function
-		if _, err := r.store.Get(ctx, v1.KindFunction.GVK(), rt.Namespace, fn); err != nil {
-			if fault.KindOf(err) == fault.NotFound {
-				return string(fn), nil
+		b := &rt.Spec.Rules[i].Backend
+		if b.Static != nil {
+			bucket := b.Static.Bucket
+			if _, gerr := r.store.Get(ctx, v1.KindBucket.GVK(), rt.Namespace, bucket); gerr != nil {
+				if fault.KindOf(gerr) == fault.NotFound {
+					return "BucketNotFound", "backend bucket \"" + string(bucket) + "\" not found", nil
+				}
+				return "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get backend bucket %s/%s", rt.Namespace, bucket)
 			}
-			return "", fault.Wrapf(err, fault.KindOf(err), op, "get backend function %s/%s", rt.Namespace, fn)
+			continue
+		}
+		fn := b.Function
+		if _, gerr := r.store.Get(ctx, v1.KindFunction.GVK(), rt.Namespace, fn); gerr != nil {
+			if fault.KindOf(gerr) == fault.NotFound {
+				return "BackendNotFound", "backend function \"" + string(fn) + "\" not found", nil
+			}
+			return "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get backend function %s/%s", rt.Namespace, fn)
 		}
 	}
-	return "", nil
+	return "", "", nil
 }
 
 // modeOf reads a namespace's normalized exposure mode; an absent Namespace is implicit.
@@ -220,6 +234,7 @@ func compile(rt *v1.Route) router.Entry {
 			Exact:    rule.PathType == v1.PathTypeExact,
 			Methods:  mset,
 			Function: rule.Backend.Function,
+			Static:   rule.Backend.Static,
 		})
 	}
 	var authMode v1.AuthMode

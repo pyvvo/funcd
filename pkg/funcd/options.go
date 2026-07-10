@@ -133,6 +133,29 @@ func WithWorkflow(dataDir string, defaultStepTimeout, retention time.Duration, d
 	}
 }
 
+// WithDeadLetterQueue tunes the eventing DLQ + bounded action-delivery retry (ADR-0118, F85). The DLQ is
+// always wired; this option sets its persistence + tunables: dataDir is the dedicated Badger directory
+// (empty ⇒ in-memory, the InMemory-preset / memory-storage path), deliveryAttempts is the bounded-retry cap
+// before a failed workflow:/function: delivery is dead-lettered (< 1 ⇒ 3), retention is how long parked
+// entries survive the periodic sweep (0 ⇒ never), and maxEntries is the per-namespace count cap (0 ⇒
+// unbounded). cmd/funcd derives dataDir as <dataDir>/deadletter from config.
+func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Duration, maxEntries int) Option {
+	return func(c *config) error {
+		c.deadletterDataDir = dataDir
+		c.deliveryAttempts = deliveryAttempts
+		c.deadletterRetention = retention
+		c.deadletterMaxEntries = maxEntries
+		return nil
+	}
+}
+
+// WithBlobPollInterval sets the platform-wide cadence at which a `blob:` EventSource's prefixes are
+// List-polled for new objects (ADR-0119, F83). A duration ≤ 0 ⇒ the 15s default. One cadence for all blob
+// sources in V1 (a per-source override is an open question).
+func WithBlobPollInterval(d time.Duration) Option {
+	return func(c *config) error { c.blobPollInterval = d; return nil }
+}
+
 // WithRuntime injects the function runtime (worker) port.
 func WithRuntime(r runtime.Runtime) Option {
 	return func(c *config) error { c.runtime = r; return nil }

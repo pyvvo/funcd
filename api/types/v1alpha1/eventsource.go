@@ -22,6 +22,9 @@ type EventSourceSpec struct {
 	// Timer is the timer source kind (V1): named events, each ticking on its own interval. The webhook
 	// source kind is a named follow-on (it needs an eventing-ingress gateway decision).
 	Timer *TimerSource `json:"timer,omitempty"`
+	// Blob is the object-store source kind (ADR-0119, F83): named events that fire on object-created under
+	// a watched Bucket prefix, detected by a poll watcher over the ADR-0007 blob.Bucket List seam.
+	Blob *BlobSource `json:"blob,omitempty"`
 }
 
 // TimerSource hosts the timer kind's named events (ADR-0108).
@@ -39,9 +42,44 @@ type TimerEvent struct {
 	Interval time.Duration `json:"interval" minimum:"100000000" maximum:"86400000000000"` // 100ms–24h
 }
 
+// BlobSource hosts the blob kind's named events over one Bucket (ADR-0119, F83): a poll watcher lists the
+// Bucket's prefixes and fires a named CloudEvent per new object.
+type BlobSource struct {
+	Bucket ObjectName  `json:"bucket"` // the ADR-0080 Bucket resource to watch (this namespace)
+	Events []BlobEvent `json:"events"` // ≥1; unique names
+}
+
+// BlobEvent is one named object-store event: a DNS-1123 name, a key prefix, and the object lifecycle events
+// it fires on (ADR-0119).
+type BlobEvent struct {
+	Name   ObjectName      `json:"name"`
+	Prefix string          `json:"prefix,omitempty"` // only objects under this key prefix fire ("" = whole bucket)
+	On     []BlobEventType `json:"on,omitempty"`     // default [Created] (set in normalize); only Created supported in V1
+}
+
+// BlobEventType is an object lifecycle event. V1: Created only (Removed/Updated are a named follow-on).
+type BlobEventType string
+
+// BlobCreated is the object-created lifecycle event — the only type supported in V1 (ADR-0119).
+const BlobCreated BlobEventType = "Created"
+
 // EventSourceStatus holds the observed state.
 type EventSourceStatus struct {
 	Status `json:",inline"`
+}
+
+// Normalize fills declared-but-empty defaults that JSON Schema cannot (ADR-0119): each blob event's empty
+// `on` defaults to [Created]. It is a decode/normalize step — pure defaulting, NOT validation — kept out of
+// Validate so Validate stays non-mutating (ADR-0108). Idempotent; a nil/timer spec is a no-op.
+func (es *EventSource) Normalize() {
+	if es.Spec.Blob == nil {
+		return
+	}
+	for i := range es.Spec.Blob.Events {
+		if len(es.Spec.Blob.Events[i].On) == 0 {
+			es.Spec.Blob.Events[i].On = []BlobEventType{BlobCreated}
+		}
+	}
 }
 
 // GroupVersionKind returns the constant GVK for EventSource.
@@ -59,8 +97,16 @@ func (es *EventSource) Validate() error {
 	if es.Spec.Timer != nil {
 		kinds++
 	}
+	if es.Spec.Blob != nil {
+		kinds++
+	}
 	if kinds != 1 {
-		return fault.Invalidf(op, "exactly one source kind must be set (spec.timer), got %d", kinds)
+		return fault.Invalidf(op, "exactly one source kind must be set (spec.timer|spec.blob), got %d", kinds)
+	}
+	if es.Spec.Blob != nil {
+		if err := es.Spec.Blob.validate(op); err != nil {
+			return err
+		}
 	}
 	if es.Spec.Timer != nil {
 		if len(es.Spec.Timer.Events) == 0 {
@@ -78,6 +124,35 @@ func (es *EventSource) Validate() error {
 			seen[ev.Name] = true
 			if ev.Interval < 100*time.Millisecond || ev.Interval > 24*time.Hour {
 				return fault.Invalidf(op, "spec.timer.events[%d].interval %s is out of bounds (100ms–24h)", i, ev.Interval)
+			}
+		}
+	}
+	return nil
+}
+
+// validate enforces the blob source kind's rules JSON Schema can't express (ADR-0119): a DNS-1123 `bucket`,
+// ≥1 event with unique DNS-1123 names, and each event's `on` (when set) containing only Created in V1. It is
+// PURE — an empty `on` is left untouched here (Normalize defaults it to [Created]); Validate never mutates.
+func (bs *BlobSource) validate(op string) error {
+	if !dnsLabel.MatchString(string(bs.Bucket)) {
+		return fault.Invalidf(op, "spec.blob.bucket %q is not a valid DNS-1123 label", bs.Bucket)
+	}
+	if len(bs.Events) == 0 {
+		return fault.Invalidf(op, "spec.blob.events must list at least one event")
+	}
+	seen := make(map[ObjectName]bool, len(bs.Events))
+	for i := range bs.Events {
+		ev := &bs.Events[i]
+		if !dnsLabel.MatchString(string(ev.Name)) {
+			return fault.Invalidf(op, "spec.blob.events[%d].name %q is not a valid DNS-1123 label", i, ev.Name)
+		}
+		if seen[ev.Name] {
+			return fault.Invalidf(op, "duplicate event name %q under spec.blob", ev.Name)
+		}
+		seen[ev.Name] = true
+		for _, t := range ev.On {
+			if t != BlobCreated {
+				return fault.Invalidf(op, "spec.blob.events[%d].on %q is unsupported in V1 (only %q)", i, t, BlobCreated)
 			}
 		}
 	}

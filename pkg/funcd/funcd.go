@@ -41,8 +41,11 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/edge/observ"
 	"github.com/green-0-rabbit/funcd/internal/edge/router"
 	"github.com/green-0-rabbit/funcd/internal/edge/shape"
+	"github.com/green-0-rabbit/funcd/internal/edge/static"
 	edgetls "github.com/green-0-rabbit/funcd/internal/edge/tls"
 	"github.com/green-0-rabbit/funcd/internal/eventing"
+	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
+	dlbadger "github.com/green-0-rabbit/funcd/internal/eventing/deadletter/badger"
 	"github.com/green-0-rabbit/funcd/internal/funclog"
 	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
 	"github.com/green-0-rabbit/funcd/internal/funclog/logread"
@@ -199,6 +202,18 @@ type config struct {
 	workflowRetention    time.Duration
 	workflowDefaultRetry int
 	workflowPayloadLimit int64
+
+	// Eventing DLQ (ADR-0118): always wired. The dead-letter queue is a dedicated Badger store at
+	// deadletterDataDir (empty ⇒ in-memory, mirroring the run store). deliveryAttempts caps the bounded
+	// action-delivery retry; deadletterRetention (TTL) + deadletterMaxEntries (per-ns cap) drive the sweep.
+	deadletterDataDir    string
+	deliveryAttempts     int
+	deadletterRetention  time.Duration
+	deadletterMaxEntries int
+
+	// Blob EventSource poll watcher (ADR-0119, F83): the platform-wide cadence a `blob:` source's prefixes
+	// are List-polled for new objects. 0 ⇒ the 15s default.
+	blobPollInterval time.Duration
 }
 
 // validate returns the first missing required dependency as a fault.Invalid.
@@ -229,9 +244,10 @@ type Platform struct {
 
 	controller  *controller.Controller
 	eventing    *eventing.Source
-	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
-	edgeRouter  router.Router    // ADR-0110 (F79): the Route matcher the data-plane front door consults
-	tlsProvider edgetls.Provider // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
+	eventFanout *eventing.Fanout      // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	blobWatcher *eventing.BlobWatcher // ADR-0119: the blob EventSource poll watcher (side Run loop)
+	edgeRouter  router.Router         // ADR-0110 (F79): the Route matcher the data-plane front door consults
+	tlsProvider edgetls.Provider      // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
 	activator   *activator.Activator
 	httpServer  *http.Server
 	listener    net.Listener
@@ -241,17 +257,22 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager            // per-function worker-node local API broker (ADR-0064)
-	workflowRuns      runstate.Store            // durable workflow run state (ADR-0094); closed on shutdown
-	workflowEngine    *workflow.Engine          // the run engine (ADR-0094); drives the retention sweep
-	workflowRetention time.Duration             // terminal-run retention horizon (0 ⇒ no sweep)
-	logSink           *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
-	traceSink         *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
-	compactor         *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
-	s3gw              *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
-	egressGateway     egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
-	egressForwarder   egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
-	egressWorkers     *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
+	invokeMgr         *local.Manager   // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
+	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
+
+	deadLetters          deadletter.Store          // eventing DLQ (ADR-0118); closed on shutdown
+	sensorReconciler     *sensor.Reconciler        // owns the retry workers (drained on shutdown) + the DLQ replay seam
+	deadletterRetention  time.Duration             // DLQ TTL horizon (0 ⇒ no TTL eviction)
+	deadletterMaxEntries int                       // DLQ per-namespace count cap (0 ⇒ unbounded)
+	logSink              *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
+	traceSink            *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
+	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
+	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
+	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
+	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -509,9 +530,23 @@ func (p *Platform) buildControlPlane() error {
 	// Sensor subscribes to it (the action side — invoke/start-workflow — moved off the Source).
 	fanout := eventing.NewFanout()
 	p.eventFanout = fanout
+	// ADR-0119 (F83): the blob EventSource poll watcher. It lists the SAME s3BucketFor substrate view
+	// external S3-frontend writes land in (writer-agnostic detection over blob.Bucket.List), persists its
+	// per-event dedup watermark over the in-tree kvstore.KV, and publishes a named CloudEvent per new object
+	// onto the same Fanout the Sensor subscribes to. Registered by the EventSource reconciler; Run in Run().
+	watermark, err := eventing.NewKVWatermark(c.kvStore)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watermark store")
+	}
+	blobWatcher, err := eventing.NewBlobWatcher(blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}, fanout, watermark, c.blobPollInterval, p.logger)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
+	}
+	p.blobWatcher = blobWatcher
 	source, err := eventing.NewSource(eventing.Deps{
 		Store:     c.store,
 		Publisher: fanout,
+		Blob:      blobWatcher,
 		Logger:    p.logger,
 	})
 	if err != nil {
@@ -527,17 +562,31 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
-	// ADR-0109 (F69): the Sensor binds the named events published on the Fanout to actions — start a
-	// WorkflowRun / invoke a Function (via the re-created invoke/wake logic). It subscribes to fanout.
+	// ADR-0118 (F85): the eventing DLQ — a dedicated Badger store (in-memory when deadletterDataDir is
+	// empty, mirroring the run store), independent of the bus driver. It backs the Sensor's bounded
+	// action-delivery retry + dead-lettering and the control-plane read/replay surface.
+	dlq, dlErr := dlbadger.New(dlbadger.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
+	if dlErr != nil {
+		return fault.Wrapf(dlErr, fault.KindOf(dlErr), op, "build dead-letter store")
+	}
+	p.deadLetters = dlq
+	p.deadletterRetention = c.deadletterRetention
+	p.deadletterMaxEntries = c.deadletterMaxEntries
+	// ADR-0109 (F69) + ADR-0118 (F85): the Sensor binds the named events published on the Fanout to actions
+	// — start a WorkflowRun / invoke a Function (via the re-created invoke/wake logic), with bounded retry
+	// before dead-lettering. It subscribes to fanout.
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
-		Store:      c.store,
-		Subscriber: fanout,
-		Invoker:    &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Timeout: 30 * time.Second}},
-		Logger:     p.logger,
+		Store:            c.store,
+		Subscriber:       fanout,
+		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Timeout: 30 * time.Second}},
+		DeadLetters:      dlq,
+		DeliveryAttempts: c.deliveryAttempts,
+		Logger:           p.logger,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
 	}
+	p.sensorReconciler = sensorReconciler
 	ctrl.Register(v1.KindSensor.GVK(), sensorReconciler)
 	// ADR-0110 (F79): the Route reconciler validates backends + multi-tenancy rules and programs the
 	// edge router (replace-all) the data-plane front door consults. p.edgeRouter is created up front so
@@ -665,6 +714,8 @@ func (p *Platform) buildControlPlane() error {
 		Logger:      p.logger,
 		Logs:        logReader,
 		RunLogs:     runLogQuerier,
+		DeadLetters: dlq,              // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Admissions: []admission.Admission{
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
@@ -730,10 +781,17 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(err, fault.KindOf(err), op, "build edge authn PEP")
 		}
 	}
+	// ADR-0120 (F82): the static-asset handler serves a static Route's Bucket prefix directly over the
+	// SAME per-namespace Bucket view the S3 frontend uses (s3BucketFor → blob.Prefixed), with no
+	// activator hop. Always wired; a static Route match without it would 404.
+	staticHandler, err := static.New(static.Deps{Buckets: s3BucketFor(c.blob, c.store), Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build static asset handler")
+	}
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, p.logger),
+	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger),
 		gateway.Recover, gateway.RequestID,
 		observ.Chain(c.observ, c.telemetry, p.logger),
 		limit.Chain(c.limits),
@@ -835,6 +893,15 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "eventing stopped", "error", err)
 		}
 	}()
+	if p.blobWatcher != nil { // ADR-0119: the blob EventSource poll loop (drains on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.blobWatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "blob watcher stopped", "error", err)
+			}
+		}()
+	}
 	go func() {
 		defer wg.Done()
 		if err := p.activator.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -855,6 +922,20 @@ func (p *Platform) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			p.runWorkflowRetention(ctx)
+		}()
+	}
+	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.sensorReconciler.RunRetryWorkers(ctx)
+		}()
+	}
+	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) { // ADR-0118: DLQ retention sweep
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.runDeadLetterRetention(ctx)
 		}()
 	}
 	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
@@ -1001,6 +1082,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.workflowRuns != nil {
 			errs = append(errs, p.workflowRuns.Close())
 		}
+		if p.deadLetters != nil { // ADR-0118: close the dedicated DLQ Badger instance
+			errs = append(errs, p.deadLetters.Close())
+		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))
 		}
@@ -1094,6 +1178,33 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 			}
 			if n > 0 {
 				p.logger.InfoContext(ctx, "workflow retention sweep reclaimed runs", "count", n)
+			}
+		}
+	}
+}
+
+// runDeadLetterRetention periodically evicts dead letters past the TTL and over the per-namespace count cap
+// (ADR-0118 §5), mirroring the run-retention sweep. It sweeps at most hourly (sooner when the TTL is short),
+// stops on ctx cancel, and logs (never fatal) a sweep failure — the next tick retries.
+func (p *Platform) runDeadLetterRetention(ctx context.Context) {
+	interval := time.Hour
+	if p.deadletterRetention > 0 && p.deadletterRetention < interval {
+		interval = p.deadletterRetention
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := p.deadLetters.SweepExpired(ctx, p.deadletterRetention, p.deadletterMaxEntries)
+			if err != nil {
+				p.logger.WarnContext(ctx, "dead-letter retention sweep failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				p.logger.InfoContext(ctx, "dead-letter retention sweep evicted entries", "count", n)
 			}
 		}
 	}
@@ -1336,6 +1447,22 @@ func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, b
 		}
 		return blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), true
 	}
+}
+
+// blobBucketLister adapts the s3BucketFor resolver to the eventing.BucketLister the BlobWatcher polls
+// (ADR-0119): it resolves (ns, Bucket) to the SAME prefixed substrate view external S3-frontend writes land
+// in, then Lists the prefix over it. A missing Bucket is fault.NotFound (the watcher logs + skips that poll;
+// the reconciler independently marks the source NotReady).
+type blobBucketLister struct {
+	resolve func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+}
+
+func (l blobBucketLister) List(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) ([]blob.Attributes, error) {
+	b, ok := l.resolve(ns, string(bucket))
+	if !ok {
+		return nil, fault.NotFoundf("funcd.blobBucketLister", "bucket %q not found in namespace %q", bucket, ns)
+	}
+	return b.List(ctx, prefix)
 }
 
 // kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):

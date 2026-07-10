@@ -10,6 +10,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
+	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
 
@@ -28,6 +29,11 @@ type Deps struct {
 	// RunLogs is the run-scoped log querier (ADR-0106). Optional; when set, NewServer registers
 	// GET …/workflowruns/{name}/logs (authorized get/WorkflowRun; resolves status.traceId).
 	RunLogs WorkflowRunLogQuerier
+	// DeadLetters is the eventing DLQ store (ADR-0118). Optional; when set (with Replayer), NewServer
+	// registers the DLQ read + replay/discard routes under …/namespaces/{ns}/deadletters.
+	DeadLetters deadletter.Store
+	// Replayer performs the imperative DLQ replay (ADR-0118 §4). Required alongside DeadLetters.
+	Replayer Replayer
 }
 
 // NewServer builds the authenticated, authorized, store-backed control-plane API
@@ -60,6 +66,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	}
 	if d.RunLogs != nil { // ADR-0106: the run-scoped log read route (resolves status.traceId), same RBAC PEP
 		RegisterWorkflowRunLogs(api, d.RunLogs, d.Authorizer)
+	}
+	if d.DeadLetters != nil && d.Replayer != nil { // ADR-0118: the DLQ read + replay/discard surface
+		RegisterDeadLetters(api, d.DeadLetters, d.Replayer, d.Authorizer)
 	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil

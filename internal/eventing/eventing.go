@@ -2,6 +2,7 @@ package eventing
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -15,6 +16,14 @@ import (
 // runTick is the base resolution of the Run loop; a named event fires when at least its Interval has
 // elapsed since its last fire.
 const runTick = 250 * time.Millisecond
+
+// condReady is the EventSource readiness condition type (ADR-0119): a blob source with a missing Bucket is
+// NotReady with a reason, mirroring the Route BackendNotFound pattern.
+const condReady = v1.ConditionType("Ready")
+
+// blobRetryInterval requeues a NotReady blob source so a Bucket created after the EventSource is picked up
+// without an external trigger (ADR-0119: missing bucket ⇒ NotReady, not Ready-but-silently-not-polling).
+const blobRetryInterval = 15 * time.Second
 
 // Publisher is the delivery seam a Source emits named CloudEvents to (ADR-0108). The V1 driver is the
 // in-process Fanout (fanout.go) the F69 Sensor subscribes to; a bus-backed driver is a V2 swap. Emitting
@@ -31,10 +40,12 @@ type eventKey struct {
 	event  v1.ObjectName
 }
 
-// Deps configures the eventing Source (internal component, ADR-0002 §1; reshaped by ADR-0108).
+// Deps configures the eventing Source (internal component, ADR-0002 §1; reshaped by ADR-0108, extended by
+// ADR-0119).
 type Deps struct {
 	Store     store.Store  // required
 	Publisher Publisher    // where a firing emits its named CloudEvent (required)
+	Blob      *BlobWatcher // ADR-0119: the poll watcher a `blob:` source registers on; nil ⇒ no blob support
 	Logger    *slog.Logger // default slog.Default()
 }
 
@@ -44,6 +55,7 @@ type Deps struct {
 type Source struct {
 	store     store.Store
 	publisher Publisher
+	blob      *BlobWatcher // ADR-0119: nil ⇒ blob sources cannot be registered
 	logger    *slog.Logger
 
 	mu     sync.Mutex
@@ -71,6 +83,7 @@ func NewSource(d Deps) (*Source, error) {
 	return &Source{
 		store:     d.Store,
 		publisher: d.Publisher,
+		blob:      d.Blob,
 		logger:    logger.With("component", "eventing"),
 		timers:    map[eventKey]*timerEntry{},
 	}, nil
@@ -91,8 +104,12 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 	if !ok {
 		return controller.Result{}, fault.Internalf("eventing.Reconcile", "unexpected type %T", obj)
 	}
+	if es.Spec.Blob != nil {
+		return s.reconcileBlob(ctx, es)
+	}
+	s.deregisterBlob(req.Namespace, req.Name) // not (any longer) a blob source: stop watching
 	if es.Spec.Timer == nil {
-		s.deregisterSource(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
+		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
 		return controller.Result{}, nil
 	}
 	s.registerTimer(req.Namespace, req.Name, es.Spec.Timer)
@@ -103,6 +120,47 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		}
 	}
 	return controller.Result{}, nil
+}
+
+// reconcileBlob owns the `blob:` source branch (ADR-0119): it resolves the watched Bucket, registers the
+// source's named events on the BlobWatcher and sets Ready — or, when the Bucket does not exist in the
+// namespace, deregisters and sets NotReady with a BucketNotFound condition (never Ready-but-not-polling),
+// requeuing so a later-created Bucket is picked up. `on` is defaulted here (decode/normalize), not in Validate.
+func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (controller.Result, error) {
+	ns, name := es.Namespace, es.Name
+	s.deregisterTimers(ns, name) // a source that became a blob kind must stop any prior timers
+	es.Normalize()               // default each event's empty `on` to [Created] (pure defaulting, not Validate)
+	if s.blob == nil {
+		return controller.Result{}, s.setBlobNotReady(ctx, es, "BlobWatcherUnavailable", "blob event watching is not enabled")
+	}
+	_, err := s.store.Get(ctx, v1.KindBucket.GVK(), ns, es.Spec.Blob.Bucket)
+	if err != nil {
+		if fault.KindOf(err) == fault.NotFound {
+			s.deregisterBlob(ns, name)
+			nrErr := s.setBlobNotReady(ctx, es, "BucketNotFound", fmt.Sprintf("bucket %q not found in namespace %q", es.Spec.Blob.Bucket, ns))
+			return controller.Result{RequeueAfter: blobRetryInterval}, nrErr
+		}
+		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
+	}
+	s.blob.Register(ns, name, es.Spec.Blob)
+	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || es.Status.Phase != v1.PhaseReady {
+		es.Status.Phase = v1.PhaseReady
+		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
+		if _, uerr := s.store.Update(ctx, es); uerr != nil {
+			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileBlob", "set eventsource ready")
+		}
+	}
+	return controller.Result{}, nil
+}
+
+// setBlobNotReady marks a blob source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).
+func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason, msg string) error {
+	es.Status.Phase = v1.PhasePending
+	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: es.Generation})
+	if _, err := s.store.Update(ctx, es); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "set eventsource not-ready")
+	}
+	return nil
 }
 
 // registerTimer (re)registers every named event of a timer source, preserving lastFire when the interval
@@ -127,14 +185,27 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, t *v1.
 	}
 }
 
-// deregisterSource removes every named event of one EventSource (delete / loses its timer kind).
+// deregisterSource removes every registration (timer + blob) of one EventSource — used on delete.
 func (s *Source) deregisterSource(ns v1.NamespaceName, source v1.ObjectName) {
+	s.deregisterTimers(ns, source)
+	s.deregisterBlob(ns, source)
+}
+
+// deregisterTimers removes every named timer event of one EventSource (delete / loses its timer kind).
+func (s *Source) deregisterTimers(ns v1.NamespaceName, source v1.ObjectName) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k := range s.timers {
 		if k.ns == ns && k.source == source {
 			delete(s.timers, k)
 		}
+	}
+}
+
+// deregisterBlob removes every named blob event of one EventSource from the watcher (nil watcher ⇒ no-op).
+func (s *Source) deregisterBlob(ns v1.NamespaceName, source v1.ObjectName) {
+	if s.blob != nil {
+		s.blob.Deregister(ns, source)
 	}
 }
 

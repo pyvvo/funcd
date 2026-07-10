@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
@@ -58,10 +60,36 @@ type RouteRule struct {
 	Backend  RouteBackend `json:"backend"`
 }
 
-// RouteBackend names the target Function (in this Route's namespace — routes are never shared
-// across namespaces, blueprint.md:467).
+// RouteBackend is an exactly-one-of union (ADR-0120, F82): a Function backend (the activator hop)
+// OR a Static backend (a Bucket prefix served directly through the edge). Validate enforces the
+// one-of. Routes are never shared across namespaces (blueprint.md:467).
 type RouteBackend struct {
-	Function ObjectName `json:"function"`
+	// Function is the target Function in this Route's namespace. Optional since F82: a static-only
+	// rule sets no function (the `omitempty` reflects the union — exactly one arm is set).
+	Function ObjectName `json:"function,omitempty"`
+	// Static serves a Bucket-prefix static site directly through the edge (F82); nil ⇒ a function backend.
+	Static *StaticBackend `json:"static,omitempty"`
+}
+
+// StaticBackend serves a Bucket prefix as a static site (ADR-0120, F82): index resolution,
+// content-types, a weak (ModTime,Size) ETag + conditional GET, HTTP Range, an optional SPA
+// fallback, and a pinned three-tier Cache-Control — served through the FEAT-0006 edge with no
+// function code. The bytes are the same per-namespace Bucket view the S3 frontend serves (ADR-0080).
+type StaticBackend struct {
+	// Bucket is the Bucket in THIS Route's namespace whose objects are served (binding-as-grant:
+	// the Route reads only this declared Bucket; the reconciler validates it exists → BucketNotFound).
+	Bucket ObjectName `json:"bucket"`
+	// Prefix is the key prefix within the Bucket that roots the site (e.g. "bi/"); "" ⇒ the bucket root.
+	Prefix string `json:"prefix,omitempty"`
+	// Index is the document served for "/" / a directory / (when SPA) a miss. Default "index.html".
+	Index string `json:"index,omitempty"`
+	// SPA, when true, serves Index (200) for any un-matched path so a client-side router owns routing;
+	// when false, an un-matched path is 404.
+	SPA bool `json:"spa,omitempty"`
+	// Public, when true, serves this Route openly (stance relaxed to `open`, ADR-0113) when the
+	// resolved stance is unset/default — a declared public site. It NEVER overrides an explicit
+	// `authenticated` stance (that combination is rejected at admission). Default false ⇒ inherit.
+	Public bool `json:"public,omitempty"`
 }
 
 // PathType selects exact vs segment-prefix matching.
@@ -138,8 +166,8 @@ func (r *Route) Validate() error {
 		default:
 			return fault.Invalidf(op, "spec.rules[%d].pathType %q must be Prefix or Exact", i, rule.PathType)
 		}
-		if !dnsLabel.MatchString(string(rule.Backend.Function)) {
-			return fault.Invalidf(op, "spec.rules[%d].backend.function %q is not a valid DNS-1123 label", i, rule.Backend.Function)
+		if err := validateBackend(r, rule, i, op); err != nil {
+			return err
 		}
 		for _, m := range rule.Methods {
 			if !validMethod(m) {
@@ -157,6 +185,35 @@ func (r *Route) Validate() error {
 		if err := validateAuthMode(r.Spec.Auth.Mode, "spec.auth.mode"); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120): each rule sets exactly
+// one of backend.function / backend.static. A function arm keeps the DNS-1123 label check; a static
+// arm requires a DNS-1123 bucket, a relative index, and (M2) rejects public + an explicit
+// `authenticated` Route stance — a contradiction (public must never override an explicit authenticated).
+func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
+	hasFn := rule.Backend.Function != ""
+	hasStatic := rule.Backend.Static != nil
+	if hasFn == hasStatic {
+		return fault.Invalidf(op, "spec.rules[%d].backend must set exactly one of function or static", i)
+	}
+	if hasFn {
+		if !dnsLabel.MatchString(string(rule.Backend.Function)) {
+			return fault.Invalidf(op, "spec.rules[%d].backend.function %q is not a valid DNS-1123 label", i, rule.Backend.Function)
+		}
+		return nil
+	}
+	st := rule.Backend.Static
+	if !dnsLabel.MatchString(string(st.Bucket)) {
+		return fault.Invalidf(op, "spec.rules[%d].backend.static.bucket %q is not a valid DNS-1123 label", i, st.Bucket)
+	}
+	if strings.HasPrefix(st.Index, "/") {
+		return fault.Invalidf(op, "spec.rules[%d].backend.static.index %q must be a relative path (no leading '/')", i, st.Index)
+	}
+	if st.Public && r.Spec.Auth != nil && r.Spec.Auth.Mode == AuthAuthenticated {
+		return fault.Invalidf(op, "spec.rules[%d].backend.static.public conflicts with spec.auth.mode=authenticated: public must not override an explicit authenticated stance", i)
 	}
 	return nil
 }

@@ -181,6 +181,22 @@ type Config struct {
 		Retention          string `json:"retention,omitempty" env:"FUNCD_WORKFLOW_RETENTION"`
 		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT"`
 	} `json:"workflow,omitempty"`
+
+	// Eventing tunes the Sensor action-delivery reliability path (ADR-0118, F85). DeliveryAttempts is the
+	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The dead-letter
+	// queue is a dedicated Badger instance at <Storage.DataDir>/deadletter (in-memory when Storage.Mode is
+	// memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries (per-namespace count cap) drive the
+	// periodic retention sweep.
+	Eventing struct {
+		DeliveryAttempts int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS"`
+		Deadletter       struct {
+			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
+			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES"`
+		} `json:"deadletter,omitempty"`
+		// BlobPollInterval is the cadence a `blob:` EventSource's prefixes are List-polled for new objects
+		// (ADR-0119, F83). A Go duration ("15s"); one cadence for all blob sources in V1.
+		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
+	} `json:"eventing,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -213,6 +229,13 @@ func defaults() Config {
 	c.Workflow.DefaultStepTimeout = "300s"
 	c.Workflow.Retention = "720h"
 	c.Workflow.PayloadLimit = 1 << 20
+	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
+	// per-namespace cap of 1000, swept periodically.
+	c.Eventing.DeliveryAttempts = 3
+	c.Eventing.Deadletter.Retention = "720h"
+	c.Eventing.Deadletter.MaxEntries = 1000
+	// Blob EventSource poll cadence (ADR-0119): 15s default.
+	c.Eventing.BlobPollInterval = "15s"
 	return c
 }
 

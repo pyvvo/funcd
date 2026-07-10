@@ -114,6 +114,46 @@ func TestEventSourceValidateMatrix(t *testing.T) {
 	}
 }
 
+// TestScenarioEventSourceValidate is the ADR-0119 `eventsource-validate` scenario: the blob source kind's
+// union + structural rules, and the decode/normalize `on` defaulting kept OUT of the pure Validate.
+func TestScenarioEventSourceValidate(t *testing.T) {
+	blob := func(bucket string, events ...BlobEvent) EventSourceSpec {
+		return EventSourceSpec{Blob: &BlobSource{Bucket: ObjectName(bucket), Events: events}}
+	}
+	ev := func(name, prefix string, on ...BlobEventType) BlobEvent {
+		return BlobEvent{Name: ObjectName(name), Prefix: prefix, On: on}
+	}
+	for _, tc := range []struct {
+		name  string
+		spec  EventSourceSpec
+		valid bool
+	}{
+		{"one blob event", blob("raw", ev("arrived", "drop/", BlobCreated)), true},
+		{"blob event empty on (defaulted later, not rejected)", blob("raw", ev("arrived", "drop/")), true},
+		{"blob and timer both set", EventSourceSpec{Timer: &TimerSource{Events: []TimerEvent{{Name: "t", Interval: time.Minute}}}, Blob: &BlobSource{Bucket: "raw", Events: []BlobEvent{ev("a", "")}}}, false},
+		{"blob empty bucket", blob("", ev("arrived", "drop/")), false},
+		{"blob non-DNS-1123 bucket", blob("Raw_Bucket", ev("arrived", "drop/")), false},
+		{"blob no events", blob("raw"), false},
+		{"blob duplicate event names", blob("raw", ev("a", "x/"), ev("a", "y/")), false},
+		{"blob non-Created on rejected", blob("raw", ev("arrived", "drop/", BlobEventType("Removed"))), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := esWith(tc.spec).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed EventSource must be fault.Invalid")
+		})
+	}
+
+	// Normalize (the decode step) defaults an empty `on` to [Created] — Validate stays pure (non-mutating).
+	es := esWith(blob("raw", ev("arrived", "drop/")))
+	require.Empty(t, es.Spec.Blob.Events[0].On, "Validate did not mutate the spec")
+	es.Normalize()
+	require.Equal(t, []BlobEventType{BlobCreated}, es.Spec.Blob.Events[0].On, "normalize defaults empty on to [Created]")
+}
+
 // TestFunctionLinkValidateMatrix is the spec.links structural matrix (ADR-0064): alias is a
 // DNS-1123 label unique within Links, target is a DNS-1123 label. Cross-resource rules
 // (target-exists, acyclic, no self-link) are an admission, not here. Parametrized accept/reject.
@@ -285,6 +325,53 @@ func TestRouteValidateMatrix(t *testing.T) {
 			require.Equal(t, fault.Invalid, fault.KindOf(err), "a malformed Route must be fault.Invalid")
 		})
 	}
+}
+
+// TestRouteStaticBackendValidate covers the ADR-0120 (F82) static-backend union rules.
+func TestRouteStaticBackendValidate(t *testing.T) {
+	mk := func(b RouteBackend, auth *RouteAuth) *Route {
+		r := &Route{}
+		r.TypeMeta = TypeMeta{APIVersion: KindRoute.GVK().APIVersion(), Kind: KindRoute}
+		r.Name, r.Namespace, r.ResourceGroup = "r", "default", "rg1"
+		r.Spec = RouteSpec{Rules: []RouteRule{{Path: "/", Backend: b}}, Auth: auth}
+		return r
+	}
+	stat := func(bucket, index string, public bool) *StaticBackend {
+		return &StaticBackend{Bucket: ObjectName(bucket), Prefix: "bi/", Index: index, Public: public}
+	}
+
+	// scenario: route-validate-backend-exactly-one
+	t.Run("exactly-one-function", func(t *testing.T) {
+		require.NoError(t, mk(RouteBackend{Function: "fn"}, nil).Validate())
+	})
+	t.Run("exactly-one-static", func(t *testing.T) {
+		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", false)}, nil).Validate())
+	})
+	t.Run("neither-arm-rejected", func(t *testing.T) {
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{}, nil).Validate()))
+	})
+	t.Run("both-arms-rejected", func(t *testing.T) {
+		err := mk(RouteBackend{Function: "fn", Static: stat("reports", "index.html", false)}, nil).Validate()
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+	})
+	t.Run("static-bucket-must-be-dns-label", func(t *testing.T) {
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("Bad_Bucket", "index.html", false)}, nil).Validate()))
+	})
+	t.Run("static-index-must-be-relative", func(t *testing.T) {
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("reports", "/index.html", false)}, nil).Validate()))
+	})
+
+	// scenario: public-vs-explicit-authenticated-conflict — explicit authenticated + public:true ⇒ rejected.
+	t.Run("public-vs-explicit-authenticated-conflict", func(t *testing.T) {
+		err := mk(RouteBackend{Static: stat("reports", "index.html", true)}, &RouteAuth{Mode: AuthAuthenticated}).Validate()
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "public must NOT override an explicit authenticated stance")
+	})
+	t.Run("public-with-open-ok", func(t *testing.T) {
+		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", true)}, &RouteAuth{Mode: AuthOpen}).Validate())
+	})
+	t.Run("public-with-unset-ok", func(t *testing.T) {
+		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", true)}, nil).Validate())
+	})
 }
 
 // TestNamespaceExposureValidate covers the F79 exposure enum incl. the absent/empty case.

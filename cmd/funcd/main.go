@@ -305,6 +305,31 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	}
 	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit))
 
+	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): a dedicated Badger store at
+	// <dataDir>/deadletter (in-memory when the substrate is memory), plus the eventing.* tunables.
+	var dlRetention time.Duration
+	if cfg.Eventing.Deadletter.Retention != "" {
+		dlRetention, err = time.ParseDuration(cfg.Eventing.Deadletter.Retention)
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.deadletter.retention %q: %w", cfg.Eventing.Deadletter.Retention, err)
+		}
+	}
+	deadletterDir := ""
+	if cfg.Storage.Mode != "memory" {
+		deadletterDir = filepath.Join(cfg.Storage.DataDir, "deadletter")
+	}
+	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries))
+
+	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
+	var blobPoll time.Duration
+	if cfg.Eventing.BlobPollInterval != "" {
+		blobPoll, err = time.ParseDuration(cfg.Eventing.BlobPollInterval)
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.blobPollInterval %q: %w", cfg.Eventing.BlobPollInterval, err)
+		}
+	}
+	opts = append(opts, funcd.WithBlobPollInterval(blobPoll))
+
 	execOpts, closeExec, err := executionOptions(ctx, cfg)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)

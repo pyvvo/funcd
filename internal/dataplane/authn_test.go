@@ -42,7 +42,7 @@ func authDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entr
 	require.NoError(t, rtr.Program(context.Background(), entries))
 	enf, err := authn.New(authn.Deps{Creds: tokens, Authz: rbac.New()})
 	require.NoError(t, err)
-	return dataplane.Handler(st, act, rtr, enf, nil), st, scaler
+	return dataplane.Handler(st, act, rtr, enf, nil, nil), st, scaler
 }
 
 func seedNSAuth(t *testing.T, st store.Store, name string, exposure v1.ExposureMode, mode v1.AuthMode) {
@@ -122,8 +122,8 @@ func TestScenarioAuthnDisabledPassthrough(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: readyEndpoints{warm: map[v1.ObjectName]string{"api": "u"}, upstream: up.URL}, Scaler: &spyScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, router.New(), nil, nil)     // nil enforcer
-	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthOpen) // open stance
+	h := dataplane.Handler(st, act, router.New(), nil, nil, nil) // nil enforcer
+	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthOpen)  // open stance
 	seedFn(t, st, "team", "api")
 
 	resp := authReq(t, h, "/function/api", "team", "") // no bearer
@@ -155,7 +155,7 @@ func TestNilEnforcerFailsClosed(t *testing.T) {
 	scaler := &spyScaler{}
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: readyEndpoints{warm: map[v1.ObjectName]string{"api": "u"}, upstream: up.URL}, Scaler: scaler})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, router.New(), nil, nil) // NIL enforcer
+	h := dataplane.Handler(st, act, router.New(), nil, nil, nil) // NIL enforcer
 	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthAuthenticated)
 	seedFn(t, st, "team", "api")
 

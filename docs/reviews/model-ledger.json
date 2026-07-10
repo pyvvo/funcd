@@ -1843,5 +1843,50 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0117-implementation-claude-opus-4-8.md",
     "notes": "All 5 verify cmds exit 0; B1 trust-anchor + JSON-EST injection-safe + O(rules) collapse + atomic cache all confirmed & tested; Lima lane green (orchestrator, not re-run); 1 Minor=model (bounded SNI peek, no sec impact); nftables/resolv fixes attributed to F80/ADR-0032 env not F81 model."
+  },
+  {
+    "date": "2026-07-10",
+    "adr": "0118",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0118-implementation-claude-opus-4-8.md",
+    "notes": "PASS; 0 blockers/0 majors/1 minor(model:non-ULID entropy-fallback id); Venom deferred=scope(in-process e2e covers full path); only test failure=known TestPythonPoolSmoke env flake"
+  },
+  {
+    "date": "2026-07-10",
+    "adr": "0119",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0119-implementation-claude-opus-4-8.md",
+    "notes": "PASS; 0 blockers/0 majors/1 minor(model:reconcileBlob persists normalized on:[Created] back to spec, idempotent); M1/M2/M3 folds honest+tested; Sensor unchanged; Venom deferred=scope(in-process e2e covers full drop->run); only test failure=known TestPythonPoolSmoke env flake"
+  },
+  {
+    "date": "2026-07-10",
+    "adr": "0120",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0120-implementation-claude-opus-4-8.md",
+    "notes": "PASS; 0 blockers/0 majors/1 minor(model:compile copies rule.Methods for a static arm vs ADR-0120 s1 'no router method restriction'; handler-405 still holds since static routes omit methods). B1 traversal reject-'..'+HasPrefix-before-Get, out-of-prefix secret proven unreachable; M2 admission-reject + runtime backstop (no silent-open, 401 anon/200 bearer e2e); M1 weak (ModTime,Size) ETag no sha256; M3 three-tier cache. matchPath '/'-catch-all=adr(ADR-0110 latent gap, minimal+no regression, all 8 router tests pass). Venom deferred=env(framework cannot seed Bucket bytes in-VM; in-process edge e2e drives live listener). Only test failure=known TestPythonPoolSmoke env flake."
   }
 ]
