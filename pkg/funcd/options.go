@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"log/slog"
+	"net/netip"
 	"time"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
@@ -16,6 +17,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/green-0-rabbit/funcd/internal/network"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/store"
@@ -254,6 +256,31 @@ func WithEdgeObservability(cfg observ.Config) Option {
 // compression (skipping streaming/upgrades). Zero Config ⇒ off (pass-through).
 func WithEdgeShaping(cfg shape.Config) Option {
 	return func(c *config) error { c.shaping = cfg; return nil }
+}
+
+// WithEgressIsolation enables the worker network-isolation substrate (ADR-0115, FEAT-0007/F80): funcd
+// programs an nftables policy (over the funcd0 CNI bridge) that default-denies worker egress and
+// redirects remaining external TCP into the egress gateway (F81). mgr is the platform-specific Manager
+// (network.New — a no-op when disabled or non-Linux); p is the ruleset frame. Applied at Run start
+// (before workers serve), removed at Shutdown.
+func WithEgressIsolation(mgr network.Manager, p network.Policy) Option {
+	return func(c *config) error { c.netManager, c.netPolicy = mgr, p; return nil }
+}
+
+// WithEgressGateway wires the ADR-0117 (F81) transparent egress PEP + DNS forwarder: when enabled on
+// Linux, funcd starts a gateway on gatewayPort (F80's REDIRECT target) that authorizes every outbound
+// worker connection against its namespace's EgressPolicy via the cedar PDP (egress::connect over a
+// forwarder-attested NetDestination), and a DNS forwarder on dnsForwarderPort (the domain trust anchor +
+// the only reachable resolver). dnsUpstream is the node resolver the forwarder forwards to. Disabled or
+// non-Linux ⇒ no-op (egress open). Pairs with WithEgressIsolation (same server.network.egress flag).
+func WithEgressGateway(gatewayPort, dnsForwarderPort uint16, dnsUpstream netip.AddrPort) Option {
+	return func(c *config) error {
+		c.egressGatewayEnabled = true
+		c.egressGatewayPort = gatewayPort
+		c.dnsForwarderPort = dnsForwarderPort
+		c.dnsUpstream = dnsUpstream
+		return nil
+	}
 }
 
 // WithContainerExecution enables curated-image container execution (ADR-0032): functions

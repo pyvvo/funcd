@@ -125,7 +125,10 @@ func TestScenarioAccessLogCorrelated(t *testing.T) {
 // The status recorder forwards Flusher + Hijacker (SSE/WS must not break).
 func TestRecorderForwardsFlusherAndHijacker(t *testing.T) {
 	var flushed, hijacked bool
+	done := make(chan struct{})
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		defer close(done) // f.Flush() unblocks the client before the handler finishes, so publish the flags
+		// via `done` (happens-before) rather than reading them racily after http.Get returns.
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 			flushed = true
@@ -141,6 +144,7 @@ func TestRecorderForwardsFlusherAndHijacker(t *testing.T) {
 	resp, err := http.Get(srv.URL)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
+	<-done // wait for the handler to publish the flags before reading them
 	require.True(t, flushed, "the observ wrapper forwards http.Flusher")
 	require.True(t, hijacked, "the observ wrapper forwards http.Hijacker")
 }

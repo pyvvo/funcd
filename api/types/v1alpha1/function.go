@@ -170,6 +170,17 @@ type FunctionStatus struct {
 // GroupVersionKind returns the constant GVK for Function.
 func (f *Function) GroupVersionKind() GroupVersionKind { return KindFunction.GVK() }
 
+// PrincipalObject is a resolved principal-backing object for the cedar capability registry (ADR-0116):
+// a *Function or a *CatalogService whose declared bindings (spec.kv/links/blob) are materialized onto
+// the Cedar principal. It is a CLOSED interface — its marker method is unexported, so only types in
+// this package implement it, which lets the registry's Bind funcs type-switch on it without any.
+type PrincipalObject interface{ isPrincipalObject() }
+
+// isPrincipalObject marks *Function as a PrincipalObject (ADR-0116): a resolved principal-backing
+// object whose spec.kv/links/blob bindings the capability registry materializes onto the Cedar
+// principal.
+func (f *Function) isPrincipalObject() {}
+
 // Validate performs envelope validation via the shared validateMeta helper, then the
 // Function-spec semantic rules JSON Schema can't express (ADR-0046, ADR-0048): Pooling.Worker
 // is a DNS-1123 label when set; the cross-field and conditional-presence checks in

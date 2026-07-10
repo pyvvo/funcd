@@ -2,9 +2,9 @@ package cedar
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	cedar "github.com/cedar-policy/cedar-go"
 	cedartypes "github.com/cedar-policy/cedar-go/types"
@@ -14,25 +14,8 @@ import (
 )
 
 // The always-on built-in rules the driver ships (NOT user Policies) are authored as Cedar in the
-// `.cedar` files alongside this one and embedded — far more legible/editable than inline Go strings.
-// builtin_kv.cedar: kv::write single-writer. builtin_kv_read.cedar (ADR-0076): a declared spec.kv
-// binding grants kv::read (the read-side link-as-grant; unbound reads stay default-deny).
-// builtin_invoke.cedar: ADR-0064's link-as-grant preserved as a built-in permit (a declared link
-// grants invoke; defense-in-depth). builtin_s3.cedar (ADR-0080): the S3 frontend's spec.blob
-// binding-as-read-grant + the prefix-owner single-writer write rule (the KV model for blob). All
-// are concatenated into the built-in PolicySet in compile().
-
-//go:embed builtin_kv.cedar
-var builtinKVPolicies string
-
-//go:embed builtin_kv_read.cedar
-var builtinKVReadPolicies string
-
-//go:embed builtin_invoke.cedar
-var builtinInvokePolicies string
-
-//go:embed builtin_s3.cedar
-var builtinS3Policies string
+// `.cedar` files embedded per-capability (each Capability owns its Builtin text, ADR-0116) and
+// concatenated into the built-in PolicySet by the registry's Builtins() in compile().
 
 // PolicySource supplies the user Policy resources the driver compiles (ADR-0074). The driver
 // compiles the built-in rules + every user Policy into one cached PolicySet, recompiled when the
@@ -43,18 +26,26 @@ type PolicySource interface {
 	Policies(ctx context.Context) (policies []v1.Policy, revision string, err error)
 }
 
-// policyCache compiles + caches the PolicySet (built-ins + user Policies), recompiling on a
-// revision change (ADR-0074: the compiled PolicySet is cached on the hot path).
-type policyCache struct {
-	src PolicySource
-
-	mu       sync.Mutex
+// compiledPolicies is one immutable cache generation: the compiled PolicySet + the source revision it
+// was built from. Held behind an atomic.Pointer so readers on the hot path load it lock-free and a
+// rebuild swaps a fresh generation in atomically (ADR-0117 §4a — one live version + one transient during
+// build, the old GC'd once the last reader drops it; no stale accumulation).
+type compiledPolicies struct {
 	revision string
 	ps       *cedar.PolicySet
-	loaded   bool
 }
 
-// Get returns the current compiled PolicySet, recompiling if the source revision changed.
+// policyCache compiles + caches the PolicySet (built-ins + user Policies + compiled EgressPolicies),
+// recompiling only on a revision change (ADR-0074/0117). Reads are lock-free (atomic load); the mutex
+// single-flights the recompile so a burst of concurrent misses compiles once.
+type policyCache struct {
+	src PolicySource
+	cur atomic.Pointer[compiledPolicies]
+	mu  sync.Mutex // guards the recompile only (single-flight), never the read path
+}
+
+// Get returns the current compiled PolicySet, recompiling if the source revision changed. The fast path
+// (revision unchanged) is a lock-free atomic load; only a revision change takes the single-flight lock.
 func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 	const op = "cedar.policyCache.Get"
 	policies, rev, err := c.src.Policies(ctx)
@@ -62,16 +53,20 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "load policies")
 	}
 
+	if cur := c.cur.Load(); cur != nil && cur.revision == rev {
+		return cur.ps, nil // lock-free hot path
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.loaded && c.revision == rev {
-		return c.ps, nil
+	if cur := c.cur.Load(); cur != nil && cur.revision == rev { // re-check under the lock (a peer may have built it)
+		return cur.ps, nil
 	}
 	ps, err := compile(policies)
 	if err != nil {
 		return nil, err
 	}
-	c.ps, c.revision, c.loaded = ps, rev, true
+	c.cur.Store(&compiledPolicies{revision: rev, ps: ps}) // atomic swap; the old generation is GC'd
 	return ps, nil
 }
 
@@ -80,7 +75,7 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 // stored Policy compiling is an invariant; a compile failure here means corruption.
 func compile(policies []v1.Policy) (*cedar.PolicySet, error) {
 	const op = "cedar.compile"
-	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtinKVPolicies+"\n"+builtinKVReadPolicies+"\n"+builtinInvokePolicies+"\n"+builtinS3Policies))
+	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(defaultRegistry.Builtins()))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
 	}

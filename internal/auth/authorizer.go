@@ -73,6 +73,10 @@ const (
 	// ActionS3Write is the Cedar action for an S3 put/delete over the blob substrate (ADR-0080):
 	// single-writer — permitted only when the principal IS the prefix owner. Resource = a BlobPrefix.
 	ActionS3Write Action = "s3::write"
+	// ActionEgressConnect is the Cedar action for an outbound worker connection (ADR-0117, F81):
+	// principal = the caller Function (source-IP resolved), resource = a NetDestination. Default-deny —
+	// a grant comes only from a compiled EgressPolicy; no built-in permit.
+	ActionEgressConnect Action = "egress::connect"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

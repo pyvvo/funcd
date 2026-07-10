@@ -44,6 +44,14 @@ const (
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
 	// from Kind.Validate's known-CRUD set by design.
 	KindS3Identity Kind = "S3Identity"
+	// KindNetDestination is the ephemeral egress destination a worker connects to (ADR-0117, F81):
+	// an AUTHORIZATION-ONLY kind (the exact KindS3Identity precedent) — NOT a stored/CRUD resource, so
+	// it has no metastore registration (excluded from Kind.Validate's CRUD set / NewObject / AllKinds).
+	// It exists only as the Cedar resource type the egress capability materializes for an egress::connect
+	// decision. Its EntityRef reinterprets the fields: the destination rides the plain-string Path,
+	// PINNED encoding Path = "<dst-ip>:<port>#<domain1>,<domain2>,…" (the "#…" domain segment is the
+	// forwarder-attested set, empty for a pure-IP/CIDR target); Name/Namespace are unused.
+	KindNetDestination Kind = "NetDestination"
 )
 
 // Validate returns fault.Invalid if the Kind is not one of the known kinds.

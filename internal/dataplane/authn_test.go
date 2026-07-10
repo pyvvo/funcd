@@ -122,8 +122,8 @@ func TestScenarioAuthnDisabledPassthrough(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: readyEndpoints{warm: map[v1.ObjectName]string{"api": "u"}, upstream: up.URL}, Scaler: &spyScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, router.New(), nil, nil) // nil enforcer
-	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthOpen)       // open stance
+	h := dataplane.Handler(st, act, router.New(), nil, nil)     // nil enforcer
+	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthOpen) // open stance
 	seedFn(t, st, "team", "api")
 
 	resp := authReq(t, h, "/function/api", "team", "") // no bearer

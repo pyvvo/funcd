@@ -19,6 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"net/netip"
+
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/blob"
@@ -32,6 +34,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/green-0-rabbit/funcd/internal/network"
 	"github.com/green-0-rabbit/funcd/internal/platform/config"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/platform/version"
@@ -227,6 +230,35 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	// Edge authn PEP (ADR-0113, F77): opt-in per-target auth-stance enforcement on the data plane.
 	if cfg.Server.Auth.Edge {
 		opts = append(opts, funcd.WithEdgeAuth())
+	}
+
+	// Egress network isolation (ADR-0115, FEAT-0007/F80): opt-in worker-egress default-deny + redirect to
+	// the egress gateway (F81). Linux/containerd only (network.New is a no-op elsewhere). The subnet comes
+	// from the containerd runtime; the gateway port / resolver / internal allowlist from config.
+	if n := cfg.Server.Network; n.Egress {
+		subnet, err := netip.ParsePrefix(cfg.Runtime.Containerd.SubnetCIDR)
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse worker subnet %q: %w", cfg.Runtime.Containerd.SubnetCIDR, err)
+		}
+		pol := network.Policy{WorkerSubnet: subnet, GatewayPort: uint16(n.EgressGatewayPort), DNSForwarderPort: uint16(n.DNSForwarderPort)}
+		if n.DNSResolver != "" {
+			if pol.DNSResolver, err = netip.ParseAddrPort(n.DNSResolver); err != nil {
+				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse dnsResolver %q: %w", n.DNSResolver, err)
+			}
+		}
+		for _, s := range n.InternalAllow {
+			ap, err := netip.ParseAddrPort(s)
+			if err != nil {
+				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse internalAllow %q: %w", s, err)
+			}
+			pol.InternalAllow = append(pol.InternalAllow, ap)
+		}
+		opts = append(opts, funcd.WithEgressIsolation(network.New(true), pol))
+		// Egress gateway + DNS forwarder (ADR-0117, F81): the enforcement point F80 redirects into. Only
+		// wired when a forwarder port is configured (the forwarder is mandatory for domain policy).
+		if n.DNSForwarderPort != 0 {
+			opts = append(opts, funcd.WithEgressGateway(uint16(n.EgressGatewayPort), uint16(n.DNSForwarderPort), pol.DNSResolver))
+		}
 	}
 
 	// Edge observability (ADR-0114, F76): opt-in RED metrics + edge trace span + access log.
@@ -506,6 +538,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 			Snapshotter: c.Snapshotter,
 			CNIBinDir:   c.CNIBinDir,
 			CNIConfDir:  c.CNIConfDir,
+			StateDir:    c.StateDir,
 			SubnetCIDR:  c.SubnetCIDR,
 		})
 		if err != nil {

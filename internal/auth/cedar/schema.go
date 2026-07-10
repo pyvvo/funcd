@@ -27,39 +27,30 @@ const (
 	entityTypeBucket     = "Bucket"     // the blob domain (the KVStore parallel)
 	entityTypeBlobPrefix = "BlobPrefix" // a sub-domain carrying owner (the KVTable parallel)
 	entityTypeS3Identity = "S3Identity" // the external SigV4 principal only (not an in-platform Function)
+	// ADR-0117 (F81 egress): the ephemeral outbound destination — carries {ip, port, domains} attrs,
+	// materialized from the request EntityRef's Path (no MetaReader read). Its id is the "<ip>:<port>" prefix.
+	entityTypeNetDestination = "NetDestination"
 )
 
-// curatedActions is the fixed set of Cedar actions this driver recognizes (ADR-0074). cedar-go's
-// schema validator is experimental, so policy validity is checked against this curated set + the
-// curated entity types below (the parser handles syntax; this handles the vocabulary). Future
-// actions (link::invoke, egress::send, …) extend this set in their consumer ADRs.
+// defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
+// (kv, invoke, s3) + the two default principal sources (Function-first, CatalogService-fallback). The
+// schema vocabulary (KnownAction/KnownEntityType), the built-in PolicySet (Builtins), and the default
+// EntityProvider are all assembled from it — replacing the hand-listed curatedActions/curatedEntityTypes
+// maps. A new capability registers here (or in a consumer's own Registry) with no shared-code edit. The
+// inputs are static + valid, so NewRegistry never errors; the explicit `_` discards the (nil) error
+// (a panic is forbidden outside main).
 //
-//nolint:gochecknoglobals // a fixed, effectively-const curated schema (ADR-0074/0075)
-var curatedActions = map[auth.Action]bool{
-	auth.ActionKVRead:     true,
-	auth.ActionKVWrite:    true,
-	auth.ActionLinkInvoke: true, // ADR-0075: fn→fn invoke (Function principal + Function resource)
-	auth.ActionS3Read:     true, // ADR-0080: S3 read over the blob substrate (BlobPrefix resource)
-	auth.ActionS3Write:    true, // ADR-0080: S3 write over the blob substrate (single-writer = prefix owner)
-}
+//nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
+var defaultRegistry, _ = NewRegistry(
+	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability()},
+	[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+)
 
-// curatedEntityTypes is the fixed set of Cedar entity types this driver models (ADR-0074).
-//
-//nolint:gochecknoglobals // a fixed, effectively-const curated schema (ADR-0074)
-var curatedEntityTypes = map[string]bool{
-	entityTypeFunction:   true,
-	entityTypeKVStore:    true,
-	entityTypeKVTable:    true,
-	entityTypeBucket:     true, // ADR-0080
-	entityTypeBlobPrefix: true, // ADR-0080
-	entityTypeS3Identity: true, // ADR-0080
-}
+// KnownAction reports whether action is in the assembled schema vocabulary (ADR-0116).
+func KnownAction(action string) bool { return defaultRegistry.KnownAction(auth.Action(action)) }
 
-// KnownAction reports whether action is in the curated schema (ADR-0074).
-func KnownAction(action string) bool { return curatedActions[auth.Action(action)] }
-
-// KnownEntityType reports whether entityType is in the curated schema (ADR-0074).
-func KnownEntityType(entityType string) bool { return curatedEntityTypes[entityType] }
+// KnownEntityType reports whether entityType is in the assembled schema vocabulary (ADR-0116).
+func KnownEntityType(entityType string) bool { return defaultRegistry.KnownEntityType(entityType) }
 
 // policyScope is the structured form of one parsed Cedar policy's scope (ADR-0074): the action it
 // names and the principal/resource entity types it references. It mirrors cedar-go's policy JSON.

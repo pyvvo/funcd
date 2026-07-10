@@ -118,7 +118,7 @@ func (h *headerWriter) Write(b []byte) (int, error) {
 	h.apply()
 	return h.ResponseWriter.Write(b)
 }
-func (h *headerWriter) Flush() { flush(h.ResponseWriter) }
+func (h *headerWriter) Flush()                                       { flush(h.ResponseWriter) }
 func (h *headerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hijack(h.ResponseWriter) }
 
 func gzipMW() func(http.Handler) http.Handler {

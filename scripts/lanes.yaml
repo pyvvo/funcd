@@ -312,3 +312,32 @@ funclog:
       - pylog-burst
     tries: 60
   venom: e2e/funclog.venom.yml
+
+egress:
+  description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail.
+  dir: examples/js/egress-probe
+  build:
+    # egress-probe → probe.mjs + probe.schema.json (esbuild + the shim's contract toolchain via node_modules).
+    - ln -sfn ../../../shim/nodejs/node_modules examples/js/egress-probe/node_modules
+    - cd examples/js/egress-probe && node --experimental-strip-types build.ts
+  stage:
+    - probe.mjs
+    - probe.schema.json
+    - function.yaml
+    - egresspolicy-wildcard.yaml   # applied MID-SUITE by the Venom allow-cases (deny-then-allow ordering)
+    - egresspolicy-cidr.yaml       # applied MID-SUITE by the Venom CIDR allow-case
+    - funcdconfig.yaml             # the ONLY lane funcdconfig with server.network.egress on (F80+F81 armed)
+  push:
+    - artifact: probe.mjs
+      ref: egress-probe
+      schema: probe.schema.json
+  # Only the Function is applied at deploy. The EgressPolicies are applied IN-VM by the Venom suite so the
+  # default-deny (no policy) case is observable BEFORE any allow-list exists — the deny-then-allow ordering.
+  apply:
+    - function.yaml
+  ready:
+    kind: function
+    names:
+      - egress-probe
+    tries: 60
+  venom: e2e/egress.venom.yml

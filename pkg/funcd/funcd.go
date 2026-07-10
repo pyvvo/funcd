@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,6 +50,8 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/gateway"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/green-0-rabbit/funcd/internal/network"
+	"github.com/green-0-rabbit/funcd/internal/network/egress"
 	"github.com/green-0-rabbit/funcd/internal/platform/clock"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
 	"github.com/green-0-rabbit/funcd/internal/provider"
@@ -115,6 +118,19 @@ type config struct {
 	gateway              gateway.Gateway
 	logger               *slog.Logger
 	telemetry            *observability.Telemetry
+
+	// egress network isolation (ADR-0115, FEAT-0007/F80). nil ⇒ not configured. Apply at Run start
+	// (before workers serve), Remove at Shutdown. A no-op when disabled or non-Linux.
+	netManager network.Manager
+	netPolicy  network.Policy
+
+	// egress gateway + DNS forwarder (ADR-0117, FEAT-0007/F81): the transparent egress PEP + the domain
+	// trust anchor, wired when enabled (Linux/containerd only; a no-op elsewhere). Zero ⇒ not configured
+	// (no gateway/forwarder started). Pairs with WithEgressIsolation (same server.network.egress flag).
+	egressGatewayEnabled bool
+	egressGatewayPort    uint16
+	dnsForwarderPort     uint16
+	dnsUpstream          netip.AddrPort
 
 	// control plane (ADR-0028)
 	listenAddr  string
@@ -225,14 +241,17 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager         // per-function worker-node local API broker (ADR-0064)
-	workflowRuns      runstate.Store         // durable workflow run state (ADR-0094); closed on shutdown
-	workflowEngine    *workflow.Engine       // the run engine (ADR-0094); drives the retention sweep
-	workflowRetention time.Duration          // terminal-run retention horizon (0 ⇒ no sweep)
-	logSink           *funclog.BlobSink      // structured function-log capture sink (ADR-0081); nil if unwired
-	traceSink         *funclog.BlobTraceSink // per-invocation trace sink (ADR-0101); nil if unwired/disabled
-	compactor         *compact.Compactor     // funclog compacted compaction pipeline (ADR-0083); nil if unwired
-	s3gw              *s3gateway.Server      // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
+	invokeMgr         *local.Manager            // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store            // durable workflow run state (ADR-0094); closed on shutdown
+	workflowEngine    *workflow.Engine          // the run engine (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration             // terminal-run retention horizon (0 ⇒ no sweep)
+	logSink           *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
+	traceSink         *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	compactor         *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
+	s3gw              *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
+	egressGateway     egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
+	egressForwarder   egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
+	egressWorkers     *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -360,7 +379,18 @@ func (p *Platform) buildControlPlane() error {
 	// resource KVTable + parent KVStore); policies are the v1.Policy resources, compiled + cached
 	// (recompiled on a store-revision change). DEFAULT-DENY — a read needs a permitting Policy; the
 	// owner-write forbid is built in. rbac still decides control-plane CRUD (c.authorizer, unchanged).
-	cedarEntities, err := cedarauth.NewEntityProvider(cedarMetaReader{c.store})
+	// The capability registry (ADR-0116): the three migrated capabilities (kv, invoke, s3) + the two
+	// principal sources (Function-first, CatalogService-fallback) registered here at the composition
+	// root. The schema vocabulary, the built-in PolicySet, and this composite EntityProvider are all
+	// assembled from the registered set — a new capability (egress next) registers with no shared edit.
+	cedarRegistry, err := cedarauth.NewRegistry(
+		[]cedarauth.Capability{cedarauth.KVCapability(), cedarauth.InvokeCapability(), cedarauth.S3Capability(), cedarauth.EgressCapability()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.CatalogServicePrincipalSource()},
+	)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")
+	}
+	cedarEntities, err := cedarRegistry.EntityProvider(cedarMetaReader{c.store})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar entity provider")
 	}
@@ -379,6 +409,29 @@ func (p *Platform) buildControlPlane() error {
 	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
 	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
 	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, p.logger)
+
+	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
+	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
+	// The gateway authorizes every outbound worker connection via the cedar PDP (egress::connect over
+	// the forwarder-attested NetDestination); the forwarder records (worker,domain)→IP so a domain rule
+	// is trustworthy. The WorkerIndex is populated by the containerd runtime at worker provisioning (§5).
+	if c.egressGatewayEnabled {
+		p.egressWorkers = egress.NewMemoryWorkerIndex()
+		fwd := egress.NewForwarder(
+			netip.AddrPortFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), c.dnsForwarderPort),
+			c.dnsUpstream,
+			p.egressWorkers,                // src-IP → namespace (ADR-0117 §5)
+			storeWildcardPatterns{c.store}, // namespace → EgressPolicy wildcards (judge Major 2 dep)
+		)
+		p.egressForwarder = fwd
+		p.egressGateway = egress.New(true, egress.Deps{
+			GatewayPort: c.egressGatewayPort,
+			Workers:     p.egressWorkers,
+			DNS:         fwd,
+			Authz:       cedarPDP,
+			Audit:       egressAuditSink{logger: p.logger.With("component", "egress.audit")},
+		})
+	}
 
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
 	// cedar PDP as the PEP. When enabled, load/generate the node master secret, build the server, and
@@ -759,6 +812,15 @@ func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
 	p.logProviders(ctx)
 
+	// Egress network isolation (ADR-0115, F80): program the default-deny + redirect substrate once, at
+	// start, before any worker serves (fail-closed) — a no-op when disabled or non-Linux. A failure to
+	// program is fatal: a half-applied egress fence must not run.
+	if p.cfg.netManager != nil {
+		if err := p.cfg.netManager.Apply(ctx, p.cfg.netPolicy); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "apply worker egress isolation")
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -802,6 +864,31 @@ func (p *Platform) Run(ctx context.Context) error {
 			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
 			}
+		}()
+	}
+	if p.egressForwarder != nil { // ADR-0117 (F81): the DNS forwarder / domain trust anchor (stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.egressForwarder.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "egress dns forwarder stopped", "error", err)
+			}
+		}()
+	}
+	if p.egressGateway != nil { // ADR-0117 (F81): the transparent egress PEP (no-op on non-Linux; stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.egressGateway.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "egress gateway stopped", "error", err)
+			}
+		}()
+	}
+	if p.egressWorkers != nil { // ADR-0117 §5: keep the src-IP→worker index synced from the running worker set
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.syncEgressWorkers(ctx)
 		}()
 	}
 	// TLS termination (ADR-0111, F74): when configured, both listeners serve HTTPS. The provider is
@@ -876,6 +963,12 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
+		}
+		if p.cfg.netManager != nil {
+			_ = p.cfg.netManager.Remove(ctx) // tear down the egress nftables tables (ADR-0115, F80)
+		}
+		if p.egressGateway != nil {
+			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
 		}
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()
@@ -1040,24 +1133,189 @@ func (r cedarMetaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1
 	return r.s.Get(ctx, gvk, ns, name)
 }
 
-// policySource adapts store.Store to cedarauth.PolicySource (ADR-0074): it lists every v1.Policy
-// (cluster-wide — namespace is encoded in the Cedar entity IDs) and returns the store-wide
-// resourceVersion as the cache revision, so the cedar driver recompiles only on a Policy change.
+// policySource adapts store.Store to cedarauth.PolicySource (ADR-0074/0117): it lists every user
+// v1.Policy AND compiles every v1.EgressPolicy into synthetic v1.Policy Cedar text (ADR-0117, M1 — the
+// egress grant reaches the PDP through the SAME PolicySource path, listed alongside KindPolicy). The
+// cache revision is the store-wide resourceVersion (monotonic, bumped by ANY write — a Policy,
+// EgressPolicy, OR namespace Function add/remove), so an appliesTo-affecting Function change recompiles.
 type policySource struct{ s store.Store }
 
 func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error) {
 	const op = "funcd.policySource.Policies"
-	res, err := p.s.List(ctx, v1.KindPolicy.GVK(), store.ListOptions{})
+	polRes, err := p.s.List(ctx, v1.KindPolicy.GVK(), store.ListOptions{})
 	if err != nil {
 		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "list policies")
 	}
-	out := make([]v1.Policy, 0, len(res.Items))
-	for _, o := range res.Items {
+	out := make([]v1.Policy, 0, len(polRes.Items))
+	for _, o := range polRes.Items {
 		if pol, ok := o.(*v1.Policy); ok {
 			out = append(out, *pol)
 		}
 	}
-	return out, res.ResourceVersion, nil
+
+	// ADR-0117 (F81): compile each namespace's EgressPolicy(ies) into synthetic v1.Policy Cedar text,
+	// scoped to the namespace Function-set (appliesTo expansion). Listed alongside the user Policies.
+	epRes, err := p.s.List(ctx, v1.KindEgressPolicy.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "list egress policies")
+	}
+	fnRes, err := p.s.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
+	if err != nil {
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "list functions")
+	}
+	fnByNS := map[v1.NamespaceName][]v1.ObjectName{}
+	for _, o := range fnRes.Items {
+		if fn, ok := o.(*v1.Function); ok {
+			fnByNS[fn.Namespace] = append(fnByNS[fn.Namespace], fn.Name)
+		}
+	}
+	for _, o := range epRes.Items {
+		ep, ok := o.(*v1.EgressPolicy)
+		if !ok {
+			continue
+		}
+		syn, cerr := cedarauth.CompileEgressPolicy(ep.Namespace, ep, fnByNS[ep.Namespace])
+		if cerr != nil {
+			return nil, "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "compile egress policy %q/%q", ep.Namespace, ep.Name)
+		}
+		out = append(out, syn...)
+	}
+
+	// The store-wide resourceVersion is monotonic across kinds; the freshest of the three lists keys the
+	// cache so a Policy/EgressPolicy/Function write recompiles (ADR-0117 M1 cache-revision fix).
+	rev := maxRevision(polRes.ResourceVersion, epRes.ResourceVersion, fnRes.ResourceVersion)
+	return out, rev, nil
+}
+
+// storeWildcardPatterns adapts store.Store to egress.WildcardPatterns (ADR-0117, judge Major 2): it
+// returns a namespace's EgressPolicy wildcard domain patterns ("*.x.com") so the DNS forwarder injects a
+// matched pattern token, keeping wildcard authorization an exact set-membership check over a
+// forwarder-derived token. Derived from the same EgressPolicy set the PDP compiles (no duplicate state).
+type storeWildcardPatterns struct{ s store.Store }
+
+func (w storeWildcardPatterns) Wildcards(ns v1.NamespaceName) []string {
+	res, err := w.s.List(context.Background(), v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, o := range res.Items {
+		ep, ok := o.(*v1.EgressPolicy)
+		if !ok {
+			continue
+		}
+		for i := range ep.Spec.Rules {
+			for _, d := range ep.Spec.Rules[i].To.Domains {
+				if len(d) > 2 && d[0] == '*' && d[1] == '.' {
+					out = append(out, d)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// egressAuditSink records each egress decision (ADR-0117): every connection (allowed + blocked) is
+// logged. Funclog-envelope convergence is an ADR-0117 open question resolved at funclog wiring; V1 logs
+// through slog so the audit trail exists.
+type egressAuditSink struct{ logger *slog.Logger }
+
+func (s egressAuditSink) Egress(ctx context.Context, rec egress.AuditRecord) {
+	s.logger.InfoContext(ctx, "egress decision",
+		"namespace", rec.Namespace, "function", rec.Function, "domain", rec.Domain,
+		"ip", rec.IP.String(), "port", rec.Port, "allowed", rec.Allowed, "reason", rec.Reason)
+}
+
+// EgressWorkerIndex returns the egress WorkerIndex the containerd runtime populates at worker
+// provisioning (ADR-0117 §5): on worker-up it records the funcd0 IP → the worker's (namespace, function)
+// Ref so the gateway can authenticate the caller by source IP. nil ⇒ egress is not enabled.
+func (p *Platform) EgressWorkerIndex() *egress.MemoryWorkerIndex { return p.egressWorkers }
+
+// syncEgressWorkers keeps the ADR-0117 §5 WorkerIndex (src funcd0 IP → principal Ref) reconciled with the
+// runtime's running worker set, so the egress gateway can authenticate a redirected connection by source
+// IP (and the DNS forwarder can resolve a worker's namespace for wildcard-token injection). It polls the
+// runtime — the same observed view the Function reconciler drives — every interval, diffing against the
+// last snapshot: a newly-running worker's IP is Added, a vanished one Removed. Runs only when the egress
+// gateway is wired; stops on ctx cancel.
+func (p *Platform) syncEgressWorkers(ctx context.Context) {
+	const interval = 2 * time.Second
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	prev := map[netip.Addr]auth.EntityRef{}
+	prev = p.reconcileEgressWorkers(ctx, prev) // seed immediately (don't wait a full tick)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			prev = p.reconcileEgressWorkers(ctx, prev)
+		}
+	}
+}
+
+// reconcileEgressWorkers computes the current running-worker IP→Ref set from the runtime (over the
+// namespaces that have Functions) and applies the diff against prev to the WorkerIndex, returning the new
+// snapshot. A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both the gateway
+// lookup and the DNS-forwarder correlation. A transient store error keeps the current index (returns prev).
+func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
+	fnRes, err := p.cfg.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
+	if err != nil {
+		return prev
+	}
+	seen := map[v1.NamespaceName]struct{}{}
+	live := map[netip.Addr]auth.EntityRef{}
+	for _, o := range fnRes.Items {
+		fn, ok := o.(*v1.Function)
+		if !ok {
+			continue
+		}
+		if _, done := seen[fn.Namespace]; done {
+			continue
+		}
+		seen[fn.Namespace] = struct{}{}
+		insts, lerr := p.cfg.runtime.List(ctx, fn.Namespace)
+		if lerr != nil {
+			continue
+		}
+		for _, in := range insts {
+			if in.State != runtime.StateRunning || in.IP == "" {
+				continue
+			}
+			ip, perr := netip.ParseAddr(in.IP)
+			if perr != nil {
+				continue
+			}
+			live[ip] = auth.EntityRef{Type: v1.KindFunction, Namespace: in.Namespace, Name: in.Name}
+		}
+	}
+	for ip, ref := range live {
+		if pr, ok := prev[ip]; !ok || pr != ref {
+			p.egressWorkers.Add(ip, ref)
+		}
+	}
+	for ip := range prev {
+		if _, ok := live[ip]; !ok {
+			p.egressWorkers.Remove(ip)
+		}
+	}
+	return live
+}
+
+// maxRevision returns the numerically-greatest of the store resourceVersions (all uint64-formatted); a
+// non-numeric value sorts as 0. Used to key the policy cache on the freshest cross-kind write.
+func maxRevision(revs ...string) string {
+	best := ""
+	var bestN uint64
+	for _, r := range revs {
+		n, perr := strconv.ParseUint(r, 10, 64)
+		if perr != nil {
+			continue
+		}
+		if best == "" || n > bestN {
+			best, bestN = r, n
+		}
+	}
+	return best
 }
 
 // s3BucketFor builds the s3gateway BucketFor resolver (ADR-0080): it maps an S3

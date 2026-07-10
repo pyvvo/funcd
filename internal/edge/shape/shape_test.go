@@ -112,7 +112,10 @@ func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	// Headers + compression both wrap the writer — both must forward the streaming interfaces.
 	cfg := shape.Config{Headers: &shape.Headers{Set: map[string]string{"X-A": "b"}}, Compression: true}
 	var flushed, hijackable bool
+	done := make(chan struct{})
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		defer close(done) // happens-before the test's reads — f.Flush() unblocks the client before the
+		// handler finishes, so the flags must be published via `done`, not read racily after http.Get.
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 			flushed = true
@@ -124,6 +127,7 @@ func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	resp, err := http.Get(srv.URL)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
+	<-done // wait for the handler to finish writing the flags before reading them
 	require.True(t, flushed, "the shaping wrapper forwards http.Flusher")
 	require.True(t, hijackable, "the shaping wrapper forwards http.Hijacker")
 }

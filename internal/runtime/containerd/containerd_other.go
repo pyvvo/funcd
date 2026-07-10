@@ -17,6 +17,7 @@ type Config struct {
 	Snapshotter string // overlayfs
 	CNIBinDir   string // /opt/cni/bin
 	CNIConfDir  string // funcd-written conflist dir
+	StateDir    string // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string // lateral bridge subnet
 }
 

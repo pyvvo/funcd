@@ -1,0 +1,17 @@
+{
+  "name": "@funcd/example-egress-probe",
+  "private": true,
+  "type": "module",
+  "description": "A funcd egress-enforcement example (ADR-0117, F81): a probe function that tries to open an outbound connection to a given URL and reports whether the in-binary egress gateway ALLOWED or REFUSED it — proving default-deny, allow-list permits, and the sni-spoof/forwarder-attestation invariant on real containerd. Authored in TypeScript against @funcd/shim-nodejs; the contract build generates the JSON Schema from FuncInput/FuncOutput, bakes an eval-free validator, and emits probe.mjs + the schema file.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node --experimental-strip-types build.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0",
+    "ts-json-schema-generator": "^2.9.0",
+    "ajv": "^8.20.0"
+  }
+}

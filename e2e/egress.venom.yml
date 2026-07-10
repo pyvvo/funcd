@@ -1,0 +1,121 @@
+# Venom e2e for the egress-probe containerd lane (ADR-0117, F81) — the declarative invoke + assert phase
+# of `just lima-example egress`, run host-side AFTER the self-deploying Lima VM is Ready. It is the
+# BEHAVIORAL coverage the ADR deferred to Lima (the in-process decision/compile tests are cross-platform).
+#
+# The lane's funcdconfig turns on server.network.egress, so on this real containerd node F80 default-denies
+# worker egress and REDIRECTs remaining external worker TCP into F81's in-binary egress gateway, while
+# worker :53 is redirected into funcd's DNS forwarder (the domain trust anchor). The egress-probe function
+# does a global fetch(url) and returns { ok } — a live read of the gateway's allow/deny decision. Each
+# testcase mirrors an ADR Scenario:
+#   * no-egresspolicy-denies-all / confidential-provably-local — no EgressPolicy ⇒ external DENIED (ok=false).
+#   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
+#     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
+#   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1 ALLOWED (ok=true); proves resource.ip.isInRange.
+#   * CIDR deny — an unlisted IP (1.0.0.1) stays DENIED (ok=false); the allow-list is closed (implicit deny).
+#   * blocked-connection-audited — the gateway emits an egress audit record (allowed=false) to the funclog.
+#
+# The EgressPolicies are applied MID-SUITE (in-VM `limactl shell` — co-located with the daemon, no path leak;
+# {{.vm}} is injected by the recipe --var) so the deny-then-allow ordering is observable. http steps hit the
+# VM's forwarded 127.0.0.1 data plane. Retry/delay is the wait (reconcile + policy-cache recompile).
+name: egress-probe enforcement (ADR-0117 / F81, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  # 1) DEFAULT-DENY (needs no outbound internet): with NO EgressPolicy, a confidential worker reaches
+  #    nothing external. Whether DNS resolves or the gateway refuses the connect, the probe reports ok=false.
+  - name: no-egresspolicy-denies-all
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers: { content-type: application/json }
+        body: '{"data":{"url":"https://example.com"}}'
+        # retry-as-wait: the first invoke may land before the sandbox is warm; retry to a 200 envelope.
+        retry: 20
+        delay: 2
+        info: "no-policy probe → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual false   # default-deny: no EgressPolicy ⇒ nothing external
+
+  # 2) ALLOW via a WILDCARD domain rule (the highest-value new-mechanism test). Apply a `*.example.com`
+  #    EgressPolicy, then probe a matching subdomain. The DNS forwarder attests www.example.com AND injects
+  #    the matched `*.example.com` token; the compiled permit `resource.domains.contains("*.example.com")`
+  #    fires and the gateway splices. Requires outbound HTTPS reachability from the VM (documented).
+  - name: allowlist-permits-wildcard-domain
+    steps:
+      - type: exec
+        # sudo bash -c '…' — NOT `sudo env A=b funcdctl`: over `limactl shell -- …` the ssh arg-rejoin
+        # collapses the env assignments into one FUNCD_SERVER value (invalid-port parse error), so the
+        # apply silently fails and the policy is never applied (the e2e bug that made the allow-cases fail).
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/egresspolicy-wildcard.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers: { content-type: application/json }
+        body: '{"data":{"url":"https://www.example.com"}}'
+        # absorb the policy-cache recompile + the worker-index sync tick (deny-then-allow settle).
+        retry: 25
+        delay: 3
+        info: "wildcard-allow probe → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual true   # *.example.com:443 permit ⇒ www.example.com spliced
+
+  # 3) ALLOW via a CIDR rule (no DNS): apply a 1.1.1.1/32 EgressPolicy, probe the literal IP. No DNS query
+  #    is opened, so the gateway authorizes purely on the destination IP via resource.ip.isInRange.
+  - name: cidr-rule-permits-declared-ip
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/egresspolicy-cidr.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers: { content-type: application/json }
+        body: '{"data":{"url":"https://1.1.1.1"}}'
+        retry: 25
+        delay: 3
+        info: "cidr-allow probe → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual true   # 1.1.1.1/32:443 permit ⇒ isInRange match ⇒ spliced
+
+  # 4) The allow-list stays CLOSED: with only 1.1.1.1/32 + *.example.com permitted, a probe of an unlisted
+  #    IP (1.0.0.1 — reachable on the wire, but not in any rule) is DENIED by the gateway, not the network.
+  #    No DNS is opened, so this deny is deterministic regardless of the VM's resolver.
+  - name: cidr-denies-unlisted-ip
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers: { content-type: application/json }
+        body: '{"data":{"url":"https://1.0.0.1"}}'
+        retry: 10
+        delay: 2
+        info: "unlisted-ip probe → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual false   # 1.0.0.1 ∉ 1.1.1.1/32 and no domain ⇒ implicit deny
+
+  # 5) blocked-connection-audited: the gateway audits EVERY decision to the funclog channel (slog). After
+  #    the denied connect above (1.0.0.1 — needs no DNS), the funcd journal carries an egress deny record.
+  - name: blocked-connection-audited
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo journalctl -u funcd-demo --no-pager | grep 'egress decision' | grep 'allowed=false' | tail -5
+        retry: 10
+        delay: 2
+        info: "egress audit (deny) → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "egress decision"
+          - result.systemout ShouldContainSubstring "allowed=false"

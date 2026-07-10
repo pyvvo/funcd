@@ -54,6 +54,7 @@ type Config struct {
 	Snapshotter string // overlayfs
 	CNIBinDir   string // /opt/cni/bin
 	CNIConfDir  string // funcd-written conflist dir
+	StateDir    string // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string // lateral bridge subnet
 }
 
@@ -78,10 +79,11 @@ type worker struct {
 }
 
 type driver struct {
-	cfg    Config
-	client *containerd.Client
-	cni    gocni.CNI
-	mu     sync.Mutex
+	cfg        Config
+	client     *containerd.Client
+	cni        gocni.CNI
+	resolvPath string // host path to the shared worker /etc/resolv.conf (bind-mounted into every worker)
+	mu         sync.Mutex
 
 	capture   runtime.LogCaptureFunc // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
 	instances map[runtime.InstanceID]*worker
@@ -165,7 +167,43 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "load cni config from %q", cfg.CNIConfDir)
 	}
-	return &driver{cfg: cfg, client: client, cni: cni, instances: map[runtime.InstanceID]*worker{}}, nil
+	resolvPath, err := writeWorkerResolv(cfg.StateDir, cfg.SubnetCIDR)
+	if err != nil {
+		_ = client.Close()
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "provision worker resolv.conf")
+	}
+	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, instances: map[runtime.InstanceID]*worker{}}, nil
+}
+
+// writeWorkerResolv writes the shared /etc/resolv.conf funcd bind-mounts into every worker, pointing at
+// the funcd0 gateway (the subnet's .1) on :53. Raw containerd — unlike CRI/kubelet — provisions NO
+// resolver, so without this a worker has no /etc/resolv.conf and cannot resolve any domain (the egress
+// e2e caught this: all domain EgressPolicy rules were dead because workers never sent DNS). With egress
+// enabled, the worker's :53 is REDIRECTed into funcd's DNS forwarder (ADR-0117), so the nameserver value
+// is just the redirect entry point — the always-present gateway is the natural target. Returns the host
+// path to bind-mount read-only at the worker's /etc/resolv.conf.
+func writeWorkerResolv(stateDir, subnetCIDR string) (string, error) {
+	const op = "runtime.containerd.writeWorkerResolv"
+	_, ipnet, err := net.ParseCIDR(subnetCIDR)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Invalid, op, "parse subnet %q", subnetCIDR)
+	}
+	gw := make(net.IP, len(ipnet.IP))
+	copy(gw, ipnet.IP)
+	gw[len(gw)-1] |= 1 // the subnet's .1 — the funcd0 bridge gateway (isGateway host-local IPAM)
+	dir := stateDir
+	if dir == "" {
+		dir = os.TempDir() // fallback for callers that don't set StateDir (e.g. the bench harness)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // funcd state dir, world-readable is fine
+		return "", fault.Wrapf(err, fault.Internal, op, "create state dir %q", dir)
+	}
+	path := filepath.Join(dir, "worker-resolv.conf")
+	body := fmt.Sprintf("nameserver %s\noptions timeout:2 attempts:2\n", gw.String())
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil { //nolint:gosec // world-readable resolv.conf is expected
+		return "", fault.Wrapf(err, fault.Internal, op, "write %q", path)
+	}
+	return path, nil
 }
 
 func (d *driver) nsCtx(ctx context.Context, ns v1alpha1.NamespaceName) context.Context {
@@ -226,6 +264,14 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 			_ = os.RemoveAll(logDir)
 		}
 	}()
+
+	// Give the worker a resolver: raw containerd provisions no /etc/resolv.conf, so without this the
+	// worker cannot resolve any domain (and every domain EgressPolicy rule is dead). Bind-mount the
+	// shared funcd resolv.conf (nameserver = the funcd0 gateway; with egress on, :53 is REDIRECTed into
+	// the DNS forwarder — ADR-0117). Read-only.
+	if d.resolvPath != "" {
+		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: d.resolvPath, Target: "/etc/resolv.conf", ReadOnly: true})
+	}
 
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),

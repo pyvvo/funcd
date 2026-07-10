@@ -88,6 +88,11 @@ type CatalogServiceStatus struct {
 // GroupVersionKind returns the constant GVK for CatalogService.
 func (c *CatalogService) GroupVersionKind() GroupVersionKind { return KindCatalogService.GVK() }
 
+// isPrincipalObject marks *CatalogService as a cedar PrincipalObject (ADR-0116/0088): an add-on provider
+// resolved as an S3 principal (its spec.blob are its blobBindings) when no same-named Function exists.
+// The marker keeps the cedar.PrincipalObject interface closed (only api/types implements it).
+func (c *CatalogService) isPrincipalObject() {}
+
 // Validate performs envelope validation via the shared validateMeta helper, then the
 // CatalogServiceSpec rules JSON Schema can't express (mirrors KVStore.Validate / FunctionSpec.Validate's
 // blob loop): each spec.blob entry's alias + prefix is a DNS-1123 label and the alias is unique within

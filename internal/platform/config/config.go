@@ -83,6 +83,21 @@ type Config struct {
 			} `json:"headers,omitempty"`
 			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION"`
 		} `json:"shaping,omitempty"`
+		// Egress network isolation (ADR-0115, FEAT-0007/F80): the worker-egress default-deny substrate.
+		// Off by default (phased); Linux/containerd only (a no-op elsewhere). When enabled, funcd programs
+		// an nftables policy over the funcd0 bridge that default-denies worker egress and redirects
+		// remaining external TCP into the egress gateway (F81). DNSResolver / InternalAllow are the
+		// worker-reachable resolver + node-service addresses (host:port) passed directly.
+		Network struct {
+			Egress            bool `json:"egress,omitempty" env:"FUNCD_NETWORK_EGRESS"`
+			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT"`
+			// DNSForwarderPort is the funcd DNS forwarder host port (ADR-0117, F81): worker :53 is
+			// REDIRECTed into it so it is the only reachable resolver (the domain trust anchor). Wired
+			// with the gateway when Egress is on (Linux/containerd only).
+			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT"`
+			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
+			InternalAllow    []string `json:"internalAllow,omitempty"`
+		} `json:"network,omitempty"`
 	} `json:"server,omitempty"`
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
@@ -128,6 +143,7 @@ type Config struct {
 			Snapshotter   string            `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
 			CNIBinDir     string            `json:"cniBinDir,omitempty" env:"FUNCD_CNI_BIN_DIR"`
 			CNIConfDir    string            `json:"cniConfDir,omitempty" env:"FUNCD_CNI_CONF_DIR"`
+			StateDir      string            `json:"stateDir,omitempty" env:"FUNCD_CONTAINERD_STATE_DIR"`
 			SubnetCIDR    string            `json:"subnetCIDR,omitempty" env:"FUNCD_SUBNET_CIDR"`
 			ImagePrefix   string            `json:"imagePrefix,omitempty" env:"FUNCD_IMAGE_PREFIX"`
 			ImageOverride map[string]string `json:"imageOverride,omitempty" env:"FUNCD_IMAGE_OVERRIDE" envSeparator:"," envKeyValSeparator:"="`
@@ -254,6 +270,11 @@ func Load(path string, flags Flags) (Config, error) {
 	}
 	if c.Runtime.Containerd.CNIConfDir == "" {
 		c.Runtime.Containerd.CNIConfDir = filepath.Join(c.Storage.DataDir, "cni")
+	}
+	if c.Runtime.Containerd.StateDir == "" {
+		// funcd-owned dir for runtime-generated files bind-mounted into workers (e.g. /etc/resolv.conf) —
+		// under dataDir (not /tmp) so it survives a tmp sweep; funcd (re)writes its contents at startup.
+		c.Runtime.Containerd.StateDir = filepath.Join(c.Storage.DataDir, "run")
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
