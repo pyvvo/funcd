@@ -31,6 +31,7 @@ func kvBadgerCfg(t *testing.T) config.Config {
 	cfg.Storage.Mode = "file"
 	cfg.Storage.DataDir = t.TempDir()
 	cfg.Kvstore.Engine = "badger"
+	cfg.Kvstore.DataDir = filepath.Join(cfg.Storage.DataDir, "kv") // config.Load derives this; set it here since this helper bypasses Load
 	return cfg
 }
 

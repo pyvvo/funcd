@@ -284,8 +284,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
 	}
 
-	// Workflow engine (ADR-0094): durable run state at <dataDir>/workflow (in-memory when the
-	// substrate is memory), plus the workflow.* tunables.
+	// Workflow engine (ADR-0094): durable run state in its own Badger instance at Workflow.DataDir
+	// (default <dataDir>/workflow; in-memory when the substrate is memory), plus the workflow.* tunables.
 	var stepTimeout, retention time.Duration
 	if cfg.Workflow.DefaultStepTimeout != "" {
 		stepTimeout, err = time.ParseDuration(cfg.Workflow.DefaultStepTimeout)
@@ -301,12 +301,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	}
 	workflowDir := ""
 	if cfg.Storage.Mode != "memory" {
-		workflowDir = filepath.Join(cfg.Storage.DataDir, "workflow")
+		workflowDir = cfg.Workflow.DataDir
 	}
 	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit))
 
-	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): a dedicated Badger store at
-	// <dataDir>/deadletter (in-memory when the substrate is memory), plus the eventing.* tunables.
+	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
+	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
 	var dlRetention time.Duration
 	if cfg.Eventing.Deadletter.Retention != "" {
 		dlRetention, err = time.ParseDuration(cfg.Eventing.Deadletter.Retention)
@@ -316,7 +316,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	}
 	deadletterDir := ""
 	if cfg.Storage.Mode != "memory" {
-		deadletterDir = filepath.Join(cfg.Storage.DataDir, "deadletter")
+		deadletterDir = cfg.Eventing.Deadletter.DataDir
 	}
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries))
 
@@ -375,10 +375,7 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 	if cfg.Kvstore.Engine != "badger" {
 		return kvmemory.New(), noop, nil
 	}
-	dir := cfg.Kvstore.DataDir
-	if dir == "" {
-		dir = filepath.Join(cfg.Storage.DataDir, "kv")
-	}
+	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load
 	if !cfg.Kvstore.Backup.Enabled && !cfg.Kvstore.Cdc.Enabled {
 		kv, err := kvbadger.Open(dir)
 		return kv, noop, err
@@ -460,11 +457,12 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	} else if cfg.Storage.Mode != "memory" {
 		log.Warn("funcd: no secrets.encryptionKeyFile — Secret values are NOT encrypted in the durable-store lane (set a 32-byte key file)")
 	}
-	// memory = ephemeral (ADR-0043); file = durable pure-Go Badger metastore at <dataDir>/store (ADR-0065).
+	// memory = ephemeral (ADR-0043); file = durable pure-Go Badger metastore at Storage.MetastoreDir
+	// (default <dataDir>/store, ADR-0065) — its own dedicated instance.
 	if cfg.Storage.Mode == "memory" {
 		return store.New(memory.New(), opts...), nil
 	}
-	eng, err := badgerstore.Open(filepath.Join(cfg.Storage.DataDir, "store"))
+	eng, err := badgerstore.Open(cfg.Storage.MetastoreDir)
 	if err != nil {
 		return nil, err
 	}

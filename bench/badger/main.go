@@ -64,6 +64,11 @@ func main() {
 	sync := flag.Bool("sync", false, "SyncWrites (fsync on every commit)")
 	durability := flag.Bool("durability", false, "run the durability proof suite (incremental backup, restore round-trip, Subscribe-lossiness, transactional-outbox CDC) instead of the perf run")
 	cdcn := flag.Int("cdcn", 200_000, "changes for the transactional-outbox CDC proof")
+	topology := flag.Bool("topology", false, "run the one-instance-vs-many-instances comparison (funcd store tiering: metastore+workflow+DLQ) instead of the perf run")
+	topo := flag.String("topo", "both", "topology mode for -topology: shared | isolated | both")
+	metakeys := flag.Int("metakeys", 50_000, "near-static metastore keys for the topology bench")
+	churnws := flag.Int("churnws", 20_000, "bounded working-set for the DLQ/workflow churn in the topology bench")
+	churnrate := flag.Int("churnrate", 0, "topology bench: cap aggregate churn at N txn/sec (0 = saturate/worst-case; funcd's real rate is modest)")
 	flag.Parse()
 
 	d := *dir
@@ -83,6 +88,13 @@ func main() {
 
 	val := make([]byte, *valsize)
 	_, _ = newRNG(1).r.Read(val)
+
+	// Topology mode: compare one shared instance (prefixes as tables) against N isolated instances,
+	// modeling funcd's metastore + workflow run-state + DLQ. Runs its own DBs — never opens the main db.
+	if *topology {
+		runTopologyBench(*topo, d, *profile, val, *metakeys, *churnws, *readers, *writers, *churnrate, *concDur, *sync, *jsonOut)
+		return
+	}
 
 	fmt.Printf("opening Badger v4: profile=%s dir=%s keys=%s funcs=%d value=%dB sync=%v\n",
 		*profile, d, human(*keys), *funcs, *valsize, *sync)

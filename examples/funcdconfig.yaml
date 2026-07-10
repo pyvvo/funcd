@@ -24,6 +24,19 @@ server:
 storage:
   mode: memory                    # file | memory. default: file (memory = ephemeral, nothing on disk)
   dataDir: /tmp/funcd-demo        # data root (process shim + file-mode blob/nats). default: /var/lib/funcd
+  # metastoreDir: ""              # control-plane metastore Badger dir (ADR-0065). default: <dataDir>/store
+
+# --- per-service store dirs: each service owns its OWN dedicated Badger instance (restore-class +
+#     service-ownership — never merged). Each defaults under <dataDir>; uncomment to relocate one.
+#     In storage.mode: memory these are unused (in-memory engines). --------------------------------
+# kvstore:                        # function-facing KV service (ADR-0066)
+#   engine: memory                # memory | badger. default: memory (ephemeral)
+#   dataDir: ""                   # KV Badger dir when engine: badger. default: <dataDir>/kv
+# workflow:                       # workflow engine (ADR-0094)
+#   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
+# eventing:                       # Sensor delivery reliability (ADR-0118)
+#   deadletter:
+#     dataDir: ""                 # dead-letter-queue Badger dir. default: <dataDir>/deadletter
 
 # --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
 auth:

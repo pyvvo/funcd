@@ -102,10 +102,15 @@ type Config struct {
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_DATA_DIR"`
+		// MetastoreDir is the control-plane metastore's dedicated Badger directory (ADR-0065). Empty ⇒
+		// derived as <DataDir>/store in Load(); ignored (in-memory engine) when Mode is memory. Its own
+		// instance, never shared — see the store-per-service rule (restore class + service ownership).
+		MetastoreDir string `json:"metastoreDir,omitempty" env:"FUNCD_METASTORE_DIR"`
 	} `json:"storage,omitempty"`
 	Kvstore struct {
 		// Engine for the function-facing KV service (ADR-0066/0069): memory (default, ephemeral) or
-		// badger (durable, at <Storage.DataDir>/kv). DataDir overrides the default location.
+		// badger (durable). Its own dedicated instance. DataDir is empty ⇒ derived as <Storage.DataDir>/kv
+		// in Load(); an explicit value overrides the default location.
 		Engine  string `json:"engine,omitempty" env:"FUNCD_KVSTORE_ENGINE" validate:"omitempty,oneof=memory badger"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_KVSTORE_DATA_DIR"`
 		// MaxStoresPerNamespace is the per-namespace KVStore count cap enforced at admission (ADR-0072);
@@ -171,27 +176,33 @@ type Config struct {
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`
 
-	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives at
-	// <Storage.DataDir>/workflow (in-memory when Storage.Mode is memory). DefaultStepTimeout +
-	// DefaultRetry feed the engine core; Retention (run GC horizon) and PayloadLimit (max run
-	// input bytes) are reserved for the run-GC / admission gates and not yet enforced by the core.
+	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
+	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
+	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention (run GC horizon) and
+	// PayloadLimit (max run input bytes) are reserved for the run-GC / admission gates, not yet enforced.
 	Workflow struct {
 		DefaultStepTimeout string `json:"defaultStepTimeout,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_STEP_TIMEOUT"`
 		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY"`
 		Retention          string `json:"retention,omitempty" env:"FUNCD_WORKFLOW_RETENTION"`
 		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT"`
+		// DataDir is the run-state Badger directory. Empty ⇒ derived as <Storage.DataDir>/workflow in
+		// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
+		DataDir string `json:"dataDir,omitempty" env:"FUNCD_WORKFLOW_DATA_DIR"`
 	} `json:"workflow,omitempty"`
 
 	// Eventing tunes the Sensor action-delivery reliability path (ADR-0118, F85). DeliveryAttempts is the
 	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The dead-letter
-	// queue is a dedicated Badger instance at <Storage.DataDir>/deadletter (in-memory when Storage.Mode is
-	// memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries (per-namespace count cap) drive the
-	// periodic retention sweep.
+	// queue is its own dedicated Badger instance at Deadletter.DataDir (default <Storage.DataDir>/deadletter;
+	// in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries
+	// (per-namespace count cap) drive the periodic retention sweep.
 	Eventing struct {
 		DeliveryAttempts int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS"`
 		Deadletter       struct {
 			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
 			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES"`
+			// DataDir is the DLQ's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
+			// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
+			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_DEADLETTER_DATA_DIR"`
 		} `json:"deadletter,omitempty"`
 		// BlobPollInterval is the cadence a `blob:` EventSource's prefixes are List-polled for new objects
 		// (ADR-0119, F83). A Go duration ("15s"); one cadence for all blob sources in V1.
@@ -298,6 +309,21 @@ func Load(path string, flags Flags) (Config, error) {
 		// funcd-owned dir for runtime-generated files bind-mounted into workers (e.g. /etc/resolv.conf) —
 		// under dataDir (not /tmp) so it survives a tmp sweep; funcd (re)writes its contents at startup.
 		c.Runtime.Containerd.StateDir = filepath.Join(c.Storage.DataDir, "run")
+	}
+	// dataDir-relative store defaults — each service owns its dedicated Badger instance (store-per-service:
+	// restore class + service ownership), so each has its own directory. Derived after the merge so an
+	// explicit file/env override wins; else <DataDir>/<name>. Unused in memory mode (in-memory engines).
+	if c.Storage.MetastoreDir == "" {
+		c.Storage.MetastoreDir = filepath.Join(c.Storage.DataDir, "store")
+	}
+	if c.Kvstore.DataDir == "" {
+		c.Kvstore.DataDir = filepath.Join(c.Storage.DataDir, "kv")
+	}
+	if c.Workflow.DataDir == "" {
+		c.Workflow.DataDir = filepath.Join(c.Storage.DataDir, "workflow")
+	}
+	if c.Eventing.Deadletter.DataDir == "" {
+		c.Eventing.Deadletter.DataDir = filepath.Join(c.Storage.DataDir, "deadletter")
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err

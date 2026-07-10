@@ -1,0 +1,38 @@
+[
+  {
+    "mode": "shared",
+    "instances": 1,
+    "populateMs": 32,
+    "rssBaselineMB": 12.5,
+    "rssPopulatedMB": 67.38,
+    "rssDeltaMB": 54.88,
+    "diskBytes": 201856613,
+    "readerOps": 1486386,
+    "readerOpsSec": 297277.2,
+    "readerP50us": 19.96,
+    "readerP99us": 133.75,
+    "writerTxns": 433066,
+    "writerTxnsSec": 86613.2,
+    "runPeakRssMB": 336.34,
+    "backupMs": 60,
+    "backupBytes": 34055867
+  },
+  {
+    "mode": "isolated",
+    "instances": 3,
+    "populateMs": 39,
+    "rssBaselineMB": 411.81,
+    "rssPopulatedMB": 485.8,
+    "rssDeltaMB": 73.99,
+    "diskBytes": 517783717,
+    "readerOps": 3419997,
+    "readerOpsSec": 683999.4,
+    "readerP50us": 2.46,
+    "readerP99us": 134.29,
+    "writerTxns": 739408,
+    "writerTxnsSec": 147881.6,
+    "runPeakRssMB": 554.66,
+    "backupMs": 91,
+    "backupBytes": 29691566
+  }
+]
