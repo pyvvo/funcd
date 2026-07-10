@@ -11,6 +11,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/secrets"
+	"github.com/green-0-rabbit/funcd/internal/store"
 )
 
 // Reconcile converges one CatalogService (ADR-0086 as reworked by ADR-0087). A present
@@ -41,6 +42,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	cs, ok := obj.(*v1.CatalogService)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a CatalogService", req.Namespace, req.Name)
+	}
+
+	// ADR-0121: spec.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService
+	// naming a not-yet-applied Bucket/prefix is admitted and held not-Ready (BucketNotFound) until it
+	// resolves, then converges (this is the check the removed catalog-blob-validity admission made). Fail-
+	// closed: the engine's S3 reach is denied until the prefix (and its owner == cs.Name) exist.
+	refRequeue, refMsg, rberr := r.resolveBucketRefs(ctx, cs)
+	if rberr != nil {
+		return controller.Result{}, rberr
+	}
+	if refRequeue {
+		cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
+		cs.Status.Phase = v1.PhasePending
+		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "BucketNotFound", Message: refMsg})
+		if _, uerr := r.store.Update(ctx, cs); uerr != nil {
+			return controller.Result{}, retryOnConflict(uerr, op)
+		}
+		return controller.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
 	// Resolve the engine env (the bindings ADR-0087 injects) BEFORE converging. A secret/config
@@ -150,6 +169,49 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 	}
 	secrets.MergeEnvGuarded(env, resolved, r.logger)
 	return env, nil
+}
+
+// resolveBucketRefs enforces ADR-0121's reconcile-time existence for a CatalogService's data references:
+// every spec.blob (bucket, prefix) AND spec.catalog (bucket, prefix) must name a Bucket prefix that exists
+// in the namespace — the check the removed catalog-blob-validity admission made synchronously. A miss
+// returns requeue=true with a message; the caller holds the service not-Ready and re-reconciles.
+func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.CatalogService) (requeue bool, message string, err error) {
+	const op = "services.catalog.resolveBucketRefs"
+	bl, lerr := r.store.List(ctx, v1.KindBucket.GVK(), store.ListOptions{Namespace: cs.Namespace})
+	if lerr != nil {
+		return false, "", fault.Wrapf(lerr, fault.KindOf(lerr), op, "list buckets in %q", cs.Namespace)
+	}
+	prefixes := map[v1.ObjectName]map[string]bool{} // bucket name → set of prefix names
+	for _, o := range bl.Items {
+		b, ok := o.(*v1.Bucket)
+		if !ok {
+			continue
+		}
+		set := make(map[string]bool, len(b.Spec.Prefixes))
+		for _, p := range b.Spec.Prefixes {
+			set[p.Name] = true
+		}
+		prefixes[b.Name] = set
+	}
+	check := func(what string, bucket v1.ObjectName, prefix string) (bool, string) {
+		set, ok := prefixes[bucket]
+		if !ok {
+			return true, fmt.Sprintf("%s → bucket %q not found in namespace %q; waiting", what, bucket, cs.Namespace)
+		}
+		if !set[prefix] {
+			return true, fmt.Sprintf("%s → prefix %q not found in bucket %q; waiting", what, prefix, bucket)
+		}
+		return false, ""
+	}
+	for _, bnd := range cs.Spec.Blob {
+		if rq, msg := check(fmt.Sprintf("spec.blob[%s]", bnd.Alias), bnd.Bucket, bnd.Prefix); rq {
+			return true, msg, nil
+		}
+	}
+	if rq, msg := check("spec.catalog", cs.Spec.Catalog.Bucket, cs.Spec.Catalog.Prefix); rq {
+		return true, msg, nil
+	}
+	return false, "", nil
 }
 
 // catalogURI is the s3:// key the DuckLake SQLite catalog lives at (ADR-0086): the bound

@@ -102,6 +102,20 @@ func reconcileOnce(t *testing.T, r *catalogsvc.Reconciler, name string) {
 	require.NoError(t, err)
 }
 
+// seedCatalogBucket stores the lakehouse Bucket (gold prefix) so ADR-0121's reconcile-time bucket-
+// existence gate resolves and the reconciler proceeds past it to Converge. Owner is the catalog itself
+// (the single writer) — owner EXISTENCE is no longer admission-checked (ADR-0121), only the prefix must be
+// present for the binding to resolve.
+func seedCatalogBucket(t *testing.T, st store.Store) {
+	t.Helper()
+	b := &v1.Bucket{}
+	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
+	b.Name, b.Namespace, b.ResourceGroup = "lakehouse", "default", "rg1"
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: "lake"}}
+	_, err := st.Create(context.Background(), b)
+	require.NoError(t, err)
+}
+
 // scenario: catalogservice-uses-provider-runtime — a CatalogService reconciles into a call to the
 // provider-runtime's Converge with a ProviderSpec (image=duckdb, port=8080, readiness GET / 200,
 // pinned single replica, the catalog s3:// key + FUNCD_QUACK_PORT in env). NO backing Function is
@@ -109,6 +123,7 @@ func reconcileOnce(t *testing.T, r *catalogsvc.Reconciler, name string) {
 func TestReconcile_catalogservice_uses_provider_runtime(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
 		d.Derive = func(ns, name string) (string, string) { return "AKIA-" + name, "secret-" + name }
@@ -152,6 +167,7 @@ func TestReconcile_catalogservice_uses_provider_runtime(t *testing.T) {
 func TestReconcile_provider_bindings_injected(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 
 	// a ConfigMap carrying DUCKDB_* engine tuning.
@@ -184,6 +200,7 @@ func TestReconcile_provider_bindings_injected(t *testing.T) {
 func TestReconcile_provider_pinned_single_writer(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
@@ -198,6 +215,7 @@ func TestReconcile_provider_pinned_single_writer(t *testing.T) {
 func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
 	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
@@ -220,6 +238,7 @@ func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 func TestReconcile_delete_tears_down_provider(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, nil)
 	_, err := st.Create(ctx, mkCatalogService("lake"))
@@ -242,6 +261,7 @@ func TestReconcile_delete_tears_down_provider(t *testing.T) {
 func TestReconcile_secrets_without_resolver_fails_closed(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
+	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, nil) // no Secrets resolver
 	cs := mkCatalogService("lake")
@@ -260,6 +280,34 @@ func TestReconcile_secrets_without_resolver_fails_closed(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionFalse, cond.Status)
 	require.Equal(t, "BindingResolveFailed", cond.Reason)
+}
+
+// scenario: catalog-waits-for-bucket (ADR-0121) — a CatalogService binding a not-yet-applied Bucket is
+// ADMITTED and held not-Ready (BucketNotFound), converging its engine only once the Bucket exists. This is
+// the reconcile-time replacement for the removed catalog-blob-validity admission (no synchronous reject).
+func TestReconcile_waits_for_bucket(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New()) // deliberately NOT seeding the bucket — the gate must catch its absence
+	prov := &fakeProvider{}
+	r := newReconciler(t, st, prov, nil)
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+
+	reconcileOnce(t, r, "lake")
+	require.Empty(t, prov.converged, "no engine converges while the bound Bucket is absent")
+	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	cs := csObj.(*v1.CatalogService)
+	require.Equal(t, v1.PhasePending, cs.Status.Phase)
+	cond, ok := cs.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "BucketNotFound", cond.Reason)
+
+	// apply the Bucket → the next reconcile resolves the gate and converges the engine (convergence).
+	seedCatalogBucket(t, st)
+	reconcileOnce(t, r, "lake")
+	require.NotEmpty(t, prov.converged, "once the Bucket exists the engine converges")
 }
 
 // DEFERRED node-gated scenarios (ADR-0086/0087): the live-DuckDB scenarios need the native DuckDB

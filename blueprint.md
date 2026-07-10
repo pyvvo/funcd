@@ -99,8 +99,10 @@ In order to make this platform self-contained, we will need to implement the fol
       coarse within the namespace (the V1.1 trust boundary) — **fine-grained per-function authz is delegated to
       the PDP/Cedar IAM ADR**, where authorization belongs (KV does not hand-roll RBAC; Cedar policies persist as
       resources in the metastore, entities materialized from existing resources). A reconciler does Ready +
-      Delete/table-removal → `DropPrefix`; admissions enforce store-count quota, binding-validity, owner-exists,
-      and deletion-protection (bindings **and** data). V1.1 KV is **same-namespace**; cross-namespace sharing and
+      Delete/table-removal → `DropPrefix`; admissions enforce store-count quota and deletion-protection (bindings
+      **and** data), while binding/owner **existence is reconcile-time** (ADR-0121, accept-and-requeue: a
+      consumer naming a not-yet-applied KVStore/table is admitted and held not-Ready until it exists — no
+      write-time existence gate). V1.1 KV is **same-namespace**; cross-namespace sharing and
       the typed engine are deferred. Cross-node replication (NATS-lattice) is FEAT-0002.
     - **Graph database**: store and query graph data. Drivers: **in-process**
       (https://github.com/kuzudb/kuzu, https://github.com/cayleygraph/cayley) and **external**

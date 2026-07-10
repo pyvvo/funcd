@@ -8,11 +8,10 @@ checkpointing its SQLite catalog to blob.
 ## What you apply (the user-facing flow)
 
 ```bash
-# Apply order resolves the admission cycle (bucket-owner ↔ CatalogService): the Bucket WITHOUT an
-# owner first, then the CatalogService, then the Bucket WITH owner=lake (an Update).
-funcdctl apply -f configmap.yaml -f secret.yaml -f bucket-base.yaml
-funcdctl apply -f catalogservice.yaml
-funcdctl apply -f bucket.yaml          # adds owner: lake (now the CatalogService exists)
+# ADR-0121: apply in ANY order — owner/binding existence is reconcile-time. The CatalogService binding
+# the not-yet-applied Bucket is admitted and waits (Ready=False/BucketNotFound); the Bucket (owner: lake)
+# resolves it and the engine converges. No two-phase bucket-base.
+funcdctl apply -f configmap.yaml -f secret.yaml -f catalogservice.yaml -f bucket.yaml -f consumer.yaml
 ```
 
 - **`bucket.yaml`** — the `lakehouse` Bucket + the `gold` prefix the catalog owns (Parquet + the

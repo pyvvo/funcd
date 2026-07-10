@@ -61,104 +61,6 @@ func (a kvStoreQuota) Admit(ctx context.Context, req Request) (v1.Object, error)
 	return req.Object, nil
 }
 
-// --- kv-binding-validity (ADR-0073): Create/Update on Function --------------------------------
-
-type kvBindingValidity struct{ r StoreReader }
-
-// NewKVBindingValidityAdmission returns the Validating admission that enforces ADR-0073's KV binding
-// rules on a Function Create/Update: every spec.kv entry names a (store, table) that exists in the
-// function's namespace. (Clone of link-validity, scanning spec.kv instead of spec.links.)
-func NewKVBindingValidityAdmission(r StoreReader) Admission { return kvBindingValidity{r: r} }
-
-func (kvBindingValidity) Name() string { return "kv-binding-validity" }
-func (kvBindingValidity) Phase() Phase { return Validating }
-
-func (kvBindingValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
-}
-
-func (a kvBindingValidity) Admit(ctx context.Context, req Request) (v1.Object, error) {
-	const op = "admission.kv-binding-validity"
-	fn, ok := req.Object.(*v1.Function)
-	if !ok || len(fn.Spec.KV) == 0 {
-		return req.Object, nil
-	}
-	ns := fn.Namespace
-	stores, err := a.r.List(ctx, v1.KindKVStore.GVK(), ns)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list kvstores in %q", ns)
-	}
-	tables := map[v1.ObjectName]map[string]bool{} // store name → set of table names
-	for _, o := range stores {
-		ks, ok := o.(*v1.KVStore)
-		if !ok {
-			continue
-		}
-		set := make(map[string]bool, len(ks.Spec.Tables))
-		for _, tb := range ks.Spec.Tables {
-			set[tb.Name] = true
-		}
-		tables[ks.Name] = set
-	}
-	for _, b := range fn.Spec.KV {
-		set, ok := tables[b.Store]
-		if !ok {
-			return nil, fault.Invalidf(op, "spec.kv[%s].store %q does not exist in namespace %q", b.Alias, b.Store, ns)
-		}
-		if !set[b.Table] {
-			return nil, fault.Invalidf(op, "spec.kv[%s].table %q does not exist in store %q", b.Alias, b.Table, b.Store)
-		}
-	}
-	return req.Object, nil
-}
-
-// --- kv-owner-exists (ADR-0073): Create/Update on KVStore -------------------------------------
-
-type kvOwnerExists struct{ r StoreReader }
-
-// NewKVOwnerExistsAdmission returns the Validating admission that enforces ADR-0073's table-owner rule
-// on a KVStore Create/Update: every tables[].owner (when set) is a real Function in the store's
-// namespace. Single-owner-per-table is structural (unique table names in Validate) — this is the
-// owner-EXISTS check, not a "≤1 owner" check.
-func NewKVOwnerExistsAdmission(r StoreReader) Admission { return kvOwnerExists{r: r} }
-
-func (kvOwnerExists) Name() string { return "kv-owner-exists" }
-func (kvOwnerExists) Phase() Phase { return Validating }
-
-func (kvOwnerExists) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindKVStore.GVK() && (op == Create || op == Update)
-}
-
-func (a kvOwnerExists) Admit(ctx context.Context, req Request) (v1.Object, error) {
-	const op = "admission.kv-owner-exists"
-	ks, ok := req.Object.(*v1.KVStore)
-	if !ok {
-		return req.Object, nil
-	}
-	// Only list functions if at least one table declares an owner.
-	hasOwner := false
-	for _, tb := range ks.Spec.Tables {
-		if tb.Owner != "" {
-			hasOwner = true
-			break
-		}
-	}
-	if !hasOwner {
-		return req.Object, nil
-	}
-	ns := ks.Namespace
-	fns, err := a.r.List(ctx, v1.KindFunction.GVK(), ns)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list functions in %q", ns)
-	}
-	for _, tb := range ks.Spec.Tables {
-		if tb.Owner != "" && !nameExists(fns, tb.Owner) {
-			return nil, fault.Invalidf(op, "spec.tables[%s].owner %q does not exist in namespace %q", tb.Name, tb.Owner, ns)
-		}
-	}
-	return req.Object, nil
-}
-
 // --- kvstore-deletion-protection (ADR-0073): Delete AND Update on KVStore ----------------------
 
 type kvStoreDeletionProtection struct {
@@ -274,14 +176,4 @@ func (a kvStoreDeletionProtection) admitUpdate(ctx context.Context, req Request)
 		}
 	}
 	return req.Object, nil
-}
-
-// nameExists reports whether any object in objs has the given name.
-func nameExists(objs []v1.Object, name v1.ObjectName) bool {
-	for _, o := range objs {
-		if o.GetObjectMeta().Name == name {
-			return true
-		}
-	}
-	return false
 }

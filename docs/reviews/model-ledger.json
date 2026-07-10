@@ -1888,5 +1888,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0120-implementation-claude-opus-4-8.md",
     "notes": "PASS; 0 blockers/0 majors/1 minor(model:compile copies rule.Methods for a static arm vs ADR-0120 s1 'no router method restriction'; handler-405 still holds since static routes omit methods). B1 traversal reject-'..'+HasPrefix-before-Get, out-of-prefix secret proven unreachable; M2 admission-reject + runtime backstop (no silent-open, 401 anon/200 bearer e2e); M1 weak (ModTime,Size) ETag no sha256; M3 three-tier cache. matchPath '/'-catch-all=adr(ADR-0110 latent gap, minimal+no regression, all 8 router tests pass). Venom deferred=env(framework cannot seed Bucket bytes in-VM; in-process edge e2e drives live listener). Only test failure=known TestPythonPoolSmoke env flake."
+  },
+  {
+    "date": "2026-07-10",
+    "adr": "0121",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0121-implementation-claude-opus-4-8.md",
+    "notes": "pass: 6 existence admissions removed + code/tests deleted; existence now fail-closed accept-and-requeue on Function+CatalogService reconcilers; all 5 scenario tests pass un-skipped; build/vet/lint/test/modverify all exit 0; ADR substance unchanged (status bump only); examples collapsed. 1 minor (bucket-before-owner has no dedicated test, covered by unchanged Cedar authz) model-attributed-soft. Venom apply-any-order lane in-progress/deferred (env)."
   }
 ]

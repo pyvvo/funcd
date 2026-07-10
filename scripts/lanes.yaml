@@ -88,7 +88,6 @@ duckdb:
   stage:
     - configmap.yaml
     - secret.yaml
-    - bucket-base.yaml
     - bucket.yaml
     - catalogservice.yaml
     - funcdconfig.yaml
@@ -98,10 +97,12 @@ duckdb:
     - artifact: bundle
       ref: catalog-reader
       entry: handler.py
+  # ADR-0121: no two-phase — apply in any order. The CatalogService binds the Bucket BEFORE it exists
+  # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: lake) resolves it and the engine
+  # converges — a live apply-any-order proof of the Bucket↔CatalogService cycle on real containerd.
   apply:
     - configmap.yaml
     - secret.yaml
-    - bucket-base.yaml
     - catalogservice.yaml
     - bucket.yaml
     - consumer.yaml
@@ -123,7 +124,6 @@ s3:
   stage:
     - roundtrip.mjs
     - roundtrip.schema.json
-    - function-base.yaml
     - bucket.yaml
     - function.yaml
     - funcdconfig.yaml
@@ -136,14 +136,13 @@ s3:
     - artifact: roundtrip.mjs
       ref: s3-roundtrip
       schema: roundtrip.schema.json
-  # Apply order resolves the admission cycle (ADR-0080 / ADR-0073): the Function WITHOUT spec.blob first
-  # (so the Bucket's gold.owner=s3-roundtrip exists), then the Bucket, then re-apply the Function WITH blob.
-  # Then the ADR-0119 reactive trio: the ingest Workflow, the blob EventSource (its Bucket now exists ⇒ it
-  # reconciles Ready and starts polling gold/), and the Sensor that starts an ingest run per new object.
+  # ADR-0121: no two-phase — apply in any order. The Function WITH spec.blob is applied BEFORE its Bucket
+  # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: s3-roundtrip) resolves it and the
+  # function converges Ready — a live apply-any-order proof of the Bucket↔Function-owner cycle on real
+  # containerd. Then the ADR-0119 reactive trio (the ingest Workflow, the blob EventSource, the Sensor).
   apply:
-    - function-base.yaml
-    - bucket.yaml
     - function.yaml
+    - bucket.yaml
     - ingest-workflow.yaml
     - drop-source.yaml
     - drop-sensor.yaml

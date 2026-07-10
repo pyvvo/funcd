@@ -45,21 +45,20 @@ The last two knobs are load-bearing: they mirror the Go scenario tests
 (`RequestChecksumCalculation=WhenRequired` / `ResponseChecksumValidation=WhenRequired`). Without them
 the SDK adds a streaming-CRC trailer the gateway rejects.
 
-## Fixtures and the apply order (resolving the admission cycle)
+## Fixtures and the apply order — any order (ADR-0121)
 
-The admission graph has a create-time cycle (ADR-0080): the Bucket's `gold.owner` references the
-Function, and the Function's `spec.blob` references the Bucket. Resolved the ADR-0073 KVStore way —
-create the Function binding-less, then the Bucket, then re-apply the Function with its binding:
+The Bucket's `gold.owner` references the Function and the Function's `spec.blob` references the Bucket:
+a create-time cycle that used to need a two-phase workaround (a binding-less `function-base.yaml`
+first, then the Bucket, then the Function with its binding). **ADR-0121 removed that** — owner/binding
+existence is reconcile-time, so both apply in **any order**:
 
-1. `function-base.yaml` — Function `s3-roundtrip`, **no** `spec.blob`, **scaled to 0** (`minReplicas:
-   0`) so no warm replica spins up yet;
-2. `bucket.yaml` — Bucket `lakehouse`, prefixes `gold` (owner `s3-roundtrip`) + `other` (no owner);
-3. `function.yaml` — re-apply (Update) the Function **with** `spec.blob[gold]` and `minReplicas: 1`.
+1. `function.yaml` — Function `s3-roundtrip` **with** `spec.blob[gold]` and `minReplicas: 1`;
+2. `bucket.yaml` — Bucket `lakehouse`, prefixes `gold` (owner `s3-roundtrip`) + `other` (no owner).
 
-Step 1 stays at zero replicas on purpose: `addS3Env` only injects the `AWS_*` env for a function that
-declares `spec.blob` (ADR-0085). If a binding-less replica became Ready in step 1, it would run without
-the S3 keypair, and the step-3 binding Update would not recreate an already-Ready replica — so the
-first replica must be the one created by step 3 (which carries `spec.blob`).
+The lane applies the **Function first** (bound to the not-yet-applied Bucket) — it is admitted and held
+`Ready=False/BucketNotFound`, then converges once the Bucket lands. That is the live apply-any-order
+proof of the Bucket↔Function-owner cycle on real containerd. (Because the function carries `spec.blob`
+from the start, `addS3Env` injects its `AWS_*` keypair on the first Ready replica — ADR-0085.)
 
 ## Build it
 

@@ -75,55 +75,6 @@ func TestScenarioStoreCountQuota(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// scenario: binding-validity — a Function whose spec.kv names a missing store/table is rejected (Invalid);
-// a fully-resolvable binding is allowed.
-func TestScenarioBindingValidity(t *testing.T) {
-	gvk := v1.KindFunction.GVK()
-	r := kvReader{stores: []*v1.KVStore{mkStore("orders", v1.KVTable{Name: "customers", Owner: "svc"})}}
-	adm := admission.NewKVBindingValidityAdmission(r)
-	require.True(t, adm.Handles(gvk, admission.Create))
-	require.True(t, adm.Handles(gvk, admission.Update))
-
-	// missing store ⇒ Invalid
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "missing", "customers"))})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing store ⇒ Invalid")
-
-	// store present but missing table ⇒ Invalid
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "orders", "missing"))})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing table ⇒ Invalid")
-
-	// fully resolvable ⇒ allowed
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkFn("svc", kvb("c", "orders", "customers"))})
-	require.NoError(t, err, "a resolvable binding is allowed")
-}
-
-// scenario: owner-exists — a KVStore whose tables[].owner is not a real Function is rejected (Invalid);
-// every owner present ⇒ allowed.
-func TestScenarioOwnerExists(t *testing.T) {
-	gvk := v1.KindKVStore.GVK()
-	r := kvReader{fns: []*v1.Function{mkFn("customers-svc"), mkFn("fulfillment-svc")}}
-	adm := admission.NewKVOwnerExistsAdmission(r)
-	require.True(t, adm.Handles(gvk, admission.Create))
-	require.True(t, adm.Handles(gvk, admission.Update))
-
-	// an owner that is not a Function ⇒ Invalid
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkStore("orders", v1.KVTable{Name: "customers", Owner: "ghost"})})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "a non-existent owner ⇒ Invalid")
-
-	// every owner present ⇒ allowed
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkStore("orders",
-			v1.KVTable{Name: "customers", Owner: "customers-svc"},
-			v1.KVTable{Name: "fulfillment", Owner: "fulfillment-svc"})})
-	require.NoError(t, err, "all owners exist ⇒ allowed")
-
-	// an empty owner (read-only table) is allowed
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkStore("orders", v1.KVTable{Name: "public"})})
-	require.NoError(t, err, "an unowned table is allowed")
-}
-
 // scenario: deletion-protected — a store named by some Function.spec.kv or still holding keys can't be
 // deleted (Conflict); a clean store is deletable.
 func TestScenarioKVStoreDeletionProtection(t *testing.T) {

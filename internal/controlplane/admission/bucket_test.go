@@ -43,12 +43,6 @@ func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Names
 	return out, nil
 }
 
-func mkCatalogSvc(name string) *v1.CatalogService {
-	c := &v1.CatalogService{TypeMeta: v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService}}
-	c.Name, c.Namespace, c.ResourceGroup = v1.ObjectName(name), "default", "rg1"
-	return c
-}
-
 type blobFakeProber struct{ has bool }
 
 func (p blobFakeProber) HasAny(_ context.Context, _ string) (bool, error) { return p.has, nil }
@@ -85,69 +79,6 @@ func TestScenarioBucketCountQuota(t *testing.T) {
 	adm2 := admission.NewBucketQuotaAdmission(blobReader{buckets: []*v1.Bucket{mkBucket("a")}}, 2)
 	_, err = adm2.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkBucket("c")})
 	require.NoError(t, err)
-}
-
-// scenario: blob-binding-validity — a Function whose spec.blob names a missing bucket/prefix is rejected
-// (Invalid); a fully-resolvable binding is allowed.
-func TestScenarioBlobBindingValidity(t *testing.T) {
-	gvk := v1.KindFunction.GVK()
-	r := blobReader{buckets: []*v1.Bucket{mkBucket("lakehouse", v1.BucketPrefix{Name: "gold", Owner: "svc"})}}
-	adm := admission.NewBlobBindingValidityAdmission(r)
-	require.True(t, adm.Handles(gvk, admission.Create))
-	require.True(t, adm.Handles(gvk, admission.Update))
-
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkBlobFn("svc", blobBnd("c", "missing", "gold"))})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing bucket ⇒ Invalid")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkBlobFn("svc", blobBnd("c", "lakehouse", "missing"))})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "binding to a missing prefix ⇒ Invalid")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk, Object: mkBlobFn("svc", blobBnd("c", "lakehouse", "gold"))})
-	require.NoError(t, err, "a resolvable binding is allowed")
-}
-
-// scenario: prefix-owner-exists — a Bucket whose prefixes[].owner is not a real Function is rejected
-// (Invalid); every owner present (or owner-less) ⇒ allowed.
-func TestScenarioBucketPrefixOwnerExists(t *testing.T) {
-	gvk := v1.KindBucket.GVK()
-	r := blobReader{fns: []*v1.Function{mkBlobFn("bronze-svc"), mkBlobFn("gold-svc")}}
-	adm := admission.NewBucketPrefixOwnerExistsAdmission(r)
-	require.True(t, adm.Handles(gvk, admission.Create))
-	require.True(t, adm.Handles(gvk, admission.Update))
-
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "bronze", Owner: "ghost"})})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "a non-existent owner ⇒ Invalid")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse",
-			v1.BucketPrefix{Name: "bronze", Owner: "bronze-svc"},
-			v1.BucketPrefix{Name: "gold", Owner: "gold-svc"})})
-	require.NoError(t, err, "all owners exist ⇒ allowed")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "public"})})
-	require.NoError(t, err, "an unowned prefix is allowed")
-}
-
-// scenario: bucket-owner-may-be-a-provider — a prefix owner that is an add-on provider (CatalogService,
-// ADR-0088), not a Function, is admitted; a name that is neither is still rejected.
-func TestScenarioBucketPrefixOwnerMayBeProvider(t *testing.T) {
-	gvk := v1.KindBucket.GVK()
-	r := blobReader{fns: []*v1.Function{mkBlobFn("etl-svc")}, css: []*v1.CatalogService{mkCatalogSvc("lake")}}
-	adm := admission.NewBucketPrefixOwnerExistsAdmission(r)
-
-	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "gold", Owner: "lake"})})
-	require.NoError(t, err, "owner=lake (a CatalogService provider) is admitted (ADR-0088)")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "bronze", Owner: "etl-svc"})})
-	require.NoError(t, err, "owner=etl-svc (a Function) is still admitted")
-
-	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: gvk,
-		Object: mkBucket("lakehouse", v1.BucketPrefix{Name: "x", Owner: "ghost"})})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "owner=ghost (neither Function nor CatalogService) ⇒ Invalid")
 }
 
 // scenario: deletion-protected — a bucket named by some Function.spec.blob or still holding objects can't

@@ -350,6 +350,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, r.programAllRoutes(ctx)
 	}
 
+	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
+	// Bucket/prefix or KVStore/table holds the function not-Ready and requeues (accept-and-requeue) —
+	// fail-closed, since the PDP denies the bound access until the referent exists, so waiting just avoids
+	// booting a worker whose grants can't resolve. This is the existence check the removed blob/kv
+	// binding-validity admissions used to make synchronously at apply time.
+	refRequeue, refReason, refMsg, rferr := r.resolveDataReferences(ctx, fn)
+	if rferr != nil {
+		return controller.Result{}, rferr
+	}
+	if refRequeue {
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: refReason, Message: refMsg})
+		fn.Status.Phase = v1.PhasePending
+		fn.Status.Replicas = 0
+		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
+			return controller.Result{}, retryOnConflict(uerr, op)
+		}
+		if perr := r.programAllRoutes(ctx); perr != nil {
+			return controller.Result{}, perr
+		}
+		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+
 	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
 	// FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound catalog that
 	// is not Ready yet (no status.endpoint, or its Secret has no QUACK_TOKEN) requeues fail-closed —

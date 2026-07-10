@@ -720,30 +720,21 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
 			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
-			// ADR-0072/0073 KV resource rules: store-count quota; kv-binding-validity (Function.spec.kv
-			// names an existing store/table); kv-owner-exists (KVStore tables[].owner is a real Function);
-			// KVStore deletion-protection (bound by spec.kv or non-empty data on Delete; still-bound table
-			// removal on Update).
+			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
+			// spec.kv or non-empty data on Delete; still-bound table removal on Update). Binding/owner
+			// EXISTENCE (Function.spec.kv → an existing store/table; KVStore tables[].owner → a real Function)
+			// is RECONCILE-TIME (ADR-0121): the Function reconciler holds a binding not-Ready until it resolves,
+			// and the owner UID is fail-closed at the PDP until the owner exists — no write-time existence gate.
 			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
-			admission.NewKVBindingValidityAdmission(storeReader{c.store}),
-			admission.NewKVOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
-			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota; blob-binding-validity
-			// (Function.spec.blob names an existing bucket/prefix); bucket-prefix-owner-exists (Bucket
-			// prefixes[].owner is a real Function); bucket-deletion-protection (bound by spec.blob or non-empty
-			// data on Delete; still-bound prefix removal on Update). The data-emptiness prober is nil until the
-			// s3gateway data plane lands (a later slice) — binding-protection still applies (nil ⇒ skip the
-			// data check, the optional-prober pattern KVStore uses).
+			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
+			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
+			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober is nil
+			// until the s3gateway data plane lands — binding-protection still applies (nil ⇒ skip the data check).
 			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
-			admission.NewBlobBindingValidityAdmission(storeReader{c.store}),
-			admission.NewBucketPrefixOwnerExistsAdmission(storeReader{c.store}),
 			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
-			// ADR-0086 CatalogService validity: spec.blob + spec.catalog name real Buckets/prefixes
-			// in the namespace (cloned from blob-binding-validity).
-			admission.NewCatalogBlobValidityAdmission(storeReader{c.store}),
-			// ADR-0091 catalog consumer-binding validity: Function.spec.catalogs names a real
-			// CatalogService in the namespace (cloned from blob-binding-validity).
-			admission.NewCatalogBindingValidityAdmission(storeReader{c.store}),
+			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
+			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
