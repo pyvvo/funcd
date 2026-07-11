@@ -27,10 +27,18 @@ fmt:
 lint:
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
 
-# run all tests; no-op when no Go packages exist
+# run the fast test lane; no-op when no Go packages exist. The heavy pkg/funcd e2e
+# scenario suite is build-tagged (`//go:build e2e`) and excluded here — see `test-e2e`.
 [group('go')]
 test:
     @if [ -n "{{_has-packages}}" ]; then go test ./...; fi
+
+# run the heavy pkg/funcd e2e scenario suite (build-tagged `e2e`; excluded from the fast
+# `test`/`ci` lane). CI runs this in a path-gated job (+ always on main); locally,
+# `just ci && just test-e2e` (or `just ci-full`) is the full-confidence run.
+[group('test')]
+test-e2e:
+    go test -tags e2e ./pkg/funcd/...
 
 # the Linux integration lane (ADR-0025 L4): real sandbox + the full exit-criterion walk.
 # Linux only — needs a container runtime; excluded from the pure-Go `just ci` gate.
@@ -301,7 +309,12 @@ check-hygiene:
     if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
     exit "$fail"
 
-# CI pipeline (generate staleness + fmt check + lint + test + build + tidy-diff check)
+# CI pipeline — the FAST lane (generate staleness + fmt check + lint + fast test + build +
+# tidy-diff check). The heavy pkg/funcd e2e suite is build-tagged out; run it via `test-e2e`
+# (CI does, in a path-gated job). `ci-full` runs both for full local confidence.
+[group('go')]
+ci-full: ci test-e2e
+
 [group('go')]
 ci: tidy generate check-hygiene
     go fmt ./...
