@@ -18,6 +18,7 @@ import { realpathSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { resolveHandler, resolveValidators } from './runtime.ts';
+import { ContractError, loadValidators } from './contract.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
@@ -109,12 +110,25 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  // ADR-0123: compile the delivered contract BEFORE importing the (untrusted) handler module — the
+  // bounded eval-free reversal (the ajv.compile runs over a contract.Check-gated, digest-pinned
+  // schema, ahead of any handler code). A set-but-broken FUNCD_CONTRACT_PATH fails closed (exit 3).
+  let delivered: { input?: Validator; output?: Validator } | null;
+  try {
+    delivered = loadValidators(process.env);
+  } catch (err) {
+    process.stderr.write(`funcd-shim: contract error: ${err instanceof ContractError ? err.message : err}\n`);
+    process.exit(3);
+  }
+
   let handler: Handler;
   let validators: { input?: Validator; output?: Validator };
   try {
     const mod = (await import(pathToFileURL(artifact).href)) as Record<string, unknown>;
     handler = resolveHandler(mod, handlerName);
-    validators = resolveValidators(mod);
+    // The delivered schema is authoritative when present; else fall back to the module-baked
+    // validators (transition back-compat for bundles still carrying __funcdValidate*).
+    validators = delivered ?? resolveValidators(mod);
   } catch (err) {
     process.stderr.write(`funcd-shim: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // materialization shape-gate failure (ADR-0030)

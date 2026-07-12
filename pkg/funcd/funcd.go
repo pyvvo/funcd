@@ -202,6 +202,21 @@ type config struct {
 	workflowRetention    time.Duration
 	workflowDefaultRetry int
 	workflowPayloadLimit int64
+	// workflowContracts overrides the F65 typed-edge ContractResolver (ADR-0098). Empty ⇒ the production
+	// OCI-metadata resolver. Set by `funcdctl dev` (ADR-0125) where a from-source step has no OCI artifact
+	// to inspect, so the OCI resolver can never resolve a file:// bundle's contract.
+	workflowContracts workflow.ContractResolver
+
+	// catalogProvider overrides the CatalogService add-on-provider runtime (ADR-0087). Empty ⇒ the
+	// production runtime that supervises the curated duckdb CONTAINER (internal/provider). Set by
+	// `funcdctl dev` (ADR-0125) to a process-mode driver that runs the embedded DuckDB+Quack engine
+	// as a host subprocess — there are no containers in process-dev.
+	catalogProvider provider.Runtime
+
+	// logObserver, when set, streams every captured function log line live (in addition to the normal
+	// blob-persisted capture) — `funcdctl dev` uses it to print logs to the terminal in real time. nil ⇒
+	// logs are only persisted, as in production.
+	logObserver LogObserver
 
 	// Eventing DLQ (ADR-0118): always wired. The dead-letter queue is a dedicated Badger store at
 	// deadletterDataDir (empty ⇒ in-memory, mirroring the run store). deliveryAttempts caps the bounded
@@ -610,9 +625,15 @@ func (p *Platform) buildControlPlane() error {
 	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
 	// the provider identity (ADR-0085) and resolves spec.secrets/spec.config (the Quack token + engine
 	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
-	providerRuntime, err := provider.NewRuntime(provider.Deps{Runtime: c.runtime, Gateway: c.gateway, Logger: p.logger})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build provider runtime")
+	// Prod: the add-on-provider runtime supervises the curated duckdb CONTAINER. Dev (ADR-0125)
+	// injects a process-mode driver that runs the embedded engine as a subprocess (no containers).
+	providerRuntime := c.catalogProvider
+	if providerRuntime == nil {
+		var perr error
+		providerRuntime, perr = provider.NewRuntime(provider.Deps{Runtime: c.runtime, Gateway: c.gateway, Logger: p.logger})
+		if perr != nil {
+			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")
+		}
 	}
 	catalogDeps := catalogsvc.ReconcilerDeps{
 		Store:      c.store,
@@ -693,7 +714,11 @@ func (p *Platform) buildControlPlane() error {
 	p.workflowEngine = wfEngine
 	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
-	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, contractResolver{}, p.logger))
+	wfContracts := workflow.ContractResolver(contractResolver{})
+	if c.workflowContracts != nil {
+		wfContracts = c.workflowContracts
+	}
+	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger))
 	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger))
 	p.controller = ctrl
 
@@ -812,7 +837,13 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0101: the traces signal rides the same channel. Reuse the shared trace sink built above
 		// (ADR-0103) so step spans + the run-root span land in one trace store; the demux (Route) sends
 		// span-tagged lines to it and untagged lines to the logs sink. nil ⇒ span lines are dropped.
-		sinks := funclog.Sinks{Logs: sink, Traces: traceSink}
+		// Dev streams logs live by tee'ing an observer onto the logs sink (production leaves it nil, so
+		// logs are only persisted).
+		var logs funclog.Sink = sink
+		if c.logObserver != nil {
+			logs = &teeLogSink{inner: sink, observe: c.logObserver}
+		}
+		sinks := funclog.Sinks{Logs: logs, Traces: traceSink}
 		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
 			res := funclog.Resource{
 				Namespace: string(spec.Namespace),

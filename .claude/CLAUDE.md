@@ -268,6 +268,27 @@ the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just b
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
+## Code & config style conventions
+
+Small house-style rules that apply to every file you write or edit:
+
+- **YAML is block style — never flow style.** No inline `{ key: value }` curly braces and no inline
+  `[a, b]` lists, in any `.yaml`/`.yml` file or any embedded YAML (funcdctl.yaml, resource manifests,
+  `.venom.yml`, YAML inside Go/Python test consts, ADR/doc code fences). Expand every mapping and
+  sequence across lines:
+
+  ```yaml
+  # do                          # not
+  properties:                   properties:
+    name:                         name: { type: string }
+      type: string              required: [name]
+  required:
+    - name
+  ```
+
+- **Imports at module top level.** No `import`/`from … import` inside a function or method (Python, JS/TS,
+  Go). The only exception is a genuine circular-import break.
+
 ## Known pitfalls (Go dev on this project — learned from ADR-0003 implementation)
 
 ### 1. `create_file` may double the `package` declaration

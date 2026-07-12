@@ -114,26 +114,25 @@ func TestE2EUserJourney(t *testing.T) {
 	require.Contains(t, wakeBody, "echoed")
 }
 
-// TestE2EEventDataContract validates the I/O contract (ADR-0058, which superseded the ADR-0038
-// JTD eventSchema) through the public surface: a function whose artifact carries a precompiled
-// input validator (`__funcdValidateInput`, what the push build bakes from FuncInput) rejects a
-// wrong-shaped event with 422 *before* the handler runs, and runs normally on a matching one.
-// Node-gated.
+// TestE2EEventDataContract validates the I/O contract (ADR-0058/0123) through the public surface:
+// a SCHEMA-ONLY artifact (no baked validator) whose delivered input schema requires {hello: string}
+// rejects a wrong-shaped event with 422 *before* the handler runs, and runs normally on a matching
+// one. Under ADR-0123 the shim compiles the validator from the delivered digest-pinned schema at
+// warm-up (advertised == enforced) — the artifact bakes no __funcdValidate* callable. Node-gated.
 func TestE2EEventDataContract(t *testing.T) {
 	dataPlane, runCLI := execPlatform(t)
 
-	// the artifact carries a precompiled, eval-free input validator (the shape the push build bakes
-	// from the author's FuncInput type, ADR-0058/0060) + the handler; the shim resolves both and
-	// validates event.data before invoking (mismatch → 422). [] ⇒ valid; non-empty ⇒ errors.
+	// the artifact is schema-only (ADR-0123): just the handler, NO baked __funcdValidate*. The shim
+	// compiles the validator from the delivered schema and validates event.data before invoking
+	// (mismatch → 422). The output side is Json ({}), so the handler's object return is accepted.
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte(
-		`export function __funcdValidateInput(data) {`+"\n"+
-			`  return data && data.hello !== undefined && typeof data.hello !== "string"`+"\n"+
-			`    ? [{ message: "hello must be a string" }] : []; }`+"\n"+
-			`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))
+		`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))
 	layout := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	// mandatory contract (ADR-0090): input accepts the {hello?: string} data (Json), void-typed output.
-	schema := writeE2ESchema(t, `{"input":{},"output":{"type":"null"}}`)
+	// mandatory contract (ADR-0090): the enforced constraint lives IN the schema (ADR-0123) — a
+	// closed record requiring hello:string on input; any JSON out (the handler echoes an object).
+	schema := writeE2ESchema(t,
+		`{"input":{"type":"object","properties":{"hello":{"type":"string"}},"required":["hello"],"additionalProperties":false},"output":{}}`)
 	pushed := strings.TrimSpace(runCLI("push", bundle, layout, "--schema", schema))
 	require.True(t, strings.HasPrefix(pushed, layout+"@sha256:"), "push prints <ref>@<digest>, got %q", pushed)
 

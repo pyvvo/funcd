@@ -1,0 +1,34 @@
+# funcdctl.yaml (ADR-0122) — the colocated CLIENT push/dev config for the Python kv-counter (the
+# client-side analogue of wrangler.toml), NOT a deploy manifest. It declares only what the client
+# tooling needs: the runtime, the handler, the KV binding the code uses, and the inline I/O contract.
+# `funcdctl push . <ref>` bakes the schema-only contract + records the runtime; `funcdctl types` emits
+# a .pyi for FuncInput/FuncOutput + the typed KV binding context; `funcdctl dev` (later) runs it locally.
+# Deploy concerns (name, namespace, scaling, placement) live on the hand-written Function CRD
+# (counter.yaml, which sits alongside this file) — this config never replaces it.
+runtime: python314
+handler: handle
+bindings:
+  kv:
+    - alias: pycounters   # the in-code handle: context.kv.*('pycounters', …)
+      store: py-counters  # the KVStore (domain)
+      table: table-counters   # the sub-domain pycounter owns (single writer)
+contract:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+    required:
+      - name
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+      count:
+        type: integer
+    required:
+      - name
+      - count

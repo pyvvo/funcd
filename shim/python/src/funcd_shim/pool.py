@@ -30,9 +30,11 @@ class _Pooled:
     one in-flight request per handler (its interpreter is single-threaded); different handlers run in
     parallel via their own interpreters (per-GIL)."""
 
-    def __init__(self, src: str, artifact: str, handler: str) -> None:
+    def __init__(self, src: str, artifact: str, handler: str, contract: str | None = None) -> None:
+        # ADR-0123: contract is the delivered contract-blob path (from the manifest's "contract"
+        # field); the worker compiles its validator from it at init, ahead of the handler import.
         self.ex = InterpreterPoolExecutor(
-            max_workers=1, initializer=_poolworker.init, initargs=(src, artifact, handler)
+            max_workers=1, initializer=_poolworker.init, initargs=(src, artifact, handler, contract)
         )
 
     def await_ready(self) -> None:
@@ -150,7 +152,9 @@ def main() -> int:
         manifest = json.load(fh)
     handlers: dict[str, _Pooled] = {}
     for entry in manifest:
-        handlers[entry["name"]] = _Pooled(src, entry["artifact"], entry["handler"])
+        handlers[entry["name"]] = _Pooled(
+            src, entry["artifact"], entry["handler"], entry.get("contract")
+        )
     for name, pooled in handlers.items():
         try:
             pooled.await_ready()

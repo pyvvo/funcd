@@ -32,6 +32,7 @@ import (
 	"oras.land/oras-go/v2/errdef"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/green-0-rabbit/funcd/internal/contract"
 )
 
 const (
@@ -43,19 +44,18 @@ const (
 	// bundle layer + manifest so Pull/Materialize resolve FUNCD_ARTIFACT to <root>/<entry>.
 	BundleEntryAnnotation = "dev.funcd.bundle.entry"
 	// bundleContractFile is the ADR-0090 I/O contract the bundle embeds ({input, output}); push
-	// gates it (VerifyBundleContract) and promotes it to the ADR-0059 contract layer.
+	// gates it (VerifyBundleContract) and promotes it to the ADR-0059 contract layer. On
+	// materialization (ADR-0123) it is (re)written in the bundle dir with the exact digest-pinned
+	// ADR-0059 blob so the shim compiles the same bytes `funcdctl inspect` advertises.
 	bundleContractFile = "__funcd_contract.json"
+	// singleFileContractSidecar is the ADR-0123 dotfile sidecar carrying the delivered contract blob
+	// next to a single-file handler in the materializer cache. It is a DOTFILE (mirroring
+	// entrySidecar) so the single-file FUNCD_ARTIFACT resolver — which selects the lone non-dotfile
+	// entry — never mistakes it for the handler.
+	singleFileContractSidecar = ".funcd-contract.json"
 	// entrySidecar records the bundle entry in the materializer's per-digest cache dir so the
 	// cache-hit fast-path returns <cacheDir>/<entry> (not a non-deterministic entries[0]).
 	entrySidecar = ".funcd-entry"
-)
-
-// baked validator symbols the ADR-0058 AST baker injects into the runtime entry file, one per
-// declared contract side. VerifyBundleContract confirms the entry DEFINES the symbol for each
-// side the embedded contract carries (a void side is {"type":"null"} but still a validated side).
-const (
-	validateInputSymbol  = "__funcd_validate_input"
-	validateOutputSymbol = "__funcd_validate_output"
 )
 
 // zeroTime is the canonical mtime/atime/ctime baked into every tar header so the packed bytes are
@@ -155,13 +155,17 @@ func PackBundle(dir, entry string) (data []byte, err error) {
 	return buf.Bytes(), nil
 }
 
-// VerifyBundleContract enforces the push-time bundle-contract gate (ADR-0089 §3 / ADR-0090):
-// dir/__funcd_contract.json MUST exist and be a valid {input, output} document with BOTH keys
-// present (a void side is {"type":"null"}, never absent), AND the entry file must DEFINE the
-// baked validator symbol for each declared side (a static source check mirroring the ADR-0058
-// AST baker). It returns the contract bytes to promote through the EXISTING ContractBlob path.
-// fault.Invalid on any gap.
-func VerifyBundleContract(dir, entry string) (contract []byte, err error) {
+// VerifyBundleContract enforces the push-time bundle-contract gate (ADR-0089 §3 / ADR-0090 /
+// ADR-0123): dir/__funcd_contract.json MUST exist and be a valid {input, output} document with
+// BOTH keys present (a void side is {"type":"null"}, never absent) AND each side must lie within
+// the funcd type profile (contract.Check — the same gate the single-file --schema path applies).
+// It no longer requires a baked validator symbol in the entry file: the artifact is schema-only
+// and the runtime shim compiles the validator from the delivered schema at worker warm-up
+// (ADR-0123, supersedes ADR-0060's build-time bake). The `entry` argument is retained for the
+// signature but is no longer read. It returns the {dialect, input, output} blob to promote through
+// the EXISTING ContractBlob path. fault.Invalid on any gap — an out-of-profile schema that slipped
+// through here would otherwise only fail at worker compile-time (cold-start fail-closed).
+func VerifyBundleContract(dir, _ string) (contractBlob []byte, err error) {
 	const op = "artifact.VerifyBundleContract"
 	raw, rerr := os.ReadFile(filepath.Join(dir, bundleContractFile)) //nolint:gosec // path is under the user-supplied bundle dir
 	if rerr != nil {
@@ -180,28 +184,17 @@ func VerifyBundleContract(dir, entry string) (contract []byte, err error) {
 	if len(doc.Output) == 0 {
 		return nil, fault.Invalidf(op, "%s is missing the \"output\" key (a void side is %s)", bundleContractFile, VoidSchema)
 	}
-	// The entry file must carry the baked validator for BOTH sides (ADR-0058/0090: both are always
-	// declared, so both symbols are always baked) — otherwise the advertised schema and the runtime
-	// enforcement could diverge.
-	src, serr := os.ReadFile(filepath.Join(dir, entry)) //nolint:gosec // entry is under the user-supplied bundle dir
-	if serr != nil {
-		return nil, fault.Invalidf(op, "read entry %q: %v", entry, serr)
+	// Gate each side against the funcd profile (ADR-0058/0123). Mirrors gateSchema's single-file
+	// path so a bundle can never ship an out-of-profile schema the worker then fails to compile.
+	if cerr := contract.Check(doc.Input); cerr != nil {
+		return nil, fault.Wrapf(cerr, fault.Invalid, op, "%s input side is outside the funcd profile", bundleContractFile)
 	}
-	for _, sym := range []string{validateInputSymbol, validateOutputSymbol} {
-		if !definesSymbol(src, sym) {
-			return nil, fault.Invalidf(op, "entry %q does not define the baked validator %s (rebuild the bundle with the ADR-0058 contract baker)", entry, sym)
-		}
+	if cerr := contract.Check(doc.Output); cerr != nil {
+		return nil, fault.Wrapf(cerr, fault.Invalid, op, "%s output side is outside the funcd profile", bundleContractFile)
 	}
 	// Assemble the mandatory {dialect, input, output} blob via the EXISTING single-file path so a
 	// bundle reaches the same contract layer as a single-file function — only the source differs.
 	return ContractBlob(doc.Input, doc.Output)
-}
-
-// definesSymbol reports whether src contains a `def <sym>(` definition (the ADR-0058 baker emits
-// each validator as a top-level `def __funcd_validate_input(d):` / `_output`). A plain textual
-// check suffices — the gate only needs to confirm the symbol is defined, not parse Python.
-func definesSymbol(src []byte, sym string) bool {
-	return bytes.Contains(src, []byte("def "+sym+"("))
 }
 
 // PushBundle packs dir (PackBundle) as a BundleTarMediaType layer with the entry annotation,

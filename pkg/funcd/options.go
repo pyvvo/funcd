@@ -19,8 +19,10 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	"github.com/green-0-rabbit/funcd/internal/network"
 	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/runtime"
 	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/green-0-rabbit/funcd/internal/workflow"
 )
 
 // Option configures the platform. Each With* function returns an Option that
@@ -224,6 +226,28 @@ func WithPoolLimit(limit int) Option {
 // driver is P-V-A). Has no effect unless a runtime shim is also configured.
 func WithMaterializer(m function.Materializer) Option {
 	return func(c *config) error { c.materializer = m; return nil }
+}
+
+// WithWorkflowContractResolver overrides the workflow F65 typed-edge ContractResolver (ADR-0098). The
+// production resolver reads a step image's I/O contract from OCI metadata; `funcdctl dev` (ADR-0125)
+// injects a resolver for from-source steps, whose file:// bundles carry no OCI artifact to inspect.
+func WithWorkflowContractResolver(r workflow.ContractResolver) Option {
+	return func(c *config) error { c.workflowContracts = r; return nil }
+}
+
+// WithLogObserver streams every captured function log line to obs as it happens, in addition to the
+// normal blob-persisted capture — `funcdctl dev` uses it to print logs to the terminal in real time.
+// obs runs on the log-routing goroutine and must not block.
+func WithLogObserver(obs LogObserver) Option {
+	return func(c *config) error { c.logObserver = obs; return nil }
+}
+
+// WithCatalogProviderRuntime overrides the CatalogService add-on-provider runtime (ADR-0087). The
+// production runtime supervises the curated duckdb CONTAINER image; `funcdctl dev` (ADR-0125) injects
+// a process-mode driver that runs the embedded DuckDB+Quack engine as a host subprocess, since
+// process-dev runs no containers.
+func WithCatalogProviderRuntime(r provider.Runtime) Option {
+	return func(c *config) error { c.catalogProvider = r; return nil }
 }
 
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are

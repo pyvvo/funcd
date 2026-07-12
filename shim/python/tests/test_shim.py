@@ -21,7 +21,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from funcd_shim import runtime, shim
+from funcd_shim import contract, runtime, shim
 from funcd_shim.types import CloudEvent, FunctionContext, Validator
 
 ECHO = (
@@ -202,6 +202,40 @@ def test_keep_alive_no_desync() -> None:
             assert json.loads(r.read())["echoed"] == 42
         finally:
             conn.close()
+
+
+# ---- ADR-0123: runtime-compiled validators (from FUNCD_CONTRACT_PATH) enforce the same wire ----
+
+
+def test_runtime_compiled_validators_enforce_wire(tmp_path: Path) -> None:
+    # scenario: runtime-compiles-validator — validators compiled from the delivered schema (not a
+    # baked callable) enforce input→422 / output→500 / void→204, byte-identical to the baked path.
+    blob = tmp_path / "c.json"
+    blob.write_text(json.dumps({
+        "input": {"type": "object", "properties": {"hello": {"type": "string"}},
+                  "required": ["hello"], "additionalProperties": False},
+        "output": {"type": "object", "properties": {"ok": {"type": "boolean"}},
+                   "required": ["ok"], "additionalProperties": False},
+    }))
+    validators = contract.load_from_path(str(blob))
+
+    # bad input → 422 (handler not called)
+    with serve(lambda ctx, e: {"ok": True}, validators) as base:
+        assert post(base, json.dumps({"data": {"hello": 5}}))[0] == 422
+    # good input, bad output → 500
+    with serve(lambda ctx, e: {"wrong": True}, validators) as base:
+        assert post(base, json.dumps({"data": {"hello": "hi"}}))[0] == 500
+    # good input, good output → 200
+    with serve(lambda ctx, e: {"ok": True}, validators) as base:
+        assert post(base, json.dumps({"data": {"hello": "hi"}}))[0] == 200
+
+    # void output side → 204 on empty, 500 on non-empty
+    (blob.parent / "v.json").write_text(json.dumps({"input": {}, "output": {"type": "null"}}))
+    void = contract.load_from_path(str(blob.parent / "v.json"))
+    with serve(lambda ctx, e: None, void) as base:
+        assert post(base, "{}")[0] == 204
+    with serve(lambda ctx, e: {"surprise": True}, void) as base:
+        assert post(base, "{}")[0] == 500
 
 
 # ---- main() shape-gate exit codes (return before serving) ----

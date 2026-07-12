@@ -1,0 +1,4 @@
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+--container-daemon-socket -
+--pull=false
+--artifact-server-path .act-artifacts

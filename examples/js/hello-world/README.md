@@ -70,6 +70,26 @@ literal tag, here `kind`) is generated as a tagged `oneOf` + `discriminator` and
 end-to-end — the build converts the `anyOf` ts-json-schema-generator emits into the form the
 profile gate accepts.
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you):
+
+```bash
+just dev-example js/hello-world      # gateway :3005 · S3 :3006 — override: just dev-example js/hello-world 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`hello-world`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}`, where `<input>` matches the manifest's `contract.input`
+(`{name: string, excited?: boolean}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/hello-world \
+  -H 'Content-Type: application/json' -d '{"data":{"name":"funcd","excited":true}}'
+# → {"greeting":"Hello, funcd!"}
+```
+
 ## Author workflow
 
 ```bash
@@ -86,7 +106,7 @@ npm run build       # esbuild → handler.mjs (the single self-contained artifac
 funcd --config ../../funcdconfig.yaml &           # start the daemon (zero-infra dev config, ADR-0061)
 funcdctl push handler.mjs oci-layout:///tmp/funcd-demo/layout:v1
 funcdctl apply -f function.yaml      # no digest — the platform pins it (ADR-0035)
-curl -XPOST http://127.0.0.1:8081/function/hello -d '{"name":"funcd"}'
+# then invoke it with the CloudEvent envelope — see "Run it locally (funcdctl dev)" above
 ```
 
 [`examples/funcdconfig.yaml`](../../funcdconfig.yaml) is the shared daemon config (in-memory

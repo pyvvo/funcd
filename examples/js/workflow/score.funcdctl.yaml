@@ -1,0 +1,30 @@
+# score.funcdctl.yaml (ADR-0122/ADR-0124) — the colocated CLIENT push/dev config for the Node score
+# step (the client-side analogue of wrangler.toml), NOT a deploy manifest. This directory holds several
+# single-file workflow steps, so each carries its own <stem>.funcdctl.yaml (ADR-0124): `funcdctl push
+# score.mjs <ref>` resolves THIS file by the `score` stem. score is the second step — its input is
+# ingest's output verbatim; it adds a derived score and has no bindings. `funcdctl push` bakes the
+# schema-only contract + records the runtime; `funcdctl types` emits a .d.ts for FuncInput/FuncOutput.
+# Deploy/orchestration concerns (name, namespace, scaling, DAG wiring) live on the hand-written Function
+# CRD and workflow.yaml, beside this file — this config never replaces them.
+runtime: nodejs22
+handler: handle
+contract:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      amount:
+        type: number
+    required:
+      - amount
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      amount:
+        type: number
+      score:
+        type: number
+    required:
+      - amount
+      - score

@@ -38,6 +38,26 @@ the handler runs — KV functions are contract-validated, not just KV-enabled.
 uv run --group build python build.py   # → counter.py (baked validators) + the I/O schemas
 ```
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you):
+
+```bash
+just dev-example python/kv-counter      # gateway :3005 · S3 :3006 — override: just dev-example python/kv-counter 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`kv-counter`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{name: string}`). POST
+**twice** and the durable `context.kv` counter increments `1 → 2`:
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/kv-counter \
+  -H 'Content-Type: application/json' -d '{"data":{"name":"alice"}}'
+# → {"name":"alice","count":1}   then, on the second POST,   {"name":"alice","count":2}
+```
+
 ## Run it (the containerd lane)
 
 Built, pushed (with its contract), and invoked alongside the JS sibling by `just lima-example-kv`: it

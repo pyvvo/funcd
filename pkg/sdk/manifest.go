@@ -1,0 +1,145 @@
+package sdk
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+
+	"sigs.k8s.io/yaml"
+
+	"github.com/green-0-rabbit/funcd/api/fault"
+	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+)
+
+// VoidSchema is the canonical void side (ADR-0090/0122): a contract side that carries no
+// meaningful payload is the explicit JSON Schema {"type":"null"}, never an omission. Kept in
+// pkg/sdk (not imported from internal/artifact) so funcdctl and the SDK share it without a
+// package-boundary violation; the constant value matches internal/artifact.VoidSchema.
+const VoidSchema = `{"type":"null"}`
+
+// Manifest is the parsed funcdctl.yaml (ADR-0122): a colocated, per-function CLIENT push/dev config
+// (the client-side analogue of wrangler.toml), NOT a deploy manifest. It carries only what the client
+// tooling needs to push, run, and type a function — the runtime, the handler, the bindings, and the
+// inline I/O contract. Deploy concerns (name, namespace, scaling, placement) live on the hand-written
+// Function CRD, never here. funcdctl reads it to `push` (bake the schema-only contract + record the
+// runtime annotation), `types` (contract → .pyi/.d.ts + a typed binding context), and — later — `dev`.
+type Manifest struct {
+	// Runtime is the runtime class (e.g. python314, nodejs22) recorded as the push runtime annotation.
+	Runtime v1.RuntimeName `json:"runtime"`
+	// Handler is the entrypoint the shim resolves.
+	Handler string `json:"handler"`
+	// Bindings holds blob/kv/catalogs/links/config/secrets — needed to run the function and to type its
+	// binding context (GenerateTypes). It is not a deploy field; it describes the capabilities the code uses.
+	Bindings Bindings `json:"bindings,omitempty"`
+	// Contract is the inline {input, output} JSON Schema; both sides always present (a void side is VoidSchema).
+	Contract Contract `json:"contract"`
+	// Dev is the funcdctl-dev-only block (ADR-0125): auto-provisioned/globally-overridable backends,
+	// inline ConfigMap values, and env-sourced Secret values. It is ADDITIVE and dev-only — `funcdctl
+	// push` and `funcdctl types` ignore it entirely (they read only the four fields above), so a
+	// funcdctl.yaml carrying a `dev:` block pushes and types identically to one without it.
+	Dev Dev `json:"dev,omitempty"`
+}
+
+// Dev is the funcdctl-dev-only manifest block (ADR-0125). `funcdctl dev` reads it to auto-provision a
+// function's backing resources locally; `funcdctl push`/`types` ignore it. It is never a deploy field.
+type Dev struct {
+	// Backends overrides the auto-provisioned backend per kind, GLOBALLY (not per binding). Empty ⇒ the
+	// built-in default (memory).
+	Backends Backends `json:"backends,omitempty"`
+	// Config carries inline ConfigMap values, keyed by ConfigMap name → {key: value}. Non-sensitive and
+	// committable (a plain env inject in dev — no ConfigMap CRD on disk).
+	Config map[string]map[string]string `json:"config,omitempty"`
+	// Secrets carries Secret values keyed by Secret name → key → "${ENV_VAR}". The value is NEVER read
+	// from the file — `funcdctl dev` resolves each ${ENV_VAR} from the process environment (a missing var
+	// fails fast), so funcdctl.yaml stays committable.
+	Secrets map[string]map[string]string `json:"secrets,omitempty"`
+}
+
+// Backends selects the driver `funcdctl dev` auto-provisions for each backend kind (ADR-0125 Decision 4),
+// GLOBAL per kind. The built-in default is memory (ephemeral); a `file://…` value selects a local-durable
+// backend under `--persist`.
+type Backends struct {
+	// KV overrides the KVStore backend for ALL kv bindings ("memory" | a dsn/path override).
+	KV string `json:"kv,omitempty"`
+	// Blob overrides the Bucket backend for ALL blob bindings ("memory" | "file://…").
+	Blob string `json:"blob,omitempty"`
+	// Catalog overrides the CatalogService backend for ALL catalog bindings ("file://…", a local DuckLake).
+	Catalog string `json:"catalog,omitempty"`
+}
+
+// Bindings reuses the v1alpha1 binding types 1:1 (ADR-0122 field map). The YAML shapes are those types'
+// json shapes (alias/store/table, alias/bucket/prefix, …) — the capabilities the code uses at runtime,
+// and the source GenerateTypes reads to emit the typed binding context.
+type Bindings struct {
+	Blob     []v1.FunctionBlob    `json:"blob,omitempty"`
+	KV       []v1.FunctionKV      `json:"kv,omitempty"`
+	Catalogs []v1.FunctionCatalog `json:"catalogs,omitempty"`
+	Links    []v1.FunctionLink    `json:"links,omitempty"`
+	Config   []v1.ObjectName      `json:"config,omitempty"`
+	Secrets  []v1.ObjectName      `json:"secrets,omitempty"`
+}
+
+// Contract is the manifest's inline I/O JSON Schema (ADR-0090/0122): both sides always present, a void
+// side spelled VoidSchema. The two raw messages are gated (contract.Check) and baked schema-only.
+type Contract struct {
+	Input  json.RawMessage `json:"input"`
+	Output json.RawMessage `json:"output"`
+}
+
+// LoadManifest reads and parses a funcdctl.yaml at path, then structurally validates it. It does NOT
+// gate the contract against the funcd profile (that is the CLI layer's contract.Check, which lives in
+// internal/ and must not be imported here) — only shape rules a manifest cannot be useful without.
+func LoadManifest(path string) (*Manifest, error) {
+	const op = "sdk.LoadManifest"
+	data, err := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
+	if err != nil {
+		return nil, fault.Invalidf(op, "read manifest %q: %v", path, err)
+	}
+	return parseManifest(op, path, data)
+}
+
+// parseManifest decodes funcdctl.yaml bytes into a Manifest and structurally validates it. sigs.k8s.io/yaml
+// accepts YAML and JSON (JSON is valid YAML) and round-trips through the json tags, so json.RawMessage
+// contract sides receive their compact JSON bytes.
+func parseManifest(op, path string, data []byte) (*Manifest, error) {
+	var m Manifest
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, fault.Invalidf(op, "parse manifest %q: %v", path, err)
+	}
+	if err := m.structuralValidate(op, path); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// structuralValidate enforces the manifest shape rules a push/dev config cannot be useful without: a
+// runtime, a handler, and both contract sides present. There is no name/namespace — those are deploy
+// concerns on the Function CRD, not this client config. The funcd-profile gate is the CLI's contract.Check.
+func (m *Manifest) structuralValidate(op, path string) error {
+	if m.Runtime == "" {
+		return fault.Invalidf(op, "manifest %q is missing runtime", path)
+	}
+	if m.Handler == "" {
+		return fault.Invalidf(op, "manifest %q is missing handler", path)
+	}
+	if len(bytes.TrimSpace(m.Contract.Input)) == 0 {
+		return fault.Invalidf(op, "manifest %q contract is missing the input side (a void side is %s)", path, VoidSchema)
+	}
+	if len(bytes.TrimSpace(m.Contract.Output)) == 0 {
+		return fault.Invalidf(op, "manifest %q contract is missing the output side (a void side is %s)", path, VoidSchema)
+	}
+	return nil
+}
+
+// ContractSides returns the two JSON Schema sides for the push-time gate + bake (contract.Check +
+// artifact.ContractBlob). Both are mandatory (ADR-0090); a void side is VoidSchema, never nil.
+func (m *Manifest) ContractSides() (input, output []byte, err error) {
+	const op = "sdk.Manifest.ContractSides"
+	if len(bytes.TrimSpace(m.Contract.Input)) == 0 {
+		return nil, nil, fault.Invalidf(op, "manifest contract is missing the input side (a void side is %s)", VoidSchema)
+	}
+	if len(bytes.TrimSpace(m.Contract.Output)) == 0 {
+		return nil, nil, fault.Invalidf(op, "manifest contract is missing the output side (a void side is %s)", VoidSchema)
+	}
+	return m.Contract.Input, m.Contract.Output, nil
+}

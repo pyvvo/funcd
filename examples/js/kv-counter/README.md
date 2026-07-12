@@ -33,6 +33,26 @@ const keys = await ctx.kv.list('counters', 'a');     // GET  /kv/counters?prefix
 metadata (`funcdctl push --contract-input/--contract-output`), so a malformed call is rejected (422)
 before the handler runs — KV functions are contract-validated, not just KV-enabled.
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you):
+
+```bash
+just dev-example js/kv-counter      # gateway :3005 · S3 :3006 — override: just dev-example js/kv-counter 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`kv-counter`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{name: string}`). POST
+**twice** and the durable `context.kv` counter increments `1 → 2`:
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/kv-counter \
+  -H 'Content-Type: application/json' -d '{"data":{"name":"alice"}}'
+# → {"name":"alice","count":1}   then, on the second POST,   {"name":"alice","count":2}
+```
+
 ## Run it (executed by the e2e)
 
 This example is **built and run** end-to-end by `pkg/funcd/kv_e2e_test.go`

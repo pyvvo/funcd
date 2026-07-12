@@ -109,6 +109,25 @@ it only reads a `pyrightconfig.json` at the **workspace root**. So:
 Without either, an interpreter that lacks `funcd_shim` shows `event: Any` (an unresolved import
 collapses the generic `TypedDict` subscript to `Any`).
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you):
+
+```bash
+just dev-example python/hello-world      # gateway :3005 · S3 :3006 — override: just dev-example python/hello-world 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`hello-world`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{name: string}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/hello-world \
+  -H 'Content-Type: application/json' -d '{"data":{"name":"funcd"}}'
+# → {"greeting":"Hello, funcd."}
+```
+
 ## Deploy
 
 The deliverable is `src/handler.py` itself. Push it and apply a `Function` with

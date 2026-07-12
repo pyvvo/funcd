@@ -59,6 +59,27 @@ spec:
 
 `greeter` is an ordinary Function with no links — it doesn't know it's being called.
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs **both** functions from source — no hand-written CRDs — printing a colored
+services banner + live logs (it builds the `-tags dev` funcdctl for you). Each single-file
+`<stem>.funcdctl.yaml` names its function by **file stem**, so you get `front` + `greeter`:
+
+```bash
+just dev-example js/fn-to-fn      # gateway :3005 · S3 :3006 — override: just dev-example js/fn-to-fn 4000 4001
+```
+
+Invoke the **entry** function `front` on the gateway the banner prints (default
+`http://127.0.0.1:3005`); its handler calls `context.invoke("greeter", …)`. The invoke is a
+**CloudEvent envelope** — `{"data": <input>}` matching `front.funcdctl.yaml`'s `contract.input`
+(`{name?: string}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/front \
+  -H 'Content-Type: application/json' -d '{"data":{"name":"funcd"}}'
+# → {"via":"front","greeting":"Hello, funcd!"}
+```
+
 ## Deploy it (push → apply), the kubectl way
 
 Build the artifacts, push them to an OCI store (a registry, or a **local layout** — no server), then

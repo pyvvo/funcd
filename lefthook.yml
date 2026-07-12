@@ -1,0 +1,18 @@
+# lefthook (https://lefthook.dev) — the git hooks manager for this repo, pinned via the Nix dev shell
+# (which runs `lefthook install` on entry; or `just install-hooks`). It mirrors the `just ci` gofmt
+# gate so a commit can never drift the tree out of CI-green on formatting. gofmt comes from the
+# flake-pinned Go, so no extra tool is needed.
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      # Format staged Go files and re-stage the result, so unformatted Go can't be committed.
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+
+commit-msg:
+  commands:
+    conventional:
+      # Reject a commit whose subject isn't a Conventional Commit ({1} = the commit-message file).
+      run: scripts/commit-msg-lint.sh {1}

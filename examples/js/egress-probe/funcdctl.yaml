@@ -1,0 +1,33 @@
+# funcdctl.yaml (ADR-0122) — the colocated CLIENT push/dev config for the Node egress-probe (the
+# client-side analogue of wrangler.toml), NOT a deploy manifest. It declares only what the client
+# tooling needs: the runtime, the handler, and the inline I/O contract. There are no bindings — egress
+# is governed by the namespaced EgressPolicy CRD (applied mid-suite), not a per-function grant.
+# `funcdctl push . <ref>` bakes the schema-only contract + records the runtime; `funcdctl types` emits
+# a .d.ts for FuncInput/FuncOutput; `funcdctl dev` (later) runs it locally.
+# Deploy concerns (name, namespace, scaling, placement) live on the hand-written Function CRD
+# (function.yaml, which sits alongside this file) — this config never replaces it.
+runtime: nodejs22
+handler: handle
+contract:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      url:
+        type: string
+    required:
+      - url
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      ok:
+        type: boolean
+      status:
+        type: number
+      error:
+        type: string
+    required:
+      - ok
+      - status
+      - error

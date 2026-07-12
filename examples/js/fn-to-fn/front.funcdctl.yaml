@@ -1,0 +1,33 @@
+# front.funcdctl.yaml (ADR-0122/ADR-0124) — the colocated CLIENT push/dev config for the Node front
+# function (the client-side analogue of wrangler.toml), NOT a deploy manifest. This directory holds
+# several single-file functions, so each carries its own <stem>.funcdctl.yaml (ADR-0124): `funcdctl push
+# front.mjs <ref>` resolves THIS file by the `front` stem, never greeter's. front is the CALLER — it
+# declares a link to greeter and calls it via context.invoke("greeter", …); the link binding IS the
+# capability (ADR-0064, default-deny). `funcdctl push` bakes the schema-only contract + records the
+# runtime; `funcdctl types` emits a .d.ts for FuncInput/FuncOutput + the typed link binding context.
+# Deploy concerns (name, namespace, scaling, the links target) live on the hand-written Function CRD
+# (front.yaml, beside this file) — this config never replaces it.
+runtime: nodejs22
+handler: handle
+bindings:
+  links:
+    - alias: greeter        # the local name front's handler passes to context.invoke
+      target: greeter       # the Function it resolves to (same namespace, latest-Ready revision)
+contract:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      via:
+        type: string
+      greeting:
+        type: string
+    required:
+      - via
+      - greeting

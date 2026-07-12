@@ -26,6 +26,11 @@ type poolManifestEntry struct {
 	Name     string `json:"name"`
 	Artifact string `json:"artifact"`
 	Handler  string `json:"handler"`
+	// Contract is the delivered ADR-0059 contract-blob path (ADR-0123) the pool worker compiles
+	// its I/O validator from at member init — the pool analog of the solo worker's
+	// FUNCD_CONTRACT_PATH. Empty ⇒ no schema delivered (dev/legacy); the worker falls back to a
+	// module-baked validator. A contracted member with a set-but-broken path fails the host closed.
+	Contract string `json:"contract,omitempty"`
 }
 
 // poolHostFor selects the pool-host launch prefix for a runtime (ADR-0050): the longest registered
@@ -218,15 +223,21 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function) (
 			desired = d
 		}
 		path := ""
+		contractPath := ""
 		if r.materializer != nil {
 			p, err := r.materializer.Materialize(ctx, m)
 			if err != nil {
 				return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
 			}
 			path = p
+			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
+			// directly), so the delivered contract path is the host path in the bundle root.
+			if name, ok := contractFileIn(filepath.Dir(p)); ok {
+				contractPath = filepath.Join(filepath.Dir(p), name)
+			}
 		}
 		manifest = append(manifest, poolManifestEntry{
-			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler,
+			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Contract: contractPath,
 		})
 	}
 	return manifest, desired, nil

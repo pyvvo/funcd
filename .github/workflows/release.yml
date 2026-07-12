@@ -1,0 +1,77 @@
+name: Build funcdctl (local)
+
+# LOCAL-ONLY for now: run under nektos/act to build the funcdctl CLI and collect the binaries as
+# artifacts. No remote GitHub Release publishing yet — that gets added when we ship remotely. Pure-Go
+# (CGO_ENABLED=0), so it runs fully under act on any host.
+#
+# A build MATRIX fans the 4 targets (linux/darwin × amd64/arm64) across parallel jobs. Each job builds
+# BOTH:
+#   - the THIN client            → dist/funcdctl-<version>-<os>-<arch>            (~10 MB)
+#   - the FAT `-tags dev` client → dist/funcdctl-dev-<version>-<os>-<arch>        (`funcdctl dev`,
+#     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack catalog
+#     engine (~130 MB) fetched by scripts/fetch-catalog-engine.sh. The engine is a subprocess, never
+#     linked, so this stays CGO_ENABLED=0 and the fetch is per-arch from duckdb.org (no docker) — the
+#     whole workflow still runs under act on any host.
+#
+# Run locally — the flags live in ./.actrc (image, colima socket fix, --pull=false, artifact dir):
+#   docker pull catthehacker/ubuntu:act-latest      # once (act won't pull with --pull=false)
+#   act workflow_dispatch -W .github/workflows/release.yml
+# Each matrix job uploads its own artifact (gitignored) under .act-artifacts/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: version string to stamp into the binary
+        required: false
+        default: dev
+
+jobs:
+  build-funcdctl:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+    env:
+      VERSION: ${{ github.event.inputs.version || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build funcdctl (thin + fat -tags dev) for ${{ matrix.os }}/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          os="${{ matrix.os }}"
+          arch="${{ matrix.arch }}"
+          LDFLAGS="-s -w -X github.com/green-0-rabbit/funcd/internal/platform/version.Version=${VERSION}"
+          mkdir -p dist
+
+          # Thin client (pkg/sdk + api only).
+          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+            go build -trimpath -ldflags "$LDFLAGS" -o "dist/funcdctl-${VERSION}-${os}-${arch}" ./cmd/funcdctl
+
+          # Fat `-tags dev` client: fetch the per-arch DuckDB+Quack engine into the embed slot, then
+          # bake it in. Engine is a subprocess (no cgo), so CGO_ENABLED=0 still cross-builds cleanly.
+          scripts/fetch-catalog-engine.sh "$os" "$arch"
+          CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+            go build -tags dev -trimpath -ldflags "$LDFLAGS" -o "dist/funcdctl-dev-${VERSION}-${os}-${arch}" ./cmd/funcdctl
+
+          ls -lh dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: funcdctl-${{ env.VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*

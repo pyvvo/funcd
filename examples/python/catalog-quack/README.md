@@ -5,6 +5,28 @@ Deploy a governed SQL **catalog + query** engine *on* funcd: a `CatalogService` 
 Quack, out-of-process (no cgo in the daemon), reading/writing Parquet through the F47 S3 surface and
 checkpointing its SQLite catalog to blob.
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the consumer function from source — no hand-written CRDs — printing a colored
+services banner + live logs (it builds the `-tags dev` funcdctl for you). The **first** run fetches
+the embedded DuckDB+Quack catalog engine for your platform (once — `just dev-example` handles it),
+and the example's `catalogs` binding (alias `lake`) is wired automatically:
+
+```bash
+just dev-example python/catalog-quack      # gateway :3005 · S3 :3006 — override: just dev-example python/catalog-quack 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`catalog-quack`); the invoke is a
+**CloudEvent envelope** — `{"data": <input>}` matching the manifest's `contract.input`
+(`{sql: string, catalog?: string}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/catalog-quack \
+  -H 'Content-Type: application/json' -d '{"data":{"sql":"SELECT 42 AS answer"}}'
+# → {"rows":[[42]]}
+```
+
 ## What you apply (the user-facing flow)
 
 ```bash

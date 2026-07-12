@@ -31,7 +31,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
-from . import runtime
+from . import contract, runtime
 from .funclog import install_log_capture, open_channel
 from .tracespan import InvocationSpan, parse_links
 from .types import CloudEvent, FunctionContext, Handler
@@ -190,13 +190,23 @@ def main(argv: list[str] | None = None) -> int:
         print("funcd-shim: FUNCD_ARTIFACT is required", file=sys.stderr)
         return 2
 
+    # ADR-0123: compile the delivered contract BEFORE importing the (untrusted) handler module — the
+    # bounded eval-free reversal (the schema-compile runs over a contract.Check-gated, digest-pinned
+    # schema, ahead of any handler code). FUNCD_CONTRACT_PATH set-but-broken → fail closed (exit 3).
+    try:
+        delivered = contract.load()
+    except contract.ContractError as err:
+        print(f"funcd-shim: contract error: {err}", file=sys.stderr)
+        return 3
     try:
         module = runtime.load_module(artifact)
         handler = runtime.resolve_handler(module, handler_name)
-        validators = runtime.resolve_validators(module)
     except runtime.ShapeError as err:
         print(f"funcd-shim: shape error: {err}", file=sys.stderr)
         return 3  # materialization shape-gate failure (ADR-0030 §3)
+    # The delivered schema is authoritative when present; else fall back to the module-baked
+    # validators (transition back-compat for artifacts still carrying __funcd_validate_*).
+    validators = delivered if delivered is not None else runtime.resolve_validators(module)
 
     hostname = "0.0.0.0" if fixed_port > 0 else "127.0.0.1"  # noqa: S104 - container bind is intentional
     fn_name = os.environ.get("FUNCD_FUNCTION", "invoke")

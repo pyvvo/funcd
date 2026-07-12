@@ -292,3 +292,73 @@ func TestScenarioContractDigestPinned(t *testing.T) {
 	require.Contains(t, string(got), `"name"`, "digest-pinned inspect returns the originally deployed contract")
 	require.NotContains(t, string(got), `"ok"`, "not the contract the tag now points at")
 }
+
+// mkFunction builds a Function pointing at ref@digest (helper for the delivery tests).
+func mkFunction(t *testing.T, ref, digest string) *v1.Function {
+	t.Helper()
+	obj, ok := v1.NewObject(v1.KindFunction)
+	require.True(t, ok)
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace = "fn", "default"
+	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
+	return fn
+}
+
+// scenario: schema-delivered-single-file (ADR-0123) — materializing a contracted single-file
+// function delivers the exact ADR-0059 contract blob as the .funcd-contract.json dotfile sidecar
+// AND still resolves the handler (the dotfile never displaces entries[0]); FUNCD_CONTRACT_PATH's
+// target bytes == the inspect-advertised blob (advertised == enforced).
+func TestScenarioSchemaDeliveredSingleFile(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	body := "export function handle() {}\n"
+	bundle := writeBundle(t, body)
+	blob, berr := artifact.ContractBlob([]byte(schemaIn), []byte(schemaOut))
+	require.NoError(t, berr)
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "")
+	require.NoError(t, err)
+
+	m := artifact.NewOrasMaterializer(t.TempDir())
+	path, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+
+	// the resolved path is the HANDLER, never the contract sidecar.
+	got, err := os.ReadFile(path) //nolint:gosec // materializer-owned temp path
+	require.NoError(t, err)
+	require.Equal(t, body, string(got), "materialize resolves the handler, not the contract dotfile")
+	require.NotEqual(t, ".funcd-contract.json", filepath.Base(path))
+
+	// the delivered sidecar carries the exact digest-pinned advertised blob.
+	sidecar := filepath.Join(filepath.Dir(path), ".funcd-contract.json")
+	delivered, err := os.ReadFile(sidecar) //nolint:gosec // materializer-owned temp path
+	require.NoError(t, err)
+	advertised, err := artifact.Inspect(context.Background(), ref, digest)
+	require.NoError(t, err)
+	require.JSONEq(t, string(advertised), string(delivered), "delivered schema == inspect-advertised blob")
+
+	// cache-hit still resolves the handler (the dotfile sidecar is skipped by the resolver).
+	again, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+	require.Equal(t, path, again, "cache-hit skips the dotfile and returns the handler")
+}
+
+// scenario: schema-delivered (bundle) — materializing a contracted bundle delivers the ADR-0059
+// blob in the bundle dir as __funcd_contract.json and resolves the bundle entry.
+func TestScenarioSchemaDeliveredBundle(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+	require.NoError(t, err)
+
+	m := artifact.NewOrasMaterializer(t.TempDir())
+	path, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+	require.Equal(t, entry, filepath.Base(path), "materialize resolves the bundle entry")
+
+	delivered, err := os.ReadFile(filepath.Join(filepath.Dir(path), "__funcd_contract.json")) //nolint:gosec // materializer-owned temp path
+	require.NoError(t, err)
+	advertised, err := artifact.Inspect(context.Background(), ref, digest)
+	require.NoError(t, err)
+	require.JSONEq(t, string(advertised), string(delivered), "bundle delivers the advertised blob")
+}

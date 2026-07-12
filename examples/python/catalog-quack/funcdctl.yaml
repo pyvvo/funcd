@@ -1,0 +1,33 @@
+# funcdctl.yaml (ADR-0122) — the colocated CLIENT push/dev config for the Python catalog-quack consumer
+# (the client-side analogue of wrangler.toml), NOT a deploy manifest. It declares only what the client
+# tooling needs: the runtime, the handler, the catalog binding the code consumes, and the inline I/O
+# contract. `funcdctl push . <ref>` bakes the schema-only contract + records the runtime; `funcdctl types`
+# emits a .pyi for FuncInput/FuncOutput + the typed catalog binding context; `funcdctl dev` (later) runs
+# it locally. Deploy concerns (name, namespace, scaling, placement) live on the hand-written Function CRD
+# (consumer.yaml, which sits alongside this file) — this config never replaces it.
+runtime: python314
+handler: handle
+bindings:
+  catalogs:
+    - alias: lake     # injects FUNCD_CATALOG_LAKE_URL + FUNCD_CATALOG_LAKE_TOKEN
+      catalog: lake   # the CatalogService (domain) this consumer binds
+contract:
+  input:
+    type: object
+    additionalProperties: false
+    properties:
+      sql:
+        type: string
+      catalog:
+        type: string
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      rows:
+        type: array
+        items:
+          type: array
+          items: {}
+    required:
+      - rows

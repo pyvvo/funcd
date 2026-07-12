@@ -14,9 +14,12 @@ import (
 
 // Explicit file list (not a directory glob): includes the underscore-prefixed __init__.py /
 // __main__.py that an `all:` glob would need but that would also drag in __pycache__/*.pyc. Listing
-// the sources by name embeds exactly the shim, nothing machine-generated.
+// the sources by name embeds exactly the shim, nothing machine-generated. Every module the extracted
+// shim imports at runtime is listed — solo (shim.py) and pool (pool.py/_poolworker.py) both import
+// funclog + tracespan (+ tracespan→invcontext) at load, and contract.py (ADR-0123) is compiled at
+// worker init; kv.py backs context.kv. build.py is the push-time AST baker (build-only) — not shipped.
 //
-//go:embed src/funcd_shim/__init__.py src/funcd_shim/__main__.py src/funcd_shim/shim.py src/funcd_shim/invoke.py src/funcd_shim/pool.py src/funcd_shim/_poolworker.py src/funcd_shim/runtime.py src/funcd_shim/types.py src/funcd_shim/py.typed
+//go:embed src/funcd_shim/__init__.py src/funcd_shim/__main__.py src/funcd_shim/shim.py src/funcd_shim/invoke.py src/funcd_shim/pool.py src/funcd_shim/_poolworker.py src/funcd_shim/runtime.py src/funcd_shim/types.py src/funcd_shim/contract.py src/funcd_shim/funclog.py src/funcd_shim/tracespan.py src/funcd_shim/invcontext.py src/funcd_shim/kv.py src/funcd_shim/py.typed
 var shimFS embed.FS
 
 // The entry scripts launch the package: Python prepends a script's own directory to sys.path, so

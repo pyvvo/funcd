@@ -36,6 +36,26 @@ node --experimental-strip-types build.ts   # → burst.mjs (run via the shim's t
 `build.ts` is a plain esbuild bundle (no I/O contract — the logs are the point), mirroring
 `examples/js/kv-counter/build.ts` minus the contract step.
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + **live logs** (it builds the `-tags dev` funcdctl for you), so the burst streams straight
+into your terminal:
+
+```bash
+just dev-example js/log-burst      # gateway :3005 · S3 :3006 — override: just dev-example js/log-burst 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`log-burst`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{items?: number, batch?: string}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/log-burst \
+  -H 'Content-Type: application/json' -d '{"data":{"items":100,"batch":"b1"}}'
+# → {"emitted":115}  — and ≥100 captured log records stream in the dev banner
+```
+
 ## Run it (the e2e)
 
 The Lima/containerd e2e deploys `burst.yaml`, invokes the function once, and asserts **≥100** captured

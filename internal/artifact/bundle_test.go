@@ -34,7 +34,10 @@ func goodBundle(t *testing.T) (dir, entry string) {
 		"def handle(context, event):\n    return {}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, entry), []byte(handler), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendored", "pkg", "__init__.py"), []byte("X = 1\n"), 0o600))
-	contract := `{"input":{"type":"null"},"output":{"type":"object","properties":{},"additionalProperties":false}}`
+	// An in-profile {input, output} contract (ADR-0058): a void input and a closed-record output.
+	// VerifyBundleContract now runs contract.Check per side (ADR-0123), so the fixture must be
+	// within the funcd profile (an empty-properties object reads as an open record — out of profile).
+	contract := `{"input":{"type":"null"},"output":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "__funcd_contract.json"), []byte(contract), 0o600))
 	return dir, entry
 }
@@ -146,14 +149,29 @@ func TestScenarioPushGatesBundleContract(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "output key is mandatory (ADR-0090)")
 	})
 
-	t.Run("missing a baked validator", func(t *testing.T) {
+	t.Run("no baked validator symbols still passes (ADR-0123 schema-only)", func(t *testing.T) {
 		t.Parallel()
 		dir, entry := goodBundle(t)
-		// A handler with only the input validator — the output side is unenforced.
+		// A schema-only handler carrying NO __funcd_validate_* symbols: the artifact no longer bakes
+		// a validator (ADR-0123 supersedes ADR-0060's build-time bake — the shim compiles it at
+		// warm-up), so the entry defining no validator symbol is now valid.
 		require.NoError(t, os.WriteFile(filepath.Join(dir, entry),
-			[]byte("def __funcd_validate_input(d):\n    return []\ndef handle():\n    return {}\n"), 0o600))
+			[]byte("def handle(context, event):\n    return {}\n"), 0o600))
+		blob, err := artifact.VerifyBundleContract(dir, entry)
+		require.NoError(t, err, "a schema-only bundle (no baked validator) passes the gate")
+		require.Contains(t, string(blob), "\"input\"")
+	})
+
+	t.Run("out-of-profile schema fails contract.Check", func(t *testing.T) {
+		t.Parallel()
+		dir, entry := goodBundle(t)
+		// An OPEN record (additionalProperties absent) is outside the funcd profile (ADR-0058). The
+		// gate now runs contract.Check per side (ADR-0123), so this fails at push, not at worker
+		// compile-time — a bundle can no longer ship a schema the shim then can't compile in-profile.
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "__funcd_contract.json"),
+			[]byte(`{"input":{"type":"null"},"output":{"type":"object","properties":{"x":{"type":"string"}}}}`), 0o600))
 		_, err := artifact.VerifyBundleContract(dir, entry)
-		require.Equal(t, fault.Invalid, fault.KindOf(err), "each declared side must carry its baked validator")
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "an out-of-profile schema is refused at push (contract.Check)")
 	})
 
 	t.Run("good bundle promotes the contract", func(t *testing.T) {

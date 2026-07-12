@@ -25,13 +25,18 @@ _validators: Validators = Validators()
 _channel: Any = None  # the shared telemetry channel (ADR-0101), opened once in init()
 
 
-def init(src: str, artifact: str, handler: str) -> None:
-    """Load the handler + optional FuncInput/FuncOutput validators into this interpreter (the
-    materialization shape-gate, ADR-0058). Runs once per worker; a failure breaks the pool → exit 3."""
+def init(src: str, artifact: str, handler: str, contract_path: str | None = None) -> None:
+    """Load the handler + I/O validators into this interpreter (the materialization shape-gate,
+    ADR-0058/0123). Runs once per worker; a failure breaks the pool → exit 3.
+
+    ADR-0123: when *contract_path* is given, compile the validators from the delivered schema
+    (``fastjsonschema.compile``) **before** the untrusted handler module is imported — the bounded
+    eval-free reversal + the m3 reorder. A set-but-broken path fails the worker closed. When absent,
+    fall back to the module-baked ``__funcd_validate_*`` (transition back-compat)."""
     global _handler, _validators, _channel
     if src not in sys.path:
         sys.path.insert(0, src)
-    from funcd_shim import runtime
+    from funcd_shim import contract, runtime
     from funcd_shim.funclog import install_log_capture, open_channel
 
     # Path B capture (ADR-0081) + traces (ADR-0101): each pool worker runs in its own subinterpreter
@@ -40,9 +45,11 @@ def init(src: str, artifact: str, handler: str) -> None:
     _channel = open_channel()
     install_log_capture(_channel)
 
+    # ADR-0123: compile the delivered contract AHEAD of the handler import (m3 reorder).
+    delivered = contract.load_from_path(contract_path) if contract_path else None
     module = runtime.load_module(artifact)
     _handler = runtime.resolve_handler(module, handler)
-    _validators = runtime.resolve_validators(module)
+    _validators = delivered if delivered is not None else runtime.resolve_validators(module)
 
 
 def ready() -> bool:

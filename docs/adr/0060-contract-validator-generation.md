@@ -10,6 +10,11 @@
   output-500 / Node-AJV-standalone); the funcd-owns-compilation integrity invariant is well-formed (validator ≡ gated
   schema by construction); compute-agnostic **verified** (a real fastjsonschema validator runs inside a subinterpreter);
   license clean (fastjsonschema BSD). The runtime side (pt2/pt3a) already conforms; the build side is ADR-0058 pt3b.)
+- **Superseded in part by**: [ADR-0123](0123-runtime-compiled-io-validators.md) (2026-07-11) — supersedes **Decision 1**
+  (the baked `__funcd_validate_*` callable) and the **build-time** compile/bake of Decisions 2–3: the validator is
+  compiled from the schema **at worker warm-up**, not baked at push. **Decision 3's integrity invariant
+  (funcd-owns-compilation → *advertised == enforced*) and Decision 4 (gate-before-use) are preserved** — funcd still
+  owns the compile, now relocated build→worker over the pinned, `contract.Check`-gated schema.
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, shim, contract, codegen, validation, security, integrity
 - **Realizes**: [FEAT-0001/F29](../feat/0001-feat-v1.1.md) (contract codegen from code types) — v1.1, same row as ADR-0058.

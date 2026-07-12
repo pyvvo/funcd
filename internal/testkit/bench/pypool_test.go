@@ -20,6 +20,14 @@ func TestPythonPoolSmoke(t *testing.T) {
 	if python == "" {
 		t.Skip("no Python ≥3.14 on PATH (needs concurrent.interpreters); skipping the Python pool smoke")
 	}
+	// ADR-0123/0071: the shim imports fastjsonschema at load (it compiles the delivered I/O schema
+	// at worker warm-up), so the interpreter hosting the shim must carry it — the runtime image
+	// ships it, but a bare dev interpreter may not. Skip (like the ≥3.14 gate) when it is absent,
+	// rather than fail: this is a host-environment gap, not a shim defect. Point FUNCD_PYTHON at an
+	// interpreter with fastjsonschema (e.g. the shim's uv venv) to exercise the lane.
+	if err := exec.Command(python, "-c", "import fastjsonschema").Run(); err != nil {
+		t.Skip("the target Python lacks fastjsonschema (the shim's runtime dep, ADR-0071); skipping the pool smoke")
+	}
 	dir := t.TempDir()
 	soloEntry, poolEntry, err := shimpython.Extract(dir)
 	if err != nil {

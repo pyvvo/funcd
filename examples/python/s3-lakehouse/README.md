@@ -18,3 +18,18 @@ a `spec.blob` binding **is** the read grant (default-deny — no binding ⇒ For
 **external** client (a DuckDB over the SSH-tunnel) uses a scoped **SigV4 keypair**.
 
 **Flow:** `ingest` → `bronze` → `transform` → `silver`/`gold` → `report`.
+
+## Run it
+
+This example is **CRD-only** — it ships resource manifests (`bucket.yaml` + `ingest`/`transform`/`report.yaml`,
+whose images build from the containerd runtime layout) with **no `funcdctl.yaml` and no colocated handler
+source**, so it is **not** runnable via `funcdctl dev`. Deploy it by applying the CRDs against a running
+platform (the containerd/Lima lane), which materializes `ingest → bronze → transform → silver/gold → report`:
+
+```bash
+funcdctl apply -f bucket.yaml
+funcdctl apply -f ingest.yaml -f transform.yaml -f report.yaml
+```
+
+For a lakehouse you can run **locally from source** with `funcdctl dev`, see the DuckLake/Quack example
+[`python/catalog-quack`](../catalog-quack) — `just dev-example python/catalog-quack`.

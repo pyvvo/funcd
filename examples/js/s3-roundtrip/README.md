@@ -60,6 +60,34 @@ The lane applies the **Function first** (bound to the not-yet-applied Bucket) �
 proof of the Bucket↔Function-owner cycle on real containerd. (Because the function carries `spec.blob`
 from the start, `addS3Env` injects its `AWS_*` keypair on the first Ready replica — ADR-0085.)
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you) and boots the in-process S3 endpoint
+alongside the gateway. It loads every manifest in the dir, so the `lakehouse` Bucket and its
+`spec.blob` binding are wired automatically:
+
+```bash
+just dev-example js/s3-roundtrip      # gateway :3005 · S3 :3006 — override: just dev-example js/s3-roundtrip 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`s3-roundtrip`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{inv?: string}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/s3-roundtrip \
+  -H 'Content-Type: application/json' -d '{"data":{"inv":"001"}}'
+# → {"put":true,"get":true,"list":1,"denied":true}
+```
+
+The handler writes to `s3://lakehouse/gold/`; inspect it with the S3 creds the banner prints, against
+the dev S3 endpoint on `:3006`:
+
+```bash
+aws s3 ls s3://lakehouse/gold/ --endpoint-url http://127.0.0.1:3006
+```
+
 ## Build it
 
 ```bash

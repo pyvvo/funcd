@@ -47,8 +47,9 @@ func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
 		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.eventingCmd(), // control-plane verbs (need the SDK client)
-		a.pushCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), // artifact verbs (internal/artifact; no server)
+		a.pushCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + funcdctl.yaml type codegen (ADR-0122)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
+		a.devCmd(),   // ADR-0125: run a function locally from source (real under -tags dev; a rebuild-hint stub otherwise)
 	)
 	return root
 }
@@ -196,6 +197,16 @@ func (a *cli) pushCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, ref := args[0], args[1]
+			// ADR-0122: a colocated funcdctl.yaml is the PRIMARY contract source. When present (in the
+			// pushed bundle dir, or beside a single-file push), funcdctl gates + bakes the manifest's
+			// inline schema-only contract and records its runtime — no --schema, no language toolchain.
+			m, _, merr := resolveManifest(path)
+			if merr != nil {
+				return merr
+			}
+			if m != nil {
+				return a.pushFromManifest(cmd.Context(), path, ref, m, entry)
+			}
 			// A DIRECTORY is a multi-file bundle (ADR-0089): the mandatory {input, output} contract
 			// travels IN the bundle as __funcd_contract.json (not --schema), and PushBundle gates it
 			// (VerifyBundleContract, ADR-0090) + promotes it to the OCI contract layer. A FILE is the

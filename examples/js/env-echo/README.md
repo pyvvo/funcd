@@ -23,7 +23,27 @@ Expected invoke body:
 { "config": "prod", "secret": "s3cr3t", "shared": "from-secret" }
 ```
 
-## Run it
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + live logs (it builds the `-tags dev` funcdctl for you). It loads every manifest in the dir,
+so the `app-config` ConfigMap and `app-secret` Secret are injected as env:
+
+```bash
+just dev-example js/env-echo      # gateway :3005 · S3 :3006 — override: just dev-example js/env-echo 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`env-echo`); its input is **void**
+(`contract.input: {type: "null"}`), so the **CloudEvent envelope** carries `null` data:
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/env-echo \
+  -H 'Content-Type: application/json' -d '{"data":null}'
+# → {"config":"prod","secret":"s3cr3t","shared":"from-secret"}   (the Secret wins the shared key)
+```
+
+## Run it on containerd (Lima)
 
 This is the container-mode counterpart to the in-process scenario
 `pkg/funcd/config_secret_e2e_test.go`. Run the full Lima/containerd lane (build → self-deploying VM →

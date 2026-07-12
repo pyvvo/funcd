@@ -15,6 +15,12 @@
   optional *“no-types-no-validation / omitted `FuncOutput`”* unchecked path (I/O contracts are now **mandatory**),
   and makes a void side an **explicit** `{"type":"null"}` schema instead of an omission. The void→**204** wire,
   the code-derived JSON Schema, and the eval-free baked validators (this ADR + ADR-0060) are **kept**, unchanged.
+- **Superseded in part by**: [ADR-0123](0123-runtime-compiled-io-validators.md) (2026-07-11) — the
+  **eval-free-in-the-sandbox** constraint and the `eval-free-runtime` scenario: the runtime validator is no longer
+  precompiled/baked; the shim **compiles it from the pinned schema at worker warm-up**. This is a *bounded* reversal —
+  the compile runs once at init over a `contract.Check`-gated, digest-pinned schema **before** any handler code loads
+  (no eval of untrusted or request-time input). The JSON-Schema-canonical contract, the profile, and the 422/500/204
+  wire are **kept**.
 - **Date**: 2026-06-19 (**Accepted 2026-06-19** — judged (no Blockers) + iterated with the decider. Settled: JSON Schema
   canonical, **generated** from code types (typia/pydantic), **eval-free precompiled** validation (AJV-standalone /
   pydantic-core), input→422 + output→500, supersedes ADR-0038's hand-written JTD. Decider refinements folded: the

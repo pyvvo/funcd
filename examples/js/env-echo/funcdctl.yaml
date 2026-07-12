@@ -1,0 +1,32 @@
+# funcdctl.yaml (ADR-0122) — the colocated CLIENT push/dev config for the Node env-echo (the
+# client-side analogue of wrangler.toml), NOT a deploy manifest. It declares only what the client
+# tooling needs: the runtime, the handler, the config/secret bindings the code reads as env, and the
+# inline I/O contract (a void input — this function takes no event payload).
+# `funcdctl push . <ref>` bakes the schema-only contract + records the runtime; `funcdctl types` emits
+# a .d.ts for FuncInput/FuncOutput + the typed binding context; `funcdctl dev` (later) runs it locally.
+# Deploy concerns (name, namespace, scaling, placement) live on the hand-written Function CRD
+# (function.yaml, which sits alongside this file) — this config never replaces it.
+runtime: nodejs22
+handler: handle
+bindings:
+  config:
+    - app-config    # ConfigMap → non-sensitive env (APP_MODE, SHARED)
+  secrets:
+    - app-secret    # Secret → sensitive env (API_KEY, SHARED — wins the shared key)
+contract:
+  input:
+    type: "null"
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      config:
+        type: string
+      secret:
+        type: string
+      shared:
+        type: string
+    required:
+      - config
+      - secret
+      - shared

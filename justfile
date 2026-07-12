@@ -17,6 +17,12 @@ default:
 help:
     @just --list
 
+# install the git hooks (lefthook — gofmt gate; see lefthook.yml). Auto-run by `nix develop`.
+[group('meta')]
+install-hooks:
+    lefthook install
+    @echo "lefthook hooks installed (.git/hooks) — gofmt gate on pre-commit"
+
 # format Go source files
 [group('go')]
 fmt:
@@ -51,6 +57,20 @@ test-integration:
 build:
     go build ./...
 
+# run the local funcdctl build workflow via nektos/act (.github/workflows/release.yml) and drop the
+# cross-compiled CLI binaries (linux/darwin x amd64/arm64) into dist/. Needs a docker daemon (colima
+# on macOS: `colima start`). act flags come from .actrc. Usage: `just act-build` or `just act-build v1.2.3`.
+[group('go')]
+act-build version="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker pull catthehacker/ubuntu:act-latest   # idempotent; .actrc then runs act with --pull=false
+    act workflow_dispatch -W .github/workflows/release.yml --input version={{version}}
+    rm -rf dist && mkdir -p dist
+    unzip -o ".act-artifacts/1/funcdctl-{{version}}/funcdctl-{{version}}.zip" -d dist
+    echo "funcdctl binaries → dist/:"
+    ls -lh dist
+
 # build + EMBED the curated runtime images (ADR-0054): each is a distroless base carrying its
 # language runtime + the funcd shim as entrypoint (node on distroless/nodejs22; python on the
 # custom distroless 3.14). The artifact is still bind-mounted at deploy (ADR-0032 unchanged).
@@ -73,6 +93,26 @@ build-runtime-images: embedimg-pin
     docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
     docker save funcd/runtime-duckdb:latest | gzip -9 > internal/runtime/embedimg/duckdb.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
+
+# Fetch + bundle the DuckDB+Quack CATALOG ENGINE for ONE target os/arch into
+# internal/catalog/embedengine/engine.tar.gz — the process-mode engine `funcdctl dev` embeds
+# (ADR-0125 Decision 5, -tags dev). Overwrites the tiny committed placeholder (skip-worktree'd via
+# the dep). Delegates to scripts/fetch-catalog-engine.sh (shared with the CI build step so they
+# never drift). Fetches per-arch from duckdb.org (no docker) — works for darwin too. NOT run by ci.
+[group('runtime')]
+build-catalog-engine os arch: catalog-engine-pin
+    scripts/fetch-catalog-engine.sh {{os}} {{arch}}
+
+# Pin/unpin the embedengine placeholder's skip-worktree bit (same rationale as embedimg-pin: the real
+# ~130 MB engine overwrites the <1 KB placeholder and must never dirty the tree or get committed).
+[group('runtime')]
+catalog-engine-pin:
+    git update-index --skip-worktree internal/catalog/embedengine/engine.tar.gz
+    @echo "embedengine placeholder pinned (skip-worktree) — local engine builds won't dirty the tree"
+
+[group('runtime')]
+catalog-engine-unpin:
+    git update-index --no-skip-worktree internal/catalog/embedengine/engine.tar.gz
 
 # Pin/unpin the embedimg placeholders' skip-worktree bit. `build-runtime-images` OVERWRITES the tracked
 # <1 KB placeholders with real 30–100 MB images, which would otherwise leave the working tree permanently
@@ -330,3 +370,47 @@ ci: tidy generate check-hygiene
 [group('example')]
 example-kv: build-shim
     go test ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v
+
+# Run a bundled example under `funcdctl dev` (ADR-0125) in ONE command, so you can reproduce it easily:
+# builds the fat -tags dev funcdctl (embedding the host-arch DuckDB+Quack catalog engine ONLY when the
+# example binds a catalog — fetched once, ~63 MB) and runs the example FROM SOURCE — a localhost gateway
+# + S3 (+ catalog), zero hand-written CRDs, real contract enforcement. The embedded shims are already
+# built into funcdctl, so no push and no build-shim. Resolve <project> as a path, `js/<name>` /
+# `python/<name>`, or a bare unique example name; a workflow example (has workflow.yaml) runs its DAG.
+# Extra flags pass through. Examples:
+#   just dev-example catalog-quack            # the DuckLake/Quack catalog example (python)
+#   just dev-example js/kv-counter --persist  # persist KV/blob across runs (qualify the ambiguous name)
+#   just dev-example workflow                 # runs examples/js/workflow/workflow.yaml as a DAG
+# Reproduce any bundled example locally with `funcdctl dev` — build, boot, serve from source.
+# Ports are args (default gateway 3005 / S3 3006) so the URLs are reproducible: `just dev-example
+# catalog-quack 3005 3006` (or pass different ports). Extra flags still pass through after them.
+[group('example')]
+dev-example project gport="3005" s3port="3006" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -d "{{project}}" ]; then dir="{{project}}"
+    elif [ -d "examples/{{project}}" ]; then dir="examples/{{project}}"
+    else
+      matches=$(find examples -mindepth 2 -maxdepth 2 -type d -name "{{project}}")
+      n=$(printf '%s' "$matches" | grep -c . || true)
+      if [ "$n" = "1" ]; then dir="$matches"
+      elif [ "$n" -gt 1 ]; then
+        echo "ambiguous example '{{project}}' — qualify one of: $(printf '%s' "$matches" | sed 's|examples/||' | paste -sd' ' -)" >&2; exit 1
+      else
+        echo "example '{{project}}' not found. Available: $(find examples -mindepth 2 -maxdepth 2 -type d | sed 's|examples/||' | paste -sd' ' -)" >&2; exit 1
+      fi
+    fi
+    target="$dir"; [ -f "$dir/workflow.yaml" ] && target="$dir/workflow.yaml"
+    echo "▶ example: $target"
+    # A catalog example needs the real engine embedded — fetch once (skip-worktree'd so it never dirties the tree).
+    if grep -rql 'catalogs:' "$dir" --include='*.yaml' 2>/dev/null && [ "$(wc -c < internal/catalog/embedengine/engine.tar.gz)" -lt 4096 ]; then
+      echo "▶ fetching the DuckDB+Quack catalog engine for $(go env GOOS)/$(go env GOARCH) (once) …"
+      git update-index --skip-worktree internal/catalog/embedengine/engine.tar.gz 2>/dev/null || true
+      scripts/fetch-catalog-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
+    fi
+    mkdir -p dist
+    echo "▶ building funcdctl (-tags dev) …"
+    go build -tags dev -o dist/funcdctl-dev ./cmd/funcdctl
+    # Fixed ports (args, default 3005/3006) so the URLs are reproducible run-to-run.
+    echo "▶ funcdctl dev $target --gport {{gport}} --s3port {{s3port}} {{args}}"
+    exec dist/funcdctl-dev dev "$target" --gport {{gport}} --s3port {{s3port}} {{args}}

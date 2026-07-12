@@ -203,6 +203,52 @@ def test_pool_parallel(tmp_path: Path) -> None:
         proc.wait(timeout=5)
 
 
+def test_pool_delivered_contract_enforces(tmp_path: Path) -> None:
+    # scenario: runtime-compiles-validator (pool) — a member whose manifest carries a "contract"
+    # path gets its validator COMPILED from that delivered schema at init (no baked symbol), and
+    # enforces input→422 exactly like the solo shim.
+    art = tmp_path / "schema_only.py"
+    # a schema-only handler: NO __funcd_validate_* baked in — validation comes from the contract.
+    art.write_text("def handle(context, event):\n    return {'echoed': event.get('data')}\n")
+    cpath = tmp_path / "contract.json"
+    cpath.write_text(json.dumps({
+        "input": {"type": "object", "properties": {"hello": {"type": "string"}},
+                  "required": ["hello"], "additionalProperties": False},
+        "output": {},
+    }))
+    mpath = tmp_path / "m.json"
+    mpath.write_text(json.dumps([
+        {"name": "f0", "artifact": str(art), "handler": "handle", "contract": str(cpath)},
+    ]))
+
+    proc, port = _start(tmp_path, mpath)
+    try:
+        assert _post(port, "f0", json.dumps({"data": {"hello": "world"}}))[0] == 200
+        st, body = _post(port, "f0", json.dumps({"data": {"hello": 5}}))
+        assert st == 422, body
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+def test_pool_broken_contract_fails_closed(tmp_path: Path) -> None:
+    # scenario: no-fail-open (pool) — a member with a set-but-missing contract path fails the whole
+    # host closed (exit 3), never serving un-validated.
+    art = tmp_path / "fn.py"
+    art.write_text("def handle(context, event):\n    return None\n")
+    mpath = tmp_path / "m.json"
+    mpath.write_text(json.dumps([
+        {"name": "f0", "artifact": str(art), "handler": "handle", "contract": str(tmp_path / "absent.json")},
+    ]))
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "funcd_shim.pool"],
+        env={"FUNCD_POOL_MANIFEST": str(mpath), "FUNCD_PORTFILE": str(tmp_path / "p"),
+             "PATH": "/usr/bin:/bin", "PYTHONPATH": SRC},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    assert proc.wait(timeout=15) == 3
+
+
 def test_pool_shape_gate(tmp_path: Path) -> None:
     # scenario: a member whose handler export is missing makes the whole host exit 3.
     bad = tmp_path / "bad.py"

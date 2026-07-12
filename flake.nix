@@ -44,9 +44,13 @@
           gopls
           just
           git
+          lefthook  # git hooks manager (gofmt gate — see lefthook.yml); installed by the shellHook
+          act  # run GitHub Actions locally (nektos/act) — needs a docker daemon (colima on macOS)
         ]) ++ limaFor system ++ [ (venomFor system) ];
         shellHook = ''
           echo "funcd dev shell — go $(go version | awk '{print $3}')"
+          # Install the lefthook git hooks (idempotent) so a commit can't drift the tree out of CI-green.
+          command -v lefthook >/dev/null 2>&1 && [ -d .git ] && lefthook install >/dev/null 2>&1 || true
         '';
       };
     });

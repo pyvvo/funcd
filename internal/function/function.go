@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -846,6 +847,37 @@ func addBundleEnv(env map[string]string, rt v1.RuntimeName, bundleRoot string) {
 	}
 }
 
+// contractDeliveryNames are the delivered contract file names the materializer writes into the
+// bundle root (ADR-0123): the in-bundle blob for a bundle, the dotfile sidecar for a single-file
+// function. The reconciler probes the host bundle root for one of them to set FUNCD_CONTRACT_PATH.
+//
+//nolint:gochecknoglobals // an immutable lookup table (a slice can't be const)
+var contractDeliveryNames = []string{"__funcd_contract.json", ".funcd-contract.json"}
+
+// contractFileIn reports the delivered contract file name present in the host bundle root dir, if
+// any (ADR-0123). "" when none — a contract-less legacy artifact, or a dev FileMaterializer path
+// with no delivered schema (the shim then falls back to a module-baked validator).
+func contractFileIn(dir string) (name string, ok bool) {
+	for _, n := range contractDeliveryNames {
+		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// addContractEnv sets FUNCD_CONTRACT_PATH (ADR-0123) so the shim compiles the delivered I/O schema
+// at worker warm-up. hostRoot is the bundle root on the host (where the materializer wrote the
+// contract file); workerRoot is the path the same dir is visible at inside the worker — equal to
+// hostRoot in process mode, the container mount target in container mode. No-op when no contract
+// file was delivered (legacy/dev), so the shim's fail-closed path only triggers for a contracted
+// function whose schema genuinely failed to reach the worker.
+func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
+	if name, ok := contractFileIn(hostRoot); ok {
+		env["FUNCD_CONTRACT_PATH"] = filepath.Join(workerRoot, name)
+	}
+}
+
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
@@ -856,6 +888,10 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_PORT":     strconv.Itoa(containerShimPort),
 		}
 		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
+		// FUNCD_CONTRACT_PATH (ADR-0123): the schema is delivered into the host bundle root
+		// (Dir(artifactPath)) which is bind-mounted at containerArtifactDir, so the in-worker path
+		// is under the mount target.
+		addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir)
 		r.addS3Env(env, fn)
 		r.addCatalogEnv(env, catalogEnv) // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
 		r.mergeSecretEnv(env, secretEnv)
@@ -888,9 +924,12 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			"FUNCD_HANDLER":  fn.Spec.Handler,
 		}
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
-		r.addInvokeSocket(env, fn)                                     // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
-		r.addS3Env(env, fn)                                            // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
-		r.addCatalogEnv(env, catalogEnv)                               // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
+		// reads directly in process mode, so host root == worker root.
+		addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath))
+		r.addInvokeSocket(env, fn)       // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		r.addS3Env(env, fn)              // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
+		r.addCatalogEnv(env, catalogEnv) // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

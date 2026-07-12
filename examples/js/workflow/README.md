@@ -26,6 +26,25 @@ npm install            # or: ln -sfn ../../../shim/nodejs/node_modules node_modu
 npm run build          # → <step>.mjs (baked contract validators) + <step>.schema.json
 ```
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` loads [`workflow.yaml`](workflow.yaml) as a **DAG** — building each step from source —
+and prints a colored services banner + live per-step logs (it builds the `-tags dev` funcdctl for
+you):
+
+```bash
+just dev-example workflow      # gateway :3005 · S3 :3006 — override: just dev-example workflow 4000 4001
+```
+
+A Workflow isn't POSTed directly — you **trigger a run**, then the step logs (ingest → score →
+hi/lo → report) stream live. Against the control plane the banner prints, either drive the CLI or
+apply a `WorkflowRun` manifest (the run input matches `ingest`'s `contract.input`, `{amount: number}`):
+
+```bash
+funcdctl workflow run orders my-run --input '{"amount":40}'   # 40 > 30 → the hi branch
+funcdctl apply -f run.yaml                                    # …or apply a WorkflowRun manifest
+```
+
 ## Run the e2e (real containerd, Lima)
 
 ```bash

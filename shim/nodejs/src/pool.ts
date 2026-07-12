@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
 import { resolveHandler, resolveValidators } from './runtime.ts';
+import { ContractError, loadFromPath } from './contract.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
@@ -28,6 +29,7 @@ interface WorkerSpec {
   name: string;
   artifact: string; // absolute local path, resolved like the single shim's FUNCD_ARTIFACT
   handler?: string; // export name, default "handle"
+  contract?: string; // ADR-0123: delivered contract-blob path; the worker compiles its validator from it
 }
 interface Req {
   id: number;
@@ -63,12 +65,22 @@ async function workerMain(): Promise<void> {
   const channel = openChannel(process.env);
   installConsoleCapture(process.env, channel);
 
+  // ADR-0123: compile the delivered contract AHEAD of the handler import (the m3 reorder). A
+  // set-but-broken contract path fails the worker closed → the host fails pool readiness (exit 3).
+  let delivered: { input?: Validator; output?: Validator } | null;
+  try {
+    delivered = spec.contract ? loadFromPath(spec.contract) : null;
+  } catch (err) {
+    process.stderr.write(`funcd-pool[${spec.name}]: contract error: ${err instanceof ContractError ? err.message : err}\n`);
+    process.exit(3);
+  }
+
   let handler: Handler;
   let validators: { input?: Validator; output?: Validator };
   try {
     const mod = (await import(pathToFileURL(spec.artifact).href)) as Record<string, unknown>;
     handler = resolveHandler(mod, spec.handler ?? 'handle');
-    validators = resolveValidators(mod);
+    validators = delivered ?? resolveValidators(mod);
   } catch (err) {
     process.stderr.write(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)

@@ -55,6 +55,26 @@ log record:
 `"logging"` for Python (Node uses `"console"`); `attrs` are stringified (the host decodes them as
 `map[string]string`).
 
+## Run it locally (`funcdctl dev`)
+
+`funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services
+banner + **live logs** (it builds the `-tags dev` funcdctl for you), so the burst streams straight
+into your terminal:
+
+```bash
+just dev-example python/log-burst      # gateway :3005 · S3 :3006 — override: just dev-example python/log-burst 4000 4001
+```
+
+Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
+`funcdctl.yaml` names the function after its directory (`log-burst`); the invoke is a **CloudEvent
+envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{count?: integer}`):
+
+```bash
+curl -sS -XPOST http://127.0.0.1:3005/function/log-burst \
+  -H 'Content-Type: application/json' -d '{"data":{"count":25}}'
+# → {"emitted":125}  — and ≥100 captured log records stream in the dev banner
+```
+
 ## Develop
 
 Managed with [uv](https://docs.astral.sh/uv/):

@@ -175,7 +175,18 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 	// and return dir/<entry>. This is selected before the single-blob layer so a bundle artifact takes
 	// the tar path; a single-blob artifact keeps the ADR-0031 behavior below unchanged.
 	if bundleLayer, ok := layerByMediaType(manifest.Layers, BundleTarMediaType); ok {
-		return pullBundle(ctx, op, target, bundleLayer, dir)
+		entryPath, berr := pullBundle(ctx, op, target, bundleLayer, dir)
+		if berr != nil {
+			return "", berr
+		}
+		// ADR-0123: deliver the digest-pinned ADR-0059 contract blob into the bundle dir so the shim
+		// compiles the exact bytes `inspect` advertises (advertised == enforced). The bundle already
+		// carries __funcd_contract.json in its tar; overwriting it with the promoted blob keeps a
+		// single source of truth and never leaves a contracted function un-validated (no fail-open).
+		if cerr := deliverContract(ctx, op, target, &manifest, dir, bundleContractFile); cerr != nil {
+			return "", cerr
+		}
+		return entryPath, nil
 	}
 	// Select the bundle layer by media type (not Layers[0]) so a contract layer (ADR-0059) never
 	// changes which bytes materialize.
@@ -203,7 +214,34 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 	if werr := os.WriteFile(path, blob, 0o644); werr != nil { //nolint:gosec // non-secret RO code; container user must read it
 		return "", fault.Wrapf(werr, fault.Internal, op, "write bundle")
 	}
+	// ADR-0123: deliver the digest-pinned ADR-0059 contract blob as a DOTFILE sidecar beside the
+	// single-file handler so the shim compiles the exact advertised bytes (advertised == enforced,
+	// no fail-open). The dotfile name is skipped by the FUNCD_ARTIFACT resolver (below), so it can
+	// never displace the handler as the lone entry.
+	if cerr := deliverContract(ctx, op, target, &manifest, dir, singleFileContractSidecar); cerr != nil {
+		return "", cerr
+	}
 	return path, nil
+}
+
+// deliverContract fetches the manifest's ADR-0059 contract blob (by its content-addressed layer,
+// digest-verified) and writes it into dir under filename — the ADR-0123 schema delivery. A manifest
+// with no contract layer is a no-op (a legacy contract-less ADR-0031 artifact); a contracted one
+// always lands its schema so the worker never serves un-validated (fail-closed is the shim's job
+// when the file is absent, this guarantees it is present for every contracted function).
+func deliverContract(ctx context.Context, op string, target oras.ReadOnlyTarget, manifest *ocispec.Manifest, dir, filename string) error {
+	layer, ok := layerByMediaType(manifest.Layers, contractMediaType)
+	if !ok {
+		return nil // contract-less artifact (legacy ADR-0031) — nothing to deliver
+	}
+	blob, berr := content.FetchAll(ctx, target, layer) // verifies the blob against its descriptor digest
+	if berr != nil {
+		return fault.Wrapf(berr, fault.Internal, op, "fetch contract blob for delivery")
+	}
+	if werr := os.WriteFile(filepath.Join(dir, filename), blob, 0o644); werr != nil { //nolint:gosec // non-secret contract schema; the container user must read it
+		return fault.Wrapf(werr, fault.Internal, op, "write contract %q", filename)
+	}
+	return nil
 }
 
 // Inspect reads a function's I/O contract straight from its OCI manifest (ADR-0059): it fetches the
@@ -417,11 +455,18 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
 		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
 		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
-		// single-file cache has no sidecar → fall back to the lone file (entries[0]).
+		// single-file cache has no sidecar → fall back to the lone NON-dotfile file. Dotfiles
+		// (.funcd-entry, .funcd-contract.json — ADR-0123) are metadata, never the handler, so the
+		// resolver skips them; the delivered contract sidecar can never displace the handler.
 		if entry := bundleEntryFromCache(cacheDir); entry != "" {
 			return filepath.Join(cacheDir, filepath.FromSlash(entry)), nil
 		}
-		return filepath.Join(cacheDir, entries[0].Name()), nil // cached single-file (immutable per digest)
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), ".") {
+				return filepath.Join(cacheDir, e.Name()), nil // cached single-file (immutable per digest)
+			}
+		}
+		// Only dotfiles cached (no handler) — fall through to Pull to re-materialize.
 	}
 	path, perr := Pull(ctx, ref, digest, cacheDir)
 	if perr != nil {
