@@ -69,6 +69,12 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 		return nil, err
 	}
 	stampTypeMeta(obj, kind) // the route's kind owns TypeMeta (k8s-style)
+	// Server-side name generation (ObjectMeta.GenerateName): fill Name before admission + the store
+	// validate the object, so a client can create without inventing a unique name. store.Create retries
+	// on the rare collision.
+	if m := obj.GetObjectMeta(); m.Name == "" && m.GenerateName != "" {
+		m.Name = v1.GenerateObjectName(m.GenerateName)
+	}
 	id, _ := middleware.IdentityFrom(ctx)
 	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
 		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,

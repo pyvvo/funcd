@@ -83,7 +83,7 @@ contract:
 	require.Contains(t, err.Error(), "runtime")
 }
 
-// scenario: types-python — GenerateTypes on a python314 manifest emits a .pyi declaring
+// scenario: types-python — GenerateTypes on a python314 manifest emits a .py module declaring
 // FuncInput/FuncOutput (from the schema) and a typed KV binding context (ADR-0122 Decision 4).
 func TestScenario_types_python(t *testing.T) {
 	t.Parallel()
@@ -92,8 +92,8 @@ func TestScenario_types_python(t *testing.T) {
 
 	files, err := sdk.GenerateTypes(m)
 	require.NoError(t, err)
-	body, ok := files["funcd_types.pyi"]
-	require.True(t, ok, "a .pyi is generated for python314")
+	body, ok := files["funcd_types.py"]
+	require.True(t, ok, "a .py module is generated for python314")
 	s := string(body)
 	require.Contains(t, s, "class FuncInput(TypedDict)")
 	require.Contains(t, s, "name: str")

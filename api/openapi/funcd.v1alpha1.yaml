@@ -966,6 +966,9 @@ components:
           type:
             - array
             - "null"
+        generateName:
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
         generation:
           format: int64
           type: integer
@@ -998,8 +1001,6 @@ components:
           type: object
         uid:
           type: string
-      required:
-        - name
       type: object
     ObjectRef:
       additionalProperties: false

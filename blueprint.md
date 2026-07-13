@@ -79,7 +79,13 @@ In order to make this platform self-contained, we will need to implement the fol
     Concrete services (each a port; drivers listed real → in-memory):
     - **Blob storage** (the storage layer, exposed as a function-facing service): object
       get/put/list/delete + presign. Drivers via `gocloud.dev/blob`: **S3-compatible**
-      (minio, zot-adjacent, AWS S3, …), **filesystem**, **in-memory**.
+      (minio, zot-adjacent, AWS S3, …), **filesystem**, **in-memory**. **Functions reach blob** via
+      `context.blob.{get,put,delete,list,signedUrl}` over the per-sandbox worker-node local API (the same
+      channel as `context.kv`/`context.invoke`), routed to a binding-gated facade that authorizes the
+      **`S3Capability`** `s3::read`/`s3::write` on the bound `BlobPrefix` (ADR-0127 — **bind-as-grant** on
+      `Function.spec.blob`: no binding ⇒ Forbidden), keyed on the **same substrate + keyspace** as the S3
+      frontend so the two coexist. The ADR-0080 **S3-protocol frontend** (SigV4 keypair) stays the
+      external/inspect path; `context.blob` is the in-function native path (no keypair, no S3 SDK).
     - **KV storage** (`kvstore` port, ADR-0019): get/put/delete/list. Drivers: **durable Badger**
       (ADR-0066 — a **separate** Badger instance from the metastore; prefix-per-store, single-writer gateway +
       group commit, `DropPrefix` teardown) and **in-memory** (default). The durable driver exposes two

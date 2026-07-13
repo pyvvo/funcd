@@ -1,0 +1,66 @@
+# query-transactions — dev manifest. Runs functions/query_transactions/handler.py IN PLACE via `main`.
+# It reads the row-level silver transactions THROUGH the `lake` catalog query engine (Quack), not from the
+# blob directly. Binding: catalog lake (consumer) only — the catalog engine does the silver read with its
+# own S3 access. The dev.catalog block provisions the same CatalogService/lake as to-gold (idempotent).
+runtime: python314
+handler: handle
+main: functions/query_transactions/handler.py
+bindings:
+  catalogs:
+    - alias: lake
+      catalog: lake
+contract:
+  input:
+    # No input — it reads the whole silver layer. With ADR-0134 the gateway builds the CloudEvent, so an
+    # empty-body POST becomes data:null; a `type: null` contract accepts it → invoke with NO body.
+    type: "null"
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      count:
+        type: integer
+      transactions:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          properties:
+            date_comptable:
+              type: string
+            libelle:
+              type: string
+            debit:
+              type: string
+            credit:
+              type: string
+            montant:
+              type: string
+          required:
+            - date_comptable
+            - libelle
+            - debit
+            - credit
+            - montant
+    required:
+      - count
+      - transactions
+dev:
+  # the project virtualenv (carries duckdb + the quack extension); funcdctl dev launches handlers with it
+  python: .venv/bin/python
+  backends:
+    blob: "file://.funcd-dev/blob"
+  # The provider side of the `lake` catalog binding — same layout to-gold declares, so funcdctl dev
+  # synthesizes one shared CatalogService/lake (DuckLake over these prefixes) served by the embedded engine.
+  catalog:
+    lake:
+      blob:
+        - alias: silver
+          bucket: releves
+          prefix: silver
+        - alias: gold
+          bucket: releves
+          prefix: gold
+      catalog:
+        bucket: releves
+        prefix: gold

@@ -1,0 +1,39 @@
+# releve-pipeline (dev) — the ref-based medallion DAG for `funcdctl dev` (ADR-0125). A copy of
+# resources/workflow.yaml, kept at the example root so `funcdctl dev workflow.yaml` resolves each step's
+# `function.ref: <name>` to the sibling `<name>.funcdctl.yaml` (+ its handler) and synthesizes it FROM
+# SOURCE — no OCI image, no push. The graph shape is unchanged from the deploy Workflow:
+#
+#   extract ──┬── verify ────────────┐   (GATE 1: independent cross-check + printed totals)
+#             └────────────► build-silver   (GATE 2: PII residual scan)   [join: all]
+#                                   └──► to-gold   (mart SQL via the `lake` catalog)
+apiVersion: funcd.io/v1alpha1
+kind: Workflow
+metadata:
+  name: releve-pipeline
+  namespace: default
+  resourceGroup: rg1
+spec:
+  pooling:
+    mode: isolated
+    minReplicas: 1
+  steps:
+    - name: extract
+      function:
+        ref: extract
+    - name: verify
+      function:
+        ref: verify
+      dependsOn:
+        - extract
+    - name: build-silver
+      function:
+        ref: build-silver
+      dependsOn:
+        - extract
+        - verify
+      join: all
+    - name: to-gold
+      function:
+        ref: to-gold
+      dependsOn:
+        - build-silver

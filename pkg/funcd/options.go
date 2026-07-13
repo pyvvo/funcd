@@ -250,6 +250,15 @@ func WithCatalogProviderRuntime(r provider.Runtime) Option {
 	return func(c *config) error { c.catalogProvider = r; return nil }
 }
 
+// WithCatalogExtensionDir points catalog-consumer functions at a local DuckDB extension directory,
+// injected into their worker env as DUCKDB_EXTENSION_DIRECTORY so a handler's `LOAD quack`/`ducklake`
+// resolves the curated extensions. It is the `funcdctl dev` (ADR-0125) analogue of the prod bundle's
+// duckdb-ext (ADR-0089): dev extracts the embedded catalog engine's extensions once and points
+// consumers at them, since a dev handler runs from source with no bundle. Empty ⇒ no injection (prod).
+func WithCatalogExtensionDir(dir string) Option {
+	return func(c *config) error { c.catalogExtensionDir = dir; return nil }
+}
+
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are
 // pulled by digest from their `spec.image` into a per-digest cache under dir. When a
 // runtime shim is configured and no explicit Materializer is set, this selects the oras
@@ -358,6 +367,19 @@ func WithListenAddr(addr string) Option {
 // WithAuthorizer injects the authorization PDP. Defaults to rbac.New().
 func WithAuthorizer(a auth.Authorizer) Option {
 	return func(c *config) error { c.authorizer = a; return nil }
+}
+
+// WithDevS3RelaxedWrites drops the S3 single-writer forbid so any authenticated principal may write any
+// blob prefix — a dev-only convenience (used by `funcdctl dev`) that lets a developer seed a workflow's
+// initial input with a plain `aws s3 cp` into a no-owner drop prefix (e.g. `landing`), and tolerates dev's
+// binding-inferred prefix owners (which cannot tell a producer from a consumer). Reads stay binding-gated.
+// The prod model (single writer == prefix owner) is unchanged; NEVER use this in production. A
+// dev-fidelity relaxation in the spirit of ADR-0125's boundaries (no egress isolation, no sandbox).
+func WithDevS3RelaxedWrites() Option {
+	return func(c *config) error {
+		c.s3DevRelaxedWrites = true
+		return nil
+	}
 }
 
 // WithDevAuth wires a single developer-role credential for token, scoped to the

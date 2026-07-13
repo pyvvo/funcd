@@ -2,6 +2,8 @@ package blob_test
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,130 +11,182 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
 	iblob "github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/services"
 	svcblob "github.com/green-0-rabbit/funcd/internal/services/blob"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
 )
 
-func newFacade(t *testing.T) *svcblob.Facade {
+// mapBucket is a tiny in-memory blob.Bucket for the facade tests. Unlike memblob it supports SignedURL,
+// and its map is directly inspectable so a test can assert the SUBSTRATE key (the coexistence property).
+type mapBucket struct{ m map[string][]byte }
+
+func newMapBucket() *mapBucket { return &mapBucket{m: map[string][]byte{}} }
+
+func (b *mapBucket) Get(_ context.Context, key string) ([]byte, error) {
+	v, ok := b.m[key]
+	if !ok {
+		return nil, fault.NotFoundf("mapBucket.Get", "key %q", key)
+	}
+	return v, nil
+}
+func (b *mapBucket) Put(_ context.Context, key string, data []byte) error {
+	b.m[key] = data
+	return nil
+}
+func (b *mapBucket) Delete(_ context.Context, key string) error { delete(b.m, key); return nil }
+func (b *mapBucket) Exists(_ context.Context, key string) (bool, error) {
+	_, ok := b.m[key]
+	return ok, nil
+}
+func (b *mapBucket) List(_ context.Context, prefix string) ([]iblob.Attributes, error) {
+	var out []iblob.Attributes
+	for k, v := range b.m {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, iblob.Attributes{Key: k, Size: int64(len(v))})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+func (b *mapBucket) SignedURL(_ context.Context, key string, opts iblob.SignOptions) (string, error) {
+	return "https://signed.example/" + key + "?method=" + string(opts.Method), nil
+}
+func (b *mapBucket) Close() error { return nil }
+
+// fakeResolver binds caller "fn" via alias "files" → bucket "bkt", prefix "p"; everything else is
+// default-deny (Forbidden), mirroring the ADR-0073 bind-as-grant BindingResolver.
+type fakeResolver struct{}
+
+func (fakeResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (svcblob.Binding, error) {
+	if fn == "fn" && alias == "files" {
+		return svcblob.Binding{Bucket: "bkt", Prefix: "p"}, nil
+	}
+	return svcblob.Binding{}, fault.Forbiddenf("fakeResolver", "no blob binding for %s/%s", fn, alias)
+}
+
+// s3PDP is a test PDP: s3::read allowed iff readOK, s3::write iff writeOK (ADR-0080 S3Capability stand-in).
+type s3PDP struct{ readOK, writeOK bool }
+
+func (p s3PDP) Authorize(_ context.Context, req auth.Request) (auth.Decision, error) {
+	switch req.Action {
+	case auth.ActionS3Read:
+		return auth.Decision{Allowed: p.readOK}, nil
+	case auth.ActionS3Write:
+		return auth.Decision{Allowed: p.writeOK}, nil
+	default:
+		return auth.Decision{Allowed: false}, nil
+	}
+}
+
+func newFacade(t *testing.T, bkt iblob.Bucket, pdp auth.Authorizer) *svcblob.Facade {
 	t.Helper()
-	bkt, err := gocloud.Open(context.Background(), "mem://")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = bkt.Close() })
-	f, err := svcblob.NewFacade(svcblob.FacadeDeps{Bucket: bkt, Authorizer: rbac.New()})
+	f, err := svcblob.NewFacade(svcblob.FacadeDeps{
+		Resolver: fakeResolver{},
+		BucketFor: func(_ v1.NamespaceName, name string) (iblob.Bucket, bool) {
+			if name == "bkt" {
+				return bkt, true
+			}
+			return nil, false
+		},
+		Authorizer: pdp,
+	})
 	require.NoError(t, err)
 	return f
 }
 
-func dev(ns v1.NamespaceName) auth.Identity {
-	return auth.Identity{Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{ns}}
-}
-func viewer(ns v1.NamespaceName) auth.Identity {
-	return auth.Identity{Subject: "obs", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{ns}}
-}
-
-// scenario: blob-facade-roundtrips.
-func TestScenarioBlobFacadeRoundtrips(t *testing.T) {
+// scenario: blob-read-write — a bound function put/gets its prefix; the object is keyed at the SHARED
+// substrate keyspace (prefix/key), so it is the same object the ADR-0080 S3 frontend serves.
+func TestScenarioBlobReadWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := newFacade(t)
+	bkt := newMapBucket()
+	f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
 
-	require.NoError(t, f.Put(ctx, dev("team-a"), "team-a", "files", "report.txt", []byte("hello")))
-	v, err := f.Get(ctx, dev("team-a"), "team-a", "files", "report.txt")
+	require.NoError(t, f.Put(ctx, "default", "fn", "files", "report.txt", []byte("hello")))
+	require.Equal(t, []byte("hello"), bkt.m["p/report.txt"], "keyed at the shared s3gateway keyspace prefix/key")
+
+	got, found, err := f.Get(ctx, "default", "fn", "files", "report.txt")
 	require.NoError(t, err)
-	require.Equal(t, []byte("hello"), v)
+	require.True(t, found)
+	require.Equal(t, []byte("hello"), got)
 
-	keys, err := f.List(ctx, dev("team-a"), "team-a", "files", "")
+	_, found, err = f.Get(ctx, "default", "fn", "files", "absent")
 	require.NoError(t, err)
-	require.Equal(t, []string{"report.txt"}, keys, "tenant prefix stripped")
+	require.False(t, found, "a missing object is found=false, not an error")
 
-	require.NoError(t, f.Delete(ctx, dev("team-a"), "team-a", "files", "report.txt"))
-	_, err = f.Get(ctx, dev("team-a"), "team-a", "files", "report.txt")
-	require.Error(t, err, "deleted object is absent")
+	require.NoError(t, f.Delete(ctx, "default", "fn", "files", "report.txt"))
+	_, found, err = f.Get(ctx, "default", "fn", "files", "report.txt")
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
-// scenario: blob-facade-prefixes-by-namespace-and-binding.
-func TestScenarioBlobFacadePrefixesByNamespaceAndBinding(t *testing.T) {
+// scenario: blob-list — list returns exactly the binding's keys under the prefix, the prefix sub-domain
+// stripped so the caller sees only its own key space.
+func TestScenarioBlobList(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := newFacade(t)
+	bkt := newMapBucket()
+	f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
 
-	require.NoError(t, f.Put(ctx, dev("team-a"), "team-a", "files", "k", []byte("a-val")))
-	require.NoError(t, f.Put(ctx, dev("team-b"), "team-b", "files", "k", []byte("b-val")))
-
-	va, err := f.Get(ctx, dev("team-a"), "team-a", "files", "k")
-	require.NoError(t, err)
-	require.Equal(t, []byte("a-val"), va, "no cross-tenant collision")
-	vb, err := f.Get(ctx, dev("team-b"), "team-b", "files", "k")
-	require.NoError(t, err)
-	require.Equal(t, []byte("b-val"), vb)
-}
-
-// scenario: blob-facade-authorizes-each-access.
-func TestScenarioBlobFacadeAuthorizesEachAccess(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := newFacade(t)
-
-	// developer scoped to team-a accessing team-b → Forbidden, before the bucket.
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, dev("team-a"), "team-b", "files", "k", []byte("x"))))
-	_, gerr := f.Get(ctx, dev("team-a"), "team-b", "files", "k")
-	require.Equal(t, fault.Forbidden, fault.KindOf(gerr))
-
-	// viewer may not write in its own namespace.
-	require.Equal(t, fault.Forbidden, fault.KindOf(f.Put(ctx, viewer("team-a"), "team-a", "files", "k", []byte("x"))))
-}
-
-// scenario: blob-facade-presigns — authorized presign passes the facade; a viewer is
-// denied a presigned PUT (the capability is a write — no escalation).
-func TestScenarioBlobFacadePresigns(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := newFacade(t)
-
-	// authorized dev requesting a GET presign: the facade authorizes (not Forbidden) and
-	// delegates to the driver (memblob may not implement signing — that's the driver, not
-	// the facade; what matters here is the facade did not deny it).
-	url, err := f.SignedURL(ctx, dev("team-a"), "team-a", "files", "k", iblob.SignOptions{Method: iblob.SignGet})
-	if err != nil {
-		require.NotEqual(t, fault.Forbidden, fault.KindOf(err), "an authorized presign is not denied by the facade")
-	} else {
-		require.NotEmpty(t, url)
+	for _, k := range []string{"bronze/a", "bronze/b", "silver/x"} {
+		require.NoError(t, f.Put(ctx, "default", "fn", "files", k, []byte("v")))
 	}
+	require.Equal(t, []string{"p/bronze/a", "p/bronze/b", "p/silver/x"}, sortedKeys(bkt), "substrate keys share the prefix")
 
-	// viewer denied a presigned PUT (write capability) — the M1 security fix.
-	_, perr := f.SignedURL(ctx, viewer("team-a"), "team-a", "files", "k", iblob.SignOptions{Method: iblob.SignPut})
-	require.Equal(t, fault.Forbidden, fault.KindOf(perr), "viewer cannot mint a presigned write URL")
+	keys, err := f.List(ctx, "default", "fn", "files", "bronze/")
+	require.NoError(t, err)
+	require.Equal(t, []string{"bronze/a", "bronze/b"}, keys)
 }
 
-// scenario: blob-service-reconciles-to-ready — the blob handler on the ADR-0019 dispatcher.
-func TestScenarioBlobServiceReconcilesToReady(t *testing.T) {
+// scenario: blob-unbound-forbidden — an alias the function did not declare is default-deny (Forbidden),
+// and a bound alias with no permitting Policy is also denied.
+func TestScenarioBlobUnboundForbidden(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st := store.New(memory.New())
 
-	obj, ok := v1.NewObject(v1.KindService)
-	require.True(t, ok)
-	svc := obj.(*v1.Service)
-	svc.Name = "myblob"
-	svc.Namespace = "default"
-	svc.ResourceGroup = "rg1"
-	svc.Spec.Type = v1.ServiceTypeBlob
+	f := newFacade(t, newMapBucket(), s3PDP{readOK: true, writeOK: true})
+	_, _, err := f.Get(ctx, "default", "fn", "nope", "k")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "an unbound alias is Forbidden (resolver default-deny)")
+
+	fDeny := newFacade(t, newMapBucket(), s3PDP{readOK: false, writeOK: false})
+	_, _, err = fDeny.Get(ctx, "default", "fn", "files", "k")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a bound alias with no permitting Policy is Forbidden (PDP deny)")
+}
+
+// scenario: blob-signed-url — signedUrl returns a substrate presigned URL; a GET-sign needs s3::read, a
+// PUT-sign needs s3::write (no read→write escalation).
+func TestScenarioBlobSignedURL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFacade(t, newMapBucket(), s3PDP{readOK: true, writeOK: false})
+
+	url, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{})
+	require.NoError(t, err)
+	require.Contains(t, url, "p/report.txt", "keyed at the shared keyspace")
+
+	_, err = f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a PUT-sign needs s3::write — no read→write escalation")
+}
+
+// TestBlobTypeHandler covers the unchanged Service-dispatcher TypeHandler (ADR-0021).
+func TestBlobTypeHandler(t *testing.T) {
+	t.Parallel()
+	h := svcblob.NewHandler()
+	require.Equal(t, v1.ServiceTypeBlob, h.Type())
+
+	svc := &v1.Service{}
 	svc.Spec.Blob = &v1.BlobServiceSpec{Binding: "files"}
-	_, err := st.Create(ctx, svc)
+	_, err := h.Reconcile(context.Background(), svc)
 	require.NoError(t, err)
 
-	d, err := services.NewDispatcher(st, nil, svcblob.NewHandler())
-	require.NoError(t, err)
-	_, err = d.Reconcile(ctx, controller.Request{GVK: v1.KindService.GVK(), Namespace: "default", Name: "myblob"})
-	require.NoError(t, err)
+	_, err = h.Reconcile(context.Background(), &v1.Service{})
+	require.Error(t, err, "a blob service without a binding is invalid")
+}
 
-	got, err := st.Get(ctx, v1.KindService.GVK(), "default", "myblob")
-	require.NoError(t, err)
-	require.Equal(t, v1.PhaseReady, got.(*v1.Service).Status.Phase)
+func sortedKeys(b *mapBucket) []string {
+	out := make([]string, 0, len(b.m))
+	for k := range b.m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

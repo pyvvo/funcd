@@ -191,6 +191,7 @@ func TestResolvePersistPlanEphemeralDefault(t *testing.T) {
 	require.Empty(t, p.storeDir)
 	require.Empty(t, p.kvDir)
 	require.Empty(t, p.blobDir)
+	require.Empty(t, p.catalogDir, "the DuckLake catalog is ephemeral (temp) without --persist")
 }
 
 // TestResolvePersistPlanPersistSubdirs — --persist lays metastore/kv/blob out as per-service subdirs of
@@ -202,6 +203,7 @@ func TestResolvePersistPlanPersistSubdirs(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "metastore"), p.storeDir)
 	require.Equal(t, filepath.Join(root, "kv"), p.kvDir)
 	require.Equal(t, filepath.Join(root, "blob"), p.blobDir)
+	require.Equal(t, filepath.Join(root, "catalog"), p.catalogDir, "--persist makes the DuckLake catalog durable")
 }
 
 // TestResolvePersistPlanDefaultDir — an empty --persist-to falls back to the gitignored default dir.

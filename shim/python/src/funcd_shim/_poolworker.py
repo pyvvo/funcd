@@ -17,6 +17,7 @@ from .runtime import Validators
 from .types import CloudEvent, Handler
 
 if TYPE_CHECKING:
+    from .blob import BlobClient
     from .kv import KVClient
 
 # Per-interpreter state, set by init() and read by invoke() — isolated to this worker interpreter.
@@ -73,6 +74,12 @@ class _Ctx:
 
         return KVClient()
 
+    @property
+    def blob(self) -> BlobClient:
+        from .blob import BlobClient
+
+        return BlobClient()
+
 
 def invoke(
     body: str,
@@ -89,7 +96,15 @@ def invoke(
     try:
         event: CloudEvent[Any] = json.loads(body) if body else CloudEvent()
     except (json.JSONDecodeError, ValueError):
-        return {"status": 400}
+        return {"status": 400, "body": {"error": "request body is not valid JSON"}}
+    if not isinstance(event, dict):
+        # A valid-JSON but non-object body (null / array / scalar) is not a CloudEvent envelope.
+        # Reject it cleanly — never let `event.get("data")` raise AttributeError and crash the pooled
+        # worker (that surfaced as a gateway `proxy error: EOF` / empty-body 502).
+        return {
+            "status": 400,
+            "body": {"error": "request body must be a JSON object (CloudEvent envelope)"},
+        }
     if _validators.input is not None:
         errors = _validators.input(event.get("data"))
         if errors:

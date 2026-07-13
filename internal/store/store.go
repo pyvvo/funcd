@@ -252,7 +252,41 @@ func (s *store) List(ctx context.Context, gvk v1.GroupVersionKind, opts ListOpti
 	return List{Items: items, ResourceVersion: strconv.FormatUint(rev, 10)}, nil
 }
 
+// Create persists a new object. When the object carries an empty Name but a GenerateName prefix
+// (ObjectMeta.GenerateName), the store assigns Name = GenerateName + a random suffix and retries on the
+// near-impossible collision — a client can create without inventing a unique name. Otherwise Name is
+// required (an empty Name with no GenerateName fails validation, unchanged).
 func (s *store) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	if s.initErr != nil {
+		return nil, s.initErr
+	}
+	if obj.GetObjectMeta().GenerateName == "" {
+		return s.createOnce(ctx, obj) // normal path: Name required, single attempt
+	}
+	// generateName path: work on a clone (the caller's input stays read-only) and regenerate the name on
+	// a collision, bounded.
+	work, cerr := cloneObject(obj)
+	if cerr != nil {
+		return nil, cerr
+	}
+	wm := work.GetObjectMeta()
+	for attempt := 0; attempt < 8; attempt++ {
+		if wm.Name == "" {
+			wm.Name = v1.GenerateObjectName(wm.GenerateName)
+		}
+		created, err := s.createOnce(ctx, work)
+		if err == nil {
+			return created, nil
+		}
+		if fault.KindOf(err) != fault.Conflict {
+			return nil, err
+		}
+		wm.Name = "" // collided — regenerate on the next attempt
+	}
+	return nil, fault.Conflictf("store.Create", "could not assign a unique %s name after 8 tries", work.GroupVersionKind().Kind)
+}
+
+func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
 	}

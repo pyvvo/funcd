@@ -2,8 +2,10 @@
 // `handle(context, event)`; the runtime shim invokes it once per CloudEvent. Authors
 // import these types for a typed handler signature + autocomplete.
 import type { KVClient } from './kv.ts';
+import type { BlobClient } from './blob.ts';
 
 export type { KVClient } from './kv.ts';
+export type { BlobClient, SignOptions } from './blob.ts';
 
 /** A CloudEvent — the normalized trigger envelope (ADR-0023). */
 export interface CloudEvent<T = unknown> {
@@ -29,6 +31,9 @@ export interface FunctionContext {
   invoke<I = unknown, O = unknown>(alias: string, input: I): Promise<O>;
   /** Namespace-scoped key-value storage (ADR-0069): get/put/del a binding's key, or list keys. */
   kv: KVClient;
+  /** Binding-scoped blob storage (ADR-0127): get/put/del/list a bound prefix's objects, or mint a
+   *  presigned URL — the blob twin of kv. */
+  blob: BlobClient;
 }
 
 /** A function handler: receives the context + CloudEvent, returns a response (or nothing). */

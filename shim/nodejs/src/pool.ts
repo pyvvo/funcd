@@ -21,6 +21,7 @@ import { ContractError, loadFromPath } from './contract.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
+import { makeBlob } from './blob.ts';
 import { installConsoleCapture, openChannel } from './funclog.ts';
 import { startSpan, parseLinks } from './tracespan.ts';
 
@@ -85,7 +86,7 @@ async function workerMain(): Promise<void> {
     process.stderr.write(`funcd-pool[${spec.name}]: shape error: ${err instanceof Error ? err.message : err}\n`);
     process.exit(3); // boot shape error → host fails pool readiness (the materialization shape-gate)
   }
-  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke(), kv: makeKV() };
+  const ctx: FunctionContext = { log: (...args) => console.log(`[${spec.name}]`, ...args), invoke: makeInvoke(), kv: makeKV(), blob: makeBlob() };
 
   port.on('message', (req: Req) => {
     void (async () => {
@@ -254,6 +255,11 @@ export function createPool(manifest: WorkerSpec[], limits?: { maxOldMB?: number;
       event = (text ? JSON.parse(text) : {}) as CloudEvent;
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
+    }
+    if (typeof event !== 'object' || event === null || Array.isArray(event)) {
+      // A valid-JSON but non-object body (null / array / scalar) is not a CloudEvent envelope. Reject
+      // it cleanly — never forward it to a worker where `event.data` would throw and crash it.
+      return c.text('request body must be a JSON object (CloudEvent envelope)', 400);
     }
     // ADR-0101/0105: forward the trace + span-id + fan-in links headers to the worker.
     const res = await h.invoke(

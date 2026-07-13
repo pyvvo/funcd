@@ -1,0 +1,54 @@
+[project]
+name = "funcd-example-releve-lakehouse"
+version = "0.1.0"
+description = "A medallion lakehouse pipeline on funcd: bank-statement PDFs → bronze/silver Parquet → gold DuckLake, with a reactive trigger, a cross-check gate + a PII gate, and confidential-egress lockdown."
+authors = [{ name = "The funcd Authors" }]
+requires-python = ">=3.12"
+# funcd-shim is the typed authoring contract (CloudEvent/FunctionContext). The runtime deps below are the
+# native closure each step vendors into its ADR-0089 bundle (functions/build.py); they are declared here for
+# LOCAL typecheck + tests only — at deploy they travel IN the artifact, on the stock python314 runtime.
+dependencies = [
+    "funcd-shim",
+    "pdfplumber>=0.11",   # extract + verify: geometric / text PDF extraction
+    "pyarrow>=17",        # bronze/silver Parquet I/O
+    "duckdb>=1.5.4",      # build-silver conform/dedup; to-gold Quack client
+]
+
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+# functions/build.py bakes the ADR-0058 validators at push time; it needs pydantic (build-time only).
+# faker (MIT) generates the synthetic statement fake data (landing/generate_synthetic.py) — build-time only.
+build = [
+    "pydantic>=2.13.4",
+    "reportlab>=5.0.0",
+    "faker>=30",
+]
+
+[tool.uv.sources]
+funcd-shim = { path = "../../../shim/python", editable = true }
+
+# Each function is pushed as its own bundle (functions/build.py) — there is no importable wheel; the code is
+# authored + typechecked in place under functions/. `import s3util` resolves to functions/s3util.py.
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["functions", "tests"]
+mypy_path = "functions"
+explicit_package_bases = true    # functions/<fn>/handler.py are distinct namespace modules (extract.handler, …)
+namespace_packages = true
+exclude = ['functions/.*/bundle/']   # vendored wheels (build.py output) are not ours to typecheck
+
+[tool.pytest.ini_options]
+pythonpath = ["functions"]       # so `import s3util` resolves in the handlers under test
+testpaths = ["tests"]            # don't recurse into functions/*/bundle (vendored wheels from build.py)
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["functions/*/bundle"]   # don't lint the vendored wheel closure
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]

@@ -1,0 +1,48 @@
+# extract — dev manifest (ADR-0122/0124/0125). Runs functions/extract/handler.py IN PLACE via `main`
+# (its own dir is the bundle root, so `import s3util` + siblings resolve and FUNCD_BUNDLE_DIR points
+# there). Bindings mirror the extract Function spec in resources/functions.yaml: config
+# releve-project-config, blob landing (read the dropped PDF) + bronze (write the Parquet). Contract is
+# the handler's FuncInput/FuncOutput TypedDicts.
+runtime: python314
+handler: handle
+main: functions/extract/handler.py
+bindings:
+  config:
+    - releve-project-config
+  blob:
+    - alias: landing
+      bucket: releves
+      prefix: landing
+    - alias: bronze
+      bucket: releves
+      prefix: bronze
+contract:
+  # extract processes EVERY PDF in landing/ (bronze is 1:1 with a source file; cross-statement
+  # aggregation is build-silver's job), so it takes NO input — the workflow runs with no --input
+  # (the root step's input is the null run input). Output is a run summary, not a single-file record.
+  input:
+    type: "null"
+  output:
+    type: object
+    additionalProperties: false
+    properties:
+      statements:
+        type: integer
+      debit:
+        type: string
+      credit:
+        type: string
+    required:
+      - statements
+      - debit
+      - credit
+dev:
+  # the project virtualenv (carries pdfplumber/pyarrow/duckdb); funcdctl dev launches handlers with it
+  python: .venv/bin/python
+  backends:
+    blob: "file://.funcd-dev/blob"
+  config:
+    releve-project-config:
+      STOP_KEYWORDS: "TOTALDESOPERATIONS,TOTALDES,Soldecréditeur,Soldedébiteur,RELEVEDECOMPTE,Titulaire,PERIODE,NATUREDESOPERATIONS,Soldeau,Crédit,Débit,Bank,<ACCOUNT_NUMBER>"
+      BANK: "bank"
+      CLASSIFICATION: "confidential"

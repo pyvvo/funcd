@@ -193,6 +193,12 @@ type config struct {
 	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
 	s3gwDataDir        string // where the master.key is persisted when no master file is set
 
+	// s3DevRelaxedWrites (funcdctl dev only) drops the S3 single-writer forbid so any authenticated
+	// principal may write any prefix — a dev-fidelity convenience for seeding a workflow's input (e.g.
+	// `aws s3 cp` into a no-owner `landing`) and for tolerating dev's binding-inferred prefix owners
+	// (which cannot tell producer from consumer). Reads stay binding-gated. NEVER set in production.
+	s3DevRelaxedWrites bool
+
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
 	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
 	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core;
@@ -212,6 +218,10 @@ type config struct {
 	// `funcdctl dev` (ADR-0125) to a process-mode driver that runs the embedded DuckDB+Quack engine
 	// as a host subprocess — there are no containers in process-dev.
 	catalogProvider provider.Runtime
+
+	// catalogExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into catalog-consumer functions
+	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
+	catalogExtensionDir string
 
 	// logObserver, when set, streams every captured function log line live (in addition to the normal
 	// blob-persisted capture) — `funcdctl dev` uses it to print logs to the terminal in real time. nil ⇒
@@ -419,8 +429,12 @@ func (p *Platform) buildControlPlane() error {
 	// principal sources (Function-first, CatalogService-fallback) registered here at the composition
 	// root. The schema vocabulary, the built-in PolicySet, and this composite EntityProvider are all
 	// assembled from the registered set — a new capability (egress next) registers with no shared edit.
+	s3Cap := cedarauth.S3Capability()
+	if c.s3DevRelaxedWrites {
+		s3Cap = cedarauth.S3CapabilityDevRelaxedWrites() // funcdctl dev: writes not owner-gated (seeding + inferred owners)
+	}
 	cedarRegistry, err := cedarauth.NewRegistry(
-		[]cedarauth.Capability{cedarauth.KVCapability(), cedarauth.InvokeCapability(), cedarauth.S3Capability(), cedarauth.EgressCapability()},
+		[]cedarauth.Capability{cedarauth.KVCapability(), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.CatalogServicePrincipalSource()},
 	)
 	if err != nil {
@@ -433,6 +447,7 @@ func (p *Platform) buildControlPlane() error {
 	cedarPDP, err := cedarauth.New(cedarauth.Deps{
 		Entities: cedarEntities,
 		Policies: policySource{c.store},
+		Builtins: cedarRegistry.Builtins(), // the ASSEMBLED built-ins (incl. any dev variant), not the package default
 		Logger:   p.logger,
 	})
 	if err != nil {
@@ -444,7 +459,30 @@ func (p *Platform) buildControlPlane() error {
 	}
 	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
 	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, p.logger)
+	// The function-facing blob facade (ADR-0127): context.blob's PEP. Built only when a blob substrate
+	// is present (else the /blob routes stay off, exactly like a nil kv). It reuses the SAME cedar PDP
+	// (the S3Capability already materializes a Function's spec.blob as its blobBindings), the SAME
+	// s3BucketFor substrate view, and the SAME blobKey keyspace as the ADR-0080 S3 frontend — so objects
+	// written via context.blob are the objects the S3 frontend serves. A nil interface (not a nil
+	// *Facade) keeps the routes off; a typed nil pointer would slip past NewHandler's nil check.
+	var blobPort local.Blob
+	if c.blob != nil {
+		blobResolver, rerr := blobsvc.NewResolver(metaReader{c.store})
+		if rerr != nil {
+			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "build blob binding resolver")
+		}
+		blobFacade, berr := blobsvc.NewFacade(blobsvc.FacadeDeps{
+			Resolver:   blobResolver,
+			BucketFor:  s3BucketFor(c.blob, c.store),
+			Authorizer: cedarPDP,
+			Logger:     p.logger,
+		})
+		if berr != nil {
+			return fault.Wrapf(berr, fault.KindOf(berr), op, "build blob facade")
+		}
+		blobPort = blobFacade
+	}
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, blobPort, p.logger)
 
 	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
 	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
@@ -521,6 +559,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            s3Injection,
+		CatalogExtensionDir:  c.catalogExtensionDir,
 		Secrets:              secretResolver,
 	})
 	if err != nil {

@@ -36,6 +36,27 @@ test('POST / with invalid CloudEvent JSON → 400', async () => {
   assert.equal(res.status, 400);
 });
 
+// scenario: non-object-body-returns-400 — a valid-JSON but non-object body (null/array/scalar) is not a
+// CloudEvent envelope. Regression: it used to reach `event.data` and crash the worker (proxy EOF/502).
+for (const body of ['null', '[1,2]', '42', '"s"', 'true']) {
+  test(`POST / with a non-object JSON body ${body} → 400 (no crash)`, async () => {
+    const app = createApp((_ctx, event) => ({ echoed: event.data }));
+    const res = await app.request('/', jsonReq(body));
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /CloudEvent envelope/);
+  });
+}
+
+// scenario: worker-survives-bad-input — a bad request must not poison the app; a subsequent good
+// request still returns 200.
+test('POST / a non-object body then a good envelope → 400 then 200', async () => {
+  const app = createApp((_ctx, event) => ({ echoed: event.data }));
+  assert.equal((await app.request('/', jsonReq('null'))).status, 400);
+  const good = await app.request('/', jsonReq(JSON.stringify({ data: { x: 1 } })));
+  assert.equal(good.status, 200);
+  assert.deepEqual(await good.json(), { echoed: { x: 1 } });
+});
+
 // scenario: health-endpoints → 200.
 test('GET /health/readiness and /health/liveness → 200', async () => {
   const app = createApp(() => ({}));

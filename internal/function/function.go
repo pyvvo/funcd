@@ -120,6 +120,14 @@ type Deps struct {
 	// AWS_SECRET_ACCESS_KEY (DeriveKeypair over Master), AWS_REGION, AWS_ENDPOINT_URL_S3
 	// (ListenAddr). A function without spec.blob, or a disabled gateway, gets nothing.
 	S3Gateway S3GatewayInjection
+
+	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
+	// catalog-consumer function's worker env (a function declaring spec.catalogs) so its handler's
+	// `LOAD quack`/`ducklake` resolves the curated DuckDB extensions from this dir. It is the dev
+	// analogue of the prod bundle's duckdb-ext (ADR-0089): `funcdctl dev` extracts the embedded
+	// catalog engine's extensions once and points consumers at them; prod leaves it empty (the
+	// bundle carries duckdb-ext under FUNCD_BUNDLE_DIR instead). Empty ⇒ no injection.
+	CatalogExtensionDir string
 }
 
 // S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
@@ -189,6 +197,10 @@ type Reconciler struct {
 	// declares spec.blob. The master secret is never logged.
 	s3Gateway S3GatewayInjection
 
+	// catalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
+	// catalog-consumer function's worker env (dev analogue of the prod bundle's duckdb-ext, ADR-0089).
+	catalogExtensionDir string
+
 	// pooling (ADR-0046/0050): the pure placement policy + per-family pool-host launch commands + cap.
 	// A function pools iff a pool host exists for its runtime family (poolKeyFor); none ⇒ solo.
 	assigner          pooling.Assigner
@@ -246,16 +258,17 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver,
-		httpClient:        &http.Client{Timeout: 2 * time.Second},
-		secrets:           d.Secrets,
-		developerFor:      developerFor,
-		invokeSockets:     d.InvokeSockets,
-		s3Gateway:         d.S3Gateway,
-		assigner:          pooling.NewAssigner(),
-		poolShimCommand:   d.PoolShimCommand,
-		poolShimsByFamily: d.PoolShimsByFamily,
-		poolLimit:         limit,
-		poolSigs:          map[pooling.PoolKey]string{},
+		httpClient:          &http.Client{Timeout: 2 * time.Second},
+		secrets:             d.Secrets,
+		developerFor:        developerFor,
+		invokeSockets:       d.InvokeSockets,
+		s3Gateway:           d.S3Gateway,
+		catalogExtensionDir: d.CatalogExtensionDir,
+		assigner:            pooling.NewAssigner(),
+		poolShimCommand:     d.PoolShimCommand,
+		poolShimsByFamily:   d.PoolShimsByFamily,
+		poolLimit:           limit,
+		poolSigs:            map[pooling.PoolKey]string{},
 	}, nil
 }
 
@@ -893,7 +906,8 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// is under the mount target.
 		addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir)
 		r.addS3Env(env, fn)
-		r.addCatalogEnv(env, catalogEnv) // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
 		r.mergeSecretEnv(env, secretEnv)
 		mounts := []runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
@@ -927,9 +941,10 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
 		// reads directly in process mode, so host root == worker root.
 		addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath))
-		r.addInvokeSocket(env, fn)       // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
-		r.addS3Env(env, fn)              // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
-		r.addCatalogEnv(env, catalogEnv) // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addInvokeSocket(env, fn)        // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
+		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
 		r.mergeSecretEnv(env, secretEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

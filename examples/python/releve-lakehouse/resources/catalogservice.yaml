@@ -1,0 +1,29 @@
+# lake — the F48 catalog/query engine (ADR-0086), deployed as an add-on provider (ADR-0087), NOT a Function.
+# It owns + writes the `gold` prefix (DuckLake Parquet + the _ducklake/catalog.db SQLite catalog) and binds
+# `silver` READ so a mart can read the conformed table. `to-gold` drives `CREATE TABLE gold.mart AS SELECT …
+# FROM silver…` over Quack; `catalog-reader` serves interactive read SQL. Every Quack client presents the
+# QUACK_TOKEN from the bound Secret (a token-less client is refused).
+apiVersion: funcd.io/v1alpha1
+kind: CatalogService
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  blob:
+    - alias: silver             # READ the conformed silver tables (to build marts)
+      bucket: releves
+      prefix: silver
+    - alias: gold              # OWN + WRITE gold (the catalog + Parquet marts live here)
+      bucket: releves
+      prefix: gold
+  catalog:
+    bucket: releves
+    prefix: gold               # SQLite catalog at gold/_ducklake/catalog.db; Parquet under gold/
+  resources:
+    cpu: "2"
+    memory: "4Gi"
+  secrets:
+    - lake-quack-token         # Secret Data key QUACK_TOKEN → engine env
+  config:
+    - lake-engine-config       # ConfigMap Data keys (DUCKDB_*) → engine env

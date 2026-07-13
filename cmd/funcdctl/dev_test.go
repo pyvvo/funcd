@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/blob/s3gateway"
 	"github.com/green-0-rabbit/funcd/pkg/funcd"
 )
 
@@ -286,4 +287,37 @@ func TestPrintLogFormatsLine(t *testing.T) {
 	if !strings.Contains(s.format(funcd.LogLine{Function: "f", Body: "x", Time: time.Now()}), "INFO") {
 		t.Error("blank severity should default to INFO")
 	}
+}
+
+// TestPrintDevEnvDerivesDeterministicKeypair — `funcdctl dev --print-env` prints exactly the four AWS
+// export lines with the S3 keypair DERIVED (fixed devS3Master over the resolved first function — the same
+// keypair the banner shows, deterministic across calls), boots no server, and defaults the endpoint port
+// to 3006.
+func TestPrintDevEnvDerivesDeterministicKeypair(t *testing.T) {
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + strictContract,
+	})
+	var out bytes.Buffer
+	a := &cli{out: &out}
+	require.NoError(t, a.printDevEnv(dir, "", devConfig{printEnv: true, s3port: 3006}))
+	s := out.String()
+
+	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
+	require.NoError(t, err)
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), devNamespace, string(pfs[0].name))
+	require.Contains(t, s, "export AWS_ACCESS_KEY_ID="+kp.AccessKey)
+	require.Contains(t, s, "export AWS_SECRET_ACCESS_KEY="+kp.SecretKey)
+	require.Contains(t, s, "export AWS_REGION="+devS3Region)
+	require.Contains(t, s, "export AWS_ENDPOINT_URL_S3=http://127.0.0.1:3006")
+	require.Equal(t, 4, strings.Count(s, "export "), "exactly the four export lines, nothing else")
+
+	// deterministic: a second call yields byte-identical output (fixed dev master).
+	var out2 bytes.Buffer
+	require.NoError(t, (&cli{out: &out2}).printDevEnv(dir, "", devConfig{printEnv: true, s3port: 3006}))
+	require.Equal(t, s, out2.String(), "print-env is deterministic")
+
+	// --s3port defaults to 3006 when unset.
+	var out3 bytes.Buffer
+	require.NoError(t, (&cli{out: &out3}).printDevEnv(dir, "", devConfig{printEnv: true}))
+	require.Contains(t, out3.String(), "http://127.0.0.1:3006", "endpoint port defaults to 3006")
 }

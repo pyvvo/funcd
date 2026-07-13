@@ -192,3 +192,24 @@ func TestValidateMeta_RejectsTypeMetaMismatch(t *testing.T) {
 		t.Fatal("expected validateMeta to reject wrong apiVersion")
 	}
 }
+
+func TestGenerateObjectName(t *testing.T) {
+	n := string(GenerateObjectName("run-"))
+	if len(n) != len("run-")+8 || n[:4] != "run-" {
+		t.Fatalf("GenerateObjectName(%q) = %q, want run-<8 hex chars>", "run-", n)
+	}
+	if err := ObjectName(n).Validate(); err != nil {
+		t.Fatalf("generated name %q is not a valid ObjectName: %v", n, err)
+	}
+	n1, n2 := GenerateObjectName("run-"), GenerateObjectName("run-")
+	if n1 == n2 {
+		t.Fatalf("two calls returned the same name %q — not random", n1)
+	}
+	long := ""
+	for range 100 {
+		long += "a"
+	}
+	if got := GenerateObjectName(long); len(got) > 63 {
+		t.Fatalf("GenerateObjectName did not bound to 63 chars: len=%d", len(got))
+	}
+}

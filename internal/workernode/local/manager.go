@@ -28,6 +28,7 @@ type Manager struct {
 	invoker Invoker
 	authz   auth.Authorizer // the invoke PDP (ADR-0075); nil ⇒ no link::invoke gate (link-as-grant only)
 	kv      KV              // the function-facing KV port (ADR-0069); nil ⇒ no /kv routes
+	blob    Blob            // the function-facing blob port (ADR-0127); nil ⇒ no /blob routes
 	logger  *slog.Logger
 
 	ctx    context.Context
@@ -46,14 +47,15 @@ type serving struct {
 // NewManager builds a Manager serving sockets under dir. invoker is the (possibly late-bound)
 // data-plane forwarder; store backs link resolution; authz (nil-able) is the invoke PDP (ADR-0075)
 // the per-sandbox handler asks link::invoke; kv (nil-able) is the function-facing KV port (ADR-0069)
-// the per-sandbox handler routes /kv/… to.
-func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Authorizer, kv KV, logger *slog.Logger) *Manager {
+// the per-sandbox handler routes /kv/… to; blob (nil-able) is the function-facing blob port (ADR-0127)
+// the handler routes /blob/… to.
+func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Authorizer, kv KV, blob Blob, logger *slog.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
-		dir: dir, store: store, invoker: invoker, authz: authz, kv: kv, logger: logger.With("component", "workernode.local"),
+		dir: dir, store: store, invoker: invoker, authz: authz, kv: kv, blob: blob, logger: logger.With("component", "workernode.local"),
 		ctx: ctx, cancel: cancel, active: map[string]*serving{},
 	}
 }
@@ -76,7 +78,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "listen on %q", path)
 	}
-	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.logger)
+	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
 	go func() { _ = srv.Serve(ln) }()

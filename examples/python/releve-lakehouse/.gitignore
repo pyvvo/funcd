@@ -1,0 +1,24 @@
+# CONFIDENTIAL — real bank statements and any layer derived from them NEVER enter the repo.
+# (gitignore has no inline comments — keep every comment on its own line.)
+raw_data/
+# No PDF is committed: real statements are PII, and synthetic samples are script-generated on demand
+# (`just gen-releve`). Ignore ALL pdfs anywhere (root, landing/, …).
+*.pdf
+*.parquet
+*.duckdb
+
+# Python / uv toolchain
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv.lock — commit once deps are pinned; ignored while drafting.
+uv.lock
+
+# ADR-0089 build output (vendored wheels — rebuilt by functions/build.py)
+functions/*/bundle/
+
+# funcdctl dev state (--persist: metastore / kv / blob / catalog)
+.funcd-dev/

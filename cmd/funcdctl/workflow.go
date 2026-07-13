@@ -133,23 +133,31 @@ func (a *cli) workflowLogsCmd() *cobra.Command {
 func (a *cli) workflowRunCmd() *cobra.Command {
 	var ns, rg, input string
 	cmd := &cobra.Command{
-		Use:   "run <workflow> <run-name>",
-		Short: "Start a workflow run (creates a WorkflowRun)",
-		Args:  cobra.ExactArgs(2),
+		Use:   "run <workflow> [run-name]",
+		Short: "Start a workflow run (creates a WorkflowRun; omit run-name for a server-generated <workflow>-<id>)",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			raw, err := readInput(input)
 			if err != nil {
 				return err
 			}
-			run := &v1.WorkflowRun{
-				TypeMeta: v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-				ObjectMeta: v1.ObjectMeta{
-					Name: v1.ObjectName(args[1]), Namespace: v1.NamespaceName(nsOrDefault(ns)), ResourceGroup: v1.ResourceGroupName(rg),
-				},
-				Spec: v1.WorkflowRunSpec{Workflow: v1.ObjectName(args[0]), Input: raw},
+			meta := v1.ObjectMeta{Namespace: v1.NamespaceName(nsOrDefault(ns)), ResourceGroup: v1.ResourceGroupName(rg)}
+			if len(args) == 2 {
+				meta.Name = v1.ObjectName(args[1])
+			} else {
+				meta.GenerateName = args[0] + "-" // server assigns <workflow>-<id> (ObjectMeta.GenerateName)
 			}
-			if verr := run.Validate(); verr != nil {
-				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl workflow run", "invalid run")
+			run := &v1.WorkflowRun{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+				ObjectMeta: meta,
+				Spec:       v1.WorkflowRunSpec{Workflow: v1.ObjectName(args[0]), Input: raw},
+			}
+			// Local pre-check only when we already have a name; a generateName run is validated server-side
+			// after the name is assigned (ObjectMeta.Validate requires a non-empty Name).
+			if meta.Name != "" {
+				if verr := run.Validate(); verr != nil {
+					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl workflow run", "invalid run")
+				}
 			}
 			c, err := a.sdkClient()
 			if err != nil {

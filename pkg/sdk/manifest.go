@@ -28,6 +28,12 @@ type Manifest struct {
 	Runtime v1.RuntimeName `json:"runtime"`
 	// Handler is the entrypoint the shim resolves.
 	Handler string `json:"handler"`
+	// Main is the handler SOURCE FILE, relative to the manifest dir — the wrangler `main` convention
+	// (wrangler.toml `main = "src/entry.py"`). Empty ⇒ the default entry co-located with the manifest
+	// (handler.py for python*, handler.mjs otherwise, or `<stem>.py`/`<stem>.mjs` for a stem manifest).
+	// It lets a `<stem>.funcdctl.yaml` point at a NESTED handler (e.g. functions/extract/handler.py),
+	// so an existing per-function layout runs under `funcdctl dev` without flattening.
+	Main string `json:"main,omitempty"`
 	// Bindings holds blob/kv/catalogs/links/config/secrets — needed to run the function and to type its
 	// binding context (GenerateTypes). It is not a deploy field; it describes the capabilities the code uses.
 	Bindings Bindings `json:"bindings,omitempty"`
@@ -43,6 +49,21 @@ type Manifest struct {
 // Dev is the funcdctl-dev-only manifest block (ADR-0125). `funcdctl dev` reads it to auto-provision a
 // function's backing resources locally; `funcdctl push`/`types` ignore it. It is never a deploy field.
 type Dev struct {
+	// Python is the interpreter `funcdctl dev` launches a python* handler with — a path relative to the
+	// manifest dir (e.g. `.venv/bin/python`) or absolute. Lets a project pin its virtualenv (which carries
+	// the handler's deps, ADR-0125's local-deps boundary) in the committable manifest instead of the
+	// FUNCD_PYTHON env. Precedence: FUNCD_PYTHON env > this > `python3` on PATH. GLOBAL per run (the first
+	// function's block is representative, like Backends).
+	Python string `json:"python,omitempty"`
+	// Node is the interpreter for a nodejs* handler (path relative to the manifest dir, or absolute).
+	// Precedence: FUNCD_NODE env > this > `node` on PATH.
+	Node string `json:"node,omitempty"`
+	// Catalog declares the PROVIDER side of a `catalogs:` binding so `funcdctl dev` can stand the
+	// CatalogService up locally, keyed by catalog name (matching a `bindings.catalogs[].catalog`). The
+	// consumer binding names WHICH catalog; this block gives dev the storage layout it cannot infer (which
+	// buckets/prefixes the DuckLake reads + owns) — the provider analogue of dev.backends. GLOBAL per run
+	// (first function that declares a given catalog wins). Empty ⇒ no catalog auto-provisioned.
+	Catalog map[string]DevCatalog `json:"catalog,omitempty"`
 	// Backends overrides the auto-provisioned backend per kind, GLOBALLY (not per binding). Empty ⇒ the
 	// built-in default (memory).
 	Backends Backends `json:"backends,omitempty"`
@@ -53,6 +74,15 @@ type Dev struct {
 	// from the file — `funcdctl dev` resolves each ${ENV_VAR} from the process environment (a missing var
 	// fails fast), so funcdctl.yaml stays committable.
 	Secrets map[string]map[string]string `json:"secrets,omitempty"`
+}
+
+// DevCatalog is the funcdctl-dev provider declaration for one catalog (the storage layout dev cannot infer
+// from a consumer binding). Blob is the catalog engine's bucket bindings (read + own — the SAME shape as
+// Function.spec.blob); Catalog is the (bucket, prefix) the DuckLake catalog syncs under (owned by the
+// catalog). funcdctl dev synthesizes a CatalogService (name = the map key) + a Quack-token Secret from it.
+type DevCatalog struct {
+	Blob    []v1.FunctionBlob `json:"blob,omitempty"`
+	Catalog v1.CatalogRef     `json:"catalog"`
 }
 
 // Backends selects the driver `funcdctl dev` auto-provisions for each backend kind (ADR-0125 Decision 4),

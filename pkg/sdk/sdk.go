@@ -62,12 +62,26 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	kind := obj.GroupVersionKind().Kind
 	ns := obj.GetNamespace()
 	name := obj.GetName()
-	if name == "" {
-		return nil, fault.Invalidf("sdk.Apply", "object has no name")
-	}
 	body, err := toWireBody(obj)
 	if err != nil {
 		return nil, err
+	}
+	if name == "" {
+		// Server-side name generation (ObjectMeta.GenerateName): no name to key a PUT on, so POST to the
+		// collection and let the server assign Name = GenerateName + <id>. A missing name AND no
+		// GenerateName is a client error.
+		if obj.GetObjectMeta().GenerateName == "" {
+			return nil, fault.Invalidf("sdk.Apply", "object has no name and no generateName")
+		}
+		colURL, cerr := c.collectionURL(kind, ns)
+		if cerr != nil {
+			return nil, cerr
+		}
+		resp, derr := c.do(ctx, http.MethodPost, colURL, body)
+		if derr != nil {
+			return nil, derr
+		}
+		return decodeObject(kind, resp)
 	}
 	itemURL, err := c.itemURL(kind, ns, name)
 	if err != nil {

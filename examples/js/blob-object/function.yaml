@@ -1,0 +1,22 @@
+# blob-object — reads+writes objects NATIVELY via context.blob (ADR-0127). The spec.blob binding (ADR-0073)
+# IS the capability: it maps the alias "gold" to the lakehouse Bucket's "gold" prefix. Default-deny — without
+# it, context.blob on "gold" is Forbidden; and the function does NOT bind "other", so a put there is denied.
+# The function OWNS the gold prefix (bucket.yaml), so it may write it (single writer). No S3 keypair injected
+# for the native path — the binding alone grants read; the ownership grants write.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: blob-object
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:blob-object   # funcdctl push object.mjs (built from src/object.ts)
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  blob:
+    - alias: gold           # the in-code handle: ctx.blob.*('gold', …)
+      bucket: lakehouse     # the Bucket (domain)
+      prefix: gold          # the sub-domain it owns → reads AND writes (single writer)

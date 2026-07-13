@@ -17,6 +17,10 @@ type Deps struct {
 	Entities EntityProvider
 	// Policies supplies the user Policy resources (compiled + cached with the built-ins).
 	Policies PolicySource
+	// Builtins is the always-on built-in Cedar policy text (a Registry's Builtins()) compiled into the
+	// PolicySet with the user Policies. Empty ⇒ the default registry's built-ins — so the compose root can
+	// supply a variant built-in set (e.g. funcdctl dev's relaxed S3 writes) without a package global.
+	Builtins string
 	// Logger is the driver's logger; nil ⇒ slog.Default().
 	Logger *slog.Logger
 }
@@ -42,9 +46,13 @@ func New(d Deps) (auth.Authorizer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	builtins := d.Builtins
+	if builtins == "" {
+		builtins = defaultRegistry.Builtins()
+	}
 	return driver{
 		entities: d.Entities,
-		policies: &policyCache{src: d.Policies},
+		policies: &policyCache{src: d.Policies, builtins: builtins},
 		logger:   logger.With("component", "auth.cedar"),
 	}, nil
 }

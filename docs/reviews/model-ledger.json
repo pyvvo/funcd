@@ -1963,5 +1963,35 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0125-implementation-claude-opus-4-8.md",
     "notes": "pass; funcdctl dev all 5 phases; 1 minor (dev-egress-not-isolated test gap, model, closed in-session fe8227b); catalog live-query DoD item is ADR-deferred (M2), engine lifecycle verified"
+  },
+  {
+    "date": "2026-07-12",
+    "adr": "0127",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/adr-0127-implementation-claude-opus-4-8.md",
+    "notes": "pass; all builds/lint/tests green both tags + Node(50) + Python(79); authz shape matches s3gateway byte-for-byte, legacy no-Action facade gone; 1 minor (env-neutral: lazy Python import mirrors kv twin, not model-attributed)"
+  },
+  {
+    "date": "2026-07-13",
+    "adr": "0134",
+    "phase": "implementation",
+    "model": "claude-opus-4-8",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0134-implementation-claude-opus-4-8.md",
+    "notes": "pass \u2014 gateway builds the CloudEvent for external invokes; 6 scenario/regression tests green; body-cap Major folded pre-accept; 1 Minor (inherent back-compat ambiguity, documented)"
   }
 ]

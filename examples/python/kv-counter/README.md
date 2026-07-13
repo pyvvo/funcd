@@ -48,13 +48,14 @@ just dev-example python/kv-counter      # gateway :3005 · S3 :3006 — override
 ```
 
 Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
-`funcdctl.yaml` names the function after its directory (`kv-counter`); the invoke is a **CloudEvent
-envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{name: string}`). POST
-**twice** and the durable `context.kv` counter increments `1 → 2`:
+`funcdctl.yaml` names the function after its directory (`kv-counter`); POST the input **directly** —
+the gateway builds the CloudEvent (ADR-0134), matching the manifest's `contract.input`
+(`{name: string}`); a full `{"data": <input>}` envelope still works too. POST **twice** and the
+durable `context.kv` counter increments `1 → 2`:
 
 ```bash
 curl -sS -XPOST http://127.0.0.1:3005/function/kv-counter \
-  -H 'Content-Type: application/json' -d '{"data":{"name":"alice"}}'
+  -H 'Content-Type: application/json' -d '{"name":"alice"}'
 # → {"name":"alice","count":1}   then, on the second POST,   {"name":"alice","count":2}
 ```
 

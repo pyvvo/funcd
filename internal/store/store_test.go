@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,5 +281,40 @@ func TestScenario_RealWriteStillEvents(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("real Update published no Modified event")
+	}
+}
+
+func TestCreateWithGenerateName(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+
+	mk := func() *v1.ConfigMap {
+		in, _ := v1.NewObject(v1.KindConfigMap)
+		c, _ := in.(*v1.ConfigMap)
+		c.GenerateName = "cfg-"
+		c.Namespace = "default"
+		c.ResourceGroup = "rg1"
+		c.Spec.Data = map[string]string{"k": "v"}
+		return c
+	}
+
+	in := mk()
+	a, err := s.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("Create with GenerateName: %v", err)
+	}
+	name := string(a.GetName())
+	if !strings.HasPrefix(name, "cfg-") || len(name) != len("cfg-")+8 {
+		t.Fatalf("generated name %q is not cfg-<8 hex>", name)
+	}
+	if in.Name != "" {
+		t.Fatalf("Create mutated the caller's Name to %q (input must stay read-only)", in.Name)
+	}
+	b, err := s.Create(ctx, mk())
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+	if b.GetName() == a.GetName() {
+		t.Fatalf("two generateName creates collided on %q", name)
 	}
 }

@@ -1,0 +1,20 @@
+# releve-landed — a blob EventSource (ADR-0119, F83): the reactive-ingestion producer. A poll watcher lists
+# the `releves` Bucket's `landing/` prefix on the platform poll interval (eventing.blobPollInterval) and
+# fires the named CloudEvent `arrived` per NEW object. Writer-agnostic: detection rides `List`, so an
+# external SigV4 PUT of a statement PDF into landing/ is what trips it — no write-path hook needed.
+#
+# NB: `on:` is QUOTED — YAML 1.1 parses a bare `on:` key as boolean true; `"on":` keeps the string the
+# schema expects (same rule as the timer/Sensor manifests).
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: releve-landed
+  namespace: default
+  resourceGroup: rg1
+spec:
+  blob:
+    bucket: releves
+    events:
+      - name: arrived
+        prefix: landing/        # only objects under landing/ fire
+        "on": [Created]         # V1: object-created only

@@ -1,0 +1,18 @@
+# lakehouse Bucket — the blob data domain (ADR-0080). Each spec.prefixes[] entry is a sub-domain whose
+# `owner` is the single writer (mirroring KVStore.spec.tables[].owner — ADR-0073). The blob-object function
+# reaches these NATIVELY via context.blob (ADR-0127) — no S3 keypair, no @aws-sdk:
+#   * gold  — OWNED by blob-object → it is the single WRITER (context.blob.put allowed by the PDP);
+#   * other — NO owner, and blob-object does NOT bind it → context.blob.put('other', …) is DENIED (403),
+#             proving bind-as-grant default-deny on the same S3Capability the S3 frontend uses.
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold            # serving layer — written by blob-object (its owner → single writer)
+      owner: blob-object
+    - name: other           # an unowned, unbound prefix — blob-object must be DENIED here
+  maxObjectBytes: 1073741824   # per-object cap (1 GiB)

@@ -13,9 +13,13 @@
 package dataplane
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/green-0-rabbit/funcd/api/fault"
@@ -144,6 +148,28 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// function (spec.pooling.worker set, ADR-0046) shares a pool worker that routes by name at
 	// POST /function/<name>, so the prefix is PRESERVED and the pool routes by name.
 	out := r.Clone(r.Context())
+	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
+	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
+	// (fn-to-fn/workflow/sensor) already emit a v1.0 envelope and bypass this — leave them streamed.
+	// The read is independently bounded (maxNormalizeBytes) because normalization buffers.
+	if !internal {
+		body, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNormalizeBytes))
+		if rerr != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(rerr, &tooLarge) {
+				fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", maxNormalizeBytes))
+			} else {
+				fault.WriteProblem(w, fault.Invalidf(op, "reading request body: %v", rerr))
+			}
+			return
+		}
+		if env, wrapped := normalizeInvokeBody(ns, name, body, newInvokeID); wrapped {
+			body = env
+		}
+		out.Body = io.NopCloser(bytes.NewReader(body))
+		out.ContentLength = int64(len(body))
+		out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
 	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Pooling.Worker != "" {
 		out.URL.Path = pathPrefix + string(name)
 		if remainder != "/" {

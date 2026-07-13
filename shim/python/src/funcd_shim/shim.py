@@ -37,6 +37,7 @@ from .tracespan import InvocationSpan, parse_links
 from .types import CloudEvent, FunctionContext, Handler
 
 if TYPE_CHECKING:
+    from .blob import BlobClient
     from .funclog import _Channel
     from .kv import KVClient
 
@@ -57,6 +58,12 @@ class _Context:
         from .kv import KVClient
 
         return KVClient()
+
+    @property
+    def blob(self) -> BlobClient:
+        from .blob import BlobClient
+
+        return BlobClient()
 
 
 def make_request_handler(

@@ -1,0 +1,27 @@
+# The `releves` Bucket WITH prefix owners — applied AFTER the functions + CatalogService exist (an Update on
+# bucket-base.yaml). `owner` is the single writer of a prefix (write = caller == prefix.owner, mirroring
+# KVStore.spec.tables[].owner — ADR-0073/0076); every other binder gets read-only. This is the consistency
+# invariant that makes the medallion layering safe: exactly one producer per layer.
+#   * landing — NO owner: written by an EXTERNAL SigV4 client (the human/agent dropping PDFs), read by extract+verify.
+#   * bronze  — owner extract       (the geometric extraction is the sole writer)
+#   * silver  — owner build-silver  (anonymize + type + dedup is the sole writer)
+#   * gold    — owner lake          (the CatalogService engine writes the DuckLake marts — ADR-0087)
+#   * reports — owner build-silver  (reuse: whoever publishes the BI bundle; swap to a dedicated fn if you add one)
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: releves
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: landing         # external drop — no in-platform owner
+    - name: bronze
+      owner: extract
+    - name: silver
+      owner: build-silver
+    - name: gold
+      owner: lake
+    - name: reports
+      owner: build-silver
+  maxObjectBytes: 1073741824

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
+    from .blob import BlobClient
     from .kv import KVClient
 
 #: Json — the explicit "arbitrary JSON value" contract type (ADR-0058). Declare ``FuncInput``/
@@ -56,6 +57,12 @@ class FunctionContext(Protocol):
     @property
     def kv(self) -> KVClient:
         """Namespace-scoped key-value storage (ADR-0069): get/put/delete a binding's key, or list keys."""
+        ...
+
+    @property
+    def blob(self) -> BlobClient:
+        """Binding-scoped blob storage (ADR-0127): get/put/delete/list a bound prefix's objects, or
+        mint a presigned URL — the blob twin of ``kv``."""
         ...
 
 

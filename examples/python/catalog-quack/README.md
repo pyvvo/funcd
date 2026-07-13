@@ -17,13 +17,13 @@ just dev-example python/catalog-quack      # gateway :3005 · S3 :3006 — overr
 ```
 
 Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
-`funcdctl.yaml` names the function after its directory (`catalog-quack`); the invoke is a
-**CloudEvent envelope** — `{"data": <input>}` matching the manifest's `contract.input`
-(`{sql: string, catalog?: string}`):
+`funcdctl.yaml` names the function after its directory (`catalog-quack`); POST the input **directly**
+— the gateway builds the CloudEvent (ADR-0134), matching the manifest's `contract.input`
+(`{sql: string, catalog?: string}`); a full `{"data": <input>}` envelope still works too:
 
 ```bash
 curl -sS -XPOST http://127.0.0.1:3005/function/catalog-quack \
-  -H 'Content-Type: application/json' -d '{"data":{"sql":"SELECT 42 AS answer"}}'
+  -H 'Content-Type: application/json' -d '{"sql":"SELECT 42 AS answer"}'
 # → {"rows":[[42]]}
 ```
 

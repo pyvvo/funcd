@@ -65,7 +65,7 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %
 // link) ⇒ Forbidden, before forwarding. The caller principal is built from the fixed Ref, never the
 // request. Every invoke is logged through logger (the broker is the audit point): an allowed call at
 // Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default().
-func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, logger *slog.Logger) http.Handler {
+func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, blob Blob, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -78,6 +78,9 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 	mux := http.NewServeMux()
 	if kv != nil {
 		registerKV(mux, caller, kv, logger)
+	}
+	if blob != nil {
+		registerBlob(mux, caller, blob, logger)
 	}
 	mux.HandleFunc("POST /invoke/{alias}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.invoke"

@@ -39,9 +39,10 @@ type compiledPolicies struct {
 // recompiling only on a revision change (ADR-0074/0117). Reads are lock-free (atomic load); the mutex
 // single-flights the recompile so a burst of concurrent misses compiles once.
 type policyCache struct {
-	src PolicySource
-	cur atomic.Pointer[compiledPolicies]
-	mu  sync.Mutex // guards the recompile only (single-flight), never the read path
+	src      PolicySource
+	builtins string // the always-on built-in Cedar text (a Registry's Builtins()); compiled with every user Policy
+	cur      atomic.Pointer[compiledPolicies]
+	mu       sync.Mutex // guards the recompile only (single-flight), never the read path
 }
 
 // Get returns the current compiled PolicySet, recompiling if the source revision changed. The fast path
@@ -62,7 +63,7 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 	if cur := c.cur.Load(); cur != nil && cur.revision == rev { // re-check under the lock (a peer may have built it)
 		return cur.ps, nil
 	}
-	ps, err := compile(policies)
+	ps, err := compile(c.builtins, policies)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +74,9 @@ func (c *policyCache) Get(ctx context.Context) (*cedar.PolicySet, error) {
 // compile builds a PolicySet from the built-in rules + the user Policies (ADR-0074). A user Policy
 // that fails to parse is an Internal fault — admission rejects bad Cedar before persistence, so a
 // stored Policy compiling is an invariant; a compile failure here means corruption.
-func compile(policies []v1.Policy) (*cedar.PolicySet, error) {
+func compile(builtins string, policies []v1.Policy) (*cedar.PolicySet, error) {
 	const op = "cedar.compile"
-	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(defaultRegistry.Builtins()))
+	ps, err := cedar.NewPolicySetFromBytes("builtin", []byte(builtins))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
 	}

@@ -85,3 +85,15 @@ func (r *Reconciler) addCatalogEnv(env, catalogEnv map[string]string) {
 		env[k] = v
 	}
 }
+
+// addCatalogExtensionDir injects DUCKDB_EXTENSION_DIRECTORY for a catalog-consumer function (one
+// declaring spec.catalogs) when a dir is configured — the dev analogue of the prod bundle's
+// duckdb-ext (ADR-0089), letting the handler's `LOAD quack`/`ducklake` resolve the curated DuckDB
+// extensions locally. Empty dir, or a function with no catalog binding, gets nothing (prod path:
+// the bundle carries duckdb-ext under FUNCD_BUNDLE_DIR, so catalogExtensionDir stays empty there).
+func (r *Reconciler) addCatalogExtensionDir(env map[string]string, fn *v1.Function) {
+	if r.catalogExtensionDir == "" || len(fn.Spec.Catalogs) == 0 {
+		return
+	}
+	env["DUCKDB_EXTENSION_DIRECTORY"] = r.catalogExtensionDir
+}

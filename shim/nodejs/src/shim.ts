@@ -22,6 +22,7 @@ import { ContractError, loadValidators } from './contract.ts';
 import type { CloudEvent, FunctionContext, Handler, Validator } from './types.ts';
 import { makeInvoke } from './invoke.ts';
 import { makeKV } from './kv.ts';
+import { makeBlob } from './blob.ts';
 import { installConsoleCapture, openChannel, type Sink } from './funclog.ts';
 import { startSpan, parseLinks } from './tracespan.ts';
 
@@ -39,7 +40,7 @@ export function createApp(
   trace: { sink?: Sink | null; fnName?: string } = {},
 ): Hono {
   const app = new Hono();
-  const ctx: FunctionContext = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV() };
+  const ctx: FunctionContext = { log: (...args) => console.log(...args), invoke: makeInvoke(), kv: makeKV(), blob: makeBlob() };
   const traceSink = trace.sink ?? null; // ADR-0101: per-invocation span emitter (null ⇒ context only)
   const fnName = trace.fnName ?? 'invoke';
 
@@ -53,6 +54,11 @@ export function createApp(
       event = (text ? JSON.parse(text) : {}) as CloudEvent;
     } catch {
       return c.text('invalid CloudEvent JSON', 400);
+    }
+    if (typeof event !== 'object' || event === null || Array.isArray(event)) {
+      // A valid-JSON but non-object body (null / array / scalar) is not a CloudEvent envelope. Reject
+      // it cleanly — never let `event.data` throw and crash the worker.
+      return c.text('request body must be a JSON object (CloudEvent envelope)', 400);
     }
     if (validators.input) {
       const errors = validators.input(event.data);

@@ -119,12 +119,13 @@ just dev-example python/hello-world      # gateway :3005 · S3 :3006 — overrid
 ```
 
 Invoke the gateway the banner prints (default `http://127.0.0.1:3005`). The single generic
-`funcdctl.yaml` names the function after its directory (`hello-world`); the invoke is a **CloudEvent
-envelope** — `{"data": <input>}` matching the manifest's `contract.input` (`{name: string}`):
+`funcdctl.yaml` names the function after its directory (`hello-world`); POST the input **directly** —
+the gateway builds the CloudEvent (ADR-0134). It matches the manifest's `contract.input`
+(`{name: string}`); a full `{"data": <input>}` envelope still works too:
 
 ```bash
 curl -sS -XPOST http://127.0.0.1:3005/function/hello-world \
-  -H 'Content-Type: application/json' -d '{"data":{"name":"funcd"}}'
+  -H 'Content-Type: application/json' -d '{"name":"funcd"}'
 # → {"greeting":"Hello, funcd."}
 ```
 

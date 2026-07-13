@@ -36,26 +36,44 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/provider"
 )
 
-// devQuackToken is the fixed local Quack auth token the dev engine serves with when spec.Env carries
-// none. Matching it on the client side (the function) is part of the deferred live-query lane.
-const devQuackToken = "funcd-dev-catalog"
+// DevQuackToken is the fixed local Quack auth token the dev engine serves with when spec.Env carries
+// none. `funcdctl dev` writes it into the synthesized catalog's QUACK_TOKEN Secret so the consumer
+// (resolveCatalogEnv → FUNCD_CATALOG_<ALIAS>_TOKEN) presents the SAME token the engine serves with.
+const DevQuackToken = "funcd-dev-catalog"
 
 // Runtime is the dev process-mode provider.Runtime: at most one duckdb+quack subprocess per provider.
 type Runtime struct {
 	logger *slog.Logger
 	mu     sync.Mutex
 	procs  map[provider.ProviderRef]*engineProc
+	// catalogDir, when non-empty, is the DURABLE root under which each provider's DuckLake SQLite
+	// catalog lives (<catalogDir>/<provider>/catalog.db) — set by `funcdctl dev` under --persist so the
+	// catalog metadata survives a restart (the Parquet DATA already persists in blob). Empty ⇒ the
+	// catalog lives in the engine's ephemeral temp dir (fresh each boot), the default.
+	catalogDir string
 }
 
+// Option configures the dev catalog engine runtime.
+type Option func(*Runtime)
+
+// WithCatalogDir persists each provider's DuckLake SQLite catalog under dir (durable across restarts)
+// instead of the engine's ephemeral temp dir. Empty dir ⇒ ephemeral (the default). Set by `funcdctl
+// dev` under --persist, mirroring the durable metastore.
+func WithCatalogDir(dir string) Option { return func(r *Runtime) { r.catalogDir = dir } }
+
 // New builds the dev catalog engine runtime.
-func New(logger *slog.Logger) *Runtime {
+func New(logger *slog.Logger, opts ...Option) *Runtime {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Runtime{
+	r := &Runtime{
 		logger: logger.With("component", "devengine"),
 		procs:  make(map[provider.ProviderRef]*engineProc),
 	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // Converge idempotently brings up the engine for spec.Ref and reports readiness. When the dev binary
@@ -164,8 +182,22 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	}
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 
+	// The SQLite catalog lives in the ephemeral engine dir by default (fresh each boot); under
+	// --persist (catalogDir set) it lives in a durable per-provider subdir OUTSIDE the temp dir, so
+	// stop()'s temp-dir cleanup never removes it and the DuckLake reopens it next boot (its Parquet
+	// DATA persists in blob). SQLite recovers its own WAL on reopen.
+	localCatalog := filepath.Join(dir, "catalog.db")
+	if r.catalogDir != "" {
+		catDir := filepath.Join(r.catalogDir, string(spec.Ref.Name))
+		if merr := os.MkdirAll(catDir, 0o755); merr != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fault.Wrapf(merr, fault.Internal, op, "durable catalog dir")
+		}
+		localCatalog = filepath.Join(catDir, "catalog.db")
+	}
+
 	initFile := filepath.Join(dir, "init.sql")
-	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, addr, spec.Env)), 0o600); werr != nil {
+	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, localCatalog, addr, spec.Env)), 0o600); werr != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fault.Wrapf(werr, fault.Internal, op, "write init.sql")
 	}
@@ -195,9 +227,13 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 }
 
 // buildInitSQL assembles the duckdb init script: pin the extension dir, LOAD the engine extensions,
-// wire an S3 secret from the injected dev keypair (so httpfs reaches the dev S3 gateway), and start
-// the Quack server. Attaching the DuckLake + serving live function queries is the deferred lane (M2).
-func buildInitSQL(extDir, addr string, env map[string]string) string {
+// wire an S3 secret from the injected dev keypair (so httpfs reaches the dev S3 gateway), ATTACH the
+// DuckLake (a LOCAL sqlite catalog + the S3 DATA_PATH derived from FUNCD_DUCKLAKE_CATALOG) as the
+// default catalog so a consumer's server-side `quack_query` DDL writes gold Parquet, then start the
+// Quack server. This mirrors the prod duckdb runtime shim (images/runtime/duckdb/shim.py) minus the
+// boto3 catalog recovery/checkpoint — dev starts a fresh local catalog each boot (the Parquet DATA
+// persists in blob under --persist); durable catalog metadata across dev restarts is out of scope.
+func buildInitSQL(extDir, localCatalog, addr string, env map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "SET extension_directory=%s;\n", sqlStr(extDir))
 	b.WriteString("LOAD httpfs;\nLOAD ducklake;\nLOAD quack;\nLOAD sqlite_scanner;\n")
@@ -210,10 +246,35 @@ func buildInitSQL(extDir, addr string, env map[string]string) string {
 			sqlStr(key), sqlStr(env["AWS_SECRET_ACCESS_KEY"]), sqlStr(firstNonEmpty(env["AWS_REGION"], "us-east-1")), sqlStr(host), useSSL)
 	}
 
+	// ATTACH the DuckLake as `lakehouse` (the same catalog name the prod duckdb shim uses, so a
+	// consumer's SQL is portable) so a served `CREATE TABLE lakehouse.…` materializes under gold. The
+	// S3 secret above authorizes both the silver read_parquet and the gold Parquet write (the provider
+	// keypair owns gold; dev-relaxed writes cover it). A served quack_query runs with `memory` as its
+	// default catalog (verified), so the consumer qualifies with `lakehouse` / `USE lakehouse` — no
+	// init-time `USE` here (it wouldn't carry to served queries). Needs the S3 secret to exist first.
+	if cat := env["FUNCD_DUCKLAKE_CATALOG"]; cat != "" {
+		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s);\n",
+			sqlStr("ducklake:sqlite:"+localCatalog), sqlStr(dataPathFor(cat)))
+	}
+
 	host, port, _ := net.SplitHostPort(addr)
-	token := firstNonEmpty(env["FUNCD_QUACK_TOKEN"], devQuackToken)
+	token := firstNonEmpty(env["FUNCD_QUACK_TOKEN"], env["QUACK_TOKEN"], DevQuackToken)
 	fmt.Fprintf(&b, "SELECT listen_url FROM quack_serve(%s, token := %s);\n", sqlStr("quack:"+host+":"+port), sqlStr(token))
 	return b.String()
+}
+
+// dataPathFor derives the DuckLake Parquet DATA_PATH (s3://<bucket>/<prefix>/) from the catalog URL
+// (s3://<bucket>/<prefix>/_ducklake/catalog.db), mirroring the prod shim's _data_path. Without the
+// marker it falls back to the URL's parent directory.
+func dataPathFor(catalogURL string) string {
+	const marker = "/_ducklake/"
+	if i := strings.Index(catalogURL, marker); i >= 0 {
+		return catalogURL[:i+1]
+	}
+	if i := strings.LastIndex(catalogURL, "/"); i >= 0 {
+		return catalogURL[:i+1]
+	}
+	return catalogURL
 }
 
 // prefixLogWriter forwards duckdb stderr lines to the driver's logger at debug level.

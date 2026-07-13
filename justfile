@@ -382,12 +382,14 @@ example-kv: build-shim
 #   just dev-example js/kv-counter --persist  # persist KV/blob across runs (qualify the ambiguous name)
 #   just dev-example workflow                 # runs examples/js/workflow/workflow.yaml as a DAG
 # Reproduce any bundled example locally with `funcdctl dev` — build, boot, serve from source.
-# Ports are args (default gateway 3005 / S3 3006) so the URLs are reproducible: `just dev-example
-# catalog-quack 3005 3006` (or pass different ports). Extra flags still pass through after them.
+# Ports are args (default gateway 3005 / S3 3006 / control-plane 3007) so the URLs are reproducible and the
+# `seed-releves`/`run-releve` recipes reach the control plane out of the box: `just dev-example catalog-quack`
+# (or pass different ports: `just dev-example <p> 3005 3006 3007`). Extra flags still pass through after them.
 [group('example')]
-dev-example project gport="3005" s3port="3006" *args:
+dev-example project gport="3005" s3port="3006" cport="3007" *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    root="$PWD"
     if [ -d "{{project}}" ]; then dir="{{project}}"
     elif [ -d "examples/{{project}}" ]; then dir="examples/{{project}}"
     else
@@ -411,6 +413,88 @@ dev-example project gport="3005" s3port="3006" *args:
     mkdir -p dist
     echo "▶ building funcdctl (-tags dev) …"
     go build -tags dev -o dist/funcdctl-dev ./cmd/funcdctl
-    # Fixed ports (args, default 3005/3006) so the URLs are reproducible run-to-run.
-    echo "▶ funcdctl dev $target --gport {{gport}} --s3port {{s3port}} {{args}}"
-    exec dist/funcdctl-dev dev "$target" --gport {{gport}} --s3port {{s3port}} {{args}}
+    # Fixed ports (args, default 3005/3006/3007) so the URLs are reproducible run-to-run and the seed/run
+    # recipes reach the control plane without extra flags.
+    # Launch FROM the example dir: the manifest's dev.backends are CWD-relative (file://.funcd-dev/blob),
+    # so running here lands .funcd-dev BESIDE the example (visible in the editor, co-located with the
+    # manifests it belongs to) instead of at the repo root. Build/fetch above stay repo-root-relative.
+    if [ "$target" = "$dir" ]; then rel="."; else rel="$(basename "$target")"; fi
+    echo "▶ (cd $dir) funcdctl dev $rel --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}"
+    cd "$dir"
+    exec "$root/dist/funcdctl-dev" dev "$rel" --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}
+
+# Flags pass through to landing/generate_synthetic.py; output lands in the example's landing/ as
+# synthetic-releve-*.pdf (gitignored — regenerate anytime). Examples:
+#   just gen-releve                                    # defaults (Jan–Nov 2025, monthly)
+#   just gen-releve --start 2025-01 --end 2026-01      # a 13-month series (→ a 13-row gold mart)
+#   just gen-releve --period-months 2 --seed 7         # bi-monthly, seeded
+#   just gen-releve --min-tx 40 --max-tx 60            # force multi-page statements
+# Generate FAKE Bank statement PDFs for the releve-lakehouse example (fake data, Faker, reproducible).
+[group('example')]
+gen-releve *args:
+    cd examples/python/releve-lakehouse && uv run --group build python landing/generate_synthetic.py {{args}}
+
+# Seed the FULL synthetic releve series into the dev S3 landing prefix, then run the pipeline ONCE — extract
+# processes EVERY PDF in landing/ (bronze is 1:1 with a source file; build-silver aggregates), so a single
+# run yields a gold mart spanning every month. Depends on gen-releve. ONE prereq: `just dev-example
+# releve-lakehouse` running (its default ports are 3005/3006/3007). S3 creds are auto-loaded via `funcdctl dev
+# … --print-env` — no copy-paste. Pass the daemon's S3 port if it isn't 3006; control plane defaults to /dev
+# token (override via FUNCD_SERVER / FUNCD_TOKEN).
+[group('example')]
+seed-releves s3port="3006": (gen-releve "--start" "2025-01" "--end" "2026-01")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=examples/python/releve-lakehouse
+    bin=dist/funcdctl-dev
+    [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
+    eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
+    export FUNCD_SERVER="${FUNCD_SERVER:-http://127.0.0.1:3007}" FUNCD_TOKEN="${FUNCD_TOKEN:-funcd-dev-token}"
+    echo "▶ pushing releves → s3://releves/landing/"
+    aws s3 sync "$dir/landing/" s3://releves/landing/ --exclude '*' --include 'synthetic-releve-*.pdf'
+    echo "▶ funcdctl workflow run releve-pipeline   (server-generated name; ONE run, no input — extract processes ALL of landing/)"
+    run=$("$bin" workflow run releve-pipeline | sed -n 's|.*WorkflowRun/||p')   # server assigns releve-pipeline-<id>
+    echo "  → $run"
+    sleep 12
+    "$bin" workflow describe "$run"
+    echo "▶ done — one run processed every statement; the gold DuckLake mart spans every month."
+    echo "  (S3 reads are binding-gated in dev; query the gold mart through the lakehouse catalog.)"
+
+# Run the releve-lakehouse medallion workflow ONCE via `funcdctl workflow run` against the running dev
+# daemon — extract processes EVERY PDF in landing/ (NO input), then verify → build-silver → to-gold, then
+# describe the per-step result. Self-seeds: if landing/ is empty it generates + pushes the canonical
+# statement first (so it just works on a fresh daemon); already-present statements are all processed. The
+# run name is server-generated (releve-pipeline-<id>), so it re-runs freely. Prereq: `just dev-example
+# releve-lakehouse` running. Arg: the daemon's S3 port if it isn't 3006.
+[group('example')]
+run-releve s3port="3006":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=examples/python/releve-lakehouse
+    bin=dist/funcdctl-dev
+    [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
+    eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
+    export FUNCD_SERVER="${FUNCD_SERVER:-http://127.0.0.1:3007}" FUNCD_TOKEN="${FUNCD_TOKEN:-funcd-dev-token}"
+    echo "▶ funcdctl workflow run releve-pipeline   (server-generated name; no input — extract processes all of landing/)"
+    run=$("$bin" workflow run releve-pipeline | sed -n 's|.*WorkflowRun/||p')   # server assigns releve-pipeline-<id>
+    echo "  → $run"
+    sleep 10
+    "$bin" workflow describe "$run"
+
+# View funcd dev OTLP logs as ONE merged table, sorted by time. The path is a DIR (scans all
+# **/*.jsonl under it), a single file, or a glob. Flattens the nested resourceLogs envelope with DuckDB
+# into time/function/severity/body — generic log viewers can't read that nesting.
+#   just logs examples/python/releve-lakehouse/.funcd-dev/blob/logs/default
+#   just logs 1783897216394510000.jsonl
+[group('example')]
+logs path:
+    uv run --no-project --with duckdb --python 3.12 python scripts/otlp-logs.py "{{path}}"
+
+# Export funcd dev OTLP logs (dir/file/glob) to a flat, TYPED parquet you can open in a DuckDB viewer
+# (Parquet Explorer). Defaults the output to funcd-logs.parquet.
+#   just logs-parquet examples/python/releve-lakehouse/.funcd-dev/blob/logs/default
+[group('example')]
+logs-parquet path out="funcd-logs.parquet":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    uv run --no-project --with duckdb --python 3.12 python scripts/otlp-logs.py "{{path}}" --parquet "{{out}}"
+    echo "▶ open in Parquet Explorer: {{out}}"

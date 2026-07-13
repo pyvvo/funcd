@@ -30,6 +30,9 @@ var builtinInvokePolicies string
 //go:embed builtin_s3.cedar
 var builtinS3Policies string
 
+//go:embed builtin_s3_dev.cedar
+var builtinS3DevPolicies string
+
 // --- Cedar UID builders (the entity ID encodes the resource's namespaced identity) ----------------
 // Shared by the capability materializers below and by principalUID/resourceUID (the driver's request
 // path in cedar.go).
@@ -188,7 +191,19 @@ func invokeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (c
 // BlobPrefix entity-refs (read binding-as-grant); the resource is the BlobPrefix + its parent Bucket +
 // the prefix owner (a Function entity-REFERENCE). Its Bind handles BOTH a *v1.Function and a
 // *v1.CatalogService (ADR-0088 — both carry spec.blob). It admits the external S3Identity principal type.
-func S3Capability() Capability {
+func S3Capability() Capability { return s3Capability(builtinS3Policies) }
+
+// S3CapabilityDevRelaxedWrites is the DEV-ONLY variant (funcdctl dev): identical to S3Capability but its
+// built-in DROPS the single-writer write forbid, so any authenticated principal may write any prefix
+// locally. This unblocks two dev realities the prod model (correctly) does not: seeding a no-owner drop
+// prefix (`aws s3 cp` into `landing`), and a producer writing a prefix whose dev-provisioned owner was
+// mis-inferred from bindings (which cannot tell producer from consumer). Reads stay binding-gated; NEVER
+// used in production, where write == prefix owner is the medallion-layer consistency invariant.
+func S3CapabilityDevRelaxedWrites() Capability { return s3Capability(builtinS3DevPolicies) }
+
+// s3Capability builds the s3::read/s3::write capability with the given built-in PolicySet (ADR-0080): the
+// two variants differ ONLY in that built-in (prod single-writer vs the dev no-owner-write relaxation).
+func s3Capability(builtin string) Capability {
 	return Capability{
 		Name:                  "s3",
 		Actions:               []auth.Action{auth.ActionS3Read, auth.ActionS3Write},
@@ -214,7 +229,7 @@ func S3Capability() Capability {
 				return out
 			},
 		},
-		Builtin: builtinS3Policies,
+		Builtin: builtin,
 	}
 }
 

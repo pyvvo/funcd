@@ -61,6 +61,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
 	"github.com/green-0-rabbit/funcd/internal/blob/s3gateway"
 	"github.com/green-0-rabbit/funcd/internal/catalog/devengine"
+	"github.com/green-0-rabbit/funcd/internal/catalog/embedengine"
 	"github.com/green-0-rabbit/funcd/internal/function"
 	"github.com/green-0-rabbit/funcd/internal/kvstore"
 	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
@@ -117,6 +118,11 @@ func (a *cli) devCmd() *cobra.Command {
 			if len(args) == 1 {
 				path = args[0]
 			}
+			// --print-env: emit the dev S3 creds as `export …` lines and exit, no server (for
+			// `eval "$(funcdctl dev <target> --s3port <p> --print-env)"`).
+			if cfg.printEnv {
+				return a.printDevEnv(path, entry, cfg)
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
@@ -141,8 +147,13 @@ func (a *cli) devCmd() *cobra.Command {
 		"fixed gateway (function-invoke) port; 0 ⇒ a random free port")
 	cmd.Flags().IntVar(&cfg.s3port, "s3port", 0,
 		"fixed S3-frontend port; 0 ⇒ a random free port")
+	cmd.Flags().IntVar(&cfg.cport, "cport", 0,
+		"fixed control-plane port (for `funcdctl --server`: apply, workflow run); 0 ⇒ a random free port")
 	cmd.Flags().StringVar(&cfg.name, "name", "",
 		"function name for a single generic funcdctl.yaml (default: the dir name); a <stem>.funcdctl.yaml always names by stem")
+	cmd.Flags().BoolVar(&cfg.printEnv, "print-env", false,
+		"print the dev S3 credentials as `export …` lines and exit (no server); pair with a fixed --s3port. "+
+			"Use: eval \"$(funcdctl dev <target> --s3port 3006 --print-env)\"")
 	return cmd
 }
 
@@ -180,6 +191,7 @@ func (a *cli) printBanner(inst *devInstance) error {
 		"",
 		headerS.Render("SERVICES"),
 		svc("gateway", inst.gatewayURL, "invoke functions"),
+		svc("control", inst.controlURL, "apply · workflow run — funcdctl --server <url> --token "+funcd.DevToken),
 		svc("s3", inst.s3Endpoint, "inspect blob · aws s3 ls s3://<bucket>/"),
 	}
 	if len(inst.catalogs) > 0 {
@@ -284,7 +296,9 @@ type devConfig struct {
 	persistTo string // the --persist state dir (empty ⇒ devPersistDir)
 	gport     int    // fixed gateway (data-plane) port; 0 ⇒ a random free port
 	s3port    int    // fixed S3-frontend port; 0 ⇒ a random free port
+	cport     int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
 	name      string // override the single-generic-funcdctl.yaml function name; "" ⇒ the dir basename
+	printEnv  bool   // print the dev S3 creds as `export …` lines and exit (no server)
 }
 
 // devInstance is a running `funcdctl dev` platform + the seams a test (or the command) drives it by.
@@ -292,6 +306,7 @@ type devInstance struct {
 	platform   *funcd.Platform
 	client     *sdk.Client
 	gatewayURL string   // the data-plane base URL functions are invoked at (POST <url>/function/<name>)
+	controlURL string   // the control-plane base URL (funcdctl --server: apply, workflow run)
 	functions  []string // the loaded function names (one function, or a workflow's step functions)
 	workflow   string   // the loaded Workflow name (Phase 3, `funcdctl dev workflow.yaml`); "" for a function run
 	catalogs   []string // bound catalog aliases served by the embedded duckdb+quack engine (Phase 4); nil if none
@@ -353,35 +368,64 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 // with no OCI pull (the materializer only materializes image steps; a ref step targets an existing
 // Function directly). builtin (wait/pass) and pre-existing ref steps run as-is.
 func (a *cli) startDevWorkflow(ctx context.Context, op, path string, wf *v1.Workflow, cfg devConfig) (*devInstance, error) {
+	pfs, err := resolveWorkflowPlan(op, path, wf)
+	if err != nil {
+		return nil, err
+	}
+	inst, berr := a.bootDev(ctx, op, pfs, []v1.Object{wf}, cfg)
+	if berr != nil {
+		return nil, berr
+	}
+	inst.workflow = string(wf.Name)
+	return inst, nil
+}
+
+// resolveWorkflowPlan resolves a Workflow CRD's steps to from-source plannedFuncs (Decision 8): each
+// function.ref/image step's stem → <stem>.funcdctl.yaml, synthesized as a from-source Function with the
+// step REWRITTEN to dispatch by ref, and lands wf in the dev namespace/group. Factored from the boot path
+// so `--print-env` resolves the same first-function identity (the S3 keypair's subject) without booting.
+func resolveWorkflowPlan(op, path string, wf *v1.Workflow) ([]plannedFunc, error) {
 	dir := filepath.Dir(path)
 	var pfs []plannedFunc
 	seen := map[v1.ObjectName]bool{}
 	for i := range wf.Spec.Steps {
 		st := &wf.Spec.Steps[i]
-		if st.Function == nil || st.Function.Image == "" {
-			continue // builtin / sub-workflow / already-ref steps need no from-source materialization
+		if st.Function == nil {
+			continue // builtin / sub-workflow steps need no from-source materialization
 		}
-		stem, terr := tagStem(op, st.Function.Image)
-		if terr != nil {
-			return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "workflow step %q", st.Name)
+		// Resolve the step's function to a <stem>.funcdctl.yaml in the workflow dir: a function.ref names
+		// the manifest stem directly; a function.image resolves by its tag stem (Decision 8).
+		var stem string
+		switch {
+		case st.Function.Ref != "":
+			stem = string(st.Function.Ref)
+		case st.Function.Image != "":
+			s, terr := tagStem(op, st.Function.Image)
+			if terr != nil {
+				return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "workflow step %q", st.Name)
+			}
+			stem = s
+		default:
+			continue
 		}
 		manifestPath := filepath.Join(dir, stem+"."+manifestFileName)
 		m, lerr := loadManifestAt(op, manifestPath)
 		if lerr != nil {
-			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "workflow step %q image %q resolves to %s", st.Name, st.Function.Image, filepath.Base(manifestPath))
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "workflow step %q resolves to %s", st.Name, filepath.Base(manifestPath))
 		}
 		name := sanitizeName(stem)
 		if !seen[name] {
-			pfs = append(pfs, plannedFunc{m: m, name: name, srcDir: dir, entry: stemEntry(stem, m.Runtime), isolate: true})
+			srcDir, entry, isolate := manifestEntry(m, dir, stemEntry(stem, m.Runtime), true)
+			pfs = append(pfs, plannedFunc{m: m, name: name, srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir})
 			seen[name] = true
 		}
-		// Rewrite the step to dispatch to the from-source Function (ADR-0125): drop the OCI image, target
+		// Rewrite the step to dispatch to the from-source Function (ADR-0125): drop any OCI image, target
 		// the synthesized Function by ref (same namespace). The engine dispatches to it without pulling.
 		st.Function.Image = ""
 		st.Function.Ref = name
 	}
 	if len(pfs) == 0 {
-		return nil, fault.Invalidf(op, "workflow %q has no function.image steps to run from source", wf.Name)
+		return nil, fault.Invalidf(op, "workflow %q has no function.ref/image steps resolving to a <stem>.funcdctl.yaml", wf.Name)
 	}
 	// Land the workflow in the dev-authorized namespace/group so the run engine + link resolver reach it.
 	wf.TypeMeta = v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow}
@@ -389,12 +433,40 @@ func (a *cli) startDevWorkflow(ctx context.Context, op, path string, wf *v1.Work
 	if wf.ResourceGroup == "" {
 		wf.ResourceGroup = devResourceGroup
 	}
-	inst, err := a.bootDev(ctx, op, pfs, []v1.Object{wf}, cfg)
-	if err != nil {
-		return nil, err
+	return pfs, nil
+}
+
+// resolveDevPlan resolves a dev target (workflow, dir, stem, or single manifest) to its plannedFuncs
+// WITHOUT booting — the shared front half of startDev, reused by `--print-env`.
+func resolveDevPlan(op, path, entryFlag string, cfg devConfig) ([]plannedFunc, error) {
+	if wf, isWorkflow, derr := detectWorkflow(op, path); derr != nil {
+		return nil, derr
+	} else if isWorkflow {
+		return resolveWorkflowPlan(op, path, wf)
 	}
-	inst.workflow = string(wf.Name)
-	return inst, nil
+	return resolveDevFunctions(op, path, entryFlag, cfg.name)
+}
+
+// printDevEnv resolves the target's first function and prints the dev S3 credentials as `export …` lines
+// to stdout, then returns — NO server is booted. The keypair is the FIXED devS3Master derived over that
+// function's identity (the same keypair the banner shows; deterministic across restarts, ADR-0128
+// Decision 6), so `eval "$(funcdctl dev <target> --s3port <p> --print-env)"` loads working creds. The
+// endpoint port is --s3port (default 3006) and must match the running daemon's --s3port.
+func (a *cli) printDevEnv(path, entryFlag string, cfg devConfig) error {
+	const op = "funcdctl dev --print-env"
+	pfs, err := resolveDevPlan(op, path, entryFlag, cfg)
+	if err != nil {
+		return err
+	}
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), devNamespace, string(pfs[0].name))
+	port := cfg.s3port
+	if port == 0 {
+		port = 3006
+	}
+	_, werr := fmt.Fprintf(a.out,
+		"export AWS_ACCESS_KEY_ID=%s\nexport AWS_SECRET_ACCESS_KEY=%s\nexport AWS_REGION=%s\nexport AWS_ENDPOINT_URL_S3=http://127.0.0.1:%d\n",
+		kp.AccessKey, kp.SecretKey, devS3Region, port)
+	return werr
 }
 
 // bootDev is the shared boot path for a function set (single, multi, or a workflow's step functions): it
@@ -464,7 +536,14 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// (a topological order over the fn-to-fn link graph within this function set).
 	fnObjs = orderFunctionsByLinks(fnObjs)
 
-	shimOpts, shimCleanup, sherr := devShimOptions(op)
+	// The interpreter config (dev.python/dev.node) is GLOBAL per run; the first function's block is
+	// representative (like dev.backends). Its relative path resolves against that manifest's dir.
+	var devBlock sdk.Dev
+	var baseDir string
+	if len(pfs) > 0 {
+		devBlock, baseDir = pfs[0].m.Dev, pfs[0].manifestDir
+	}
+	shimOpts, shimCleanup, sherr := devShimOptions(op, devBlock, baseDir)
 	if sherr != nil {
 		return nil, sherr
 	}
@@ -478,6 +557,11 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		// the Workflow reaches Ready (each step still enforces its OWN contract at the shim, ADR-0123).
 		// Harmless for a single-function run (no Workflow is applied).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
+		// Dev seeding + provisioning convenience: blob writes are not owner-gated locally, so a developer
+		// can seed a workflow's input with `aws s3 cp` into a no-owner `landing`, and dev's binding-inferred
+		// prefix owners (which can't tell producer from consumer) never wrongly block a producer's own write.
+		// Reads stay binding-gated; the prod single-writer model is unchanged (dev-only, never the release client).
+		funcd.WithDevS3RelaxedWrites(),
 	}
 
 	// Catalog dev (Decision 5): if any function binds a catalog, wire the process-mode DuckDB+Quack
@@ -487,9 +571,33 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// not here — so `funcdctl dev` still boots.
 	if aliases := catalogAliases(pfs); len(aliases) > 0 {
 		inst.catalogs = aliases
-		catEngine := devengine.New(slog.Default())
+		// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
+		// metastore) so a dev restart reopens it; ephemeral otherwise. resolvePersistPlan is pure, so the
+		// second call in buildPersistDrivers is harmless.
+		var catOpts []devengine.Option
+		if plan, perr := resolvePersistPlan(cfg, pfs[0].m); perr == nil && plan.catalogDir != "" {
+			catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
+		}
+		catEngine := devengine.New(slog.Default(), catOpts...)
 		opts = append(opts, funcd.WithCatalogProviderRuntime(catEngine))
 		inst.cleanup = append(inst.cleanup, catEngine.StopAll)
+
+		// A catalog CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
+		// quack/ducklake extensions — in prod those ride the bundle's duckdb-ext (ADR-0089), absent when
+		// running from source. Extract the embedded engine's extensions once and point consumers at them
+		// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-catalog-query). A placeholder build (no engine)
+		// skips it — the same not-bundled path the provider engine reports at reconcile time.
+		if embedengine.Bundled() {
+			if extRoot, xerr := os.MkdirTemp("", "funcd-dev-duckdb-ext-*"); xerr == nil {
+				if paths, perr := embedengine.Extract(extRoot); perr == nil {
+					opts = append(opts, funcd.WithCatalogExtensionDir(paths.ExtensionDir))
+					inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(extRoot) })
+				} else {
+					_ = os.RemoveAll(extRoot)
+					slog.Default().Warn("could not extract catalog extensions for consumers", "err", perr)
+				}
+			}
+		}
 	}
 
 	// Stream function logs to the terminal in real time (Decision 6, dev UX): tee every captured log
@@ -502,13 +610,28 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		_ = a.writef("%s\n", logStyler.format(l))
 	}))
 
-	// Fixed listen ports for reproducible URLs (--gport / --s3port); 0 keeps the ephemeral free port.
-	// This overrides InMemory()'s 127.0.0.1:0 for the data plane; the S3 port is applied in devS3Options.
-	if cfg.gport != 0 && cfg.gport == cfg.s3port {
-		return nil, fault.Invalidf(op, "--gport and --s3port must differ (both %d)", cfg.gport)
+	// Fixed listen ports for reproducible URLs (--gport / --s3port / --cport); 0 keeps the ephemeral free
+	// port. These override InMemory()'s 127.0.0.1:0 (control plane + data plane); the S3 port is applied in
+	// devS3Options. Any two fixed ports must differ (deterministic order so the error is stable).
+	fixedPorts := []struct {
+		name string
+		port int
+	}{{"--gport", cfg.gport}, {"--s3port", cfg.s3port}, {"--cport", cfg.cport}}
+	seenPort := map[int]string{}
+	for _, fp := range fixedPorts {
+		if fp.port == 0 {
+			continue
+		}
+		if other, dup := seenPort[fp.port]; dup {
+			return nil, fault.Invalidf(op, "%s and %s must be different ports (both %d)", other, fp.name, fp.port)
+		}
+		seenPort[fp.port] = fp.name
 	}
 	if cfg.gport != 0 {
 		opts = append(opts, funcd.WithDataPlaneAddr(fmt.Sprintf("127.0.0.1:%d", cfg.gport)))
+	}
+	if cfg.cport != 0 {
+		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))
 	}
 
 	// Durable-local drivers (ADR-0125 Decision 7): under --persist (or a `dev.backends` file:// override)
@@ -542,6 +665,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	}
 	inst.platform = p
 	inst.gatewayURL = "http://" + p.DataPlaneAddr()
+	inst.controlURL = "http://" + p.Addr()
 
 	go func() { inst.runErr <- p.Run(ctx) }()
 
@@ -619,9 +743,10 @@ func freeLocalAddr() (string, error) {
 // persistPlan is the resolved durable-driver layout (ADR-0125 Decision 7): an empty dir for a kind means
 // "keep the ephemeral memory driver". Dirs are absolute, per-service subdirs of the persist root.
 type persistPlan struct {
-	storeDir string // durable metastore (Badger); "" ⇒ memory
-	kvDir    string // durable function KV (Badger); "" ⇒ memory
-	blobDir  string // durable blob (fileblob); "" ⇒ mem://
+	storeDir   string // durable metastore (Badger); "" ⇒ memory
+	kvDir      string // durable function KV (Badger); "" ⇒ memory
+	blobDir    string // durable blob (fileblob); "" ⇒ mem://
+	catalogDir string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
 }
 
 // resolvePersistPlan computes the durable-driver layout from the flags + `dev.backends` (Decision 4/7),
@@ -643,6 +768,7 @@ func resolvePersistPlan(cfg devConfig, m *sdk.Manifest) (persistPlan, error) {
 	var p persistPlan
 	if cfg.persist {
 		p.storeDir = filepath.Join(absRoot, "metastore")
+		p.catalogDir = filepath.Join(absRoot, "catalog")
 	}
 
 	kvDir, kerr := resolveBackendDir(op, m.Dev.Backends.KV, cfg.persist, absRoot, "kv")
@@ -754,11 +880,12 @@ func buildPersistDrivers(op string, cfg devConfig, m *sdk.Manifest) (opts []func
 // (a single-file function, so per-function contracts never collide when several share a dir, ADR-0124);
 // !isolate ⇒ run in place in srcDir (the generic-funcdctl.yaml bundle path, Phase 1/2).
 type plannedFunc struct {
-	m       *sdk.Manifest
-	name    v1.ObjectName
-	srcDir  string // the dir holding the handler source
-	entry   string // the handler entry filename within srcDir
-	isolate bool
+	m           *sdk.Manifest
+	name        v1.ObjectName
+	srcDir      string // the dir holding the handler source
+	entry       string // the handler entry filename within srcDir
+	isolate     bool
+	manifestDir string // the dir holding the funcdctl.yaml (base for a dev.python/dev.node relative path)
 }
 
 // detectWorkflow reports whether path is a Workflow CRD file (`funcdctl dev workflow.yaml`, Decision 8).
@@ -838,7 +965,8 @@ func resolveDirFunctions(op, dir, entryFlag, nameFlag string) ([]plannedFunc, er
 				return nil, lerr
 			}
 			stem := strings.TrimSuffix(filepath.Base(mp), "."+manifestFileName)
-			pfs = append(pfs, plannedFunc{m: m, name: sanitizeName(stem), srcDir: dir, entry: stemEntry(stem, m.Runtime), isolate: true})
+			srcDir, entry, isolate := manifestEntry(m, dir, stemEntry(stem, m.Runtime), true)
+			pfs = append(pfs, plannedFunc{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir})
 		}
 		return pfs, nil
 	}
@@ -847,11 +975,12 @@ func resolveDirFunctions(op, dir, entryFlag, nameFlag string) ([]plannedFunc, er
 	if lerr != nil {
 		return nil, fault.NotFoundf(op, "no %s found in %q — funcdctl dev runs a function from its manifest dir", manifestFileName, dir)
 	}
-	entry := entryFlag
-	if entry == "" {
-		entry = defaultEntry(m.Runtime)
+	dflt := entryFlag
+	if dflt == "" {
+		dflt = defaultEntry(m.Runtime)
 	}
-	return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: dir, entry: entry, isolate: false}}, nil
+	srcDir, entry, isolate := manifestEntry(m, dir, dflt, false)
+	return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
 }
 
 // resolveFileFunction resolves a single existing file (Decision 9): the generic funcdctl.yaml is the
@@ -866,11 +995,12 @@ func resolveFileFunction(op, path, entryFlag, nameFlag string) ([]plannedFunc, e
 		if lerr != nil {
 			return nil, lerr
 		}
-		entry := entryFlag
-		if entry == "" {
-			entry = defaultEntry(m.Runtime)
+		dflt := entryFlag
+		if dflt == "" {
+			dflt = defaultEntry(m.Runtime)
 		}
-		return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: dir, entry: entry, isolate: false}}, nil
+		srcDir, entry, isolate := manifestEntry(m, dir, dflt, false)
+		return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
 	}
 	var stem string
 	if strings.HasSuffix(base, "."+manifestFileName) {
@@ -894,11 +1024,12 @@ func resolveStemInDir(op, dir, stem, entryFlag string) ([]plannedFunc, error) {
 	if lerr != nil {
 		return nil, fault.NotFoundf(op, "no %s found in %q — funcdctl dev <stem> runs the function whose stem matches", stem+"."+manifestFileName, dir)
 	}
-	entry := entryFlag
-	if entry == "" {
-		entry = stemEntry(stem, m.Runtime)
+	dflt := entryFlag
+	if dflt == "" {
+		dflt = stemEntry(stem, m.Runtime)
 	}
-	return []plannedFunc{{m: m, name: sanitizeName(stem), srcDir: dir, entry: entry, isolate: true}}, nil
+	srcDir, entry, isolate := manifestEntry(m, dir, dflt, true)
+	return []plannedFunc{{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
 }
 
 // loadManifestAt loads a funcdctl.yaml only if it exists (a stat gate so a missing file yields the
@@ -935,6 +1066,33 @@ func synthesizeResources(op string, pfs []plannedFunc) ([]v1.Object, error) {
 		}
 	}
 
+	// dev.catalog provider declarations (ADR-0091 consumer binding in dev), de-duplicated by catalog name
+	// (first function that declares one wins). A catalog OWNS its DuckLake prefix — the catalog reconciler's
+	// resolveBucketRefs requires that prefix's owner == the CatalogService name — and its other blob prefixes
+	// must exist (a read layer is created owner-less unless a function writes it).
+	devCatalogs := map[v1.ObjectName]sdk.DevCatalog{}
+	for _, pf := range pfs {
+		for name, dc := range pf.m.Dev.Catalog {
+			if _, seen := devCatalogs[v1.ObjectName(name)]; !seen {
+				devCatalogs[v1.ObjectName(name)] = dc
+			}
+		}
+	}
+	for name, dc := range devCatalogs {
+		for _, b := range dc.Blob {
+			if buckets[b.Bucket] == nil {
+				buckets[b.Bucket] = map[string]v1.ObjectName{}
+			}
+			if _, ok := buckets[b.Bucket][b.Prefix]; !ok {
+				buckets[b.Bucket][b.Prefix] = "" // exists; a read layer with no in-platform writer
+			}
+		}
+		if buckets[dc.Catalog.Bucket] == nil {
+			buckets[dc.Catalog.Bucket] = map[string]v1.ObjectName{}
+		}
+		buckets[dc.Catalog.Bucket][dc.Catalog.Prefix] = name // the catalog owns its DuckLake prefix
+	}
+
 	var objs []v1.Object
 	for _, store := range sortedResourceNames(kvStores) {
 		obj, _ := v1.NewObject(v1.KindKVStore)
@@ -953,6 +1111,34 @@ func synthesizeResources(op string, pfs []plannedFunc) ([]v1.Object, error) {
 			bk.Spec.Prefixes = append(bk.Spec.Prefixes, v1.BucketPrefix{Name: prefix, Owner: buckets[bucket][prefix]})
 		}
 		objs = append(objs, bk)
+	}
+
+	// The CatalogService per dev.catalog + its QUACK_TOKEN Secret. The token is the dev engine's fixed
+	// DevQuackToken, so the consumer's resolveCatalogEnv (FUNCD_CATALOG_<ALIAS>_TOKEN) presents exactly what
+	// the engine serves with. The engine's endpoint + S3 keypair are wired by the catalog reconciler.
+	catalogNames := make([]v1.ObjectName, 0, len(devCatalogs))
+	for name := range devCatalogs {
+		catalogNames = append(catalogNames, name)
+	}
+	sort.Slice(catalogNames, func(i, j int) bool { return catalogNames[i] < catalogNames[j] })
+	for _, name := range catalogNames {
+		dc := devCatalogs[name]
+		tokenSecret := v1.ObjectName(string(name) + "-quack-token")
+		// The token Secret is appended BEFORE the CatalogService so it is in the store when the catalog
+		// reconciler resolves engineEnv (whose secret-missing path does not requeue, unlike BucketNotFound).
+		sobj, _ := v1.NewObject(v1.KindSecret)
+		s := sobj.(*v1.Secret)
+		setMeta(&s.ObjectMeta, tokenSecret)
+		s.Spec.Data = map[string][]byte{"QUACK_TOKEN": []byte(devengine.DevQuackToken)}
+		objs = append(objs, s)
+
+		cobj, _ := v1.NewObject(v1.KindCatalogService)
+		cs := cobj.(*v1.CatalogService)
+		setMeta(&cs.ObjectMeta, name)
+		cs.Spec.Blob = dc.Blob
+		cs.Spec.Catalog = dc.Catalog
+		cs.Spec.Secrets = []v1.ObjectName{tokenSecret}
+		objs = append(objs, cs)
 	}
 
 	// ConfigMaps + Secrets, de-duplicated by name across functions (the first function that names one
@@ -1005,6 +1191,7 @@ func synthesizeFunction(pf plannedFunc, imagePath string) *v1.Function {
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
 	fn.Spec.KV = pf.m.Bindings.KV
 	fn.Spec.Blob = pf.m.Bindings.Blob
+	fn.Spec.Catalogs = pf.m.Bindings.Catalogs // so resolveCatalogEnv injects FUNCD_CATALOG_<ALIAS>_URL/_TOKEN (ADR-0091)
 	fn.Spec.Config = pf.m.Bindings.Config
 	fn.Spec.Secrets = pf.m.Bindings.Secrets
 	fn.Spec.Links = pf.m.Bindings.Links
@@ -1144,6 +1331,19 @@ func stemEntry(stem string, rt v1.RuntimeName) string {
 	return stem + ".mjs"
 }
 
+// manifestEntry resolves a manifest's bundle root + entry file. With the wrangler-style `main` set (a
+// handler file relative to the manifest dir), the handler's OWN dir is the bundle root — its siblings
+// (SQL, vendored deps under a bundle/) resolve and FUNCD_BUNDLE_DIR points there — so it runs IN PLACE.
+// Without `main`, it's the flat stem/generic convention: defaultEntry co-located with the manifest,
+// isolated per defaultIsolate.
+func manifestEntry(m *sdk.Manifest, dir, defaultEntry string, defaultIsolate bool) (srcDir, entry string, isolate bool) {
+	if strings.TrimSpace(m.Main) != "" {
+		full := filepath.Join(dir, m.Main)
+		return filepath.Dir(full), filepath.Base(full), false
+	}
+	return dir, defaultEntry, defaultIsolate
+}
+
 // setMeta stamps the shared namespace/resource-group onto a synthesized resource.
 func setMeta(meta *v1.ObjectMeta, name v1.ObjectName) {
 	meta.Name = name
@@ -1182,7 +1382,17 @@ func resolveSecretData(op, secretName string, entry map[string]string) (map[stri
 // funcd options that launch them on the process runtime (mirroring cmd/funcd's process-mode wiring).
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
-func devShimOptions(op string) (_ []funcd.Option, cleanup func(), err error) {
+//
+// resolveInterpreter resolves a manifest dev.python/dev.node value: empty ⇒ "", absolute ⇒ as-is, else
+// joined against the manifest dir (so `.venv/bin/python` points at the project's virtualenv).
+func resolveInterpreter(p, baseDir string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(baseDir, p)
+}
+
+func devShimOptions(op string, dev sdk.Dev, baseDir string) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
 		return nil, nil, fault.Wrapf(derr, fault.Internal, op, "create shim temp dir")
@@ -1197,7 +1407,12 @@ func devShimOptions(op string) (_ []funcd.Option, cleanup func(), err error) {
 	var opts []funcd.Option
 	haveDefault := false
 
+	// Interpreter precedence: env override > the manifest's dev.node/dev.python (a project pins its
+	// toolchain in the committable funcdctl.yaml) > the bare name on PATH.
 	node := envOr("FUNCD_NODE", "")
+	if node == "" {
+		node = resolveInterpreter(dev.Node, baseDir)
+	}
 	if node == "" {
 		if p, lerr := exec.LookPath("node"); lerr == nil {
 			node = p
@@ -1213,6 +1428,9 @@ func devShimOptions(op string) (_ []funcd.Option, cleanup func(), err error) {
 	}
 
 	python := envOr("FUNCD_PYTHON", "")
+	if python == "" {
+		python = resolveInterpreter(dev.Python, baseDir)
+	}
 	if python == "" {
 		if p, lerr := exec.LookPath("python3"); lerr == nil {
 			python = p

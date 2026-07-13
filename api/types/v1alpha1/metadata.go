@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -113,7 +115,14 @@ type TypeMeta struct {
 // Carrier bookkeeping fields (UID, Generation, ResourceVersion, …) are
 // set by the store; their lifecycle semantics are owned by the store/controller ADRs.
 type ObjectMeta struct {
-	Name            ObjectName        `json:"name"`
+	// Name is the resource name. omitempty (not "required") so a create may omit it in favour of
+	// GenerateName; the store still requires a non-empty Name (ObjectMeta.Validate) once assigned.
+	Name ObjectName `json:"name,omitempty"`
+	// GenerateName is an optional NAME PREFIX for server-side name generation (the k8s pattern): when Name
+	// is empty and GenerateName is set, the create path fills Name = GenerateName + a random suffix
+	// (GenerateObjectName), retrying on the rare collision. Ignored once Name is set. A plain prefix string
+	// (a trailing '-' is idiomatic and allowed — the generated Name is what must be a valid label).
+	GenerateName    string            `json:"generateName,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`
 	Namespace       NamespaceName     `json:"namespace,omitempty"`
 	ResourceGroup   ResourceGroupName `json:"resourceGroup,omitempty"`
 	Tags            Tags              `json:"tags,omitempty"`
@@ -166,6 +175,24 @@ func (m *ObjectMeta) GetObjectMeta() *ObjectMeta { return m }
 
 // GetName returns the resource name.
 func (m *ObjectMeta) GetName() ObjectName { return m.Name }
+
+// nameSuffixHexBytes is the random-suffix width for GenerateObjectName: 4 crypto/rand bytes → 8 hex chars,
+// i.e. 16^8 ≈ 4.3e9 names per prefix (uniqueness is still enforced by store.Create's conflict retry).
+const nameSuffixHexBytes = 4
+
+// GenerateObjectName builds a unique object name from a prefix: the prefix (truncated so the whole name
+// stays within the 63-char DNS-1123 label limit) followed by a random 8-hex-char suffix. It is the single
+// name-generation convention for server-side ObjectMeta.GenerateName and the Sensor's WorkflowRun names.
+func GenerateObjectName(prefix string) ObjectName {
+	if max := 63 - nameSuffixHexBytes*2; len(prefix) > max {
+		prefix = prefix[:max]
+	}
+	b := make([]byte, nameSuffixHexBytes)
+	if _, err := rand.Read(b); err != nil { // crypto/rand failure is near-impossible; degrade to a fixed suffix
+		return ObjectName(prefix + "00000000")
+	}
+	return ObjectName(prefix + hex.EncodeToString(b))
+}
 
 // GetNamespace returns the namespace (empty for cluster-scoped kinds).
 func (m *ObjectMeta) GetNamespace() NamespaceName { return m.Namespace }

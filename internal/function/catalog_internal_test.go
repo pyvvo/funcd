@@ -90,6 +90,32 @@ func TestScenarioMissingQuackTokenRequeues(t *testing.T) {
 	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_TOKEN", "no empty token is injected")
 }
 
+// scenario: dev-catalog-extension-dir-to-consumer — when catalogExtensionDir is set (funcdctl dev),
+// a catalog-consumer function gets DUCKDB_EXTENSION_DIRECTORY in its worker env (so its handler's
+// LOAD quack resolves offline), while a non-consumer function does NOT. Empty dir ⇒ no injection.
+func TestScenarioDevCatalogExtensionDirToConsumer(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, fakeResolver{env: map[string]string{"QUACK_TOKEN": "t0ken"}})
+	seedCatalogService(t, r, "lake", "lake-quack.default:8080")
+	r.catalogExtensionDir = "/dev/ext"
+
+	// consumer: DUCKDB_EXTENSION_DIRECTORY injected.
+	consumer := catalogConsumerFn("lake", "lake")
+	env, _, err := r.resolveCatalogEnv(context.Background(), consumer)
+	require.NoError(t, err)
+	spec := r.workerSpec(consumer, 0, "/art/app.mjs", nil, env)
+	require.Equal(t, "/dev/ext", spec.Env["DUCKDB_EXTENSION_DIRECTORY"], "a catalog consumer gets the extension dir")
+
+	// non-consumer: no injection.
+	nonSpec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil)
+	require.NotContains(t, nonSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "a non-consumer gets no extension dir")
+
+	// empty dir (prod default): no injection even for a consumer.
+	r.catalogExtensionDir = ""
+	prodSpec := r.workerSpec(consumer, 0, "/art/app.mjs", nil, env)
+	require.NotContains(t, prodSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "empty dir (prod) injects nothing")
+}
+
 // scenario: token-only-to-declared-consumer — a Function that declares no spec.catalogs receives no
 // FUNCD_CATALOG_* env (the token reaches only declared consumers).
 func TestScenarioTokenOnlyToDeclaredConsumer(t *testing.T) {

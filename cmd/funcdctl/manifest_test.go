@@ -163,7 +163,7 @@ func TestResolveManifest_stem_precedence(t *testing.T) {
 	require.Equal(t, "genericHandle", m.Handler)
 }
 
-// scenario: types via the CLI — `funcdctl types -f funcdctl.yaml -o <dir>` writes a .pyi.
+// scenario: types via the CLI — `funcdctl types -f funcdctl.yaml -o <dir>` writes a .py module.
 func TestScenario_types_command(t *testing.T) {
 	dir := t.TempDir()
 	writeFuncdctl(t, dir, pyFuncdctlYAML)
@@ -171,7 +171,7 @@ func TestScenario_types_command(t *testing.T) {
 
 	var out bytes.Buffer
 	require.NoError(t, execCLI(&out, nil, "types", "-f", filepath.Join(dir, "funcdctl.yaml"), "-o", outDir))
-	body, err := os.ReadFile(filepath.Join(outDir, "funcd_types.pyi")) //nolint:gosec // test-owned path
+	body, err := os.ReadFile(filepath.Join(outDir, "funcd_types.py")) //nolint:gosec // test-owned path
 	require.NoError(t, err)
 	require.Contains(t, string(body), "class FuncInput(TypedDict)")
 	require.Contains(t, string(body), "class FuncOutput(TypedDict)")
