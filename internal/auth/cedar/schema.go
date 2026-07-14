@@ -27,6 +27,13 @@ const (
 	entityTypeBucket     = "Bucket"     // the blob domain (the KVStore parallel)
 	entityTypeBlobPrefix = "BlobPrefix" // a sub-domain carrying owner (the KVTable parallel)
 	entityTypeS3Identity = "S3Identity" // the external SigV4 principal only (not an in-platform Function)
+	// ADR-0135 (F100): a user-assigned managed identity — an external caller principal resolved from an
+	// Identity-issued keypair. Distinct from S3Identity (the raw-key principal); a RolesAssignment grants it.
+	entityTypeIdentity = "Identity"
+	// ADR-0137 (F102): the catalog serving-layer resource — the CatalogService a catalog::query targets.
+	// A Function's spec.catalogs are its `catalogBindings` (binding-as-query-grant); a Catalog-scoped
+	// RolesAssignment grants an Identity query on it. The catalog PEP proxy is the enforcement point.
+	entityTypeCatalogService = "CatalogService"
 	// ADR-0117 (F81 egress): the ephemeral outbound destination — carries {ip, port, domains} attrs,
 	// materialized from the request EntityRef's Path (no MetaReader read). Its id is the "<ip>:<port>" prefix.
 	entityTypeNetDestination = "NetDestination"
@@ -42,7 +49,7 @@ const (
 //
 //nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
 var defaultRegistry, _ = NewRegistry(
-	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability()},
+	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), CatalogCapability()},
 	[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
 )
 

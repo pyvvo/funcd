@@ -16,5 +16,9 @@ permit(principal, action == Action::"s3::read", resource)
 // WITHOUT the base permit even the owner could not write.
 permit(principal, action == Action::"s3::write", resource);
 
+// Generalized single-writer (ADR-0136): the base permit lets any principal write; the forbid overrides it
+// unless the principal is in the prefix's `writers` set — the legacy owner (as one entry, back-compat)
+// PLUS any writer-role RolesAssignment grant (so an external Identity can be a writer). An owner-less,
+// writer-less prefix has no `writers` attr ⇒ the forbid always fires ⇒ unwritable (default-deny).
 forbid(principal, action == Action::"s3::write", resource)
-  unless { resource has owner && principal == resource.owner };
+  unless { resource has writers && resource.writers.contains(principal) };

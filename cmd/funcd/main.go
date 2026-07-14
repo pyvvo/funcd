@@ -284,6 +284,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
 	}
 
+	// Catalog PEP proxy (ADR-0137): under containerd, publish the proxy on a netns-reachable host (the
+	// CNI bridge gateway IP) so a worker in its own netns can reach it; empty ⇒ 127.0.0.1 (process/dev).
+	if cfg.Catalog.ProxyHost != "" {
+		opts = append(opts, funcd.WithCatalogProxyHost(cfg.Catalog.ProxyHost))
+	}
+
 	// Workflow engine (ADR-0094): durable run state in its own Badger instance at Workflow.DataDir
 	// (default <dataDir>/workflow; in-memory when the substrate is memory), plus the workflow.* tunables.
 	var stepTimeout, retention time.Duration

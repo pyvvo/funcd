@@ -77,6 +77,11 @@ const (
 	// principal = the caller Function (source-IP resolved), resource = a NetDestination. Default-deny —
 	// a grant comes only from a compiled EgressPolicy; no built-in permit.
 	ActionEgressConnect Action = "egress::connect"
+	// ActionCatalogQuery is the Cedar action for a catalog SQL query over the Quack/DuckLake serving
+	// path (ADR-0137, F102): a declared spec.catalogs binding grants it (binding-as-query-grant), and a
+	// Catalog-scoped RolesAssignment grants it to an external Identity. Resource = a CatalogService.
+	// Read-shaped (a Cedar permit, never a writers entry). The catalog PEP proxy is the enforcement point.
+	ActionCatalogQuery Action = "catalog::query"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

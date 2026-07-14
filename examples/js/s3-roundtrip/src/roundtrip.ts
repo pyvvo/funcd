@@ -33,11 +33,16 @@ export interface FuncOutput {
   get: boolean;
   list: number;
   denied: boolean;
+  /** A PutObject+GetObject into `shared` — a prefix the fn neither owns nor binds — authorized ONLY by
+   *  the RolesAssignment granting Blob Data Writer @ lakehouse/shared (ADR-0136). true ⇒ the role-assigned
+   *  writer path works on real containerd (the prod mirror of funcdctl dev's grant). */
+  granted: boolean;
 }
 
 const BUCKET = 'lakehouse';
 const GOLD = 'gold'; // the prefix this function OWNS
 const OTHER = 'other'; // a prefix it is NOT bound to → must be denied
+const SHARED = 'shared'; // NOT owned, NOT bound — writable ONLY via the ADR-0136 RolesAssignment grant
 
 function newClient(): S3Client {
   return new S3Client({
@@ -103,5 +108,22 @@ export async function handle(ctx: FunctionContext, event: CloudEvent<FuncInput>)
     ctx.log(`s3-roundtrip: PUT ${OTHER}/x.txt denied=${denied} (status=${code}, name=${e?.name})`);
   }
 
-  return { put, get, list, denied };
+  // (e) PutObject + GetObject into `shared` — a prefix this fn NEITHER owns NOR binds. This is the SAME
+  //     unowned class as `other` (step d, denied), but here a RolesAssignment grants Blob Data Writer @
+  //     lakehouse/shared (ADR-0136), so the write passes the REAL single-writer forbid via the `writers`
+  //     set. granted=true proves the role-assigned-writer path on real containerd (the prod mirror of
+  //     funcdctl dev's auto-provisioned grant), distinct from the owner path (step a).
+  let granted = false;
+  try {
+    const gkey = `${SHARED}/granted-${inv}.txt`;
+    await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: gkey, Body: want }));
+    const g = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: gkey }));
+    granted = (await streamToString(g.Body)) === want;
+    ctx.log(`s3-roundtrip: PUT+GET ${gkey} via RolesAssignment grant → granted=${granted}`);
+  } catch (err) {
+    const e = err as { $metadata?: { httpStatusCode?: number }; name?: string };
+    ctx.log(`s3-roundtrip: ${SHARED} write via grant FAILED (status=${e?.$metadata?.httpStatusCode}, name=${e?.name})`);
+  }
+
+  return { put, get, list, denied, granted };
 }

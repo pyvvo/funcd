@@ -23,6 +23,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.9.2
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/nftables v0.3.0
 	github.com/miekg/dns v1.1.72

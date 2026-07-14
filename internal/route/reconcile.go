@@ -21,17 +21,24 @@ const op = "route.Reconcile"
 
 const condReady = v1.ConditionType("Ready")
 
+// routeEntrySource is this reconciler's edge-aggregator source key (ADR-0138): the user-Route set is
+// one partition of the shared edge table, alongside the CatalogService reconciler's catalog partition.
+const routeEntrySource = "routes"
+
 // Deps are the reconciler's dependencies.
 type Deps struct {
-	Store  store.Store
-	Router router.Router
+	Store store.Store
+	// Routes contributes the user-Route entry set (source "routes") to the shared edge aggregator
+	// (ADR-0138) — replacing a direct router.Program so user Routes coexist with the CatalogService's
+	// node-private catalog route without clobbering the replace-all edge table.
+	Routes router.EntrySetter
 	Logger *slog.Logger
 }
 
 // Reconciler drives Route → programmed edge router.
 type Reconciler struct {
 	store  store.Store
-	rtr    router.Router
+	routes router.EntrySetter
 	logger *slog.Logger
 }
 
@@ -40,14 +47,14 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if d.Store == nil {
 		return nil, fault.Invalidf("route.NewReconciler", "store is required")
 	}
-	if d.Router == nil {
-		return nil, fault.Invalidf("route.NewReconciler", "router is required")
+	if d.Routes == nil {
+		return nil, fault.Invalidf("route.NewReconciler", "routes (edge aggregator) is required")
 	}
 	l := d.Logger
 	if l == nil {
 		l = slog.Default()
 	}
-	return &Reconciler{store: d.Store, rtr: d.Router, logger: l.With("component", "route")}, nil
+	return &Reconciler{store: d.Store, routes: d.Routes, logger: l.With("component", "route")}, nil
 }
 
 type routeKey struct {
@@ -68,7 +75,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if err != nil {
 		return controller.Result{}, err
 	}
-	if err := r.rtr.Program(ctx, entries); err != nil {
+	if err := r.routes.Set(ctx, routeEntrySource, entries); err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "program edge router")
 	}
 	obj, err := r.store.Get(ctx, v1.KindRoute.GVK(), req.Namespace, req.Name)

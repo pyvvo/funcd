@@ -31,6 +31,7 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/blob"
 	"github.com/green-0-rabbit/funcd/internal/blob/s3gateway"
 	"github.com/green-0-rabbit/funcd/internal/bus"
+	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/controlplane"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
@@ -66,7 +67,9 @@ import (
 	"github.com/green-0-rabbit/funcd/internal/services"
 	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
 	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
+	identitysvc "github.com/green-0-rabbit/funcd/internal/services/identity"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
+	rolessvc "github.com/green-0-rabbit/funcd/internal/services/roles"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
 	"github.com/green-0-rabbit/funcd/internal/workflow"
@@ -193,11 +196,10 @@ type config struct {
 	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
 	s3gwDataDir        string // where the master.key is persisted when no master file is set
 
-	// s3DevRelaxedWrites (funcdctl dev only) drops the S3 single-writer forbid so any authenticated
-	// principal may write any prefix — a dev-fidelity convenience for seeding a workflow's input (e.g.
-	// `aws s3 cp` into a no-owner `landing`) and for tolerating dev's binding-inferred prefix owners
-	// (which cannot tell producer from consumer). Reads stay binding-gated. NEVER set in production.
-	s3DevRelaxedWrites bool
+	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
+	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
+	// netns can reach the proxy. Empty ⇒ 127.0.0.1 (the process-runtime/dev default; loopback is shared).
+	catalogProxyHost string
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
 	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
@@ -295,6 +297,7 @@ type Platform struct {
 	traceSink            *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
 	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
+	catalogProxy         *cataloggw.Manager        // per-CatalogService node-private catalog PEP proxies (ADR-0137); Shutdown-closed
 	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
@@ -429,12 +432,14 @@ func (p *Platform) buildControlPlane() error {
 	// principal sources (Function-first, CatalogService-fallback) registered here at the composition
 	// root. The schema vocabulary, the built-in PolicySet, and this composite EntityProvider are all
 	// assembled from the registered set — a new capability (egress next) registers with no shared edit.
-	s3Cap := cedarauth.S3Capability()
-	if c.s3DevRelaxedWrites {
-		s3Cap = cedarauth.S3CapabilityDevRelaxedWrites() // funcdctl dev: writes not owner-gated (seeding + inferred owners)
-	}
+	// ADR-0136: a store-backed WriterLister feeds writer-role RolesAssignment grants into the s3/kv
+	// single-writer `writers` set (so an external Identity can be granted write).
+	writerLister := rolessvc.NewLister(c.store)
+	s3Cap := cedarauth.S3CapabilityWithWriters(writerLister)
 	cedarRegistry, err := cedarauth.NewRegistry(
-		[]cedarauth.Capability{cedarauth.KVCapability(), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability()},
+		// ADR-0137 (F102): CatalogCapability makes the live PDP understand catalog::query; the per-CatalogService
+		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/catalog/reconcile.go.
+		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.CatalogCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.CatalogServicePrincipalSource()},
 	)
 	if err != nil {
@@ -511,12 +516,18 @@ func (p *Platform) buildControlPlane() error {
 	// cedar PDP as the PEP. When enabled, load/generate the node master secret, build the server, and
 	// expose the per-function keypair deriver to the reconciler for worker-env injection. Disabled ⇒
 	// nothing is built (no listener, no IAM, no injection) — zero-config unchanged.
+	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
+	// SigV4 keypairs from AND the catalog PEP proxy derives/verifies per-function catalog tokens with
+	// (ADR-0137). Loaded ONCE here — before both the s3gw and the catalog wiring — so they share one
+	// master (LoadOrCreateMaster is deterministic per file/dir, but loading twice risks generating two
+	// different keys on a first run). Never logged.
+	master, merr := s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir)
+	if merr != nil {
+		return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
+	}
+
 	var s3Injection function.S3GatewayInjection
 	if c.s3gwEnabled {
-		master, merr := s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir)
-		if merr != nil {
-			return fault.Wrapf(merr, fault.KindOf(merr), op, "load s3gateway master secret")
-		}
 		bucketFor := s3BucketFor(c.blob, c.store)
 		srv, gerr := s3gateway.New(s3gateway.Deps{
 			BucketFor:      bucketFor,
@@ -524,7 +535,10 @@ func (p *Platform) buildControlPlane() error {
 			Master:         master,
 			Listen:         c.s3gwListenAddr,
 			MaxUploadBytes: c.s3gwMaxUploadBytes,
-			Logger:         p.logger,
+			// ADR-0135: resolve external Identity-issued keys to their stored secret (populates the
+			// previously-nil ExternalKeys seam), so a managed Identity authenticates over SigV4.
+			External: identitysvc.NewExternalKeys(c.store),
+			Logger:   p.logger,
 		})
 		if gerr != nil {
 			return fault.Wrapf(gerr, fault.KindOf(gerr), op, "build s3gateway")
@@ -540,6 +554,24 @@ func (p *Platform) buildControlPlane() error {
 			},
 		}
 	}
+
+	// Catalog PEP proxy manager (ADR-0137): the node-private per-CatalogService proxies that bring
+	// internal function→catalog queries under the same per-caller, per-query Cedar PEP as blob/kv/S3.
+	// It resolves a presented catalog token (a per-function MAC bearer or a minted per-Identity token)
+	// to its principal via catalogKeys, PEPs catalog::query on the endpoint's CatalogService, and swaps
+	// the caller token for the shared engine token only after an allow. The catalog reconciler Ensures a
+	// proxy per Ready catalog (publishing its url as Status.Endpoint) and Removes it on teardown.
+	// bindHost/publishHost: a worker under containerd is in its OWN netns and cannot reach the daemon's
+	// 127.0.0.1, so when c.catalogProxyHost is set (the CNI bridge gateway IP) the proxy binds 0.0.0.0
+	// (netns-reachable) and publishes that host; empty ⇒ 127.0.0.1 both (the process-runtime/dev default).
+	// This mirrors the s3gateway ListenAddr/Endpoint split (ADR-0085/0137).
+	catBindHost, catPublishHost := "127.0.0.1", "127.0.0.1"
+	if c.catalogProxyHost != "" {
+		catBindHost, catPublishHost = "0.0.0.0", c.catalogProxyHost
+	}
+	catalogKeys := cataloggw.NewCatalogKeys(master, c.store)
+	catalogMgr := cataloggw.NewManager(catBindHost, catPublishHost, catalogKeys, cedarPDP, p.logger)
+	p.catalogProxy = catalogMgr
 
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
@@ -559,6 +591,7 @@ func (p *Platform) buildControlPlane() error {
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            s3Injection,
+		CatalogMaster:        master, // ADR-0137: per-function catalog token derivation (same master as S3)
 		CatalogExtensionDir:  c.catalogExtensionDir,
 		Secrets:              secretResolver,
 	})
@@ -613,6 +646,12 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
 	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
+	// Edge-route aggregator (ADR-0138): the SINGLE sole-writer of p.edgeRouter's replace-all table. The
+	// Route reconciler (user Routes) and the CatalogService reconciler (its node-private catalog::query
+	// PEP proxy entry) each Set only their own source partition; the aggregator unions all sources into
+	// one Program call — so an exposed catalog coexists with user Routes instead of clobbering them. The
+	// data-plane still reads p.edgeRouter directly (Resolve); only writes go through the aggregator.
+	edgeAgg := router.NewAggregator(p.edgeRouter, p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
@@ -645,7 +684,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0110 (F79): the Route reconciler validates backends + multi-tenancy rules and programs the
 	// edge router (replace-all) the data-plane front door consults. p.edgeRouter is created up front so
 	// both the reconciler and the data-plane handler share the one live table.
-	routeReconciler, err := route.NewReconciler(route.Deps{Store: c.store, Router: p.edgeRouter, Logger: p.logger})
+	routeReconciler, err := route.NewReconciler(route.Deps{Store: c.store, Routes: edgeAgg, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build route reconciler")
 	}
@@ -681,6 +720,8 @@ func (p *Platform) buildControlPlane() error {
 		S3Endpoint: c.s3gwEndpoint,
 		ImageFor:   c.imageFor,
 		Logger:     p.logger,
+		Proxy:      catalogMgr, // ADR-0137: Ensure a node-private catalog PEP proxy per Ready catalog
+		Routes:     edgeAgg,    // ADR-0138: program the opt-in external edge entry to the proxy
 	}
 	// The engine's S3 keypair is derived over the PROVIDER identity (ADR-0085), the same deriver the
 	// Function reconciler uses — present only when the S3 gateway is enabled.
@@ -695,6 +736,14 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
 	}
 	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
+
+	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and
+	// registers it (via storeExternalKeys, wired into s3gateway.Deps.External above).
+	identityReconciler, err := identitysvc.NewReconciler(identitysvc.ReconcilerDeps{Store: c.store, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build Identity reconciler")
+	}
+	ctrl.Register(v1.KindIdentity.GVK(), identityReconciler)
 
 	// ADR-0101/0103: one shared funclog trace sink — the F51 per-invocation step spans AND the
 	// engine's per-run root span (ADR-0103) both persist here, so a run's spans form one coherent
@@ -1115,6 +1164,11 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()
 		}
+		// Stop the per-CatalogService catalog PEP proxies (ADR-0137) — node-private http.Servers that
+		// front the engines; closed before the runtime tears the engines down.
+		if p.catalogProxy != nil {
+			p.catalogProxy.Shutdown()
+		}
 		// Stop the S3 gateway (ADR-0080/0085) before blob.Close — it serves from the blob substrate.
 		var s3gwErr error
 		if p.s3gw != nil {
@@ -1353,9 +1407,17 @@ func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error)
 		out = append(out, syn...)
 	}
 
-	// The store-wide resourceVersion is monotonic across kinds; the freshest of the three lists keys the
-	// cache so a Policy/EgressPolicy/Function write recompiles (ADR-0117 M1 cache-revision fix).
-	rev := maxRevision(polRes.ResourceVersion, epRes.ResourceVersion, fnRes.ResourceVersion)
+	// ADR-0136 (F101): compile each RolesAssignment's read/query/invoke grants into synthetic Cedar
+	// permits (write grants gate the single-writer forbid via the WriterLister, not a permit here).
+	raPols, raRV, raErr := rolessvc.CompilePolicies(ctx, p.s)
+	if raErr != nil {
+		return nil, "", fault.Wrapf(raErr, fault.KindOf(raErr), op, "compile roles assignments")
+	}
+	out = append(out, raPols...)
+
+	// The store-wide resourceVersion is monotonic across kinds; the freshest of the lists keys the cache
+	// so a Policy/EgressPolicy/Function/RolesAssignment write recompiles (ADR-0117 M1 cache-revision fix).
+	rev := maxRevision(polRes.ResourceVersion, epRes.ResourceVersion, fnRes.ResourceVersion, raRV)
 	return out, rev, nil
 }
 

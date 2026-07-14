@@ -41,6 +41,15 @@ const (
 	KindWorkflow       Kind = "Workflow"
 	KindWorkflowRun    Kind = "WorkflowRun"
 	KindSensor         Kind = "Sensor"
+	// KindIdentity is a user-assigned managed identity (ADR-0135, F100): a stored, status-bearing CRUD
+	// resource whose reconciler issues a credential. It resolves on the wire to an S3Identity Cedar
+	// principal (KindS3Identity below is the auth-only wire principal; Identity is the CRUD resource).
+	KindIdentity Kind = "Identity"
+	// KindRole (ADR-0136, F101) is a named data-plane permission set (a stored value-type, like Grant).
+	KindRole Kind = "Role"
+	// KindRolesAssignment (ADR-0136, F101) grants many (principal, role, scope) entries in one stored
+	// value-type; the PDP compiles it to Cedar permits + the single-writer `writers` set.
+	KindRolesAssignment Kind = "RolesAssignment"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -63,7 +72,8 @@ func (k Kind) Validate() error {
 		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
-		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor:
+		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
+		KindIdentity, KindRole, KindRolesAssignment:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -346,6 +356,18 @@ func NewObject(k Kind) (Object, bool) {
 		wr := &WorkflowRun{}
 		wr.TypeMeta = typeMetaFor(k)
 		return wr, true
+	case KindIdentity:
+		id := &Identity{}
+		id.TypeMeta = typeMetaFor(k)
+		return id, true
+	case KindRole:
+		ro := &Role{}
+		ro.TypeMeta = typeMetaFor(k)
+		return ro, true
+	case KindRolesAssignment:
+		ra := &RolesAssignment{}
+		ra.TypeMeta = typeMetaFor(k)
+		return ra, true
 	default:
 		return nil, false
 	}
@@ -376,6 +398,9 @@ func AllKinds() []Kind {
 		KindWorkflow,
 		KindWorkflowRun,
 		KindSensor,
+		KindIdentity,
+		KindRole,
+		KindRolesAssignment,
 	}
 }
 

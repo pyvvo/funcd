@@ -23,28 +23,31 @@ type kindDescriptor struct {
 //
 //nolint:gochecknoglobals // lookup table, effectively constant
 var kindDescriptors = map[v1.Kind]kindDescriptor{
-	v1.KindNamespace:      {"namespaces", false},
-	v1.KindResourceGroup:  {"resourcegroups", true},
-	v1.KindFunction:       {"functions", true},
-	v1.KindRevision:       {"revisions", true},
-	v1.KindRoute:          {"routes", true},
-	v1.KindService:        {"services", true},
-	v1.KindEventSource:    {"eventsources", true},
-	v1.KindConfigMap:      {"configmaps", true},
-	v1.KindSecret:         {"secrets", true},
-	v1.KindGrant:          {"grants", true},
-	v1.KindEgressPolicy:   {"egresspolicies", true},
-	v1.KindInvocation:     {"invocations", true},
-	v1.KindRuntimeClass:   {"runtimeclasses", false},
-	v1.KindWorkerNode:     {"workers", false},
-	v1.KindGateway:        {"gateways", false},
-	v1.KindKVStore:        {"kvstores", true},
-	v1.KindBucket:         {"buckets", true},
-	v1.KindCatalogService: {"catalogservices", true},
-	v1.KindPolicy:         {"policies", true},
-	v1.KindWorkflow:       {"workflows", true},
-	v1.KindWorkflowRun:    {"workflowruns", true},
-	v1.KindSensor:         {"sensors", true},
+	v1.KindNamespace:       {"namespaces", false},
+	v1.KindResourceGroup:   {"resourcegroups", true},
+	v1.KindFunction:        {"functions", true},
+	v1.KindRevision:        {"revisions", true},
+	v1.KindRoute:           {"routes", true},
+	v1.KindService:         {"services", true},
+	v1.KindEventSource:     {"eventsources", true},
+	v1.KindConfigMap:       {"configmaps", true},
+	v1.KindSecret:          {"secrets", true},
+	v1.KindGrant:           {"grants", true},
+	v1.KindEgressPolicy:    {"egresspolicies", true},
+	v1.KindInvocation:      {"invocations", true},
+	v1.KindRuntimeClass:    {"runtimeclasses", false},
+	v1.KindWorkerNode:      {"workers", false},
+	v1.KindGateway:         {"gateways", false},
+	v1.KindKVStore:         {"kvstores", true},
+	v1.KindBucket:          {"buckets", true},
+	v1.KindCatalogService:  {"catalogservices", true},
+	v1.KindPolicy:          {"policies", true},
+	v1.KindWorkflow:        {"workflows", true},
+	v1.KindWorkflowRun:     {"workflowruns", true},
+	v1.KindSensor:          {"sensors", true},
+	v1.KindIdentity:        {"identities", true},       // ADR-0135, F100
+	v1.KindRole:            {"roles", true},            // ADR-0136, F101
+	v1.KindRolesAssignment: {"rolesassignments", true}, // ADR-0136, F101
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

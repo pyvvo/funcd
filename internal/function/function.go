@@ -121,6 +121,13 @@ type Deps struct {
 	// (ListenAddr). A function without spec.blob, or a disabled gateway, gets nothing.
 	S3Gateway S3GatewayInjection
 
+	// CatalogMaster is the node master secret the per-function catalog token is derived from (ADR-0137):
+	// resolveCatalogEnv injects FUNCD_CATALOG_<ALIAS>_TOKEN = DeriveCatalogToken(master, ns, fn), a
+	// MAC-authenticated bearer the catalog PEP proxy verifies (was the shared QUACK_TOKEN). It is the
+	// SAME master the S3 gateway derives keypairs from (loaded once at the compose root). nil/empty ⇒ a
+	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
+	CatalogMaster []byte
+
 	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
 	// catalog-consumer function's worker env (a function declaring spec.catalogs) so its handler's
 	// `LOAD quack`/`ducklake` resolves the curated DuckDB extensions from this dir. It is the dev
@@ -197,6 +204,10 @@ type Reconciler struct {
 	// declares spec.blob. The master secret is never logged.
 	s3Gateway S3GatewayInjection
 
+	// catalogMaster is the node master the per-function catalog token is derived from (ADR-0137);
+	// nil/empty ⇒ catalog injection derives a token the proxy cannot verify. Never logged.
+	catalogMaster []byte
+
 	// catalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
 	// catalog-consumer function's worker env (dev analogue of the prod bundle's duckdb-ext, ADR-0089).
 	catalogExtensionDir string
@@ -263,6 +274,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,
 		s3Gateway:           d.S3Gateway,
+		catalogMaster:       d.CatalogMaster,
 		catalogExtensionDir: d.CatalogExtensionDir,
 		assigner:            pooling.NewAssigner(),
 		poolShimCommand:     d.PoolShimCommand,

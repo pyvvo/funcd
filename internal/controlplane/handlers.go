@@ -135,6 +135,12 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Sensor:
 		o.TypeMeta = tm
+	case *v1.Identity:
+		o.TypeMeta = tm
+	case *v1.Role:
+		o.TypeMeta = tm
+	case *v1.RolesAssignment:
+		o.TypeMeta = tm
 	}
 }
 
@@ -730,6 +736,130 @@ func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.Namespa
 
 func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindCatalogService, ns, name)
+}
+
+// --- Identity (namespaced) — ADR-0135, FEAT-0008/F100 ---
+
+func (h *storeHandlers) GetIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error) {
+	o, err := h.getObj(ctx, v1.KindIdentity, ns, name)
+	if err != nil {
+		return v1.Identity{}, err
+	}
+	return *o.(*v1.Identity), nil
+}
+
+func (h *storeHandlers) CreateIdentity(ctx context.Context, id v1.Identity) (v1.Identity, error) {
+	o, err := h.createObj(ctx, v1.KindIdentity, &id)
+	if err != nil {
+		return v1.Identity{}, err
+	}
+	return *o.(*v1.Identity), nil
+}
+
+func (h *storeHandlers) ListIdentities(ctx context.Context, ns v1.NamespaceName) ([]v1.Identity, error) {
+	objs, err := h.listObj(ctx, v1.KindIdentity, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Identity, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Identity)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, id v1.Identity) (v1.Identity, error) {
+	o, err := h.replaceObj(ctx, v1.KindIdentity, ns, name, &id)
+	if err != nil {
+		return v1.Identity{}, err
+	}
+	return *o.(*v1.Identity), nil
+}
+
+func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindIdentity, ns, name)
+}
+
+// --- Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 ---
+
+func (h *storeHandlers) GetRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error) {
+	o, err := h.getObj(ctx, v1.KindRole, ns, name)
+	if err != nil {
+		return v1.Role{}, err
+	}
+	return *o.(*v1.Role), nil
+}
+
+func (h *storeHandlers) CreateRole(ctx context.Context, ro v1.Role) (v1.Role, error) {
+	o, err := h.createObj(ctx, v1.KindRole, &ro)
+	if err != nil {
+		return v1.Role{}, err
+	}
+	return *o.(*v1.Role), nil
+}
+
+func (h *storeHandlers) ListRoles(ctx context.Context, ns v1.NamespaceName) ([]v1.Role, error) {
+	objs, err := h.listObj(ctx, v1.KindRole, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.Role, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.Role)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ro v1.Role) (v1.Role, error) {
+	o, err := h.replaceObj(ctx, v1.KindRole, ns, name, &ro)
+	if err != nil {
+		return v1.Role{}, err
+	}
+	return *o.(*v1.Role), nil
+}
+
+func (h *storeHandlers) DeleteRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindRole, ns, name)
+}
+
+func (h *storeHandlers) GetRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.RolesAssignment, error) {
+	o, err := h.getObj(ctx, v1.KindRolesAssignment, ns, name)
+	if err != nil {
+		return v1.RolesAssignment{}, err
+	}
+	return *o.(*v1.RolesAssignment), nil
+}
+
+func (h *storeHandlers) CreateRolesAssignment(ctx context.Context, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
+	o, err := h.createObj(ctx, v1.KindRolesAssignment, &ra)
+	if err != nil {
+		return v1.RolesAssignment{}, err
+	}
+	return *o.(*v1.RolesAssignment), nil
+}
+
+func (h *storeHandlers) ListRolesAssignments(ctx context.Context, ns v1.NamespaceName) ([]v1.RolesAssignment, error) {
+	objs, err := h.listObj(ctx, v1.KindRolesAssignment, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.RolesAssignment, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.RolesAssignment)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
+	o, err := h.replaceObj(ctx, v1.KindRolesAssignment, ns, name, &ra)
+	if err != nil {
+		return v1.RolesAssignment{}, err
+	}
+	return *o.(*v1.RolesAssignment), nil
+}
+
+func (h *storeHandlers) DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindRolesAssignment, ns, name)
 }
 
 // --- Policy (namespaced) — ADR-0074 ---

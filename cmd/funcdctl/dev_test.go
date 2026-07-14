@@ -19,6 +19,7 @@ import (
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/blob/s3gateway"
 	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	"github.com/green-0-rabbit/funcd/pkg/sdk"
 )
 
 // requireNode skips a test when node is not on PATH — the hermetic dev lane runs the REAL Node shim
@@ -201,6 +202,49 @@ func TestScenarioDevAutoProvisionsBackends(t *testing.T) {
 	bk, err := inst.client.Get(context.Background(), v1.KindBucket, "default", "releves")
 	require.NoError(t, err, "the blob binding auto-provisioned a Bucket")
 	require.Equal(t, "bronze", bk.(*v1.Bucket).Spec.Prefixes[0].Name)
+}
+
+// scenario: dev-grants-blob-writer (ADR-0128 as amended 2026-07-14) — instead of dropping the S3
+// single-writer forbid, `funcdctl dev` auto-provisions a `Blob Data Writer` RolesAssignment (ADR-0136)
+// per function, so the dev principal is a real writer and its seeds/producer-writes pass the REAL forbid.
+// Hermetic: asserts synthesizeResources emits the admission-valid grant (no node/boot needed).
+func TestScenarioDevGrantsBlobWriterRole(t *testing.T) {
+	pfs := []plannedFunc{{
+		name: "ingest",
+		m: &sdk.Manifest{
+			Runtime: "python311",
+			Handler: "handle",
+			Bindings: sdk.Bindings{
+				Blob: []v1.FunctionBlob{{Alias: "landing", Bucket: "releves", Prefix: "landing"}},
+			},
+		},
+	}}
+	objs, err := synthesizeResources("op", pfs)
+	require.NoError(t, err)
+
+	var role *v1.Role
+	var ra *v1.RolesAssignment
+	for _, o := range objs {
+		switch v := o.(type) {
+		case *v1.Role:
+			role = v
+		case *v1.RolesAssignment:
+			ra = v
+		}
+	}
+	// A WRITE-ONLY custom Role — not the built-in Blob Data Writer (read+write) — so dev reads stay
+	// binding-gated (the "forgot to bind → read Forbidden" fidelity ADR-0125 keeps).
+	require.NotNil(t, role, "dev auto-provisions the write-only dev-blob-writer Role")
+	require.NoError(t, role.Validate())
+	require.Equal(t, []string{"s3::write"}, role.Spec.Actions, "write only — reads NOT widened")
+
+	require.NotNil(t, ra, "dev auto-provisions a RolesAssignment binding the function to that Role (non-bypass path)")
+	require.NoError(t, ra.Validate(), "the provisioned grant is admission-valid")
+	require.Equal(t, v1.ObjectName("dev-blob-writer-ingest"), ra.Name)
+	require.Equal(t, &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: "ingest"}, ra.Spec.Principal)
+	require.Len(t, ra.Spec.Assignments, 1)
+	require.Equal(t, v1.RoleRef{Kind: v1.RoleRefKindRole, Name: "dev-blob-writer"}, ra.Spec.Assignments[0].RoleRef)
+	require.Equal(t, &v1.ScopeRef{Kind: v1.ScopeKindNamespace}, ra.Spec.Assignments[0].Scope)
 }
 
 // scenario: dev-egress-not-isolated — `funcdctl dev` does not reproduce egress isolation (process

@@ -46,6 +46,14 @@ func principalFor(acct auth.Account, external ExternalKeys) (principal, error) {
 	}
 	if external != nil {
 		if _, ns, ok := external.Lookup(acct.Access); ok {
+			// ADR-0135: a managed-Identity-issued key resolves to the Identity::"<ns>/<name>" principal
+			// (RolesAssignment grants it); any other external key stays the legacy S3Identity principal.
+			if idNS, name, isID := DecodeIdentityAccess(acct.Access); isID {
+				return principal{
+					ref:       authz.EntityRef{Type: v1.KindIdentity, Namespace: v1.NamespaceName(idNS), Name: v1.ObjectName(name)},
+					namespace: v1.NamespaceName(idNS),
+				}, nil
+			}
 			return principal{
 				ref:       authz.EntityRef{Type: v1.KindS3Identity, Namespace: v1.NamespaceName(ns), Name: v1.ObjectName(acct.Access)},
 				namespace: v1.NamespaceName(ns),

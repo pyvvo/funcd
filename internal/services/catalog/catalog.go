@@ -16,6 +16,8 @@ import (
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
+	"github.com/green-0-rabbit/funcd/internal/edge/router"
 	"github.com/green-0-rabbit/funcd/internal/provider"
 	"github.com/green-0-rabbit/funcd/internal/store"
 )
@@ -66,6 +68,17 @@ type ReconcilerDeps struct {
 	// ImageFor maps a curated runtime name → the engine image ref (ADR-0054). nil ⇒ a deterministic
 	// fallback "funcd/runtime-<runtime>" is used.
 	ImageFor func(runtime string) string
+	// Proxy runs the per-CatalogService node-private catalog PEP proxy (ADR-0137): on the Ready
+	// branch the reconciler Ensures a proxy fronting the engine and publishes ITS url as
+	// Status.Endpoint (internal functions inject the proxy, not the engine), and Removes it on
+	// teardown. nil ⇒ no internal PEP proxy (the engine address is published directly, the
+	// pre-ADR-0137 posture) — kept nil-safe for the in-memory/unit path.
+	Proxy *cataloggw.Manager
+	// Routes contributes this catalog's OPT-IN external ingress entry (source "catalog/<ns>/<name>")
+	// to the shared edge-router aggregator (ADR-0138). When spec.ingress is set and the catalog is
+	// Ready, the reconciler programs an edge entry whose Upstream is the PEP PROXY (never the engine);
+	// cleared on not-Ready / delete. nil ⇒ no external exposure (the in-memory/dev path).
+	Routes router.EntrySetter
 }
 
 // Reconciler is the controller.Reconciler for KindCatalogService (ADR-0086/0087): present ⇒
@@ -80,6 +93,8 @@ type Reconciler struct {
 	developerFor func(ns v1.NamespaceName) auth.Identity
 	s3Endpoint   string
 	imageFor     func(string) string
+	proxy        *cataloggw.Manager
+	routes       router.EntrySetter
 }
 
 // NewReconciler builds the CatalogService reconciler. Store + Provider are required.
@@ -112,7 +127,16 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		developerFor: developerFor,
 		s3Endpoint:   d.S3Endpoint,
 		imageFor:     imageFor,
+		proxy:        d.Proxy,
+		routes:       d.Routes,
 	}, nil
+}
+
+// catalogRouteSource is the catalog's edge-aggregator source key (ADR-0138): its external ingress
+// entry is one partition of the shared edge table, keyed "catalog/<ns>/<name>" — disjoint from the
+// Route reconciler's "routes" partition.
+func catalogRouteSource(ns v1.NamespaceName, name v1.ObjectName) string {
+	return "catalog/" + string(ns) + "/" + string(name)
 }
 
 // engineName is the engine identity published in status.Function (kept from ADR-0086, repointed at

@@ -2,12 +2,14 @@ package catalog_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
+	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
 	"github.com/green-0-rabbit/funcd/internal/controller"
 	"github.com/green-0-rabbit/funcd/internal/provider"
 	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
@@ -231,6 +233,35 @@ func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 	cond, ok := cs.Status.Conditions.Get("Ready")
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionTrue, cond.Status)
+}
+
+// scenario (ADR-0137 internal enforcement) — when a Manager is wired and the provider reports Ready,
+// the reconciler Ensures a node-private catalog PEP proxy fronting the engine and publishes the PROXY
+// address (bare 127.0.0.1:<port> — the function wraps it in quack://) as Status.Endpoint — internal
+// functions inject the proxy, not the engine. A delete then Removes the proxy.
+func TestReconcile_ready_publishes_proxy_endpoint(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+
+	reconcileOnce(t, r, "lake")
+
+	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	cs := csObj.(*v1.CatalogService)
+	require.Equal(t, v1.PhaseReady, cs.Status.Phase)
+	require.True(t, strings.HasPrefix(cs.Status.Endpoint, "127.0.0.1:"),
+		"Status.Endpoint is the node-private catalog PEP proxy address (bare host:port), got %q", cs.Status.Endpoint)
+
+	// delete → the proxy is Removed (idempotent; no assertion needed beyond no panic/error).
+	require.NoError(t, st.Delete(ctx, v1.KindCatalogService.GVK(), "default", "lake", ""))
+	reconcileOnce(t, r, "lake")
 }
 
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine

@@ -23,6 +23,11 @@ s3gateway:
   enabled: true
   listenAddr: 0.0.0.0:9000
   endpoint: http://10.63.0.1:9000
+catalog:
+  # proxyHost — the per-CatalogService catalog::query PEP proxy publishes on this host (ADR-0137), the
+  # query-path analog of s3gateway.endpoint. The consumer function runs in its own CNI netns and cannot
+  # reach the daemon's 127.0.0.1, so publish on the CNI bridge gateway IP; the proxy binds 0.0.0.0.
+  proxyHost: 10.63.0.1
 log:
   format: text
   level: info

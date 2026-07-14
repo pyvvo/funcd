@@ -49,8 +49,10 @@ func TestIAMGetUserAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "s3cr3t", eacct.Secret)
 
+	// An unknown/malformed key must return the versity sentinel auth.ErrNoSuchUser so the SigV4
+	// middleware maps it to a clean 403 InvalidAccessKeyId (not a 500 InternalError the SDK retries).
 	_, err = im.GetUserAccount("NOPE")
-	require.Error(t, err, "an unknown access key is not found")
+	require.ErrorIs(t, err, auth.ErrNoSuchUser, "an unknown access key fails closed with the 403-mapped sentinel")
 }
 
 // TestIAMMutatorsNotSupported (ADR-0085) — the three mutators reject (derived accounts

@@ -557,11 +557,10 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		// the Workflow reaches Ready (each step still enforces its OWN contract at the shim, ADR-0123).
 		// Harmless for a single-function run (no Workflow is applied).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
-		// Dev seeding + provisioning convenience: blob writes are not owner-gated locally, so a developer
-		// can seed a workflow's input with `aws s3 cp` into a no-owner `landing`, and dev's binding-inferred
-		// prefix owners (which can't tell producer from consumer) never wrongly block a producer's own write.
-		// Reads stay binding-gated; the prod single-writer model is unchanged (dev-only, never the release client).
-		funcd.WithDevS3RelaxedWrites(),
+		// Dev blob writes run the REAL prod single-writer authz (ADR-0128 as amended 2026-07-14): rather than
+		// dropping the forbid, synthesizeResources auto-provisions a Blob Data Writer RolesAssignment (ADR-0136)
+		// per dev function, so the dev principal is a legit writer. Seeding a no-owner `landing` and a producer
+		// writing a binding-inferred prefix both pass the forbid; an unassigned principal is still denied.
 	}
 
 	// Catalog dev (Decision 5): if any function binds a catalog, wire the process-mode DuckDB+Quack
@@ -1173,8 +1172,42 @@ func synthesizeResources(op string, pfs []plannedFunc) ([]v1.Object, error) {
 			objs = append(objs, s)
 		}
 	}
+
+	// Dev blob-write grant (ADR-0128 as amended 2026-07-14): instead of dropping the S3 single-writer forbid,
+	// grant each dev function WRITE on every prefix in the dev namespace via ADR-0136, so it is a real member
+	// of each prefix's `writers` set. This lets the developer seed a no-owner `landing` (as the first
+	// function's derived keypair) and lets a producer write a binding-inferred prefix — both through the REAL
+	// prod forbid. An unassigned principal is still denied. A WRITE-ONLY custom Role (not the built-in
+	// `Blob Data Writer`, which also grants read) is used so reads stay strictly binding-gated in dev — the
+	// "forgot to bind → read Forbidden" fidelity ADR-0125 deliberately keeps.
+	if len(pfs) > 0 {
+		robj, _ := v1.NewObject(v1.KindRole)
+		role := robj.(*v1.Role)
+		setMeta(&role.ObjectMeta, devBlobWriterRole)
+		role.Spec.Actions = []string{"s3::write"} // data-plane action token (ADR-0136); write only
+		objs = append(objs, role)
+	}
+	for _, pf := range pfs {
+		obj, _ := v1.NewObject(v1.KindRolesAssignment)
+		ra := obj.(*v1.RolesAssignment)
+		setMeta(&ra.ObjectMeta, v1.ObjectName("dev-blob-writer-"+string(pf.name)))
+		ra.Spec = v1.RolesAssignmentSpec{
+			Principal: &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: pf.name},
+			Assignments: []v1.AssignmentEntry{
+				{
+					RoleRef: v1.RoleRef{Kind: v1.RoleRefKindRole, Name: string(devBlobWriterRole)},
+					Scope:   &v1.ScopeRef{Kind: v1.ScopeKindNamespace},
+				},
+			},
+		}
+		objs = append(objs, ra)
+	}
 	return objs, nil
 }
+
+// devBlobWriterRole is the name of the write-only Role `funcdctl dev` provisions to make each dev function
+// a member of every prefix's `writers` set (ADR-0128 as amended → ADR-0136), without widening reads.
+const devBlobWriterRole v1.ObjectName = "dev-blob-writer"
 
 // synthesizeFunction builds the Function object for one planned function (ADR-0125): run from source
 // (file:// imagePath), MinReplicas=1 so it serves immediately, with its data/config/secret bindings AND

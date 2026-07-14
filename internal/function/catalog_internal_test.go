@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
 )
 
 // seedCatalogService stores a CatalogService in the reconciler's memory store with the given
@@ -34,34 +35,50 @@ func catalogConsumerFn(alias, catalog string) *v1.Function {
 	return fn
 }
 
-// scenario: binding-injects-endpoint-and-token — a Ready CatalogService (status.endpoint set + a
-// Secret carrying QUACK_TOKEN) makes the worker env carry FUNCD_CATALOG_LAKE_URL AND _TOKEN, both
-// PRESENT and NON-EMPTY. This specifically guards the M1 regression: routing them through
-// mergeSecretEnv (whose FUNCD_ guard drops them) would leave one or both empty/absent.
+// scenario: binding-injects-endpoint-and-token — a Ready CatalogService (status.endpoint set, now the
+// node-private catalog PEP proxy URL, ADR-0137) makes the worker env carry FUNCD_CATALOG_LAKE_URL AND
+// _TOKEN, both PRESENT and NON-EMPTY. The _TOKEN is the per-function MAC bearer (ADR-0137), NOT the
+// shared QUACK_TOKEN: it round-trips via CatalogKeys.PrincipalFor to THIS Function principal. This also
+// guards the M1 regression: routing the FUNCD_-prefixed keys through mergeSecretEnv would drop them.
 func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	t.Parallel()
-	// The secret resolver returns the catalog's Secret Data — QUACK_TOKEN is selected out of it.
-	r := newShimReconciler(t, fakeResolver{env: map[string]string{"QUACK_TOKEN": "t0ken-abc", "OTHER": "ignored"}})
-	seedCatalogService(t, r, "lake", "lake-quack.default:8080")
+	master := []byte("catalog-inject-test-node-master")
+	// The secret resolver still carries QUACK_TOKEN, but catalog injection no longer reads it — the
+	// shared token stays with the proxy; the function gets a per-function derived token instead.
+	r := newShimReconciler(t, fakeResolver{env: map[string]string{"QUACK_TOKEN": "t0ken-abc"}})
+	r.catalogMaster = master
+	const proxyURL = "http://127.0.0.1:54321" // the node-private proxy URL the reconciler publishes
+	seedCatalogService(t, r, "lake", proxyURL)
 
-	env, requeue, err := r.resolveCatalogEnv(context.Background(), catalogConsumerFn("lake", "lake"))
+	fn := catalogConsumerFn("lake", "lake") // namespace "default", name "reader"
+	env, requeue, err := r.resolveCatalogEnv(context.Background(), fn)
 	require.NoError(t, err)
 	require.False(t, requeue, "a Ready catalog does not requeue")
 
 	// Present AND non-empty — the values survive the DIRECT write (not routed through mergeSecretEnv).
 	require.Contains(t, env, "FUNCD_CATALOG_LAKE_URL")
 	require.Contains(t, env, "FUNCD_CATALOG_LAKE_TOKEN")
-	require.Equal(t, "lake-quack.default:8080", env["FUNCD_CATALOG_LAKE_URL"], "URL is status.endpoint, verbatim")
-	require.NotEmpty(t, env["FUNCD_CATALOG_LAKE_URL"], "URL must survive non-empty")
-	require.Equal(t, "t0ken-abc", env["FUNCD_CATALOG_LAKE_TOKEN"], "token is the QUACK_TOKEN key, re-keyed")
-	require.NotEmpty(t, env["FUNCD_CATALOG_LAKE_TOKEN"], "token must survive non-empty")
-	require.NotContains(t, env, "OTHER", "only QUACK_TOKEN is selected — the map is NOT merged")
+	require.Equal(t, proxyURL, env["FUNCD_CATALOG_LAKE_URL"], "URL is status.endpoint (the proxy), verbatim")
+
+	// The injected token is the per-function MAC token — it resolves to THIS Function principal, and is
+	// NOT the shared QUACK_TOKEN (the proxy holds that and swaps it in only after an allow).
+	injected := env["FUNCD_CATALOG_LAKE_TOKEN"]
+	require.NotEmpty(t, injected, "token must survive non-empty")
+	require.NotEqual(t, "t0ken-abc", injected, "the shared QUACK_TOKEN is NOT handed to the function")
+	want, derr := cataloggw.DeriveCatalogToken(master, fn.Namespace, fn.Name)
+	require.NoError(t, derr)
+	require.Equal(t, want, injected, "the per-function token is derived over the node master")
+	ref, ok := cataloggw.NewCatalogKeys(master, r.store).PrincipalFor(injected)
+	require.True(t, ok, "the injected token resolves via the proxy's CatalogKeys")
+	require.Equal(t, v1.KindFunction, ref.Type)
+	require.Equal(t, fn.Namespace, ref.Namespace)
+	require.Equal(t, fn.Name, ref.Name)
 
 	// End-to-end through workerSpec: the DIRECT write means the FUNCD_-prefixed keys reach Env even
 	// though mergeSecretEnv would have dropped them.
-	spec := r.workerSpec(catalogConsumerFn("lake", "lake"), 0, "/art/app.mjs", nil, env)
-	require.Equal(t, "lake-quack.default:8080", spec.Env["FUNCD_CATALOG_LAKE_URL"], "the URL reaches the worker env DIRECTLY")
-	require.Equal(t, "t0ken-abc", spec.Env["FUNCD_CATALOG_LAKE_TOKEN"], "the token reaches the worker env DIRECTLY")
+	spec := r.workerSpec(fn, 0, "/art/app.mjs", nil, env)
+	require.Equal(t, proxyURL, spec.Env["FUNCD_CATALOG_LAKE_URL"], "the URL reaches the worker env DIRECTLY")
+	require.Equal(t, injected, spec.Env["FUNCD_CATALOG_LAKE_TOKEN"], "the token reaches the worker env DIRECTLY")
 }
 
 // scenario: requeue-until-catalog-ready — a bound catalog with no status.endpoint (still deploying)
@@ -77,17 +94,25 @@ func TestScenarioRequeueUntilCatalogReady(t *testing.T) {
 	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_URL", "no empty URL is injected while the catalog is not Ready")
 }
 
-// scenario: missing-QUACK_TOKEN — a Ready catalog whose Secret carries no QUACK_TOKEN requeues
-// fail-closed rather than injecting an empty token (ADR-0091 fail-closed on a missing token key).
-func TestScenarioMissingQuackTokenRequeues(t *testing.T) {
+// scenario: token-decoupled-from-catalog-secret (ADR-0137) — the per-function token no longer comes
+// from the catalog's Secret, so a Ready catalog whose Secret carries no QUACK_TOKEN STILL injects a
+// valid per-function token (the proxy holds the shared engine token; the function never sees it).
+// Readiness now gates on status.endpoint alone (covered by TestScenarioRequeueUntilCatalogReady).
+func TestScenarioTokenDecoupledFromCatalogSecret(t *testing.T) {
 	t.Parallel()
+	master := []byte("decoupled-token-master")
 	r := newShimReconciler(t, fakeResolver{env: map[string]string{"SOME_OTHER_KEY": "x"}}) // no QUACK_TOKEN
-	seedCatalogService(t, r, "lake", "lake-quack.default:8080")
+	r.catalogMaster = master
+	seedCatalogService(t, r, "lake", "http://127.0.0.1:54321")
 
-	env, requeue, err := r.resolveCatalogEnv(context.Background(), catalogConsumerFn("lake", "lake"))
+	fn := catalogConsumerFn("lake", "lake")
+	env, requeue, err := r.resolveCatalogEnv(context.Background(), fn)
 	require.NoError(t, err)
-	require.True(t, requeue, "a catalog Secret with no QUACK_TOKEN requeues fail-closed")
-	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_TOKEN", "no empty token is injected")
+	require.False(t, requeue, "a Ready catalog injects even when its Secret lacks QUACK_TOKEN (token is derived, not read)")
+	want2, derr2 := cataloggw.DeriveCatalogToken(master, fn.Namespace, fn.Name)
+	require.NoError(t, derr2)
+	require.Equal(t, want2, env["FUNCD_CATALOG_LAKE_TOKEN"],
+		"the per-function token is derived over the node master, independent of the catalog Secret")
 }
 
 // scenario: dev-catalog-extension-dir-to-consumer — when catalogExtensionDir is set (funcdctl dev),

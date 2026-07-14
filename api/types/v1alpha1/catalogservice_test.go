@@ -65,6 +65,40 @@ func TestCatalogServiceValidate(t *testing.T) {
 	}
 }
 
+// scenario: spec.ingress validate (ADR-0138) — opt-in external exposure. Structural Validate checks
+// only that the declared edge path is a non-empty rooted prefix; the route (to the PEP proxy) is
+// programmed by the reconciler once Ready.
+func TestCatalogServiceValidate_ingress(t *testing.T) {
+	goldCatalog := CatalogRef{Bucket: "lakehouse", Prefix: "gold"}
+	gold := FunctionBlob{Alias: "catalog", Bucket: "lakehouse", Prefix: "gold"}
+
+	// valid: a rooted pathPrefix (optionally with a host).
+	ok := catalogService("exposed", goldCatalog, gold)
+	ok.Spec.Ingress = &CatalogIngress{PathPrefix: "/catalog/lake", Host: "lake.example"}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid spec.ingress rejected: %v", err)
+	}
+
+	// valid: nil ingress (internal-only, the default) is fine.
+	if err := catalogService("internal", goldCatalog, gold).Validate(); err != nil {
+		t.Errorf("nil spec.ingress rejected: %v", err)
+	}
+
+	// invalid: an empty pathPrefix.
+	empty := catalogService("emptypath", goldCatalog, gold)
+	empty.Spec.Ingress = &CatalogIngress{PathPrefix: ""}
+	if err := empty.Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("empty spec.ingress.pathPrefix: want Invalid, got %v", err)
+	}
+
+	// invalid: a non-rooted pathPrefix (no leading slash).
+	unrooted := catalogService("unrooted", goldCatalog, gold)
+	unrooted.Spec.Ingress = &CatalogIngress{PathPrefix: "catalog/lake"}
+	if err := unrooted.Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("non-rooted spec.ingress.pathPrefix: want Invalid, got %v", err)
+	}
+}
+
 // scenario: spec.secrets/spec.config validate (ADR-0087) — each names a Secret/ConfigMap whose Data
 // is injected into the engine env (the ADR-0057 convention). Structural Validate checks only that
 // each is a valid DNS-1123 ObjectName; cross-resource existence + read authorization is the

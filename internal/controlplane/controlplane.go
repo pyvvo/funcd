@@ -146,6 +146,25 @@ type Handlers interface {
 	ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error)
 	DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// Identity (namespaced) — ADR-0135, FEAT-0008/F100
+	GetIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error)
+	CreateIdentity(ctx context.Context, id v1.Identity) (v1.Identity, error)
+	ListIdentities(ctx context.Context, ns v1.NamespaceName) ([]v1.Identity, error)
+	ReplaceIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, id v1.Identity) (v1.Identity, error)
+	DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
+	// Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101
+	GetRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error)
+	CreateRole(ctx context.Context, ro v1.Role) (v1.Role, error)
+	ListRoles(ctx context.Context, ns v1.NamespaceName) ([]v1.Role, error)
+	ReplaceRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ro v1.Role) (v1.Role, error)
+	DeleteRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	GetRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.RolesAssignment, error)
+	CreateRolesAssignment(ctx context.Context, ra v1.RolesAssignment) (v1.RolesAssignment, error)
+	ListRolesAssignments(ctx context.Context, ns v1.NamespaceName) ([]v1.RolesAssignment, error)
+	ReplaceRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ra v1.RolesAssignment) (v1.RolesAssignment, error)
+	DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

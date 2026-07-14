@@ -13,55 +13,61 @@ import (
 type StubHandlers struct {
 	mu sync.RWMutex
 
-	namespaces      map[string]v1.Namespace
-	resourceGroups  map[string]v1.ResourceGroup
-	functions       map[string]v1.Function
-	revisions       map[string]v1.Revision
-	routes          map[string]v1.Route
-	services        map[string]v1.Service
-	eventSources    map[string]v1.EventSource
-	configMaps      map[string]v1.ConfigMap
-	secrets         map[string]v1.Secret
-	grants          map[string]v1.Grant
-	egressPolicies  map[string]v1.EgressPolicy
-	invocations     map[string]v1.Invocation
-	runtimeClasses  map[string]v1.RuntimeClass
-	workerNodes     map[string]v1.WorkerNode
-	gateways        map[string]v1.Gateway
-	kvstores        map[string]v1.KVStore
-	buckets         map[string]v1.Bucket
-	catalogServices map[string]v1.CatalogService
-	policies        map[string]v1.Policy
-	workflows       map[string]v1.Workflow
-	workflowRuns    map[string]v1.WorkflowRun
-	sensors         map[string]v1.Sensor
+	namespaces       map[string]v1.Namespace
+	resourceGroups   map[string]v1.ResourceGroup
+	functions        map[string]v1.Function
+	revisions        map[string]v1.Revision
+	routes           map[string]v1.Route
+	services         map[string]v1.Service
+	eventSources     map[string]v1.EventSource
+	configMaps       map[string]v1.ConfigMap
+	secrets          map[string]v1.Secret
+	grants           map[string]v1.Grant
+	egressPolicies   map[string]v1.EgressPolicy
+	invocations      map[string]v1.Invocation
+	runtimeClasses   map[string]v1.RuntimeClass
+	workerNodes      map[string]v1.WorkerNode
+	gateways         map[string]v1.Gateway
+	kvstores         map[string]v1.KVStore
+	buckets          map[string]v1.Bucket
+	catalogServices  map[string]v1.CatalogService
+	identities       map[string]v1.Identity
+	roles            map[string]v1.Role
+	rolesAssignments map[string]v1.RolesAssignment
+	policies         map[string]v1.Policy
+	workflows        map[string]v1.Workflow
+	workflowRuns     map[string]v1.WorkflowRun
+	sensors          map[string]v1.Sensor
 }
 
 // NewStubHandlers returns an initialized StubHandlers.
 func NewStubHandlers() *StubHandlers {
 	return &StubHandlers{
-		namespaces:      make(map[string]v1.Namespace),
-		resourceGroups:  make(map[string]v1.ResourceGroup),
-		functions:       make(map[string]v1.Function),
-		revisions:       make(map[string]v1.Revision),
-		routes:          make(map[string]v1.Route),
-		services:        make(map[string]v1.Service),
-		eventSources:    make(map[string]v1.EventSource),
-		configMaps:      make(map[string]v1.ConfigMap),
-		secrets:         make(map[string]v1.Secret),
-		grants:          make(map[string]v1.Grant),
-		egressPolicies:  make(map[string]v1.EgressPolicy),
-		invocations:     make(map[string]v1.Invocation),
-		runtimeClasses:  make(map[string]v1.RuntimeClass),
-		workerNodes:     make(map[string]v1.WorkerNode),
-		gateways:        make(map[string]v1.Gateway),
-		kvstores:        make(map[string]v1.KVStore),
-		buckets:         make(map[string]v1.Bucket),
-		catalogServices: make(map[string]v1.CatalogService),
-		policies:        make(map[string]v1.Policy),
-		workflows:       make(map[string]v1.Workflow),
-		workflowRuns:    make(map[string]v1.WorkflowRun),
-		sensors:         make(map[string]v1.Sensor),
+		namespaces:       make(map[string]v1.Namespace),
+		resourceGroups:   make(map[string]v1.ResourceGroup),
+		functions:        make(map[string]v1.Function),
+		revisions:        make(map[string]v1.Revision),
+		routes:           make(map[string]v1.Route),
+		services:         make(map[string]v1.Service),
+		eventSources:     make(map[string]v1.EventSource),
+		configMaps:       make(map[string]v1.ConfigMap),
+		secrets:          make(map[string]v1.Secret),
+		grants:           make(map[string]v1.Grant),
+		egressPolicies:   make(map[string]v1.EgressPolicy),
+		invocations:      make(map[string]v1.Invocation),
+		runtimeClasses:   make(map[string]v1.RuntimeClass),
+		workerNodes:      make(map[string]v1.WorkerNode),
+		gateways:         make(map[string]v1.Gateway),
+		kvstores:         make(map[string]v1.KVStore),
+		buckets:          make(map[string]v1.Bucket),
+		catalogServices:  make(map[string]v1.CatalogService),
+		identities:       make(map[string]v1.Identity),
+		roles:            make(map[string]v1.Role),
+		rolesAssignments: make(map[string]v1.RolesAssignment),
+		policies:         make(map[string]v1.Policy),
+		workflows:        make(map[string]v1.Workflow),
+		workflowRuns:     make(map[string]v1.WorkflowRun),
+		sensors:          make(map[string]v1.Sensor),
 	}
 }
 
@@ -728,6 +734,168 @@ func (s *StubHandlers) ReplaceCatalogService(_ context.Context, ns v1.NamespaceN
 	}
 	s.catalogServices[key] = cs
 	return cs, nil
+}
+
+func (s *StubHandlers) GetIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.identities[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Identity{}, fault.NotFoundf("StubHandlers.GetIdentity", "Identity %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateIdentity(_ context.Context, id v1.Identity) (v1.Identity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(id.Namespace, id.Name)
+	if _, exists := s.identities[key]; exists {
+		return v1.Identity{}, fault.Conflictf("StubHandlers.CreateIdentity", "Identity %s already exists", key)
+	}
+	s.identities[key] = id
+	return id, nil
+}
+
+func (s *StubHandlers) ListIdentities(_ context.Context, ns v1.NamespaceName) ([]v1.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Identity, 0)
+	for _, v := range s.identities {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, id v1.Identity) (v1.Identity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.identities[key]; !exists {
+		return v1.Identity{}, fault.NotFoundf("StubHandlers.ReplaceIdentity", "Identity %s not found", key)
+	}
+	s.identities[key] = id
+	return id, nil
+}
+
+func (s *StubHandlers) DeleteIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.identities[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteIdentity", "Identity %s not found", key)
+	}
+	delete(s.identities, key)
+	return nil
+}
+
+func (s *StubHandlers) GetRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.roles[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Role{}, fault.NotFoundf("StubHandlers.GetRole", "Role %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateRole(_ context.Context, ro v1.Role) (v1.Role, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ro.Namespace, ro.Name)
+	if _, exists := s.roles[key]; exists {
+		return v1.Role{}, fault.Conflictf("StubHandlers.CreateRole", "Role %s already exists", key)
+	}
+	s.roles[key] = ro
+	return ro, nil
+}
+
+func (s *StubHandlers) ListRoles(_ context.Context, ns v1.NamespaceName) ([]v1.Role, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Role, 0)
+	for _, v := range s.roles {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, ro v1.Role) (v1.Role, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.roles[key]; !exists {
+		return v1.Role{}, fault.NotFoundf("StubHandlers.ReplaceRole", "Role %s not found", key)
+	}
+	s.roles[key] = ro
+	return ro, nil
+}
+
+func (s *StubHandlers) DeleteRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.roles[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteRole", "Role %s not found", key)
+	}
+	delete(s.roles, key)
+	return nil
+}
+
+func (s *StubHandlers) GetRolesAssignment(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.RolesAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.rolesAssignments[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.RolesAssignment{}, fault.NotFoundf("StubHandlers.GetRolesAssignment", "RolesAssignment %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateRolesAssignment(_ context.Context, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ra.Namespace, ra.Name)
+	if _, exists := s.rolesAssignments[key]; exists {
+		return v1.RolesAssignment{}, fault.Conflictf("StubHandlers.CreateRolesAssignment", "RolesAssignment %s already exists", key)
+	}
+	s.rolesAssignments[key] = ra
+	return ra, nil
+}
+
+func (s *StubHandlers) ListRolesAssignments(_ context.Context, ns v1.NamespaceName) ([]v1.RolesAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.RolesAssignment, 0)
+	for _, v := range s.rolesAssignments {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceRolesAssignment(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.rolesAssignments[key]; !exists {
+		return v1.RolesAssignment{}, fault.NotFoundf("StubHandlers.ReplaceRolesAssignment", "RolesAssignment %s not found", key)
+	}
+	s.rolesAssignments[key] = ra
+	return ra, nil
+}
+
+func (s *StubHandlers) DeleteRolesAssignment(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.rolesAssignments[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteRolesAssignment", "RolesAssignment %s not found", key)
+	}
+	delete(s.rolesAssignments, key)
+	return nil
 }
 
 func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {

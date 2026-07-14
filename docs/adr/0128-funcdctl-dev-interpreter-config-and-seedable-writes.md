@@ -25,7 +25,24 @@
   (the dev-UX lineage) · [ADR-0122](0122-funcdctl-yaml-manifest-native-contract-codegen.md) (the `funcdctl.yaml` +
   `dev:` block extended here) · [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md)/[ADR-0116](0116-capability-authorization-framework.md)
   (the S3 single-writer built-in + the capability framework the relaxation varies) · [ADR-0127](0127-context-blob-data-plane.md)
-  (context.blob — the native path the seeded input feeds)
+  (context.blob — the native path the seeded input feeds) · [ADR-0136](0136-roles-and-role-assignments.md)
+  (Role/RolesAssignment — the IAM writer-role grant this amendment adopts in place of the relaxation)
+
+> ## ⚠️ In-place amendment — 2026-07-14 (deliberate rules bypass)
+>
+> **This `Implemented` ADR was edited in place, which the repo's working agreement forbids.**
+> [CLAUDE.md](../../.claude/CLAUDE.md) is explicit: an `Implemented` ADR is *fully frozen* and a correction is
+> *always* a new superseding ADR, never an in-place edit. **That rule is knowingly bypassed here, at the
+> decider's (green-0-rabbit) explicit direction** — recorded so the deviation is honest, not hidden.
+>
+> **What changed:** Decision 2 (the dev S3-write relaxation) is replaced. `funcdctl dev` no longer *drops* the
+> single-writer forbid — it now **leverages the ADR-0136 IAM writer-role grant**: it auto-provisions a
+> write-only blob-writer `Role` + `RolesAssignment` for the dev principal so the **real** single-writer authz runs in dev
+> (an unassigned principal is still denied — a fidelity gain, not a bypass). Decisions 1 (interpreter config),
+> 3 (registry-built-ins fix), and 4 (`--cport`) are unchanged. The superseded relaxation text below is kept and
+> annotated rather than deleted, so the original decision stays legible. Because this is an in-place bypass, the
+> normal propagation (a new feat row + roadmap follow-through a superseding ADR would carry) is intentionally
+> skipped; the F93 feat row keeps its `implemented` status.
 
 ## Context & Need
 
@@ -66,11 +83,17 @@ That is fixed here (threaded through `cedar.Deps`) as a prerequisite of #2.
   a file into a **no-owner** prefix (`landing`), Then the write succeeds (so a workflow's input can be seeded).
 - **scenario: dev-producer-writes-inferred-owner** — Given a prefix whose dev-inferred owner is not its actual
   producer, When the producer writes it (via context.blob or the S3 frontend), Then the write succeeds in dev.
-- **scenario: prod-single-writer-unchanged** — Given the PROD S3 built-in (no relaxation), When a non-owner (or
+- **scenario: prod-single-writer-unchanged** — Given the PROD S3 built-in, When a non-owner (or
   anyone, for a no-owner prefix) writes, Then it is denied — the consistency invariant holds; reads stay
-  binding-gated in BOTH variants.
+  binding-gated. *(amended 2026-07-14: this same real built-in now runs in dev too — see below.)*
 - **scenario: variant-builtins-take-effect** — Given a PDP built from a registry carrying a variant built-in,
   When it authorizes, Then the variant's built-ins are the ones evaluated (not the package default).
+
+> *(amended 2026-07-14)* The two seed scenarios (`dev-seed-no-owner-prefix`, `dev-producer-writes-inferred-owner`)
+> now hold **through the real forbid**, because `funcdctl dev` grants the dev principal a write-only blob-writer Role
+> (ADR-0136) — the write succeeds since the principal is in the prefix's `writers` set, not because the forbid
+> was dropped. A new scenario **dev-unassigned-write-denied** holds: an Identity with **no** grant is denied
+> the write locally (the fidelity gain the relaxation could not give).
 
 ## Scope
 
@@ -116,11 +139,18 @@ never in the thin release client); the catalog **consumer-binding env** injectio
    (relative to the manifest dir, or absolute) → the bare name on PATH**. GLOBAL per run — the first planned
    function's block is representative (like `dev.backends`). `push`/`types` ignore it (dev-only).
 
-2. **Dev S3-write relaxation.** Add `S3CapabilityDevRelaxedWrites()` — the ADR-0080 S3 capability with a
-   dev-only built-in (`builtin_s3_dev.cedar`) that keeps the read binding-grant but **drops the single-writer
-   write forbid**, so any authenticated principal may write any prefix locally. A `funcd` option
-   `WithDevS3RelaxedWrites()` selects it; `funcdctl dev` sets the option. Prod (`S3Capability`, single-writer
-   forbid) is untouched; reads stay binding-gated in both.
+2. **Dev S3 writes via an IAM writer-role grant** *(amended 2026-07-14 — see the in-place-amendment banner)*.
+   ~~Add `S3CapabilityDevRelaxedWrites()` — a dev-only built-in (`builtin_s3_dev.cedar`) that drops the
+   single-writer write forbid, so any authenticated principal may write any prefix locally; `WithDevS3RelaxedWrites()`
+   selects it.~~ **Superseded.** `funcdctl dev` keeps the **real** prod S3 built-in (`S3CapabilityWithWriters`,
+   single-writer forbid — ADR-0136's generalized `writers` set) and instead **auto-provisions a write-only
+   `Role` + a `RolesAssignment` per dev function**: a namespace-scoped grant to the **dev principal** (the dev
+   function's derived keypair, ADR-0085) so it joins each prefix's `writers` set — its seeds and producer-writes
+   then pass the *real* forbid, no bypass. The Role grants **`s3::write` only** (not the built-in `Blob Data
+   Writer`, which also grants read) so **reads stay strictly binding-gated** in dev — the "forgot to bind → read
+   Forbidden" fidelity ADR-0125 deliberately keeps. An **unassigned** principal is still denied, so dev exercises
+   the actual default-deny + writer-grant path. `WithDevS3RelaxedWrites` and `builtin_s3_dev.cedar` are removed;
+   prod is untouched (it always ran the real forbid).
 
 3. **Registry built-ins reach the PDP (ADR-0116 fix).** `cedar.Deps` gains a `Builtins` field; the driver's
    policy cache compiles *that* (falling back to the default registry when empty) instead of the package-global
@@ -134,10 +164,12 @@ never in the thin release client); the catalog **consumer-binding env** injectio
 
 ## Temporary workarounds
 
-- **The dev write relaxation** is itself the workaround for the absence of a prod-safe external-prefix-owner.
-  **Exit criterion**: the first-class **typed `owner` + external `S3Identity` identity** model (tracked on
-  Project #4) lets an external drop client legitimately own `landing`, at which point the prod single-writer
-  built-in authorizes the seed with no relaxation, and `funcdctl dev` can drop `WithDevS3RelaxedWrites`.
+- ~~**The dev write relaxation** is itself the workaround for the absence of a prod-safe external-prefix-owner.~~
+  **Resolved 2026-07-14 by ADR-0136** (Role/RolesAssignment + the generalized `writers` set). The writer-role
+  grant is the prod-safe mechanism the exit criterion called for: `funcdctl dev` auto-provisions a
+  write-only blob-writer `Role` + `RolesAssignment` for the dev principal, so the **real** single-writer built-in authorizes
+  the seed with **no** relaxation. `WithDevS3RelaxedWrites` and `builtin_s3_dev.cedar` are removed — no workaround
+  remains.
 
 ## Contracts
 
@@ -151,45 +183,68 @@ type Dev struct {
     Secrets  map[string]map[string]string `json:"secrets,omitempty"`
 }
 
-// internal/auth/cedar — a dev variant of the S3 capability + the built-ins wired through Deps.
-func S3CapabilityDevRelaxedWrites() Capability // == S3Capability but Builtin = builtin_s3_dev.cedar (no write forbid)
+// internal/auth/cedar — the built-ins wired through Deps (Decision 3, unchanged).
 type Deps struct { Entities EntityProvider; Policies PolicySource; Builtins string; Logger *slog.Logger }
 // New(): builtins := d.Builtins; if "" { builtins = defaultRegistry.Builtins() }; the policy cache compiles it.
+// (amended 2026-07-14) S3CapabilityDevRelaxedWrites + builtin_s3_dev.cedar are REMOVED; dev uses the real
+// S3CapabilityWithWriters, and the dev writer is a data-provisioned RolesAssignment (below), not a policy variant.
 
-// pkg/funcd — the dev-only option + the registry selection at the composition root.
-func WithDevS3RelaxedWrites() Option // sets c.s3DevRelaxedWrites
-// Start(): s3Cap := S3Capability(); if c.s3DevRelaxedWrites { s3Cap = S3CapabilityDevRelaxedWrites() }
-//          cedarauth.New(Deps{..., Builtins: cedarRegistry.Builtins()})
-
-// cmd/funcdctl — interpreter resolution + the dev option (funcdctl dev only).
+// cmd/funcdctl — interpreter resolution (Decision 1) + the dev IAM writer grant (amended Decision 2).
 func resolveInterpreter(p, baseDir string) string // ""→""; abs→as-is; else filepath.Join(baseDir, p)
 // devShimOptions(op, dev sdk.Dev, baseDir string): env > resolveInterpreter(dev.Python/Node, baseDir) > PATH
-// bootDev opts include funcd.WithDevS3RelaxedWrites()
+// bootDev: after auto-provisioning the bindings' Buckets/KVStores, also Create a RolesAssignment granting the
+// dev principal WRITE (a write-only dev-blob-writer Role) @ the dev namespace (ADR-0136) — replaces WithDevS3RelaxedWrites().
 ```
 
-```cedar
-// internal/auth/cedar/builtin_s3_dev.cedar — DEV-ONLY. Read unchanged (binding-as-grant); write has the base
-// permit but NO single-writer forbid (the whole relaxation). Prod's builtin_s3.cedar keeps the forbid.
-permit(principal, action == Action::"s3::read", resource)
-  when { principal has blobBindings && principal.blobBindings.contains(resource) };
-permit(principal, action == Action::"s3::write", resource);
+```yaml
+# What funcdctl dev auto-provisions (ADR-0136): a WRITE-ONLY Role + a RolesAssignment per function. The dev
+# principal becomes a real writer, so the prod single-writer forbid authorizes its seeds/producer-writes. The
+# Role grants s3::write ONLY, so reads stay binding-gated. No policy variant; an unassigned principal = denied.
+apiVersion: funcd.io/v1alpha1
+kind: Role
+metadata:
+  name: dev-blob-writer
+  namespace: default
+spec:
+  actions:
+    - "s3::write"
+---
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: dev-blob-writer-<dev-function>
+  namespace: default
+spec:
+  principal:
+    kind: Function
+    name: <dev-function>
+  assignments:
+    - roleRef:
+        kind: Role
+        name: dev-blob-writer
+      scope:
+        kind: Namespace
 ```
 
 | consumes | exposes |
 |---|---|
-| the ADR-0122 `Dev` block, the ADR-0116 capability registry + cedar driver, the ADR-0080 S3 built-in | `dev.python`/`dev.node`; `S3CapabilityDevRelaxedWrites`; `cedar.Deps.Builtins`; `funcd.WithDevS3RelaxedWrites`; `funcdctl dev`'s interpreter resolution |
+| the ADR-0122 `Dev` block; the ADR-0116 capability registry + cedar driver; the ADR-0080 real S3 built-in; the ADR-0136 `Role` + `RolesAssignment` (a write-only dev-blob-writer Role) | `dev.python`/`dev.node`; `cedar.Deps.Builtins`; `funcdctl dev`'s interpreter resolution + its auto-provisioned dev write-only blob-writer `Role` + `RolesAssignment` |
 
 ## Implementation plan
 
+> *(amended 2026-07-14)* The relaxation files below (`builtin_s3_dev.cedar`, `S3CapabilityDevRelaxedWrites`,
+> `c.s3DevRelaxedWrites`, `WithDevS3RelaxedWrites`, the registry swap) are **removed** by the amendment. The
+> replacement work is: `cmd/funcdctl/dev.go` Creates a write-only blob-writer `Role` + `RolesAssignment` (ADR-0136) for the dev
+> principal in `bootDev`. `Deps.Builtins` (Decision 3) and the interpreter files (Decision 1) stay as below.
+
 **Files**
 - `pkg/sdk/manifest.go` — `Dev.Python` + `Dev.Node`.
-- `internal/auth/cedar/builtin_s3_dev.cedar` (new) + `capabilities.go` (`S3CapabilityDevRelaxedWrites`, factored
-  `s3Capability(builtin)`); `cedar.go` (`Deps.Builtins`, default fallback) + `policies.go` (`policyCache.builtins`,
-  `compile(builtins, …)`).
-- `pkg/funcd` — `c.s3DevRelaxedWrites`, `WithDevS3RelaxedWrites`, registry selection + `Deps.Builtins:
+- ~~`internal/auth/cedar/builtin_s3_dev.cedar` (new) + `capabilities.go` (`S3CapabilityDevRelaxedWrites`).~~
+  `cedar.go` (`Deps.Builtins`, default fallback) + `policies.go` (`policyCache.builtins`, `compile(builtins, …)`).
+- ~~`pkg/funcd` — `c.s3DevRelaxedWrites`, `WithDevS3RelaxedWrites`, registry selection~~ + `Deps.Builtins:
   cedarRegistry.Builtins()`.
 - `cmd/funcdctl/dev.go` — `resolveInterpreter`, `devShimOptions(op, dev, baseDir)`, `plannedFunc.manifestDir`,
-  `funcd.WithDevS3RelaxedWrites()` in `bootDev` opts.
+  ~~`funcd.WithDevS3RelaxedWrites()`~~ the auto-provisioned dev write-only blob-writer `Role` + `RolesAssignment` in `bootDev`.
 
 **Test plan** (named tests)
 - `TestScenarioDevRelaxedWritesDropOwnerGate` (cedar) — the dev variant allows a non-owner write; prod denies;
@@ -209,7 +264,9 @@ succeeds; prod S3 authz unchanged.
 ## Review checklist
 
 - [ ] `dev.python`/`dev.node` resolve env > manifest (rel-to-dir/abs) > PATH; `push`/`types` still ignore `dev:`.
-- [ ] `S3CapabilityDevRelaxedWrites` drops ONLY the write forbid; reads binding-gated; prod `S3Capability` unchanged.
+- [ ] ~~`S3CapabilityDevRelaxedWrites` drops ONLY the write forbid.~~ *(amended 2026-07-14)* `funcdctl dev` runs the
+      **real** `S3CapabilityWithWriters` (single-writer forbid) and auto-provisions a write-only blob-writer `Role` +
+      `RolesAssignment` (ADR-0136) for the dev principal; an unassigned principal is still denied; prod unchanged.
 - [ ] `cedar.Deps.Builtins` compiled by the policy cache (default-registry fallback when empty); the composition
       root passes the assembled registry's `Builtins()`.
 - [ ] `WithDevS3RelaxedWrites` is dev-only (set by `funcdctl dev`, never the release client); off by default.
@@ -222,9 +279,10 @@ succeeds; prod S3 authz unchanged.
 **Positive**: a project pins its toolchain in the committable `funcdctl.yaml` (`funcdctl dev` needs no env); a
 developer can seed a workflow's input blob locally; a from-source workflow whose prefix owners are
 binding-inferred still runs; and the capability framework now honors a variant's built-ins (a latent bug fixed).
-**Negative (accepted)**: the dev S3 write relaxation is a real fidelity gap — dev is **not** where the
-single-writer invariant is validated (documented, like egress/sandbox); an owner-model change is still owed for a
-prod-safe external drop (deferred, tracked).
+**Negative (accepted)**: ~~the dev S3 write relaxation is a real fidelity gap — dev is **not** where the
+single-writer invariant is validated.~~ *(amended 2026-07-14)* Closed — dev now runs the **real** single-writer
+forbid with the dev principal grant-listed as a writer (ADR-0136), so the single-writer invariant **is** exercised
+in dev; the only accepted cost is one auto-provisioned `RolesAssignment` in the dev boot path.
 **Neutral**: `to-gold`'s catalog consumer-binding env in dev remains unwired (separate); the prod path and the
 thin release client are unaffected.
 

@@ -152,8 +152,10 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 		return functionUID(p.Namespace, p.Name), nil
 	case v1.KindS3Identity:
 		return s3IdentityUID(p.Namespace, p.Name), nil
+	case v1.KindIdentity:
+		return identityUID(p.Namespace, p.Name), nil
 	default:
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, S3Identity)", p.Type)
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, S3Identity, Identity)", p.Type)
 	}
 }
 
@@ -186,6 +188,10 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 		return functionUID(res.Namespace, res.Name), nil
 	case v1.KindBucket:
 		return resourceBlobPrefixUID(res)
+	case v1.KindCatalogService:
+		// ADR-0137 (F102): the catalog::query resource — CatalogService::"<ns>/<catalog>", byte-matching
+		// what CatalogCapability.Resource emits and a Function's catalogBindings members.
+		return catalogServiceUID(res.Namespace, res.Name), nil
 	case v1.KindNetDestination:
 		// ADR-0117 (F81): the egress destination — its UID is the Path's "<ip>:<port>" prefix,
 		// byte-matching what EgressCapability.Resource emits (mirroring principalUID's S3Identity case).

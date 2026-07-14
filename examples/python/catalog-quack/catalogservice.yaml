@@ -28,3 +28,6 @@ spec:
     - lake-quack-token         # Secret Data key QUACK_TOKEN → engine env (the Quack auth token)
   config:
     - lake-engine-config       # ConfigMap Data keys (DUCKDB_*) → engine env
+  ingress:                     # ADR-0138: OPT-IN external edge exposure of the catalog::query PEP proxy
+    pathPrefix: /catalog/lake  # the gateway routes this edge path to the PROXY (never the engine); the
+                               # proxy PEPs catalog::query, so an external caller is authorized like internal

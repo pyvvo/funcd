@@ -176,6 +176,16 @@ type Config struct {
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`
 
+	// Catalog tunes the per-CatalogService catalog::query PEP proxies (ADR-0137). ProxyHost is the
+	// netns-reachable host each proxy publishes into a function's FUNCD_CATALOG_<ALIAS>_URL — the
+	// query-path analog of S3Gateway.Endpoint's host. Under containerd a worker runs in its own netns
+	// and cannot reach the daemon's 127.0.0.1, so this MUST be a node address the sandbox can reach (the
+	// CNI bridge gateway IP, e.g. 10.63.0.1); the proxy then binds 0.0.0.0. Empty ⇒ 127.0.0.1 (the
+	// process-runtime/dev default, shared loopback).
+	Catalog struct {
+		ProxyHost string `json:"proxyHost,omitempty" env:"FUNCD_CATALOG_PROXY_HOST"`
+	} `json:"catalog,omitempty"`
+
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
 	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
 	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention (run GC horizon) and

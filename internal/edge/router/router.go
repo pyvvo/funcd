@@ -45,6 +45,12 @@ type CompiledRule struct {
 	// Static, when non-nil, is a static Bucket-prefix backend (ADR-0120, F82); Function is then unused
 	// and the data-plane serves it via internal/edge/static (no activator hop).
 	Static *v1.StaticBackend
+	// Upstream, when non-empty, is a NODE-PRIVATE in-daemon reverse-proxy target (ADR-0138): the
+	// data-plane reverse-proxies a match here instead of resolving a Function/Static. It is set ONLY
+	// by trusted in-daemon reconcilers (the CatalogService reconciler → its catalog::query PEP proxy),
+	// never from a user-authored Route — a user backend has no Upstream arm, so the edge cannot be
+	// pointed at an arbitrary in-daemon address (no SSRF). Function/Static are then unused.
+	Upstream string
 }
 
 // Match is the resolved target. StripPrefix is the matched rule's prefix the handler strips from
@@ -56,6 +62,9 @@ type Match struct {
 	Auth        v1.AuthMode // the matched Route's auth stance (ADR-0113); "" ⇒ namespace default
 	// Static is non-nil for a static backend (ADR-0120, F82): serve via internal/edge/static, no wake.
 	Static *v1.StaticBackend
+	// Upstream is non-empty for a node-private reverse-proxy backend (ADR-0138): the data-plane
+	// reverse-proxies to it (no activator hop, no Function resolve). Trusted in-daemon target only.
+	Upstream string
 }
 
 // compiled is one flattened matcher row (host + rule), sorted longest-path-first.
@@ -67,6 +76,7 @@ type compiled struct {
 	namespace v1.NamespaceName
 	function  v1.ObjectName
 	static    *v1.StaticBackend
+	upstream  string
 	auth      v1.AuthMode
 }
 
@@ -91,6 +101,7 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 				namespace: e.Namespace,
 				function:  r.Function,
 				static:    r.Static,
+				upstream:  r.Upstream,
 				auth:      e.Auth,
 			})
 		}
@@ -128,7 +139,7 @@ func (t *table) Resolve(host, path, method string) (Match, bool) {
 		if !row.exact {
 			strip = row.path
 		}
-		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Auth: row.auth, Static: row.static}, true
+		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Auth: row.auth, Static: row.static, Upstream: row.upstream}, true
 	}
 	return Match{}, false
 }

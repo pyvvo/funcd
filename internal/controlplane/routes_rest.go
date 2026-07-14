@@ -334,6 +334,168 @@ func registerGrant(api huma.API, h Handlers) {
 	})
 }
 
+// ===== Identity (namespaced) — ADR-0135, FEAT-0008/F100 =====
+
+type createIdentityInput struct{ Body v1.Identity }
+type identityOutput struct{ Body v1.Identity }
+type listIdentityOutput struct{ Body []v1.Identity }
+
+func registerIdentity(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/identities"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listIdentities", Method: http.MethodGet, Path: base,
+		Tags: []string{"Identity"},
+	}, func(ctx context.Context, in *namespacedList) (*listIdentityOutput, error) {
+		items, err := h.ListIdentities(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listIdentityOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createIdentity", Method: http.MethodPost, Path: base,
+		Tags: []string{"Identity"},
+	}, func(ctx context.Context, in *createIdentityInput) (*identityOutput, error) {
+		item, err := h.CreateIdentity(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &identityOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getIdentity", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Identity"},
+	}, func(ctx context.Context, in *namespacedGet) (*identityOutput, error) {
+		item, err := h.GetIdentity(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &identityOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceIdentity", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Identity"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Identity
+	}) (*identityOutput, error) {
+		item, err := h.ReplaceIdentity(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &identityOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteIdentity", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Identity"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteIdentity(ctx, in.Namespace, in.Name))
+	})
+}
+
+// ===== Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 =====
+
+type createRoleInput struct{ Body v1.Role }
+type roleOutput struct{ Body v1.Role }
+type listRoleOutput struct{ Body []v1.Role }
+type createRolesAssignmentInput struct{ Body v1.RolesAssignment }
+type rolesAssignmentOutput struct{ Body v1.RolesAssignment }
+type listRolesAssignmentOutput struct{ Body []v1.RolesAssignment }
+
+func registerRole(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/roles"
+	huma.Register(api, huma.Operation{OperationID: "listRoles", Method: http.MethodGet, Path: base, Tags: []string{"Role"}},
+		func(ctx context.Context, in *namespacedList) (*listRoleOutput, error) {
+			items, err := h.ListRoles(ctx, in.Namespace)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &listRoleOutput{Body: items}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "createRole", Method: http.MethodPost, Path: base, Tags: []string{"Role"}},
+		func(ctx context.Context, in *createRoleInput) (*roleOutput, error) {
+			item, err := h.CreateRole(ctx, in.Body)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &roleOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "getRole", Method: http.MethodGet, Path: base + "/{name}", Tags: []string{"Role"}},
+		func(ctx context.Context, in *namespacedGet) (*roleOutput, error) {
+			item, err := h.GetRole(ctx, in.Namespace, in.Name)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &roleOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "replaceRole", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"Role"}},
+		func(ctx context.Context, in *struct {
+			Namespace v1.NamespaceName `path:"namespace"`
+			Name      v1.ObjectName    `path:"name"`
+			Body      v1.Role
+		}) (*roleOutput, error) {
+			item, err := h.ReplaceRole(ctx, in.Namespace, in.Name, in.Body)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &roleOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "deleteRole", Method: http.MethodDelete, Path: base + "/{name}", Tags: []string{"Role"}},
+		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+			return nil, wrapFaultError(h.DeleteRole(ctx, in.Namespace, in.Name))
+		})
+}
+
+func registerRolesAssignment(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/rolesassignments"
+	huma.Register(api, huma.Operation{OperationID: "listRolesAssignments", Method: http.MethodGet, Path: base, Tags: []string{"RolesAssignment"}},
+		func(ctx context.Context, in *namespacedList) (*listRolesAssignmentOutput, error) {
+			items, err := h.ListRolesAssignments(ctx, in.Namespace)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &listRolesAssignmentOutput{Body: items}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "createRolesAssignment", Method: http.MethodPost, Path: base, Tags: []string{"RolesAssignment"}},
+		func(ctx context.Context, in *createRolesAssignmentInput) (*rolesAssignmentOutput, error) {
+			item, err := h.CreateRolesAssignment(ctx, in.Body)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &rolesAssignmentOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "getRolesAssignment", Method: http.MethodGet, Path: base + "/{name}", Tags: []string{"RolesAssignment"}},
+		func(ctx context.Context, in *namespacedGet) (*rolesAssignmentOutput, error) {
+			item, err := h.GetRolesAssignment(ctx, in.Namespace, in.Name)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &rolesAssignmentOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "replaceRolesAssignment", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"RolesAssignment"}},
+		func(ctx context.Context, in *struct {
+			Namespace v1.NamespaceName `path:"namespace"`
+			Name      v1.ObjectName    `path:"name"`
+			Body      v1.RolesAssignment
+		}) (*rolesAssignmentOutput, error) {
+			item, err := h.ReplaceRolesAssignment(ctx, in.Namespace, in.Name, in.Body)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &rolesAssignmentOutput{Body: item}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "deleteRolesAssignment", Method: http.MethodDelete, Path: base + "/{name}", Tags: []string{"RolesAssignment"}},
+		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+			return nil, wrapFaultError(h.DeleteRolesAssignment(ctx, in.Namespace, in.Name))
+		})
+}
+
 // ===== KVStore (namespaced) — ADR-0072 =====
 
 type createKVStoreInput struct{ Body v1.KVStore }

@@ -1,0 +1,159 @@
+package gateway
+
+import (
+	"log/slog"
+	"net"
+	"net/http"
+	"sync"
+
+	"github.com/green-0-rabbit/funcd/api/fault"
+	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/auth"
+)
+
+// Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private
+// http.Server per catalog, each fronting that catalog's engine. The CatalogService reconciler calls
+// Ensure on its Ready branch to (re)bind a node-private listener for the catalog and learn the proxy
+// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), and Remove on teardown.
+// One listener endpoint per catalog fixes the PEP's target catalog by the endpoint (the proxy takes
+// the namespace from the resolved principal — see NewCatalogProxy).
+type Manager struct {
+	keys CatalogKeys
+	pdp  auth.Authorizer
+	log  *slog.Logger
+
+	// bindHost is the interface each proxy listens on; publishHost is the host injected into functions as
+	// FUNCD_CATALOG_<ALIAS>_URL. They differ under containerd (ADR-0137, mirroring the s3gateway
+	// ListenAddr/Endpoint split): a worker runs in its OWN netns, so it CANNOT reach the daemon's
+	// 127.0.0.1 — the proxy must bind a netns-reachable interface (0.0.0.0) and publish the CNI bridge
+	// gateway IP (e.g. 10.63.0.1). In the process runtime (funcdctl dev) both are 127.0.0.1 (shared
+	// loopback). Empty ⇒ 127.0.0.1 (the dev/loopback default).
+	bindHost    string
+	publishHost string
+
+	mu      sync.Mutex
+	servers map[string]*managedProxy // key = "ns/name"
+}
+
+// managedProxy is one running node-private proxy: its listener, its serving http.Server, and the
+// (upstream, engineToken) it was built for — so Ensure can detect a change and rebind.
+type managedProxy struct {
+	listener    net.Listener
+	server      *http.Server
+	upstream    string
+	engineToken string
+}
+
+// NewManager builds the catalog proxy Manager over the shared token resolver + PDP (ADR-0137). The
+// same CatalogKeys/Authorizer back every per-catalog proxy; each proxy differs only in its
+// EngineTarget (the catalog ref + its netns engine URL + shared engine token). bindHost is the interface
+// each proxy binds; publishHost is the host injected into functions (see Manager). Both empty ⇒
+// 127.0.0.1 (the process-runtime/dev default, shared loopback); under containerd pass bindHost "0.0.0.0"
+// and publishHost the CNI bridge gateway IP so a worker in its own netns can reach the proxy.
+func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authorizer, log *slog.Logger) *Manager {
+	if log == nil {
+		log = slog.Default()
+	}
+	if bindHost == "" {
+		bindHost = "127.0.0.1"
+	}
+	if publishHost == "" {
+		publishHost = "127.0.0.1"
+	}
+	return &Manager{
+		keys:        keys,
+		pdp:         pdp,
+		log:         log.With("component", "catalog.gateway.manager"),
+		bindHost:    bindHost,
+		publishHost: publishHost,
+		servers:     make(map[string]*managedProxy),
+	}
+}
+
+// managerKey is the servers-map key for a catalog ref: "ns/name".
+func managerKey(ns v1.NamespaceName, name v1.ObjectName) string {
+	return string(ns) + "/" + string(name)
+}
+
+// Ensure guarantees a node-private proxy is running for catalog, fronting upstream with engineToken,
+// and returns the bare "<publishHost>:<port>" host:port the function injects as FUNCD_CATALOG_<ALIAS>_URL
+// (its handler wraps it in quack://; the engine endpoint was bare too). Under containerd publishHost is
+// the CNI bridge gateway IP (netns-reachable), NOT the bind interface; in dev both are 127.0.0.1. If a
+// proxy already runs for the catalog with the SAME (upstream, engineToken) it is reused (idempotent — a
+// re-reconcile does not rebind); if either differs the old server is gracefully closed and a fresh
+// listener is bound (its URL changes). Thread-safe.
+func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (string, error) {
+	const op = "catalog.gateway.Manager.Ensure"
+	key := managerKey(catalog.Namespace, catalog.Name)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.servers[key]; ok {
+		if existing.upstream == upstream && existing.engineToken == engineToken {
+			return m.publishURL(existing.listener.Addr()), nil
+		}
+		// The engine moved or its shared token rotated: gracefully drop the stale proxy and rebind.
+		m.closeProxy(key, existing)
+	}
+
+	ln, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, "0"))
+	if err != nil {
+		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
+	}
+	handler := NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken})
+	srv := &http.Server{Handler: handler}
+	mp := &managedProxy{listener: ln, server: srv, upstream: upstream, engineToken: engineToken}
+	m.servers[key] = mp
+
+	go func() {
+		if serr := srv.Serve(ln); serr != nil && serr != http.ErrServerClosed {
+			m.log.Error("catalog proxy serve stopped", "catalog", key, "err", serr)
+		}
+	}()
+
+	url := m.publishURL(ln.Addr())
+	m.log.Debug("catalog proxy ensured", "catalog", key, "url", url, "upstream", upstream)
+	return url, nil
+}
+
+// Remove stops and forgets the proxy for a catalog (ADR-0137 teardown path). Idempotent: removing an
+// unknown catalog is a no-op.
+func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
+	key := managerKey(ns, name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mp, ok := m.servers[key]; ok {
+		m.closeProxy(key, mp)
+	}
+}
+
+// Shutdown stops every running proxy (daemon shutdown). Thread-safe and idempotent.
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, mp := range m.servers {
+		m.closeProxy(key, mp)
+	}
+}
+
+// closeProxy stops one proxy and deletes it from the map. The caller must hold m.mu. Closing the
+// http.Server also closes its listener; the errors are best-effort (a shutting-down proxy).
+func (m *Manager) closeProxy(key string, mp *managedProxy) {
+	_ = mp.server.Close()
+	delete(m.servers, key)
+	m.log.Debug("catalog proxy removed", "catalog", key)
+}
+
+// publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral
+// PORT the listener bound, joined to the Manager's publishHost (the netns-reachable host — the CNI bridge
+// gateway IP under containerd, 127.0.0.1 in dev), NOT the bind interface. Bare because the handler prepends
+// quack:// (a scheme here would produce quack://http://… → Invalid Port). On a malformed addr it falls back
+// to the raw addr string.
+func (m *Manager) publishURL(addr net.Addr) string {
+	_, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return net.JoinHostPort(m.publishHost, port)
+}

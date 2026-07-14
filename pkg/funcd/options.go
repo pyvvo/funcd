@@ -117,6 +117,19 @@ func WithS3Gateway(listenAddr, endpoint string, maxUploadBytes int64, masterSecr
 	}
 }
 
+// WithCatalogProxyHost sets the netns-reachable host the per-CatalogService catalog PEP proxies publish
+// (ADR-0137) — the query-path analog of the S3 gateway's sandbox-facing Endpoint host. Under containerd a
+// worker runs in its OWN netns and cannot reach the daemon's 127.0.0.1, so set this to the CNI bridge
+// gateway IP (e.g. "10.63.0.1"): the proxy then binds 0.0.0.0 and publishes that host in
+// FUNCD_CATALOG_<ALIAS>_URL. Empty (the default / process-runtime / funcdctl dev) ⇒ 127.0.0.1, where the
+// daemon and the worker share the loopback.
+func WithCatalogProxyHost(host string) Option {
+	return func(c *config) error {
+		c.catalogProxyHost = host
+		return nil
+	}
+}
+
 // WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; this option
 // sets its persistence + tunables: dataDir is the Badger run-state directory (empty ⇒ in-memory,
 // the default / InMemory-preset path), defaultStepTimeout bounds a single step invocation
@@ -367,19 +380,6 @@ func WithListenAddr(addr string) Option {
 // WithAuthorizer injects the authorization PDP. Defaults to rbac.New().
 func WithAuthorizer(a auth.Authorizer) Option {
 	return func(c *config) error { c.authorizer = a; return nil }
-}
-
-// WithDevS3RelaxedWrites drops the S3 single-writer forbid so any authenticated principal may write any
-// blob prefix — a dev-only convenience (used by `funcdctl dev`) that lets a developer seed a workflow's
-// initial input with a plain `aws s3 cp` into a no-owner drop prefix (e.g. `landing`), and tolerates dev's
-// binding-inferred prefix owners (which cannot tell a producer from a consumer). Reads stay binding-gated.
-// The prod model (single writer == prefix owner) is unchanged; NEVER use this in production. A
-// dev-fidelity relaxation in the spirit of ADR-0125's boundaries (no egress isolation, no sandbox).
-func WithDevS3RelaxedWrites() Option {
-	return func(c *config) error {
-		c.s3DevRelaxedWrites = true
-		return nil
-	}
 }
 
 // WithDevAuth wires a single developer-role credential for token, scoped to the

@@ -127,6 +127,9 @@ s3:
     - bucket.yaml
     - function.yaml
     - funcdconfig.yaml
+    # ADR-0136 (F101): grants s3-roundtrip Blob Data Writer on the unowned `shared` prefix — the role-assigned
+    # writer path (a write to a prefix it neither owns nor binds), proven live alongside the owner path.
+    - rolesassignment.yaml
     # ADR-0119 (F83): the reactive-ingestion trio — a builtin-pass Workflow started when an object lands
     # under gold/, the blob EventSource that watches it, and the Sensor that binds the drop to the run.
     - ingest-workflow.yaml
@@ -143,6 +146,9 @@ s3:
   apply:
     - function.yaml
     - bucket.yaml
+    # The RolesAssignment references the Function + the lakehouse/shared prefix; its admission is structural
+    # (no existence gate), and the WriterLister resolves it per-request, so it applies after function+bucket.
+    - rolesassignment.yaml
     - ingest-workflow.yaml
     - drop-source.yaml
     - drop-sensor.yaml

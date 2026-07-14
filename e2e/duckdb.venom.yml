@@ -25,6 +25,9 @@ testcases:
         # engine reads/writes S3 (HEAD 404 fresh, not 403), serves Quack, and the readiness probe passes
         # — the CatalogService auto-progresses to Ready (the reconciler requeues while it boots). Assert
         # Ready + the published status.endpoint, and that NO backing Function exists (it's a provider).
+        # Under ADR-0137 status.endpoint is the per-CatalogService catalog::query PEP PROXY (published on
+        # the CNI bridge host so a consumer's netns can reach it — its ephemeral port), NOT the engine's
+        # internal :8080 (which the proxy now fronts as its upstream).
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
@@ -39,7 +42,7 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PHASE=Ready"
-          - result.systemout ShouldContainSubstring ":8080"          # serving Quack on the fixed netns port
+          - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"  # the netns-reachable catalog::query PEP proxy (ADR-0137), not the engine's :8080
           - result.systemout ShouldContainSubstring "FUNCTIONS=0"     # a provider, NOT a Function
 
   - name: the engine serves Quack and its S3 access is authorized (ADR-0088, not 403)
@@ -99,3 +102,42 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "rows"                 # the handler's FuncOutput shape
           - result.body ShouldContainSubstring "[[42]]"               # rows == [[42]] — real Quack round-trip on lake
+
+  - name: the catalog is exposed at the edge and external catalog::query is PEP'd (ADR-0138)
+    steps:
+      # ADR-0138: catalogservice.yaml declares spec.ingress.pathPrefix /catalog/lake, so once `lake` is Ready
+      # the CatalogService reconciler programs — THROUGH THE EDGE-ROUTE AGGREGATOR — a Route-v2 edge entry whose
+      # node-private Upstream backend is the catalog::query PEP PROXY (never the engine). This proves, on real
+      # containerd: (a) the aggregator programmed the catalog entry ALONGSIDE the function route (testcase 3b's
+      # /function/catalog-reader still 200'd — no replace-all clobber); (b) the data-plane reverse-proxies the
+      # edge path to the PROXY, which forwards a non-handshake request to the ready engine (⇒ 200 REACHABILITY).
+      - type: http
+        method: GET
+        url: "http://127.0.0.1:8081/catalog/lake"
+        retry: 20
+        delay: 2
+        info: "edge /catalog/lake → status {{.result.statuscode}} (200 = edge reaches the PEP proxy → engine)"
+        assertions:
+          - result.statuscode ShouldEqual 200          # the edge routes external traffic through the aggregator's Upstream entry to the proxy
+      # control: an unexposed edge path has NO programmed entry ⇒ 404. This distinguishes "the catalog entry is
+      # programmed and reachable" (200 above) from "no route at all", proving the 200 is ADR-0138's edge entry.
+      - type: http
+        method: GET
+        url: "http://127.0.0.1:8081/catalog/not-a-catalog"
+        info: "control edge /catalog/not-a-catalog → status {{.result.statuscode}} (404 = no route)"
+        assertions:
+          - result.statuscode ShouldEqual 404          # no edge entry for an unexposed path
+      # PEP ENFORCEMENT at the edge: POST a real Quack handshake frame carrying a GARBAGE token (8-byte preamble
+      # + token TLV field 0x01,0x00 + LEB128 length 0x1a + 26-byte token + trailing field — the makeHandshake
+      # shape). The proxy resolves the caller token to a principal, fails (unresolvable), and FAIL-CLOSES 403 —
+      # the engine never sees it. This proves the external catalog::query path is default-deny at the edge.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            code=$(printf "\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x1agarbage-unresolvable-token\x02\x00\x03end" \
+              | curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST --data-binary @- http://127.0.0.1:8081/catalog/lake)
+            echo "PEP=$code"'
+        info: "edge PEP (garbage token) → {{.result.systemout}} (PEP=403 = default-deny enforced at the edge)"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PEP=403"   # unresolvable caller token ⇒ fail-closed, engine never reached

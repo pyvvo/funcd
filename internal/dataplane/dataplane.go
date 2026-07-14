@@ -19,6 +19,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -86,6 +88,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if m.Static != nil {
 				// Static backend (ADR-0120, F82): serve the Bucket prefix directly — no activator hop.
 				s.serveStatic(w, r, m, op)
+				return
+			}
+			if m.Upstream != "" {
+				// Node-private upstream backend (ADR-0138): reverse-proxy to an in-daemon target (the
+				// CatalogService's catalog::query PEP proxy). No activator hop, no Function resolve. The
+				// upstream does its OWN authz (the proxy PEPs catalog::query on the Quack handshake token),
+				// so the edge honors the entry's own stance (open for a catalog) rather than gating here.
+				s.serveUpstream(w, r, m, op)
 				return
 			}
 			stance := s.authStance(r, m.Auth, m.Namespace)
@@ -215,6 +225,37 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Ma
 		return
 	}
 	s.static.Serve(w, r, ns, m.Static, stripMatched(r.URL.Path, m.StripPrefix))
+}
+
+// serveUpstream reverse-proxies a matched request to a node-private in-daemon upstream (ADR-0138) —
+// the CatalogService's catalog::query PEP proxy. The matched rule prefix is stripped so the upstream
+// is addressed at its own root, mirroring the gateway's PathPrefix strip. Streaming-native
+// (httputil.ReverseProxy). The upstream is trusted (set only by an in-daemon reconciler, never a user
+// Route) and does its own authz, so no edge PEP runs here. A malformed upstream is a 502 (a
+// reconciler bug, not a client error).
+func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
+	target, err := url.Parse(m.Upstream)
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream %q is not a valid URL", m.Upstream))
+		return
+	}
+	if t, ok := observ.TargetFrom(r.Context()); ok {
+		t.Namespace, t.Function = string(m.Namespace), m.Upstream
+	}
+	remainder := stripMatched(r.URL.Path, m.StripPrefix)
+	if remainder == "" {
+		remainder = "/"
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, perr error) {
+		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream unreachable: %v", perr))
+	}
+	// Address the upstream at its own root: replace the request path with the stripped remainder
+	// (NewSingleHostReverseProxy's default Director would join the target path with the full request
+	// path, keeping the matched prefix — we want it stripped).
+	r.URL.Path = remainder
+	r.URL.RawPath = ""
+	proxy.ServeHTTP(w, r)
 }
 
 // authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the

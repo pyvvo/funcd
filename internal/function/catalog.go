@@ -6,36 +6,36 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
 )
 
-// quackTokenKey is the Secret Data key the CatalogService's Quack token lives under (ADR-0091/0087).
-// resolveCatalogEnv selects exactly this key out of the resolved Secret map and re-keys it to
-// FUNCD_CATALOG_<ALIAS>_TOKEN — it never merges the whole map.
-const quackTokenKey = "QUACK_TOKEN"
-
 // resolveCatalogEnv resolves each spec.catalogs binding into the FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env
-// pair for worker injection (ADR-0091). For every binding it Gets the bound CatalogService in the
-// function's namespace, reads its status.endpoint (the published Quack URL, injected VERBATIM), and
-// resolves the Quack token by PDP-authorized secret resolution over cs.spec.secrets — selecting only
-// the "QUACK_TOKEN" key out of the returned map (never merging the map).
+// pair for worker injection (ADR-0091 as reworked by ADR-0137). For every binding it Gets the bound
+// CatalogService in the function's namespace, reads its status.endpoint — now the node-private catalog
+// PEP proxy URL (ADR-0137), no longer the engine — and derives the per-function catalog token
+// DeriveCatalogToken(master, ns, fn): a MAC-authenticated bearer the proxy constant-time-verifies to
+// this Function principal, then PEPs catalog::query per query. The shared QUACK_TOKEN is no longer
+// handed to the function — the proxy holds it and swaps it in only after an allow.
 //
-// It is fail-closed on readiness: if a bound catalog has no status.endpoint yet (still deploying) OR
-// its Secret carries no QUACK_TOKEN, it returns (requeue=true) with no env populated for that binding
-// — the caller holds the function Ready=False/CatalogNotReady and requeues, rather than injecting an
-// empty URL/token. Returns (nil, false, nil) when the function declares no catalogs.
+// It is fail-closed on readiness: a bound catalog with no status.endpoint yet (still deploying, or the
+// proxy not yet Ensured) returns (requeue=true) with no env — the caller holds the function
+// Ready=False/CatalogNotReady and requeues, rather than injecting an empty URL. Returns (nil, false,
+// nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through
-// mergeSecretEnv, whose FUNCD_ reserved-key guard (secrets.go:64) would silently drop them. (Mirrors
-// the catalog reconciler, which sets its own FUNCD_QUACK_PORT/FUNCD_DUCKLAKE_CATALOG directly,
-// reconcile.go:120-123.)
+// mergeSecretEnv, whose FUNCD_ reserved-key guard would silently drop them. (Mirrors the catalog
+// reconciler, which sets its own FUNCD_QUACK_PORT/FUNCD_DUCKLAKE_CATALOG directly.)
 func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (env map[string]string, requeue bool, err error) {
 	const op = "function.resolveCatalogEnv"
 	if len(fn.Spec.Catalogs) == 0 {
 		return nil, false, nil
 	}
-	if r.secrets == nil {
-		return nil, false, fault.Invalidf(op, "catalog injection needs secret resolution but it is not configured (%s/%s declares %d catalog binding(s))",
-			fn.Namespace, fn.Name, len(fn.Spec.Catalogs))
+	// The per-function catalog token is keyed by (ns, fn), so it is the SAME across every binding of
+	// this function; the proxy for each catalog resolves it to this Function principal, then PEPs
+	// catalog::query on THAT catalog. Derived once here.
+	token, terr := cataloggw.DeriveCatalogToken(r.catalogMaster, fn.Namespace, fn.Name)
+	if terr != nil {
+		return nil, false, fault.Wrapf(terr, fault.KindOf(terr), op, "derive catalog token for %s/%s", fn.Namespace, fn.Name)
 	}
 	out := make(map[string]string, len(fn.Spec.Catalogs)*2)
 	for _, bnd := range fn.Spec.Catalogs {
@@ -53,26 +53,14 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 		if !ok {
 			return nil, false, fault.Internalf(op, "object %s/%s is not a CatalogService", fn.Namespace, bnd.Catalog)
 		}
-		// Fail-closed on readiness: no published endpoint ⇒ the catalog is not Ready yet. Requeue
+		// Fail-closed on readiness: no published endpoint ⇒ the catalog proxy is not up yet. Requeue
 		// rather than inject an empty URL.
 		if cs.Status.Endpoint == "" {
 			return nil, true, nil
 		}
-		// Resolve the Quack token PDP-authorized (same secret-injector identity as the function's own
-		// secrets, ADR-0057) and select ONLY the QUACK_TOKEN key — do not merge the whole map.
-		resolved, rerr := r.secrets.ResolveEnv(ctx, r.developerFor(fn.Namespace), fn.Namespace, secretNames(cs.Spec.Secrets))
-		if rerr != nil {
-			return nil, false, fault.Wrapf(rerr, fault.KindOf(rerr), op, "resolve catalog %q token", bnd.Catalog)
-		}
-		token, ok := resolved[quackTokenKey]
-		if !ok || token == "" {
-			// The catalog's Secret carries no QUACK_TOKEN yet (or it is empty) — the provider is still
-			// coming up. Fail closed: requeue rather than inject an empty token.
-			return nil, true, nil
-		}
 		alias := strings.ToUpper(bnd.Alias)
-		out["FUNCD_CATALOG_"+alias+"_URL"] = cs.Status.Endpoint // verbatim (ADR-0091)
-		out["FUNCD_CATALOG_"+alias+"_TOKEN"] = token
+		out["FUNCD_CATALOG_"+alias+"_URL"] = cs.Status.Endpoint // the node-private catalog PEP proxy (ADR-0137)
+		out["FUNCD_CATALOG_"+alias+"_TOKEN"] = token            // per-function MAC token (ADR-0137), not the shared QUACK_TOKEN
 	}
 	return out, false, nil
 }

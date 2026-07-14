@@ -48,6 +48,21 @@ type CatalogServiceSpec struct {
 	// as env vars (ADR-0087): engine tuning (DUCKDB_*). Same env-injection shape as Secrets, but
 	// from non-sensitive ConfigMap Data. Empty ⇒ no config injection.
 	Config []ObjectName `json:"config,omitempty"`
+	// Ingress declares OPT-IN external edge exposure of this catalog's catalog::query PEP proxy
+	// (ADR-0138). Nil ⇒ internal-only (no edge route — today's default). Set ⇒ once Ready, the
+	// reconciler programs an ingress route to the PEP PROXY (never the engine), so an external caller
+	// is PEP'd on catalog::query exactly like an internal one. Exposure is a network path, not a grant:
+	// default-deny is preserved (an external Identity still needs a RolesAssignment).
+	Ingress *CatalogIngress `json:"ingress,omitempty"`
+}
+
+// CatalogIngress declares external edge exposure of a CatalogService's catalog::query PEP proxy
+// (ADR-0138). huma derives the schema from these tags (no hand-written Schema(), like CatalogRef).
+type CatalogIngress struct {
+	// PathPrefix is the edge path the proxy is exposed at, e.g. "/catalog/lake". Required (leading "/").
+	PathPrefix string `json:"pathPrefix"`
+	// Host is an optional exact host match ("" = any host), mirroring gateway.Route.Host (V1).
+	Host string `json:"host,omitempty"`
 }
 
 // CatalogRef names the bound (bucket, prefix) the DuckLake catalog syncs under (ADR-0086). The
@@ -151,6 +166,14 @@ func (c *CatalogService) Validate() error {
 	for _, cm := range c.Spec.Config {
 		if !dnsLabel.MatchString(string(cm)) {
 			return fault.Invalidf(op, "spec.config entry %q is not a valid DNS-1123 name", cm)
+		}
+	}
+	// spec.ingress (ADR-0138) opts the catalog into external edge exposure. Structural Validate checks
+	// only that the declared edge path is a rooted prefix; the route is programmed (to the PEP proxy)
+	// by the reconciler once Ready.
+	if c.Spec.Ingress != nil {
+		if c.Spec.Ingress.PathPrefix == "" || c.Spec.Ingress.PathPrefix[0] != '/' {
+			return fault.Invalidf(op, "spec.ingress.pathPrefix %q must be a non-empty rooted path (leading %q)", c.Spec.Ingress.PathPrefix, "/")
 		}
 	}
 	return nil

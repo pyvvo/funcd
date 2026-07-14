@@ -19,7 +19,9 @@ func setup(t *testing.T) (context.Context, store.Store, router.Router, *route.Re
 	ctx := context.Background()
 	st := store.New(memory.New())
 	rtr := router.New()
-	rec, err := route.NewReconciler(route.Deps{Store: st, Router: rtr})
+	// ADR-0138: the reconciler writes through the edge aggregator; rtr is the underlying table the
+	// aggregator Programs and the test Resolves against (same live table).
+	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: router.NewAggregator(rtr, nil)})
 	require.NoError(t, err)
 	return ctx, st, rtr, rec
 }

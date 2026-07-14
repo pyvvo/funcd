@@ -32,6 +32,7 @@ testcases:
           - result.bodyjson.get ShouldEqual true   # GetObject read it back, body matched
           - result.bodyjson.list ShouldBeGreaterThan 0 # ListObjectsV2 saw the key under gold/
           - result.bodyjson.denied ShouldEqual true # PutObject into unbound `other` was 403-denied by the PEP
+          - result.bodyjson.granted ShouldEqual true # PutObject+GetObject into unowned `shared` succeeded VIA the RolesAssignment grant (ADR-0136)
 
   # A DIRECT, wire-level negative (not via the function's self-report): a request carrying a forged
   # SigV4 credential (an access key the in-process IAM resolves to no account) must be rejected by the
@@ -53,6 +54,28 @@ testcases:
         assertions:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring FORGED403"
+
+  # An UNKNOWN/undecodable access key (one the in-process IAM resolves to NO account) must fail CLOSED
+  # with a clean 403 whose S3 error code is `InvalidAccessKeyId` — NOT a 500 InternalError the AWS SDK
+  # then retries. This guards the gateway fix: GetUserAccount returns the versity sentinel auth.ErrNoSuchUser
+  # (→ 403 InvalidAccessKeyId in the SigV4 middleware), instead of a generic not-found error (→ 500).
+  # UNKNOWN403 / UNKNOWNBAD are disjoint markers; UNKNOWNBAD echoes the code+body so a regression is legible.
+  - name: an unknown access key is rejected with a clean 403 InvalidAccessKeyId (not a 500)
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc 'D=$(date -u +%Y%m%dT%H%M%SZ); DD=$(date -u +%Y%m%d); \
+            code=$(curl -s -o /tmp/unk.xml -w "%{http_code}" --max-time 10 -X PUT \
+            -H "Authorization: AWS4-HMAC-SHA256 Credential=AKIAUNKNOWN000000000/$DD/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=1111111111111111111111111111111111111111111111111111111111111111" \
+            -H "x-amz-date: $D" -H "x-amz-content-sha256: UNSIGNED-PAYLOAD" \
+            "http://127.0.0.1:9000/lakehouse/gold/unknown.txt"); \
+            if [ "$code" = 403 ] && grep -q InvalidAccessKeyId /tmp/unk.xml; then echo "UNKNOWN403 code=$code"; else echo "UNKNOWNBAD code=$code body=$(cat /tmp/unk.xml)"; fi'
+        retry: 5
+        delay: 2
+        info: "unknown-key → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring UNKNOWN403"
 
   # ADR-0119 (F83) — REACTIVE INGESTION: the first case's s3-roundtrip invoke PUT an object into
   # lakehouse/gold/ over the S3 frontend (an external SigV4 write). The `gold-drops` blob EventSource polls
