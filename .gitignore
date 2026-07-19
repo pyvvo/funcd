@@ -76,3 +76,6 @@ data/
 # funcdctl dev --persist state dir (durable Badger metastore/kv + fileblob under per-service subdirs,
 # ADR-0125 Decision 7) — a `.funcd-dev/` dir in ANY manifest/working dir; never committed
 .funcd-dev/
+
+# S3-gateway node master secret — generated at runtime by LoadOrCreateMaster (ADR-0085), never committed
+**/s3gateway/master.key
