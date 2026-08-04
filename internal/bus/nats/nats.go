@@ -99,7 +99,11 @@ func Open(ctx context.Context, opts Options) (bus.Bus, error) {
 		cleanup()
 		return nil, fault.Internalf("nats.Open", "jetstream: %v", err)
 	}
-	return &embedded{srv: srv, nc: nc, js: js, storage: opts.Storage, cleanup: cleanup, subs: map[int]func(){}}, nil
+	return &embedded{
+		srv: srv, nc: nc, js: js, storage: opts.Storage, cleanup: cleanup,
+		subs:    map[int]func(){},
+		covered: map[bus.Subject]bool{},
+	}, nil
 }
 
 type embedded struct {
@@ -109,10 +113,11 @@ type embedded struct {
 	storage Storage
 	cleanup func()
 
-	mu     sync.Mutex     // guards subs/nextID/closed
-	subs   map[int]func() // live subscriptions/consumers -> their stop func
-	nextID int
-	closed bool
+	mu      sync.Mutex     // guards subs/nextID/closed/covered
+	subs    map[int]func() // live subscriptions/consumers -> their stop func
+	nextID  int
+	closed  bool
+	covered map[bus.Subject]bool // memoized streamCovers; cleared by EnsureStream
 }
 
 // register records a live subscription/consumer's stop func so Close() can stop it
@@ -144,18 +149,54 @@ func (e *embedded) streamStorage() jetstream.StorageType {
 	return jetstream.MemoryStorage
 }
 
+// Publish is DURABLE on a stream-covered subject: it waits for the JetStream PubAck, so the message is
+// persisted before returning (ADR-0008 crash-recovery — a Close/crash right after Publish must not lose
+// it). A core publish + Flush only proves the bytes reached the server, leaving an async capture window.
+// An uncovered subject stays core pub/sub (ADR-0008 pubsub-* are non-durable by design, and a JetStream
+// publish there would block on an ack no stream sends); core subscribers see either form.
 func (e *embedded) Publish(ctx context.Context, subject bus.Subject, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Core publish; a JetStream stream covering the subject captures it durably.
-	if err := e.nc.Publish(string(subject), data); err != nil {
-		return mapErr("bus.Publish", err)
+	covered, err := e.streamCovers(ctx, subject)
+	if err != nil {
+		return err
 	}
-	if err := e.nc.Flush(); err != nil {
-		return mapErr("bus.Publish", err)
+	if covered {
+		if _, perr := e.js.Publish(ctx, string(subject), data); perr != nil {
+			return mapErr("bus.Publish", perr)
+		}
+		return nil
+	}
+	if perr := e.nc.Publish(string(subject), data); perr != nil {
+		return mapErr("bus.Publish", perr)
+	}
+	if ferr := e.nc.Flush(); ferr != nil {
+		return mapErr("bus.Publish", ferr)
 	}
 	return nil
+}
+
+// streamCovers reports whether a stream captures subject, memoized (one round-trip per subject).
+// A lookup error other than "no stream" is surfaced — never silently downgrade to a non-durable publish.
+func (e *embedded) streamCovers(ctx context.Context, subject bus.Subject) (bool, error) {
+	e.mu.Lock()
+	if covered, ok := e.covered[subject]; ok {
+		e.mu.Unlock()
+		return covered, nil
+	}
+	e.mu.Unlock()
+
+	_, err := e.js.StreamNameBySubject(ctx, string(subject))
+	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
+		return false, mapErr("bus.Publish", err)
+	}
+	covered := err == nil
+
+	e.mu.Lock()
+	e.covered[subject] = covered
+	e.mu.Unlock()
+	return covered, nil
 }
 
 func (e *embedded) Subscribe(ctx context.Context, subject bus.Subject) (bus.Subscription, error) {
@@ -211,6 +252,10 @@ func (e *embedded) EnsureStream(ctx context.Context, cfg bus.StreamConfig) error
 	}); err != nil {
 		return mapErr("bus.EnsureStream", err)
 	}
+	// a subject resolved as uncovered may now be captured — re-resolve so it publishes durably.
+	e.mu.Lock()
+	clear(e.covered)
+	e.mu.Unlock()
 	return nil
 }
 

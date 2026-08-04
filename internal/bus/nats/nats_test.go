@@ -3,6 +3,7 @@ package nats_test
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +157,59 @@ func TestScenario_CrashRecovery(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("crash-recovery: timed out — message not recovered")
+	}
+}
+
+// scenario: crash-recovery (durability guard) — Publish must return only AFTER persisting, so closing
+// with no grace period loses nothing. A batch is the reliable detector: a non-durable publish (core +
+// Flush) drops at least one of many in the async capture window, where a single message usually survives.
+func TestScenario_PublishIsDurableBeforeReturn(t *testing.T) {
+	const count = 25
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	b1, err := natsdriver.Open(ctx, natsdriver.Options{Storage: natsdriver.FileStorage, StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open(1): %v", err)
+	}
+	if err := b1.EnsureStream(ctx, bus.StreamConfig{Name: "DURBATCH", Subjects: []bus.Subject{"durb.>"}}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	for i := range count {
+		if err := b1.Publish(ctx, "durb.1", []byte(strconv.Itoa(i))); err != nil {
+			t.Fatalf("Publish(%d): %v", i, err)
+		}
+	}
+	// no drain, no sleep — every message must already be durable
+	if err := b1.Close(); err != nil {
+		t.Fatalf("close(1): %v", err)
+	}
+
+	b2, err := natsdriver.Open(ctx, natsdriver.Options{Storage: natsdriver.FileStorage, StoreDir: dir})
+	if err != nil {
+		t.Fatalf("open(2): %v", err)
+	}
+	defer func() { _ = b2.Close() }()
+	c, err := b2.Consume(ctx, bus.ConsumeConfig{Stream: "DURBATCH", Durable: "d1", Subject: "durb.>"})
+	if err != nil {
+		t.Fatalf("Consume after reopen: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	seen := make(map[string]bool, count)
+	deadline := time.After(30 * time.Second)
+	for len(seen) < count {
+		select {
+		case m, ok := <-c.C():
+			if !ok {
+				t.Fatal("consumer channel closed")
+			}
+			seen[string(m.Data)] = true
+			if err := m.Ack(); err != nil {
+				t.Fatalf("Ack: %v", err)
+			}
+		case <-deadline:
+			t.Fatalf("durability: recovered only %d/%d messages — Publish returned before persisting", len(seen), count)
+		}
 	}
 }
