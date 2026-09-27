@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // runTick is the base resolution of the Run loop; a named event fires when at least its Interval has

@@ -6,7 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // RegisterRoutes registers every kind's CRUD operation on api, dispatching to h.

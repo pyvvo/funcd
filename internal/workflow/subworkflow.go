@@ -8,9 +8,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 // ChildResolver resolves a child workflow's pinned spec + its resolved step-image cache for a `workflow:`

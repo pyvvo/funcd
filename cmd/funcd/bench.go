@@ -16,10 +16,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/runtime/ctrmanager"
-	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
-	shimpython "github.com/green-0-rabbit/funcd/shim/python"
+	shimpython "github.com/pyvvo/funcd-python/shim"
+	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
+	"github.com/pyvvo/funcd/internal/testkit/bench"
 )
 
 // benchContainerdNamespace is the dedicated, isolated containerd namespace the --containerd lane
@@ -75,9 +76,9 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&c.shim, "shim", "shim/nodejs/shim.mjs", "path to the node runtime shim")
-	f.StringVar(&c.poolShim, "pool-shim", "shim/nodejs/pool.mjs",
-		"path to the pooled worker_threads shim (ADR-0044; \"\" to skip)")
+	f.StringVar(&c.shim, "shim", "", "path to the node runtime shim (default: the embedded shim)")
+	f.StringVar(&c.poolShim, "pool-shim", "",
+		"path to the pooled worker_threads shim (ADR-0044; default: the embedded pool shim; a missing path skips the comparison)")
 	f.StringVar(&c.python, "python", "",
 		"python ≥3.14 for the Python pool comparison (ADR-0050); default auto-detect, none found ⇒ skip")
 	f.IntVar(&c.concurrency, "concurrency", 8, "load workers")
@@ -129,7 +130,8 @@ func runInProcess(ctx context.Context, out io.Writer, c benchConfig) error {
 		logf(out, "funcd bench: node not on PATH (the shim runs JS) — skipping the in-process lane\n")
 		return nil
 	}
-	shimPath, poolShimPath, err := resolveShimPaths(c)
+	shimPath, poolShimPath, cleanup, err := resolveShimPaths(c)
+	defer cleanup()
 	if err != nil {
 		return err
 	}
@@ -143,15 +145,35 @@ func runInProcess(ctx context.Context, out io.Writer, c benchConfig) error {
 	return reportPythonPool(ctx, out, c)
 }
 
-// resolveShimPaths resolves the required node shim (error if missing) and the optional pool shim
-// to absolute paths; poolShimPath is "" when unset or not found (pooling comparison skipped).
-func resolveShimPaths(c benchConfig) (shimPath, poolShimPath string, err error) {
-	shimPath, err = filepath.Abs(c.shim)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve shim path: %w", err)
+// resolveShimPaths returns the node shim and the pool shim to run. An empty flag extracts the
+// embedded copy (ADR-0141) into a temp dir that cleanup removes; an explicit --shim must exist, and an
+// explicit --pool-shim that is missing leaves poolShimPath "" (pooling comparison skipped).
+func resolveShimPaths(c benchConfig) (shimPath, poolShimPath string, cleanup func(), err error) {
+	cleanup = func() {}
+	if c.shim == "" || c.poolShim == "" {
+		dir, derr := os.MkdirTemp("", "funcd-bench-nodeshim-*")
+		if derr != nil {
+			return "", "", cleanup, fmt.Errorf("temp dir for the embedded node shims: %w", derr)
+		}
+		cleanup = func() { _ = os.RemoveAll(dir) }
+		if c.shim == "" {
+			if shimPath, err = writeEmbeddedShim(dir, "shim.mjs", shimnode.Shim); err != nil {
+				return "", "", cleanup, err
+			}
+		}
+		if c.poolShim == "" {
+			if poolShimPath, err = writeEmbeddedShim(dir, "pool.mjs", shimnode.Pool); err != nil {
+				return "", "", cleanup, err
+			}
+		}
 	}
-	if _, serr := os.Stat(shimPath); serr != nil {
-		return "", "", fmt.Errorf("shim not found at %s — run `just build-shim`: %w", shimPath, serr)
+	if c.shim != "" {
+		if shimPath, err = filepath.Abs(c.shim); err != nil {
+			return "", "", cleanup, fmt.Errorf("resolve shim path: %w", err)
+		}
+		if _, serr := os.Stat(shimPath); serr != nil {
+			return "", "", cleanup, fmt.Errorf("shim not found at %s: %w", shimPath, serr)
+		}
 	}
 	if c.poolShim != "" {
 		if p, perr := filepath.Abs(c.poolShim); perr == nil {
@@ -160,7 +182,15 @@ func resolveShimPaths(c benchConfig) (shimPath, poolShimPath string, err error) 
 			}
 		}
 	}
-	return shimPath, poolShimPath, nil
+	return shimPath, poolShimPath, cleanup, nil
+}
+
+func writeEmbeddedShim(dir, name string, data []byte) (string, error) {
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		return "", fmt.Errorf("extract the embedded %s: %w", name, err)
+	}
+	return p, nil
 }
 
 // runSubstrateBench runs the per-substrate sustainability bench, writes the report, prints one

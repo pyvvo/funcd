@@ -15,9 +15,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // shimPlatform boots an InMemory platform running real functions on the process-driver
@@ -25,11 +26,7 @@ import (
 // data-plane base URL. Node-gated.
 func shimPlatform(t *testing.T) (*sdk.Client, string, string) {
 	t.Helper()
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the data-plane node lane")

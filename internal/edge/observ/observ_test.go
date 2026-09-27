@@ -13,9 +13,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/green-0-rabbit/funcd/internal/edge/observ"
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 )
 
 func serve(t *testing.T, mw func(http.Handler) http.Handler, next http.Handler, r *http.Request) *httptest.ResponseRecorder {

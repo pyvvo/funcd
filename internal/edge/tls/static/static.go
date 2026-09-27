@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 const op = "edge.tls.static"

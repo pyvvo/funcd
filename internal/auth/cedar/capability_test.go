@@ -8,9 +8,9 @@ import (
 	cedartypes "github.com/cedar-policy/cedar-go/types"
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // regMeta is an in-memory MetaReader for the registry unit tests (an internal package cedar test so it

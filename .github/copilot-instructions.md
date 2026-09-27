@@ -28,7 +28,7 @@ doc, commit message, code, code comment, example, **or even a grep-pattern strin
 
 - **no** absolute OS paths (`/Users/<user>/…`, `/home/<user>/…`, `C:\Users\…`) — every path is **project-root-relative**;
 - **no** local machine **username**, home-directory name, or personal **email**;
-- the only identity the repo knows is `green-0-rabbit` / `github.com/green-0-rabbit/funcd` / "The funcd Authors".
+- the only identity the repo knows is `green-0-rabbit` / `github.com/pyvvo/funcd` / "The funcd Authors".
 
 This is **non-negotiable and binds subagents too** (judge, review, summary — every gate that writes a file). If
 you must *describe* a check, describe it generically ("grepped for the local username / abs-path") — **never
@@ -135,12 +135,12 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - Roadmap `P-x` placeholders reconcile to real ADR numbers as ADRs land (track by the
   stable **feature code** `Fxx`, not the placeholder).
 - Identity in every repo file: `Deciders: green-0-rabbit`, module
-  `github.com/green-0-rabbit/funcd`, author "The funcd Authors". **Never** write the local
+  `github.com/pyvvo/funcd`, author "The funcd Authors". **Never** write the local
   machine username or local filesystem paths into a tracked file — grep before finishing.
 - **Paths are always project-root-relative — never absolute OS paths.** The repository root is
   your path origin: every path you write into a tracked file, a commit message, a doc, a report,
   or any generated/committed output must be relative to the project root (e.g. `docs/reviews/…`,
-  `shim/python/src/…`), **never** an absolute working-OS path (`/Users/<user>/…`, `/home/<user>/…`,
+  `pkg/funcd/…`), **never** an absolute working-OS path (`/Users/<user>/…`, `/home/<user>/…`,
   `C:\Users\…`). The OS-absolute prefix leaks the machine username and is non-portable. This holds
   even inside example/illustrative strings (e.g. a grep pattern shown in a review doc) — write the
   *pattern token* generically (`/Users/`, `<user>`), never the real path. The **only** exception:

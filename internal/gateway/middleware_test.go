@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gateway"
 )
 
 // scenario: middleware-chain-order — the chain runs middlewares in declared order

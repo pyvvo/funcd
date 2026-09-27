@@ -3,9 +3,9 @@ package embedded_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/gateway/gatewaycontract"
+	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/gateway/gatewaycontract"
 )
 
 // scenario: driver-conformance-parity (and the route/strip/404/reprogram

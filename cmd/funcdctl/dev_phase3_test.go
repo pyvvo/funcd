@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // startDevPath boots funcdctl dev over an explicit path (a workflow.yaml or a manifest dir) and tears it

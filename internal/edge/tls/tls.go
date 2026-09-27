@@ -10,9 +10,9 @@ import (
 	"crypto/tls"
 	"log/slog"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/edge/tls/acme"
-	"github.com/green-0-rabbit/funcd/internal/edge/tls/static"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/edge/tls/acme"
+	"github.com/pyvvo/funcd/internal/edge/tls/static"
 )
 
 // Mode selects the certificate issuance strategy.

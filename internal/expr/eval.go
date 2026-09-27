@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/dop251/goja"
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 const evalOp = "expr.eval"

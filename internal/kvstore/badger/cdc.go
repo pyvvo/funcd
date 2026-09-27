@@ -11,8 +11,8 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/bus"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/bus"
 )
 
 // cdc implements the ADR-0066 CDC seam (ADR-0068) as a transactional outbox: every write appends a

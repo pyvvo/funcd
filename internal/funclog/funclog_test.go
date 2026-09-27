@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/funclog"
-	"github.com/green-0-rabbit/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 func memBucket(t *testing.T) blob.Bucket {

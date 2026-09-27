@@ -3,8 +3,8 @@ package contract_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/contract"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/contract"
 )
 
 // scenario: type-is-source-of-truth / the def — every SUPPORTED construct is accepted.

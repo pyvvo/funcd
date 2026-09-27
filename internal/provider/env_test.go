@@ -6,11 +6,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/provider"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	storemem "github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/store"
+	storemem "github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // fakeSecretResolver is a consumer-side SecretResolver double: it returns a canned env.

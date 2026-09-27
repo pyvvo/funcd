@@ -12,15 +12,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/function"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
 // scenario: materializer-satisfies-adr0030-seam (node-gated) — the OrasMaterializer is
@@ -28,11 +29,7 @@ import (
 // reconciler pulls the pushed artifact by digest from a local OCI layout and the real Node
 // shim runs it to Ready. Proves the P-V-1 + P-V-A seam composes, not just type-asserts.
 func TestScenarioMaterializerSatisfiesADR0030SeamNode(t *testing.T) {
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the node-gated seam test")

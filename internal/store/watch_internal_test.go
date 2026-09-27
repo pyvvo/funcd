@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // fakeEngine is a minimal in-test store.Engine. It lives in package store (white-box)

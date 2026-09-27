@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/edge/router"
-	"github.com/green-0-rabbit/funcd/internal/provider"
-	"github.com/green-0-rabbit/funcd/internal/secrets"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/secrets"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // quackTokenEnvKey is the engine-env key the resolved shared Quack/engine token lives under (ADR-0086,

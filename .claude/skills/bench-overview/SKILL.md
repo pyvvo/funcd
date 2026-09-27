@@ -18,14 +18,15 @@ The raw report is the source of truth. `bench-overview.md` interprets it — nev
 
 ## Step 0 — Preconditions (node-gated)
 
-The harness runs real JS, so it needs **node** on PATH and the bundled shim present:
+The harness runs real JS, so it needs **node** on PATH. The shims are embedded from the pinned
+funcd-typescript module (ADR-0141), so there is nothing to build:
 
 ```bash
 command -v node            # required; without it the bench skips (say so, stop)
-ls shim/nodejs/shim.mjs    # the embedded shim; if missing/stale, run: just build-shim
 ```
 
-If `shim.mjs` is missing (or `shim/nodejs/src/*.ts` changed since it was built), run `just build-shim` first.
+To bench an unreleased shim, point a gitignored `go.work` at a funcd-typescript clone, or pass
+`--shim`/`--pool-shim` paths.
 
 ## Step 1 — Produce the RAW report
 

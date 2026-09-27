@@ -28,7 +28,7 @@ doc, commit message, code, code comment, example, **or even a grep-pattern strin
 
 - **no** absolute OS paths (`/Users/<user>/…`, `/home/<user>/…`, `C:\Users\…`) — every path is **project-root-relative**;
 - **no** local machine **username**, home-directory name, or personal **email**;
-- the only identity the repo knows is `green-0-rabbit` / `github.com/green-0-rabbit/funcd` / "The funcd Authors".
+- the only identity the repo knows is `green-0-rabbit` / `github.com/pyvvo/funcd` / "The funcd Authors".
 
 This is **non-negotiable and binds subagents too** (judge, review, summary — every gate that writes a file). If
 you must *describe* a check, describe it generically ("grepped for the local username / abs-path") — **never
@@ -135,12 +135,12 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - Roadmap `P-x` placeholders reconcile to real ADR numbers as ADRs land (track by the
   stable **feature code** `Fxx`, not the placeholder).
 - Identity in every repo file: `Deciders: green-0-rabbit`, module
-  `github.com/green-0-rabbit/funcd`, author "The funcd Authors". **Never** write the local
+  `github.com/pyvvo/funcd`, author "The funcd Authors". **Never** write the local
   machine username or local filesystem paths into a tracked file — grep before finishing.
 - **Paths are always project-root-relative — never absolute OS paths.** The repository root is
   your path origin: every path you write into a tracked file, a commit message, a doc, a report,
   or any generated/committed output must be relative to the project root (e.g. `docs/reviews/…`,
-  `shim/python/src/…`), **never** an absolute working-OS path (`/Users/<user>/…`, `/home/<user>/…`,
+  `pkg/funcd/…`), **never** an absolute working-OS path (`/Users/<user>/…`, `/home/<user>/…`,
   `C:\Users\…`). The OS-absolute prefix leaks the machine username and is non-portable. This holds
   even inside example/illustrative strings (e.g. a grep pattern shown in a review doc) — write the
   *pattern token* generically (`/Users/`, `<user>`), never the real path. The **only** exception:
@@ -268,6 +268,26 @@ the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just b
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
+## The language repos — pinned Go modules, never copies (ADR-0141)
+
+The shims and their examples live in [pyvvo/funcd-typescript](https://github.com/pyvvo/funcd-typescript) and
+[pyvvo/funcd-python](https://github.com/pyvvo/funcd-python), not here. funcd pins both in `go.mod` at release
+tags and reads them through the Go module system:
+
+- **Embedded shims**: `cmd/funcd` and `cmd/funcdctl` import `github.com/pyvvo/funcd-typescript/shim`
+  (`Shim`, `Pool`) and `github.com/pyvvo/funcd-python/shim` (`Extract`).
+- **Files** (examples, the image's shim): `scripts/moddir.sh <module>` in recipes and lanes,
+  `internal/testkit/langmod` in tests. The module cache is **read-only**; anything that writes beside an
+  example works on a copy under `.modcopy/` (`scripts/example-copy.sh`, a lane's `copy: true`).
+- **Only `go.mod`/`go.sum` name a language-module version** (`just check-hygiene` enforces it).
+- **A shim change** is a PR and a release in the language repo, then `go get <module>@<tag>` here. To test
+  an unreleased change, clone the repo next to funcd and add a local `go.work`
+  (`go work init . ../funcd-typescript`); git ignores it. Never commit a `go.work` or a pseudo-version.
+- **One session across repos**: start Claude Code in funcd with the siblings added
+  (`claude --add-dir ../funcd-typescript --add-dir ../funcd-python`), so a shim change, its release and
+  the funcd bump happen in one conversation. Each repo keeps its own CLAUDE.md, PR flow and merge queue.
+- **Design decisions still live here**: a change to the funcd ↔ shim contract needs a funcd ADR first.
+
 ## ⛔ Grounding — never present invention as fact
 
 Design work *necessarily* invents: a proposed CRD shape, a new port, a contract that does not exist yet.
@@ -353,7 +373,8 @@ four checks above pass, the implementation is done; `just ci` will pass after co
 ### 3. The containerd Lima lanes need colima (Docker) running — start it if a lane fails early
 
 The `just lima-example-*` lanes (KV, fn-to-fn, …) and `build-runtime-images` build the embedded
-runtime images with `docker build`, so they require **colima to be running** (it provides the
+runtime images with `docker build` (the shim comes from the pinned module as the `shim` build context,
+ADR-0141), so they require **colima to be running** (it provides the
 Docker daemon on macOS — a *separate host daemon* from the flake-pinned Lima). If colima is
 stopped, the lane fails **early in `build-runtime-images`** with a Docker-socket connection error
 (`failed to connect to the docker API … : no such file or directory`) — *before* the VM ever

@@ -8,15 +8,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/eventing"
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
-	dlbadger "github.com/green-0-rabbit/funcd/internal/eventing/deadletter/badger"
-	dlmemory "github.com/green-0-rabbit/funcd/internal/eventing/deadletter/memory"
-	"github.com/green-0-rabbit/funcd/internal/sensor"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	dlbadger "github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
+	dlmemory "github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
+	"github.com/pyvvo/funcd/internal/sensor"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // scriptedInvoker fails its first `failFirst` calls then succeeds; failFirst < 0 ⇒ always fail. A real

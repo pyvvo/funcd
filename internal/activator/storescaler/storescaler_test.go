@@ -7,11 +7,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/activator"
-	"github.com/green-0-rabbit/funcd/internal/activator/storescaler"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/activator/storescaler"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 func putFunction(t *testing.T, st store.Store, name string, phase v1.Phase) {

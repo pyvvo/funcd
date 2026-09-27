@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // CatalogService is a namespaced add-on-provider instance (ADR-0086, F48): a governed SQL

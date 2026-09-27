@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Policy is a namespaced authorization resource (ADR-0074): its spec is Cedar policy text (one or

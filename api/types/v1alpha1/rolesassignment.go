@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // PrincipalKind is the kind of a principal a role is assigned to.

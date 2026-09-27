@@ -9,10 +9,10 @@ package storescaler
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/activator"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // maxAttempts bounds the optimistic-concurrency retry loop on fault.Conflict.

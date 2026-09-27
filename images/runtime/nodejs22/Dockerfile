@@ -17,8 +17,9 @@
 # with: just build-runtime-images   (docker build -> docker save, gzip -9 OCI tars per arch).
 FROM gcr.io/distroless/nodejs22-debian12
 
-# The funcd runtime shim, copied to a fixed path and run as node's entrypoint target.
-COPY shim/nodejs/shim.mjs /opt/funcd/shim.mjs
+# The funcd runtime shim, copied to a fixed path and run as node's entrypoint target. `shim` is a
+# named build context: the pinned funcd-typescript module's shim/ dir (ADR-0141).
+COPY --from=shim shim.mjs /opt/funcd/shim.mjs
 
 # Where the platform bind-mounts the function artifact (read-only).
 ENV FUNCD_ARTIFACT=/var/funcd/artifact/handler.mjs

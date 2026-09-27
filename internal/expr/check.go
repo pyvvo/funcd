@@ -5,7 +5,7 @@ import (
 
 	"github.com/dop251/goja/ast"
 	"github.com/dop251/goja/token"
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 const checkOp = "expr.check"

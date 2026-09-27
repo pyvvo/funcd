@@ -15,8 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // applyConfigMap creates a ConfigMap (non-sensitive Data → env via spec.config, ADR-0093).

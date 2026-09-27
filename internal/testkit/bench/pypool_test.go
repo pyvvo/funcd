@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/testkit/bench"
-	shimpython "github.com/green-0-rabbit/funcd/shim/python"
+	shimpython "github.com/pyvvo/funcd-python/shim"
+	"github.com/pyvvo/funcd/internal/testkit/bench"
 )
 
 // TestPythonPoolSmoke exercises the Python solo-vs-pool comparison (ADR-0050). Py-gated: skipped

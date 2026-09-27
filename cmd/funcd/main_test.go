@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,16 +16,18 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
-	"github.com/green-0-rabbit/funcd/internal/platform/config"
-	"github.com/green-0-rabbit/funcd/internal/platform/version"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
-	shimnode "github.com/green-0-rabbit/funcd/shim/nodejs"
+	shimpython "github.com/pyvvo/funcd-python/shim"
+	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario: production-injects-substrate (ADR-0043) — Production() no longer wires blob/bus, so
@@ -95,6 +98,42 @@ func TestShimEmbedded(t *testing.T) {
 	t.Parallel()
 	require.NotEmpty(t, shimnode.Shim, "the runtime shim is embedded")
 	require.Contains(t, string(shimnode.Shim), "FUNCD_PORT", "it is the ADR-0030/0032 shim contract")
+}
+
+// scenario: shim-from-pinned-module (ADR-0141) — the binary embeds the pinned language modules'
+// shims byte for byte (the Node shim + pool, and the Python package tree the daemon extracts), and
+// funcd itself holds no shim source.
+func TestScenarioShimFromPinnedModule(t *testing.T) {
+	ts := langmod.Dir(t, langmod.TypeScript)
+	for name, embedded := range map[string][]byte{"shim.mjs": shimnode.Shim, "pool.mjs": shimnode.Pool} {
+		want, err := os.ReadFile(filepath.Join(ts, "shim", name))
+		require.NoError(t, err)
+		require.Equal(t, want, embedded, "the embedded %s is the pinned module's", name)
+	}
+
+	src := filepath.Join(langmod.Dir(t, langmod.Python), "shim", "src")
+	dir := t.TempDir()
+	_, _, err := shimpython.Extract(dir)
+	require.NoError(t, err)
+	extracted := 0
+	require.NoError(t, filepath.WalkDir(filepath.Join(dir, "funcd_shim"), func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil || d.IsDir() {
+			return werr
+		}
+		rel, rerr := filepath.Rel(dir, p)
+		require.NoError(t, rerr)
+		got, gerr := os.ReadFile(p)
+		require.NoError(t, gerr)
+		want, rerr := os.ReadFile(filepath.Join(src, rel))
+		require.NoError(t, rerr)
+		require.Equal(t, want, got, "the extracted %s is the pinned module's", rel)
+		extracted++
+		return nil
+	}))
+	require.Positive(t, extracted, "the Python shim tree was extracted")
+
+	_, err = os.Stat(filepath.Join("..", "..", "shim"))
+	require.ErrorIs(t, err, fs.ErrNotExist, "funcd holds no shim source")
 }
 
 // scenario: process-mode extracts the shim — executionOptions (default mode) extracts the

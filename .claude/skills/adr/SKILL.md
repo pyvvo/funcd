@@ -152,7 +152,7 @@ the ADR `Implemented` on a pass.
 ## Project conventions (apply silently throughout)
 
 - **Identity**: `Deciders: green-0-rabbit`; module paths use
-  `github.com/green-0-rabbit/funcd`; copyright "The funcd Authors". Never write the
+  `github.com/pyvvo/funcd`; copyright "The funcd Authors". Never write the
   local machine username or local filesystem paths into repo files — before finishing,
   grep the changed files for the local username to verify nothing leaked.
 - Filenames: `NNNN-kebab-case-title.md`, numbers sequential, never reused.

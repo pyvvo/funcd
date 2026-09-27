@@ -31,10 +31,10 @@ import (
 	gocni "github.com/containerd/go-cni"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/runtime/embedimg"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/embedimg"
 )
 
 // stopGrace is how long Stop waits after SIGTERM before sending SIGKILL.

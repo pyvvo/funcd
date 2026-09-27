@@ -157,7 +157,7 @@ Once every requested item is `Implemented`:
 
 ## Project conventions (apply silently throughout)
 
-- **Identity**: `Deciders: green-0-rabbit`; module `github.com/green-0-rabbit/funcd`; author "The funcd
+- **Identity**: `Deciders: green-0-rabbit`; module `github.com/pyvvo/funcd`; author "The funcd
   Authors". Never write the local machine username or local filesystem paths into any tracked file —
   grep changed files before finishing.
 - **Propagation in the same session** (CLAUDE.md): an ADR status move owes its feat row (and blueprint, if

@@ -16,7 +16,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Format selects the slog handler rendering. The empty value is valid and

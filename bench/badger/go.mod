@@ -1,4 +1,4 @@
-module github.com/green-0-rabbit/funcd/bench/badger
+module github.com/pyvvo/funcd/bench/badger
 
 go 1.26.4
 

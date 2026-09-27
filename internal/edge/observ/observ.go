@@ -23,8 +23,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/platform/observability"
+	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 )
 
 // Config toggles the three observability signals. A zero Config is a pass-through.

@@ -23,18 +23,18 @@ type Result struct {
 
 // Report is the whole run: the config it ran under, every scenario, and the on-disk + peak summary.
 type Report struct {
-	Profile     string   `json:"profile"`
-	Keys        int      `json:"keys"`
-	Funcs       int      `json:"funcs"`
-	ValueBytes  int      `json:"valueBytes"`
-	SyncWrites  bool     `json:"syncWrites"`
-	GOMAXPROCS  int      `json:"gomaxprocs"`
-	LSMBytes    int64    `json:"lsmBytes"`
-	VlogBytes   int64    `json:"vlogBytes"`
-	DirBytes    int64    `json:"dirBytes"`
-	RunPeakRSS  float64  `json:"runPeakRssMB"`
-	FinalRSSMB  float64  `json:"finalRssMB"`
-	Results     []Result `json:"results"`
+	Profile    string   `json:"profile"`
+	Keys       int      `json:"keys"`
+	Funcs      int      `json:"funcs"`
+	ValueBytes int      `json:"valueBytes"`
+	SyncWrites bool     `json:"syncWrites"`
+	GOMAXPROCS int      `json:"gomaxprocs"`
+	LSMBytes   int64    `json:"lsmBytes"`
+	VlogBytes  int64    `json:"vlogBytes"`
+	DirBytes   int64    `json:"dirBytes"`
+	RunPeakRSS float64  `json:"runPeakRssMB"`
+	FinalRSSMB float64  `json:"finalRssMB"`
+	Results    []Result `json:"results"`
 }
 
 func round(f float64) float64 { return math.Round(f*100) / 100 }

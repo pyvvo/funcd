@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/edge/limit"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/internal/edge/limit"
+	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
 // scenario: over-rate-429-no-wake (e2e, F75/ADR-0112) — the ingress limiter runs on the real

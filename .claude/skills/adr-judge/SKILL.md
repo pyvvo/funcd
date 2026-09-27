@@ -186,7 +186,7 @@ by a new superseding ADR, never in place).
 ## Project conventions (apply silently throughout)
 
 - **Identity**: `Deciders: green-0-rabbit`; module paths use
-  `github.com/green-0-rabbit/funcd`; copyright "The funcd Authors". Never write the local
+  `github.com/pyvvo/funcd`; copyright "The funcd Authors". Never write the local
   machine username or local filesystem paths into repo files.
 - **License gate**: any dependency the ADR proposes must be Apache-2.0/MIT-compatible —
   if the ADR didn't check, that omission is itself a Major finding.

@@ -16,11 +16,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // harness is an embedded funcd platform with an INJECTED process runtime (so a chaos test can find
@@ -37,11 +38,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Skip("node not on PATH — the chaos lane needs a real worker")
 	}
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not built at %s (run `just build-shim`)", shim)
-	}
+	shim := langmod.NodeShim(t)
 	rt := process.New()
 	p, err := funcd.New(funcd.InMemory(), funcd.WithRuntime(rt), funcd.WithRuntimeShim(node, shim))
 	require.NoError(t, err)

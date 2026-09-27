@@ -20,17 +20,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/activator"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/envresolve"
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/pooling"
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/scheduler"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/envresolve"
+	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/pooling"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/scheduler"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 const (

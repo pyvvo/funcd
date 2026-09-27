@@ -11,8 +11,8 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // fakeBucket is an in-memory blob.Bucket recording puts (count + bytes) and able to inject upload failures

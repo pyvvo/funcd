@@ -9,12 +9,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
-	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
-	"github.com/green-0-rabbit/funcd/internal/workernode/local"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
+	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // kvPDP is a test PDP (ADR-0074): kv::read allowed iff readOK (a permitting Policy stand-in); kv::write

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	containerrt "github.com/green-0-rabbit/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/gateway"
+	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
 // Runtime is the add-on-provider runtime. It REUSES the existing runtime.Runtime container port

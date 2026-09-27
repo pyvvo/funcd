@@ -7,14 +7,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/edge/router"
-	"github.com/green-0-rabbit/funcd/internal/provider"
-	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	storemem "github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/provider"
+	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
+	"github.com/pyvvo/funcd/internal/store"
+	storemem "github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // recordingRoutes is a router.EntrySetter double that holds each source's last-Set slice — the edge

@@ -7,8 +7,8 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // VoidSchema is the canonical void side (ADR-0090/0122): a contract side that carries no

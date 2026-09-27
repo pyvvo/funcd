@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/scheduler"
+	"github.com/pyvvo/funcd/internal/scheduler"
 )
 
 // Run asserts the Scheduler port guarantee against s: every valid request yields a

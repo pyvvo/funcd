@@ -7,14 +7,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
-	"github.com/green-0-rabbit/funcd/internal/secrets"
-	"github.com/green-0-rabbit/funcd/internal/secrets/aesgcm"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/secrets"
+	"github.com/pyvvo/funcd/internal/secrets/aesgcm"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 func key32() []byte {

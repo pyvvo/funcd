@@ -17,16 +17,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/function"
-	"github.com/green-0-rabbit/funcd/internal/gateway"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
 // fakeRuntime is a controllable runtime.Runtime for the shim-mode reconciler tests
@@ -304,7 +305,7 @@ func TestScenarioCuratedImageBuilds(t *testing.T) {
 	require.NoError(t, err)
 	df := string(data)
 	require.Contains(t, df, "FROM gcr.io/distroless/nodejs22-debian12", "based on the distroless Node 22 runtime (ADR-0054)")
-	require.Contains(t, df, "COPY shim/nodejs/shim.mjs /opt/funcd/shim.mjs", "carries the funcd shim")
+	require.Contains(t, df, "COPY --from=shim shim.mjs /opt/funcd/shim.mjs", "carries the funcd shim from the pinned module (ADR-0141)")
 	require.Contains(t, df, `CMD ["/opt/funcd/shim.mjs"]`, "runs the shim as node's entrypoint target (distroless node ENTRYPOINT)")
 }
 
@@ -358,11 +359,7 @@ func TestScenarioShimShapeFailureBlocksReady(t *testing.T) {
 // It skips the test when the shim or node is unavailable (ADR-0030 node lane).
 func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.Gateway) {
 	t.Helper()
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, err := os.Stat(shim); err != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the node-gated shim lane")
@@ -429,11 +426,7 @@ func TestScenarioShimEndToEndNode(t *testing.T) {
 // scenario: shim-fixed-port-bind (node-gated, ADR-0032) — with FUNCD_PORT set the shim binds
 // the fixed port on all interfaces (container mode) instead of the loopback+portfile path.
 func TestScenarioShimFixedPortBindNode(t *testing.T) {
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the node-gated shim lane")

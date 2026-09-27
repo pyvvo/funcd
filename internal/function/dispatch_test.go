@@ -9,13 +9,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/function"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // scenario: runtime-selects-shim — one daemon, two curated languages (ADR-0049). The reconciler

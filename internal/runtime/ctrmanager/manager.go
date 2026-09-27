@@ -21,7 +21,7 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // FuncdRoot is funcd's runtime root — the value the install command + the Manager already use.

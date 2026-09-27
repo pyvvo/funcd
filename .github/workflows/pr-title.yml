@@ -1,0 +1,41 @@
+name: PR title
+
+# PRs are squash-merged through a merge queue, with the PR title as the commit message, so that
+# message is what release-please reads. On the PR this checks the title; in the merge queue it
+# checks every commit message that is about to land on main, exactly as it will land.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - if: github.event_name == 'pull_request_target'
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: github.event_name == 'merge_group'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - if: github.event_name == 'merge_group'
+        name: Check the commit messages the queue is about to merge
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          for c in $(git rev-list "$BASE_SHA..HEAD"); do
+            git log -1 --format=%B "$c" > "$RUNNER_TEMP/commit-msg"
+            scripts/commit-msg-lint.sh "$RUNNER_TEMP/commit-msg"
+          done

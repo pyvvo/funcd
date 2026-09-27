@@ -3,9 +3,9 @@ package memory_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/internal/store/storecontract"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/store/storecontract"
 )
 
 // scenario: driver-conformance-parity (memory side) — the pure-Go in-memory

@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/testkit/loadgen"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/testkit/loadgen"
 )
 
 // benchCmd is the `funcdctl bench` verb (ADR-0053): a client-side load/latency probe against a

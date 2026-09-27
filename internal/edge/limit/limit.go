@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 const op = "edge.limit"

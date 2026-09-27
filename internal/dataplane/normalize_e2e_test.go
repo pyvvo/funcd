@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/dataplane"
 )
 
 // echoUpstream captures the body the data plane forwards to the function upstream.

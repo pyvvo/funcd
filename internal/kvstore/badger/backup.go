@@ -14,8 +14,8 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // backup implements the ADR-0066 Backup seam (ADR-0067): version-watermarked incremental export of the KV

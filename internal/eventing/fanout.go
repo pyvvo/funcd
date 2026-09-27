@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // Fanout is the in-process Publisher driver (ADR-0108): a fired CloudEvent is delivered to every live

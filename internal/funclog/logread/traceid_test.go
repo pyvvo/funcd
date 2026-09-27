@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
-	"github.com/green-0-rabbit/funcd/internal/funclog/logread"
+	"github.com/pyvvo/funcd/internal/funclog/compact"
+	"github.com/pyvvo/funcd/internal/funclog/logread"
 )
 
 // rowTrace builds a compact.Row for a given function + trace-id (ADR-0106 run-scoped read tests).

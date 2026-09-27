@@ -1,7 +1,7 @@
 // Standalone benchmark module (mirrors bench/badger): it pulls the goja engine as a
 // dependency in isolation so the assessment of whether the MAIN funcd module should
 // carry it is evidence-based (see RESULTS.md).
-module github.com/green-0-rabbit/funcd/bench/expr-engine
+module github.com/pyvvo/funcd/bench/expr-engine
 
 go 1.26.4
 

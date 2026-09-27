@@ -9,11 +9,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	bstore "github.com/green-0-rabbit/funcd/internal/store/badger"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
+	bstore "github.com/pyvvo/funcd/internal/store/badger"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario (e2e): durable-metastore-survives-restart — boot funcd with a FILE-mode Badger metastore

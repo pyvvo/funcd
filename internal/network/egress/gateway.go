@@ -14,7 +14,7 @@ import (
 	"context"
 	"net/netip"
 
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // Gateway is the transparent egress PEP: it accepts F80-redirected worker connections on GatewayPort,

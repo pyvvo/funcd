@@ -12,10 +12,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/funclog/compact"
-	"github.com/green-0-rabbit/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/funclog/compact"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 // baseTime is a fixed seal instant well inside a UTC day; window math is independent of it.

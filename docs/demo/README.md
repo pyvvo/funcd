@@ -31,7 +31,7 @@ setup); `just demo-record` also needs `vhs` + `ffmpeg` +
 |---|---|
 | `demo.yaml` | the demo **inputs** (`demoDir`, `server`, `dataPlane`, `token`, `function`) — the scripts read these via `yq` |
 | `function.yaml` | the deployed **Function CRD**; `spec.image` + `spec.imageDigest` are filled at apply time from the push output |
-| the function | authored in TypeScript at [`examples/js/hello-world`](../../examples/js/hello-world) (`handle(context, event)`, typed against `@funcd/shim-nodejs`); bundled to `handler.mjs` at setup |
+| the function | authored in TypeScript at [`examples/hello-world`](https://github.com/pyvvo/funcd-typescript/tree/main/examples/hello-world) in pyvvo/funcd-typescript (`handle(context, event)`, typed against `@funcd-dev/shim`); its committed `handler.mjs` comes from the pinned module (ADR-0141) |
 | `server/main.go` | a tiny **embedded** funcd wired for execution (ADR-0014 + shim + oras), fixed ports `:8080`/`:8081` — demo tooling, *not* the production daemon (`cmd/funcd`) |
 | `cli-demo.tape` | the VHS script — the reproducible source of the recordings |
 | `cli-demo.gif` · `cli-demo.webm` | the rendered recordings (generated from the tape) |

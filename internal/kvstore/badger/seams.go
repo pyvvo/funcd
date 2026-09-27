@@ -3,9 +3,9 @@ package badger
 import (
 	badger "github.com/dgraph-io/badger/v4"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/bus"
-	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/bus"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 // Seams holds the optional DR + CDC the daemon wires when configured (ADR-0067/0068). A nil field means

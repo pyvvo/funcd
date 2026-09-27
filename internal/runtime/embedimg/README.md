@@ -56,5 +56,5 @@ just embedimg-unpin    # clear it — needed before a legitimate placeholder upd
 ## Override (no registry by default)
 
 A runtime not present in the embed falls through to the Manager's `--image runtime=ref`
-override (`ImageOverride`), which pulls from a registry (e.g. `ghcr.io/green-0-rabbit/…`).
+override (`ImageOverride`), which pulls from a registry (e.g. `ghcr.io/pyvvo/…`).
 A runtime in neither embed nor override is a `fault.NotFound` — never a silent miss.

@@ -7,7 +7,7 @@
 # its catalog prefix) so its keypair reads/writes S3 through the F47 PEP, and it reaches Ready on its own
 # HTTP readiness probe.
 #
-# The CONSUMER is a funcd FUNCTION (examples/python/catalog-quack/src/handler.py + consumer.yaml) — the
+# The CONSUMER is a funcd FUNCTION (pyvvo/funcd-python examples/catalog-quack/src/handler.py + consumer.yaml) — the
 # funcd-native shape. It runs on the STOCK `python314` runtime: its duckdb dep travels IN the artifact as
 # an ADR-0089 dependency BUNDLE (vendored duckdb wheel + duckdb-ext/). Testcase 3 deploys it, asserts it
 # reaches Ready (bundle materialized + `import duckdb` at module load), and then does a LIVE SQL round-trip:

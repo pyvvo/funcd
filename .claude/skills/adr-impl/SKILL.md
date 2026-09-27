@@ -42,7 +42,7 @@ If none is given, ask which ADR.
    malformed against the ADR-0000 template — stop and report it (hand back to the `adr` skill to
    complete those sections); do not reverse-engineer a plan from prose.
 3. **Identity rules** (apply throughout, grep before finishing): module is
-   `github.com/green-0-rabbit/funcd`; author "The funcd Authors"; never write the local machine
+   `github.com/pyvvo/funcd`; author "The funcd Authors"; never write the local machine
    username or local filesystem paths into any file.
 4. **Prerequisite implementations exist.** Read the ADR's *Contracts → Dependencies & I/O* and its
    `Relates to`. If it consumes something not yet on disk (e.g. it uses `api/fault` but that package

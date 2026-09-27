@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	huma "github.com/danielgtaylor/huma/v2"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Phase represents the lifecycle phase of a resource per the blueprint resource state

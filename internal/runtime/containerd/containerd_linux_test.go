@@ -15,9 +15,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/runtime/containerd"
-	"github.com/green-0-rabbit/funcd/internal/runtime/runtimecontract"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/containerd"
+	"github.com/pyvvo/funcd/internal/runtime/runtimecontract"
 )
 
 func requireIntegration(t *testing.T) {

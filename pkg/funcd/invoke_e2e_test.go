@@ -17,11 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
-	"github.com/green-0-rabbit/funcd/internal/contract"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // shimPlatformOCI is the process-shim platform + the oras artifact materializer (ADR-0031), so
@@ -29,11 +30,7 @@ import (
 // Returns an SDK client + the data-plane base URL. Node-gated.
 func shimPlatformOCI(t *testing.T) (*sdk.Client, string) {
 	t.Helper()
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the OCI deploy lane")
@@ -56,32 +53,12 @@ func shimPlatformOCI(t *testing.T) (*sdk.Client, string) {
 	return c, "http://" + p.DataPlaneAddr()
 }
 
-// buildFnToFnExample runs the example's CONTRACT build (build.ts, ADR-0058/0060): for greeter + front
-// it generates the JSON Schema from FuncInput/FuncOutput and bakes the eval-free __funcdValidate*
-// into the .mjs. Returns the example dir (the built .mjs + *-{input,output}.schema.json live there).
-func buildFnToFnExample(t *testing.T) string {
+// tsExample returns a TypeScript example's dir in the pinned funcd-typescript module (ADR-0141). Its
+// bundles and {input, output} contracts are committed there and kept fresh by that repo's CI, so nothing
+// is built here. Read-only.
+func tsExample(t *testing.T, name string) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not on PATH")
-	}
-	exDir := filepath.Join(root, "examples", "js", "fn-to-fn")
-	// The build imports the shim's buildContract + esbuild; ensure node_modules resolves (offline-safe).
-	if _, serr := os.Stat(filepath.Join(exDir, "node_modules")); serr != nil {
-		shimNM := filepath.Join(root, "shim", "nodejs", "node_modules")
-		if _, e := os.Stat(shimNM); e != nil {
-			t.Skip("shim node_modules absent (run: just build-shim)")
-		}
-		require.NoError(t, os.Symlink(shimNM, filepath.Join(exDir, "node_modules")))
-	}
-	cmd := exec.Command(node, "--experimental-strip-types", "build.ts")
-	cmd.Dir = exDir
-	if b, berr := cmd.CombinedOutput(); berr != nil {
-		t.Fatalf("contract build: %v\n%s", berr, b)
-	}
-	return exDir
+	return filepath.Join(langmod.Dir(t, langmod.TypeScript), "examples", name)
 }
 
 // pushExampleFn pushes a built handler + its generated contract to a local OCI layout — exactly what
@@ -108,13 +85,11 @@ func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest str
 	return ref, digest
 }
 
-// loadFn reads an examples/js/fn-to-fn YAML manifest (the deployable unit — the link is declared
+// loadFn reads a fn-to-fn example YAML manifest (the deployable unit — the link is declared
 // there) and points its artifact at the pushed OCI ref+digest.
 func loadFn(t *testing.T, manifest, ref, digest string) *v1.Function {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	data, err := os.ReadFile(filepath.Join(root, "examples", "js", "fn-to-fn", manifest))
+	data, err := os.ReadFile(filepath.Join(tsExample(t, "fn-to-fn"), manifest))
 	require.NoError(t, err)
 	var fn v1.Function
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse %s", manifest)
@@ -143,7 +118,7 @@ func waitReady(t *testing.T, c *sdk.Client, names ...string) {
 // greeter's reply flows back through the broker.
 func TestScenarioHandlerInvokesLinkedFunction(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildFnToFnExample(t)
+	exDir := tsExample(t, "fn-to-fn")
 	layout := t.TempDir()
 	gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
 	fRef, fDig := pushExampleFn(t, layout, exDir, "front")
@@ -164,7 +139,7 @@ func TestScenarioHandlerInvokesLinkedFunction(t *testing.T) {
 // rejects a wrong-shaped input with 422 at the shim, before the handler; a valid one returns 200.
 func TestScenarioContractRejectsBadInput(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildFnToFnExample(t)
+	exDir := tsExample(t, "fn-to-fn")
 	layout := t.TempDir()
 	gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
 	applyFnObj(t, c, loadFn(t, "greeter.yaml", gRef, gDig))
@@ -187,7 +162,7 @@ func TestScenarioContractRejectsBadInput(t *testing.T) {
 // propagates it, and front's awaited invoke throws → front fails (no greeting, no target output).
 func TestScenarioInvokePropagatesContract422(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildFnToFnExample(t)
+	exDir := tsExample(t, "fn-to-fn")
 	layout := t.TempDir()
 	gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
 	fRef, fDig := pushExampleFn(t, layout, exDir, "front")
@@ -210,7 +185,7 @@ func TestScenarioInvokePropagatesContract422(t *testing.T) {
 // — the next invoke is denied (the daemon's PDP gate returns Forbidden, front never reaches greeter).
 func TestScenarioPolicyRevokesInvokeE2E(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildFnToFnExample(t)
+	exDir := tsExample(t, "fn-to-fn")
 	layout := t.TempDir()
 	gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
 	fRef, fDig := pushExampleFn(t, layout, exDir, "front")
@@ -252,7 +227,7 @@ func TestScenarioPolicyRevokesInvokeE2E(t *testing.T) {
 // undeclared alias fails closed (no link is no grant, default-deny).
 func TestScenarioUnlinkedAliasDeniedE2E(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildFnToFnExample(t)
+	exDir := tsExample(t, "fn-to-fn")
 	layout := t.TempDir()
 	fRef, fDig := pushExampleFn(t, layout, exDir, "front")
 

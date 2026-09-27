@@ -3,8 +3,8 @@ package memory_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter/memory"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
 )
 
 // TestMemoryContract runs the shared deadletter.Store contract against the in-memory driver, so the fake is

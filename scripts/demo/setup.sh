@@ -11,8 +11,10 @@ rm -rf "$DEMO"; mkdir -p "$DEMO/bin"
 go build -o "$DEMO/bin/funcdctl" ./cmd/funcdctl
 go build -o "$DEMO/bin/demo-server" ./docs/demo/server
 
-# bundle the function artifact from its TypeScript source (the author flow: TS -> handler.mjs)
-( cd examples/js/hello-world && npm ci --silent && npm run build )
+# the function artifact: hello-world's committed handler.mjs in the pinned funcd-typescript module
+# (ADR-0141; that repo builds it from its TypeScript source). Resolve the module once so journey.sh
+# stays offline.
+scripts/moddir.sh github.com/pyvvo/funcd-typescript >"$DEMO/hello-world.dir"
 
 lsof -ti tcp:8080 2>/dev/null | xargs kill 2>/dev/null || true
 nohup "$DEMO/bin/demo-server" >"$DEMO/server.log" 2>&1 &

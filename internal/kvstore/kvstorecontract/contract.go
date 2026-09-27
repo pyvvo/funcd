@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 // Run asserts the KV port guarantee against kv.

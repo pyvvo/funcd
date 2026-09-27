@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // poolEntry is one manifest row the pooled shim (ADR-0044) hosts.

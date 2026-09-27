@@ -1,6 +1,7 @@
 # ADR-0001: Project setup, file structure, and Nix dev environment
 
-- **Status**: Implemented
+- **Status**: Implemented — **module path superseded by [ADR-0141](0141-repo-split-pyvvo-pinned-language-modules.md)**
+  (`github.com/green-0-rabbit/funcd` → `github.com/pyvvo/funcd`; the rest of this ADR is retained unchanged)
 - **Date**: 2026-06-13 (accepted 2026-06-13; pre-acceptance fix: flake shell ships `just`, not `gnumake`; implemented 2026-06-13 — bootstrap built, tree matches the Repository surface and `just ci` exits 0; reconciled directly from `Accepted` as a one-time migration of pre-existing work to the new gate model)
 - **Deciders**: green-0-rabbit
 - **Tags**: setup, repo, nix, tooling

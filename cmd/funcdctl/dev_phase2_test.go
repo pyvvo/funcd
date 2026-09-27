@@ -18,7 +18,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // requireRuntime skips a test when neither node nor python3 is on PATH — `funcdctl dev` needs a runtime

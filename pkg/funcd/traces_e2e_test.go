@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,17 +16,18 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/bus/nats"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario (e2e): funclog-captures-spans (ADR-0101) — a REAL Node function invocation produces one
@@ -41,14 +41,9 @@ func TestScenarioE2EFunclogCapturesSpans(t *testing.T) {
 	if err != nil {
 		t.Skip("node not on PATH; skipping the traces capture lane")
 	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	shim := filepath.Join(root, "shim", "nodejs", "shim.mjs")
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("node shim not built at %s (run: just build-shim)", shim)
-	}
+	shim := langmod.NodeShim(t)
 
-	exDir := buildLogBurst(t, root, node)
+	exDir := tsExample(t, "log-burst")
 
 	bucket, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)

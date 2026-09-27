@@ -11,8 +11,8 @@ import (
 
 	"github.com/miekg/dns"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // Forwarder is the ONLY resolver a worker can reach (F80 redirects worker :53 into it). It forwards to

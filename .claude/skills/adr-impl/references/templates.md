@@ -4,7 +4,7 @@ Copy the shape that matches what the ADR's *Contracts* section asks for, then re
 real types and fill each body with the **real behavior the ADR specifies**. These shapes show the
 *form* (package layout, signatures, error handling); the logic inside is yours to implement so the
 Scenario tests pass (see `conventions.md`). Replace `NNNN` with the ADR number throughout.
-Module path is `github.com/green-0-rabbit/funcd`.
+Module path is `github.com/pyvvo/funcd`.
 
 ## Table of contents
 1. Port interface (the abstraction, dependency-light)
@@ -62,8 +62,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/widget"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/widget"
 )
 
 // New returns the in-memory widget driver. Driver constructors return the PORT interface
@@ -131,8 +131,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/widget"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/widget"
 )
 
 // RunContract runs the identical assertions against any driver. newWidget builds a fresh instance.
@@ -174,7 +174,7 @@ package funcd
 import (
 	"log/slog"
 
-	"github.com/green-0-rabbit/funcd/internal/widget"
+	"github.com/pyvvo/funcd/internal/widget"
 )
 
 type config struct {
@@ -196,7 +196,7 @@ package funcd
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Platform is the embeddable funcd instance.
@@ -244,7 +244,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/green-0-rabbit/funcd/internal/widget"
+	"github.com/pyvvo/funcd/internal/widget"
 )
 
 // Deps are the explicit dependencies of the controller (no functional options inside internal/).
@@ -271,7 +271,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 ## 6. `api/fault` usage (you import it; you don't redefine error kinds)
 
 ```go
-import "github.com/green-0-rabbit/funcd/api/fault"
+import "github.com/pyvvo/funcd/api/fault"
 
 // construct
 return fault.NotFoundf("widget.Get", "no widget with id %q", id)
@@ -296,7 +296,7 @@ If `api/fault` does not exist yet, ADR-0002 is not implemented — that is a pre
 ```go
 package v1alpha1
 
-import "github.com/green-0-rabbit/funcd/api/fault"
+import "github.com/pyvvo/funcd/api/fault"
 
 // IDs / names — no bare strings across boundaries.
 type NamespaceName string
@@ -341,8 +341,8 @@ package funcd_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
 // scenario: facade-missing-dep  (ADR-NNNN)

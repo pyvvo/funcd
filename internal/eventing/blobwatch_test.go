@@ -10,10 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	kvmemory "github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 )
 
 // fakeLister is a scripted BucketLister: it returns the objects whose Key is under the requested prefix,

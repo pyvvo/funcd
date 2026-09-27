@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // maxNormalizeBytes bounds the buffered read of an external invoke body during CloudEvent

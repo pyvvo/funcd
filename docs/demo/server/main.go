@@ -5,7 +5,8 @@
 // this launcher uses the ADR-0014 embed path with the ADR-0030 shim + ADR-0031 oras
 // materializer so the journey actually runs the handler.
 //
-// Run from the repo root: `go run ./docs/demo/server` (override FUNCD_SHIM if needed).
+// Run from the repo root: `go run ./docs/demo/server`. It runs the embedded Node shim (ADR-0141);
+// FUNCD_SHIM overrides it with a path.
 package main
 
 import (
@@ -18,7 +19,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
 const (
@@ -32,14 +34,23 @@ func main() {
 		slog.Error("demo-server: node is required on PATH (the runtime shim runs JS)")
 		os.Exit(1)
 	}
-	shim := os.Getenv("FUNCD_SHIM")
-	if shim == "" {
-		shim, _ = filepath.Abs(filepath.Join("shim", "nodejs", "shim.mjs"))
-	}
 	cache, err := os.MkdirTemp("", "funcd-demo-artifacts-*")
 	if err != nil {
 		slog.Error("demo-server: temp dir", "error", err)
 		os.Exit(1)
+	}
+	shim := os.Getenv("FUNCD_SHIM")
+	if shim == "" {
+		dir, derr := os.MkdirTemp("", "funcd-demo-shim-*")
+		if derr != nil {
+			slog.Error("demo-server: temp dir", "error", derr)
+			os.Exit(1)
+		}
+		shim = filepath.Join(dir, "shim.mjs")
+		if werr := os.WriteFile(shim, shimnode.Shim, 0o600); werr != nil {
+			slog.Error("demo-server: extract the embedded shim", "error", werr)
+			os.Exit(1)
+		}
 	}
 
 	p, err := funcd.New(

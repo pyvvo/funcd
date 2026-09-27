@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob"
 
 	gcblob "gocloud.dev/blob"
 	"gocloud.dev/gcerrors"

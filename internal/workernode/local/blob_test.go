@@ -9,12 +9,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	iblob "github.com/green-0-rabbit/funcd/internal/blob"
-	blobsvc "github.com/green-0-rabbit/funcd/internal/services/blob"
-	"github.com/green-0-rabbit/funcd/internal/workernode/local"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	iblob "github.com/pyvvo/funcd/internal/blob"
+	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // blobMapBucket is a tiny in-memory blob.Bucket for the local-API blob route tests (supports SignedURL).

@@ -1,8 +1,8 @@
 package sensor
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/expr"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/expr"
 )
 
 // eventResolver is the F73 Resolver exposing the firing CloudEvent as the `event` root (ADR-0109): a Sensor

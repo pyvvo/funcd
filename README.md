@@ -37,8 +37,6 @@ Each gate has a skill (`.claude/skills/`): **plan** → **decide** → **judge**
 8. **Implementation review** (recommended) — `adr-impl-review` again audits code + tests against
    the ADR and updates the model scorecard.
 
-Your flow is essentially right. Let me lay out the canonical version, overlay your model choices, and fix one timing detail that matters.
-
 ## The current workflow (ADR-0000 gates 0–5)
 
 | # | Gate | Skill | Your model | Status moves it makes |
@@ -53,10 +51,35 @@ Your flow is essentially right. Let me lay out the canonical version, overlay yo
 **The loop** (exactly as you said): review `changes-requested`/`fail` → ADR stays `Reviewing` → back to gate 4 (`adr-impl`) to fix the `model`-attributed findings → re-review → repeat until the review gate passes and stamps `Implemented`. (`adr`-attributed findings don't loop here — they break out to a *new superseding ADR*.)
 
 
+## Repositories
+
+funcd is split across the [pyvvo](https://github.com/pyvvo) org
+([ADR-0141](docs/adr/0141-repo-split-pyvvo-pinned-language-modules.md)):
+
+| Repo | Holds |
+|---|---|
+| [pyvvo/funcd](https://github.com/pyvvo/funcd) | the Go platform: daemon, API, CLI, SDK, runtime images, providers, e2e tests, ADRs |
+| [pyvvo/funcd-typescript](https://github.com/pyvvo/funcd-typescript) | the Node shim and the TypeScript examples; npm [`@funcd-dev/shim`](https://www.npmjs.com/package/@funcd-dev/shim) |
+| [pyvvo/funcd-python](https://github.com/pyvvo/funcd-python) | the Python shim and the Python examples; PyPI [`funcd-shim`](https://pypi.org/project/funcd-shim/) |
+| [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions) | real functions deployed on the platform |
+
+funcd pins the two language repos as Go modules in `go.mod`, embeds their shims, and runs their
+committed examples in its e2e tests and Lima lanes. To take a new language release:
+
+```bash
+go get github.com/pyvvo/funcd-typescript@<tag>
+```
+
+To work on a shim and funcd together, clone the language repo next to funcd and add a local
+`go.work`, which git ignores:
+
+```bash
+go work init . ../funcd-typescript
+```
+
 ## Status
 
-Scaffolded — ADR-0001 (project setup, file structure, Nix dev environment).
-Blueprint + ADR phase, repository skeleton in place, CI bootstrapped.
+See [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) for what is built and the decision log.
 
 ## License
 

@@ -8,7 +8,7 @@ cover Debian/Ubuntu and RHEL/Fedora; the steps are identical except where noted.
 Either download a release binary, or build from source:
 
 ```sh
-git clone https://github.com/green-0-rabbit/funcd && cd funcd
+git clone https://github.com/pyvvo/funcd && cd funcd
 ./scripts/build.sh                 # → dist/funcd (pure-Go dev build)
 sudo install -m0755 dist/funcd /usr/local/bin/funcd
 funcd version                      # prints the stamped build identity

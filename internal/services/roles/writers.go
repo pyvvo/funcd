@@ -8,9 +8,9 @@ import (
 
 	cedartypes "github.com/cedar-policy/cedar-go/types"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth/cedar"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth/cedar"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // Lister is a store-backed cedar.WriterLister (ADR-0136): it lists a namespace's RolesAssignments and

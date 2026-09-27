@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Namespace is a cluster-scoped resource that defines a tenant boundary.

@@ -12,7 +12,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // startTimeout bounds how long Ensure waits for the private containerd socket to come up

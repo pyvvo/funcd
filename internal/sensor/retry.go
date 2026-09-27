@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/eventing"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/eventing"
 )
 
 // Retry-queue tuning (ADR-0118). These are the operational-retry defaults — short, since each Invoke

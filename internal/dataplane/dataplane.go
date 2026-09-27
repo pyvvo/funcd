@@ -24,14 +24,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/activator"
-	"github.com/green-0-rabbit/funcd/internal/edge/authn"
-	"github.com/green-0-rabbit/funcd/internal/edge/observ"
-	"github.com/green-0-rabbit/funcd/internal/edge/router"
-	"github.com/green-0-rabbit/funcd/internal/edge/static"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/edge/authn"
+	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/edge/static"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // internalKey marks a request context as originating from an internal caller.

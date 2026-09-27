@@ -6,10 +6,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/auth/authcontract"
-	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/authcontract"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 )
 
 func allowed(t *testing.T, a auth.Authorizer, id auth.Identity, verb auth.Verb, kind v1.Kind, ns v1.NamespaceName) bool {

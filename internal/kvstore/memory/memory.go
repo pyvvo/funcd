@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 type driver struct {

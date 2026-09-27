@@ -22,8 +22,9 @@
 FROM python:3.14-slim-bookworm AS py
 
 # The funcd Python shim package (stdlib-only — ADR-0049/0050). Laid into the site path the
-# embedded 3.14 will see.
-COPY shim/python/src/funcd_shim /opt/funcd/funcd_shim
+# embedded 3.14 will see. `shim` is a named build context: the pinned funcd-python module's shim/ dir
+# (ADR-0141).
+COPY --from=shim src/funcd_shim /opt/funcd/funcd_shim
 # fastjsonschema (pure-Python, BSD-3) — the ONE runtime dependency the build-baked contract validators
 # import (ADR-0060). Shipped onto the same PYTHONPATH as the shim so a contract-validated artifact can
 # import its validator at runtime; without it such functions crash at startup (ADR-0071). Pinned for a
@@ -42,7 +43,7 @@ RUN set -eux; mkdir -p /opt/funcd-libs; \
       | grep -vE 'libc\.so|libm\.so|libpython|ld-linux|libstdc|libgcc|libdl|libpthread|librt' \
       | sort -u \
       | while read -r lib; do cp -L "$lib" /opt/funcd-libs/; done
-# The solo-shim entry (mirrors shim/python/embed.go's shimEntryScript) — `python3 <entry>`.
+# The solo-shim entry (mirrors shimEntryScript in funcd-python's shim/embed.go) — `python3 <entry>`.
 RUN printf 'from funcd_shim.shim import main\nraise SystemExit(main())\n' > /opt/funcd/entry.py
 
 # --- stage 2: the custom distroless 3.14 image ---------------------------------------------

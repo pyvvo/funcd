@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gateway"
 )
 
 // scenario: upstream-pooled — the gateway's reverse proxies share one transport that reuses

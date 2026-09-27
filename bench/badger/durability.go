@@ -246,9 +246,9 @@ func outboxCDC(baseDir string, n int, val []byte) []Result {
 			if !found {
 				break
 			}
-			seen[seq]++             // "process" the change (idempotent consumer would dedup here)
-			next = seq + 1          // advance
-			cur := make([]byte, 8)  // persist the cursor DURABLY before the next read
+			seen[seq]++            // "process" the change (idempotent consumer would dedup here)
+			next = seq + 1         // advance
+			cur := make([]byte, 8) // persist the cursor DURABLY before the next read
 			binary.BigEndian.PutUint64(cur, next)
 			if err := db.Update(func(txn *badger.Txn) error { return txn.Set(cursorKey, cur) }); err != nil {
 				return processed, err

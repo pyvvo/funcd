@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/funclog"
 )
 
 // fakeSink records Append calls so the tee test can assert logs are still persisted.

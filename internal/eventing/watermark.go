@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 // Cursor is the compact, bounded watermark for one named blob event (ADR-0119): the newest ModTime seen and

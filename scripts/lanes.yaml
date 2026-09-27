@@ -4,9 +4,15 @@
 # new lane is just a section here + its manifests + a Venom suite, with NO per-lane recipe or VM YAML.
 #
 # Per lane:
-#   dir     — the example directory (host-relative), source of the staged files + the build.
-#   build   — host shell commands (run from the repo root, in order) that produce the artifacts to push.
-#   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts).
+#   module  — the pinned Go module the example lives in (ADR-0141): github.com/pyvvo/funcd-typescript or
+#             github.com/pyvvo/funcd-python, resolved by scripts/moddir.sh (module cache or go.work).
+#             Absent = the funcd repo root. The language repos commit their example builds.
+#   dir     — the example directory, relative to the module root; source of the staged files.
+#   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
+#             .modcopy/lane/<module>, so the example's relative references still resolve.
+#   build   — host shell commands (run in the lane's dir, in order) that produce the artifacts to push.
+#   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts);
+#             or {from, module, to}: a file from funcd's root (or from `module`'s root) to a tgz path.
 #   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
 #             optional schema (single-file --schema), entry (bundle --entry), or site: true (a prebuilt
 #             static web app dir pushed with --site, ADR-0139).
@@ -16,10 +22,8 @@
 
 env-echo:
   description: A JS function receiving spec.config (ConfigMap) + spec.secrets (Secret) env (ADR-0093/0057).
-  dir: examples/js/env-echo
-  build:
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/env-echo/node_modules
-    - cd examples/js/env-echo && node --experimental-strip-types build.ts
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/env-echo
   stage:
     - env-echo.mjs
     - env-echo.schema.json
@@ -51,10 +55,8 @@ env-echo:
 
 fn-to-fn:
   description: Two JS functions with a declared synchronous fn-to-fn link (ADR-0064/0058).
-  dir: examples/js/fn-to-fn
-  build:
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/fn-to-fn/node_modules
-    - cd examples/js/fn-to-fn && node --experimental-strip-types build.ts
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/fn-to-fn
   stage:
     - greeter.mjs
     - front.mjs
@@ -83,9 +85,11 @@ fn-to-fn:
 
 duckdb:
   description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
-  dir: examples/python/catalog-quack
+  module: github.com/pyvvo/funcd-python
+  dir: examples/catalog-quack
+  copy: true
   build:
-    - cd examples/python/catalog-quack && uv run --group build python build.py
+    - uv run --group build python build.py
   stage:
     - configmap.yaml
     - secret.yaml
@@ -116,12 +120,8 @@ duckdb:
 
 s3:
   description: The s3-roundtrip JS function round-trips S3 with its funcd-injected keypair + a PEP deny (ADR-0080/0085, F47).
-  dir: examples/js/s3-roundtrip
-  build:
-    # This example DEPENDS on @aws-sdk/client-s3 (not in the shim node_modules), so install its own deps
-    # first (a repo-local npm cache keeps it hermetic), then the contract build bundles the SDK + bakes
-    # the ADR-0090 {input,output} schema (roundtrip.schema.json) into a self-contained roundtrip.mjs.
-    - cd examples/js/s3-roundtrip && npm install --silent --no-audit --no-fund --cache "$(pwd)/.npm-cache" && node --experimental-strip-types build.ts
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/s3-roundtrip
   stage:
     - roundtrip.mjs
     - roundtrip.schema.json
@@ -183,13 +183,8 @@ s3:
 
 kv:
   description: The kv-counter JS + Python functions increment a per-name counter via context.kv on a durable Badger store (ADR-0069/0073/0076).
-  dir: examples/js/kv-counter
-  build:
-    # JS kv-counter → counter.mjs + I/O schemas (esbuild + contract toolchain via the shim node_modules).
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/kv-counter/node_modules
-    - cd examples/js/kv-counter && node --experimental-strip-types build.ts
-    # Python kv-counter → counter.py (baked validators) + I/O schemas (funcd_shim.build via uv).
-    - cd examples/python/kv-counter && uv run --group build python build.py
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/kv-counter
   # Both sides collide on the schema-file basenames, so the Python side is staged under a py/ subdir via
   # the {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root.
   stage:
@@ -199,13 +194,17 @@ kv:
     - counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
     - store.yaml
     - funcdconfig.yaml
-    - from: examples/python/kv-counter/counter.py
+    - from: examples/kv-counter/counter.py
+      module: github.com/pyvvo/funcd-python
       to: py/counter.py
-    - from: examples/python/kv-counter/counter.schema.json
+    - from: examples/kv-counter/counter.schema.json
+      module: github.com/pyvvo/funcd-python
       to: py/counter.schema.json
-    - from: examples/python/kv-counter/counter.yaml
+    - from: examples/kv-counter/counter.yaml
+      module: github.com/pyvvo/funcd-python
       to: py/counter.yaml
-    - from: examples/python/kv-counter/store.yaml
+    - from: examples/kv-counter/store.yaml
+      module: github.com/pyvvo/funcd-python
       to: py/store.yaml
   push:
     - artifact: counter.mjs
@@ -235,12 +234,8 @@ kv:
 
 workflow:
   description: A Workflow (ingest→score→{hi|lo}→report→wait→pass) mixing materialized function steps with engine-native built-ins (a blocking wait + a pass transform), driven on real containerd (ADR-0094 + ADR-0096).
-  dir: examples/js/workflow
-  build:
-    # Each step is an ordinary contract-bearing function; build.ts bakes each contract and emits
-    # <step>.mjs + <step>.schema.json (esbuild + the shim's contract toolchain via node_modules).
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/workflow/node_modules
-    - cd examples/js/workflow && node --experimental-strip-types build.ts
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/workflow
   stage:
     - ingest.mjs
     - score.mjs
@@ -310,24 +305,21 @@ workflow:
 
 funclog:
   description: The log-burst JS + Python functions each emit >=100 logs; funcd captures them as OTLP-JSONL (ADR-0081/0084).
-  dir: examples/js/log-burst
-  build:
-    # JS log-burst → burst.mjs + burst.schema.json (ADR-0090 void-vs-typed: burst.ts declares a real
-    # {items,batch}->{emitted} shape the e2e reads, so its contract is that typed shape, baked in).
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/log-burst/node_modules
-    - cd examples/js/log-burst && node --experimental-strip-types build.ts
-    # Python log-burst → handler.py (baked validators) + handler.schema.json (same typed contract).
-    - cd examples/python/log-burst && uv run --group build python build.py
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/log-burst
   stage:
     - burst.mjs
     - burst.schema.json
     - burst.yaml
     - funcdconfig.yaml
-    - from: examples/python/log-burst/handler.py
+    - from: examples/log-burst/handler.py
+      module: github.com/pyvvo/funcd-python
       to: py/handler.py
-    - from: examples/python/log-burst/handler.schema.json
+    - from: examples/log-burst/handler.schema.json
+      module: github.com/pyvvo/funcd-python
       to: py/handler.schema.json
-    - from: examples/python/log-burst/handler.yaml
+    - from: examples/log-burst/handler.yaml
+      module: github.com/pyvvo/funcd-python
       to: py/handler.yaml
   # Both examples are named "log-burst"; the Python one deploys as "pylog-burst" (transform rewrites both
   # the metadata.name and the artifact ref) so they coexist on one daemon.
@@ -352,11 +344,8 @@ funclog:
 
 egress:
   description: The egress-probe JS function proves ADR-0117 (F81) egress enforcement on real containerd — default-deny with no EgressPolicy, allow via a wildcard-domain / CIDR EgressPolicy, and the audit trail.
-  dir: examples/js/egress-probe
-  build:
-    # egress-probe → probe.mjs + probe.schema.json (esbuild + the shim's contract toolchain via node_modules).
-    - ln -sfn ../../../shim/nodejs/node_modules examples/js/egress-probe/node_modules
-    - cd examples/js/egress-probe && node --experimental-strip-types build.ts
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/egress-probe
   stage:
     - probe.mjs
     - probe.schema.json

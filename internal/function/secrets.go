@@ -3,11 +3,11 @@ package function
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/envresolve"
-	"github.com/green-0-rabbit/funcd/internal/secrets"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/envresolve"
+	"github.com/pyvvo/funcd/internal/secrets"
 )
 
 // SecretResolver resolves a function's bound Secret names → an env-var map for worker

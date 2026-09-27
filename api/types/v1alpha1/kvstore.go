@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Default per-op caps for a KVStore (ADR-0072): applied where the spec value is read when 0.

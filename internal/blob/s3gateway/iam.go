@@ -18,7 +18,7 @@ import (
 
 	"github.com/versity/versitygw/auth"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // accessKeyPrefix marks a funcd-derived (in-platform) access key. A key without it

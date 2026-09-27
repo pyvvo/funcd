@@ -10,8 +10,8 @@ import (
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // lakehouseMeta seeds the canonical fixture (the cedar s3_test mirror): bucket

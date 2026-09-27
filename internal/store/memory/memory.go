@@ -8,8 +8,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // New returns a fresh, empty in-memory engine.

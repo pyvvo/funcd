@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
 // TestE2EUserJourney walks the platform exactly as an end user would, through the public
@@ -32,11 +32,7 @@ func TestE2EUserJourney(t *testing.T) {
 	if err != nil {
 		t.Skip("node not on PATH; skipping the end-user execution journey")
 	}
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := e2eNodeShim(t)
 
 	// --- the platform the user deploys to (embedded; real execution + OCI artifacts) ---
 	artifactCache := t.TempDir() // platform-side per-digest pull cache (ADR-0031)
@@ -165,11 +161,7 @@ func execPlatform(t *testing.T) (dataPlane string, runCLI func(...string) string
 	if err != nil {
 		t.Skip("node not on PATH; skipping the execution e2e")
 	}
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s", shim)
-	}
+	shim := e2eNodeShim(t)
 	p, err := funcd.New(
 		funcd.InMemory(),
 		funcd.WithRuntimeShim(node, shim),

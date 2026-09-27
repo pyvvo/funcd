@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/bus"
+	"github.com/pyvvo/funcd/internal/bus"
 )
 
 const (

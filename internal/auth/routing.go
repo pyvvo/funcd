@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // routing is the dispatch Authorizer (ADR-0074): an Action-bearing Request (a Cedar

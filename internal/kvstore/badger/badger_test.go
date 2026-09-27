@@ -9,8 +9,8 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
 
-	kvbadger "github.com/green-0-rabbit/funcd/internal/kvstore/badger"
-	"github.com/green-0-rabbit/funcd/internal/kvstore/kvstorecontract"
+	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
+	"github.com/pyvvo/funcd/internal/kvstore/kvstorecontract"
 )
 
 type closer interface{ Close() error }

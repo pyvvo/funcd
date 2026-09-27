@@ -111,7 +111,7 @@ ADR-0046 (`spec.pooling.worker`); this is the host + the measured trade.
 
 ## Python worker pooling — subinterpreters (ADR-0050)
 
-Python gets its own pool host (`shim/python/.../pool.py`): N handlers in one process, each in its **own
+Python gets its own pool host (funcd-python's `shim/.../pool.py`): N handlers in one process, each in its **own
 subinterpreter** (one `InterpreterPoolExecutor(max_workers=1)` per handler, `concurrent.interpreters`, Python ≥3.14) —
 per-interpreter GIL + module-state isolation, the Python analog of Node `worker_threads`.
 

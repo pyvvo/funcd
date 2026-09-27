@@ -34,7 +34,7 @@ func TestScenarioFuncdVersionSubcommandStamped(t *testing.T) {
 	}
 	root := repoRoot(t)
 	bin := filepath.Join(t.TempDir(), "funcd")
-	ldflags := "-X github.com/green-0-rabbit/funcd/internal/platform/version.Version=v9.9.9"
+	ldflags := "-X github.com/pyvvo/funcd/internal/platform/version.Version=v9.9.9"
 
 	build := exec.Command("go", "build", "-ldflags", ldflags, "-o", bin, "./cmd/funcd")
 	build.Dir = root

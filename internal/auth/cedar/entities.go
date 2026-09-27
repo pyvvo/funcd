@@ -5,9 +5,9 @@ import (
 
 	cedartypes "github.com/cedar-policy/cedar-go/types"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // EntityProvider resolves ONLY the request-relevant Cedar entities (the principal + the resource + its

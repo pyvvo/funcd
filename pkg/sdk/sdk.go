@@ -10,8 +10,8 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // apiPrefix is the control-plane REST prefix (ADR-0005/0018).

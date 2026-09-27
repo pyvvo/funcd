@@ -3,8 +3,8 @@ package badger_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter/badger"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
 )
 
 // TestBadgerContract runs the shared deadletter.Store contract against the Badger driver in in-memory mode

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // ContainerdConfig parameterizes the containerd footprint lane (ADR-0052). It mirrors the

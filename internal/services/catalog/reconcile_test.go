@@ -7,14 +7,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/provider"
-	catalogsvc "github.com/green-0-rabbit/funcd/internal/services/catalog"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	storemem "github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/provider"
+	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
+	"github.com/pyvvo/funcd/internal/store"
+	storemem "github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // fakeProvider is a provider.Runtime double: it records the ProviderSpec it was Converge'd with and

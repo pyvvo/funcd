@@ -82,5 +82,5 @@ These constraints hold for real code just as they did for skeletons — the same
 - [ ] Code shapes match ADR-0002 (options vs deps-struct, one-file drivers, `api/fault`, typed
       surface, ctx-first, no globals, slog-only).
 - [ ] The ADR's own *Review checklist* items are satisfied.
-- [ ] No local username/paths leaked; module path is `github.com/green-0-rabbit/funcd`.
+- [ ] No local username/paths leaked; module path is `github.com/pyvvo/funcd`.
 - [ ] The ADR is set to `Reviewing` and the realizing `docs/feat/` row is set to `reviewing`.

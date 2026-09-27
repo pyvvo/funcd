@@ -8,11 +8,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	iblob "github.com/green-0-rabbit/funcd/internal/blob"
-	svcblob "github.com/green-0-rabbit/funcd/internal/services/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	iblob "github.com/pyvvo/funcd/internal/blob"
+	svcblob "github.com/pyvvo/funcd/internal/services/blob"
 )
 
 // mapBucket is a tiny in-memory blob.Bucket for the facade tests. Unlike memblob it supports SignedURL,

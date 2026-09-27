@@ -77,7 +77,7 @@ docs/
 │
 ├─ 2-guides/                        # how-to — one task per page, every page runnable against examples/
 │  ├─ write-a-function/
-│  │  ├─ typescript.md              # lift from examples/js/hello-world/README.md (already the right shape)
+│  │  ├─ typescript.md              # lift from funcd-typescript examples/hello-world/README.md (already the right shape)
 │  │  ├─ python.md                  # uv project, handler.py, dependency bundling, fastjsonschema (ADR-0049/0071/0089)
 │  │  └─ funcdctl-yaml.md           # client config: runtime/handler/bindings/contract; multi-function files (ADR-0122/0124)
 │  ├─ local-dev-loop.md             # `funcdctl dev`: from source, zero CRDs, --persist, print-env, interpreter config (ADR-0125–0132)
@@ -85,14 +85,14 @@ docs/
 │  ├─ deploy-and-expose.md          # Function + Route; TLS, limits, edge authn, shaping (FEAT-0006)
 │  ├─ config-and-secrets.md         # ConfigMap/Secret binding, injection order (config then secret, secret wins), key file (ADR-0022/0057/0093)
 │  ├─ use-kv.md                     # KVStore, spec.kv, tables, typed accessors, binding-as-read-grant, backup + CDC (examples/*/kv-counter)
-│  ├─ use-blob-and-s3.md            # Bucket, spec.blob, injected SigV4 keypair, boto3/DuckDB httpfs from the same env (examples/js/s3-roundtrip)
-│  ├─ call-another-function.md      # fn-to-fn links; 422 propagation (ADR-0064, examples/js/fn-to-fn)
+│  ├─ use-blob-and-s3.md            # Bucket, spec.blob, injected SigV4 keypair, boto3/DuckDB httpfs from the same env (funcd-typescript examples/s3-roundtrip)
+│  ├─ call-another-function.md      # fn-to-fn links; 422 propagation (ADR-0064, funcd-typescript examples/fn-to-fn)
 │  ├─ triggers.md                   # HTTP, timer, object-store EventSource, Sensor actions (ADR-0108/0109/0119)
-│  ├─ build-a-workflow.md           # Workflow/WorkflowRun; run/describe/cancel/replay --from <step>; run logs (examples/js/workflow)
-│  ├─ query-the-catalog.md          # CatalogService, consumer binding, per-caller catalog::query RBAC (ADR-0086/0091/0137, examples/python/catalog-quack)
+│  ├─ build-a-workflow.md           # Workflow/WorkflowRun; run/describe/cancel/replay --from <step>; run logs (funcd-typescript examples/workflow)
+│  ├─ query-the-catalog.md          # CatalogService, consumer binding, per-caller catalog::query RBAC (ADR-0086/0091/0137, funcd-python examples/catalog-quack)
 │  ├─ logs-and-traces.md            # `funcdctl logs <function>` / `<run>`, OTLP endpoint, cross-sub-workflow trace linking (ADR-0084/0104/0106)
 │  ├─ serve-a-static-site.md        # static Route backend (ADR-0120); `Site` = ADR-0139 Proposed → marked unbuilt until Implemented
-│  ├─ lock-down-egress.md           # NetDestination / EgressPolicy, default-deny (FEAT-0007, examples/js/egress-probe)
+│  ├─ lock-down-egress.md           # NetDestination / EgressPolicy, default-deny (FEAT-0007, funcd-typescript examples/egress-probe)
 │  ├─ identity-and-roles.md         # Identity / Role / RolesAssignment (FEAT-0008)
 │  ├─ embed-as-a-library.md         # pkg/funcd: New(opts...), presets, providers; docs/demo/server/main.go is the example
 │  └─ examples.md                   # index of examples/*: what each proves + which ADR; releve-lakehouse is the capstone
@@ -105,7 +105,7 @@ docs/
 │  │  └─ funcd.md                   # daemon: install/uninstall/bench/version, flags
 │  ├─ funcdconfig-yaml.md           # every key, default, FUNCD_* override; precedence flag > env > file > default (examples/funcdconfig.yaml, ADR-0061/0062)
 │  ├─ funcdctl-yaml.md              # full key reference for the client config (ADR-0122/0124)
-│  ├─ function-context.md           # Node + Python: context.kv / blob / log / links / span; the CloudEvent envelope (shim/nodejs/src/types.ts, shim/python)
+│  ├─ function-context.md           # Node + Python: context.kv / blob / log / links / span; the CloudEvent envelope (funcd-typescript shim/src/types.ts, funcd-python shim/src/funcd_shim)
 │  ├─ contract-profile.md           # supported type subset (closed records, enums, unions, Json…) and what fails a push (ADR-0058/0090)
 │  ├─ expressions.md                # `${{ … }}` Select + Condition on goja; where they apply (ADR-0095)
 │  ├─ cedar.md                      # entities, actions, built-in policies, Policy resource (ADR-0074–0076)
@@ -145,7 +145,7 @@ docs/
 ## Grounding notes
 
 **Already written, lift as-is:** `docs/install.md`, `docs/conventions.md`, `docs/demo/README.md`,
-`examples/funcdconfig.yaml`, `examples/js/hello-world/README.md`, `e2e/README.md`,
+`examples/funcdconfig.yaml`, `funcd-typescript examples/hello-world/README.md`, `e2e/README.md`,
 `docs/reports/bench-overview.md`, the two security docs.
 
 **New writing:** everything in `1-concepts` and most of `2-guides`, sourced from

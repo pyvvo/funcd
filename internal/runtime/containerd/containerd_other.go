@@ -7,8 +7,8 @@
 package containerd
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/runtime"
 )
 
 // Config configures the containerd driver (the composition root supplies it).

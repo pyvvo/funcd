@@ -3,7 +3,7 @@ package badger
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 // scenario: runstate-driver-conformance — the Badger driver in in-memory mode

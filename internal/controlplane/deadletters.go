@@ -7,11 +7,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 )
 
 // Replayer is the replay seam the DLQ route needs from the Sensor reconciler (ADR-0118 §4). It performs ONE

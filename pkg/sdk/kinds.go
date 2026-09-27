@@ -8,7 +8,7 @@ package sdk
 import (
 	"strings"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // kindDescriptor is the client's knowledge of one kind's REST path shape.

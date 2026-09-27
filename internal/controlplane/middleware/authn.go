@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // CredentialStore resolves an opaque bearer token / API key to an Identity. It

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // pyFuncdctlYAML is a funcdctl.yaml (ADR-0122): a client push/dev config with an in-profile inline

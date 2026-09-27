@@ -12,7 +12,7 @@ import (
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Table names funcd owns. Programmed additively over the CNI bridge (ADR-0056 never-clobber); Remove

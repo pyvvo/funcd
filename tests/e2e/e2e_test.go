@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
 // scenario: e2e-embed-inmemory-boots.

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/blobcontract"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/blobcontract"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 )
 
 // scenario: driver-conformance-parity — the gocloud driver passes the identical

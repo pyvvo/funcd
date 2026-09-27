@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           os="${{ matrix.os }}"
           arch="${{ matrix.arch }}"
-          LDFLAGS="-s -w -X github.com/green-0-rabbit/funcd/internal/platform/version.Version=${VERSION}"
+          LDFLAGS="-s -w -X github.com/pyvvo/funcd/internal/platform/version.Version=${VERSION}"
           mkdir -p dist
 
           # Thin client (pkg/sdk + api only).

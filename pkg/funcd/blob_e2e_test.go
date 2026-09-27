@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,35 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
-
-// buildBlobObjectExample runs the blob-object example's esbuild (→ object.mjs), reusing the shim's
-// node_modules so it resolves esbuild offline (same pattern as buildKVExample). Node-gated.
-func buildBlobObjectExample(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not on PATH")
-	}
-	exDir := filepath.Join(root, "examples", "js", "blob-object")
-	if _, serr := os.Stat(filepath.Join(exDir, "node_modules")); serr != nil {
-		shimNM := filepath.Join(root, "shim", "nodejs", "node_modules")
-		if _, e := os.Stat(shimNM); e != nil {
-			t.Skip("shim node_modules absent (run: just build-shim)")
-		}
-		require.NoError(t, os.Symlink(shimNM, filepath.Join(exDir, "node_modules")))
-	}
-	cmd := exec.Command(node, "--experimental-strip-types", "build.ts")
-	cmd.Dir = exDir
-	if b, berr := cmd.CombinedOutput(); berr != nil {
-		t.Fatalf("blob-object build: %v\n%s", berr, b)
-	}
-	return exDir
-}
 
 // applyBucket parses a Bucket manifest and applies it through the control-plane client (ADR-0080).
 func applyBucket(t *testing.T, c *sdk.Client, path string) {
@@ -64,13 +37,11 @@ func applyBucket(t *testing.T, c *sdk.Client, path string) {
 // by attempting an UNBOUND alias (→ 403). Covers scenarios blob-read-write, blob-list, blob-unbound-forbidden.
 func TestScenarioE2EBlobObjectViaContextBlob(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildBlobObjectExample(t)
+	exDir := tsExample(t, "blob-object")
 	layout := t.TempDir()
 	ref, digest := pushExampleFn(t, layout, exDir, "object")
 
-	root, _ := filepath.Abs(filepath.Join("..", ".."))
-	exYAML := filepath.Join(root, "examples", "js", "blob-object")
-	data, err := os.ReadFile(filepath.Join(exYAML, "function.yaml"))
+	data, err := os.ReadFile(filepath.Join(exDir, "function.yaml"))
 	require.NoError(t, err)
 	var fn v1.Function
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse function.yaml")
@@ -95,7 +66,7 @@ func TestScenarioE2EBlobObjectViaContextBlob(t *testing.T) {
 
 	// Apply the Bucket (gold owner=blob-object), then re-apply the function WITH spec.blob (the binding
 	// grants read, the ownership grants write). ADR-0121: owner existence is reconcile-time, any order.
-	applyBucket(t, c, filepath.Join(exYAML, "bucket.yaml"))
+	applyBucket(t, c, filepath.Join(exDir, "bucket.yaml"))
 	applyFnObj(t, c, &fn)
 	waitReady(t, c, "blob-object")
 

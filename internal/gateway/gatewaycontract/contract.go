@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/websocket"
 
-	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gateway"
 )
 
 // RunContract runs every scenario assertion against the gateway from newGateway.

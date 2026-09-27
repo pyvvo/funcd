@@ -15,10 +15,10 @@ import (
 	"github.com/versity/versitygw/s3err"
 	"github.com/versity/versitygw/s3response"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	authz "github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	authz "github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // region is the single S3 region funcd's gateway advertises (ADR-0085); DuckDB and

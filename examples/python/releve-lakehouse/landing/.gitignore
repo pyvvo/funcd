@@ -1,5 +1,0 @@
-# NEVER commit bank data. Real statement PDFs and any extracted layers are dropped/produced at runtime and
-# stay local; synthetic samples are script-generated on demand (`just gen-releve`). Nothing here is committed.
-*.pdf
-*.parquet
-*.csv

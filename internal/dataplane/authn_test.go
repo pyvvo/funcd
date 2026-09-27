@@ -8,15 +8,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/activator"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
-	"github.com/green-0-rabbit/funcd/internal/dataplane"
-	"github.com/green-0-rabbit/funcd/internal/edge/authn"
-	"github.com/green-0-rabbit/funcd/internal/edge/router"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/edge/authn"
+	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 type creds map[string]auth.Identity

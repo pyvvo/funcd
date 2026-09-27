@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 func seedBucket(t *testing.T, r *Reconciler, name string, prefixes ...string) {

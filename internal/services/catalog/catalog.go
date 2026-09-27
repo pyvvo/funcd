@@ -13,13 +13,13 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
-	"github.com/green-0-rabbit/funcd/internal/edge/router"
-	"github.com/green-0-rabbit/funcd/internal/provider"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // DuckDBRuntime is the curated runtime name whose image the reconciler deploys the engine from

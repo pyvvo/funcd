@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // EngineTarget is the single CatalogService this proxy endpoint fronts (ADR-0137): its Cedar resource

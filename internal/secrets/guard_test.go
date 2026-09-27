@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/secrets"
+	"github.com/pyvvo/funcd/internal/secrets"
 )
 
 // scenario: merge-env-guarded — the single reserved-key guard drops FUNCD_-prefixed keys, keeps the

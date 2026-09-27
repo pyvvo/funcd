@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // PyPoolComparison is the Python solo-vs-pooled head-to-head (ADR-0050) — the Python analog of the

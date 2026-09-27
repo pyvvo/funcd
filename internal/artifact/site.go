@@ -17,7 +17,7 @@ import (
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // SiteArtifactType marks an OCI manifest as a funcd static-site bundle: one BundleTarMediaType layer,

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/catalog/embedengine"
-	"github.com/green-0-rabbit/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/catalog/embedengine"
+	"github.com/pyvvo/funcd/internal/provider"
 )
 
 func testSpec() provider.ProviderSpec {

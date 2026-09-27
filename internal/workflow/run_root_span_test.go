@@ -6,11 +6,11 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	"github.com/green-0-rabbit/funcd/internal/funclog"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
-	wbadger "github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
+	wbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
 // fakeTraceSink captures the run-root spans the reconciler emits (ADR-0103).

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
 // fakeDispatcher is an in-memory step invoker for engine tests: per-step canned

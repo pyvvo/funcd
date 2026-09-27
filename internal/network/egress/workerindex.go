@@ -4,7 +4,7 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // MemoryWorkerIndex is the in-memory WorkerIndex (ADR-0117, §5) the containerd runtime populates at

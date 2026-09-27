@@ -2,13 +2,13 @@ package bench
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
 // scenario: bench smoke — a short run asserting the scenario *properties* (not just populated
@@ -17,13 +17,8 @@ func TestBenchSmoke(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not on PATH; skipping the bench smoke")
 	}
-	shim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "shim.mjs"))
-	require.NoError(t, err)
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("shim not found at %s (run `just build-shim`)", shim)
-	}
-	poolShim, err := filepath.Abs(filepath.Join("..", "..", "shim", "nodejs", "pool.mjs"))
-	require.NoError(t, err)
+	shim := langmod.NodeShim(t)
+	poolShim := langmod.PoolShim(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

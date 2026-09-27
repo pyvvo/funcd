@@ -6,6 +6,6 @@ package boundaryfixture
 // e2e-boundary rule (ADR-0025). (Expected: depguard "tests/e2e must only import
 // pkg/** + api/**".) Gated behind the lintfixture build tag so the normal gate skips it;
 // tests/lint-fixtures/lintrules_test.go runs it explicitly and asserts the finding fires.
-import "github.com/green-0-rabbit/funcd/internal/store"
+import "github.com/pyvvo/funcd/internal/store"
 
 var _ = store.New

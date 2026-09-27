@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 )
 
 // seedCatalogService stores a CatalogService in the reconciler's memory store with the given

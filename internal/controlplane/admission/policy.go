@@ -3,9 +3,9 @@ package admission
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth/cedar"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth/cedar"
 )
 
 // --- policy-validity (ADR-0074): Create/Update on Policy ----------------------------------------

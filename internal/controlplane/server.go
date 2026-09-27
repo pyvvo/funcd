@@ -6,12 +6,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
-	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
-	"github.com/green-0-rabbit/funcd/internal/eventing/deadletter"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // Deps configures the control-plane API server (ADR-0018, internal component).

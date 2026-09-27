@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/kvstore/kvstorecontract"
-	"github.com/green-0-rabbit/funcd/internal/kvstore/memory"
+	"github.com/pyvvo/funcd/internal/kvstore/kvstorecontract"
+	"github.com/pyvvo/funcd/internal/kvstore/memory"
 )
 
 // scenario: kv-roundtrips — put/get/delete/list round-trip on the in-memory driver.

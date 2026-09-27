@@ -10,7 +10,7 @@ import (
 
 	huma "github.com/danielgtaylor/huma/v2"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // DNSLabel is the RFC-1123 DNS-label pattern — the SINGLE source for both server-side validation

@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,17 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/plog"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/artifact"
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/bus/nats"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario (e2e): funclog-captures-burst (ADR-0081) — a REAL Node function emitting 100+ console.*
@@ -39,14 +39,8 @@ func TestScenarioE2EFunclogCapturesBurst(t *testing.T) {
 	if err != nil {
 		t.Skip("node not on PATH; skipping the funclog capture lane")
 	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	shim := filepath.Join(root, "shim", "nodejs", "shim.mjs")
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("node shim not built at %s (run: just build-shim)", shim)
-	}
-
-	exDir := buildLogBurst(t, root, node)
+	shim := langmod.NodeShim(t)
+	exDir := tsExample(t, "log-burst")
 
 	bucket, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
@@ -116,26 +110,6 @@ func TestScenarioE2EFunclogCapturesBurst(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return countLogRecords(t, bucket) >= 100
 	}, 15*time.Second, 300*time.Millisecond, "≥100 captured function-log records in blob")
-}
-
-// buildLogBurst runs the example's esbuild (build.ts → burst.mjs), reusing the shim's node_modules
-// so it resolves esbuild offline (the kv-counter/fn-to-fn pattern). Node-gated.
-func buildLogBurst(t *testing.T, root, node string) string {
-	t.Helper()
-	exDir := filepath.Join(root, "examples", "js", "log-burst")
-	if _, serr := os.Stat(filepath.Join(exDir, "node_modules")); serr != nil {
-		shimNM := filepath.Join(root, "shim", "nodejs", "node_modules")
-		if _, e := os.Stat(shimNM); e != nil {
-			t.Skip("shim node_modules absent (run: just build-shim)")
-		}
-		require.NoError(t, os.Symlink(shimNM, filepath.Join(exDir, "node_modules")))
-	}
-	cmd := exec.Command(node, "--experimental-strip-types", "build.ts")
-	cmd.Dir = exDir
-	if b, berr := cmd.CombinedOutput(); berr != nil {
-		t.Fatalf("log-burst build: %v\n%s", berr, b)
-	}
-	return exDir
 }
 
 // countLogRecords sums the LogRecord count across every OTLP-JSONL object under logs/.

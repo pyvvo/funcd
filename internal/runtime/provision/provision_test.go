@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 func sum(b []byte) string {

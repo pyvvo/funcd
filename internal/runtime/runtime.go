@@ -15,7 +15,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // InstanceID identifies one worker instance (a function replica).

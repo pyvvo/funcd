@@ -1,6 +1,0 @@
-# build outputs (regenerate with `node build.ts`)
-probe.mjs
-*.schema.json
-.*.entry.ts
-.*.validator.mjs
-node_modules

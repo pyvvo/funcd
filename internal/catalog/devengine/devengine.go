@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/catalog/embedengine"
-	"github.com/green-0-rabbit/funcd/internal/provider"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/catalog/embedengine"
+	"github.com/pyvvo/funcd/internal/provider"
 )
 
 // DevQuackToken is the fixed local Quack auth token the dev engine serves with when spec.Env carries

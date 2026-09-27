@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/eventing"
 )
 
 // scenario: fanout-routes-by-key — a published named event reaches only the subscriber(s) whose

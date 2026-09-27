@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // maxBlobBytes caps a blob value buffered in memory (a DoS guard on the local API, ADR-0127). Larger

@@ -47,8 +47,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/ratelimit"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/ratelimit"
 )
 
 // New returns the in-memory limiter driver with a fixed budget of allows per key.
@@ -86,7 +86,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/ratelimit"
+	"github.com/pyvvo/funcd/internal/ratelimit"
 )
 
 // RunContract runs identical assertions against any driver. newLimiter builds a fresh
@@ -114,7 +114,7 @@ func RunContract(t *testing.T, newLimiter func(t *testing.T, budget int) ratelim
 // add to the config struct:
 //   ratelimiter ratelimit.Limiter
 // add the import:
-//   "github.com/green-0-rabbit/funcd/internal/ratelimit"
+//   "github.com/pyvvo/funcd/internal/ratelimit"
 
 // WithRateLimiter injects the rate-limiter driver.
 func WithRateLimiter(l ratelimit.Limiter) Option {
@@ -129,9 +129,9 @@ package memory_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/ratelimit"
-	"github.com/green-0-rabbit/funcd/internal/ratelimit/memory"
-	"github.com/green-0-rabbit/funcd/internal/ratelimit/ratelimitcontract"
+	"github.com/pyvvo/funcd/internal/ratelimit"
+	"github.com/pyvvo/funcd/internal/ratelimit/memory"
+	"github.com/pyvvo/funcd/internal/ratelimit/ratelimitcontract"
 )
 
 // scenario: denies-over-budget  (ADR-0099)

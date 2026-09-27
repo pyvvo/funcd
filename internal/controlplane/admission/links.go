@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // StoreReader is the read-only store view a cross-resource admission needs. It is a subset of

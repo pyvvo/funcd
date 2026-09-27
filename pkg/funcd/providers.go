@@ -3,7 +3,7 @@ package funcd
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/provider"
 )
 
 // providerCatalog is the platform's static provider catalog (ADR-0082): the single source of

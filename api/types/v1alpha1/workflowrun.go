@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	huma "github.com/danielgtaylor/huma/v2"
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // WorkflowRun is a namespaced, status-bearing resource: one execution of a Workflow

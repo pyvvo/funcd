@@ -9,7 +9,7 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
 
 - `kv-counter.venom.yml` — the KV containerd lane (ADR-0069/0076). Proves two properties declaratively:
   1. **binding-as-read-grant** — each counter (nodejs22 + python314) reads 1→2 with **no read Policy**.
-  2. **fail-closed** — applying `examples/js/kv-counter/counter-unbound.yaml` (the same config minus
+  2. **fail-closed** — applying `examples/kv-counter/counter-unbound.yaml` (in pyvvo/funcd-typescript) (the same config minus
      `spec.kv`) makes `context.kv.get` **Forbidden** (bound-only, not default-allow).
 - `fn-to-fn.venom.yml` — the fn-to-fn link lane (ADR-0064/0058). Proves: front invokes greeter (the link
   is the capability); a missing name makes greeter's contract reject (422) and that **422 propagates** back

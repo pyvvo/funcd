@@ -12,10 +12,10 @@ import (
 	"github.com/versity/versitygw/s3api"
 	"github.com/versity/versitygw/s3api/middlewares"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	authz "github.com/green-0-rabbit/funcd/internal/auth"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	authz "github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // defaultMaxUpload is the fail-closed buffer cap on a single buffered object when a

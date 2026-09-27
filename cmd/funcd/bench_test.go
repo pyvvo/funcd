@@ -2,11 +2,41 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/stretchr/testify/require"
+
+	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	"github.com/pyvvo/funcd/api/fault"
 )
+
+// scenario: bench-uses-embedded-shims (ADR-0141) — with no --shim/--pool-shim, funcd bench runs the
+// embedded shims from a temp dir that cleanup removes; an explicit path overrides, and a missing
+// explicit pool shim skips the pooling comparison.
+func TestScenarioBenchUsesEmbeddedShims(t *testing.T) {
+	shim, pool, cleanup, err := resolveShimPaths(benchConfig{})
+	require.NoError(t, err)
+	for path, want := range map[string][]byte{shim: shimnode.Shim, pool: shimnode.Pool} {
+		got, rerr := os.ReadFile(path)
+		require.NoError(t, rerr)
+		require.Equal(t, want, got, "%s is the embedded shim", filepath.Base(path))
+	}
+	cleanup()
+	_, err = os.Stat(shim)
+	require.ErrorIs(t, err, fs.ErrNotExist, "cleanup removes the extracted shims")
+
+	explicit := filepath.Join(t.TempDir(), "shim.mjs")
+	require.NoError(t, os.WriteFile(explicit, shimnode.Shim, 0o600))
+	shim, pool, cleanup, err = resolveShimPaths(benchConfig{shim: explicit, poolShim: filepath.Join(t.TempDir(), "absent.mjs")})
+	require.NoError(t, err)
+	defer cleanup()
+	require.Equal(t, explicit, shim, "an explicit --shim wins")
+	require.Empty(t, pool, "a missing explicit --pool-shim skips the comparison")
+}
 
 // scenario: bench-is-one-flag-driven-verb — `funcd bench --help` is a SINGLE verb whose mode is
 // chosen by mutually-exclusive flags (--containerd, --doctor), not a process/containerd/doctor

@@ -1,6 +1,6 @@
 [Unit]
 Description=funcd — single-binary serverless/agent platform
-Documentation=https://github.com/green-0-rabbit/funcd
+Documentation=https://github.com/pyvvo/funcd
 After=network-online.target
 Wants=network-online.target
 

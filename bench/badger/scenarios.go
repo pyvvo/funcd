@@ -530,7 +530,7 @@ func singleWriterGateway(db *badger.DB, clients int, dur time.Duration, batchMax
 		}
 		time.Sleep(dur)
 		close(stop)
-		wg.Wait()        // clients finish their in-flight op, then exit
+		wg.Wait()         // clients finish their in-flight op, then exit
 		close(writerStop) // only now stop the writer
 		<-writerDone
 		return "", nil

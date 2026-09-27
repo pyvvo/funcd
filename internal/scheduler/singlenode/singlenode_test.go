@@ -6,11 +6,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/scheduler"
-	"github.com/green-0-rabbit/funcd/internal/scheduler/schedulercontract"
-	"github.com/green-0-rabbit/funcd/internal/scheduler/singlenode"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/scheduler"
+	"github.com/pyvvo/funcd/internal/scheduler/schedulercontract"
+	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 )
 
 // scenario: single-node-places-local — any request is placed on the configured local worker.

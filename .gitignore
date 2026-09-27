@@ -1,5 +1,4 @@
-# no trailing slash: also ignore a `node_modules` SYMLINK (the example build lanes `ln -sfn` the shim's
-# node_modules into each example) — a trailing-slash rule matches only directories, letting the symlink slip.
+# no trailing slash: also ignores a `node_modules` symlink
 node_modules
 /bin/
 /funcd
@@ -44,17 +43,12 @@ __pycache__
 .pytest_cache/
 .ruff_cache/
 
-# Python kv-counter example build outputs (regenerate with `uv run --group build python build.py`)
-/examples/python/kv-counter/counter.py
-/examples/python/kv-counter/counter.schema.json
+# writable copies of the pinned language-repo examples (ADR-0141: scripts/example-copy.sh, lane `copy: true`)
+.modcopy/
 
-# Python log-burst example build outputs (ADR-0090 contract — `uv run --group build python build.py`)
-/examples/python/log-burst/handler.py
-/examples/python/log-burst/handler.schema.json
-
-# JS contract-schema build outputs (ADR-0090 `--schema` docs; the .mjs are handled per-example)
-/examples/js/log-burst/burst.schema.json
-/examples/js/s3-roundtrip/roundtrip.schema.json
+# a local go.work overriding the language-module pins for cross-repo work (ADR-0141) — never committed
+go.work
+go.work.sum
 
 # Function dependency-bundle build output (ADR-0089 deployment package: handler + vendored native
 # deps) — a `bundle/` dir in ANY example/subproject; never commit the (often ~100MB) vendored closure

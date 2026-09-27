@@ -42,9 +42,9 @@ linters:
             - "**/api/**"
             - "!**/*_test.go"
           deny:
-            - pkg: "github.com/green-0-rabbit/funcd/internal"
+            - pkg: "github.com/pyvvo/funcd/internal"
               desc: "api/** production code must not import internal/*"
-            - pkg: "github.com/green-0-rabbit/funcd/pkg"
+            - pkg: "github.com/pyvvo/funcd/pkg"
               desc: "api/** production code must not import pkg/*"
         platform-leaf:
           list-mode: original
@@ -52,7 +52,7 @@ linters:
             - "**/internal/platform/**"
             - "!**/*_test.go"
           deny:
-            - pkg: "github.com/green-0-rabbit/funcd/internal"
+            - pkg: "github.com/pyvvo/funcd/internal"
               desc: "internal/platform is a leaf; must not import other internal packages"
         e2e-boundary:
           list-mode: original
@@ -64,7 +64,7 @@ linters:
           deny:
             # depguard's deny `pkg` is a PREFIX match, not a glob — a trailing "/*"
             # silently never matches. Bare prefix denies internal + every subpackage.
-            - pkg: "github.com/green-0-rabbit/funcd/internal"
+            - pkg: "github.com/pyvvo/funcd/internal"
               desc: "tests/e2e must only import pkg/** + api/**"
         # ADR-0051/0055: gopsutil + fortio are confined to the bench harness. Deny them
         # EVERYWHERE except internal/testkit/bench/** (negated from $all), so an accidental cross-import

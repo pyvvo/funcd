@@ -10,7 +10,7 @@ import (
 	"context"
 	"net/netip"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Manager programs the host-level worker-egress isolation substrate (F80). It is enabled opt-in; disabled

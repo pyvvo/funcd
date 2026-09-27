@@ -22,7 +22,7 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/go-playground/validator/v10"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 	"sigs.k8s.io/yaml"
 )
 

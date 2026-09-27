@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/green-0-rabbit/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane"
 )
 
 func main() {

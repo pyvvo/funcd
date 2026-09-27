@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Group and Version are the wire identity of every funcd resource.

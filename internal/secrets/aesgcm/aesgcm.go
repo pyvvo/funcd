@@ -11,8 +11,8 @@ import (
 	"crypto/rand"
 	"io"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/store"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // keyLen is the AES-256 key length in bytes.

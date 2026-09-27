@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // Typed-edge contract checking (ADR-0098, F65). A pure, registry-free layer over the I/O schemas

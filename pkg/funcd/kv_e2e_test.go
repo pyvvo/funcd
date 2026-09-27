@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,35 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
-
-// buildKVExample runs the kv-counter example's esbuild (→ counter.mjs), reusing the shim's node_modules
-// so it resolves esbuild offline (same pattern as buildFnToFnExample). Node-gated.
-func buildKVExample(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not on PATH")
-	}
-	exDir := filepath.Join(root, "examples", "js", "kv-counter")
-	if _, serr := os.Stat(filepath.Join(exDir, "node_modules")); serr != nil {
-		shimNM := filepath.Join(root, "shim", "nodejs", "node_modules")
-		if _, e := os.Stat(shimNM); e != nil {
-			t.Skip("shim node_modules absent (run: just build-shim)")
-		}
-		require.NoError(t, os.Symlink(shimNM, filepath.Join(exDir, "node_modules")))
-	}
-	cmd := exec.Command(node, "--experimental-strip-types", "build.ts")
-	cmd.Dir = exDir
-	if b, berr := cmd.CombinedOutput(); berr != nil {
-		t.Fatalf("kv-counter build: %v\n%s", berr, b)
-	}
-	return exDir
-}
 
 // scenario (e2e): kv-counter-via-context-kv (ADR-0073/0074) — the REAL path: build the kv-counter
 // handler, push it to an OCI layout, apply it, then POST. The handler reads+increments a per-name
@@ -55,15 +28,13 @@ func buildKVExample(t *testing.T) string {
 // binding, and that the owner-write is the built-in forbid.
 func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
-	exDir := buildKVExample(t)
+	exDir := tsExample(t, "kv-counter")
 	layout := t.TempDir()
 	// push WITH the I/O contract (counter.schema.json baked by build.ts, ADR-0090) — the kv-counter
 	// function is contract-validated exactly like fn-to-fn, so the artifact carries its schemas.
 	ref, digest := pushExampleFn(t, layout, exDir, "counter")
 
-	root, _ := filepath.Abs(filepath.Join("..", ".."))
-	exYAML := filepath.Join(root, "examples", "js", "kv-counter")
-	data, err := os.ReadFile(filepath.Join(exYAML, "counter.yaml"))
+	data, err := os.ReadFile(filepath.Join(exDir, "counter.yaml"))
 	require.NoError(t, err)
 	var fn v1.Function
 	require.NoError(t, yaml.Unmarshal(data, &fn), "parse counter.yaml")
@@ -101,7 +72,7 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	require.NotEqual(t, 1, count, "without a spec.kv binding, the kv-counter call is denied (default-deny): %s", body)
 
 	// Apply the owned store (owner "counter" exists now), then re-apply the function WITH spec.kv.
-	applyKVStore(t, c, filepath.Join(exYAML, "store.yaml"))
+	applyKVStore(t, c, filepath.Join(exDir, "store.yaml"))
 	applyFnObj(t, c, &fn)
 	waitReady(t, c, "counter")
 

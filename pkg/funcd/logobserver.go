@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/funclog"
 )
 
 // LogLine is one structured function-log record surfaced to a LogObserver — a stable projection of

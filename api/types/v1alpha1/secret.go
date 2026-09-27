@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	huma "github.com/danielgtaylor/huma/v2"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Secret is a namespaced, pure-data resource for sensitive configuration.

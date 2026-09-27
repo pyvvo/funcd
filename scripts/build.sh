@@ -7,7 +7,7 @@
 # Override any of VERSION / COMMIT / DATE / OUT / CGO_ENABLED via the environment.
 set -eu
 
-PKG="github.com/green-0-rabbit/funcd/internal/platform/version"
+PKG="github.com/pyvvo/funcd/internal/platform/version"
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 COMMIT="${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo none)}"
 DATE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"

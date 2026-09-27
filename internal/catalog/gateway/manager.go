@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private

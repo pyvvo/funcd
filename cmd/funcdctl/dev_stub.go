@@ -5,7 +5,7 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // devCmd is the release-build stub of `funcdctl dev` (ADR-0125). The real command embeds the whole

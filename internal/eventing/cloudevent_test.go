@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/eventing"
 )
 
 // scenario: cloudevent-normalized — a named event's envelope carries the source URI + the event name as

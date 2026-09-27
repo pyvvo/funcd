@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Role is a named, reusable permission set (ADR-0136, FEAT-0008/F101): a set of funcd data-plane action

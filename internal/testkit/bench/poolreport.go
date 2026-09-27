@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // PoolComparison is the head-to-head the separate pool report renders (ADR-0044). Two axes, NOT of

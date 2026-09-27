@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/funclog"
-	"github.com/green-0-rabbit/funcd/internal/platform/clock"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 // mintTraceContext returns a fresh W3C trace context (ADR-0102): a 16-byte trace-id and an 8-byte

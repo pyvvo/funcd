@@ -4,23 +4,22 @@ package funcd_test
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/blob/gocloud"
-	"github.com/green-0-rabbit/funcd/internal/bus/nats"
-	"github.com/green-0-rabbit/funcd/internal/gateway/embedded"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	"github.com/green-0-rabbit/funcd/internal/store/memory"
-	"github.com/green-0-rabbit/funcd/pkg/funcd"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario (e2e): scheduled-workflow-start (F68, ADR-0109) — a REAL `timer:` EventSource + a Sensor
@@ -31,12 +30,7 @@ func TestScenarioE2EScheduledWorkflow(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not on PATH; skipping the scheduled-workflow lane")
 	}
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	shim := filepath.Join(root, "shim", "nodejs", "shim.mjs")
-	if _, serr := os.Stat(shim); serr != nil {
-		t.Skipf("node shim not built at %s (run: just build-shim)", shim)
-	}
+	shim := langmod.NodeShim(t)
 
 	bucket, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)

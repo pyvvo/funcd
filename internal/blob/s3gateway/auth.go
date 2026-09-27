@@ -6,9 +6,9 @@ import (
 	"github.com/versity/versitygw/auth"
 	"github.com/versity/versitygw/s3api/utils"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	authz "github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	authz "github.com/pyvvo/funcd/internal/auth"
 )
 
 // principal is the resolved S3 caller (ADR-0085): an in-platform Function Ref or an

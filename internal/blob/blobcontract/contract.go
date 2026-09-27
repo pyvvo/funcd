@@ -8,8 +8,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // RunContract runs the backend-agnostic blob scenarios against a Bucket built by

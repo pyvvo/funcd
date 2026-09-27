@@ -9,10 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/bus"
-	"github.com/green-0-rabbit/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/bus"
+	"github.com/pyvvo/funcd/internal/gateway"
 )
 
 // scenario: inmemory-boots — New(InMemory()) returns a platform with every port wired.

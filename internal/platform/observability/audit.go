@@ -5,7 +5,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // AuditDecision is the outcome recorded for a security-relevant action.

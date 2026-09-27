@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/dataplane"
 )
 
 // namespaceHeader matches the data-plane's target-namespace header (internal/dataplane).

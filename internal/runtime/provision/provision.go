@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Pinned runtime versions (ADR-0056). These match the validated Lima/homebox set

@@ -40,7 +40,7 @@ The implementation turns the Accepted ADR into working code with passing scenari
 - [ ] **Deps**: only those the ADR sanctioned; `go.mod`/`go.sum` tidy; resolved versions recorded.
 - [ ] **No scope creep**: the work implements *this* ADR, not a neighbouring decision (that's a new
       ADR).
-- [ ] **Tracking**: module path `github.com/green-0-rabbit/funcd`; no dev-machine reference leaked
+- [ ] **Tracking**: module path `github.com/pyvvo/funcd`; no dev-machine reference leaked
       (absolute path / local username / personal email — checked **silently**, never written as a report
       section, see the CLAUDE.md absolute rule); the realized `docs/feat/` row at `reviewing` and the ADR at
       `Reviewing` with its substance unchanged (the builder's only permitted ADR edit is the

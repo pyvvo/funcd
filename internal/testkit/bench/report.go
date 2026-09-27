@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // WriteReport writes the bench reports to dir as both machine-readable JSON (for a future CI

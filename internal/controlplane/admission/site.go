@@ -3,8 +3,8 @@ package admission
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // --- site-prefix-immutable (ADR-0139): Update on Site --------------------------------------

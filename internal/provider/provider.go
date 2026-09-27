@@ -11,7 +11,7 @@ package provider
 import (
 	"sort"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Kind is a provider's deployment tier (the blueprint provider model).

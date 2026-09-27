@@ -9,11 +9,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	bstore "github.com/green-0-rabbit/funcd/internal/store/badger"
-	"github.com/green-0-rabbit/funcd/internal/store/storecontract"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
+	bstore "github.com/pyvvo/funcd/internal/store/badger"
+	"github.com/pyvvo/funcd/internal/store/storecontract"
 )
 
 // newBadgerStore opens a fresh Badger-backed store.Store at a temp dir (sync off for test speed).

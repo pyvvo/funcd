@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/platform/version"
 )
 
 // scenario: version-defaults-unstamped.

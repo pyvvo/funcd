@@ -13,7 +13,7 @@ import (
 	"github.com/versity/versitygw/s3err"
 	"github.com/versity/versitygw/s3response"
 
-	authz "github.com/green-0-rabbit/funcd/internal/auth"
+	authz "github.com/pyvvo/funcd/internal/auth"
 )
 
 // multipartStore buffers in-flight multipart uploads in memory (ADR-0080 Temporary

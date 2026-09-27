@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	cataloggw "github.com/green-0-rabbit/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 )
 
 // resolveCatalogEnv resolves each spec.catalogs binding into the FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env

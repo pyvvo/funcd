@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // pyManifest is a funcdctl.yaml (ADR-0122): a client push/dev config with a python314 runtime, a KV

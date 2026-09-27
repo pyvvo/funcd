@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Site is a namespaced, status-bearing static web deliverable (ADR-0139, F103): an immutable bundle

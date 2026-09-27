@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // EventSource is a namespaced resource that configures an event trigger source.

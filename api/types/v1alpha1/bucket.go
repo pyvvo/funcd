@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Bucket is a namespaced blob domain (ADR-0080): the S3 *bucket*, mirroring KVStore — a named domain

@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/edge/tls/acme"
+	"github.com/pyvvo/funcd/internal/edge/tls/acme"
 )
 
 // scenario: acme-config-built — the driver builds a well-formed certmagic config for a CA directory

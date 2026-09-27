@@ -3,7 +3,7 @@ package gocloud
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob"
 )
 
 // Proves List's sort directly (independent of any backend's own ordering): a shuffled

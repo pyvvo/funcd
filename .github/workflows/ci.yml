@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
+  merge_group:
 
 # pull-requests:read — dorny/paths-filter reads the PR's changed files via the API.
 # actions:write — cache-nix-action lists/saves/purges its store caches via the cache API.
@@ -14,35 +17,44 @@ permissions:
   actions: write
 
 jobs:
-  # Detect whether this change touches anything the pkg/funcd e2e scenarios depend on.
-  # pkg/funcd imports ~63% of the module, execs the language shims, and rides the runtime
-  # images — so any of these paths changing means the heavy suite must run. A docs/ADR/
-  # example-only change trips none of them and skips it.
+  # `code`: whether this change touches anything the pkg/funcd e2e scenarios depend on.
+  # pkg/funcd imports ~63% of the module, execs the language shims (pinned in go.mod,
+  # ADR-0141), and rides the runtime images — so any of these paths changing means the heavy
+  # suite must run. `nondocs`: anything but Markdown or LICENSE, which gates the fast lane. A
+  # skipped required job still reports success, so a docs-only PR is not blocked.
   changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      nondocs: ${{ steps.filter.outputs.nondocs }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
+          predicate-quantifier: some-with-excludes
           filters: |
             code:
               - 'api/**'
               - 'internal/**'
               - 'pkg/**'
-              - 'shim/**'
               - 'images/**'
               - 'go.mod'
               - 'go.sum'
               - 'flake.nix'
               - 'flake.lock'
               - '.github/workflows/ci.yml'
+            nondocs:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE'
 
-  # Fast lane — runs on every change. The heavy pkg/funcd e2e suite is build-tagged out
-  # of `just ci`, so this is fmt + lint + fast tests + build (seconds of test, not ~70s).
+  # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
+  # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
+  # build (seconds of test, not ~70s).
   ci:
+    needs: changes
+    if: needs.changes.outputs.nondocs == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

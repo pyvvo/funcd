@@ -84,7 +84,7 @@ placeholders. Then:
 
 - Status is **Active** (a living plan — say so; it updates as ADRs land, unlike immutable ADRs).
 - Identity rules: never write the local machine username or local filesystem paths into the file;
-  module paths use `github.com/green-0-rabbit/funcd`. Grep the file before finishing.
+  module paths use `github.com/pyvvo/funcd`. Grep the file before finishing.
 - Close by pointing at the first unblocked move (the wave-1 items whose deps are already Accepted)
   and the highest-leverage design start.
 

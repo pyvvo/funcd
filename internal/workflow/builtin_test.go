@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 func waitStep(name, wait string, deps ...string) v1.WorkflowStep {

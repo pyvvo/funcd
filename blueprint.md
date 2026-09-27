@@ -907,11 +907,25 @@ funcd/
 ├── .github/workflows/ci.yml              # lint → unit → codegen-drift → integration → e2e
 ├── .golangci.yml
 ├── justfile                              # single task runner (just)
-├── go.mod                                # codegen tools pinned via the `tool` directive
+├── go.mod                                # module github.com/pyvvo/funcd; codegen tools via `tool`; the language repos pinned by tag (ADR-0141)
 ├── go.sum
 ├── LICENSE
 └── README.md
 ```
+
+### Companion repositories (ADR-0141)
+
+funcd lives at `github.com/pyvvo/funcd`. The language shims and their examples live in their own repos, which
+funcd consumes as Go modules pinned by release tag in `go.mod`:
+
+| Repo | Holds | funcd uses |
+|------|-------|------------|
+| `pyvvo/funcd-typescript` | the Node shim (`shim.mjs`, `pool.mjs`), npm `@funcd-dev/shim`, the JS examples with committed builds | `shim.Shim`, `shim.Pool` (embedded), the image's `shim.mjs`, the examples for e2e and lanes |
+| `pyvvo/funcd-python` | the Python shim (`funcd_shim`), PyPI `funcd-shim`, the Python examples | `shim.Extract` (embedded), the image's `funcd_shim`, the examples for e2e and lanes |
+| `pyvvo/funcd-functions` | real functions deployed on the platform | nothing (a consumer of funcd) |
+
+funcd reads a module's files from `go list -m -f '{{.Dir}}'` and never writes there; a gitignored `go.work`
+overrides a pin for cross-repo work. Providers (duckdb, later rqlite) stay in funcd.
 
 ### Challenged & changed (vs the draft layout)
 

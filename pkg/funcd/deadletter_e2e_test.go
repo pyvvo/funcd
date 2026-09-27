@@ -9,10 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/eventing"
-	"github.com/green-0-rabbit/funcd/pkg/sdk"
+	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario (in-process): driver-independent DLQ end-to-end (ADR-0118, F85) — a running InMemory platform

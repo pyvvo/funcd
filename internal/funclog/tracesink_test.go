@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
-	"github.com/green-0-rabbit/funcd/internal/blob"
-	"github.com/green-0-rabbit/funcd/internal/funclog"
-	"github.com/green-0-rabbit/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 func newTraceSink(t *testing.T, b blob.Bucket, maxBytes int) *funclog.BlobTraceSink {

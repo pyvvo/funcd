@@ -6,11 +6,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/controller"
-	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
-	"github.com/green-0-rabbit/funcd/internal/store"
-	storemem "github.com/green-0-rabbit/funcd/internal/store/memory"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
+	"github.com/pyvvo/funcd/internal/store"
+	storemem "github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // recPrefixManager records the prefixes DropPrefix was called with and serves a fixed key list (the

@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 
-	"github.com/green-0-rabbit/funcd/internal/edge/tls/static"
+	"github.com/pyvvo/funcd/internal/edge/tls/static"
 )
 
 // serveTLS starts an httptest TLS server using cfg and returns it.

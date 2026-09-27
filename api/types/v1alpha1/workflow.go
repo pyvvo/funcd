@@ -5,7 +5,7 @@ import (
 	"time"
 
 	huma "github.com/danielgtaylor/huma/v2"
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Workflow is a namespaced, status-bearing resource: a declarative multi-step run

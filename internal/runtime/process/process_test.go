@@ -3,9 +3,9 @@ package process_test
 import (
 	"testing"
 
-	"github.com/green-0-rabbit/funcd/internal/runtime"
-	"github.com/green-0-rabbit/funcd/internal/runtime/process"
-	"github.com/green-0-rabbit/funcd/internal/runtime/runtimecontract"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/runtime/runtimecontract"
 )
 
 // scenario: driver-conformance-parity (and the lifecycle/logs/stop/not-found/exec

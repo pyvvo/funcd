@@ -5,7 +5,7 @@ package ctrmanager
 import (
 	"context"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // privateManager is the non-Linux stub: the private-managed containerd needs a Linux host

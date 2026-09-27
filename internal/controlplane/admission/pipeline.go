@@ -3,7 +3,7 @@ package admission
 import (
 	"context"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // Pipeline runs the registered admissions for a write: all Mutating (threading the object), then

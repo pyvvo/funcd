@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Filenames for the generated declaration files, keyed by runtime family.

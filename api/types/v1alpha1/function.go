@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // Function is a namespaced resource representing a deployable function/agent.

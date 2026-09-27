@@ -10,17 +10,18 @@ DEMO="$(cfg .demoDir)"; SERVER="$(cfg .server)"; DATA="$(cfg .dataPlane)"
 TOKEN="$(cfg .token)"; FN="$(cfg .function)"
 LAYOUT_REF="$(yq '.spec.artifact.uri' docs/demo/function.yaml)" # the CRD is the single source
 CLI="$DEMO/bin/funcdctl"
+HELLO="$(cat "$DEMO/hello-world.dir")/examples/hello-world"
 fc() { "$CLI" --server "$SERVER" --token "$TOKEN" "$@"; }
 say() { printf '\n\033[1;36m❯ %s\033[0m\n' "$*"; }
 
 printf '\033[1;35mfuncd — deploy a function from a source artifact and invoke it, all via the CLI\033[0m\n'
 
-say "cat src/handler.ts                            # the function, typed against @funcd/shim-nodejs"
-cat examples/js/hello-world/src/handler.ts
+say "cat src/handler.ts                            # the function, typed against @funcd-dev/shim"
+cat "$HELLO/src/handler.ts"
 sleep 1.4
 
 say "funcdctl push handler.mjs oci-layout://…:v1     # bundle (esbuild) → push the OCI artifact"
-fc push examples/js/hello-world/handler.mjs "$LAYOUT_REF"
+fc push "$HELLO/handler.mjs" "$LAYOUT_REF"
 sleep 1.4
 
 say "funcdctl apply -f function.yaml                 # deploy — no digest; the platform pins it"

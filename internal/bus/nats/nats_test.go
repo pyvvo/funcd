@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/bus"
-	"github.com/green-0-rabbit/funcd/internal/bus/buscontract"
-	natsdriver "github.com/green-0-rabbit/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/bus"
+	"github.com/pyvvo/funcd/internal/bus/buscontract"
+	natsdriver "github.com/pyvvo/funcd/internal/bus/nats"
 )
 
 // scenario: subscribe-after-close — Subscribe/Consume on a closed bus fail cleanly with

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate"
-	"github.com/green-0-rabbit/funcd/internal/workflow/runstate/badger"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
 // resetFake zeroes a fake's call/order/input tracking so a replay's dispatches can be asserted

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/green-0-rabbit/funcd/internal/edge/limit"
+	"github.com/pyvvo/funcd/internal/edge/limit"
 )
 
 // counter is a next-handler that records how many times it was called (200 OK).

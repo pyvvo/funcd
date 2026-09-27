@@ -86,8 +86,8 @@ act-build version="dev":
 ARCH := `go env GOARCH`
 [group('runtime')]
 build-runtime-images: embedimg-pin
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-typescript)/shim" -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-python)/shim" -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
     docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/duckdb/Dockerfile -t funcd/runtime-duckdb:latest .
     docker save funcd/runtime-nodejs22:latest | gzip -9 > internal/runtime/embedimg/nodejs22.tar
     docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
@@ -131,26 +131,11 @@ embedimg-pin:
 embedimg-unpin:
     -git update-index --no-skip-worktree internal/runtime/embedimg/*.tar 2>/dev/null || true
 
-# regenerate the Node runtime shims from TypeScript (ADR-0037/0044): typecheck + self-test +
-# esbuild bundle → shim/nodejs/shim.mjs (single-tenant, go:embed'd) + pool.mjs (pooled
-# worker_threads). Needs npm on PATH. Both are generated artifacts; rerun after editing src/*.ts.
-[group('runtime')]
-build-shim:
-    cd shim/nodejs && npm ci && npm run typecheck && npm test && npm run build
-
-# check the Python runtime shim (ADR-0049/0050): strict typecheck + lint + tests, for the shim and
-# the example. Runs on Python 3.14 so the subinterpreter pool-host tests (ADR-0050,
-# concurrent.interpreters) run rather than skip. Stdlib-only, go:embed'd — no bundle step. Needs uv.
-[group('runtime')]
-check-shim-python:
-    cd shim/python && uv run --python 3.14 ruff check . && uv run --python 3.14 mypy && uv run --python 3.14 pytest -q
-    cd examples/python/hello-world && uv run --python 3.14 ruff check . && uv run --python 3.14 mypy && uv run --python 3.14 pytest -q
-
 # run the benchmark & sustainability harness (ADR-0040): drive the data plane + sample memory
 # across the memory and file substrate → the RAW report docs/reports/report.{md,json}, plus the
 # separate worker-pool comparison docs/reports/pool-report.{md,json} (ADR-0044: density + throughput,
 # pooled vs per-function). Both feed the authored docs/reports/bench-overview.md (regenerate via the
-# bench-overview skill). Needs node + the shims. Numbers are dev-machine + process-RSS (see caveats).
+# bench-overview skill). Needs node (the shims are embedded). Numbers are dev-machine + process-RSS (see caveats).
 [group('runtime')]
 bench:
     go run ./cmd/funcd bench --out docs/reports --density 8
@@ -205,10 +190,10 @@ lima-down:
 # scripts/lanes.yaml (the REGISTRY), runs scripts/lane.py to execute its `build` + stage its files + the
 # registry into lane.tgz, boots the ONE generic VM (scripts/lima-lane.yaml — which reads the same section
 # in-guest to push + apply + probe Ready), and runs the lane's Venom suite. Add a lane by adding a section
-# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ node/uv per the lane's `build`).
+# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ uv for the duckdb lane's `build`).
 # Examples: `just lima-example env-echo` · `just lima-example duckdb`.
 [group('example')]
-lima-example name: build-runtime-images build-shim
+lima-example name: build-runtime-images
     #!/usr/bin/env bash
     set -euo pipefail
     name='{{name}}'; deps='{{lima_deps}}'; vm='{{lima_name}}-{{name}}'
@@ -284,8 +269,8 @@ lima-example-metastore: build-runtime-images
     echo "venom results: {{lima_deps}}/test_results_metastore.venom.xml"
 
 # run the CLI demo end to end (build → boot → push/apply/get/invoke → teardown).
-# Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: examples/js/hello-world.
-# Needs node + npm + yq on PATH.
+# Inputs: docs/demo/demo.yaml · CRD: docs/demo/function.yaml · function: hello-world from the pinned
+# funcd-typescript module (ADR-0141). Needs node + yq on PATH.
 [group('demo')]
 demo:
     bash scripts/demo/setup.sh
@@ -300,18 +285,18 @@ demo-record:
 # launch funcd locally with the example config (examples/funcdconfig.yaml, ADR-0061): a zero-infra
 # dev daemon — in-memory substrate + process runtime, control plane on 127.0.0.1:8080, data plane on
 # :8081. Runs until Ctrl-C. With node / python3 on PATH, pushed functions actually execute — then in
-# another shell `funcdctl push` + `apply` an example (see examples/*/hello-world/README.md).
+# another shell `funcdctl push` + `apply` an example (see hello-world in pyvvo/funcd-typescript or pyvvo/funcd-python).
 [group('example')]
 funcd-example:
     go run ./cmd/funcd --config examples/funcdconfig.yaml
 
-# run the fn-to-fn link example end-to-end (ADR-0064/0058): builds the shim + the TS example with its
-# CONTRACT build (generated JSON Schema + baked validators), pushes to an OCI layout, applies the
-# manifests, and drives the real broker round-trip + contract-422 + invoke-propagation + default-deny.
-# Needs node on PATH (the tests skip without it).
+# run the fn-to-fn link example end-to-end (ADR-0064/0058): takes the committed TS example (bundles +
+# generated JSON Schema with baked validators) from the pinned funcd-typescript module (ADR-0141), pushes
+# it to an OCI layout, applies the manifests, and drives the real broker round-trip + contract-422 +
+# invoke-propagation + default-deny. Needs node on PATH (the tests skip without it).
 [group('example')]
-example-fn-to-fn: build-shim
-    go test ./pkg/funcd/ -run 'TestScenario(HandlerInvokesLinkedFunction|ContractRejectsBadInput|InvokePropagatesContract422|UnlinkedAliasDeniedE2E)' -v
+example-fn-to-fn:
+    go test -tags e2e ./pkg/funcd/ -run 'TestScenario(HandlerInvokesLinkedFunction|ContractRejectsBadInput|InvokePropagatesContract422|UnlinkedAliasDeniedE2E)' -v
 
 # build the version-stamped single binary (ADR-0026) → dist/funcd.
 # Pure-Go static (CGO_ENABLED=0) — ADR-0065 made the metastore engine pure-Go Badger (no cgo lane).
@@ -349,6 +334,12 @@ check-hygiene:
         echo "hygiene: bench/expr-engine/expr-engine is tracked — it is a compiled build output; keep it gitignored"
         fail=1
     fi
+    # ADR-0141: only go.mod/go.sum pin a language module, so a bump reaches every consumer; nothing
+    # hard-codes a version or a module-cache path (frozen docs keep history).
+    if git grep -n -E 'pyvvo/funcd-(typescript|python)@v[0-9]|pkg/mod/github\.com/pyvvo' -- ':!go.mod' ':!go.sum' ':!docs/adr/' ':!docs/reviews/' ':!docs/legacy/'; then
+        echo "hygiene: a language-module version or module-cache path is hard-coded above — resolve it through go.mod (scripts/moddir.sh)"
+        fail=1
+    fi
     if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
     exit "$fail"
 
@@ -367,23 +358,24 @@ ci: tidy generate check-hygiene
     go build ./...
     go mod verify
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
-# run the KV example end-to-end (ADR-0069): build the shim + the kv-counter example, push it, apply it,
-# and POST twice — the handler increments a per-name counter via context.kv (→ worker-node local API →
+# run the KV example end-to-end (ADR-0069): take the committed kv-counter example from the pinned
+# funcd-typescript module (ADR-0141), push it, apply it, and POST twice — the handler increments a per-name counter via context.kv (→ worker-node local API →
 # PDP Facade → durable driver), so the count goes 1 then 2. Needs node on PATH (the test skips without it).
 [group('example')]
-example-kv: build-shim
-    go test ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v
+example-kv:
+    go test -tags e2e ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v
 
 # Run a bundled example under `funcdctl dev` (ADR-0125) in ONE command, so you can reproduce it easily:
 # builds the fat -tags dev funcdctl (embedding the host-arch DuckDB+Quack catalog engine ONLY when the
 # example binds a catalog — fetched once, ~63 MB) and runs the example FROM SOURCE — a localhost gateway
 # + S3 (+ catalog), zero hand-written CRDs, real contract enforcement. The embedded shims are already
-# built into funcdctl, so no push and no build-shim. Resolve <project> as a path, `js/<name>` /
-# `python/<name>`, or a bare unique example name; a workflow example (has workflow.yaml) runs its DAG.
+# built into funcdctl, so no push. <project> is `js/<name>` / `python/<name>` or a bare unique example name
+# from the pinned language modules (run from a writable copy under .modcopy/, ADR-0141), or a path (used
+# as-is, e.g. a sibling clone); a workflow example (has workflow.yaml) runs its DAG.
 # Extra flags pass through. Examples:
 #   just dev-example catalog-quack            # the DuckLake/Quack catalog example (python)
 #   just dev-example js/kv-counter --persist  # persist KV/blob across runs (qualify the ambiguous name)
-#   just dev-example workflow                 # runs examples/js/workflow/workflow.yaml as a DAG
+#   just dev-example workflow                 # runs funcd-typescript's examples/workflow/workflow.yaml as a DAG
 # Reproduce any bundled example locally with `funcdctl dev` — build, boot, serve from source.
 # Ports are args (default gateway 3005 / S3 3006 / control-plane 3007) so the URLs are reproducible and the
 # `seed-releves`/`run-releve` recipes reach the control plane out of the box: `just dev-example catalog-quack`
@@ -393,18 +385,7 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
     #!/usr/bin/env bash
     set -euo pipefail
     root="$PWD"
-    if [ -d "{{project}}" ]; then dir="{{project}}"
-    elif [ -d "examples/{{project}}" ]; then dir="examples/{{project}}"
-    else
-      matches=$(find examples -mindepth 2 -maxdepth 2 -type d -name "{{project}}")
-      n=$(printf '%s' "$matches" | grep -c . || true)
-      if [ "$n" = "1" ]; then dir="$matches"
-      elif [ "$n" -gt 1 ]; then
-        echo "ambiguous example '{{project}}' — qualify one of: $(printf '%s' "$matches" | sed 's|examples/||' | paste -sd' ' -)" >&2; exit 1
-      else
-        echo "example '{{project}}' not found. Available: $(find examples -mindepth 2 -maxdepth 2 -type d | sed 's|examples/||' | paste -sd' ' -)" >&2; exit 1
-      fi
-    fi
+    dir="$(scripts/example-copy.sh "{{project}}")"
     target="$dir"; [ -f "$dir/workflow.yaml" ] && target="$dir/workflow.yaml"
     echo "▶ example: $target"
     # A catalog example needs the real engine embedded — fetch once (skip-worktree'd so it never dirties the tree).
@@ -419,23 +400,23 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
     # Fixed ports (args, default 3005/3006/3007) so the URLs are reproducible run-to-run and the seed/run
     # recipes reach the control plane without extra flags.
     # Launch FROM the example dir: the manifest's dev.backends are CWD-relative (file://.funcd-dev/blob),
-    # so running here lands .funcd-dev BESIDE the example (visible in the editor, co-located with the
-    # manifests it belongs to) instead of at the repo root. Build/fetch above stay repo-root-relative.
+    # so running here lands .funcd-dev BESIDE the example copy (co-located with the manifests it belongs
+    # to) instead of at the repo root. Build/fetch above stay repo-root-relative.
     if [ "$target" = "$dir" ]; then rel="."; else rel="$(basename "$target")"; fi
     echo "▶ (cd $dir) funcdctl dev $rel --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}"
     cd "$dir"
     exec "$root/dist/funcdctl-dev" dev "$rel" --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}
 
-# Flags pass through to landing/generate_synthetic.py; output lands in the example's landing/ as
-# synthetic-releve-*.pdf (gitignored — regenerate anytime). Examples:
+# Flags pass through to landing/generate_synthetic.py; output lands in the example copy's landing/
+# (.modcopy/funcd-python/examples/releve-lakehouse/landing/) as synthetic-releve-*.pdf. Examples:
 #   just gen-releve                                    # defaults (Jan–Nov 2025, monthly)
 #   just gen-releve --start 2025-01 --end 2026-01      # a 13-month series (→ a 13-row gold mart)
 #   just gen-releve --period-months 2 --seed 7         # bi-monthly, seeded
 #   just gen-releve --min-tx 40 --max-tx 60            # force multi-page statements
-# Generate FAKE Bank statement PDFs for the releve-lakehouse example (fake data, Faker, reproducible).
+# Generate FAKE bank statement PDFs for the releve-lakehouse example (fake data, Faker, reproducible).
 [group('example')]
 gen-releve *args:
-    cd examples/python/releve-lakehouse && uv run --group build python landing/generate_synthetic.py {{args}}
+    cd "$(scripts/example-copy.sh python/releve-lakehouse)" && uv run --group build python landing/generate_synthetic.py {{args}}
 
 # Seed the FULL synthetic releve series into the dev S3 landing prefix, then run the pipeline ONCE — extract
 # processes EVERY PDF in landing/ (bronze is 1:1 with a source file; build-silver aggregates), so a single
@@ -447,7 +428,7 @@ gen-releve *args:
 seed-releves s3port="3006": (gen-releve "--start" "2025-01" "--end" "2026-01")
     #!/usr/bin/env bash
     set -euo pipefail
-    dir=examples/python/releve-lakehouse
+    dir="$(scripts/example-copy.sh python/releve-lakehouse)"
     bin=dist/funcdctl-dev
     [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
     eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
@@ -472,7 +453,7 @@ seed-releves s3port="3006": (gen-releve "--start" "2025-01" "--end" "2026-01")
 run-releve s3port="3006":
     #!/usr/bin/env bash
     set -euo pipefail
-    dir=examples/python/releve-lakehouse
+    dir="$(scripts/example-copy.sh python/releve-lakehouse)"
     bin=dist/funcdctl-dev
     [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
     eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
@@ -486,7 +467,7 @@ run-releve s3port="3006":
 # View funcd dev OTLP logs as ONE merged table, sorted by time. The path is a DIR (scans all
 # **/*.jsonl under it), a single file, or a glob. Flattens the nested resourceLogs envelope with DuckDB
 # into time/function/severity/body — generic log viewers can't read that nesting.
-#   just logs examples/python/releve-lakehouse/.funcd-dev/blob/logs/default
+#   just logs .modcopy/funcd-python/examples/releve-lakehouse/.funcd-dev/blob/logs/default
 #   just logs 1783897216394510000.jsonl
 [group('example')]
 logs path:
@@ -494,7 +475,7 @@ logs path:
 
 # Export funcd dev OTLP logs (dir/file/glob) to a flat, TYPED parquet you can open in a DuckDB viewer
 # (Parquet Explorer). Defaults the output to funcd-logs.parquet.
-#   just logs-parquet examples/python/releve-lakehouse/.funcd-dev/blob/logs/default
+#   just logs-parquet .modcopy/funcd-python/examples/releve-lakehouse/.funcd-dev/blob/logs/default
 [group('example')]
 logs-parquet path out="funcd-logs.parquet":
     #!/usr/bin/env bash

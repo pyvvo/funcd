@@ -13,8 +13,8 @@ import (
 
 	cedar "github.com/cedar-policy/cedar-go"
 
-	"github.com/green-0-rabbit/funcd/api/fault"
-	"github.com/green-0-rabbit/funcd/internal/auth"
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // Cedar entity-type names (ADR-0074). The cedar text references these literally, e.g.
