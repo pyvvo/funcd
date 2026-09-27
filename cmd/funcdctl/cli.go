@@ -191,12 +191,24 @@ func (a *cli) pushCmd() *cobra.Command {
 	var schemaPath string
 	var entry string
 	var runtime string
+	var isSite bool
 	cmd := &cobra.Command{
 		Use:   "push <path> <ref>",
-		Short: "Package a function (a file or a bundle directory) as an OCI artifact and push it (prints <ref>@<digest>)",
+		Short: "Package a function (a file or a bundle directory) — or, with --site, a prebuilt static web app — as an OCI artifact and push it (prints <ref>@<digest>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, ref := args[0], args[1]
+			// ADR-0139: a static-site bundle is its own artifact type — no contract, no runtime, no entry.
+			if isSite {
+				if schemaPath != "" || runtime != "" || cmd.Flags().Changed("entry") {
+					return fault.Invalidf("funcdctl push", "--site is mutually exclusive with --schema, --runtime and --entry (a site has no contract, runtime, or handler)")
+				}
+				digest, err := artifact.PushSite(cmd.Context(), ref, path)
+				if err != nil {
+					return err
+				}
+				return a.writef("%s@%s\n", ref, digest)
+			}
 			// ADR-0122: a colocated funcdctl.yaml is the PRIMARY contract source. When present (in the
 			// pushed bundle dir, or beside a single-file push), funcdctl gates + bakes the manifest's
 			// inline schema-only contract and records its runtime — no --schema, no language toolchain.
@@ -244,6 +256,8 @@ func (a *cli) pushCmd() *cobra.Command {
 		"handler entry file relative to the bundle root (directory push only, ADR-0089)")
 	cmd.Flags().StringVar(&runtime, "runtime", "",
 		"runtime class recorded on the manifest (dev.funcd.runtime.v1, ADR-0094) so the workflow materializer resolves a step image's runtime without pulling the bundle")
+	cmd.Flags().BoolVar(&isSite, "site", false,
+		"push <path> (a directory) as a static-site bundle for a Site (ADR-0139): one deterministic tar+gzip layer, no contract/runtime/entry")
 	return cmd
 }
 

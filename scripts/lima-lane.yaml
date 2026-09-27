@@ -45,6 +45,8 @@ provision:
               cmd += ["--entry", p["entry"]]
           if p.get("runtime"):  # dev.funcd.runtime.v1 annotation — a workflow step image is self-describing (ADR-0094)
               cmd += ["--runtime", p["runtime"]]
+          if p.get("site"):  # a prebuilt static web app dir → a site artifact (ADR-0139)
+              cmd += ["--site"]
           print("+", *cmd)
           subprocess.run(cmd, check=True)
       for m in spec.get("apply", []):

@@ -38,6 +38,20 @@ func TestScenarioZeroConfigDefaults(t *testing.T) {
 	require.Equal(t, "json", c.Log.Format)
 	require.Equal(t, "info", c.Log.Level)
 	require.Equal(t, "", c.Telemetry.Endpoint)
+	require.Equal(t, "index.html", c.Site.DefaultIndex, "ADR-0139 site default index")
+}
+
+// scenario: site-default-index-config (ADR-0139) — site.defaultIndex is a config-level knob with the web
+// convention as its default, overridable by FUNCD_SITE_DEFAULT_INDEX, and a leading '/' is rejected.
+func TestScenarioSiteDefaultIndexConfig(t *testing.T) {
+	t.Setenv("FUNCD_SITE_DEFAULT_INDEX", "home.htm")
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "home.htm", c.Site.DefaultIndex)
+
+	t.Setenv("FUNCD_SITE_DEFAULT_INDEX", "/index.html")
+	_, err = config.Load("", config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an absolute default index is rejected")
 }
 
 // the precedence matrix — flag > env > file > default — parameterized across the tiers (ADR-0062).

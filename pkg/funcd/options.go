@@ -3,8 +3,10 @@ package funcd
 import (
 	"log/slog"
 	"net/netip"
+	"strings"
 	"time"
 
+	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
 	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/blob"
@@ -169,6 +171,18 @@ func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Du
 // sources in V1 (a per-source override is an open question).
 func WithBlobPollInterval(d time.Duration) Option {
 	return func(c *config) error { c.blobPollInterval = d; return nil }
+}
+
+// WithSiteDefaultIndex sets the document a Site serves for "/" (and asserts present before Ready) when
+// its spec.index is empty (ADR-0139, F103). "" ⇒ "index.html". A relative path, never a leading '/'.
+func WithSiteDefaultIndex(index string) Option {
+	return func(c *config) error {
+		if strings.HasPrefix(index, "/") {
+			return fault.Invalidf("funcd.WithSiteDefaultIndex", "site default index %q must be a relative path (no leading '/')", index)
+		}
+		c.siteDefaultIndex = index
+		return nil
+	}
 }
 
 // WithRuntime injects the function runtime (worker) port.

@@ -21,7 +21,9 @@ testcases:
         method: POST
         url: "{{.dp}}/function/s3-roundtrip"
         headers: { content-type: application/json }
-        body: '{"data":{}}'
+        # inv=site pins the object key (gold/roundtrip-site.txt) so the ADR-0139 Site case below can fetch
+        # the very object this invoke wrote, through the Site's /data mount.
+        body: '{"data":{"inv":"site"}}'
         # retry-as-wait: the first invoke may land before the sandbox is fully warm; retry to 200.
         retry: 20
         delay: 2
@@ -96,7 +98,10 @@ testcases:
           if not ing:
               print("INGESTNONE runs="+str(len(runs))); sys.exit(0)
           r=ing[0]
-          key=json.loads(r.get("spec",{}).get("input","{}") or "{}").get("file","")
+          inp=r.get("spec",{}).get("input") or {}
+          if not isinstance(inp, dict):  # spec.input is a JSON object on the wire (json.RawMessage); tolerate a string too
+              inp=json.loads(inp or "{}")
+          key=inp.get("file","")
           print("INGESTOK count="+str(len(ing))+" phase="+r.get("status",{}).get("phase","")+" key="+key)'
         retry: 20
         delay: 3
@@ -105,3 +110,196 @@ testcases:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring INGESTOK"
           - "result.systemout ShouldContainSubstring key=gold/"
+
+  # ADR-0139 (F103) — THE DECLARATIVE STATIC WEB APP. site.yaml pushed the prebuilt BI bundle with
+  # `funcdctl push --site`, and the Site ADOPTED the lakehouse Bucket (its gold/other/shared entries
+  # untouched, an ownerless `bi` prefix added), materialized the bundle under bi/<digest-slug>/, and
+  # programmed its owned Route: the app at `/` for bi.example.com, the gold layer mounted at `/data`.
+  # All host-side curl (the data plane is forwarded to {{.dp}}); Host: selects the Site's Route.
+  - name: the Site serves its bundle and assets at the edge
+    steps:
+      - type: exec
+        # retry-as-wait: the Site converges after the function gate (pull → unpack → Route programmed).
+        script: |
+          body=$(curl -s --max-time 10 -H "Host: bi.example.com" {{.dp}}/)
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: bi.example.com" {{.dp}}/)
+          echo "INDEX code=$code title=$(printf '%s' "$body" | grep -o '<title>[^<]*</title>')"
+        retry: 30
+        delay: 2
+        info: "site index → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring INDEX code=200"
+          - "result.systemout ShouldContainSubstring <title>bi-lakehouse</title>"
+      - type: exec
+        # An asset: the right content-type + a weak ETag (the ADR-0120 static handler, reused verbatim).
+        script: |
+          curl -s -D - -o /dev/null --max-time 10 -H "Host: bi.example.com" {{.dp}}/assets/app.js | tr -d '\r' | awk 'NR==1{print "ASSET " $2} tolower($1)=="content-type:"{print "CT " $2} tolower($1)=="etag:"{print "ETAG " $2}'
+        retry: 5
+        delay: 2
+        info: "site asset → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring ASSET 200"
+          - "result.systemout ShouldContainSubstring CT text/javascript"
+          - "result.systemout ShouldContainSubstring ETAG W/"
+
+  - name: the Site's /data mount serves the gold layer and 404s a miss (never the SPA shell)
+    steps:
+      - type: exec
+        # The object the first case's invoke wrote into gold/ (inv=site), read through the Site's mount.
+        script: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: bi.example.com" {{.dp}}/data/roundtrip-site.txt)
+          body=$(curl -s --max-time 10 -H "Host: bi.example.com" {{.dp}}/data/roundtrip-site.txt)
+          echo "DATA code=$code body=$body"
+        retry: 10
+        delay: 2
+        info: "data mount → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring DATA code=200 body=roundtrip-site"
+      - type: exec
+        # A miss under the data mount is a 404 — NOT the SPA index — while an unknown app path IS the shell.
+        script: |
+          miss=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: bi.example.com" {{.dp}}/data/missing.parquet)
+          missbody=$(curl -s --max-time 10 -H "Host: bi.example.com" {{.dp}}/data/missing.parquet)
+          spa=$(curl -s --max-time 10 -H "Host: bi.example.com" {{.dp}}/some/client/route | grep -c '<title>bi-lakehouse</title>')
+          case "$missbody" in *bi-lakehouse*) shell=yes;; *) shell=no;; esac
+          echo "MISS code=$miss shell=$shell SPA hits=$spa"
+        retry: 5
+        delay: 2
+        info: "data-mount miss → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring MISS code=404 shell=no"
+          - "result.systemout ShouldContainSubstring SPA hits=1"
+
+  - name: a Site redeploy swaps to the new build with no failed request
+    steps:
+      - type: exec
+        # Re-point spec.image at the second pushed build (bi-v2) — the same manifest with a new tag, applied
+        # inside the VM exactly as an operator would.
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -lc 'sed "s#^  image: .*#  image: oci-layout:///mnt/funcd-deps/registry:bi-v2#" /opt/lane/site.yaml | funcdctl apply -f - >/dev/null && echo APPLIED'
+        retry: 3
+        delay: 2
+        info: "redeploy apply → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring APPLIED"
+      - type: exec
+        # Every request during and after the swap is a 200 carrying one of the two builds — never a miss or
+        # a 5xx — and the new build is what ends up served.
+        script: |
+          bad=0; seen2=0
+          for i in $(seq 1 40); do
+            out=$(curl -s -w "\n%{http_code}" --max-time 10 -H "Host: bi.example.com" {{.dp}}/)
+            code=$(printf '%s' "$out" | tail -n1)
+            ok=1
+            case "$out" in *bi-lakehouse-v2*) seen2=$((seen2+1));; *bi-lakehouse*) ;; *) ok=0;; esac
+            [ "$code" = 200 ] || ok=0
+            [ "$ok" = 1 ] || bad=$((bad+1))
+            sleep 0.5
+          done
+          echo "SWAP bad=$bad v2seen=$seen2"
+        retry: 3
+        delay: 2
+        info: "redeploy swap → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring SWAP bad=0"
+          - "result.systemout ShouldNotContainSubstring v2seen=0"
+
+  # ADR-0140 (F104) — PATH-MOUNTED SITE. site-docs.yaml sets neither host nor path, so its bundle mounts
+  # at the by-name default /site/docs on the SAME listener the host-qualified `bi` Site uses. Reached with
+  # NO Host header at all: the point of the ADR is that a second site needs no hostname and no DNS.
+  - name: a host-less Site is served by path on the same listener
+    steps:
+      - type: exec
+        # retry-as-wait: the docs Site converges after its own pull + Route programming.
+        script: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 {{.dp}}/site/docs/)
+          body=$(curl -s --max-time 10 {{.dp}}/site/docs/)
+          echo "DOCS code=$code title=$(printf '%s' "$body" | grep -o '<title>[^<]*</title>')"
+        retry: 30
+        delay: 2
+        info: "path-mounted site → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring DOCS code=200"
+          - "result.systemout ShouldContainSubstring <title>lakehouse-docs</title>"
+      - type: exec
+        # The mount serves its index with AND without the trailing slash: `GET /site/docs` strips to an
+        # empty remainder, which the router/handler must resolve to the index (not a 404 or a redirect).
+        script: |
+          slash=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 {{.dp}}/site/docs/)
+          bare=$(curl -s --max-time 10 -w "|%{http_code}" {{.dp}}/site/docs)
+          echo "BARE code=${bare##*|} title=$(printf '%s' "${bare%|*}" | grep -o '<title>[^<]*</title>') slash=$slash"
+        retry: 5
+        delay: 2
+        info: "mount, bare vs trailing slash → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring BARE code=200"
+          - "result.systemout ShouldContainSubstring <title>lakehouse-docs</title>"
+          - "result.systemout ShouldContainSubstring slash=200"
+      - type: exec
+        # An asset UNDER the mount: the matched prefix is stripped, so the key is docs/<digest>/assets/…
+        # — proving the ADR-0120 handler is reached unchanged from a non-root mount.
+        script: |
+          curl -s -D - -o /dev/null --max-time 10 {{.dp}}/site/docs/assets/app.js | tr -d '\r' | awk 'NR==1{print "MASSET " $2} tolower($1)=="content-type:"{print "MCT " $2} tolower($1)=="etag:"{print "METAG " $2}'
+        retry: 5
+        delay: 2
+        info: "asset under the mount → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring MASSET 200"
+          - "result.systemout ShouldContainSubstring MCT text/javascript"
+          - "result.systemout ShouldContainSubstring METAG W/"
+      - type: exec
+        # A data mount NESTED under the bundle mount wins for its subtree (longest-path-first), and a miss
+        # there is 404 — never the app shell, even though the bundle rule carries spa: true.
+        script: |
+          hit=$(curl -s --max-time 10 -w "|%{http_code}" {{.dp}}/site/docs/data/roundtrip-site.txt)
+          miss=$(curl -s --max-time 10 -w "|%{http_code}" {{.dp}}/site/docs/data/missing.parquet)
+          case "${miss%|*}" in *lakehouse-docs*) shell=yes;; *) shell=no;; esac
+          echo "NESTED code=${hit##*|} body=${hit%|*} missCode=${miss##*|} shell=$shell"
+        retry: 10
+        delay: 2
+        info: "nested data mount → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring NESTED code=200 body=roundtrip-site"
+          - "result.systemout ShouldContainSubstring missCode=404"
+          - "result.systemout ShouldContainSubstring shell=no"
+      - type: exec
+        # The SPA fallback is scoped to the mount: an unknown path under /site/docs serves the shell;
+        # the same shape outside it is not this site's business (404).
+        script: |
+          inside=$(curl -s --max-time 10 -w "|%{http_code}" {{.dp}}/site/docs/client/route)
+          case "${inside%|*}" in *lakehouse-docs*) ishell=yes;; *) ishell=no;; esac
+          outside=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 {{.dp}}/client/route)
+          echo "SPA inside=${inside##*|} shell=$ishell outside=$outside"
+        retry: 5
+        delay: 2
+        info: "spa scoped to the mount → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring SPA inside=200 shell=yes"
+          - "result.systemout ShouldContainSubstring outside=404"
+      - type: exec
+        # The two sites do not interfere: `bi` still answers on its host, and the host-less mount does
+        # NOT capture the root (nothing serves / without a host) nor a sibling path prefix.
+        script: |
+          bi=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -H "Host: bi.example.com" {{.dp}}/)
+          root=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 {{.dp}}/)
+          sibling=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 {{.dp}}/site/docsomething)
+          echo "COEXIST bi=$bi rootNoHost=$root sibling=$sibling"
+        retry: 5
+        delay: 2
+        info: "coexistence → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring COEXIST bi=200"
+          - "result.systemout ShouldContainSubstring rootNoHost=404"
+          - "result.systemout ShouldContainSubstring sibling=404"

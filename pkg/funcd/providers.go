@@ -10,11 +10,11 @@ import (
 // truth for which capability providers funcd offers and their tier. It is declared here at the
 // composition root, which already wires every provider, so internal/provider stays a leaf.
 //
-// Built-ins are in-daemon / pure-Go / always-on; add-ons are out-of-daemon deployed service
-// functions. s3 (ADR-0080) and log-ingest (ADR-0081) are Accepted built-ins whose code is still
-// pending; the add-ons (catalog/query F48, observability-serving F54) are idea-stage — the catalog
-// classifies recognized providers, not only running ones. `bus` is intentionally absent: it is the
-// internal-plane messaging substrate, never function-bindable, so it is not a provider.
+// Built-ins are in-daemon / pure-Go / always-on; add-ons are out-of-daemon managed engine
+// services deployed by the provider runtime (ADR-0087). `bus` is intentionally absent: it is the
+// internal-plane messaging substrate, never function-bindable, so it is not a provider. The F54
+// observability read path (ADR-0084) is likewise absent: it is in-daemon substrate serving the
+// log-ingest capability, not a provider of its own.
 func providerCatalog() (*provider.Catalog, error) {
 	return provider.New(
 		// built-in data-plane services (function-bindable)
@@ -26,12 +26,10 @@ func providerCatalog() (*provider.Catalog, error) {
 		// built-in protocol gateways (infra; no function-facing binding)
 		provider.Descriptor{Name: "ingress", Kind: provider.Builtin, Port: "gateway.Gateway", Summary: "HTTP ingress gateway"},
 		provider.Descriptor{Name: "egress", Kind: provider.Builtin, Summary: "egress gateway (default-deny + audit)"},
-		// built-in providers — Accepted, implementation pending
 		provider.Descriptor{Name: "s3", Kind: provider.Builtin, Port: "blob.Bucket", Bindings: []string{"spec.blob"}, Summary: "S3-protocol frontend over blob (ADR-0080)"},
-		provider.Descriptor{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel (ADR-0081)"},
-		// add-on providers — out-of-daemon service functions (idea-stage)
-		provider.Descriptor{Name: "catalog-query", Kind: provider.Addon, Summary: "DuckLake catalog/query service (F48)"},
-		provider.Descriptor{Name: "observability-serving", Kind: provider.Addon, Summary: "observability serving over DuckDB (F54)"},
+		provider.Descriptor{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel + funclog read path (ADR-0081/0084)"},
+		// add-on providers — out-of-daemon managed engines (ADR-0087)
+		provider.Descriptor{Name: "catalog-query", Kind: provider.Addon, Bindings: []string{"spec.catalogs"}, Summary: "DuckLake catalog/query service (F48, ADR-0086)"},
 	)
 }
 

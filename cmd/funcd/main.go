@@ -335,6 +335,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 		}
 	}
 	opts = append(opts, funcd.WithBlobPollInterval(blobPoll))
+	// Site default index document (ADR-0139, F103).
+	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
 	execOpts, closeExec, err := executionOptions(ctx, cfg)
 	if err != nil {

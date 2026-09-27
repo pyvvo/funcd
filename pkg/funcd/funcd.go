@@ -70,6 +70,7 @@ import (
 	identitysvc "github.com/green-0-rabbit/funcd/internal/services/identity"
 	kvsvc "github.com/green-0-rabbit/funcd/internal/services/kv"
 	rolessvc "github.com/green-0-rabbit/funcd/internal/services/roles"
+	"github.com/green-0-rabbit/funcd/internal/site"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/workernode/local"
 	"github.com/green-0-rabbit/funcd/internal/workflow"
@@ -241,6 +242,10 @@ type config struct {
 	// Blob EventSource poll watcher (ADR-0119, F83): the platform-wide cadence a `blob:` source's prefixes
 	// are List-polled for new objects. 0 ⇒ the 15s default.
 	blobPollInterval time.Duration
+
+	// Site reconciler (ADR-0139, F103): the index document served for "/" when a Site's spec.index is
+	// empty. "" ⇒ "index.html".
+	siteDefaultIndex string
 }
 
 // validate returns the first missing required dependency as a fault.Invalid.
@@ -689,6 +694,10 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build route reconciler")
 	}
 	ctrl.Register(v1.KindRoute.GVK(), routeReconciler)
+	// ADR-0139 (F103): the Site reconciler materializes a site bundle under a digest-scoped prefix of the
+	// SAME per-namespace Bucket view the S3 frontend and the static handler use (s3BucketFor), then owns
+	// the Bucket + Route it declares inline; its status is derived from the owned Route.
+	ctrl.Register(v1.KindSite.GVK(), site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger}))
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
@@ -848,6 +857,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
 			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
+			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
+			admission.NewSitePrefixImmutableAdmission(),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),

@@ -50,6 +50,9 @@ const (
 	// KindRolesAssignment (ADR-0136, F101) grants many (principal, role, scope) entries in one stored
 	// value-type; the PDP compiles it to Cedar permits + the single-writer `writers` set.
 	KindRolesAssignment Kind = "RolesAssignment"
+	// KindSite (ADR-0139, F103) is a declarative static web app: an immutable bundle materialized into a
+	// digest-scoped Bucket prefix, owning its Bucket + Route inline; Ready only once servable.
+	KindSite Kind = "Site"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -73,7 +76,7 @@ func (k Kind) Validate() error {
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
-		KindIdentity, KindRole, KindRolesAssignment:
+		KindIdentity, KindRole, KindRolesAssignment, KindSite:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -368,6 +371,10 @@ func NewObject(k Kind) (Object, bool) {
 		ra := &RolesAssignment{}
 		ra.TypeMeta = typeMetaFor(k)
 		return ra, true
+	case KindSite:
+		si := &Site{}
+		si.TypeMeta = typeMetaFor(k)
+		return si, true
 	default:
 		return nil, false
 	}
@@ -401,6 +408,7 @@ func AllKinds() []Kind {
 		KindIdentity,
 		KindRole,
 		KindRolesAssignment,
+		KindSite,
 	}
 }
 

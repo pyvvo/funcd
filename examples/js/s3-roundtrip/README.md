@@ -60,6 +60,18 @@ The lane applies the **Function first** (bound to the not-yet-applied Bucket) �
 proof of the Bucket↔Function-owner cycle on real containerd. (Because the function carries `spec.blob`
 from the start, `addS3Env` injects its `AWS_*` keypair on the first Ready replica — ADR-0085.)
 
+## The BI Site on top of the lakehouse (ADR-0139, F103)
+
+`site.yaml` deploys the prebuilt BI app in `bi/` as **one declared, versioned resource**. The lane pushes
+the directory with `funcdctl push --site bi oci-layout:///mnt/funcd-deps/registry:bi` (a site artifact:
+one deterministic tar+gzip layer, no contract, no runtime) and applies the `Site` **after** `bucket.yaml`,
+so it **adopts** `lakehouse`: the `gold`/`other`/`shared` entries stay byte-identical and an ownerless
+`bi` prefix is added — nothing on the S3 wire can write it. The reconciler materializes the bundle under
+`bi/<digest-slug>/` (index written last), then owns a Route serving the app at `/` for
+`bi.example.com` with the gold layer mounted at `/data` (a miss there is a `404`, never the SPA shell).
+`bi-v2/` is the second build the suite redeploys to by re-pointing `spec.image` at the `bi-v2` tag: the
+swap is atomic and the previous digest's objects are kept, so rolling back is re-pointing the tag again.
+
 ## Run it locally (`funcdctl dev`)
 
 `funcdctl dev` runs the function from source — no hand-written CRDs — printing a colored services

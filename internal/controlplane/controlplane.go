@@ -165,6 +165,13 @@ type Handlers interface {
 	ReplaceRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ra v1.RolesAssignment) (v1.RolesAssignment, error)
 	DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// Site (namespaced) — ADR-0139, FEAT-0003/F103
+	GetSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Site, error)
+	CreateSite(ctx context.Context, si v1.Site) (v1.Site, error)
+	ListSites(ctx context.Context, ns v1.NamespaceName) ([]v1.Site, error)
+	ReplaceSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, si v1.Site) (v1.Site, error)
+	DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

@@ -34,6 +34,7 @@ type StubHandlers struct {
 	identities       map[string]v1.Identity
 	roles            map[string]v1.Role
 	rolesAssignments map[string]v1.RolesAssignment
+	sites            map[string]v1.Site
 	policies         map[string]v1.Policy
 	workflows        map[string]v1.Workflow
 	workflowRuns     map[string]v1.WorkflowRun
@@ -64,6 +65,7 @@ func NewStubHandlers() *StubHandlers {
 		identities:       make(map[string]v1.Identity),
 		roles:            make(map[string]v1.Role),
 		rolesAssignments: make(map[string]v1.RolesAssignment),
+		sites:            make(map[string]v1.Site),
 		policies:         make(map[string]v1.Policy),
 		workflows:        make(map[string]v1.Workflow),
 		workflowRuns:     make(map[string]v1.WorkflowRun),
@@ -688,6 +690,62 @@ func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name
 		return fault.NotFoundf("StubHandlers.DeleteBucket", "Bucket %s not found", key)
 	}
 	delete(s.buckets, key)
+	return nil
+}
+
+// ---- Site (ADR-0139) ----
+
+func (s *StubHandlers) GetSite(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Site, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.sites[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.Site{}, fault.NotFoundf("StubHandlers.GetSite", "Site %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateSite(_ context.Context, si v1.Site) (v1.Site, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(si.Namespace, si.Name)
+	if _, exists := s.sites[key]; exists {
+		return v1.Site{}, fault.Conflictf("StubHandlers.CreateSite", "Site %s already exists", key)
+	}
+	s.sites[key] = si
+	return si, nil
+}
+
+func (s *StubHandlers) ListSites(_ context.Context, ns v1.NamespaceName) ([]v1.Site, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.Site, 0)
+	for _, v := range s.sites {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceSite(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, si v1.Site) (v1.Site, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sites[key]; !exists {
+		return v1.Site{}, fault.NotFoundf("StubHandlers.ReplaceSite", "Site %s not found", key)
+	}
+	s.sites[key] = si
+	return si, nil
+}
+
+func (s *StubHandlers) DeleteSite(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sites[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteSite", "Site %s not found", key)
+	}
+	delete(s.sites, key)
 	return nil
 }
 

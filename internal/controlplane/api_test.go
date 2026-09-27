@@ -265,3 +265,33 @@ func TestSchemaRejectsInvalidDTO(t *testing.T) {
 		}
 	}
 }
+
+// ===== scenario: site-requires-ingress (ADR-0139) =====
+// A Site's ingress is required in V1: the generated schema marks it required, so a body without it is
+// rejected at the edge (422) before any handler runs; the same body with an ingress is created (201).
+// Validate() cannot see the absence of a value-typed field, so the wire schema is the enforcement path.
+func TestScenarioSiteSchemaRequiresIngress(t *testing.T) {
+	h := controlplane.NewStubHandlers()
+	r := chi.NewRouter()
+	api := controlplane.NewAPI(r, h)
+	ta := humatest.Wrap(t, api)
+	const path = "/apis/funcd.io/v1alpha1/namespaces/my-ns/sites"
+
+	spec := map[string]interface{}{
+		"image":  "oci-layout:///layout:bi",
+		"bucket": map[string]interface{}{"name": "reports"},
+		"prefix": "bi",
+	}
+	body := map[string]interface{}{
+		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "Site"},
+		"metadata": map[string]interface{}{"name": "bi", "namespace": "my-ns", "resourceGroup": "rg1"},
+		"spec":     spec,
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", body); resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing spec.ingress: want 422 (schema required), got %d: %s", resp.Code, resp.Body.String())
+	}
+	spec["ingress"] = map[string]interface{}{"host": "bi.example.com"}
+	if resp := ta.Post(path, "Content-Type: application/json", body); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
+		t.Fatalf("with spec.ingress: want 2xx, got %d: %s", resp.Code, resp.Body.String())
+	}
+}

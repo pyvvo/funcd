@@ -1265,3 +1265,68 @@ func registerSensor(api huma.API, h Handlers) {
 		return nil, wrapFaultError(h.DeleteSensor(ctx, in.Namespace, in.Name))
 	})
 }
+
+// ===== Site (namespaced) — ADR-0139, FEAT-0003/F103 =====
+
+type createSiteInput struct{ Body v1.Site }
+type siteOutput struct{ Body v1.Site }
+type listSiteOutput struct{ Body []v1.Site }
+
+func registerSite(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/sites"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listSites", Method: http.MethodGet, Path: base,
+		Tags: []string{"Site"},
+	}, func(ctx context.Context, in *namespacedList) (*listSiteOutput, error) {
+		items, err := h.ListSites(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listSiteOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createSite", Method: http.MethodPost, Path: base,
+		Tags: []string{"Site"},
+	}, func(ctx context.Context, in *createSiteInput) (*siteOutput, error) {
+		item, err := h.CreateSite(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &siteOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getSite", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"Site"},
+	}, func(ctx context.Context, in *namespacedGet) (*siteOutput, error) {
+		item, err := h.GetSite(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &siteOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceSite", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"Site"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.Site
+	}) (*siteOutput, error) {
+		item, err := h.ReplaceSite(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &siteOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteSite", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"Site"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteSite(ctx, in.Namespace, in.Name))
+	})
+}

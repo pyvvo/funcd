@@ -222,7 +222,10 @@ lima-example name: build-runtime-images build-shim
     limactl start --name "$vm" --tty=false scripts/lima-lane.yaml
     # Declarative e2e via OVH Venom (ADR-0077) — the generic VM already gated `limactl start` on the lane's
     # `ready` target, so we invoke immediately. Run from the scratch dir with the absolute suite path.
-    ( cd "$deps" && venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
+    # VENOM_VERBOSE=2 keeps each step's output in venom.<pid>.log even when the suite PASSES (venom
+    # prints a step's `info:` line to the console only on failure/retry) — so a green run leaves a
+    # transcript to cite, not just a pass/fail XML.
+    ( cd "$deps" && VENOM_VERBOSE=2 venom run --output-dir "$deps" --var "vm=$vm" "$suite" )
     echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
 
 # Prime the local Lima cache with the pinned Debian VM image so lanes boot with NO upstream dependency (the

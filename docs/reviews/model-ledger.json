@@ -2053,5 +2053,35 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0138-implementation-claude-opus-4-8.md",
     "notes": "pass; Route-v2 edge exposure of the catalog::query PEP proxy (node-private Upstream backend + edge aggregator, no SSRF); e2e green on real containerd (edge 200 + control 404 + PEP 403); the first internal/gateway draft was an adr-attributed misfire caught by e2e and reworked in-session (not model-attributed); 1 minor (vestigial gateway cleanup, out of scope)"
+  },
+  {
+    "date": "2026-09-17",
+    "adr": "0139",
+    "phase": "implementation",
+    "model": "claude-opus-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 28,
+    "dod_total": 28,
+    "report": "docs/reviews/adr-0139-implementation-claude-opus-5.md",
+    "notes": "pass \u2014 Site kind+reconciler+artifact+admission conform; 19/19 scenarios named+passing; in-process e2e + s3 containerd lane 7/7 (real-S3 403 for Function+Identity); stampTypeMeta gap caught by the lane and fixed pre-handoff. 2 minors, both adr-attributed: Deps.DefaultIndex config knob (decider-directed) \u00b7 'Validate requires ingress' wording vs value-typed contract (enforced at the wire, 422 test)."
+  },
+  {
+    "date": "2026-09-27",
+    "adr": "0140",
+    "phase": "implementation",
+    "model": "claude-opus-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 21,
+    "dod_total": 21,
+    "report": "docs/reviews/adr-0140-implementation-claude-opus-5.md",
+    "notes": "pass \u2014 ingress.path + (*Site).EffectivePath() + resolved-path validation + digest-keyed bundle-rule lookup match the Contracts; 11/11 scenarios named+passing; no router/dataplane/static change (the ADR's reuse claim held); s3 containerd lane 8/8 with two sites on one listener (no Host header); ADR-0139 suites pass unchanged. No findings."
   }
 ]

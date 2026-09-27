@@ -14,9 +14,11 @@ import (
 
 	"github.com/green-0-rabbit/funcd/api/fault"
 	v1 "github.com/green-0-rabbit/funcd/api/types/v1alpha1"
+	"github.com/green-0-rabbit/funcd/internal/artifact"
 	"github.com/green-0-rabbit/funcd/internal/auth"
 	"github.com/green-0-rabbit/funcd/internal/auth/rbac"
 	"github.com/green-0-rabbit/funcd/internal/controlplane"
+	"github.com/green-0-rabbit/funcd/internal/controlplane/admission"
 	"github.com/green-0-rabbit/funcd/internal/controlplane/middleware"
 	"github.com/green-0-rabbit/funcd/internal/store"
 	"github.com/green-0-rabbit/funcd/internal/store/memory"
@@ -247,4 +249,89 @@ func TestScenarioCLIInspectReadsContract(t *testing.T) {
 	require.Contains(t, out.String(), `"name"`, "inspect renders the input schema")
 	require.Contains(t, out.String(), `"output"`, "inspect always renders both sides (the void output present)")
 	require.Contains(t, out.String(), "2020-12", "inspect renders the JSON Schema dialect")
+}
+
+// scenario: cli-push-site (ADR-0139) — `push --site <dir> <ref>` packs a prebuilt web app as a site
+// artifact (no --schema needed) and prints <ref>@<digest>; the digest resolves as a site; and --site is
+// mutually exclusive with the function flags.
+func TestScenarioCLIPushSite(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dist")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), []byte("<title>bi</title>"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "app.js"), []byte("console.log(1)"), 0o600))
+	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":bi"
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "push", "--site", dir, ref))
+	printed := strings.TrimSpace(out.String())
+	require.True(t, strings.HasPrefix(printed, ref+"@sha256:"), "push --site prints <ref>@<digest>, got %q", printed)
+	digest, err := artifact.ResolveSite(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, ref+"@"+digest, printed)
+
+	for _, extra := range [][]string{{"--schema", "x.json"}, {"--runtime", "python314"}, {"--entry", "index.html"}} {
+		args := append([]string{"push", "--site", dir, ref}, extra...)
+		err := execCLI(&bytes.Buffer{}, nil, args...)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "--site with %v must be rejected", extra)
+	}
+}
+
+// siteManifest is a Site manifest in the block-style YAML an operator writes (ADR-0139).
+const siteManifest = `apiVersion: funcd.io/v1alpha1
+kind: Site
+metadata:
+  name: bi
+  namespace: team-a
+  resourceGroup: rg1
+spec:
+  image: oci-layout:///mnt/registry:bi
+  bucket:
+    name: reports
+  prefix: bi
+  spa: true
+  ingress:
+    host: bi.example.com
+    public: true
+    rules:
+      - path: /data
+        prefix: gold
+`
+
+// scenario: cli-apply-site + prefix-is-immutable at the API (ADR-0139) — `funcdctl apply -f site.yaml`
+// creates a Site through the REAL control plane (stampTypeMeta + validate admission + the store), `get`
+// reads it back, a re-apply of the same manifest is accepted, and a re-apply that changes spec.prefix is
+// refused by the site-prefix-immutable Update admission.
+func TestScenarioCLIApplySite(t *testing.T) {
+	t.Parallel()
+	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
+		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+	})
+	h, err := controlplane.NewServer(controlplane.Deps{
+		Store:       store.New(memory.New()),
+		Authorizer:  rbac.New(),
+		Credentials: creds,
+		Admissions:  []admission.Admission{admission.NewSitePrefixImmutableAdmission()},
+	})
+	require.NoError(t, err)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "apply", "-f", writeManifest(t, siteManifest)))
+	require.Contains(t, out.String(), "applied Site/bi")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "get", "site", "bi", "-n", "team-a", "-o", "json"))
+	require.Contains(t, out.String(), `"prefix": "bi"`)
+	require.Contains(t, out.String(), `"apiVersion": "funcd.io/v1alpha1"`, "the server stamps TypeMeta for a Site")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "apply", "-f", writeManifest(t, siteManifest)), "re-applying the same manifest is fine")
+
+	moved := strings.Replace(siteManifest, "  prefix: bi\n", "  prefix: reports\n", 1)
+	err = execCLI(&bytes.Buffer{}, c, "apply", "-f", writeManifest(t, moved))
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a changed spec.prefix is refused at the API")
+	require.Contains(t, err.Error(), "spec.prefix is immutable")
 }

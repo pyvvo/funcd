@@ -78,7 +78,13 @@ func PackBundle(dir, entry string) (data []byte, err error) {
 	if eerr != nil || !entryInfo.Mode().IsRegular() {
 		return nil, fault.Invalidf(op, "entry %q is not a regular file in bundle %q", entry, dir)
 	}
+	return packDir(op, dir)
+}
 
+// packDir is the entry-less deterministic packer behind PackBundle: the same sorted, zeroed
+// tar+gzip stream, with no handler-entry gate — a site bundle (ADR-0139) has no entry file at push
+// time (its index is a reconcile-time spec.index). dir must already be a directory.
+func packDir(op, dir string) (data []byte, err error) {
 	// Collect every regular file / directory, keyed by its slash-separated relative path, so the
 	// walk order (OS-dependent) never leaks into the bytes — we sort the paths ourselves.
 	type node struct {

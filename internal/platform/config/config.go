@@ -218,6 +218,13 @@ type Config struct {
 		// (ADR-0119, F83). A Go duration ("15s"); one cadence for all blob sources in V1.
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
 	} `json:"eventing,omitempty"`
+
+	// Site tunes the declarative static web app reconciler (ADR-0139, FEAT-0003/F103). DefaultIndex is
+	// the document a Site serves for "/" — and asserts present before it reports Ready — when its
+	// spec.index is empty. A relative path (no leading '/').
+	Site struct {
+		DefaultIndex string `json:"defaultIndex,omitempty" env:"FUNCD_SITE_DEFAULT_INDEX" validate:"omitempty,startsnotwith=/"`
+	} `json:"site,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -257,6 +264,8 @@ func defaults() Config {
 	c.Eventing.Deadletter.MaxEntries = 1000
 	// Blob EventSource poll cadence (ADR-0119): 15s default.
 	c.Eventing.BlobPollInterval = "15s"
+	// Site default index document (ADR-0139): the web convention.
+	c.Site.DefaultIndex = "index.html"
 	return c
 }
 

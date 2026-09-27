@@ -17,7 +17,6 @@ func sampleCatalog(t *testing.T) *provider.Catalog {
 		provider.Descriptor{Name: "blob", Kind: provider.Builtin, Port: "blob.Bucket", Bindings: []string{"spec.blob"}, Summary: "blob substrate"},
 		provider.Descriptor{Name: "ingress", Kind: provider.Builtin, Port: "gateway.Gateway", Summary: "ingress gateway"},
 		provider.Descriptor{Name: "catalog-query", Kind: provider.Addon, Summary: "DuckLake catalog/query (F48)"},
-		provider.Descriptor{Name: "observability-serving", Kind: provider.Addon, Summary: "observability serving (F54)"},
 	)
 	require.NoError(t, err)
 	return c
@@ -46,7 +45,7 @@ func TestScenarioCatalogEnumeratesBuiltins(t *testing.T) {
 func TestScenarioCatalogClassifiesAddons(t *testing.T) {
 	c := sampleCatalog(t)
 	addons := c.ByKind(provider.Addon)
-	require.Equal(t, []string{"catalog-query", "observability-serving"}, namesOf(addons))
+	require.Equal(t, []string{"catalog-query"}, namesOf(addons))
 	for _, d := range addons {
 		require.Equal(t, provider.Addon, d.Kind)
 	}

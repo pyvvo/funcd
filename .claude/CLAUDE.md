@@ -268,6 +268,28 @@ the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just b
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
+## ⛔ Grounding — never present invention as fact
+
+Design work *necessarily* invents: a proposed CRD shape, a new port, a contract that does not exist yet.
+That stays free — it is the job. What is **forbidden** is presenting invention in the same register as
+fact, or smuggling in elements nothing asked for. This binds chat answers and sketches as hard as
+tracked files; a shape the decider reviews is a decision input, and an unmarked invention corrupts it.
+
+- **Every element is grounded or flagged.** A field, kind, status reason, CLI flag, ADR number, or file
+  path is either traced to something real — **cite it** (`api/types/…`, an ADR number, the precedent it
+  mirrors) — or explicitly marked as new and unbuilt. The defect is the *mixed block*: a manifest where
+  some keys map to shipped code and one is your idea, with nothing to tell them apart.
+- **Never add what the request does not need.** A speculative field, a knob "for later", an extra
+  capability — that is scope creep at the design layer, and it costs the decider a review cycle to
+  discover it was never real. Propose the minimum shape; list the rest as open questions.
+- **grep the vocabulary before naming anything.** This repo reuses words precisely, so a new name that
+  collides with a shipped one is a defect, not a taste call (`retain` is already a *deletion policy* on
+  `Workflow.spec.kv[].deletion`; `artifact` is already the OCI *function* bundle). Search the term, then
+  name it.
+- **"Show me X" is answered by what the code says — including "X does not exist."** Never fabricate a
+  path, field, flag, status reason, or ADR number to satisfy the shape of the question. Read it or say
+  it is unbuilt.
+
 ## Code & config style conventions
 
 Small house-style rules that apply to every file you write or edit:
@@ -288,6 +310,15 @@ Small house-style rules that apply to every file you write or edit:
 
 - **Imports at module top level.** No `import`/`from … import` inside a function or method (Python, JS/TS,
   Go). The only exception is a genuine circular-import break.
+
+- **Don't bloat code or examples with comments.** Comment the *why* when it is not derivable from the
+  code — an invariant, a non-obvious constraint, an ADR the line implements. Never narrate the *what*:
+  no line-by-line annotation, no comment restating the identifier next to it, no explanatory comment on
+  every field of a struct or every key of a YAML manifest. This binds **examples, manifests, and answers
+  in chat** as much as tracked code: a sample manifest carries the shape, not a tutorial — if a field
+  needs prose, that prose belongs in the ADR or the example's README, not inline. A package/type doc
+  comment naming the ADR it realizes stays; a wall of per-key commentary does not. Same rule for prose:
+  say it once, at the right altitude.
 
 ## Known pitfalls (Go dev on this project — learned from ADR-0003 implementation)
 

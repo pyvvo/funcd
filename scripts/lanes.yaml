@@ -8,7 +8,8 @@
 #   build   — host shell commands (run from the repo root, in order) that produce the artifacts to push.
 #   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts).
 #   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
-#             optional schema (single-file --schema) or entry (bundle --entry).
+#             optional schema (single-file --schema), entry (bundle --entry), or site: true (a prebuilt
+#             static web app dir pushed with --site, ADR-0139).
 #   apply   — `funcdctl apply -f` order in the guest (after the pushes).
 #   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s).
 #   venom   — the host-side Venom suite the recipe runs once the VM is up.
@@ -135,10 +136,27 @@ s3:
     - ingest-workflow.yaml
     - drop-source.yaml
     - drop-sensor.yaml
+    # ADR-0139 (F103): the prebuilt BI app (two builds, for the redeploy case) + the Site that adopts the
+    # lakehouse Bucket, materializes the bundle under bi/<digest>/, and mounts gold/ at /data.
+    - bi
+    - bi-v2
+    - site.yaml
+    # ADR-0140 (F104): a SECOND site on the same listener, host-less ⇒ mounted at /site/docs.
+    - docs
+    - site-docs.yaml
   push:
     - artifact: roundtrip.mjs
       ref: s3-roundtrip
       schema: roundtrip.schema.json
+    - artifact: bi
+      ref: bi
+      site: true
+    - artifact: bi-v2
+      ref: bi-v2
+      site: true
+    - artifact: docs
+      ref: docs
+      site: true
   # ADR-0121: no two-phase — apply in any order. The Function WITH spec.blob is applied BEFORE its Bucket
   # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: s3-roundtrip) resolves it and the
   # function converges Ready — a live apply-any-order proof of the Bucket↔Function-owner cycle on real
@@ -152,6 +170,10 @@ s3:
     - ingest-workflow.yaml
     - drop-source.yaml
     - drop-sensor.yaml
+    # ADR-0139: applied AFTER bucket.yaml so the Site ADOPTS lakehouse (adds its ownerless `bi` prefix,
+    # leaves gold/other/shared untouched) — the live shared-substrate case.
+    - site.yaml
+    - site-docs.yaml
   ready:
     kind: function
     names:
