@@ -92,7 +92,7 @@ flowchart TB
 ## Out of scope (tracked elsewhere)
 
 - **OCR** (Tesseract/ghostscript) — needs arbitrary/custom system runtimes (curated distroless can't carry
-  them); tracked on the GitHub **Project #4** backlog, not a feature here.
+  them); tracked on the GitHub **project board** backlog, not a feature here.
 - **Vector DB service** (LanceDB/RAG) — integrate the blueprint's planned vector service when RAG is picked up.
 - **The Observable *build* step / data-loaders** — build-time concern; funcd serves the **prebuilt** static
   bundle (F82's static serving), it does not run the build.

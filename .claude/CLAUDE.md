@@ -194,9 +194,9 @@ The four document layers hold **committed, version-scoped** work (a feat row, an
 item). Raw future ideas that are **not yet scoped into a version** — cross-cutting "someday"
 features, research spikes, anything deferred past the current version — do **not** belong in the
 docs (they would rot the feat/roadmap with un-decided scope). They go to the project's GitHub
-**Project board #4**:
+**Project board #1** (pyvvo org):
 
-- **Board**: <https://github.com/users/green-0-rabbit/projects/4/views/1> (`@green-0-rabbit's funcd`).
+- **Board**: <https://github.com/orgs/pyvvo/projects/1> (`funcd`; copied from the user-owned Project #4 by ADR-0141).
 - **Use the [`/project-management`](skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
   Its `driver.py` bakes in the project/field/option ids (verified) so there is nothing to discover;
   it needs the `project` token scope (the `green-0-rabbit` token already has it; otherwise
@@ -221,7 +221,7 @@ only un-scoped ideas.
 ### A feature ADR carries a board card that natively tracks its lifecycle
 
 A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
-FEAT-0001, FEAT-0003) — **gets a Project #4 tracking card created when it is first drafted**, and its
+FEAT-0001, FEAT-0003) — **gets a board tracking card created when it is first drafted**, and its
 **Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
 it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
 
@@ -382,7 +382,9 @@ boots or the Venom suite runs. This is environmental, **not** a code/test/suite 
 chase it in the lane's YAML.
 
 **Mitigation**: `colima start`, confirm `docker info` responds (and `docker context show` is
-`colima`), then re-run the lane. colima can stop/die mid-session (sleep, resource pressure); when
+`colima`), then re-run the lane. colima shares only `$HOME` with its VM, so run the lanes from a checkout
+under `$HOME`: from anywhere else (a `/tmp` worktree) a `docker run -v` bind mount, like the duckdb lane's
+bundle build, silently writes into the VM instead of the host. colima can stop/die mid-session (sleep, resource pressure); when
 a containerd lane suddenly fails at the image-build step, check colima **first**. Keep it running;
 don't stop it mid-session. (The Venom e2e suites themselves are covered by the `venom-e2e` skill.)
 

@@ -106,7 +106,7 @@ Quality bar per section:
   the implementation PR).
 
 **Open the board card (feature ADRs only).** If this ADR realizes a genuine deliverable feat-row (a
-user-facing capability, e.g. FEAT-0001/FEAT-0003), **create its Project #4 tracking card in `Backlog`
+user-facing capability, e.g. FEAT-0001/FEAT-0003), **create its board tracking card in `Backlog`
 now**, at draft — native lifecycle tracking starts here, not at acceptance. Use the
 [`/project-management`](../project-management/SKILL.md) skill (`list` first; if the ADR was scoped from a
 pre-existing board idea, **reuse that card** rather than create a second). Title it so it's findable

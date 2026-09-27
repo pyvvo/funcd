@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Driver for the funcd GitHub Project board (Project #4, owner green-0-rabbit).
+"""Driver for the funcd GitHub Project board (Project #1, owner pyvvo — ADR-0141).
 
 Every project coordinate is baked in below, so a caller never has to discover the
 project, its node id, the Status field id, or the option ids — and never has to
@@ -28,10 +28,10 @@ import sys
 import time
 
 # --- baked-in project coordinates (verified against the live board) ---------------
-OWNER = "green-0-rabbit"
-NUMBER = "4"
-PROJECT_ID = "PVT_kwHOBMTWh84BbERr"
-STATUS_FIELD_ID = "PVTSSF_lAHOBMTWh84BbERrzhV3cDE"
+OWNER = "pyvvo"
+NUMBER = "1"
+PROJECT_ID = "PVT_kwDOE_I5Lc4Bk4o4"
+STATUS_FIELD_ID = "PVTSSF_lADOE_I5Lc4Bk4o4zhjnieQ"
 # The Status single-select options. The board currently exposes exactly these three.
 STATUS_OPTIONS = {
     "Backlog": "0401eb5a",
@@ -176,7 +176,7 @@ def cmd_ids(_):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="driver.py", description="funcd Project #4 board driver")
+    p = argparse.ArgumentParser(prog="driver.py", description="funcd Project #1 board driver")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list").set_defaults(fn=cmd_list)
