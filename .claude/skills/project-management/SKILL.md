@@ -1,12 +1,12 @@
 ---
 name: project-management
-description: Manage the funcd GitHub Project board (Project #4, owner green-0-rabbit) — create a backlog item, change an item's status (Backlog / In Progress / Done), or refine an existing item's title/body. Use whenever asked to add/triage a backlog ticket, move a card, edit a project item, or list the board. All project ids are baked into driver.py, so there is nothing to discover and no `gh` invocation to hand-assemble.
+description: Manage the funcd GitHub Project board (pyvvo Project #1) — create a backlog item, change an item's status (Backlog / In Progress / Done), or refine an existing item's title/body. Use whenever asked to add/triage a backlog ticket, move a card, edit a project item, or list the board. All project ids are baked into driver.py, so there is nothing to discover and no `gh` invocation to hand-assemble.
 ---
 
 # project-management — drive the funcd Project board
 
-The backlog for this repo lives on **GitHub Project #4** (`@green-0-rabbit's funcd`,
-<https://github.com/users/green-0-rabbit/projects/4>). This skill drives it through one
+The backlog for this repo lives on **GitHub Project #1** of the pyvvo org (`funcd`,
+<https://github.com/orgs/pyvvo/projects/1>). This skill drives it through one
 script — **[driver.py](driver.py)** — so no agent has to guess the `gh` CLI surface or
 rediscover which project / field / option ids to target. The driver has the project node
 id, the Status field id, and the option ids **baked in** (verified against the live board);

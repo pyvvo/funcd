@@ -1,0 +1,37 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    # Only the canonical repo cuts releases; a fork's main never tags.
+    if: github.repository == 'pyvvo/funcd'
+    runs-on: ubuntu-latest
+    steps:
+      # A PR opened with GITHUB_TOKEN triggers no workflows, so its required checks never run and the
+      # merge queue refuses it. A token from the funcd release GitHub App does trigger them. Until the
+      # app is configured, release-please falls back to GITHUB_TOKEN.
+      - id: app-token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
