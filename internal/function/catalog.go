@@ -17,10 +17,12 @@ import (
 // this Function principal, then PEPs catalog::query per query. The shared QUACK_TOKEN is no longer
 // handed to the function — the proxy holds it and swaps it in only after an allow.
 //
-// It is fail-closed on readiness: a bound catalog with no status.endpoint yet (still deploying, or the
-// proxy not yet Ensured) returns (requeue=true) with no env — the caller holds the function
-// Ready=False/CatalogNotReady and requeues, rather than injecting an empty URL. Returns (nil, false,
-// nil) when the function declares no catalogs.
+// It is fail-closed on readiness: a bound catalog that is not Ready yet returns (requeue=true) with no
+// env — the caller holds the function Ready=False/CatalogNotReady and requeues. Readiness is the
+// catalog's Phase, not a non-empty status.endpoint: while the engine starts, the catalog reconciler
+// publishes the raw engine address there, and injecting it would bypass the PEP proxy (the engine
+// then rejects the per-function token). Only a Ready catalog publishes the proxy URL. Returns (nil,
+// false, nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through
 // mergeSecretEnv, whose FUNCD_ reserved-key guard would silently drop them. (Mirrors the catalog
@@ -53,9 +55,9 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 		if !ok {
 			return nil, false, fault.Internalf(op, "object %s/%s is not a CatalogService", fn.Namespace, bnd.Catalog)
 		}
-		// Fail-closed on readiness: no published endpoint ⇒ the catalog proxy is not up yet. Requeue
-		// rather than inject an empty URL.
-		if cs.Status.Endpoint == "" {
+		// Fail-closed on readiness: only a Ready catalog's endpoint is the proxy URL. Before that it is
+		// empty, or the raw engine address while the engine starts. Requeue in both cases.
+		if cs.Status.Phase != v1.PhaseReady || cs.Status.Endpoint == "" {
 			return nil, true, nil
 		}
 		alias := strings.ToUpper(bnd.Alias)

@@ -132,9 +132,9 @@ func TestScenarioShimFromPinnedModule(t *testing.T) {
 	}))
 	require.Positive(t, extracted, "the Python shim tree was extracted")
 
-	// No shim source is left in funcd. Check the sources, not the dir: an old checkout can keep an
-	// ignored shim/nodejs/node_modules behind.
-	for _, src := range []string{"nodejs/shim.mjs", "nodejs/pool.mjs", "nodejs/src", "nodejs/embed.go", "python/embed.go", "python/src"} {
+	// No shim source is left in funcd. Check source FILES, not dirs: an old checkout can keep ignored
+	// caches behind (shim/nodejs/node_modules, shim/python/src/funcd_shim/__pycache__).
+	for _, src := range []string{"nodejs/shim.mjs", "nodejs/pool.mjs", "nodejs/embed.go", "nodejs/src/shim.ts", "python/embed.go", "python/src/funcd_shim/shim.py"} {
 		_, err = os.Stat(filepath.Join("..", "..", "shim", src))
 		require.ErrorIs(t, err, fs.ErrNotExist, "funcd holds no shim source (shim/%s)", src)
 	}
