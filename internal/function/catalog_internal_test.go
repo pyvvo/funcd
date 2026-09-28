@@ -11,9 +11,21 @@ import (
 )
 
 // seedCatalogService stores a CatalogService in the reconciler's memory store with the given
-// published endpoint + spec.secrets, so resolveCatalogEnv can Get it. endpoint == "" models a
-// not-Ready catalog (no status.endpoint published yet).
+// published endpoint + spec.secrets, so resolveCatalogEnv can Get it. A non-empty endpoint models a
+// Ready catalog (the reconciler publishes the proxy URL and Phase Ready together); endpoint == ""
+// models one still deploying.
 func seedCatalogService(t *testing.T, r *Reconciler, name, endpoint string) {
+	t.Helper()
+	phase := v1.PhasePending
+	if endpoint != "" {
+		phase = v1.PhaseReady
+	}
+	seedCatalogServiceIn(t, r, name, endpoint, phase)
+}
+
+// seedCatalogServiceIn is seedCatalogService with an explicit phase, for the not-Ready states that
+// still publish an endpoint (the raw engine address while the engine starts).
+func seedCatalogServiceIn(t *testing.T, r *Reconciler, name, endpoint string, phase v1.Phase) {
 	t.Helper()
 	obj, _ := v1.NewObject(v1.KindCatalogService)
 	cs := obj.(*v1.CatalogService)
@@ -23,6 +35,7 @@ func seedCatalogService(t *testing.T, r *Reconciler, name, endpoint string) {
 	cs.Spec.Catalog = v1.CatalogRef{Bucket: "lakehouse", Prefix: "gold"}
 	cs.Spec.Secrets = []v1.ObjectName{"quack-token"} // names the Secret carrying QUACK_TOKEN
 	cs.Status.Endpoint = endpoint
+	cs.Status.Phase = phase
 	_, err := r.store.Create(context.Background(), cs)
 	require.NoError(t, err)
 }
@@ -94,10 +107,27 @@ func TestScenarioRequeueUntilCatalogReady(t *testing.T) {
 	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_URL", "no empty URL is injected while the catalog is not Ready")
 }
 
+// scenario: requeue-until-catalog-ready (the engine-starting case) — while the engine starts, the catalog
+// reconciler publishes the raw engine address as status.endpoint with Phase Pending. Injecting it would
+// bypass the PEP proxy, and the engine rejects the per-function token ("Authentication failed"), so the
+// consumer must requeue until the catalog is Ready and its endpoint is the proxy URL.
+func TestScenarioRequeueUntilCatalogReadyNotOnEngineAddress(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, fakeResolver{env: map[string]string{"QUACK_TOKEN": "t0ken"}})
+	r.catalogMaster = []byte("catalog-engine-starting-test-master")
+	seedCatalogServiceIn(t, r, "lake", "10.63.0.5:9494", v1.PhasePending) // the engine's netns address
+
+	env, requeue, err := r.resolveCatalogEnv(context.Background(), catalogConsumerFn("lake", "lake"))
+	require.NoError(t, err)
+	require.True(t, requeue, "a Pending catalog requeues even though it publishes an endpoint")
+	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_URL", "the raw engine address is never injected")
+	require.NotContains(t, env, "FUNCD_CATALOG_LAKE_TOKEN")
+}
+
 // scenario: token-decoupled-from-catalog-secret (ADR-0137) — the per-function token no longer comes
 // from the catalog's Secret, so a Ready catalog whose Secret carries no QUACK_TOKEN STILL injects a
 // valid per-function token (the proxy holds the shared engine token; the function never sees it).
-// Readiness now gates on status.endpoint alone (covered by TestScenarioRequeueUntilCatalogReady).
+// Readiness gates on the catalog's Phase (TestScenarioRequeueUntilCatalogReady*), not on its Secret.
 func TestScenarioTokenDecoupledFromCatalogSecret(t *testing.T) {
 	t.Parallel()
 	master := []byte("decoupled-token-master")

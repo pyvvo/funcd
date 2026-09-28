@@ -400,7 +400,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
 	// FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound catalog that
-	// is not Ready yet (no status.endpoint, or its Secret has no QUACK_TOKEN) requeues fail-closed —
+	// is not Ready yet (its endpoint is not the PEP proxy yet) requeues fail-closed —
 	// the function is held Ready=False/CatalogNotReady and re-reconciled soon, never booted with an
 	// empty URL/token (mirrors the ADR-0088 catalog-wait). A hard resolution error fails it closed.
 	catalogEnv, requeue, cerr := r.resolveCatalogEnv(ctx, fn)
