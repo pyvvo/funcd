@@ -1,12 +1,13 @@
 # ADR-0141: Repository split — funcd moves to `pyvvo` and pins the language repos as Go modules
 
-- **Status**: Reviewing (2026-09-28)
+- **Status**: Implemented (2026-09-28)
 - **Date**: 2026-09-28 (judged 2026-09-28 — right decision; folded 1 Blocker (`tests/e2e` may not import
   `internal/`, so it gets its own shim helper) + 4 Majors (an explicit *Refines* line for the frozen ADRs whose
   paths move; the renamed depguard prefixes proven by `tests/lint-fixtures`; the bump scenario gets the
   `check-hygiene` version gate and a live drill; `.examples/` renamed `.modcopy/`) + minors. **Accepted
   2026-09-28** under `adr-batch`, with acceptance delegated by the decider. **Reviewing 2026-09-28** — implemented by
-  `adr-impl`; the move to `pyvvo/funcd` follows the Implementation plan's step 3.)
+  `adr-impl`; the move to `pyvvo/funcd` follows the Implementation plan's step 3. **Implemented 2026-09-28** —
+  review gate pass, see docs/reviews/adr-0141-implementation-claude-opus-5-5.md.)
 - **Deciders**: green-0-rabbit
 - **Tags**: repo, module-path, shim, examples, e2e, history, ci
 - **Realizes**: [FEAT-0000/F01](../feat/0000-feat-v1.md) (the repo skeleton this re-shapes)
