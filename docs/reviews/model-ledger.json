@@ -2083,5 +2083,20 @@
     "dod_total": 21,
     "report": "docs/reviews/adr-0140-implementation-claude-opus-5.md",
     "notes": "pass \u2014 ingress.path + (*Site).EffectivePath() + resolved-path validation + digest-keyed bundle-rule lookup match the Contracts; 11/11 scenarios named+passing; no router/dataplane/static change (the ADR's reuse claim held); s3 containerd lane 8/8 with two sites on one listener (no Host header); ADR-0139 suites pass unchanged. No findings."
+  },
+  {
+    "date": "2026-09-28",
+    "adr": "0141",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 4,
+    "model_attributed": 2,
+    "dod_passed": 13,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0141-implementation-claude-opus-5-5.md",
+    "notes": "pass; 4 minors: duckdb consumer auth pre-existing on the baseline (env), copy contract narrower than the whole-module copy (adr), unlisted docs-only CI skip (model), brittle no-shim-dir check fixed in #2 (model)"
   }
 ]
