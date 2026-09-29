@@ -25,7 +25,6 @@ import argparse
 import json
 import subprocess
 import sys
-import time
 
 # --- baked-in project coordinates (verified against the live board) ---------------
 OWNER = "pyvvo"
@@ -123,25 +122,14 @@ def cmd_status(a):
 
 
 def cmd_create(a):
-    gh("project", "item-create", NUMBER, "--owner", OWNER, "--title", a.title, "--body", a.body or "")
-    # Locate the just-created item by EXACT title (robust to item-create's return shape), then set
-    # Status via the project-ITEM id so it never lands in "No Status". The board is eventually
-    # consistent — a fresh item is not immediately queryable — so poll briefly before giving up.
-    item = None
-    for _ in range(10):
-        matches = [it for it in items() if it.get("title", "") == a.title]
-        if len(matches) > 1:
-            sys.exit(f"error: created, but {len(matches)} items now share the exact title {a.title!r}; "
-                     "set its status manually with `status`")
-        if matches:
-            item = matches[0]
-            break
-        time.sleep(1)
-    if item is None:
-        sys.exit(f"error: created {a.title!r} but it did not become queryable in time to set status.\n"
-                 f"re-run: driver.py status \"{a.title[:30]}\" \"{a.status}\"")
-    set_status(item["id"], a.status)
-    print(f"ok: created [{a.status}] {a.title}  ({item['id']})")
+    # Take the new item's id from item-create itself: the board's item listing is eventually consistent
+    # and can lag for minutes, so looking the fresh item up by title fails. Status is set via the
+    # project-ITEM id, so the item never lands in "No Status".
+    out = gh("project", "item-create", NUMBER, "--owner", OWNER, "--title", a.title, "--body", a.body or "",
+             "--format", "json")
+    item_id = json.loads(out)["id"]
+    set_status(item_id, a.status)
+    print(f"ok: created [{a.status}] {a.title}  ({item_id})")
 
 
 def cmd_refine(a):
