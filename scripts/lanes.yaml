@@ -98,6 +98,8 @@ duckdb:
     - funcdconfig.yaml
     - consumer.yaml
     - bundle
+    - from: e2e/fixtures/duckdb-catalogservice-nudge.yaml
+      to: catalogservice-nudge.yaml
   push:
     - artifact: bundle
       ref: catalog-reader

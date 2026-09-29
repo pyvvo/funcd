@@ -141,3 +141,49 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PEP=403"   # unresolvable caller token ⇒ fail-closed, engine never reached
+
+  - name: a crashed engine comes back on a new IP behind the same proxy URL, and the consumer keeps working
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-before
+            pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" > /tmp/lake-ip-before
+            sudo ctr --address $sock -n funcd-default task kill -s KILL lake-r0
+            funcdctl apply -f /opt/lane/catalogservice-nudge.yaml
+            echo "BEFORE=$(cat /tmp/lake-endpoint-before) IP=$(cat /tmp/lake-ip-before)"'
+        info: "killed the engine and nudged the catalog → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BEFORE=10.63.0.1:"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 45
+        delay: 2
+        info: "sql after the engine restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[42]]"               # the consumer still reaches the catalog through its injected URL
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            now=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}")
+            [ "$now" = "$(cat /tmp/lake-endpoint-before)" ] && same=yes || same=no
+            [ -n "$ip" ] && [ "$ip" != "$(cat /tmp/lake-ip-before)" ] && moved=yes || moved=no
+            echo "ENDPOINT_SAME=$same ENGINE_MOVED=$moved ($(cat /tmp/lake-ip-before) -> $ip, endpoint $now)"'
+        info: "after the restart → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENGINE_MOVED=yes"              # the engine really came back on a new IP
+          - result.systemout ShouldContainSubstring "ENDPOINT_SAME=yes"             # yet the published proxy URL did not change
