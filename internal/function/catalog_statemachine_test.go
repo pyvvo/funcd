@@ -40,6 +40,10 @@ const (
 //   - once the proxy targets the current engine, every consumer's query reaches that engine with the shared
 //     engine token swapped in.
 //
+// Out of scope until their board cards are fixed: QUACK_TOKEN rotation, which breaks queries today, and
+// restarting a crashed engine with no CatalogService change, which this model hides because any step may
+// reconcile.
+//
 // A failure prints the shrunk command sequence and the seed that reproduces it.
 func TestCatalogPathStateMachine(t *testing.T) {
 	t.Parallel()
