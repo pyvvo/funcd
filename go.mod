@@ -26,7 +26,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/google/nftables v0.3.0
-	github.com/leanovate/gopter v0.2.11
 	github.com/miekg/dns v1.1.72
 	github.com/nats-io/nats-server/v2 v2.14.2
 	github.com/nats-io/nats.go v1.52.0
@@ -57,6 +56,7 @@ require (
 	golang.org/x/sys v0.46.0
 	golang.org/x/time v0.15.0
 	oras.land/oras-go/v2 v2.6.1
+	pgregory.net/rapid v1.3.0
 	sigs.k8s.io/yaml v1.6.0
 )
 

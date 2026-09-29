@@ -4,19 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/leanovate/gopter"
-	"github.com/leanovate/gopter/commands"
-	"github.com/leanovate/gopter/gen"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
@@ -31,30 +29,61 @@ const (
 	sharedQuackToken = "shared-engine-token"
 )
 
-// TestCatalogPathStateMachine is a stateful property test of the catalog path (ADR-0137). gopter runs random
+// TestCatalogPathStateMachine is a stateful property test of the catalog path (ADR-0137). rapid runs random
 // sequences of engine crashes, engine readiness, catalog reconciles and consumer provisioning against the
 // real catalog reconciler, the real PEP proxy Manager and the real resolveCatalogEnv, over one store; only
-// the engine is faked. After every step it checks that:
-//   - a consumer is provisioned only while the catalog is Ready, and never with an engine address;
+// the engine is faked. After every action it checks that:
+//   - a consumer is provisioned only while the catalog is Ready;
 //   - the catalog's Ready endpoint never changes, and every consumer holds it;
 //   - once the proxy targets the current engine, every consumer's query reaches that engine with the shared
 //     engine token swapped in.
 //
 // Out of scope until their board cards are fixed: QUACK_TOKEN rotation, which breaks queries today, and
-// restarting a crashed engine with no CatalogService change, which this model hides because any step may
+// restarting a crashed engine with no CatalogService change, which this model hides because any action may
 // reconcile.
 //
-// A failure prints the shrunk command sequence and the seed that reproduces it.
+// A failure prints the minimized action sequence and saves it under testdata/rapid; later runs replay it.
 func TestCatalogPathStateMachine(t *testing.T) {
 	t.Parallel()
-	params := gopter.DefaultTestParameters()
-	params.MaxSize = 40
-	props := gopter.NewProperties(params)
-	props.Property("consumers keep working across engine moves", commands.Prop(catalogCommands(t)))
-	props.TestingRun(t)
+	rapid.Check(t, func(rt *rapid.T) {
+		w := newCatalogWorld(t)
+		rt.Cleanup(w.close)
+		m := catalogModel{proxyEngine: -1}
+		rt.Repeat(map[string]func(*rapid.T){
+			"": func(rt *rapid.T) { w.check(rt, m) },
+			"ReconcileCatalog": func(rt *rapid.T) {
+				w.reconcile(rt)
+				m.catalogReady = m.engineReady
+				if m.engineReady {
+					m.proxyEngine = m.engine
+				}
+			},
+			"EngineReady": func(rt *rapid.T) {
+				if m.engineReady {
+					rt.Skip("the engine is already Ready")
+				}
+				w.engine.ready = true
+				m.engineReady = true
+			},
+			"EngineCrash": func(*rapid.T) {
+				w.engine.crash()
+				m.engine++
+				m.engineReady = false
+			},
+			"Provision": func(rt *rapid.T) {
+				i := rapid.IntRange(0, numConsumers-1).Draw(rt, "consumer")
+				if requeued := w.provision(rt, i); requeued == m.catalogReady {
+					rt.Fatalf("reader-%d: requeued=%t while catalog Ready=%t", i, requeued, m.catalogReady)
+				}
+				if m.catalogReady {
+					m.provisioned[i] = true
+				}
+			},
+		})
+	})
 }
 
-// catalogModel is the expected state after each command.
+// catalogModel is the expected state.
 type catalogModel struct {
 	engine       int  // the current engine generation
 	engineReady  bool // the provider reports the current engine Ready
@@ -63,136 +92,15 @@ type catalogModel struct {
 	provisioned  [numConsumers]bool
 }
 
-func catalogCommands(t *testing.T) *commands.ProtoCommands {
-	reconcile := &commands.ProtoCommand{
-		Name:    "ReconcileCatalog",
-		RunFunc: func(s commands.SystemUnderTest) commands.Result { return s.(*catalogWorld).reconcile() },
-		NextStateFunc: func(s commands.State) commands.State {
-			m := s.(catalogModel)
-			m.catalogReady = m.engineReady
-			if m.engineReady {
-				m.proxyEngine = m.engine
-			}
-			return m
-		},
-		PostConditionFunc: checkCatalogWorld,
-	}
-	engineReady := &commands.ProtoCommand{
-		Name:             "EngineReady",
-		RunFunc:          func(s commands.SystemUnderTest) commands.Result { return s.(*catalogWorld).engineReady() },
-		PreConditionFunc: func(s commands.State) bool { return !s.(catalogModel).engineReady },
-		NextStateFunc: func(s commands.State) commands.State {
-			m := s.(catalogModel)
-			m.engineReady = true
-			return m
-		},
-		PostConditionFunc: checkCatalogWorld,
-	}
-	engineCrash := &commands.ProtoCommand{
-		Name:    "EngineCrash",
-		RunFunc: func(s commands.SystemUnderTest) commands.Result { return s.(*catalogWorld).engineCrash() },
-		NextStateFunc: func(s commands.State) commands.State {
-			m := s.(catalogModel)
-			m.engine++
-			m.engineReady = false
-			return m
-		},
-		PostConditionFunc: checkCatalogWorld,
-	}
-	cmds := []gopter.Gen{gen.Const(reconcile), gen.Const(engineReady), gen.Const(engineCrash)}
-	for i := range numConsumers {
-		cmds = append(cmds, gen.Const(&commands.ProtoCommand{
-			Name:    fmt.Sprintf("Provision(reader-%d)", i),
-			RunFunc: func(s commands.SystemUnderTest) commands.Result { return s.(*catalogWorld).provision(i) },
-			NextStateFunc: func(s commands.State) commands.State {
-				m := s.(catalogModel)
-				if m.catalogReady {
-					m.provisioned[i] = true
-				}
-				return m
-			},
-			PostConditionFunc: checkCatalogWorld,
-		}))
-	}
-	return &commands.ProtoCommands{
-		NewSystemUnderTestFunc:     func(commands.State) commands.SystemUnderTest { return newCatalogWorld(t) },
-		DestroySystemUnderTestFunc: func(s commands.SystemUnderTest) { s.(*catalogWorld).close() },
-		InitialStateGen:            gen.Const(catalogModel{proxyEngine: -1}),
-		GenCommandFunc:             func(commands.State) gopter.Gen { return gen.OneGenOf(cmds...) },
-	}
-}
-
-// observation is what the harness reads back after a command: the stored catalog status and each
-// consumer's injected URL. query sends one request through consumer i as its worker would; the postcondition
-// calls it only where the model says the request must reach the engine.
-type observation struct {
-	err       error
-	phase     v1.Phase
-	endpoint  string
-	readyURL  string // the first endpoint the catalog published as Ready
-	provision int    // the consumer a Provision command resolved, else -1
-	requeued  bool
-	consumers [numConsumers]consumerView
-	query     func(i int) queryResult
-}
-
-type consumerView struct {
-	provisioned bool
-	url         string
-	engineAddr  bool // the URL is an engine address, not the proxy
-}
-
-type queryResult struct {
-	err        error
-	status     int
-	generation string // the engine generation that answered
-	token      string // the token that engine received
-}
-
-func checkCatalogWorld(state commands.State, result commands.Result) *gopter.PropResult {
-	m, o := state.(catalogModel), result.(observation)
-	fail := func(format string, args ...any) *gopter.PropResult {
-		return gopter.NewPropResult(false, fmt.Sprintf(format, args...))
-	}
-	switch {
-	case o.err != nil:
-		return fail("step failed: %v", o.err)
-	case (o.phase == v1.PhaseReady) != m.catalogReady:
-		return fail("catalog phase %q, model Ready=%t", o.phase, m.catalogReady)
-	case o.phase == v1.PhaseReady && o.endpoint != o.readyURL:
-		return fail("the Ready endpoint moved from %s to %s", o.readyURL, o.endpoint)
-	case o.provision >= 0 && o.requeued == m.catalogReady:
-		return fail("reader-%d: requeued=%t while catalog Ready=%t", o.provision, o.requeued, m.catalogReady)
-	}
-	for i, c := range o.consumers {
-		switch {
-		case c.provisioned != m.provisioned[i]:
-			return fail("reader-%d: provisioned=%t, model %t", i, c.provisioned, m.provisioned[i])
-		case !c.provisioned:
-			continue
-		case c.engineAddr || c.url != o.readyURL:
-			return fail("reader-%d holds %s, not the proxy URL %s", i, c.url, o.readyURL)
-		case m.proxyEngine != m.engine:
-			continue // the proxy still targets a crashed engine until the next Ready reconcile
-		}
-		if q := o.query(i); q.status != http.StatusOK || q.generation != strconv.Itoa(m.engine) || q.token != sharedQuackToken {
-			return fail("reader-%d via %s: status %d err %v from engine %q with token %q, want 200 from engine %d with the shared token",
-				i, c.url, q.status, q.err, q.generation, q.token, m.engine)
-		}
-	}
-	return gopter.NewPropResult(true, "")
-}
-
 // catalogWorld is the system under test.
 type catalogWorld struct {
-	fn          *Reconciler
-	catalog     *catalogsvc.Reconciler
-	proxies     *cataloggw.Manager
-	engine      *engineProvider
-	client      *http.Client
-	consumers   [numConsumers]map[string]string // the catalog env each consumer's workers started with
-	readyURL    string
-	engineAddrs map[string]bool
+	fn        *Reconciler
+	catalog   *catalogsvc.Reconciler
+	proxies   *cataloggw.Manager
+	engine    *engineProvider
+	client    *http.Client
+	consumers [numConsumers]map[string]string // the catalog env each consumer's workers started with
+	readyURL  string                          // the first endpoint the catalog published as Ready
 }
 
 func newCatalogWorld(t *testing.T) *catalogWorld {
@@ -218,72 +126,98 @@ func newCatalogWorld(t *testing.T) *catalogWorld {
 	})
 	require.NoError(t, err)
 	return &catalogWorld{
-		fn:          fn,
-		catalog:     catalog,
-		proxies:     proxies,
-		engine:      engine,
-		client:      &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}},
-		engineAddrs: map[string]bool{engine.addr(): true},
+		fn:      fn,
+		catalog: catalog,
+		proxies: proxies,
+		engine:  engine,
+		client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+				if err == nil {
+					resetOnClose(c)
+				}
+				return c, err
+			},
+		}},
 	}
 }
 
 func (w *catalogWorld) close() {
+	w.client.CloseIdleConnections()
 	w.proxies.Shutdown()
 	w.engine.srv.Close()
 }
 
-func (w *catalogWorld) reconcile() observation {
+// resetOnClose makes a closed TCP connection send RST, so it never parks a port in TIME_WAIT: rapid builds
+// thousands of worlds while it minimizes a failure, and parked ports exhaust the ephemeral range.
+func resetOnClose(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+}
+
+// check asserts the invariants against the model. It queries a consumer only where the model says the
+// request must reach the current engine. Failure messages carry no ports: rapid minimizes a case only while
+// its re-runs fail with the same message.
+func (w *catalogWorld) check(rt *rapid.T, m catalogModel) {
+	obj, err := w.fn.store.Get(context.Background(), v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(rt, err)
+	cs := obj.(*v1.CatalogService)
+	ready := cs.Status.Phase == v1.PhaseReady
+	if ready && w.readyURL == "" {
+		w.readyURL = cs.Status.Endpoint
+	}
+	switch {
+	case ready != m.catalogReady:
+		rt.Fatalf("catalog phase %q, model Ready=%t", cs.Status.Phase, m.catalogReady)
+	case ready && cs.Status.Endpoint != w.readyURL:
+		rt.Logf("first Ready endpoint %s, now %s", w.readyURL, cs.Status.Endpoint)
+		rt.Fatalf("the Ready endpoint moved")
+	}
+	for i, env := range w.consumers {
+		url := env["FUNCD_CATALOG_LAKE_URL"]
+		switch {
+		case (env != nil) != m.provisioned[i]:
+			rt.Fatalf("reader-%d: provisioned=%t, model %t", i, env != nil, m.provisioned[i])
+		case env == nil:
+			continue
+		case url != w.readyURL:
+			rt.Logf("reader-%d holds %s, the Ready endpoint is %s", i, url, w.readyURL)
+			rt.Fatalf("reader-%d does not hold the Ready endpoint", i)
+		case m.proxyEngine != m.engine:
+			continue // the proxy still targets a crashed engine until the next Ready reconcile
+		}
+		if q := w.query(i); q.status != http.StatusOK || q.generation != strconv.Itoa(m.engine) || q.token != sharedQuackToken {
+			rt.Logf("reader-%d queried %s: %v", i, url, q.err)
+			rt.Fatalf("reader-%d: status %d from engine %q with token %q, want 200 from engine %d with the shared token",
+				i, q.status, q.generation, q.token, m.engine)
+		}
+	}
+}
+
+func (w *catalogWorld) reconcile(rt *rapid.T) {
 	_, err := w.catalog.Reconcile(context.Background(), controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"})
-	o := w.observe()
-	o.err = errors.Join(err, o.err)
-	return o
-}
-
-func (w *catalogWorld) engineReady() observation {
-	w.engine.ready = true
-	return w.observe()
-}
-
-func (w *catalogWorld) engineCrash() observation {
-	w.engine.crash()
-	w.engineAddrs[w.engine.addr()] = true
-	return w.observe()
+	require.NoError(rt, err)
 }
 
 // provision resolves a consumer's catalog env as its Function reconcile would; on success its workers start
 // with it. A requeue leaves the running workers, and their env, as they were.
-func (w *catalogWorld) provision(i int) observation {
+func (w *catalogWorld) provision(rt *rapid.T, i int) (requeued bool) {
 	fn := catalogConsumerFn("lake", "lake")
 	fn.Name = v1.ObjectName(fmt.Sprintf("reader-%d", i))
 	env, requeue, err := w.fn.resolveCatalogEnv(context.Background(), fn)
-	if err == nil && !requeue {
+	require.NoError(rt, err)
+	if !requeue {
 		w.consumers[i] = env
 	}
-	o := w.observe()
-	o.err = errors.Join(err, o.err)
-	o.provision, o.requeued = i, requeue
-	return o
+	return requeue
 }
 
-func (w *catalogWorld) observe() observation {
-	o := observation{provision: -1, query: w.query}
-	obj, err := w.fn.store.Get(context.Background(), v1.KindCatalogService.GVK(), "default", "lake")
-	if err != nil {
-		o.err = err
-		return o
-	}
-	cs := obj.(*v1.CatalogService)
-	o.phase, o.endpoint = cs.Status.Phase, cs.Status.Endpoint
-	if o.phase == v1.PhaseReady && w.readyURL == "" {
-		w.readyURL = o.endpoint
-	}
-	o.readyURL = w.readyURL
-	for i, env := range w.consumers {
-		if url := env["FUNCD_CATALOG_LAKE_URL"]; env != nil {
-			o.consumers[i] = consumerView{provisioned: true, url: url, engineAddr: w.engineAddrs[url]}
-		}
-	}
-	return o
+type queryResult struct {
+	err        error
+	status     int
+	generation string // the engine generation that answered
+	token      string // the token that engine received
 }
 
 // query sends one Quack handshake through consumer i's injected URL with its injected token.
@@ -315,11 +249,17 @@ func (p *engineProvider) addr() string { return p.srv.Listener.Addr().String() }
 
 func (p *engineProvider) start() {
 	generation := strconv.Itoa(p.generation)
-	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("X-Engine-Generation", generation)
 		w.Header().Set("X-Engine-Token", quackHandshakeToken(body))
 	}))
+	p.srv.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			resetOnClose(c)
+		}
+	}
+	p.srv.Start()
 }
 
 func (p *engineProvider) crash() {
