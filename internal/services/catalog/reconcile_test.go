@@ -264,6 +264,35 @@ func TestReconcile_ready_publishes_proxy_endpoint(t *testing.T) {
 	reconcileOnce(t, r, "lake")
 }
 
+// scenario: catalog-engine-move-keeps-endpoint — the engine comes back on a new netns IP (a crashed
+// instance re-converged): the reconciler re-Ensures the proxy with the new upstream, and Status.Endpoint,
+// the URL consumers were injected with, stays the same. The function reconciler does not watch
+// CatalogService, so a moved endpoint would strand every consumer.
+func TestReconcile_engine_move_keeps_proxy_endpoint(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+	endpoint := func() string {
+		obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+		require.NoError(t, gerr)
+		return obj.(*v1.CatalogService).Status.Endpoint
+	}
+
+	reconcileOnce(t, r, "lake")
+	before := endpoint()
+	require.NotEmpty(t, before)
+
+	prov.status.Address = "10.63.0.9:8080"
+	reconcileOnce(t, r, "lake")
+	require.Equal(t, before, endpoint(), "the engine moved, but the endpoint consumers hold is unchanged")
+}
+
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine
 // down via the provider-runtime; it is idempotent (a missing engine is fine).
 func TestReconcile_delete_tears_down_provider(t *testing.T) {

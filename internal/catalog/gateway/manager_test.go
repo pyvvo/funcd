@@ -76,18 +76,21 @@ func TestManager_EnsureProxiesThroughToEngine(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "the listener is closed after Remove")
 }
 
-// TestManager_EnsureRebindsOnEngineChange confirms a changed upstream/engineToken rebinds the proxy
-// (a fresh listener, so the old addr stops answering).
-func TestManager_EnsureRebindsOnEngineChange(t *testing.T) {
+// TestManager_EnsureKeepsURLWhenEngineMoves confirms a changed upstream/engineToken retargets the running
+// proxy instead of rebinding it: the URL consumers already hold stays the same, and the next query
+// reaches the NEW engine with the NEW shared engine token swapped in.
+func TestManager_EnsureKeepsURLWhenEngineMoves(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
 	seedCatalogWorld(t, st)
 	pdp := buildPDP(t, st)
-	keys := NewCatalogKeys([]byte("rebind-master"), st)
+	master := []byte("retarget-master")
+	keys := NewCatalogKeys(master, st)
 
-	up1 := httptest.NewServer((&engineStub{}).handler())
+	stub1, stub2 := &engineStub{}, &engineStub{}
+	up1 := httptest.NewServer(stub1.handler())
 	t.Cleanup(up1.Close)
-	up2 := httptest.NewServer((&engineStub{}).handler())
+	up2 := httptest.NewServer(stub2.handler())
 	t.Cleanup(up2.Close)
 
 	mgr := NewManager("", "", keys, pdp, nil)
@@ -98,17 +101,19 @@ func TestManager_EnsureRebindsOnEngineChange(t *testing.T) {
 	require.NoError(t, err)
 	url2, err := mgr.Ensure(catalog, up2.URL, "token-b")
 	require.NoError(t, err)
-	require.NotEqual(t, url1, url2, "a changed engine rebinds a fresh listener")
+	require.Equal(t, url1, url2, "the engine moved, but the proxy URL consumers hold is unchanged")
 
-	// the old addr no longer answers (its server was closed) — retry, the close/port-release is not instant.
-	require.Eventually(t, func() bool {
-		c, e := net.DialTimeout("tcp", url1, dialTimeout)
-		if e == nil {
-			_ = c.Close()
-			return false
-		}
-		return true
-	}, 2*time.Second, 20*time.Millisecond, "the superseded proxy listener is closed")
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+	resp, err := http.Post("http://"+url1, "application/octet-stream", strings.NewReader(string(makeHandshake(granted))))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a granted query is forwarded")
+	require.False(t, stub1.hit, "the old engine is no longer reached")
+	require.True(t, stub2.hit, "the query reaches the new engine through the same URL")
+	_, forwarded, ok := swapHandshakeToken(stub2.body, "x")
+	require.True(t, ok)
+	require.Equal(t, "token-b", forwarded, "the new shared engine token is swapped in")
 }
 
 // TestManager_PublishHostSplit confirms the containerd bind/publish split (ADR-0137): with a
