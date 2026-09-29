@@ -35,13 +35,35 @@ type Manager struct {
 	servers map[string]*managedProxy // key = "ns/name"
 }
 
-// managedProxy is one running node-private proxy: its listener, its serving http.Server, and the
-// (upstream, engineToken) it was built for — so Ensure can detect a change and rebind.
+// managedProxy is one running node-private proxy: its listener, its serving http.Server, its handler
+// slot, and the (upstream, engineToken) it targets — so Ensure can detect a change and retarget it.
 type managedProxy struct {
 	listener    net.Listener
 	server      *http.Server
+	handler     *retargetable
 	upstream    string
 	engineToken string
+}
+
+// retargetable is a proxy's handler slot. Ensure swaps in a proxy for the new engine target when the
+// engine moves or its shared token rotates, and keeps the listener, so the URL already injected into
+// consumers stays valid: nothing re-provisions a consumer when a catalog's endpoint changes.
+type retargetable struct {
+	mu sync.RWMutex
+	h  http.Handler
+}
+
+func (s *retargetable) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	h := s.h
+	s.mu.RUnlock()
+	h.ServeHTTP(w, r)
+}
+
+func (s *retargetable) set(h http.Handler) {
+	s.mu.Lock()
+	s.h = h
+	s.mu.Unlock()
 }
 
 // NewManager builds the catalog proxy Manager over the shared token resolver + PDP (ADR-0137). The
@@ -79,9 +101,9 @@ func managerKey(ns v1.NamespaceName, name v1.ObjectName) string {
 // and returns the bare "<publishHost>:<port>" host:port the function injects as FUNCD_CATALOG_<ALIAS>_URL
 // (its handler wraps it in quack://; the engine endpoint was bare too). Under containerd publishHost is
 // the CNI bridge gateway IP (netns-reachable), NOT the bind interface; in dev both are 127.0.0.1. If a
-// proxy already runs for the catalog with the SAME (upstream, engineToken) it is reused (idempotent — a
-// re-reconcile does not rebind); if either differs the old server is gracefully closed and a fresh
-// listener is bound (its URL changes). Thread-safe.
+// proxy already runs for the catalog it is reused (idempotent — a re-reconcile does not rebind); if the
+// upstream or engineToken differs, the running proxy is retargeted in place and its URL stays the same.
+// Thread-safe.
 func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (string, error) {
 	const op = "catalog.gateway.Manager.Ensure"
 	key := managerKey(catalog.Namespace, catalog.Name)
@@ -90,20 +112,24 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	defer m.mu.Unlock()
 
 	if existing, ok := m.servers[key]; ok {
-		if existing.upstream == upstream && existing.engineToken == engineToken {
-			return m.publishURL(existing.listener.Addr()), nil
+		if existing.upstream != upstream || existing.engineToken != engineToken {
+			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
+			// consumers already hold keeps working.
+			existing.handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
+			existing.upstream, existing.engineToken = upstream, engineToken
+			m.log.Debug("catalog proxy retargeted", "catalog", key, "upstream", upstream)
 		}
-		// The engine moved or its shared token rotated: gracefully drop the stale proxy and rebind.
-		m.closeProxy(key, existing)
+		return m.publishURL(existing.listener.Addr()), nil
 	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, "0"))
 	if err != nil {
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
-	handler := NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken})
+	handler := &retargetable{}
+	handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
 	srv := &http.Server{Handler: handler}
-	mp := &managedProxy{listener: ln, server: srv, upstream: upstream, engineToken: engineToken}
+	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp
 
 	go func() {
