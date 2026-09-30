@@ -76,7 +76,9 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.instances[id]; ok {
+	// An exited instance is replaced (ADR-0142), as containerd allows once Stop has deleted the container,
+	// so a replica can be re-created after it stopped or crashed.
+	if old, ok := d.instances[id]; ok && !old.state.Terminal() {
 		return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
 	}
 	inst := &instance{
@@ -186,8 +188,11 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 		return fault.NotFoundf(op, "instance %q not found", id)
 	}
 	if inst.state != runtime.StateRunning || inst.cmd == nil {
+		// idempotent: already exited or never started. The instance reads Stopped afterwards, as containerd
+		// reports once Stop has deleted the container (ADR-0142: a reclaimed replica is Stopped, never Failed).
+		inst.state = runtime.StateStopped
 		d.mu.Unlock()
-		return nil // idempotent: already stopped / never started
+		return nil
 	}
 	inst.stopping = true
 	proc := inst.cmd.Process

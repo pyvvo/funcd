@@ -17,6 +17,7 @@ type queue struct {
 	processing map[Request]struct{} // currently being processed
 	order      []Request            // FIFO of keys ready for Get
 	failures   map[Request]int      // per-key backoff failure count
+	pending    map[Request]*delayed // the key's one pending delayed add (ADR-0142)
 
 	base, max    time.Duration
 	shuttingDown bool
@@ -27,6 +28,7 @@ func newQueue(base, maxDelay time.Duration) *queue {
 		dirty:      map[Request]struct{}{},
 		processing: map[Request]struct{}{},
 		failures:   map[Request]int{},
+		pending:    map[Request]*delayed{},
 		base:       base,
 		max:        maxDelay,
 	}
@@ -56,13 +58,46 @@ func (q *queue) addLocked(key Request) {
 	q.cond.Signal()
 }
 
-// AddAfter enqueues key after delay (a real timer; ADR-0015 §3).
+// delayed is a key's pending delayed add: its deadline and the timer that adds the key.
+type delayed struct {
+	at    time.Time
+	timer *time.Timer
+}
+
+// AddAfter enqueues key after delay (a real timer; ADR-0015 §3). A key has at most one pending delay
+// (ADR-0142): an earlier deadline replaces the pending one, a later or equal one is dropped. Without this, a
+// reconciler that requeues itself in steady state would gain another timer chain on every extra event.
 func (q *queue) AddAfter(key Request, delay time.Duration) {
 	if delay <= 0 {
 		q.Add(key)
 		return
 	}
-	time.AfterFunc(delay, func() { q.Add(key) })
+	at := time.Now().Add(delay)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.shuttingDown {
+		return
+	}
+	if p, ok := q.pending[key]; ok {
+		if !at.Before(p.at) {
+			return
+		}
+		p.timer.Stop()
+	}
+	d := &delayed{at: at}
+	d.timer = time.AfterFunc(delay, func() { q.fire(key, d) })
+	q.pending[key] = d
+}
+
+// fire adds key if d is still its pending delay; a replaced timer that fires anyway does nothing.
+func (q *queue) fire(key Request, d *delayed) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.pending[key] != d {
+		return
+	}
+	delete(q.pending, key)
+	q.addLocked(key)
 }
 
 // AddRateLimited enqueues key after an exponential backoff (base·2^(failures-1),
@@ -134,5 +169,9 @@ func (q *queue) ShutDown() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.shuttingDown = true
+	for key, d := range q.pending {
+		d.timer.Stop()
+		delete(q.pending, key)
+	}
 	q.cond.Broadcast()
 }

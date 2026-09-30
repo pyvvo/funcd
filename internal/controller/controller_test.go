@@ -3,6 +3,7 @@ package controller_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -111,6 +112,36 @@ func TestScenarioReconcileRetryBackoff(t *testing.T) {
 		3*time.Second, 10*time.Millisecond, "retried until success")
 	time.Sleep(200 * time.Millisecond)
 	require.Equal(t, 3, fr.count(), "forgotten after success — not requeued forever")
+}
+
+// scenario: requeue-does-not-multiply (ADR-0142) — a reconciler that always asks to run again after a period,
+// with extra watch events for its object, still runs about once per period plus once per event: the queue keeps one
+// pending delay per key, so each event does not start another periodic chain.
+func TestScenarioRequeueDoesNotMultiply(t *testing.T) {
+	t.Parallel()
+	const period = 50 * time.Millisecond
+	st := store.New(memory.New())
+	fr := &fakeReconciler{result: controller.Result{RequeueAfter: period}}
+	createObject(t, st, v1.KindConfigMap, "steady")
+	stop := run(t, st, v1.KindConfigMap.GVK(), fr)
+	defer stop()
+
+	ctx := context.Background()
+	for i := range 5 {
+		obj, err := st.Get(ctx, v1.KindConfigMap.GVK(), "default", "steady")
+		require.NoError(t, err)
+		cm := obj.(*v1.ConfigMap)
+		cm.Spec.Data = map[string]string{"n": strconv.Itoa(i)}
+		_, err = st.Update(ctx, cm)
+		require.NoError(t, err)
+		time.Sleep(period / 5)
+	}
+
+	before := fr.count()
+	time.Sleep(20 * period)
+	passes := fr.count() - before
+	require.GreaterOrEqual(t, passes, 10, "it keeps requeueing every period")
+	require.Less(t, passes, 35, "about one pass per period — the extra events did not start more chains")
 }
 
 // scenario: reconcile-requeue-after — Result{RequeueAfter} re-runs after the delay.

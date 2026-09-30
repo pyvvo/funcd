@@ -31,6 +31,11 @@ type Result struct {
 	RequeueAfter time.Duration
 }
 
+// SupervisionPeriod is the steady-state requeue of a reconciler that owns running instances (ADR-0142):
+// while they should be running it returns Result{RequeueAfter: SupervisionPeriod}, so the next pass
+// checks them and replaces one that died without a store write.
+const SupervisionPeriod = 10 * time.Second
+
 // Reconciler is the per-kind logic a feature contributes. It must be idempotent
 // (the queue is at-least-once). A delete surfaces as fault.NotFound from the store.
 type Reconciler interface {

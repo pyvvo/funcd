@@ -27,9 +27,13 @@ func mapErr(err error, op, format string, a ...any) error {
 	}
 }
 
-// mapState maps a containerd process status to a runtime.State.
-func mapState(s containerd.ProcessStatus) runtime.State {
-	switch s {
+// mapState maps a containerd task status to a runtime.State. A task that exited with a non-zero status is
+// Failed, as the port defines it (ADR-0142); a zero exit is Stopped.
+func mapState(st containerd.Status) runtime.State {
+	if st.Status == containerd.Stopped && st.ExitStatus != 0 {
+		return runtime.StateFailed
+	}
+	switch st.Status {
 	case containerd.Created:
 		return runtime.StateCreated
 	case containerd.Running, containerd.Pausing, containerd.Paused:

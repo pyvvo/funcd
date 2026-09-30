@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -291,6 +292,50 @@ func TestReconcile_engine_move_keeps_proxy_endpoint(t *testing.T) {
 	prov.status.Address = "10.63.0.9:8080"
 	reconcileOnce(t, r, "lake")
 	require.Equal(t, before, endpoint(), "the engine moved, but the endpoint consumers hold is unchanged")
+}
+
+// scenario: crashed-catalog-engine-restarts (ADR-0142) — a Ready catalog asks to run again after the supervision
+// period, with no write; that pass converges the engine the provider recreates after a crash — first starting, then
+// Ready on a new address — and the endpoint consumers were injected with stays the same.
+func TestScenarioCrashedCatalogEngineRestarts(t *testing.T) {
+	const period = 50 * time.Millisecond
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Proxy = mgr
+		d.SupervisionPeriod = period
+	})
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+	req := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
+	get := func() *v1.CatalogService {
+		obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+		require.NoError(t, gerr)
+		return obj.(*v1.CatalogService)
+	}
+
+	res, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, period, res.RequeueAfter, "a Ready catalog comes back after the supervision period")
+	proxyURL := get().Status.Endpoint
+
+	prov.status = provider.ProviderStatus{Running: 1, Ready: false, Address: "10.63.0.9:8080"}
+	res, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, v1.PhasePending, get().Status.Phase, "the recreated engine is still starting")
+	require.Equal(t, 2*time.Second, res.RequeueAfter)
+
+	prov.status.Ready = true
+	res, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, prov.converged, 3, "every pass converged the engine")
+	require.Equal(t, v1.PhaseReady, get().Status.Phase)
+	require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
+	require.Equal(t, period, res.RequeueAfter)
 }
 
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine

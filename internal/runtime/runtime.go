@@ -35,6 +35,9 @@ const (
 	StateFailed State = "failed"
 )
 
+// Terminal reports whether an instance in this state has exited (Stopped or Failed).
+func (s State) Terminal() bool { return s == StateStopped || s == StateFailed }
+
 // Limits bounds a worker's resources (0 = unlimited).
 type Limits struct {
 	MemoryBytes int64

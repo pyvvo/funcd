@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
@@ -34,19 +35,23 @@ import (
 // (ADR-0030): it records the WorkerSpec it was asked to run and surfaces a configurable
 // endpoint (IP:Port) + state so the readiness gate can be exercised without a real shim.
 type fakeRuntime struct {
-	mu     sync.Mutex
-	specs  map[runtime.InstanceID]runtime.WorkerSpec
-	state  map[runtime.InstanceID]runtime.State
-	ip     string
-	port   int
-	failed bool // Start marks instances Failed (the shim exited on a shape error)
+	mu      sync.Mutex
+	specs   map[runtime.InstanceID]runtime.WorkerSpec
+	state   map[runtime.InstanceID]runtime.State
+	created map[runtime.InstanceID]time.Time
+	ip      string
+	port    int
+	failed  bool // Start marks instances Failed (the shim exited on a shape error)
+	creates int
+	lists   int
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
 	return &fakeRuntime{
-		specs: map[runtime.InstanceID]runtime.WorkerSpec{},
-		state: map[runtime.InstanceID]runtime.State{},
-		ip:    ip, port: port,
+		specs:   map[runtime.InstanceID]runtime.WorkerSpec{},
+		state:   map[runtime.InstanceID]runtime.State{},
+		created: map[runtime.InstanceID]time.Time{},
+		ip:      ip, port: port,
 	}
 }
 
@@ -54,8 +59,13 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Replica)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if st, ok := f.state[id]; ok && !st.Terminal() {
+		return runtime.Instance{}, fault.Conflictf("fake.Create", "instance %q already exists", id)
+	}
 	f.specs[id] = spec
 	f.state[id] = runtime.StateCreated
+	f.created[id] = time.Now()
+	f.creates++
 	return f.snapshot(id), nil
 }
 
@@ -92,6 +102,7 @@ func (f *fakeRuntime) Exec(_ context.Context, _ runtime.InstanceID, _ []string) 
 func (f *fakeRuntime) List(_ context.Context, ns v1.NamespaceName) ([]runtime.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lists++
 	var out []runtime.Instance
 	for id, spec := range f.specs {
 		if spec.Namespace == ns {
@@ -108,13 +119,36 @@ func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	spec := f.specs[id]
 	in := runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, Replica: spec.Replica,
-		State: f.state[id],
+		State: f.state[id], CreatedAt: f.created[id],
 	}
 	if in.State == runtime.StateRunning {
 		in.IP = f.ip
 		in.Port = f.port
 	}
 	return in
+}
+
+// exit marks replica 0 of name as exited in state st, created age ago (a crash of a worker that ran that long).
+func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Duration) {
+	id := runtime.NewInstanceID("default", name, 0)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state[id] = st
+	f.created[id] = time.Now().Add(-age)
+}
+
+// setFailing makes later Starts fail (true) or succeed (false).
+func (f *fakeRuntime) setFailing(failing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed = failing
+}
+
+// counts returns how many Creates and Lists the fake has served.
+func (f *fakeRuntime) counts() (creates, lists int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.creates, f.lists
 }
 
 func (f *fakeRuntime) specFor(name v1.ObjectName) (runtime.WorkerSpec, bool) {
@@ -138,7 +172,7 @@ type shimHarness struct {
 	artifact string
 }
 
-func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool) *shimHarness {
+func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...func(*function.Deps)) *shimHarness {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health/readiness" {
@@ -162,11 +196,15 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool) *shimHarn
 	sch, err := singlenode.New("local")
 	require.NoError(t, err)
 	gw := embedded.New()
-	r, err := function.NewReconciler(function.Deps{
+	deps := function.Deps{
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
 		Materializer: function.NewFileMaterializer(),
 		ShimCommand:  []string{"node", "/opt/funcd/shim.mjs"},
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
 	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact}
 }

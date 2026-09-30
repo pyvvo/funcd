@@ -95,6 +95,47 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.NoError(t, rt.Stop(ctx, inst.ID), "second Stop is idempotent")
 	})
 
+	// ADR-0142: a stopped replica can be created again under the same ID (the Function reconciler replaces a
+	// dead replica with Stop → Create → Start).
+	t.Run("worker-recreate-after-stop", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		first, err := rt.Create(ctx, specOf(t, "recreate", []string{"sleep", "30"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, first.ID))
+		require.NoError(t, rt.Stop(ctx, first.ID))
+
+		time.Sleep(10 * time.Millisecond)
+		second, err := rt.Create(ctx, specOf(t, "recreate", []string{"sleep", "30"}))
+		require.NoError(t, err, "an exited instance's ID can be created again")
+		require.Equal(t, first.ID, second.ID)
+		require.True(t, second.CreatedAt.After(first.CreatedAt), "the new instance has a new CreatedAt")
+		require.NoError(t, rt.Start(ctx, second.ID))
+		got, err := rt.Status(ctx, second.ID)
+		require.NoError(t, err)
+		require.Equal(t, runtime.StateRunning, got.State)
+		require.NoError(t, rt.Stop(ctx, second.ID))
+	})
+
+	// ADR-0142: a worker that exits with a non-zero status is Failed on every driver.
+	t.Run("worker-exit-nonzero-failed", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		inst, err := rt.Create(ctx, specOf(t, "exit3", []string{"sh", "-c", "exit 3"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		waitState(t, rt, inst.ID, runtime.StateFailed)
+
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+		got, err := rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.Equal(t, runtime.StateStopped, got.State, "after Stop an exited instance is Stopped")
+	})
+
 	t.Run("instance-not-found", func(t *testing.T) {
 		ctx := context.Background()
 		rt := newRuntime(t)

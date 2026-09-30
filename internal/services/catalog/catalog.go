@@ -12,11 +12,13 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
@@ -79,6 +81,9 @@ type ReconcilerDeps struct {
 	// Ready, the reconciler programs an edge entry whose Upstream is the PEP PROXY (never the engine);
 	// cleared on not-Ready / delete. nil ⇒ no external exposure (the in-memory/dev path).
 	Routes router.EntrySetter
+
+	// SupervisionPeriod is the requeue of a Ready CatalogService (ADR-0142); 0 ⇒ controller.SupervisionPeriod.
+	SupervisionPeriod time.Duration
 }
 
 // Reconciler is the controller.Reconciler for KindCatalogService (ADR-0086/0087): present ⇒
@@ -95,6 +100,7 @@ type Reconciler struct {
 	imageFor     func(string) string
 	proxy        *cataloggw.Manager
 	routes       router.EntrySetter
+	period       time.Duration // steady-state requeue (ADR-0142)
 }
 
 // NewReconciler builds the CatalogService reconciler. Store + Provider are required.
@@ -118,6 +124,10 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if imageFor == nil {
 		imageFor = func(rt string) string { return "funcd/runtime-" + rt }
 	}
+	period := d.SupervisionPeriod
+	if period <= 0 {
+		period = controller.SupervisionPeriod
+	}
 	return &Reconciler{
 		store:        d.Store,
 		prov:         d.Provider,
@@ -129,6 +139,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		imageFor:     imageFor,
 		proxy:        d.Proxy,
 		routes:       d.Routes,
+		period:       period,
 	}, nil
 }
 

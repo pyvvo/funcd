@@ -444,7 +444,7 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 	if err != nil {
 		return inst, nil
 	}
-	inst.State = mapState(st.Status)
+	inst.State = mapState(st)
 	return inst, nil
 }
 
@@ -514,7 +514,7 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 		if task, err := d.task(nctx, sb); err == nil {
 			inst.PID = int(task.Pid())
 			if st, serr := task.Status(nctx); serr == nil {
-				inst.State = mapState(st.Status)
+				inst.State = mapState(st)
 			}
 		}
 		out = append(out, inst)
