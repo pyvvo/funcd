@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/runtime"
 )
 
 // scenario: chaos-worker-recovers-quiescent (ADR-0047) — killing a Ready function's worker process
@@ -31,9 +32,20 @@ func TestChaos_WorkerKilledRecoversAndRequiesces(t *testing.T) {
 	require.NotZero(t, pid, "no running worker found for the function")
 	require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
 
-	// the reconciler re-provisions the worker back to Ready.
-	require.Eventually(t, func() bool { return h.phase(t, "chaos") == v1.PhaseReady },
-		30*time.Second, 100*time.Millisecond, "worker did not recover to Ready after the kill")
+	// the reconciler replaces the worker and the function is Ready again (ADR-0142). The status alone proves
+	// nothing — it stays Ready after the kill — so wait for a running worker with a new PID.
+	require.Eventually(t, func() bool {
+		insts, lerr := h.rt.List(context.Background(), "default")
+		if lerr != nil {
+			return false
+		}
+		for _, in := range insts {
+			if string(in.Name) == "chaos" && in.State == runtime.StateRunning && in.PID > 0 && in.PID != pid {
+				return h.phase(t, "chaos") == v1.PhaseReady
+			}
+		}
+		return false
+	}, 30*time.Second, 100*time.Millisecond, "the worker was not replaced (a new PID) and Ready after the kill")
 
 	// and the loop re-quiesces — recovery did not leave a storm behind.
 	time.Sleep(500 * time.Millisecond)

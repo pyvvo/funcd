@@ -195,3 +195,46 @@ testcases:
         info: "edge access log → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldContainSubstring ACCESSLOG_OK
+
+  # ADR-0142: nothing writes the Function after the kill — its periodic pass replaces the dead worker.
+  - name: crashed-function-worker-restarts — a killed worker is replaced with no write, and the function serves again
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"env-echo-r0\"{print \$2}" > /tmp/env-echo-pid-before
+            sudo ctr --address $sock -n funcd-default task kill -s KILL env-echo-r0
+            echo "PID_BEFORE=$(cat /tmp/env-echo-pid-before)"'
+        info: "killed the worker, no write → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "PID_BEFORE=[0-9]+"
+      # The activator holds a call up to its 30 s activation timeout while the replacement boots, so a few
+      # attempts bound this step to about two minutes.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        retry: 4
+        delay: 2
+        info: "invoke after the kill → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual prod
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            now=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"env-echo-r0\" && \$3==\"RUNNING\"{print \$2}")
+            phase=$(funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            [ -n "$now" ] && [ "$now" != "$(cat /tmp/env-echo-pid-before)" ] && replaced=yes || replaced=no
+            echo "REPLACED=$replaced PHASE=$phase ($(cat /tmp/env-echo-pid-before) -> $now)"'
+        info: "after the restart → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REPLACED=yes"
+          - result.systemout ShouldContainSubstring "PHASE=Ready"

@@ -142,7 +142,8 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PEP=403"   # unresolvable caller token ⇒ fail-closed, engine never reached
 
-  - name: a crashed engine comes back on a new IP behind the same proxy URL, and the consumer keeps working
+  # ADR-0142: nothing writes the CatalogService after the kill — the catalog's periodic pass recreates the engine.
+  - name: crashed-catalog-engine-restarts — a killed engine comes back on a new IP behind the same proxy URL with no write, and the consumer keeps working
     steps:
       - type: exec
         script: |
@@ -153,9 +154,8 @@ testcases:
             pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" > /tmp/lake-ip-before
             sudo ctr --address $sock -n funcd-default task kill -s KILL lake-r0
-            funcdctl apply -f /opt/lane/catalogservice-nudge.yaml
             echo "BEFORE=$(cat /tmp/lake-endpoint-before) IP=$(cat /tmp/lake-ip-before)"'
-        info: "killed the engine and nudged the catalog → {{.result.systemout}}"
+        info: "killed the engine, no write → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "BEFORE=10.63.0.1:"
@@ -165,12 +165,12 @@ testcases:
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
-        retry: 45
+        retry: 30
         delay: 2
         info: "sql after the engine restart → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring "[[42]]"               # the consumer still reaches the catalog through its injected URL
+          - result.body ShouldContainSubstring "[[42]]"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '

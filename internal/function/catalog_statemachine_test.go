@@ -38,9 +38,9 @@ const (
 //   - once the proxy targets the current engine, every consumer's query reaches that engine with the shared
 //     engine token swapped in.
 //
-// Out of scope until their board cards are fixed: QUACK_TOKEN rotation, which breaks queries today, and
-// restarting a crashed engine with no CatalogService change, which this model hides because any action may
-// reconcile.
+// Out of scope until its board card is fixed: QUACK_TOKEN rotation, which breaks queries today. Reconciles are
+// free actions here; that one follows a crash is ADR-0142's periodic requeue, covered by the catalog reconciler's
+// TestScenarioCrashedCatalogEngineRestarts and the duckdb lane.
 //
 // A failure prints the minimized action sequence and saves it under testdata/rapid; later runs replay it.
 func TestCatalogPathStateMachine(t *testing.T) {

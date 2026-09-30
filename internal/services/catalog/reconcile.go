@@ -178,7 +178,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		// Pending until an unrelated watch event, never auto-progressing to Ready.
 		return controller.Result{RequeueAfter: 2 * time.Second}, nil
 	}
-	return controller.Result{}, nil
+	// ADR-0142: come back after the supervision period, so Converge recreates an engine that died with no write.
+	return controller.Result{RequeueAfter: r.period}, nil
 }
 
 // syncIngressRoute reconciles this catalog's OPT-IN external edge entry (ADR-0138). When spec.ingress

@@ -103,7 +103,7 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 	for i := 0; i < spec.Replicas; i++ {
 		inst, ok := byReplica[i]
 		// Recreate a missing / terminal (failed/stopped) instance (supervision = re-convergence).
-		if !ok || isTerminal(inst.State) {
+		if !ok || inst.State.Terminal() {
 			if ok {
 				// best-effort stop the terminal instance before recreating it (idempotent).
 				if serr := r.rt.Stop(ctx, inst.ID); serr != nil {
@@ -265,12 +265,6 @@ func (r *engineRuntime) removeRoute(ctx context.Context, ref ProviderRef) error 
 		return fault.Wrapf(perr, fault.KindOf(perr), op, "re-program routes without %s", ownID)
 	}
 	return nil
-}
-
-// isTerminal reports whether an instance state means the engine is not (and won't become) running
-// without a recreate — so re-convergence recreates it (ADR-0087 supervision).
-func isTerminal(s containerrt.State) bool {
-	return s == containerrt.StateFailed || s == containerrt.StateStopped
 }
 
 // limitsFrom maps the recorded ResourceSpec onto runtime.Limits when the values are parseable

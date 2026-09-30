@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -112,14 +113,15 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 // Pooled (admitted): the one shared pool worker for the key, driven to the max desired over
 // the key's admitted members (ADR-0046 Decision 6). Returns the running count attributable to
 // this function (its replicas, or 1/0 for a pooled member depending on the pool worker).
-func (r *Reconciler) convergeFor(ctx context.Context, fn *v1.Function, a pooling.Assignment, pinnedDigest string, secretEnv, catalogEnv map[string]string) (int, error) {
+func (r *Reconciler) convergeFor(ctx context.Context, fn *v1.Function, a pooling.Assignment, pinnedDigest string, secretEnv, catalogEnv map[string]string) (int, time.Time, error) {
 	if !a.Pooled {
 		return r.converge(ctx, fn, r.desiredReplicas(fn), pinnedDigest, secretEnv, catalogEnv)
 	}
 	// Pooled members can't declare secrets (gated in Reconcile), so secretEnv is nil here; a pooled
 	// function's shared worker env likewise can't isolate a per-function catalog token, so catalogEnv
 	// is not injected into the pool (a catalog-consuming function runs solo — min-replica=1, ADR-0086).
-	return r.ensurePool(ctx, a.Key)
+	running, err := r.ensurePool(ctx, a.Key)
+	return running, time.Time{}, err
 }
 
 // readyFor reports a function's readiness. Solo: its own replicas (ADR-0030). Pooled: its
@@ -127,9 +129,9 @@ func (r *Reconciler) convergeFor(ctx context.Context, fn *v1.Function, a pooling
 // (ADR-0046 Decision 5).
 func (r *Reconciler) readyFor(ctx context.Context, fn *v1.Function, a pooling.Assignment, running int) (ready int, shapeFailed bool) {
 	if !a.Pooled {
-		return r.readyReplicas(ctx, fn.Namespace, fn.Name, running)
+		return r.readyReplicas(ctx, fn.Namespace, fn.Name, running, r.desiredReplicas(fn))
 	}
-	return r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), running)
+	return r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), running, 1)
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions

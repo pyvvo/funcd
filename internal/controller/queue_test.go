@@ -67,3 +67,35 @@ func TestQueueShutdownUnblocksGet(t *testing.T) {
 		t.Fatal("ShutDown did not unblock Get")
 	}
 }
+
+// An earlier AddAfter replaces the pending one, and the replaced timer never adds the key (ADR-0142).
+func TestAddAfterEarliestWins(t *testing.T) {
+	t.Parallel()
+	q := newQueue(time.Millisecond, time.Second)
+	k := key("a")
+
+	q.AddAfter(k, 300*time.Millisecond)
+	q.AddAfter(k, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return q.Len() == 1 }, 150*time.Millisecond, 5*time.Millisecond)
+	got, _ := q.Get()
+	q.Done(got)
+
+	time.Sleep(400 * time.Millisecond)
+	require.Equal(t, 0, q.Len(), "the replaced 300ms timer does not add the key")
+}
+
+// A later AddAfter is dropped while an earlier one is pending (ADR-0142).
+func TestAddAfterLaterIsDropped(t *testing.T) {
+	t.Parallel()
+	q := newQueue(time.Millisecond, time.Second)
+	k := key("a")
+
+	q.AddAfter(k, 20*time.Millisecond)
+	q.AddAfter(k, 300*time.Millisecond)
+	require.Eventually(t, func() bool { return q.Len() == 1 }, 150*time.Millisecond, 5*time.Millisecond)
+	got, _ := q.Get()
+	q.Done(got)
+
+	time.Sleep(400 * time.Millisecond)
+	require.Equal(t, 0, q.Len(), "the later delay was dropped, so nothing fires at 300ms")
+}
