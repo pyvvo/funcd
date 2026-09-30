@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/pyvvo/funcd/compare/v0.1.2...v0.1.3) (2026-09-30)
+
+
+### Bug Fixes
+
+* **supervision:** replace a crashed worker or engine without a write (ADR-0142) ([#10](https://github.com/pyvvo/funcd/issues/10)) ([0fdb86e](https://github.com/pyvvo/funcd/commit/0fdb86e4cc0c59346e316c8d030f6386a5e293b3))
+
 ## [0.1.2](https://github.com/pyvvo/funcd/compare/v0.1.1...v0.1.2) (2026-09-29)
 
 
