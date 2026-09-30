@@ -20,8 +20,9 @@ jobs:
   # `code`: whether this change touches anything the pkg/funcd e2e scenarios depend on.
   # pkg/funcd imports ~63% of the module, execs the language shims (pinned in go.mod,
   # ADR-0141), and rides the runtime images — so any of these paths changing means the heavy
-  # suite must run. `nondocs`: anything but Markdown or LICENSE, which gates the fast lane. A
-  # skipped required job still reports success, so a docs-only PR is not blocked.
+  # suite must run. `nondocs`: anything but Markdown, LICENSE or release-please's version files,
+  # which gates the fast lane — so a release PR (CHANGELOG.md + version.txt + the manifest) skips
+  # it. A skipped required job still reports success, so a docs-only or release PR is not blocked.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -48,6 +49,8 @@ jobs:
               - '**'
               - '!**/*.md'
               - '!LICENSE'
+              - '!version.txt'
+              - '!.release-please-manifest.json'
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
