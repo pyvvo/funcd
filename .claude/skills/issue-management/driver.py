@@ -7,10 +7,11 @@ fails on drift), the repo's labels (`labels --sync`), and the checks `create` ru
 issue. Shells out to the `gh` CLI (system PATH) + python3 only; the Nix dev shell is not required.
 
   driver.py list [--state open|closed|all] [--label L]    # issues: #n state [labels] title
-  driver.py show <number>                                 # one issue: title, labels, url, body
+  driver.py show <number> [--body]                        # one issue: title, labels, url, body (--body: body only)
   driver.py template <kind>                               # an empty body in the kind's shape
   driver.py create --kind K --title T --area A [--area A]... --priority P [--needs-adr]
                    --body-file F|- [--dry-run]            # check, then file the issue
+  driver.py edit <number> [--title T] [--body-file F|-]   # check against the issue's kind, then update it
   driver.py relabel <number> [--add L]... [--remove L]...
   driver.py labels [--sync]                               # the taxonomy vs the repo; --sync fixes it
   driver.py forms [--check]                               # write the issue forms; --check fails on drift
@@ -181,6 +182,9 @@ def cmd_list(a):
 
 def cmd_show(a):
     it = json.loads(gh("issue", "view", str(a.number), "-R", REPO, "--json", "number,title,state,labels,url,body"))
+    if a.body:
+        print(it["body"])
+        return
     print(f"#{it['number']} {it['state']} [{names(it['labels'])}] {it['title']}\n{it['url']}\n\n{it['body']}")
 
 
@@ -207,6 +211,24 @@ def cmd_create(a):
     for lb in labels:
         args += ["--label", lb]
     print(gh(*args, stdin=body).strip())
+
+
+def cmd_edit(a):
+    if not a.title and not a.body_file:
+        sys.exit("error: nothing to edit; pass --title and/or --body-file")
+    labels = json.loads(gh("issue", "view", str(a.number), "-R", REPO, "--json", "labels"))["labels"]
+    kinds = [lb["name"][len("kind/"):] for lb in labels if lb["name"].startswith("kind/")]
+    if len(kinds) != 1 or kinds[0] not in SHAPES:
+        sys.exit(f"error: #{a.number} needs exactly one known kind/ label to check against; relabel it first")
+    args, body = ["issue", "edit", str(a.number), "-R", REPO], None
+    if a.title:
+        check_title(a.title)
+        args += ["--title", a.title]
+    if a.body_file:
+        body = check_body(kinds[0], sys.stdin.read() if a.body_file == "-" else Path(a.body_file).read_text())
+        args += ["--body-file", "-"]
+    gh(*args, stdin=body)
+    print(f"#{a.number} updated")
 
 
 def cmd_relabel(a):
@@ -296,6 +318,7 @@ def main():
     s.add_argument("--label")
     s = sub.add_parser("show")
     s.add_argument("number", type=int)
+    s.add_argument("--body", action="store_true")
     s = sub.add_parser("template")
     s.add_argument("kind", choices=list(SHAPES))
     s = sub.add_parser("create")
@@ -306,6 +329,10 @@ def main():
     s.add_argument("--needs-adr", action="store_true")
     s.add_argument("--body-file", required=True, help="a file, or - for stdin")
     s.add_argument("--dry-run", action="store_true")
+    s = sub.add_parser("edit")
+    s.add_argument("number", type=int)
+    s.add_argument("--title")
+    s.add_argument("--body-file", help="a file, or - for stdin")
     s = sub.add_parser("relabel")
     s.add_argument("number", type=int)
     s.add_argument("--add", action="append", default=[])
@@ -316,7 +343,7 @@ def main():
     s.add_argument("--check", action="store_true")
     a = p.parse_args()
     {"list": cmd_list, "show": cmd_show, "template": cmd_template, "create": cmd_create,
-     "relabel": cmd_relabel, "labels": cmd_labels, "forms": cmd_forms}[a.cmd](a)
+     "edit": cmd_edit, "relabel": cmd_relabel, "labels": cmd_labels, "forms": cmd_forms}[a.cmd](a)
 
 
 if __name__ == "__main__":

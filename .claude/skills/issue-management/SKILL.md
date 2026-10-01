@@ -96,6 +96,14 @@ EOF
 characters or with a `[tag]`/`type:` prefix or a trailing period, an unknown label, an open issue with the same
 title, and a local absolute path.
 
+To change an issue later, edit its current body and run `edit`, which applies the same checks against the
+issue's `kind/` label:
+
+```bash
+python3 .claude/skills/issue-management/driver.py show 13 --body > issue.md   # the body only
+python3 .claude/skills/issue-management/driver.py edit 13 --body-file issue.md [--title "<new title>"]
+```
+
 ## Writing a good issue
 
 - **One defect per issue.** Two symptoms with one cause are one issue; two causes are two issues that link
