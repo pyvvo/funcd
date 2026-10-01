@@ -197,7 +197,7 @@ docs (they would rot the feat/roadmap with un-decided scope). They go to the pro
 **Project board #1** (pyvvo org):
 
 - **Board**: <https://github.com/orgs/pyvvo/projects/1> (`funcd`; copied from the user-owned Project #4 by ADR-0141).
-- **Use the [`/project-management`](skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
+- **Use the [`/project-management`](../.claude/skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
   Its `driver.py` bakes in the project/field/option ids (verified) so there is nothing to discover;
   it needs the `project` token scope (the `green-0-rabbit` token already has it; otherwise
   `gh auth refresh -s project`). **List first** to avoid duplicates, then create:
@@ -241,7 +241,7 @@ The board's three Status options — **Backlog · In Progress · Done** — map 
 | `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
 
 The skill gates carry each move as an explicit step. Create/move the card with the
-[`/project-management`](skills/project-management/SKILL.md) skill (it resolves the item by title
+[`/project-management`](../.claude/skills/project-management/SKILL.md) skill (it resolves the item by title
 substring — no ids to hand-assemble):
 
 ```bash
@@ -249,6 +249,19 @@ python3 .claude/skills/project-management/driver.py create --title "<…> — AD
 python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
 python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
 ```
+
+## Issues — defects and concrete work live in GitHub Issues
+
+Wrong behavior in what is built (a bug, a flaky test) and concrete work items go to
+[GitHub Issues](https://github.com/pyvvo/funcd/issues), in one fixed shape per kind and one label taxonomy.
+**Use the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill — do not hand-write
+`gh issue`.** Its `driver.py` holds the shapes and the labels, checks every issue before filing it, and
+generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-edit them).
+
+- **Where things go**: a defect or a task → an issue; an un-scoped idea → a board card; a decision → an ADR.
+- **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
+- **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
+  PR that implements it closes the issue (`Fixes #N` in the PR description).
 
 ## Dev environment — run everything through Nix
 
