@@ -1,7 +1,10 @@
 package admission
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"reflect"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -84,4 +87,46 @@ func (a workflowRunContract) Admit(ctx context.Context, req Request) (v1.Object,
 		return nil, fault.Invalidf(op, "run input does not match workflow %q contract (InputSchemaMismatch): %s", run.Spec.Workflow, v1.FieldDiffs(diffs))
 	}
 	return req.Object, nil
+}
+
+// --- workflowrun-spec-immutable (ADR-0094): Update on WorkflowRun ------------------------------
+
+type workflowRunSpecImmutable struct{}
+
+// NewWorkflowRunSpecImmutableAdmission returns the Validating admission that rejects an Update changing
+// a WorkflowRun's spec.workflow, spec.input or spec.replay. The engine runs a run's spec once, so a
+// second run applied under an existing name is rejected (ADR-0094 duplicate-run-name-rejected) instead
+// of replacing the record of what ran; spec.paused and spec.cancel stay mutable.
+func NewWorkflowRunSpecImmutableAdmission() Admission { return workflowRunSpecImmutable{} }
+
+func (workflowRunSpecImmutable) Name() string { return "workflowrun-spec-immutable" }
+func (workflowRunSpecImmutable) Phase() Phase { return Validating }
+
+func (workflowRunSpecImmutable) Handles(gvk v1.GroupVersionKind, op Operation) bool {
+	return gvk == v1.KindWorkflowRun.GVK() && op == Update
+}
+
+func (workflowRunSpecImmutable) Admit(_ context.Context, req Request) (v1.Object, error) {
+	const op = "admission.workflowrun-spec-immutable"
+	oldR, ok := req.Old.(*v1.WorkflowRun)
+	if !ok {
+		return req.Object, nil
+	}
+	newR, ok := req.Object.(*v1.WorkflowRun)
+	if !ok {
+		return req.Object, nil
+	}
+	if newR.Spec.Workflow != oldR.Spec.Workflow || !sameJSON(newR.Spec.Input, oldR.Spec.Input) || !reflect.DeepEqual(newR.Spec.Replay, oldR.Spec.Replay) {
+		return nil, fault.Conflictf(op, "WorkflowRun %q already exists: a run's workflow, input and replay are fixed when it is created — start a new run under a new name", newR.Name)
+	}
+	return req.Object, nil
+}
+
+// sameJSON reports whether a and b are the same JSON text, ignoring insignificant whitespace.
+func sameJSON(a, b json.RawMessage) bool {
+	var ca, cb bytes.Buffer
+	if json.Compact(&ca, a) != nil || json.Compact(&cb, b) != nil {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes())
 }

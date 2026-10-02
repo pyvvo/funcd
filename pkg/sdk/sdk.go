@@ -73,15 +73,7 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if obj.GetObjectMeta().GenerateName == "" {
 			return nil, fault.Invalidf("sdk.Apply", "object has no name and no generateName")
 		}
-		colURL, cerr := c.collectionURL(kind, ns)
-		if cerr != nil {
-			return nil, cerr
-		}
-		resp, derr := c.do(ctx, http.MethodPost, colURL, body)
-		if derr != nil {
-			return nil, derr
-		}
-		return decodeObject(kind, resp)
+		return c.create(ctx, kind, ns, body)
 	}
 	itemURL, err := c.itemURL(kind, ns, name)
 	if err != nil {
@@ -92,14 +84,29 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if fault.KindOf(err) != fault.NotFound {
 			return nil, err
 		}
-		colURL, cerr := c.collectionURL(kind, ns)
-		if cerr != nil {
-			return nil, cerr
-		}
-		resp, err = c.do(ctx, http.MethodPost, colURL, body)
-		if err != nil {
-			return nil, err
-		}
+		return c.create(ctx, kind, ns, body)
+	}
+	return decodeObject(kind, resp)
+}
+
+// Create creates obj by POSTing the collection path, never replacing an existing object: a taken
+// name is a fault.Conflict. An empty name with GenerateName set lets the server assign one.
+func (c *Client) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	body, err := toWireBody(obj)
+	if err != nil {
+		return nil, err
+	}
+	return c.create(ctx, obj.GroupVersionKind().Kind, obj.GetNamespace(), body)
+}
+
+func (c *Client) create(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, body []byte) (v1.Object, error) {
+	colURL, err := c.collectionURL(kind, ns)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(ctx, http.MethodPost, colURL, body)
+	if err != nil {
+		return nil, err
 	}
 	return decodeObject(kind, resp)
 }

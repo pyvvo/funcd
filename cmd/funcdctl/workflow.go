@@ -78,7 +78,7 @@ func (a *cli) workflowReplayCmd() *cobra.Command {
 			if verr := replay.Validate(); verr != nil {
 				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl workflow replay", "invalid replay")
 			}
-			if _, err := c.Apply(cmd.Context(), replay); err != nil {
+			if _, err := c.Create(cmd.Context(), replay); err != nil {
 				return err
 			}
 			return a.writef("replay %s created (of %s from %s)\n", newName, args[0], from)
@@ -163,11 +163,11 @@ func (a *cli) workflowRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applied, err := c.Apply(cmd.Context(), run)
+			created, err := c.Create(cmd.Context(), run) // a run is started once: a taken name is a Conflict (ADR-0094)
 			if err != nil {
 				return err
 			}
-			return a.writef("started %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
+			return a.writef("started %s/%s\n", created.GroupVersionKind().Kind, created.GetName())
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")

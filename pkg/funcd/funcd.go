@@ -881,6 +881,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
+			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
+			admission.NewWorkflowRunSpecImmutableAdmission(),
 		},
 	})
 	if err != nil {
