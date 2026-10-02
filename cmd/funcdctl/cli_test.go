@@ -362,3 +362,33 @@ func TestIssue193_UnknownOutputIsRejected(t *testing.T) {
 	require.NoError(t, execCLI(&out, c, "get", "function", "fn1", "-n", "team-a", "-o", "json"))
 	require.Contains(t, out.String(), `"name": "fn1"`)
 }
+
+func configMapDoc(name string) string {
+	return "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: " + name +
+		"\n  namespace: team-a\n  resourceGroup: rg1\nspec:\n  data:\n    k: v\n"
+}
+
+// Issue #62: a multi-document YAML manifest applies every document, not only the first; an invalid
+// document fails the pre-flight before any document reaches the server.
+func TestIssue62_ApplyMultiDocumentAppliesEveryDocument(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+
+	names := []string{"md-first", "md-second", "md-third"}
+	multi := "---\n" + configMapDoc(names[0]) + "---\n# a comment-only document is skipped\n---\n" +
+		configMapDoc(names[1]) + "---\n" + configMapDoc(names[2]) + "---\n"
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "apply", "-f", writeManifest(t, multi)))
+	for _, name := range names {
+		require.Contains(t, out.String(), "applied ConfigMap/"+name)
+		_, err := c.Get(context.Background(), v1.KindConfigMap, "team-a", v1.ObjectName(name))
+		require.NoError(t, err, "ConfigMap %s was applied", name)
+	}
+
+	bad := configMapDoc("md-valid") + "---\n" + strings.Replace(configMapDoc("md-bad"), "  resourceGroup: rg1\n", "", 1)
+	err := execCLI(&bytes.Buffer{}, c, "apply", "-f", writeManifest(t, bad))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), `"md-bad"`)
+	_, err = c.Get(context.Background(), v1.KindConfigMap, "team-a", "md-valid")
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "no document is applied when one fails the pre-flight")
+}

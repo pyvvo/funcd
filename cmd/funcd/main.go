@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,13 +53,19 @@ import (
 
 func main() {
 	if err := newRootCmd(os.Stdout).Execute(); err != nil {
-		slog.Error("funcd", "error", err)
+		if !errors.As(err, new(loggedError)) {
+			slog.Error("funcd", "error", err) // failed before the configured logger existed
+		}
 		os.Exit(1)
 	}
 }
 
+// loggedError is a serve failure the configured logger already wrote, so main does not log it again.
+type loggedError struct{ error }
+
 // newRootCmd builds the funcd daemon command tree (ADR-0042): the root runs the platform; the
-// `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam).
+// `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam), and the
+// daemon logs go to out too.
 func newRootCmd(out io.Writer) *cobra.Command {
 	var memoryOnly bool
 	var configPath string
@@ -72,7 +79,7 @@ func newRootCmd(out io.Writer) *cobra.Command {
 			if cmd.Flags().Changed("memory") {
 				memoryFlag = &memoryOnly
 			}
-			return serve(cmd.Context(), configPath, memoryFlag)
+			return serve(cmd.Context(), configPath, memoryFlag, out)
 		},
 	}
 	root.Flags().BoolVar(&memoryOnly, "memory", false,
@@ -96,8 +103,9 @@ func newRootCmd(out io.Writer) *cobra.Command {
 
 // serve resolves the operator config (funcdconfig.yaml, ADR-0061; precedence flag > env > file >
 // default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
-// --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate).
-func serve(parent context.Context, configPath string, memoryFlag *bool) error {
+// --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate). The
+// logger writes to out; once it exists, serve logs its own failure and returns it as a loggedError.
+func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) (err error) {
 	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
@@ -113,11 +121,17 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 	}
 
 	// Logger from log.format/level (overrides the preset's logger, ADR-0061 §6).
-	logger, err := buildLogger(cfg)
+	logger, err := buildLogger(cfg, out)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}
 	root := logger.Root()
+	defer func() {
+		if err != nil {
+			root.ErrorContext(parent, "funcd", "error", err)
+			err = loggedError{err}
+		}
+	}()
 
 	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root)
 	if err != nil {
@@ -338,7 +352,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
-	execOpts, closeExec, err := executionOptions(ctx, cfg)
+	execOpts, closeExec, err := executionOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
@@ -347,12 +361,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 }
 
 // buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
-func buildLogger(cfg config.Config) (*observability.Logger, error) {
+func buildLogger(cfg config.Config, w io.Writer) (*observability.Logger, error) {
 	format := observability.FormatJSON
 	if cfg.Log.Format == "text" {
 		format = observability.FormatText
 	}
-	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.Log.Level)}, os.Stdout)
+	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.Log.Level)}, w)
 }
 
 // parseLevel maps a validated level string to a slog.Level (config already rejected bad values).
@@ -373,7 +387,8 @@ func parseLevel(level string) slog.Level {
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
-// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger. When
+// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger and
+// storage.mode is file (storage.mode: memory keeps the KV in memory, ADR-0043). When
 // kvstore.backup (ADR-0067) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
 // the driver — DR export to an object-storage target, and a transactional-outbox change-feed to the bus.
 // The returned start func launches their loops (a no-op otherwise). Enable-without-target / enable-without-
@@ -381,6 +396,10 @@ func parseLevel(level string) slog.Level {
 func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
 	noop := func(context.Context) {}
 	if cfg.Kvstore.Engine != "badger" {
+		return kvmemory.New(), noop, nil
+	}
+	if cfg.Storage.Mode == "memory" {
+		logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
 		return kvmemory.New(), noop, nil
 	}
 	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load
@@ -395,14 +414,22 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		if cfg.Kvstore.Backup.Target == "" {
 			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
 		}
+		interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
+		if err != nil {
+			return nil, noop, err
+		}
+		rebaseline, err := parseDurationOr("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour)
+		if err != nil {
+			return nil, noop, err
+		}
 		b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
 		if err != nil {
 			return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
 		}
 		bucket = b
 		bcfg = kvbadger.BackupConfig{
-			Interval:   parseDurationOr(cfg.Kvstore.Backup.Interval, 30*time.Second),
-			Rebaseline: parseDurationOr(cfg.Kvstore.Backup.Rebaseline, 24*time.Hour),
+			Interval:   interval,
+			Rebaseline: rebaseline,
 			ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
 		}
 	}
@@ -416,10 +443,14 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		if theBus == nil {
 			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
 		}
+		retention, err := parseDurationOr("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour)
+		if err != nil {
+			return nil, noop, err
+		}
 		sink = theBus
 		ccfg = kvbadger.CDCConfig{
 			Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
-			Retention: parseDurationOr(cfg.Kvstore.Cdc.Retention, 24*time.Hour),
+			Retention: retention,
 		}
 	}
 
@@ -441,17 +472,17 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 	return kv, start, nil
 }
 
-// parseDurationOr parses a Go duration string, falling back to def on empty or invalid input (config
-// already validated the surface; this is a defensive default for the optional cadence fields).
-func parseDurationOr(s string, def time.Duration) time.Duration {
+// parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
+// value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
+func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
 	if s == "" {
-		return def
+		return def, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
-		return def
+		return 0, fault.Invalidf("buildKVStore", "config key %q has invalid value %q (want a positive Go duration, e.g. 30s)", key, s)
 	}
-	return d
+	return d, nil
 }
 
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
@@ -474,7 +505,27 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return store.New(eng, opts...), nil
+	st := store.New(eng, opts...)
+	if err := checkSecretsDecode(st, enc != nil); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	return st, nil
+}
+
+// checkSecretsDecode reads every stored Secret once at startup, so a secrets.encryptionKeyFile that
+// does not match how the durable store's Secrets were written (issue #93) stops funcd with a clear
+// error instead of failing every Secret read, write and delete later.
+func checkSecretsDecode(st store.Store, keyed bool) error {
+	_, err := st.List(context.Background(), v1.KindSecret.GVK(), store.ListOptions{})
+	switch {
+	case err == nil:
+		return nil
+	case keyed:
+		return fmt.Errorf("stored Secrets do not decrypt with secrets.encryptionKeyFile: they were written with a different key or with none — restore the setting they were written with: %w", err)
+	default:
+		return fmt.Errorf("stored Secrets are encrypted but secrets.encryptionKeyFile is not set — set it to the key they were written with: %w", err)
+	}
 }
 
 // secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
@@ -545,7 +596,7 @@ func noopClose() error { return nil }
 // (its lane settings from cfg.Runtime.Containerd); else (default) → the process driver running the embedded
 // Node shim. It returns a closer the caller must defer — for containerd mode it stops the
 // ctrmanager-supervised private containerd (ADR-0054); for process mode it is a no-op.
-func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, func() error, error) {
+func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logger) ([]funcd.Option, func() error, error) {
 	if cfg.Runtime.Mode == "containerd" {
 		c := cfg.Runtime.Containerd
 		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
@@ -589,7 +640,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 		}
 	}
 	if node == "" {
-		slog.Warn("funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
+		logger.WarnContext(ctx, "funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
 		return opts, noopClose, nil
 	}
 	shimPath := filepath.Join(cfg.Storage.DataDir, "shim.mjs")
@@ -613,7 +664,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 		}
 	}
 	if python == "" {
-		slog.Info("funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
+		logger.InfoContext(ctx, "funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
 		return opts, noopClose, nil
 	}
 	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.Storage.DataDir, "shim-python"))
@@ -628,7 +679,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 	if pythonAtLeast314(python) {
 		opts = append(opts, funcd.WithPoolShimFor("python", python, poolEntry))
 	} else {
-		slog.Info("funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
+		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
 }

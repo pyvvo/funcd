@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/scheduler"
 )
 
 // PlatformAnnotation records, on a function manifest, the platform its bundle was built for (ADR-0145).
@@ -129,7 +130,8 @@ func platformList(ps []v1.OCIPlatform) string {
 }
 
 // Platforms lists the platforms the artifact at digest (or at ref's tag when digest is empty) provides: an
-// index's, an annotated manifest's one, or nil for an unannotated manifest, which runs anywhere.
+// index's, an annotated manifest's one, or nil for an unannotated manifest, which runs anywhere. An index none of
+// whose manifests names a platform runs nowhere: an error matching scheduler.ErrNoMatchingPlatform.
 func Platforms(ctx context.Context, ref, digest string) ([]v1.OCIPlatform, error) {
 	const op = "artifact.Platforms"
 	target, reference, terr := resolveTarget(ctx, ref)
@@ -155,7 +157,12 @@ func Platforms(ctx context.Context, ref, digest string) ([]v1.OCIPlatform, error
 		if jerr := json.Unmarshal(data, &index); jerr != nil {
 			return nil, fault.Invalidf(op, "decode index: %v", jerr)
 		}
-		return indexPlatforms(index), nil
+		ps := indexPlatforms(index)
+		if len(ps) == 0 {
+			return nil, fault.Wrapf(scheduler.ErrNoMatchingPlatform, fault.Invalid, op,
+				"artifact %s provides no platform: no manifest in its index names one", desc.Digest)
+		}
+		return ps, nil
 	}
 	var manifest ocispec.Manifest
 	if jerr := json.Unmarshal(data, &manifest); jerr != nil {
@@ -190,7 +197,7 @@ func PushIndex(ctx context.Context, ref string, sources []string) (digest string
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
-	if tag == "" || strings.HasPrefix(tag, "sha256:") {
+	if tag == "" || isDigest(tag) {
 		return "", fault.Invalidf(op, "index ref %q needs a tag", ref)
 	}
 	home, herr := repositoryOf(ref)
@@ -262,7 +269,7 @@ func readIndexSource(ctx context.Context, op string, target oras.ReadOnlyTarget,
 		return src, fault.Invalidf(op, "source %s is not in the index's repository %s", source, home)
 	}
 	_, tag, _ := resolveTargetRef(source)
-	if tag == "" {
+	if tag == "" || isDigest(tag) {
 		return src, fault.Invalidf(op, "source %s needs a tag", source)
 	}
 	desc, data, ferr := oras.FetchBytes(ctx, target, tag, oras.DefaultFetchBytesOptions)
