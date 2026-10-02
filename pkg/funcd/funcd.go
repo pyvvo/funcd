@@ -302,6 +302,7 @@ type Platform struct {
 	deadletterMaxEntries int                       // DLQ per-namespace count cap (0 ⇒ unbounded)
 	logSink              *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
 	traceSink            *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	logRoutes            logRoutes                 // the live capture Routes feeding logSink/traceSink, drained by Shutdown
 	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 	catalogProxy         *cataloggw.Manager        // per-CatalogService node-private catalog PEP proxies (ADR-0137); Shutdown-closed
@@ -962,10 +963,7 @@ func (p *Platform) buildControlPlane() error {
 				Function:  string(spec.Name),
 				Replica:   strconv.Itoa(spec.Replica),
 			}
-			go func() {
-				defer func() { _ = r.Close() }()
-				_ = funclog.Route(context.Background(), r, sinks, res, p.logger)
-			}()
+			p.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, p.logger) })
 		})
 	}
 
@@ -1198,9 +1196,11 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.s3gw != nil {
 			s3gwErr = p.s3gw.Close()
 		}
-		// Close the runtime first (stops instances → log channels EOF → pumps flush), then seal any
-		// remaining funclog segments, all before blob.Close() (the sink writes to blob) — ADR-0081.
+		// Close the runtime first (stops instances → log channels EOF), let every capture Route read its
+		// channel to the end and flush, then seal any remaining funclog segments, all before blob.Close()
+		// (the sink writes to blob) — ADR-0081.
 		runtimeErr := p.cfg.runtime.Close()
+		p.logRoutes.drain(ctx)
 		var logSinkErr, traceSinkErr error
 		if p.logSink != nil {
 			logSinkErr = p.logSink.Close()
