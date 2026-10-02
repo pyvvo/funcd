@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -338,6 +339,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
+			if derr := r.reclaimOrphanPools(ctx, req.Namespace); derr != nil {
+				return controller.Result{}, derr
+			}
 			return controller.Result{}, r.programAllRoutes(ctx)
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get function")
@@ -345,6 +349,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	fn, ok := obj.(*v1.Function)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a Function", req.Namespace, req.Name)
+	}
+	// A spec change can move fn off its pool key (spec.pooling.worker or spec.runtime), leaving that pool without a member.
+	if fn.Status.ObservedGeneration < fn.Generation {
+		if err := r.reclaimOrphanPools(ctx, fn.Namespace); err != nil {
+			return controller.Result{}, err
+		}
 	}
 	// ADR-0142: a Ready solo Function whose spec is already processed only needs its replicas checked; if they
 	// all run, the pass writes nothing and comes back after the supervision period.
@@ -399,13 +409,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
 	// joins a shared pool worker by (namespace, runtime, worker-id). A REJECTED (over-cap)
-	// member is held NotReady with a PoolFull condition and gets no worker and no route.
+	// member is held NotReady with a PoolFull condition and gets no worker and no route; it
+	// comes back on the supervision period, since a slot frees without a write to its object.
 	assign, err := r.assign(ctx, fn)
 	if err != nil {
 		return controller.Result{}, err
 	}
 	if assign.Rejected {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, zeroReplicas: true}, drainAfter)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, zeroReplicas: true, requeue: r.supervisionPeriod}, drainAfter)
 	}
 	// Clear a stale PoolFull from a prior reconcile (e.g. the pool shrank and this member was
 	// admitted): the condition reflects current placement, never a leftover.
@@ -426,7 +437,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
 		}
-		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
+		var requeue time.Duration
+		if fault.KindOf(serr) == fault.NotFound {
+			requeue = 2 * time.Second
+		}
+		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true, requeue: requeue}, drainAfter)
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -639,6 +655,11 @@ func earliest(a, b time.Duration) time.Duration {
 // readinessPoll is how soon a pass re-checks a booting shim.
 const readinessPoll = 200 * time.Millisecond
 
+// bootTimeout bounds how long a solo replica may run without becoming ready before readiness judges it a shape failure
+// (ADR-0030 §4b's timeout), as when its handler blocks while it loads. It exceeds the activator's 30 s activation hold,
+// so it never cuts short a boot that a cold call still waits for.
+const bootTimeout = time.Minute
+
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
 
@@ -712,7 +733,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired)
+	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
@@ -742,13 +763,13 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired)
+	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath, bootTimeout)
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := time.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
-	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1)
+	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath, bootTimeout)
 	retryAt := retryS
 	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
 		retryAt = retryC
@@ -1083,7 +1104,7 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // moved tag cannot drift it (the immutability guarantee).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
-	revName := fmt.Sprintf("%s-%d", fn.Name, fn.Generation)
+	revName := revisionName(fn)
 	existing, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName))
 	if err == nil {
 		fn.Status.CurrentRevision = revName
@@ -1130,6 +1151,9 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	fn.Status.CurrentRevision = revName
 	return pinned, nil
 }
+
+// revisionName is the Revision a Function's generation stamps (ADR-0020): <name>-<generation>.
+func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name, fn.Generation) }
 
 // pinDigest resolves an OCI artifact ref → digest at Revision stamp (ADR-0035). With no
 // resolver configured (file:// dev / legacy mode) there is no digest to pin — the
@@ -1232,9 +1256,10 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 
 // readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
 // In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
-// running replica's /health/readiness and treats a failed instance (the shim exited because it could not load the
-// handler) as a shape failure. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int) (ready int, shapeFailed bool) {
+// running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
+// handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
+// bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, shapeFailed bool) {
 	if r.materializer == nil {
 		return running, false
 	}
@@ -1250,21 +1275,34 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		case runtime.StateFailed:
 			shapeFailed = true
 		case runtime.StateRunning:
-			if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port) {
+			switch {
+			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
+			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
+				shapeFailed = true
 			}
 		}
 	}
 	return ready, shapeFailed
 }
 
-// probeReady issues GET /health/readiness against a shim and reports a 200 (ADR-0030 §4b).
-func (r *Reconciler) probeReady(ctx context.Context, ip string, port int) bool {
+// The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).
+const (
+	readinessPath = "/health/readiness"
+	livenessPath  = "/health/liveness"
+)
+
+// probeBodyMax bounds the body drained before close: a body read to EOF returns the connection to
+// the keep-alive pool, so repeated probes do not churn ephemeral ports (ADR-0041).
+const probeBodyMax = 4 << 10
+
+// probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
+func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
 	host := ip
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	url := fmt.Sprintf("http://%s:%d/health/readiness", host, port)
+	url := fmt.Sprintf("http://%s:%d%s", host, port, path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
@@ -1273,7 +1311,10 @@ func (r *Reconciler) probeReady(ctx context.Context, ip string, port int) bool {
 	if err != nil {
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyMax))
+		_ = resp.Body.Close()
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -1288,7 +1329,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	// verdict (Status.Phase==Ready, set only after /health/readiness passes), not merely on
 	// a running process. Otherwise the activator forwards before the shim binds (502). The
 	// upstream is still returned so a caller can see the address while it boots. For a pooled
-	// function the upstream is its pool worker's address, resolved by the pool key (ADR-0046).
+	// function the upstream is its pool worker's address, resolved by the pool key, plus the
+	// /function/<name> path the pool routes the member by (ADR-0046 Decision 5): every caller (the
+	// data plane, a workflow step, a Sensor action) gets it from here, where pooling is decided.
 	obj, err := e.r.store.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
 	if err != nil {
 		return "", false, nil
@@ -1298,6 +1341,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 		return "", false, nil
 	}
 	up := e.r.upstreamForFn(ctx, f)
+	if _, pooled := e.r.poolKeyFor(f); pooled && up != "" {
+		up += "/function/" + string(f.Name)
+	}
 	ready := f.Status.Phase == v1.PhaseReady && up != ""
 	if ready && e.r.calls != nil {
 		e.r.calls.HandedOut(up) // the drain waits out a call that resolved this upstream (ADR-0143)
@@ -1546,12 +1592,16 @@ func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest
 	return err
 }
 
-// placementMessage is the scheduler's own message for a refused placement ("artifact provides [...]; node ... runs
-// ..."), without the operation prefix.
+// placementMessage is the innermost message of a refused placement, without the operation prefixes: the
+// scheduler's ("artifact provides [...]; node ... runs ...") or the resolver's (an index that names no platform).
 func placementMessage(err error) string {
+	msg := err.Error()
 	var fe *fault.Error
-	if errors.As(err, &fe) && fe.Msg != "" {
-		return fe.Msg
+	for errors.As(err, &fe) {
+		if fe.Msg != "" {
+			msg = fe.Msg
+		}
+		err = fe.Err
 	}
-	return err.Error()
+	return msg
 }

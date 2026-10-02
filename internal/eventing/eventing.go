@@ -22,9 +22,10 @@ const runTick = 25 * time.Millisecond
 // NotReady with a reason, mirroring the Route BackendNotFound pattern.
 const condReady = v1.ConditionType("Ready")
 
-// blobRetryInterval requeues a NotReady blob source so a Bucket created after the EventSource is picked up
-// without an external trigger (ADR-0119: missing bucket ⇒ NotReady, not Ready-but-silently-not-polling).
-const blobRetryInterval = 15 * time.Second
+// bucketRecheckInterval requeues every blob source so a Bucket created or deleted after the EventSource is
+// picked up without an external trigger: no Bucket event reaches this reconciler (ADR-0119: missing bucket ⇒
+// NotReady, not Ready-but-silently-not-polling).
+const bucketRecheckInterval = 15 * time.Second
 
 // Publisher is the delivery seam a Source emits named CloudEvents to (ADR-0108). The V1 driver is the
 // in-process Fanout (fanout.go) the F69 Sensor subscribes to; a bus-backed driver is a V2 swap. Emitting
@@ -125,8 +126,9 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 
 // reconcileBlob owns the `blob:` source branch (ADR-0119): it resolves the watched Bucket, registers the
 // source's named events on the BlobWatcher and sets Ready — or, when the Bucket does not exist in the
-// namespace, deregisters and sets NotReady with a BucketNotFound condition (never Ready-but-not-polling),
-// requeuing so a later-created Bucket is picked up. `on` is defaulted here (decode/normalize), not in Validate.
+// namespace, deregisters and sets NotReady with a BucketNotFound condition (never Ready-but-not-polling).
+// Either way it requeues, so a Bucket created or deleted later is picked up. `on` is defaulted here
+// (decode/normalize), not in Validate.
 func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (controller.Result, error) {
 	ns, name := es.Namespace, es.Name
 	s.deregisterTimers(ns, name) // a source that became a blob kind must stop any prior timers
@@ -139,7 +141,7 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		if fault.KindOf(err) == fault.NotFound {
 			s.deregisterBlob(ns, name)
 			nrErr := s.setBlobNotReady(ctx, es, "BucketNotFound", fmt.Sprintf("bucket %q not found in namespace %q", es.Spec.Blob.Bucket, ns))
-			return controller.Result{RequeueAfter: blobRetryInterval}, nrErr
+			return controller.Result{RequeueAfter: bucketRecheckInterval}, nrErr
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
 	}
@@ -151,7 +153,7 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileBlob", "set eventsource ready")
 		}
 	}
-	return controller.Result{}, nil
+	return controller.Result{RequeueAfter: bucketRecheckInterval}, nil
 }
 
 // setBlobNotReady marks a blob source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).

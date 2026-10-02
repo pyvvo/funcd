@@ -90,7 +90,8 @@ func (r *Reconciler) assign(ctx context.Context, fn *v1.Function) (pooling.Assig
 }
 
 // sameKeyFunctions returns every function in the store declaring key (ns, runtime, worker-id),
-// Ready or not — the membership the cap + manifest are computed over (ADR-0046 Decision 3/4).
+// Ready or not — the membership the cap + manifest are computed over (ADR-0046 Decision 3/4) —
+// each as pinnedMember returns it.
 func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) ([]*v1.Function, error) {
 	list, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
 	if err != nil {
@@ -103,18 +104,60 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 			continue
 		}
 		if k, isPooled := r.poolKeyFor(fn); isPooled && k == key {
+			if fn, err = r.pinnedMember(ctx, fn); err != nil {
+				return nil, err
+			}
 			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
-			// own reconcile reports NoMatchingPlatform, and the pool serves its peers.
+			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. One whose platforms cannot be
+			// listed now (a registry outage) keeps the revision it serves, or is left out: its own reconcile retries,
+			// and its peers keep their pool.
 			if perr := r.placeable(ctx, fn, fn.Spec.Image, fn.Spec.ImageDigest); perr != nil {
 				if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
 					continue
 				}
-				return nil, perr
+				s := r.servingMember(ctx, fn)
+				if s == nil || r.placeable(ctx, s, s.Spec.Image, s.Spec.ImageDigest) != nil {
+					r.logger.Warn("pool member left out: its platforms cannot be listed", "function", fn.Name, "err", perr)
+					continue
+				}
+				fn = s
 			}
 			out = append(out, fn)
 		}
 	}
 	return out, nil
+}
+
+// pinnedMember is m at its current generation's Revision digest (ADR-0035), the digest the pool
+// gates and materializes it at, as the solo path does: a Function deployed from a tag alone has no
+// spec.imageDigest. A member whose Revision is not stamped yet is returned as stored.
+func (r *Reconciler) pinnedMember(ctx context.Context, m *v1.Function) (*v1.Function, error) {
+	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(revisionName(m)))
+	if err != nil {
+		if fault.KindOf(err) == fault.NotFound {
+			return m, nil
+		}
+		return nil, err
+	}
+	tmpl.Spec.ImageDigest = digest
+	return tmpl, nil
+}
+
+// servingMember is m at the revision it serves, for a member whose current revision cannot be gated or materialized:
+// while m serves (Ready or Degraded) a revision other than its current generation's, its pool entry stays at that
+// revision, as a solo Function's serving revision keeps its calls while the current one fails (ADR-0143). nil when m
+// serves no other revision or that Revision cannot be read.
+func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Function {
+	s := m.Status.ServingRevision
+	if !servingPhase(m.Status.Phase) || s == "" || s == revisionName(m) {
+		return nil
+	}
+	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(s))
+	if err != nil {
+		return nil
+	}
+	tmpl.Spec.ImageDigest = digest
+	return tmpl
 }
 
 // convergePooled provisions a pooled member's shared pool worker, driven to the max desired over the key's admitted
@@ -123,11 +166,14 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 // per-function catalog token, so neither env reaches the pool (a catalog-consuming function runs solo, ADR-0086). The
 // serving revision follows the current one once the pool worker is ready (ADR-0143 Decision 8).
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment) (verdict, error) {
-	running, err := r.ensurePool(ctx, a.Key)
+	running, err := r.ensurePool(ctx, a.Key, fn)
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1)
+	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
+	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
+	// (ADR-0046 Decision 5). No boot limit: a pool worker restarts in place and keeps its CreatedAt, so its age is not its boot time.
+	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, 0)
 	serving := servingPhase(fn.Status.Phase)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
@@ -142,13 +188,14 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 // 4 & 6): it builds the manifest from the key's admitted members, computes the pool's desired
 // replica as the max over those members' effective desired, and ensures exactly one pool
 // worker — created/restarted only when the desired manifest differs from the running one
-// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey) (int, error) {
+// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count. self is
+// the member being reconciled.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (int, error) {
 	members, err := r.admittedMembers(ctx, key)
 	if err != nil {
 		return 0, err
 	}
-	manifest, desired, err := r.poolManifest(ctx, members)
+	manifest, desired, err := r.poolManifest(ctx, members, self)
 	if err != nil {
 		return 0, err
 	}
@@ -220,20 +267,36 @@ func (r *Reconciler) admittedMembers(ctx context.Context, key pooling.PoolKey) (
 // poolManifest materializes each admitted member's artifact and builds the pool manifest plus
 // the pool's desired replica = max over members' effective desired (ADR-0046 Decision 6), so a
 // warm/woken member keeps the pool up for idle siblings and reclaim fires only when all are idle.
-func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function) ([]poolManifestEntry, int, error) {
+// A member whose artifact cannot be materialized fails alone (ADR-0046 bounded blast radius): it
+// keeps the revision it serves (servingMember) or is left out of the manifest, and only self's own
+// failure is returned. A member the pooled config/secret gate fails closed is left out too: no
+// worker runs its code (ADR-0057).
+func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function) ([]poolManifestEntry, int, error) {
 	const op = "function.poolManifest"
 	manifest := make([]poolManifestEntry, 0, len(members))
 	desired := 0
 	for _, m := range members {
-		if d := r.desiredReplicas(m); d > desired {
-			desired = d
+		if _, gerr := r.resolveBindingEnv(ctx, m, true); gerr != nil {
+			continue
 		}
 		path := ""
 		contractPath := ""
 		if r.materializer != nil {
 			p, err := r.materializer.Materialize(ctx, m)
+			if err != nil && m.Name != self.Name {
+				if s := r.servingMember(ctx, m); s != nil {
+					if sp, serr := r.materializer.Materialize(ctx, s); serr == nil {
+						m, p, err = s, sp, nil
+					}
+				}
+			}
 			if err != nil {
-				return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
+				err = fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
+				if m.Name == self.Name {
+					return nil, 0, err
+				}
+				r.logger.Warn("pool member left out: its artifact cannot be materialized", "function", m.Name, "err", err)
+				continue
 			}
 			path = p
 			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
@@ -241,6 +304,9 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function) (
 			if name, ok := contractFileIn(filepath.Dir(p)); ok {
 				contractPath = filepath.Join(filepath.Dir(p), name)
 			}
+		}
+		if d := r.desiredReplicas(m); d > desired {
+			desired = d
 		}
 		manifest = append(manifest, poolManifestEntry{
 			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Contract: contractPath,
@@ -340,11 +406,48 @@ func (r *Reconciler) stopPool(ctx context.Context, insts []runtime.Instance) err
 	return nil
 }
 
+// reclaimOrphanPools stops and removes each pool worker in ns whose key no Function declares any more: its last member
+// was deleted or moved off the key. Only a member's own reconcile drives its pool (ensurePool), so nothing else would
+// reclaim it (ADR-0046 Decision 6). The workers are listed before the Functions, so a pool created in between has its
+// member listed.
+func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName) error {
+	const op = "function.reclaimOrphanPools"
+	insts, err := r.runtime.List(ctx, ns)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list workers")
+	}
+	list, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list functions")
+	}
+	declared := map[v1.ObjectName]bool{}
+	for _, obj := range list.Items {
+		if fn, ok := obj.(*v1.Function); ok {
+			if key, pooled := r.poolKeyFor(fn); pooled {
+				declared[poolInstanceName(key)] = true
+			}
+		}
+	}
+	for _, in := range insts {
+		if declared[in.Name] || !strings.HasPrefix(string(in.Name), poolInstancePrefix) {
+			continue
+		}
+		if err := r.retire(ctx, in); err != nil {
+			return err
+		}
+		r.forgetPoolSigOf(ns, in.Name)
+	}
+	return nil
+}
+
+// poolInstancePrefix starts every pool worker's name (poolInstanceName).
+const poolInstancePrefix = "__pool__"
+
 // poolInstanceName is the synthetic worker name for a pool key. It encodes runtime + worker
 // id so distinct keys never collide, and is prefixed so it can never equal a real function
 // name (a DNS-1123 label cannot contain "__"), keeping a member's solo lookups separate.
 func poolInstanceName(key pooling.PoolKey) v1.ObjectName {
-	return v1.ObjectName("__pool__" + key.Runtime + "__" + key.Worker)
+	return v1.ObjectName(poolInstancePrefix + key.Runtime + "__" + key.Worker)
 }
 
 // manifestSignature is a stable digest of the pool manifest used for idempotent restarts:
@@ -392,4 +495,15 @@ func (r *Reconciler) forgetPoolSig(key pooling.PoolKey) {
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
 	delete(r.poolSigs, key)
+}
+
+// forgetPoolSigOf forgets the signature of the pool worker named name in ns.
+func (r *Reconciler) forgetPoolSigOf(ns v1.NamespaceName, name v1.ObjectName) {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	for key := range r.poolSigs {
+		if key.Namespace == ns && poolInstanceName(key) == name {
+			delete(r.poolSigs, key)
+		}
+	}
 }

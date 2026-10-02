@@ -149,14 +149,10 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 			return
 		}
 	}
-	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
-	if err != nil {
+	if _, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name); err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 		return
 	}
-	// Address the function. A SOLO function's shim serves POST / (strip the prefix). A POOLED
-	// function (spec.pooling.worker set, ADR-0046) shares a pool worker that routes by name at
-	// POST /function/<name>, so the prefix is PRESERVED and the pool routes by name.
 	out := r.Clone(r.Context())
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
 	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
@@ -178,14 +174,10 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 		out.ContentLength = int64(len(body))
 		out.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}
-	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Pooling.Worker != "" {
-		out.URL.Path = pathPrefix + string(name)
-		if remainder != "/" {
-			out.URL.Path += remainder
-		}
-	} else {
-		out.URL.Path = remainder
-	}
+	// The remainder is relative to the function's upstream: a solo shim serves POST /, and a pooled
+	// function's upstream carries the /function/<name> its pool worker routes by (ADR-0046), set by
+	// the reconciler, which decides whether the function is pooled.
+	out.URL.Path = remainder
 	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
 	s.activator.ServeHTTP(w, out)
 }

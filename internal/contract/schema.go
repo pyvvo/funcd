@@ -1,6 +1,9 @@
 package contract
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // schema is the subset of JSON Schema 2020-12 keywords the profile gate inspects. Unknown
 // keywords (title, description, format, minimum, pattern, …) are ignored — they constrain a
@@ -51,18 +54,29 @@ func (s *schema) primaryType() string {
 // typeField captures JSON Schema's `type`, which is a string OR an array of strings.
 type typeField struct{ values []string }
 
+// errNullType rejects a JSON null type value (an unquoted YAML `type: null`): it is not JSON Schema, and
+// dropping it would turn the side into the `Json` (any) form.
+var errNullType = errors.New(`"type" is JSON null, not a type name; a void side is {"type":"null"} (quote "null" in YAML)`)
+
 func (t *typeField) UnmarshalJSON(b []byte) error {
-	if len(b) == 0 || string(b) == "null" {
-		return nil
+	var names []*string
+	if len(b) > 0 && b[0] == '[' {
+		if err := json.Unmarshal(b, &names); err != nil {
+			return err
+		}
+	} else {
+		var one *string
+		if err := json.Unmarshal(b, &one); err != nil {
+			return err
+		}
+		names = []*string{one}
 	}
-	if b[0] == '[' {
-		return json.Unmarshal(b, &t.values)
+	for _, n := range names {
+		if n == nil {
+			return errNullType
+		}
+		t.values = append(t.values, *n)
 	}
-	var one string
-	if err := json.Unmarshal(b, &one); err != nil {
-		return err
-	}
-	t.values = []string{one}
 	return nil
 }
 
