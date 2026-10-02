@@ -169,9 +169,7 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 			}
 			return
 		}
-		if env, wrapped := normalizeInvokeBody(ns, name, body, newInvokeID); wrapped {
-			body = env
-		}
+		body = InvokeEnvelope(ns, name, body)
 		out.Body = io.NopCloser(bytes.NewReader(body))
 		out.ContentLength = int64(len(body))
 		out.Header.Set("Content-Length", strconv.Itoa(len(body)))

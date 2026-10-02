@@ -2,8 +2,12 @@ package sdk_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -137,5 +141,58 @@ func TestIssue139_ValidationErrorNamesField(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
 		require.Contains(t, err.Error(), tc.location, name)
 		require.Contains(t, err.Error(), "expected number >= 0", name)
+	}
+}
+
+// A 301/302/303 makes Go resend a PUT/DELETE as a body-less GET; the SDK must surface that as an
+// error, never report the GET's 200 as a stored or deleted object. 307/308 keep the method and work.
+func TestIssue136_WritesRefuseMethodChangingRedirect(t *testing.T) {
+	t.Parallel()
+	stored, err := json.Marshal(newFunction("fn1", "old"))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		code    int
+		follows bool
+	}{
+		{code: http.StatusMovedPermanently},
+		{code: http.StatusFound},
+		{code: http.StatusSeeOther},
+		{code: http.StatusTemporaryRedirect, follows: true},
+		{code: http.StatusPermanentRedirect, follows: true},
+	} {
+		t.Run(http.StatusText(tc.code), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			var mu sync.Mutex
+			var seen []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				if r.URL.Path != "/final" {
+					http.Redirect(w, r, "/final", tc.code)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(stored)
+			}))
+			t.Cleanup(srv.Close)
+			c, err := sdk.New(srv.URL)
+			require.NoError(t, err)
+
+			_, applyErr := c.Apply(ctx, newFunction("fn1", "new"))
+			deleteErr := c.Delete(ctx, v1.KindFunction, "team-a", "fn1")
+			mu.Lock()
+			defer mu.Unlock()
+			if tc.follows {
+				require.NoError(t, applyErr)
+				require.NoError(t, deleteErr)
+				require.Subset(t, seen, []string{"PUT /final", "DELETE /final"})
+				return
+			}
+			require.Error(t, applyErr, "Apply reported the redirected GET as the stored object; seen %v", seen)
+			require.Error(t, deleteErr, "Delete reported the redirected GET as a delete; seen %v", seen)
+			require.False(t, slices.Contains(seen, "GET /final"), "a write was resent as GET: %v", seen)
+		})
 	}
 }

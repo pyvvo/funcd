@@ -157,6 +157,13 @@ func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([
 	return nil, fault.Invalidf(op, "read request body: %v", err)
 }
 
+// newServer builds the local API's http.Server. IdleTimeout closes a keep-alive connection left idle
+// between requests (a DoS guard on the local API: each held connection pins a daemon goroutine); it
+// outlasts the TypeScript shim's 5 s client keep-alive, so the client closes an idle connection first.
+func newServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
+}
+
 // Serve runs h on a Unix domain socket at path (bind-mounted into the sandbox) until ctx is done.
 // A stale socket file at path is removed first.
 func Serve(ctx context.Context, path string, h http.Handler) error {
@@ -166,7 +173,7 @@ func Serve(ctx context.Context, path string, h http.Handler) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.Unavailable, op, "listen on unix socket %q", path)
 	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	srv := newServer(h)
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

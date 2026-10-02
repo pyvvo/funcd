@@ -15,7 +15,8 @@ import (
 const namespaceHeader = "X-Funcd-Namespace"
 
 // proxyInvoker forwards the call through the IN-PROCESS data-plane handler (ADR-0033/0016): it
-// synthesizes a POST /function/<target> request, captures the response, and propagates the target
+// synthesizes a POST /function/<target> request carrying the input as a CloudEvents v1.0 envelope (the
+// edge never normalizes internal traffic, ADR-0134), captures the response, and propagates the target
 // shim's status verbatim — it does NOT re-validate the contract (the daemon holds no per-function
 // validator; the target's shim returns 422 input / 500 output per ADR-0058). A cold target is woken
 // by the activator inside the data-plane handler; the timeout bounds the wait.
@@ -32,7 +33,7 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	// internal invoke is by name and is not subject to a namespace's exposure mode. Spoof-proof — the
 	// value is set here in-process; an external request on the public listener can't carry it.
 	cctx = dataplane.WithInternal(cctx)
-	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Function), bytes.NewReader(input)).WithContext(cctx)
+	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Function), bytes.NewReader(dataplane.InvokeEnvelope(target.Namespace, target.Function, input))).WithContext(cctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(namespaceHeader, string(target.Namespace))
 

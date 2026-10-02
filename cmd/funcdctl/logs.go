@@ -26,10 +26,8 @@ func (a *cli) logsCmd() *cobra.Command {
 		Short: "Print a function's logs (tenant-scoped to your identity)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			switch output {
-			case "", "wide", "json":
-			default:
-				return fault.Invalidf("funcdctl logs", "unknown output %q (want: wide or json)", output)
+			if err := checkOutput("funcdctl logs", output, "wide", "json"); err != nil {
+				return err
 			}
 			c, err := a.sdkClient()
 			if err != nil {
