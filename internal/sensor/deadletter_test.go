@@ -2,6 +2,7 @@ package sensor_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +128,93 @@ func TestTransientThenSucceeds(t *testing.T) {
 	require.Equal(t, 1, ready, "exactly one Ready Invocation at the terminal outcome")
 	require.Equal(t, 0, failed, "no Failed Invocation for a delivery that recovered")
 	require.Equal(t, 2, inv.count(), "one failure + one success")
+}
+
+// heldRetryInvoker fails the inline attempt, then holds the first retry attempt until release (or until its context
+// ends, as an HTTP POST does), recording the context that attempt was given.
+type heldRetryInvoker struct {
+	mu      sync.Mutex
+	calls   int
+	retry   context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *heldRetryInvoker) Invoke(ctx context.Context, _ v1.NamespaceName, _ v1.ObjectName, _ eventing.CloudEvent) error {
+	h.mu.Lock()
+	h.calls++
+	call := h.calls
+	if call == 2 {
+		h.retry = ctx
+	}
+	h.mu.Unlock()
+	switch call {
+	case 1:
+		return fault.Unavailablef("test.invoke", "target returned 500")
+	case 2:
+		close(h.entered)
+		select {
+		case <-ctx.Done():
+			return fault.Unavailablef("test.invoke", "POST: %v", ctx.Err())
+		case <-h.release:
+			return nil
+		}
+	}
+	return nil
+}
+
+func (h *heldRetryInvoker) retryCtx() context.Context {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.retry
+}
+
+// Shutdown drains the retry workers (ADR-0118 §6): a retry attempt already in flight runs to its end with a live
+// context, so the target's answer is recorded. Handing it the cancelled platform context aborted the POST the target
+// was already serving: the delivery was then dropped with no record, or, on its last attempt, dead-lettered although
+// the target had run it (issue #145).
+func TestIssue145_ShutdownLetsInflightRetryFinish(t *testing.T) {
+	for _, attempts := range []int{2, 3} {
+		t.Run(fmt.Sprintf("attempts=%d", attempts), func(t *testing.T) {
+			inv := &heldRetryInvoker{entered: make(chan struct{}), release: make(chan struct{})}
+			st := store.New(memory.New())
+			fan := eventing.NewFanout()
+			dlq := dlmemory.New()
+			r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: fan, Invoker: inv, DeadLetters: dlq, DeliveryAttempts: attempts})
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			drained := make(chan struct{})
+			go func() {
+				r.RunRetryWorkers(ctx)
+				close(drained)
+			}()
+			createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+				[]v1.Action{{Name: "notify", On: "d", Function: "mailer"}})
+			_, err = r.Reconcile(context.Background(), reqOf("s"))
+			require.NoError(t, err)
+			fire(t, fan, "git", "push", "")
+
+			select {
+			case <-inv.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the retry attempt never started")
+			}
+			cancel()
+			require.NoError(t, inv.retryCtx().Err(), "shutdown cancelled the retry attempt in flight instead of letting it finish")
+			close(inv.release)
+			select {
+			case <-drained:
+			case <-time.After(5 * time.Second):
+				t.Fatal("RunRetryWorkers did not return after the in-flight attempt finished")
+			}
+
+			ready, failed := invocationsByPhase(t, st)
+			require.Equal(t, 1, ready, "the delivery the target served is recorded Ready")
+			require.Equal(t, 0, failed)
+			require.Empty(t, dlqList(t, dlq, "team-a"), "a delivery the target served is not dead-lettered")
+		})
+	}
 }
 
 // scenario: replay-restarts-action — a stored DeadLetter with a now-healthy target replays against the LIVE
@@ -272,4 +360,29 @@ func TestRetentionEvicts(t *testing.T) {
 	require.Len(t, teamA, 1)
 	require.Equal(t, "01C", teamA[0].ID, "the newest survivor remains")
 	require.Len(t, dlqList(t, dlq, "team-b"), 1, "another namespace under cap/TTL is untouched")
+}
+
+func TestIssue174_ReplayRecordsInvocation(t *testing.T) {
+	inv := &scriptedInvoker{failFirst: -1}
+	st, fan, dlq, r := dlqHarness(t, inv, 1)
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+		[]v1.Action{{Name: "notify", On: "d", Function: "mailer"}})
+	_, err := r.Reconcile(context.Background(), reqOf("s"))
+	require.NoError(t, err)
+	fire(t, fan, "git", "push", "")
+	require.Len(t, dlqList(t, dlq, "team-a"), 1)
+	id := dlqList(t, dlq, "team-a")[0].ID
+
+	require.Error(t, r.Replay(context.Background(), "team-a", id))
+	ready, failed := invocationsByPhase(t, st)
+	require.Equal(t, 0, ready)
+	require.Equal(t, 2, failed, "a failed replay is an action delivery: it records a Failed Invocation")
+
+	inv.mu.Lock()
+	inv.failFirst = 0
+	inv.mu.Unlock()
+	require.NoError(t, r.Replay(context.Background(), "team-a", id))
+	ready, failed = invocationsByPhase(t, st)
+	require.Equal(t, 1, ready, "a successful replay records a Ready Invocation")
+	require.Equal(t, 2, failed)
 }

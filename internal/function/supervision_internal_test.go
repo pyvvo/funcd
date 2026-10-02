@@ -28,8 +28,8 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 		return serr == nil && in.State == runtime.StateFailed
 	}, 5*time.Second, 10*time.Millisecond)
 
-	_, failed := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1)
+	_, failed := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1, readinessPath)
 	require.False(t, failed, "replica 1 is at the bound, so it is not judged")
-	_, failed = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2)
+	_, failed = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2, readinessPath)
 	require.True(t, failed, "inside the bound, a Failed replica is a shape failure")
 }

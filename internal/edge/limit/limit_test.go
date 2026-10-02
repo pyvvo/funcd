@@ -1,8 +1,11 @@
 package limit_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -138,4 +141,33 @@ func TestRateLimiterLRUBound(t *testing.T) {
 	}
 	// hot has already spent its burst and stayed hot ⇒ still limited (bucket preserved, not reset by eviction).
 	require.Equal(t, http.StatusTooManyRequests, do(h, "GET", "/function/x", "hot:1", 0).Code)
+}
+
+// Issue #89: under key: function a flood of distinct, very long path heads must not make the limiter
+// retain MaxKeys × path length — the key map is bounded by MaxKeys alone, whatever the path size.
+func TestIssue89_FunctionKeyMemoryBounded(t *testing.T) {
+	const (
+		maxKeys = 64
+		segLen  = 64 << 10
+	)
+	for name, shape := range map[string]string{"single-segment": "/%s", "function-name": "/function/%s/x"} {
+		t.Run(name, func(t *testing.T) {
+			h := limit.Chain(limit.Config{RatePerMin: 60, Key: limit.KeyFunction, MaxKeys: maxKeys})(&counter{})
+			before := liveHeap()
+			for i := 0; i < maxKeys; i++ {
+				do(h, "GET", fmt.Sprintf(shape, strconv.Itoa(i)+strings.Repeat("a", segLen)), "1.1.1.1:1", 0)
+			}
+			grown := liveHeap() - before
+			runtime.KeepAlive(h)
+			require.Less(t, grown, int64(maxKeys*segLen/8),
+				"%d long-path keys left %d live heap bytes: the limiter holds the path itself as its key", maxKeys, grown)
+		})
+	}
+}
+
+func liveHeap() int64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return int64(m.HeapAlloc)
 }

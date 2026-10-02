@@ -230,3 +230,30 @@ func TestIssue95_CachedPlatformsNeedNoSourceAfterRestart(t *testing.T) {
 		require.NoError(t, err, name)
 	}
 }
+
+// A digest-form source is refused with "needs a tag" on both an OCI layout and a registry (ADR-0145 Decision 2).
+func TestIssue156_IndexRefusesDigestSourceConsistently(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "layout")
+	arm := platformBundle(t, dir, "arm", v1.PlatformLinuxARM64, "python314")
+	armDigest, err := artifact.NewOrasMaterializer(t.TempDir(), "").Resolve(ctx, arm)
+	require.NoError(t, err)
+	const registryDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	for name, tc := range map[string]struct {
+		ref    string
+		source string
+	}{
+		"layout digest":         {"oci-layout://" + dir + ":idx", "oci-layout://" + dir + "@" + armDigest},
+		"layout tag and digest": {"oci-layout://" + dir + ":idx", arm + "@" + armDigest},
+		"registry digest":       {"127.0.0.1:1/fn:idx", "127.0.0.1:1/fn@" + registryDigest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := artifact.PushIndex(ctx, tc.ref, []string{tc.source})
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.Contains(t, err.Error(), "source "+tc.source+" needs a tag")
+		})
+	}
+}

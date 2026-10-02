@@ -75,17 +75,18 @@ func PackBundle(dir, entry string) (data []byte, err error) {
 	if serr != nil || !info.IsDir() {
 		return nil, fault.Invalidf(op, "bundle path %q is not a directory", dir)
 	}
-	entryInfo, eerr := os.Stat(filepath.Join(dir, entry))
-	if eerr != nil || !entryInfo.Mode().IsRegular() {
+	if entry == "" {
 		return nil, fault.Invalidf(op, "entry %q is not a regular file in bundle %q", entry, dir)
 	}
-	return packDir(op, dir)
+	return packDir(op, dir, entry)
 }
 
-// packDir is the entry-less deterministic packer behind PackBundle: the same sorted, zeroed
-// tar+gzip stream, with no handler-entry gate — a site bundle (ADR-0139) has no entry file at push
-// time (its index is a reconcile-time spec.index). dir must already be a directory.
-func packDir(op, dir string) (data []byte, err error) {
+// packDir is the deterministic packer behind PackBundle and PushSite: the same sorted, zeroed
+// tar+gzip stream. A non-empty entry must be one of the regular files it packs — checked against the
+// walk itself, so a symlinked entry (or one under a symlinked dir), which the walk skips, is refused
+// rather than recorded and left out. A site bundle (ADR-0139) passes "": its index is a
+// reconcile-time spec.index. dir must already be a directory.
+func packDir(op, dir, entry string) (data []byte, err error) {
 	// Collect every regular file / directory, keyed by its slash-separated relative path, so the
 	// walk order (OS-dependent) never leaks into the bytes — we sort the paths ourselves.
 	type node struct {
@@ -116,6 +117,12 @@ func packDir(op, dir string) (data []byte, err error) {
 	})
 	if walkErr != nil {
 		return nil, fault.Wrapf(walkErr, fault.Internal, op, "walk bundle %q", dir)
+	}
+	if entry != "" {
+		want := filepath.ToSlash(filepath.Clean(entry))
+		if !slices.ContainsFunc(nodes, func(n node) bool { return n.rel == want && n.info.Mode().IsRegular() }) {
+			return nil, fault.Invalidf(op, "entry %q is not a regular file in bundle %q (symlinks are not packed)", entry, dir)
+		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].rel < nodes[j].rel })
 
@@ -245,7 +252,7 @@ func PushBundle(ctx context.Context, ref, dir, entry, runtime string, platform v
 	if platform != "" {
 		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, reproducible(opts))
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}

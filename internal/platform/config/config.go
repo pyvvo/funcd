@@ -53,11 +53,11 @@ type Config struct {
 		} `json:"tls,omitempty"`
 		// Ingress protection limits (ADR-0112, F75). Absent/zero ⇒ off (pass-through).
 		Limits struct {
-			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN"`
-			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST"`
+			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN" validate:"min=0"`
+			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST" validate:"min=0"`
 			Key          string `json:"key,omitempty" env:"FUNCD_LIMITS_KEY" validate:"omitempty,oneof=clientIP function"`
-			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES"`
-			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT"`
+			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES" validate:"min=0"`
+			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT" validate:"min=0"`
 		} `json:"limits,omitempty"`
 		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
 		Auth struct {

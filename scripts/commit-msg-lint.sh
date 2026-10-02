@@ -4,8 +4,9 @@
 set -euo pipefail
 
 msg_file="${1:?usage: commit-msg-lint.sh <commit-msg-file>}"
-# First non-comment, non-blank line = the subject.
-subject="$(grep -v '^#' "${msg_file}" | sed '/^[[:space:]]*$/d' | head -n1)"
+# First non-comment, non-blank line = the subject. One sed that quits at it: a pipe into `head -n1` breaks under
+# pipefail once the body is long, because the writer gets SIGPIPE (#248).
+subject="$(sed -n '/^#/d; /^[[:space:]]*$/d; p; q' "${msg_file}")"
 
 # git generates these itself (merge/revert/fixup/squash/amend) — not author-authored, so exempt.
 case "${subject}" in

@@ -14,6 +14,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/kvstore"
@@ -139,42 +140,12 @@ func startDriver(db *badger.DB, cfg config) *driver {
 }
 
 // gateway is THE single writer: it blocks for one request, greedy-drains whatever else is queued (up to
-// batchMax) into one Badger txn (group commit — no fixed timer), commits, and releases every waiter. When a
-// CDC seam is wired, each write also appends its change-log entry IN THE SAME txn (the outbox property).
+// batchMax), group-commits the batch (no fixed timer), and releases every waiter.
 func (d *driver) gateway(batchMax int) {
 	defer d.wg.Done()
 	batch := make([]*writeReq, 0, batchMax)
 	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		err := d.db.Update(func(txn *badger.Txn) error {
-			for _, r := range batch {
-				if r.del {
-					if e := txn.Delete([]byte(r.key)); e != nil {
-						return e
-					}
-					if d.cdc != nil {
-						if e := d.cdc.OnWrite(txn, r.key, OpDelete); e != nil {
-							return e
-						}
-					}
-					continue
-				}
-				if e := txn.Set([]byte(r.key), r.val); e != nil {
-					return e
-				}
-				if d.cdc != nil {
-					if e := d.cdc.OnWrite(txn, r.key, OpPut); e != nil {
-						return e
-					}
-				}
-			}
-			return nil
-		})
-		for _, r := range batch {
-			r.done <- err
-		}
+		d.commit(batch)
 		batch = batch[:0]
 	}
 	for {
@@ -205,6 +176,58 @@ func (d *driver) gateway(batchMax int) {
 		}
 		flush()
 	}
+}
+
+// commit writes batch in as few Badger txns as it fits. A request that overflows the open txn
+// (ErrTxnTooBig) starts the next txn, and a request Badger rejects on its own (an over-limit key) fails
+// alone, so one caller's write never fails a co-batched caller's. Requests that share a txn share its commit.
+func (d *driver) commit(batch []*writeReq) {
+	for len(batch) > 0 {
+		n, err := d.update(batch)
+		if n == len(batch) {
+			for _, r := range batch {
+				r.done <- err
+			}
+			return
+		}
+		if n > 0 {
+			d.commit(batch[:n]) // the requests before batch[n] fit one txn
+		} else {
+			batch[0].done <- err // batch[0] fails even in an empty txn
+			n = 1
+		}
+		batch = batch[n:]
+	}
+}
+
+// update stages batch in one txn and commits it. On a staging error the txn is discarded, and applied is the
+// number of leading requests that staged before it.
+func (d *driver) update(batch []*writeReq) (applied int, err error) {
+	err = d.db.Update(func(txn *badger.Txn) error {
+		for _, r := range batch {
+			if e := d.apply(txn, r); e != nil {
+				return e
+			}
+			applied++
+		}
+		return nil
+	})
+	return applied, err
+}
+
+// apply stages one write in txn. When a CDC seam is wired, the write's change-log entry goes IN THE SAME txn
+// (the outbox property).
+func (d *driver) apply(txn *badger.Txn, r *writeReq) error {
+	op, err := OpPut, error(nil)
+	if r.del {
+		op, err = OpDelete, txn.Delete([]byte(r.key))
+	} else {
+		err = txn.Set([]byte(r.key), r.val)
+	}
+	if err != nil || d.cdc == nil {
+		return err
+	}
+	return d.cdc.OnWrite(txn, r.key, op)
 }
 
 func (d *driver) gcLoop(interval time.Duration) {
@@ -307,13 +330,31 @@ func (d *driver) List(ctx context.Context, prefix string) ([]string, error) {
 // without ever hiding a real key. The CDC seam writes under this prefix.
 const Reserved = "\x00"
 
-// DropPrefix wipes every key under prefix in one operation — the per-store teardown (O(store)). It is a
-// driver capability beyond the flat kvstore.KV port; the KV reconciler may type-assert for it.
+// dropConcurrency bounds the concurrent gateway Deletes of a seam-wired DropPrefix, so the gateway
+// group-commits them instead of paying one commit per key.
+const dropConcurrency = 64
+
+// DropPrefix wipes every key under prefix — the per-store teardown (O(store)). It is a driver capability
+// beyond the flat kvstore.KV port; the KV reconciler may type-assert for it. Badger's native DropPrefix
+// writes no tombstone, so with a CDC or Backup seam wired each key is deleted through the gateway instead:
+// the change feed (ADR-0068) and the incremental backup (ADR-0067) must both see the deletion.
 func (d *driver) DropPrefix(prefix string) error {
-	if err := d.db.DropPrefix([]byte(prefix)); err != nil {
-		return fault.Internalf("kvbadger.DropPrefix", "%v", err)
+	if d.cdc == nil && d.backup == nil {
+		if err := d.db.DropPrefix([]byte(prefix)); err != nil {
+			return fault.Internalf("kvbadger.DropPrefix", "%v", err)
+		}
+		return nil
 	}
-	return nil
+	keys, err := d.List(context.Background(), prefix)
+	if err != nil {
+		return err
+	}
+	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(dropConcurrency)
+	for _, k := range keys {
+		g.Go(func() error { return d.Delete(ctx, k) })
+	}
+	return g.Wait()
 }
 
 func (d *driver) Close() error {

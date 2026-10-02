@@ -297,25 +297,21 @@ func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	return nil
 }
 
+// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM.
 func (d *driver) Close() error {
 	d.mu.Lock()
-	var running []*instance
-	for _, inst := range d.instances {
+	var running []runtime.InstanceID
+	for id, inst := range d.instances {
 		if inst.state == runtime.StateRunning && inst.cmd != nil {
-			inst.stopping = true
-			running = append(running, inst)
+			running = append(running, id)
 		}
 	}
 	d.mu.Unlock()
-	for _, inst := range running {
-		_ = inst.cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-inst.done:
-		case <-time.After(stopGrace):
-			_ = inst.cmd.Process.Kill()
-			<-inst.done
-		}
+	var wg sync.WaitGroup
+	for _, id := range running {
+		wg.Go(func() { _ = d.Stop(context.Background(), id) })
 	}
+	wg.Wait()
 	return nil
 }
 

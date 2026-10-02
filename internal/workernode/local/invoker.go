@@ -3,11 +3,11 @@ package local
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"time"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/dataplane"
 )
 
@@ -36,11 +36,13 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(namespaceHeader, string(target.Namespace))
 
-	rec := httptest.NewRecorder()
+	rec := &cappedRecorder{ResponseRecorder: httptest.NewRecorder()}
 	p.dataPlane.ServeHTTP(rec, req)
+	if rec.over {
+		return nil, fault.PayloadTooLargef("workernode.local.invoke", "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
+	}
 	res := rec.Result()
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
+	body := rec.Body.Bytes()
 
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return body, nil
@@ -48,3 +50,21 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	// Propagate the target's failure (e.g. the shim's 422/500, or the activator's 503) verbatim.
 	return nil, &UpstreamError{Status: res.StatusCode, Body: body}
 }
+
+// cappedRecorder captures the target's response holding at most maxInvokeBytes of its body, the
+// local API's DoS guard applied to the output as to the input. Past the cap it drops the bytes
+// instead of failing the write: a failed write makes httputil.ReverseProxy abort the whole handler.
+type cappedRecorder struct {
+	*httptest.ResponseRecorder
+	over bool
+}
+
+func (c *cappedRecorder) Write(p []byte) (int, error) {
+	if c.over || c.Body.Len()+len(p) > maxInvokeBytes {
+		c.over = true
+		return len(p), nil
+	}
+	return c.ResponseRecorder.Write(p)
+}
+
+func (c *cappedRecorder) WriteString(s string) (int, error) { return c.Write([]byte(s)) }

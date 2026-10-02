@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,7 +34,8 @@ type FunctionRef struct {
 // Endpoints resolves a function's currently-ready upstream. P-M/scheduler provide the
 // production driver (from the provisioned replica set); tests inject a fake.
 type Endpoints interface {
-	// Upstream returns the ready upstream base URL for fn and whether one exists.
+	// Upstream returns the ready upstream URL for fn and whether one exists. The URL's path, if
+	// any, is where fn's worker serves it (a pool worker's /function/<name>, ADR-0046).
 	Upstream(ctx context.Context, fn FunctionRef) (upstream string, ready bool, err error)
 }
 
@@ -77,6 +79,13 @@ type Activator struct {
 	mu         sync.Mutex
 	inflight   map[FunctionRef]*activation // singleflight: one activation per cold fn
 	lastActive map[FunctionRef]time.Time   // last-activity tracker feeding idle reclaim
+	stopped    bool                        // Run has returned: no new activation starts
+
+	// life bounds every activation and is cancelled when Run returns: the platform that would start a woken worker
+	// stops with it, so a held request could never be served. drives counts the running activations.
+	life   context.Context
+	cancel context.CancelFunc
+	drives sync.WaitGroup
 }
 
 // newPooledTransport returns the data-plane's shared upstream transport: it reuses keep-alive
@@ -135,6 +144,7 @@ func New(d Deps) (*Activator, error) {
 	if d.Calls != nil {
 		transport = d.Calls.Wrap(transport)
 	}
+	life, cancel := context.WithCancel(context.Background())
 	return &Activator{
 		store:             d.Store,
 		endpoints:         d.Endpoints,
@@ -147,6 +157,8 @@ func New(d Deps) (*Activator, error) {
 		transport:         transport,
 		inflight:          map[FunctionRef]*activation{},
 		lastActive:        map[FunctionRef]time.Time{},
+		life:              life,
+		cancel:            cancel,
 	}, nil
 }
 
@@ -217,13 +229,21 @@ func (a *Activator) activate(ctx context.Context, fn FunctionRef) (string, error
 	a.mu.Lock()
 	act, existed := a.inflight[fn]
 	if !existed {
+		if a.stopped {
+			a.mu.Unlock()
+			return "", errStopped(fn)
+		}
 		act = &activation{done: make(chan struct{})}
 		a.inflight[fn] = act
+		a.drives.Add(1)
 	}
 	a.mu.Unlock()
 
 	if !existed {
-		go a.drive(fn, act)
+		go func() {
+			defer a.drives.Done()
+			a.drive(fn, act)
+		}()
 	}
 
 	select {
@@ -236,10 +256,10 @@ func (a *Activator) activate(ctx context.Context, fn FunctionRef) (string, error
 }
 
 // drive runs one shared activation: trigger the wake once, then poll Endpoints until a
-// ready upstream appears or ActivationTimeout elapses, and resolve all waiters. It uses
-// its own bounded context (not a request's) so the shared wake is not tied to one caller.
+// ready upstream appears, ActivationTimeout elapses or Run returns, and resolve all waiters. It
+// uses its own bounded context (not a request's) so the shared wake is not tied to one caller.
 func (a *Activator) drive(fn FunctionRef, act *activation) {
-	ctx, cancel := context.WithTimeout(context.Background(), a.activationTimeout)
+	ctx, cancel := context.WithTimeout(a.life, a.activationTimeout)
 	defer cancel()
 
 	if err := a.scaler.ScaleTo(ctx, fn, 1); err != nil {
@@ -262,8 +282,12 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 		}
 		select {
 		case <-ctx.Done():
-			a.resolve(fn, act, "", fault.Unavailablef("activator.activate",
-				"function %s/%s did not become ready within %s", fn.Namespace, fn.Name, a.activationTimeout))
+			var err error = fault.Unavailablef("activator.activate",
+				"function %s/%s did not become ready within %s", fn.Namespace, fn.Name, a.activationTimeout)
+			if a.life.Err() != nil {
+				err = errStopped(fn)
+			}
+			a.resolve(fn, act, "", err)
 			return
 		case <-ticker.C:
 		}
@@ -291,10 +315,30 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 		fault.WriteProblem(w, fault.Internalf("activator.forward", "invalid upstream %q", upstream))
 		return
 	}
+	if target.Path != "" {
+		r = rebase(r, target.Path)
+		target = &url.URL{Scheme: target.Scheme, Host: target.Host}
+	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
 	rp.ServeHTTP(w, r)
+}
+
+// rebase addresses r under base, the path an upstream serves its function at: r's root is base
+// itself, since a pool worker serves a member at /function/<name> and not at /function/<name>/
+// (ADR-0046), and any other path of r is appended to base.
+func rebase(r *http.Request, base string) *http.Request {
+	out := r.WithContext(r.Context())
+	u := *r.URL
+	if u.Path == "" || u.Path == "/" {
+		u.Path = base
+	} else {
+		u.Path = strings.TrimSuffix(base, "/") + u.Path
+	}
+	u.RawPath = ""
+	out.URL = &u
+	return out
 }
 
 // ReclaimIdle scales to zero every minReplicas==0 function whose last activity is older
@@ -347,8 +391,10 @@ func (a *Activator) seenAt(fn FunctionRef, now time.Time) (time.Time, bool) {
 	return last, true
 }
 
-// Run calls ReclaimIdle every ReclaimInterval until ctx is cancelled.
+// Run calls ReclaimIdle every ReclaimInterval until ctx is cancelled. On return it ends every
+// in-flight activation (its waiters get Unavailable) and waits for them.
 func (a *Activator) Run(ctx context.Context) error {
+	defer a.halt()
 	ticker := time.NewTicker(a.reclaimInterval)
 	defer ticker.Stop()
 	for {
@@ -361,4 +407,18 @@ func (a *Activator) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// errStopped is what a waiter gets once Run has returned.
+func errStopped(fn FunctionRef) error {
+	return fault.Unavailablef("activator.activate", "activator stopped before %s/%s became ready", fn.Namespace, fn.Name)
+}
+
+// halt stops new activations, cancels the running ones and waits for them to resolve their waiters.
+func (a *Activator) halt() {
+	a.mu.Lock()
+	a.stopped = true
+	a.mu.Unlock()
+	a.cancel()
+	a.drives.Wait()
 }

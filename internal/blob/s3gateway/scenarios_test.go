@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
 // lakehouseMeta seeds the canonical fixture (the cedar s3_test mirror): bucket
@@ -202,6 +203,44 @@ func TestScenarioOwnerMultipartWrite(t *testing.T) {
 	})
 	require.Error(t, err, "a bound non-owner cannot start a multipart write")
 	require.Equal(t, 403, statusCode(err))
+}
+
+// TestIssue30_MultipartTotalCappedAtUploadPart: maxUploadBytes bounds the bytes a multipart
+// upload buffers (ADR-0080), so the part that would take the upload past the cap is
+// rejected when it arrives, not at Complete after every part is held in memory.
+func TestIssue30_MultipartTotalCappedAtUploadPart(t *testing.T) {
+	const maxUpload = 1024
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket, func(d *s3gateway.Deps) {
+		d.MaxUploadBytes = maxUpload
+	})
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	key := ptrS("bronze/capped.parquet")
+
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: ptrS("lakehouse"), Key: key})
+	require.NoError(t, err)
+	upload := func(num int32, size int) (*awss3.UploadPartOutput, error) {
+		return owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: ptrS("lakehouse"), Key: key, UploadId: create.UploadId,
+			PartNumber: &num, Body: bytes.NewReader(bytes.Repeat([]byte("x"), size)),
+		})
+	}
+
+	_, err = upload(1, maxUpload)
+	require.NoError(t, err, "a part up to the cap is accepted")
+	first, err := upload(1, maxUpload)
+	require.NoError(t, err, "re-sending a part replaces it, it does not add to the total")
+	_, err = upload(2, 1)
+	require.Error(t, err, "a part past the upload's cap must be rejected")
+	require.Equal(t, 400, statusCode(err), "EntityTooLarge")
+
+	num := int32(1)
+	_, err = owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+		Bucket: ptrS("lakehouse"), Key: key, UploadId: create.UploadId,
+		MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{ETag: first.ETag, PartNumber: &num}}},
+	})
+	require.NoError(t, err, "the upload holds only the accepted part, within the cap")
+	require.Len(t, mustGet(t, g, "default", "lakehouse", "bronze/capped.parquet"), maxUpload)
 }
 
 // mustGet reads a substrate key directly (bypassing the gateway) for assertions.

@@ -580,7 +580,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 		return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(imageFor)}, mgr.Close, nil
 	}
 
-	// process mode (default, cross-platform): run the embedded Node shim on the process driver.
+	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver.
 	opts := []funcd.Option{funcd.WithRuntime(process.New())}
 	node := envOr("FUNCD_NODE", "")
 	if node == "" {
@@ -596,7 +596,12 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 	if werr := os.WriteFile(shimPath, shimnode.Shim, 0o600); werr != nil {
 		return nil, noopClose, fmt.Errorf("extract runtime shim to %s: %w", shimPath, werr)
 	}
-	opts = append(opts, funcd.WithRuntimeShim(node, shimPath))
+	// The node pool host (ADR-0046): node functions that name one spec.pooling.worker share it.
+	poolPath := filepath.Join(cfg.Storage.DataDir, "pool.mjs")
+	if werr := os.WriteFile(poolPath, shimnode.Pool, 0o600); werr != nil {
+		return nil, noopClose, fmt.Errorf("extract pool shim to %s: %w", poolPath, werr)
+	}
+	opts = append(opts, funcd.WithRuntimeShim(node, shimPath), funcd.WithPoolShim(node, poolPath))
 
 	// Optional second curated language — the Python shim (ADR-0049). If a python3 is present,
 	// extract the embedded (stdlib-only, no pip) shim package and register it for the `python*`

@@ -33,6 +33,7 @@ const (
 	cdcCursorKey    = Reserved + "cdc_cursor/default" // the single-consumer durable cursor
 	cdcSeqBandwidth = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
 	cdcPollInterval = 200 * time.Millisecond          // tail wake cadence when the log is drained
+	cdcRetryDelay   = time.Second                     // RunCDC's wait before re-tailing after a failed pass
 )
 
 // CDCConfig configures the opt-in change-feed (ADR-0068). Subject is the bus subject to publish to (the
@@ -83,8 +84,9 @@ func (c *cdc) OnWrite(txn *badger.Txn, key string, op Op) error {
 	return txn.Set(cdcLogKey(seq), rec)
 }
 
-// Tail drains the outbox to the bus from the durable cursor until ctx is cancelled, reclaiming delivered
-// entries on each pass (retention). It resumes from the persisted cursor on restart — zero loss.
+// Tail drains the outbox to the bus from the durable cursor until ctx is cancelled or a pass fails,
+// reclaiming delivered entries on each pass (retention). It resumes from the persisted cursor on restart —
+// zero loss.
 func (c *cdc) Tail(ctx context.Context) error {
 	for {
 		n, err := c.drain(ctx)
@@ -270,13 +272,23 @@ func (c *cdc) release() {
 }
 
 // RunCDC drives the tailer until ctx is cancelled (the daemon starts it in a goroutine when CDC is
-// enabled). A nil/non-*cdc c is a no-op.
+// enabled). A failed pass (e.g. a transient sink publish error) is logged and the tailer restarts from the
+// durable cursor after cdcRetryDelay, so delivery resumes with no loss. A nil/non-*cdc c is a no-op.
 func RunCDC(ctx context.Context, c CDC, logger *slog.Logger) {
 	cc, ok := c.(*cdc)
 	if !ok || cc == nil {
 		return
 	}
-	if err := cc.Tail(ctx); err != nil && ctx.Err() == nil {
-		logger.Error("kv cdc tail failed", "err", err)
+	for {
+		err := cc.Tail(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		logger.Error("kv cdc tail failed; retrying from the durable cursor", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(cdcRetryDelay):
+		}
 	}
 }

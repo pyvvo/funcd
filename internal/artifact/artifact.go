@@ -15,16 +15,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/gofrs/flock"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/credentials"
@@ -98,6 +103,17 @@ func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descripto
 	return ocispec.Descriptor{}, false
 }
 
+// reproducible returns opts with the manifest creation time fixed to the bundle's zero time. oras stamps the wall clock
+// when none is given, so identical content pushed in different seconds got different digests (#237); a fixed value
+// keeps ADR-0089's same tree, same digest at the manifest too.
+func reproducible(opts oras.PackManifestOptions) oras.PackManifestOptions {
+	annotations := make(map[string]string, len(opts.ManifestAnnotations)+1)
+	maps.Copy(annotations, opts.ManifestAnnotations)
+	annotations[ocispec.AnnotationCreated] = zeroTime.Format(time.RFC3339)
+	opts.ManifestAnnotations = annotations
+	return opts
+}
+
 // Push packages file as the §1 OCI artifact and pushes it to ref's target (a local OCI
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
 // rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
@@ -144,7 +160,7 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 		}
 		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, reproducible(opts))
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}
@@ -386,11 +402,11 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 		if merr := os.MkdirAll(dir, 0o750); merr != nil {
 			return nil, "", fault.Wrapf(merr, fault.Internal, op, "create layout dir")
 		}
-		store, serr := oci.New(dir)
-		if serr != nil {
+		var store *oci.Store
+		if serr := withLayout(dir, func(s *oci.Store) error { store = s; return nil }); serr != nil {
 			return nil, "", fault.Wrapf(serr, fault.Internal, op, "open OCI layout %q", dir)
 		}
-		return store, tag, nil
+		return &layoutTarget{ReadOnlyTarget: store, dir: dir}, tag, nil
 	}
 	repo, rerr := remote.NewRepository(ref)
 	if rerr != nil {
@@ -402,19 +418,63 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	return repo, repo.Reference.Reference, nil
 }
 
-// parseLocalRef splits oci-layout://<dir>[:<tag>] into its directory + optional tag. A
-// tag is the suffix after the last ':' that contains no path separator.
+// layoutTarget is a local OCI layout. oras-go's oci.Store reads index.json once, when it opens, and rewrites the whole
+// file on every manifest push and tag, with locking that holds only inside one process. So reads use the store
+// resolveTarget opened, and each write opens the store again under the layout lock: parallel pushes into one layout
+// then add to the index.json the other wrote instead of overwriting it (issue #97).
+type layoutTarget struct {
+	oras.ReadOnlyTarget
+	dir string
+}
+
+func (l *layoutTarget) Push(ctx context.Context, expected ocispec.Descriptor, r io.Reader) error {
+	return withLayout(l.dir, func(s *oci.Store) error { return s.Push(ctx, expected, r) })
+}
+
+func (l *layoutTarget) Tag(ctx context.Context, desc ocispec.Descriptor, reference string) error {
+	return withLayout(l.dir, func(s *oci.Store) error { return s.Tag(ctx, desc, reference) })
+}
+
+// withLayout opens the OCI store at dir and runs fn while it holds an exclusive lock on the layout directory, so no
+// other process rewrites index.json between the store reading it and fn writing it. O_RDONLY without O_CREATE locks
+// the directory itself, so no lock file lands in the layout.
+func withLayout(dir string, fn func(*oci.Store) error) error {
+	const op = "artifact.withLayout"
+	lock := flock.New(dir, flock.SetFlag(os.O_RDONLY))
+	if err := lock.Lock(); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "lock OCI layout %q", dir)
+	}
+	defer func() { _ = lock.Unlock() }()
+	store, err := oci.New(dir)
+	if err != nil {
+		return err
+	}
+	return fn(store)
+}
+
+// parseLocalRef splits oci-layout://<dir>[:<tag>][@<digest>] into its directory + optional reference. A
+// tag is the suffix after the last ':' that contains no path separator; a digest wins over a tag, as in a
+// registry ref.
 func parseLocalRef(ref string) (dir, tag string, ok bool) {
 	if !strings.HasPrefix(ref, ociLayoutScheme) {
 		return "", "", false
 	}
 	rest := strings.TrimPrefix(ref, ociLayoutScheme)
+	if i := strings.LastIndex(rest, "@"); i >= 0 && isDigest(rest[i+1:]) {
+		dir, _, _ = parseLocalRef(ociLayoutScheme + rest[:i])
+		return dir, rest[i+1:], true
+	}
 	if i := strings.LastIndex(rest, ":"); i >= 0 {
 		if cand := rest[i+1:]; cand != "" && !strings.ContainsAny(cand, `/\`) {
 			return rest[:i], cand, true
 		}
 	}
 	return rest, "", true
+}
+
+// isDigest reports whether a ref's reference part is a digest rather than a tag.
+func isDigest(reference string) bool {
+	return registry.Reference{Reference: reference}.ValidateReferenceAsDigest() == nil
 }
 
 // OrasMaterializer is a DRIVER of ADR-0030's internal/function.Materializer: it pulls a

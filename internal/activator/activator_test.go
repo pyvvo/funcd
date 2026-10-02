@@ -131,6 +131,24 @@ func TestScenarioWarmPassthrough(t *testing.T) {
 	require.Equal(t, 0, sc.count(), "warm path must not call ScaleTo")
 }
 
+// An upstream with a path (a pool worker's /function/<name>, ADR-0046) serves the function's root at that path itself,
+// and a sub-path below it.
+func TestForwardUnderUpstreamPath(t *testing.T) {
+	t.Parallel()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.URL.Path)
+	}))
+	t.Cleanup(backend.Close)
+	a := newActivator(t, activator.Deps{Endpoints: &fakeEndpoints{upstream: backend.URL + "/function/svc", ready: true}, Scaler: &fakeScaler{}})
+	fn := activator.FunctionRef{Namespace: "default", Name: "svc"}
+
+	for path, want := range map[string]string{"/": "/function/svc", "/a/b": "/function/svc/a/b"} {
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, activator.WithFunction(httptest.NewRequest(http.MethodPost, path, nil), fn))
+		require.Equal(t, want, rec.Body.String(), "request path %s", path)
+	}
+}
+
 // ADR-0143: with Calls set, a proxied call counts against its upstream until its answer ends.
 func TestProxiedCallIsCountedWhileInFlight(t *testing.T) {
 	t.Parallel()
@@ -259,6 +277,91 @@ func TestScenarioActivationTimeout(t *testing.T) {
 	rec2 := serve(a, fn)
 	require.Equal(t, http.StatusServiceUnavailable, rec2.Code)
 	require.Equal(t, 2, sc.count(), "activation was cleared — second request re-activates")
+}
+
+// When Run stops, the platform that would start a woken worker is stopping too, so a held cold request can never be
+// served: Run releases it with a 503 instead of letting it wait out its activation timeout, which kept the data-plane
+// drain, and so shutdown, waiting its full bound; a cold request after Run returned gets a 503 without a wake (issue
+// #144).
+func TestIssue144_RunStopReleasesHeldColdRequest(t *testing.T) {
+	t.Parallel()
+	woke := make(chan struct{})
+	var once sync.Once
+	sc := &fakeScaler{hook: func(activator.FunctionRef, int) { once.Do(func() { close(woke) }) }}
+	a := newActivator(t, activator.Deps{
+		Endpoints:         &fakeEndpoints{}, // never ready
+		Scaler:            sc,
+		ActivationTimeout: time.Minute,
+		PollInterval:      5 * time.Millisecond,
+		ReclaimInterval:   time.Hour,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(ctx) }()
+
+	fn := activator.FunctionRef{Namespace: "default", Name: "cold"}
+	served := make(chan *httptest.ResponseRecorder, 1)
+	go func() { served <- serve(a, fn) }()
+	<-woke
+	cancel()
+	select {
+	case err := <-ran:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return when the platform stopped: shutdown waits out the held request's activation timeout")
+	}
+	select {
+	case rec := <-served:
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		require.Contains(t, rec.Body.String(), "urn:funcd:problem:unavailable")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held cold request was not released when Run stopped: it waits out its activation timeout")
+	}
+
+	rec := serve(a, fn)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "a cold request after Run returned gets a 503")
+	require.Equal(t, 1, sc.count(), "a cold request after Run returned must not wake the function")
+}
+
+// No activation goroutine outlives Run: Run returns only once a running activation has ended (issue #144).
+func TestIssue144_RunWaitsForRunningActivation(t *testing.T) {
+	t.Parallel()
+	woke, release := make(chan struct{}), make(chan struct{})
+	sc := &fakeScaler{hook: func(activator.FunctionRef, int) {
+		close(woke)
+		<-release
+	}}
+	a := newActivator(t, activator.Deps{
+		Endpoints:         &fakeEndpoints{}, // never ready
+		Scaler:            sc,
+		ActivationTimeout: time.Minute,
+		PollInterval:      5 * time.Millisecond,
+		ReclaimInterval:   time.Hour,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan error, 1)
+	go func() { ran <- a.Run(ctx) }()
+
+	served := make(chan *httptest.ResponseRecorder, 1)
+	go func() { served <- serve(a, activator.FunctionRef{Namespace: "default", Name: "cold"}) }()
+	<-woke
+	cancel()
+	require.Never(t, func() bool { return len(ran) > 0 }, 50*time.Millisecond, 5*time.Millisecond,
+		"Run returned while an activation was still running: its goroutine outlives Run")
+
+	close(release)
+	select {
+	case err := <-ran:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return once the running activation could end")
+	}
+	select {
+	case rec := <-served:
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held cold request was not released when Run stopped")
+	}
 }
 
 // scenario: idle-reclaim — a minReplicas==0 function idle past IdleTimeout is scaled to
