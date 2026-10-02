@@ -50,7 +50,8 @@ func (FileMaterializer) Materialize(_ context.Context, fn *v1.Function) (string,
 }
 
 // PlatformResolver lists the platforms an artifact digest provides (ADR-0145): an OCI image index's, an annotated
-// manifest's one, or nil for an artifact that runs anywhere. The reconciler gates placement on it.
+// manifest's one, or nil for an artifact that runs anywhere. An artifact that runs nowhere is an error matching
+// scheduler.ErrNoMatchingPlatform. The reconciler gates placement on it.
 type PlatformResolver interface {
 	Platforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error)
 }

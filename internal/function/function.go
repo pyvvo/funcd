@@ -1570,12 +1570,16 @@ func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest
 	return err
 }
 
-// placementMessage is the scheduler's own message for a refused placement ("artifact provides [...]; node ... runs
-// ..."), without the operation prefix.
+// placementMessage is the innermost message of a refused placement, without the operation prefixes: the
+// scheduler's ("artifact provides [...]; node ... runs ...") or the resolver's (an index that names no platform).
 func placementMessage(err error) string {
+	msg := err.Error()
 	var fe *fault.Error
-	if errors.As(err, &fe) && fe.Msg != "" {
-		return fe.Msg
+	for errors.As(err, &fe) {
+		if fe.Msg != "" {
+			msg = fe.Msg
+		}
+		err = fe.Err
 	}
-	return err.Error()
+	return msg
 }
