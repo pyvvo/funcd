@@ -212,6 +212,51 @@ func TestIssue110_HeadObjectDoesNotReadObject(t *testing.T) {
 	require.Equal(t, 404, statusCode(err))
 }
 
+// Issue #112: a ranged GET reports the complete object length in Content-Range, honours
+// suffix ranges, and answers 416 for a range that starts at or past the end — on both the
+// RangeReader path and the full-Get fallback.
+func TestIssue112_RangedGetReportsSizeOr416(t *testing.T) {
+	drivers := map[string]func(t *testing.T) blob.Bucket{
+		"range-reader": memBucket,
+		"fallback":     func(t *testing.T) blob.Bucket { return noRangeBucket{inner: memBucket(t)} },
+	}
+	cases := []struct {
+		rng, contentRange, body string
+		status                  int
+	}{
+		{rng: "bytes=2-5", contentRange: "bytes 2-5/10", body: "2345"},
+		{rng: "bytes=5-100", contentRange: "bytes 5-9/10", body: "56789"},
+		{rng: "bytes=7-", contentRange: "bytes 7-9/10", body: "789"},
+		{rng: "bytes=-3", contentRange: "bytes 7-9/10", body: "789"},
+		{rng: "bytes=20-30", status: 416},
+		{rng: "bytes=10-", status: 416},
+	}
+	for name, makeBucket := range drivers {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeBucket)
+			g.seed(t, "default", "lakehouse", "gold/q.parquet", []byte("0123456789"))
+			c := g.client(t, "default", "analytics")
+			for _, tc := range cases {
+				out, err := c.GetObject(context.Background(), &awss3.GetObjectInput{
+					Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet"), Range: ptrS(tc.rng),
+				})
+				if tc.status != 0 {
+					require.Error(t, err, "Range %s", tc.rng)
+					require.Equal(t, tc.status, statusCode(err), "Range %s", tc.rng)
+					continue
+				}
+				require.NoError(t, err, "Range %s", tc.rng)
+				body, rerr := io.ReadAll(out.Body)
+				_ = out.Body.Close()
+				require.NoError(t, rerr)
+				require.Equal(t, tc.contentRange, aws.ToString(out.ContentRange), "Range %s", tc.rng)
+				require.Equal(t, tc.body, string(body), "Range %s", tc.rng)
+				require.Equal(t, int64(len(tc.body)), aws.ToInt64(out.ContentLength), "Range %s", tc.rng)
+			}
+		})
+	}
+}
+
 // scenario: owner multipart write (ADR-0080) — the owner drives an explicit multipart
 // upload (Create → UploadPart×2 → Complete) under the s3::write PEP; the buffered parts
 // assemble into a single blob.Put. A non-owner's Create is denied (403).

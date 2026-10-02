@@ -3,6 +3,7 @@ package s3gateway
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -128,54 +129,79 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 	}
 	key := blobKey(prefix, object)
 
-	offset, length, ranged, rerr := parseRange(deref(in.Range))
-	if rerr != nil {
-		return nil, s3err.GetAPIError(s3err.ErrInvalidRange)
-	}
-
 	var data []byte
-	if ranged {
-		data, err = b.getRange(ctx, sub, key, offset, length)
-	} else {
-		data, err = sub.Get(ctx, key)
+	var contentRange *string
+	if rng := deref(in.Range); rng != "" {
+		data, contentRange, err = getRange(ctx, sub, key, rng)
+	} else if data, err = sub.Get(ctx, key); err != nil {
+		err = mapBlobErr(err)
 	}
-	if err != nil {
-		return nil, mapBlobErr(err)
-	}
-
-	out := &awss3.GetObjectOutput{
-		Body:          io.NopCloser(bytes.NewReader(data)),
-		ContentLength: ptr(int64(len(data))),
-		LastModified:  ptr(time.Now().UTC()),
-		AcceptRanges:  ptr("bytes"),
-		ETag:          ptr(etag(data)),
-	}
-	if ranged {
-		// total length is needed for a correct Content-Range; re-derive from a Head-less
-		// full read only when necessary is avoided — report the served slice bounds.
-		end := offset + int64(len(data)) - 1
-		out.ContentRange = ptr("bytes " + strconv.FormatInt(offset, 10) + "-" + strconv.FormatInt(end, 10) + "/*")
-	}
-	return out, nil
-}
-
-// getRange uses the optional blob.RangeReader capability when the driver implements
-// it, else falls back to a full Get + slice (ADR-0080 rangereader-fallback).
-func (b *be) getRange(ctx context.Context, sub blob.Bucket, key string, offset, length int64) ([]byte, error) {
-	if rr, ok := sub.(blob.RangeReader); ok {
-		return rr.GetRange(ctx, key, offset, length)
-	}
-	full, err := sub.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if offset >= int64(len(full)) {
-		return nil, nil
+
+	return &awss3.GetObjectOutput{
+		Body:          io.NopCloser(bytes.NewReader(data)),
+		ContentLength: ptr(int64(len(data))),
+		ContentRange:  contentRange,
+		LastModified:  ptr(time.Now().UTC()),
+		AcceptRanges:  ptr("bytes"),
+		ETag:          ptr(etag(data)),
+	}, nil
+}
+
+// getRange serves a Range header the way S3 does (RFC 9110 §14): the object size bounds
+// the range, a range starting at or past the end is a 416, and Content-Range carries the
+// complete length. It reads only the range through the optional blob.RangeReader when the
+// driver has one, else a full Get + slice (ADR-0080 rangereader-fallback). Errors are S3 errors.
+func getRange(ctx context.Context, sub blob.Bucket, key, header string) ([]byte, *string, error) {
+	rr, ranger := sub.(blob.RangeReader)
+	var full []byte
+	var size int64
+	var err error
+	if ranger {
+		size, err = objectSize(ctx, sub, key)
+	} else if full, err = sub.Get(ctx, key); err == nil {
+		size = int64(len(full))
 	}
-	if length < 0 || offset+length > int64(len(full)) {
-		return full[offset:], nil
+	if err != nil {
+		return nil, nil, mapBlobErr(err)
 	}
-	return full[offset : offset+length], nil
+
+	offset, length, valid, err := backend.ParseObjectRange(size, header)
+	if err != nil {
+		return nil, nil, err
+	}
+	var data []byte
+	switch {
+	case !ranger:
+		data = full[offset : offset+length]
+	case valid:
+		data, err = rr.GetRange(ctx, key, offset, length)
+	default:
+		data, err = sub.Get(ctx, key)
+	}
+	if err != nil {
+		return nil, nil, mapBlobErr(err)
+	}
+	if !valid {
+		return data, nil, nil
+	}
+	return data, ptr(fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, size)), nil
+}
+
+// objectSize reads an object's size through the port's List, since blob.Bucket has no Stat.
+func objectSize(ctx context.Context, sub blob.Bucket, key string) (int64, error) {
+	items, err := sub.List(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if it.Key == key {
+			return it.Size, nil
+		}
+	}
+	return 0, fault.NotFoundf("s3gateway.GetObject", "%q not found", key)
 }
 
 // HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe answered from the object's
