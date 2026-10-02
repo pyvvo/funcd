@@ -139,6 +139,10 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 
 // A Create rejected because the instance is live (Created or Running) leaves no driver-created log file behind.
 func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	ctx := context.Background()
+	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", Name: "live", Command: []string{"sleep", "30"}}
 	logs := func() []string {
@@ -166,6 +170,10 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 // Close deletes the driver-owned log and port files of every instance it holds, as Remove does, so a daemon restart
 // leaves no pair per live worker in the temp dir; a log the caller set through LogPath stays.
 func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	ctx := context.Background()
+	rt := process.New()
 	callerLog := filepath.Join(t.TempDir(), "caller.log")
 	specs := []runtime.WorkerSpec{
 		{Namespace: "default", Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
