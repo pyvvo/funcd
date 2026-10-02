@@ -1,9 +1,14 @@
 package config_test
 
 import (
+	_ "embed"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -220,6 +225,35 @@ func TestIssue343_WorkflowPayloadLimitDefault256KiB(t *testing.T) {
 	c, err = config.Load("", config.Flags{})
 	require.NoError(t, err)
 	require.Equal(t, int64(1<<20), c.Workflow.PayloadLimit, "an explicit cap overrides the default")
+}
+
+//go:embed config.go
+var configSource string
+
+// The Workflow block's doc describes Retention and PayloadLimit as enforced, not as reserved for later gates.
+func TestIssue345_WorkflowDocSaysRetentionAndPayloadLimitEnforced(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "config.go", configSource, parser.ParseComments)
+	require.NoError(t, err)
+	var doc string
+	ast.Inspect(f, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name.Name != "Config" {
+			return true
+		}
+		for _, fld := range ts.Type.(*ast.StructType).Fields.List {
+			if len(fld.Names) == 1 && fld.Names[0].Name == "Workflow" {
+				doc = fld.Doc.Text()
+			}
+		}
+		return false
+	})
+	require.NotEmpty(t, doc, "Config.Workflow carries a doc comment")
+	for _, key := range []string{"Retention", "PayloadLimit"} {
+		require.Contains(t, doc, key, "the doc names what %s does", key)
+	}
+	for _, stale := range []string{"not yet enforced", "reserved"} {
+		require.NotContains(t, strings.ToLower(doc), stale, "Retention and PayloadLimit are enforced (ADR-0094)")
+	}
 }
 
 // scenario: unknown-key-rejected — a misspelled key ⇒ strict-decode fault.Invalid.

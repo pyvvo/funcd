@@ -206,8 +206,9 @@ type config struct {
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
 	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
-	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core;
-	// retention + payloadLimit are declared here but enforced by later gates (run GC / admission).
+	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core; retention drives
+	// the terminal-run sweep (runWorkflowRetention) and payloadLimit bounds run inputs and step outputs
+	// (the engine and the WorkflowRun admission).
 	workflowDataDir      string
 	workflowStepTimeout  time.Duration
 	workflowRetention    time.Duration

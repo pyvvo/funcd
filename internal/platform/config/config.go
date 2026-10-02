@@ -199,8 +199,10 @@ type Config struct {
 
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
 	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
-	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention (run GC horizon) and
-	// PayloadLimit (max run input bytes) are reserved for the run-GC / admission gates, not yet enforced.
+	// memory). DefaultStepTimeout + DefaultRetry feed the engine core. Retention is the terminal-run GC
+	// horizon: a periodic sweep reclaims each closed run (engine record and WorkflowRun object) older than
+	// it; 0 ⇒ no sweep. PayloadLimit caps the bytes of a run input (at WorkflowRun admission and run start)
+	// and of each step output; 0 ⇒ unbounded.
 	Workflow struct {
 		DefaultStepTimeout string `json:"defaultStepTimeout,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_STEP_TIMEOUT"`
 		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY"`
