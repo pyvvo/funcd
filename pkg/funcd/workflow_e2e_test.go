@@ -311,3 +311,38 @@ func TestScenarioSubworkflow(t *testing.T) {
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "sub"), "the sub-workflow step ran the child inline")
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "sink"), "sink ran with the child's output (doubled=8) flowed across the boundary")
 }
+
+// Issue #28: a step is bounded by its own timeout (here 60s), not by a fixed 30s cap on the platform's
+// step-dispatch HTTP client. The handler answers after 32s, past the old cap and well within the step's.
+func TestIssue28_StepLongerThan30sHonorsStepTimeout(t *testing.T) {
+	c, _ := shimPlatformOCI(t)
+	src, layout := t.TempDir(), t.TempDir()
+	writeStep(t, src, "slow", `export const handle = async (ctx, e) => { await new Promise((r) => setTimeout(r, 32000)); return { done: true }; };`)
+	img := pushStepImage(t, layout, src, "slow")
+
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "long", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
+			Steps:   []v1.WorkflowStep{{Name: "slow", Function: &v1.FunctionStep{Image: img, Timeout: 60 * time.Second}}},
+		},
+	}
+	_, err := c.Apply(context.Background(), wf)
+	require.NoError(t, err)
+	waitMaterializedReady(t, c, "long-slow")
+
+	run := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "long-1", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "long", Input: json.RawMessage(`{}`)},
+	}
+	_, err = c.Apply(context.Background(), run)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		p := getRun(t, c, "long-1").Status.Phase
+		return p == "Succeeded" || p == "Failed"
+	}, 60*time.Second, 200*time.Millisecond, "the run reaches a terminal phase")
+	got := getRun(t, c, "long-1")
+	require.Equal(t, "Succeeded", string(got.Status.Phase), "the 32s step finishes within its 60s timeout; steps: %+v", got.Status.Steps)
+}

@@ -800,8 +800,10 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
 		Grant:     storeGranter{store: c.store},
-		Client:    &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second},
-		Logger:    p.logger,
+		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
+		// (ADR-0094), and a client-wide cap would cut a longer step short.
+		Client: &http.Client{Transport: calls.Wrap(nil)},
+		Logger: p.logger,
 	})
 	if derr != nil {
 		return fault.Wrapf(derr, fault.KindOf(derr), op, "build workflow dispatcher")
