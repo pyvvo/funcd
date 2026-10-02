@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // ETag is an S3 content fingerprint, not a security primitive
 	"encoding/hex"
-	"io"
 	"sort"
 	"strconv"
 	"sync"
@@ -231,5 +230,3 @@ func etag(data []byte) string {
 	sum := md5.Sum(data) //nolint:gosec // content fingerprint, not security
 	return `"` + hex.EncodeToString(sum[:]) + `"`
 }
-
-var _ = io.EOF

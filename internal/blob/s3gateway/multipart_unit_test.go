@@ -1,6 +1,13 @@
 package s3gateway
 
 import (
+	"embed"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,4 +52,51 @@ func TestIssue30_AbandonedMultipartUploadExpires(t *testing.T) {
 	require.True(t, ok, "a part within the window refreshes it, even when the upload was created before it")
 	_, ok = m.parts(idle)
 	require.True(t, ok, "an upload created within the window is kept")
+}
+
+// packageSources is read through the embed so a `go test -overlay` revert check sees the overlaid source.
+//
+//go:embed *.go
+var packageSources embed.FS
+
+// TestIssue381_NoBlankVarKeepsImportAlive: no package source holds a `var _ = pkg.Name`
+// whose only job is to keep an otherwise unused import compiling.
+func TestIssue381_NoBlankVarKeepsImportAlive(t *testing.T) {
+	t.Parallel()
+	files, err := fs.Glob(packageSources, "*.go")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := packageSources.ReadFile(name)
+		require.NoError(t, err)
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		require.NoError(t, err)
+		imported := map[string]bool{}
+		for _, imp := range f.Imports {
+			local := path.Base(strings.Trim(imp.Path.Value, `"`))
+			if imp.Name != nil {
+				local = imp.Name.Name
+			}
+			imported[local] = true
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			spec, ok := n.(*ast.ValueSpec)
+			if !ok || spec.Type != nil || len(spec.Names) != 1 || spec.Names[0].Name != "_" {
+				return true
+			}
+			for _, v := range spec.Values {
+				sel, ok := v.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if pkg, ok := sel.X.(*ast.Ident); ok && imported[pkg.Name] {
+					t.Errorf("%s: blank var keeps import %q alive", fset.Position(spec.Pos()), pkg.Name)
+				}
+			}
+			return true
+		})
+	}
 }
