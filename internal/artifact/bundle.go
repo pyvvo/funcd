@@ -67,8 +67,9 @@ var zeroTime = time.Unix(0, 0).UTC()
 
 // PackBundle writes dir as a DETERMINISTIC tar+gzip stream: entries are sorted by path and
 // mtime/uid/gid/uname/gname are zeroed, so two identical trees produce byte-identical output
-// (and thus an identical digest — ADR-0035). Only regular files and directories are packed;
-// entry must name an existing regular file relative to dir (the handler) — else fault.Invalid.
+// (and thus an identical digest — ADR-0035). Only regular files and directories are packed: any other
+// entry (a symlink, a device) is fault.Invalid, never silently left out. entry must name an existing
+// regular file relative to dir (the handler) — else fault.Invalid.
 func PackBundle(dir, entry string) (data []byte, err error) {
 	const op = "artifact.PackBundle"
 	info, serr := os.Stat(dir)
@@ -82,11 +83,11 @@ func PackBundle(dir, entry string) (data []byte, err error) {
 }
 
 // packDir is the deterministic packer behind PackBundle and PushSite: the same sorted, zeroed
-// tar+gzip stream. A non-empty entry must be one of the regular files it packs — checked against the
-// walk itself, so a symlinked entry (or one under a symlinked dir), which the walk skips, is refused
-// rather than recorded and left out. A site bundle (ADR-0139) passes "": its index is a
-// reconcile-time spec.index. dir must already be a directory; a symlinked root is resolved first,
-// because the walk does not descend into one and would pack nothing.
+// tar+gzip stream. Any path that is neither a regular file nor a directory is refused by name, so a
+// symlinked file or dir is never dropped from the layer without a word (the untar side would refuse it
+// anyway). A non-empty entry must be one of the regular files it packs. A site bundle (ADR-0139)
+// passes "": its index is a reconcile-time spec.index. dir must already be a directory; a symlinked root is resolved
+// first, because the walk does not descend into one and would pack nothing.
 func packDir(op, dir, entry string) (data []byte, err error) {
 	root, rerr := filepath.EvalSymlinks(dir)
 	if rerr != nil {
@@ -115,18 +116,18 @@ func packDir(op, dir, entry string) (data []byte, err error) {
 			return ferr
 		}
 		if !fi.Mode().IsRegular() && !fi.IsDir() {
-			return nil // skip symlinks/devices/etc. — a bundle is plain code + data
+			return fault.Invalidf(op, "bundle %q contains %q, which is not a regular file or directory (symlinks are not packed)", dir, filepath.ToSlash(rel))
 		}
 		nodes = append(nodes, node{rel: filepath.ToSlash(rel), info: fi})
 		return nil
 	})
 	if walkErr != nil {
-		return nil, fault.Wrapf(walkErr, fault.Internal, op, "walk bundle %q", dir)
+		return nil, fault.Wrapf(walkErr, fault.KindOf(walkErr), op, "walk bundle %q", dir)
 	}
 	if entry != "" {
 		want := filepath.ToSlash(filepath.Clean(entry))
 		if !slices.ContainsFunc(nodes, func(n node) bool { return n.rel == want && n.info.Mode().IsRegular() }) {
-			return nil, fault.Invalidf(op, "entry %q is not a regular file in bundle %q (symlinks are not packed)", entry, dir)
+			return nil, fault.Invalidf(op, "entry %q is not a regular file in bundle %q", entry, dir)
 		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].rel < nodes[j].rel })

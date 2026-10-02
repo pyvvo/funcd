@@ -359,3 +359,43 @@ func TestIssue155_SymlinkedEntryRefused(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "an entry reached through a symlinked dir is not packed, so it is refused")
 	})
 }
+
+// Issue 363: the packer skipped every symlink other than the entry without an error, so a bundle
+// whose vendored dependency is a symlink was pushed without it. The push must refuse it, naming the path.
+func TestIssue363_SymlinkedFileRefusedNotDropped(t *testing.T) {
+	t.Parallel()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "dep.py"), []byte("Y = 2\n"), 0o600))
+
+	t.Run("symlinked file", func(t *testing.T) {
+		t.Parallel()
+		dir, entry := goodBundle(t)
+		require.NoError(t, os.Symlink(filepath.Join(outside, "dep.py"), filepath.Join(dir, "vendored", "pkg", "dep.py")))
+
+		_, err := artifact.PackBundle(dir, entry)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a symlinked file is refused, not left out of the layer")
+		require.ErrorContains(t, err, "vendored/pkg/dep.py")
+		_, err = artifact.PushBundle(context.Background(), layoutRef(t, "v1"), dir, entry, "", "")
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "push fails instead of shipping a bundle without the file")
+	})
+
+	t.Run("symlinked dir", func(t *testing.T) {
+		t.Parallel()
+		dir, entry := goodBundle(t)
+		require.NoError(t, os.Symlink(outside, filepath.Join(dir, "vendor")))
+
+		_, err := artifact.PackBundle(dir, entry)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a symlinked dir is refused, not left out of the layer")
+		require.ErrorContains(t, err, "vendor")
+	})
+
+	t.Run("site", func(t *testing.T) {
+		t.Parallel()
+		dir := siteDir(t)
+		require.NoError(t, os.Symlink(filepath.Join(outside, "dep.py"), filepath.Join(dir, "img", "dep.py")))
+
+		_, err := artifact.PushSite(context.Background(), layoutRef(t, "v1"), dir)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a site push refuses a symlink too")
+		require.ErrorContains(t, err, "img/dep.py")
+	})
+}
