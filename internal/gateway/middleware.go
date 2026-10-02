@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -28,11 +29,16 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 type requestIDKey struct{}
 
 // Recover is a middleware that turns a handler panic into an RFC 9457
-// problem+json 500 instead of crashing the connection.
+// problem+json 500 instead of crashing the connection. http.ErrAbortHandler is
+// re-panicked: it is net/http's signal to abort the connection (e.g. a proxied
+// stream whose upstream died mid-body), so the client sees the truncation.
 func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(rec)
+				}
 				fault.WriteProblem(w, fault.Internalf("gateway.Recover", "handler panic: %v", rec))
 			}
 		}()
