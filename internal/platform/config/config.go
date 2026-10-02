@@ -297,7 +297,7 @@ func Locate(explicit string) (string, error) {
 
 // Load builds the effective Config (ADR-0062): defaults() → strict-decode the file at path ("" ⇒
 // skip) → overlay env (caarlos0/env; an unset FUNCD_* var leaves the field untouched) → apply the
-// --memory flag → derive the dataDir-relative containerd defaults → Validate. Any
+// --memory flag → make storage.dataDir absolute → derive the dataDir-relative defaults → Validate. Any
 // read/parse/unknown-key/enum error ⇒ fault.Invalid. The returned Config is fully populated + valid.
 func Load(path string, flags Flags) (Config, error) {
 	const op = "config.Load"
@@ -316,6 +316,15 @@ func Load(path string, flags Flags) (Config, error) {
 	}
 	if flags.MemoryOnly != nil && *flags.MemoryOnly { // the flag tier (top precedence)
 		c.Storage.Mode = "memory"
+	}
+	// A relative dataDir resolves against the working directory once, here, so every derived path and
+	// consumer sees one absolute root (the file:// blob URL reads a relative path's first segment as a host).
+	if c.Storage.DataDir != "" {
+		abs, err := filepath.Abs(c.Storage.DataDir)
+		if err != nil {
+			return Config{}, fault.Invalidf(op, "config key %q: resolve %q: %v", "storage.dataDir", c.Storage.DataDir, err)
+		}
+		c.Storage.DataDir = abs
 	}
 	// dataDir-relative containerd defaults — derived after the merge, when DataDir is final.
 	if c.Runtime.Containerd.Root == "" {

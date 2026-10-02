@@ -83,6 +83,34 @@ func TestDaemonSubstrate(t *testing.T) {
 	}
 }
 
+// issue 189: a relative storage.dataDir must reach the file substrate as an absolute path under the
+// working directory, not as a "file://data/blob" URL whose host swallows the first segment.
+func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("funcdconfig.yaml", []byte("storage:\n  dataDir: data\n"), 0o600))
+
+	cfg, err := config.Load("funcdconfig.yaml", config.Flags{})
+	require.NoError(t, err)
+
+	opts, label, _, err := substrateOptions(context.Background(), false, cfg.Storage.DataDir)
+	require.NoError(t, err)
+	require.Equal(t, "file", label)
+	require.Equal(t, filepath.Join(cwd, "data"), cfg.Storage.DataDir)
+	require.Equal(t, filepath.Join(cwd, "data", "store"), cfg.Storage.MetastoreDir)
+	all := append([]funcd.Option{
+		funcd.Production(),
+		funcd.WithStore(store.New(memory.New())),
+		funcd.WithRuntime(process.New()),
+		funcd.WithDevAuth("t", "default"),
+	}, opts...)
+	p, err := funcd.New(all...)
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+	require.DirExists(t, filepath.Join(cwd, "data", "blob"))
+}
+
 // scenario: daemon-version-and-serve (ADR-0042) — `funcd version` prints the stamped build
 // identity via the cobra root (the root's RunE serves; the version subcommand prints to out).
 func TestDaemonVersion(t *testing.T) {
