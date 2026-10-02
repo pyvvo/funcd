@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/gateway"
@@ -147,4 +150,55 @@ func TestRecorderForwardsFlusherAndHijacker(t *testing.T) {
 	<-done // wait for the handler to publish the flags before reading them
 	require.True(t, flushed, "the observ wrapper forwards http.Flusher")
 	require.True(t, hijacked, "the observ wrapper forwards http.Hijacker")
+}
+
+// Issue #85: with real telemetry the edge emits an OTel SERVER span whose span-id is the one injected
+// into the forwarded traceparent (so the invocation span has an emitted parent), parented under the
+// inbound span; a malformed inbound trace-id is not adopted.
+func TestIssue85_EdgeServerSpanEmittedWithInjectedSpanID(t *testing.T) {
+	const inboundTrace, inboundSpan = "0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331"
+	cases := []struct {
+		name        string
+		inbound     string
+		adopt       bool
+		wantsParent bool
+	}{
+		{name: "adopts inbound", inbound: "00-" + inboundTrace + "-" + inboundSpan + "-01", adopt: true, wantsParent: true},
+		{name: "root", inbound: ""},
+		{name: "uppercase trace-id not adopted", inbound: "00-" + strings.ToUpper(inboundTrace) + "-" + inboundSpan + "-01"},
+		{name: "non-hex trace-id not adopted", inbound: "00-" + strings.Repeat("zz", 16) + "-" + inboundSpan + "-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sr := tracetest.NewSpanRecorder()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+			tel := observability.NewFromProviders(nil, tp)
+			var injected string
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { injected = r.Header.Get("traceparent") })
+			req := httptest.NewRequest("GET", "http://x/y", nil)
+			if tc.inbound != "" {
+				req.Header.Set("traceparent", tc.inbound)
+			}
+			serve(t, observ.Chain(observ.Config{Trace: true}, tel, nil), next, req)
+
+			parts := strings.Split(injected, "-")
+			require.Len(t, parts, 4, "well-formed traceparent")
+			spans := sr.Ended()
+			require.Len(t, spans, 1, "one edge span is emitted under real telemetry")
+			sp := spans[0]
+			require.Equal(t, trace.SpanKindServer, sp.SpanKind())
+			require.Equal(t, sp.SpanContext().TraceID().String(), parts[1], "the injected trace-id is the edge span's")
+			require.Equal(t, sp.SpanContext().SpanID().String(), parts[2], "the injected span-id is the emitted edge span's")
+			if tc.adopt {
+				require.Equal(t, inboundTrace, parts[1], "the inbound trace-id is adopted")
+			} else {
+				require.NotEqual(t, inboundTrace, strings.ToLower(parts[1]), "a malformed or absent inbound trace-id is not adopted")
+			}
+			if tc.wantsParent {
+				require.Equal(t, inboundSpan, sp.Parent().SpanID().String(), "the edge span parents under the inbound span")
+			} else {
+				require.False(t, sp.Parent().IsValid(), "the edge span is a root")
+			}
+		})
+	}
 }
