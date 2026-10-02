@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -1277,6 +1278,10 @@ const (
 	livenessPath  = "/health/liveness"
 )
 
+// probeBodyMax bounds the body drained before close: a body read to EOF returns the connection to
+// the keep-alive pool, so repeated probes do not churn ephemeral ports (ADR-0041).
+const probeBodyMax = 4 << 10
+
 // probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
 func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
 	host := ip
@@ -1292,7 +1297,10 @@ func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path s
 	if err != nil {
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyMax))
+		_ = resp.Body.Close()
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 
