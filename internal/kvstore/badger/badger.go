@@ -14,6 +14,7 @@ import (
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/kvstore"
@@ -307,13 +308,31 @@ func (d *driver) List(ctx context.Context, prefix string) ([]string, error) {
 // without ever hiding a real key. The CDC seam writes under this prefix.
 const Reserved = "\x00"
 
-// DropPrefix wipes every key under prefix in one operation — the per-store teardown (O(store)). It is a
-// driver capability beyond the flat kvstore.KV port; the KV reconciler may type-assert for it.
+// dropConcurrency bounds the concurrent gateway Deletes of a seam-wired DropPrefix, so the gateway
+// group-commits them instead of paying one commit per key.
+const dropConcurrency = 64
+
+// DropPrefix wipes every key under prefix — the per-store teardown (O(store)). It is a driver capability
+// beyond the flat kvstore.KV port; the KV reconciler may type-assert for it. Badger's native DropPrefix
+// writes no tombstone, so with a CDC or Backup seam wired each key is deleted through the gateway instead:
+// the change feed (ADR-0068) and the incremental backup (ADR-0067) must both see the deletion.
 func (d *driver) DropPrefix(prefix string) error {
-	if err := d.db.DropPrefix([]byte(prefix)); err != nil {
-		return fault.Internalf("kvbadger.DropPrefix", "%v", err)
+	if d.cdc == nil && d.backup == nil {
+		if err := d.db.DropPrefix([]byte(prefix)); err != nil {
+			return fault.Internalf("kvbadger.DropPrefix", "%v", err)
+		}
+		return nil
 	}
-	return nil
+	keys, err := d.List(context.Background(), prefix)
+	if err != nil {
+		return err
+	}
+	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(dropConcurrency)
+	for _, k := range keys {
+		g.Go(func() error { return d.Delete(ctx, k) })
+	}
+	return g.Wait()
 }
 
 func (d *driver) Close() error {

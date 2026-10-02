@@ -166,3 +166,66 @@ func TestScenarioCDCRetentionBoundsLog(t *testing.T) {
 	require.NoError(t, cc.gc(ctx))
 	require.Equal(t, 0, countPrefix(t, d.db, cdcLogPrefix), "delivered entries reclaimed — the log does not grow unbounded")
 }
+
+// Issue #98: DropPrefix (the KVStore reconciler's table/store reclaim) must record each dropped key as a
+// deletion the CDC feed publishes and the incremental backup ships, or consumers and a DR restore keep it.
+func TestIssue98_DropPrefixRecordsDeletions(t *testing.T) {
+	ctx := context.Background()
+	dropped := []string{"default/s/t/k0", "default/s/t/k1", "default/s/t/k2"}
+	const kept = "default/s/u/k0"
+	seed := func(t *testing.T, kv interface {
+		Put(context.Context, string, []byte) error
+	}) {
+		t.Helper()
+		for _, k := range append([]string{kept}, dropped...) {
+			require.NoError(t, kv.Put(ctx, k, []byte("v")))
+		}
+	}
+
+	t.Run("cdc", func(t *testing.T) {
+		fb := &fakeBus{}
+		kv, seams, err := OpenWithSeamsFor(t.TempDir(), nil, BackupConfig{}, fb, CDCConfig{Subject: "kv.changes"})
+		require.NoError(t, err)
+		defer func() { _ = kv.(*driver).Close() }()
+		cc := seams.CDC.(*cdc)
+		seed(t, kv)
+		_, err = cc.drain(ctx)
+		require.NoError(t, err)
+
+		require.NoError(t, kv.(*driver).DropPrefix("default/s/t/"))
+		_, err = cc.drain(ctx)
+		require.NoError(t, err)
+
+		deleted := map[string]bool{}
+		for _, r := range fb.pubs {
+			if r.Op == OpDelete {
+				deleted[r.Key] = true
+			}
+		}
+		for _, k := range dropped {
+			require.True(t, deleted[k], "the feed carries a delete for dropped key %q (records=%v)", k, fb.pubs)
+		}
+		require.False(t, deleted[kept], "a key outside the prefix is not deleted")
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		bucket := newFakeBucket()
+		kv, seams, err := OpenWithSeamsFor(t.TempDir(), bucket, BackupConfig{ChunkBytes: 1 << 16}, nil, CDCConfig{})
+		require.NoError(t, err)
+		defer func() { _ = kv.(*driver).Close() }()
+		bk := seams.Backup.(*backup)
+		seed(t, kv)
+		require.NoError(t, bk.Rebaseline(ctx))
+
+		require.NoError(t, kv.(*driver).DropPrefix("default/s/t/"))
+		_, err = bk.Ship(ctx)
+		require.NoError(t, err)
+
+		dst := openRawDB(t, t.TempDir())
+		rb, err := NewBackup(dst, bucket, BackupConfig{})
+		require.NoError(t, err)
+		require.NoError(t, rb.Restore(ctx))
+		require.Equal(t, 0, countPrefix(t, dst, "default/s/t/"), "a restore does not resurrect dropped keys")
+		require.Equal(t, 1, countPrefix(t, dst, "default/s/u/"), "a key outside the prefix is restored")
+	})
+}
