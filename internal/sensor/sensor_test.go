@@ -16,19 +16,27 @@ import (
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
-// fakeInvoker records the functions it was asked to invoke (a real Invoker stub, no mock framework).
+// fakeInvoker records the functions it was asked to invoke and the CloudEvents it delivered (a real
+// Invoker stub, no mock framework).
 type fakeInvoker struct {
-	mu    sync.Mutex
-	calls []v1.ObjectName
+	mu     sync.Mutex
+	calls  []v1.ObjectName
+	events []eventing.CloudEvent
 }
 
-func (f *fakeInvoker) Invoke(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, _ eventing.CloudEvent) error {
+func (f *fakeInvoker) Invoke(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, ev eventing.CloudEvent) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fn)
+	f.events = append(f.events, ev)
 	return nil
 }
 func (f *fakeInvoker) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+func (f *fakeInvoker) delivered() []eventing.CloudEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]eventing.CloudEvent(nil), f.events...)
+}
 
 func harness(t *testing.T) (store.Store, *eventing.Fanout, *fakeInvoker, *sensor.Reconciler) {
 	t.Helper()
@@ -220,4 +228,20 @@ func TestStatelessIndependentFirings(t *testing.T) {
 	fire(t, fan, "git", "push", "")
 	fire(t, fan, "git", "push", "")
 	require.Len(t, runs(t, st), 2, "each firing is independent (no dedup)")
+}
+
+func TestIssue113_FunctionActionReceivesProjectedInput(t *testing.T) {
+	st, fan, inv, r := harness(t)
+	input := json.RawMessage(`{"file":"${{ event.data.key }}","lit":"x"}`)
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "drops", "arrived")},
+		[]v1.Action{{Name: "load", On: "d", Function: "loader", Input: input}})
+	_, err := r.Reconcile(context.Background(), reqOf("s"))
+	require.NoError(t, err)
+	fire(t, fan, "drops", "arrived", `{"key":"drop/a.parquet","size":3}`)
+
+	got := inv.delivered()
+	require.Len(t, got, 1)
+	require.JSONEq(t, `{"file":"drop/a.parquet","lit":"x"}`, string(got[0].Data), "the function receives the projected input as the event data")
+	require.Equal(t, eventing.SourceURI("team-a", "drops"), got[0].Source, "the rest of the CloudEvent is unchanged")
+	require.Equal(t, "arrived", got[0].Type)
 }

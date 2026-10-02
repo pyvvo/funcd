@@ -219,8 +219,9 @@ func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.R
 	r.attemptDelivery(ctx, newRetryID(), d, 1) // inline attempt #1; retries run async on the retry queue
 }
 
-// deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun
-// (`workflow:`) or invoke a Function (`function:`). Returns the delivery error (nil on success).
+// deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun with it
+// (`workflow:`) or invoke a Function with the CloudEvent carrying it as its data (`function:`). Returns the
+// delivery error (nil on success).
 func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
 	input, err := buildInput(d.action.Input, d.ce)
 	if err != nil {
@@ -230,7 +231,9 @@ func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
 	case d.action.Workflow != "":
 		return r.startWorkflow(ctx, d.ns, d.rg, d.sensor, d.action, input)
 	case d.action.Function != "":
-		return r.invoker.Invoke(ctx, d.ns, d.action.Function, d.ce)
+		ce := d.ce
+		ce.Data = input
+		return r.invoker.Invoke(ctx, d.ns, d.action.Function, ce)
 	}
 	return nil
 }
