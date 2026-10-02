@@ -191,3 +191,34 @@ func bodies(lines []logread.Line) []string {
 	}
 	return out
 }
+
+// Issue #84: one undecodable raw object (a torn write) must fail neither the function's read nor a
+// namespace-wide run read; every readable object is still returned.
+func TestIssue84_UndecodableRawObjectDoesNotFailReads(t *testing.T) {
+	ctx := context.Background()
+	b := memBucket(t)
+	base := baseTime().UnixNano()
+	seedRaw(t, b, "default", "mmm", "0", base, []compact.Row{row(base, "INFO", 9, "good")})
+	date := time.Unix(0, base).UTC().Format("2006-01-02")
+	badKey := fmt.Sprintf("logs/default/mmm/%s/%d-1.otlp.jsonl", date, base+1)
+	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`)); err != nil {
+		t.Fatalf("put truncated raw: %v", err)
+	}
+	seedCompacted(t, b, "default", "step", base, []compact.Row{rowTrace(base, "run-A line", "step", traceA)})
+
+	r := logread.NewBlobReader(b)
+	lines, err := r.Read(ctx, logread.Query{Namespace: "default", Function: "mmm"})
+	if err != nil {
+		t.Fatalf("function read: %v", err)
+	}
+	if got := bodies(lines); len(got) != 1 || got[0] != "good" {
+		t.Fatalf("function read = %v, want [good]", got)
+	}
+	lines, err = r.Read(ctx, logread.Query{Namespace: "default", TraceID: traceA})
+	if err != nil {
+		t.Fatalf("namespace-wide run read: %v", err)
+	}
+	if got := bodies(lines); len(got) != 1 || got[0] != "run-A line" {
+		t.Fatalf("namespace-wide run read = %v, want [run-A line]", got)
+	}
+}

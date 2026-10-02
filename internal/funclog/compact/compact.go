@@ -154,7 +154,8 @@ type window struct {
 // CompactOnce runs exactly one pass: discover raw → group into closed windows → merge into one Parquet per
 // (ns, fn, window) → delete the consumed raw (only after the Put succeeds) → prune compacted past Retention.
 // Deterministic and idempotent: the window's existing Parquet is read back and its rows kept, and raw it already
-// holds is not re-added, so a re-pass rewrites the same compacted key with no loss and no duplicate.
+// holds is not re-added, so a re-pass rewrites the same compacted key with no loss and no duplicate. A window
+// holding an undecodable raw object is logged and left raw; the rest of the pass goes on.
 func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 	const op = "compact.Compactor.CompactOnce"
 	objs, err := c.bucket.List(ctx, logsPrefix)
@@ -214,6 +215,12 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 			}
 		}
 		fresh, rerr := c.readRaw(ctx, pending)
+		if fault.KindOf(rerr) == fault.Invalid {
+			// An undecodable object never heals on retry, so it must not stall the pass. The whole window stays
+			// raw: compacting only its good objects would later be overwritten at the same deterministic key.
+			c.log.WarnContext(ctx, "funclog compaction skipped a window with an undecodable raw object", "error", rerr)
+			continue
+		}
 		if rerr != nil {
 			return st, rerr
 		}

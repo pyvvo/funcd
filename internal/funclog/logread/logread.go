@@ -123,7 +123,7 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 			}
 			decoded, derr := compact.DecodeJSONL(data)
 			if derr != nil {
-				return nil, fault.Wrapf(derr, fault.KindOf(derr), op, "decode %q", o.Key)
+				continue // one undecodable object (a torn write) must not fail the read; the compactor logs its key
 			}
 			rows = append(rows, decoded...)
 		}
