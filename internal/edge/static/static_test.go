@@ -44,14 +44,15 @@ func backend(prefix string, spa bool) *v1.StaticBackend {
 	return &v1.StaticBackend{Bucket: "reports", Prefix: prefix, Index: "index.html", SPA: spa}
 }
 
-// serve drives the handler once with the given method + remainder + headers.
+// serve drives the handler once with the given method + remainder + headers. Like the data-plane, it
+// passes the decoded r.URL.Path as the remainder.
 func serve(h *static.Handler, method, remainder string, back *v1.StaticBackend, hdr map[string]string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "http://bi.example.com"+remainder, nil)
 	for k, v := range hdr {
 		r.Header.Set(k, v)
 	}
 	w := httptest.NewRecorder()
-	h.Serve(w, r, "analytics", back, remainder)
+	h.Serve(w, r, "analytics", back, r.URL.Path)
 	return w
 }
 
