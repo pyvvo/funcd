@@ -3,7 +3,7 @@
 // neutral leaf). It reads bound ConfigMaps (non-sensitive, a plain store read) and Secrets
 // (sensitive, PDP-resolved), guarded-merging both into one worker-env map, config first
 // then secrets (so a secret overrides a config default). It imports only internal/secrets
-// (the pure reserved-key guard) + internal/store — never internal/function or
+// (the pure reserved-key and env-value guards) + internal/store — never internal/function or
 // internal/provider — so both consumers can depend on it without inverting the layering.
 package envresolve
 
@@ -49,7 +49,7 @@ var (
 // Secrets (sensitive, PDP-resolved via d.Secrets under d.Identity(ns)), guarded against
 // reserved FUNCD_ keys (ADR-0092). Config is merged first, then secrets (so a secret may
 // override a config default). Returns fault.Invalid if secrets are declared but d.Secrets is
-// nil (unchanged catalog semantics). On failure the returned error is joined with ErrConfig or
+// nil (unchanged catalog semantics), or if a value cannot be delivered as env (EnvValueProblem). On failure the returned error is joined with ErrConfig or
 // ErrSecret (ADR-0093 §4) so a caller can attribute it via errors.Is while keeping the fault
 // kind. This is the single resolver for Functions AND providers.
 func ResolveEnv(ctx context.Context, d Deps, ns v1.NamespaceName, config, secretNames []v1.ObjectName) (map[string]string, error) {
@@ -65,6 +65,11 @@ func ResolveEnv(ctx context.Context, d Deps, ns v1.NamespaceName, config, secret
 		cm, ok := obj.(*v1.ConfigMap)
 		if !ok {
 			return nil, errors.Join(fault.Internalf(op, "object %s/%s is not a ConfigMap", ns, name), ErrConfig)
+		}
+		for k, v := range cm.Spec.Data {
+			if p := secrets.EnvValueProblem(v); p != "" {
+				return nil, errors.Join(fault.Invalidf(op, "config %q key %q %s; env delivery cannot carry it", name, k, p), ErrConfig)
+			}
 		}
 		secrets.MergeEnvGuarded(env, cm.Spec.Data, d.Logger)
 	}

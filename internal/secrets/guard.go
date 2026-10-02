@@ -3,6 +3,7 @@ package secrets
 import (
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 )
 
 // IsReservedKey reports whether an env key is reserved by the runtime shim contract
@@ -26,4 +27,17 @@ func MergeEnvGuarded(dst, src map[string]string, log *slog.Logger) {
 		}
 		dst[k] = v
 	}
+}
+
+// EnvValueProblem says why v cannot be delivered as a worker env value, or returns "" if it can:
+// a value that is not valid UTF-8 would reach the worker as U+FFFD, and exec rejects a NUL byte.
+// It is the one value check for resolved Secret and ConfigMap data.
+func EnvValueProblem(v string) string {
+	switch {
+	case !utf8.ValidString(v):
+		return "is not valid UTF-8"
+	case strings.IndexByte(v, 0) >= 0:
+		return "contains a NUL byte"
+	}
+	return ""
 }
