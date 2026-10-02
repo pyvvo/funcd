@@ -27,6 +27,7 @@ type fakeRuntime struct {
 	ip        string
 	port      int
 	state     containerrt.State // the state newly-created instances report
+	startErr  error             // returned by the next Start, once
 	created   []containerrt.WorkerSpec
 	started   []containerrt.InstanceID
 	stopped   []containerrt.InstanceID
@@ -54,6 +55,14 @@ func (f *fakeRuntime) Start(_ context.Context, id containerrt.InstanceID) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, id)
+	if err := f.startErr; err != nil {
+		f.startErr = nil
+		return err
+	}
+	if in, ok := f.instances[id]; ok {
+		in.State = containerrt.StateRunning
+		f.instances[id] = in
+	}
 	return nil
 }
 
@@ -336,4 +345,31 @@ func TestConverge_uses_spec_port_not_instance_port(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, st.Ready, "Converge probes spec.Port (the fixed netns port), not the 0 Instance.Port")
 	require.Equal(t, host+":"+strconv.Itoa(port), st.Address, "status.Address uses spec.Port, not Instance.Port")
+}
+
+// A failed Start leaves the engine Created (the containerd task stays Created); the next pass must
+// start it instead of adopting it as not-terminal and reporting EngineNotReady forever (ADR-0142).
+func TestIssue106_StartsEngineLeftInCreated(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	rt.state = containerrt.StateCreated
+	rt.startErr = fault.Unavailablef("fakeRuntime.Start", "transient start failure")
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt})
+	require.NoError(t, err)
+	ctx := context.Background()
+	spec := specFor(host, port, nil)
+
+	_, err = pr.Converge(ctx, spec)
+	require.Error(t, err, "the first Start fails")
+
+	_, err = pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 1, "the Created engine is adopted, not recreated")
+	require.Len(t, rt.started, 2, "the engine left Created is started on the next pass")
+
+	st, err := pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.True(t, st.Ready, "the started engine becomes Ready")
+	require.Equal(t, 1, st.Running)
 }
