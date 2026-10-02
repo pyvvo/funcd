@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
@@ -99,16 +100,13 @@ func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descripto
 	return ocispec.Descriptor{}, false
 }
 
-// packedAt is the creation time stamped into every manifest this package packs. oras stamps the wall clock when none
-// is given, so identical content pushed in different seconds got different digests (#237); a fixed value keeps
-// ADR-0089's same tree, same digest.
-const packedAt = "1970-01-01T00:00:00Z"
-
-// reproducible returns opts with the manifest creation time fixed to packedAt.
+// reproducible returns opts with the manifest creation time fixed to the bundle's zero time. oras stamps the wall clock
+// when none is given, so identical content pushed in different seconds got different digests (#237); a fixed value
+// keeps ADR-0089's same tree, same digest at the manifest too.
 func reproducible(opts oras.PackManifestOptions) oras.PackManifestOptions {
 	annotations := make(map[string]string, len(opts.ManifestAnnotations)+1)
 	maps.Copy(annotations, opts.ManifestAnnotations)
-	annotations[ocispec.AnnotationCreated] = packedAt
+	annotations[ocispec.AnnotationCreated] = zeroTime.Format(time.RFC3339)
 	opts.ManifestAnnotations = annotations
 	return opts
 }

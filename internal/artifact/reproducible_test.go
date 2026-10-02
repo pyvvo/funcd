@@ -17,8 +17,9 @@ func TestIssue237_IdenticalPushesKeepTheirDigest(t *testing.T) {
 	ctx := context.Background()
 	bundle, entry := goodBundle(t)
 	file := writeBundle(t, "export function handle() {}\n")
+	site := siteDir(t)
 	pushes := map[string]func(ref string) (string, error){
-		"site":   func(ref string) (string, error) { return artifact.PushSite(ctx, ref, siteDir(t)) },
+		"site":   func(ref string) (string, error) { return artifact.PushSite(ctx, ref, site) },
 		"bundle": func(ref string) (string, error) { return artifact.PushBundle(ctx, ref, bundle, entry, "python314", "") },
 		"file":   func(ref string) (string, error) { return artifact.Push(ctx, ref, file, nil, "nodejs22", "") },
 	}
