@@ -284,6 +284,9 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if spec.Revision != "" {
 		labels["funcd/revision"] = string(spec.Revision)
 	}
+	if err := d.reclaim(nctx, op, id, ctrID); err != nil {
+		return runtime.Instance{}, err
+	}
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(ctrID+"-snap", image),
@@ -324,6 +327,32 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
 		PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
 	}, nil
+}
+
+// reclaim deletes the container and snapshot that hold a worker's name when this driver runs no worker under it.
+// containerd keeps both when funcd stops or dies, and the restarted driver starts with no instances, so without this
+// every re-create of the worker fails with "already exists".
+func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID, ctrID string) error {
+	d.mu.Lock()
+	sb, ok := d.instances[id]
+	live := ok && !sb.released
+	d.mu.Unlock()
+	if live {
+		return nil
+	}
+	c, err := d.client.LoadContainer(nctx, ctrID)
+	switch {
+	case err == nil:
+		if derr := d.discard(nctx, c); derr != nil {
+			return mapErr(derr, op, "delete leftover container %q", ctrID)
+		}
+	case !errdefs.IsNotFound(err):
+		return mapErr(err, op, "load leftover container %q", ctrID)
+	}
+	if err := d.client.SnapshotService("").Remove(nctx, ctrID+"-snap"); err != nil && !errdefs.IsNotFound(err) {
+		return mapErr(err, op, "remove leftover snapshot %q", ctrID+"-snap")
+	}
+	return nil
 }
 
 // workerNames returns a worker's container ID and CNI attachment ID (ADR-0143). A revisioned worker joins its parts with
@@ -443,19 +472,7 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 		return 0, mapErr(err, op, "list containers")
 	}
 	for _, c := range cs {
-		if task, terr := c.Task(nctx, nil); terr == nil {
-			_ = task.Kill(nctx, syscall.SIGKILL)
-			select {
-			case <-waitTask(nctx, task):
-			case <-time.After(stopGrace):
-			}
-			_, _ = task.Delete(nctx)
-		}
-		if labels, lerr := c.Labels(nctx); lerr == nil {
-			_, cniID := workerNames(labels["funcd/namespace"], labels["funcd/name"], labels["funcd/revision"], labels["funcd/replica"])
-			_ = d.cni.Remove(nctx, cniID, "")
-		}
-		_ = c.Delete(nctx, containerd.WithSnapshotCleanup)
+		_ = d.discard(nctx, c)
 		d.mu.Lock()
 		for id, sb := range d.instances {
 			if sb.ctrID == c.ID() {
@@ -466,6 +483,24 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 		d.mu.Unlock()
 	}
 	return len(cs), nil
+}
+
+// discard kills a container's task, tears its CNI attachment down from its labels (the netns died with its task) and
+// deletes it with its snapshot.
+func (d *driver) discard(nctx context.Context, c containerd.Container) error {
+	if task, terr := c.Task(nctx, nil); terr == nil {
+		_ = task.Kill(nctx, syscall.SIGKILL)
+		select {
+		case <-waitTask(nctx, task):
+		case <-time.After(stopGrace):
+		}
+		_, _ = task.Delete(nctx)
+	}
+	if labels, lerr := c.Labels(nctx); lerr == nil {
+		_, cniID := workerNames(labels["funcd/namespace"], labels["funcd/name"], labels["funcd/revision"], labels["funcd/replica"])
+		_ = d.cni.Remove(nctx, cniID, "")
+	}
+	return c.Delete(nctx, containerd.WithSnapshotCleanup)
 }
 
 func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Instance, error) {
