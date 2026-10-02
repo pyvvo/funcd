@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -452,4 +453,33 @@ func TestIssue373_RemovesStoppedEngine(t *testing.T) {
 		rt.mu.Unlock()
 		require.Equal(t, []string{"create", "remove", "create"}, calls, "the stopped replica is removed before it is recreated")
 	})
+}
+
+// Repeated readiness probes to one engine reuse a keep-alive connection, so the converge loop does not churn
+// ephemeral ports into TIME_WAIT (ADR-0041).
+func TestIssue376_ReadinessProbeReusesConnection(t *testing.T) {
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	host := addr.IP.String()
+
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port)})
+	require.NoError(t, err)
+	spec := specFor(host, addr.Port, nil)
+	for range 10 {
+		st, cerr := pr.Converge(context.Background(), spec)
+		require.NoError(t, cerr)
+		require.True(t, st.Ready)
+	}
+	require.EqualValues(t, 1, conns.Load(), "10 probes must share one keep-alive connection")
 }
