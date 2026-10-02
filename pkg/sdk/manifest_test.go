@@ -189,3 +189,55 @@ metadata:
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), "document 2")
 }
+
+// A bare `on:` key (the documented Sensor and blob EventSource shape) decodes as the string key "on",
+// never as YAML 1.1's boolean true — which the typed decode would drop without a word.
+func TestIssue63_BareOnKeyDecodesAsString(t *testing.T) {
+	sensor, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: Sensor
+metadata:
+  name: orders-pipelines
+  namespace: default
+  resourceGroup: rg1
+spec:
+  on:
+    - name: hook
+      source: team-hooks
+      event: new-orders
+  do:
+    - name: on-demand
+      on: hook
+      workflow: orders-report
+`))
+	require.NoError(t, err)
+	s, ok := sensor.(*v1.Sensor)
+	require.True(t, ok)
+	require.Len(t, s.Spec.On, 1)
+	require.Equal(t, v1.ObjectName("hook"), s.Spec.On[0].Name)
+	require.Len(t, s.Spec.Do, 1)
+	require.Equal(t, v1.ObjectName("hook"), s.Spec.Do[0].On)
+	require.NoError(t, s.Validate())
+
+	source, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: removals
+  namespace: default
+  resourceGroup: rg1
+spec:
+  blob:
+    bucket: raw
+    events:
+      - name: gone
+        prefix: drop/
+        on:
+          - Removed
+`))
+	require.NoError(t, err)
+	es, ok := source.(*v1.EventSource)
+	require.True(t, ok)
+	require.Equal(t, []v1.BlobEventType{"Removed"}, es.Spec.Blob.Events[0].On)
+	require.ErrorContains(t, es.Validate(), `"Removed" is unsupported`)
+}
