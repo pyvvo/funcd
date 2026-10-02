@@ -172,8 +172,8 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	}
 	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
 	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
-	// (ADR-0046 Decision 5).
-	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath)
+	// (ADR-0046 Decision 5). No boot limit: a pool worker restarts in place and keeps its CreatedAt, so its age is not its boot time.
+	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, 0)
 	serving := servingPhase(fn.Status.Phase)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair

@@ -107,6 +107,8 @@ func mapBlobErr(err error) error {
 	switch fault.KindOf(err) {
 	case fault.NotFound:
 		return s3err.GetAPIError(s3err.ErrNoSuchKey)
+	case fault.Forbidden:
+		return accessDenied()
 	case fault.Invalid:
 		return s3err.GetAPIError(s3err.ErrInvalidRequest)
 	default:

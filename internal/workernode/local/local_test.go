@@ -3,6 +3,8 @@ package local_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -218,4 +220,36 @@ func TestInvokerPropagates(t *testing.T) {
 	var ue *local.UpstreamError
 	require.ErrorAs(t, err, &ue)
 	require.Equal(t, http.StatusUnprocessableEntity, ue.Status, "shim 422 propagated verbatim")
+}
+
+// Issue #134: the fn-to-fn broker forwards context.invoke(alias, input) as INTERNAL traffic, which the
+// edge never normalizes (ADR-0134), so the broker must emit the v1.0 envelope itself — the target's
+// event.data is the caller's input, as for an external invoke; a {"data":…} envelope passes through.
+func TestIssue134_InvokeWrapsInputInCloudEventEnvelope(t *testing.T) {
+	var got []byte
+	dp := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	target := local.Ref{Namespace: "team-a", Function: "echo"}
+	invoke := func(input string) {
+		t.Helper()
+		_, err := local.NewInvoker(dp).Invoke(context.Background(), target, []byte(input), time.Second)
+		require.NoError(t, err)
+	}
+	for _, input := range []string{`{"name":"plain"}`, `[1,2,3]`} {
+		invoke(input)
+		var ce struct {
+			SpecVersion string          `json:"specversion"`
+			Source      string          `json:"source"`
+			Data        json.RawMessage `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(got, &ce), "forwarded body %s", got)
+		require.Equal(t, "1.0", ce.SpecVersion, "input %s must arrive as a CloudEvent envelope, got %s", input, got)
+		require.Equal(t, "funcd://team-a/function/echo", ce.Source)
+		require.JSONEq(t, input, string(ce.Data), "event.data is the caller's input")
+	}
+
+	invoke(`{"data":{"name":"wrapped"}}`)
+	require.JSONEq(t, `{"data":{"name":"wrapped"}}`, string(got), "an envelope-shaped input passes through")
 }

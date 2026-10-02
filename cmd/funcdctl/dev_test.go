@@ -365,3 +365,38 @@ func TestPrintDevEnvDerivesDeterministicKeypair(t *testing.T) {
 	require.NoError(t, (&cli{out: &out3}).printDevEnv(dir, "", devConfig{printEnv: true}))
 	require.Contains(t, out3.String(), "http://127.0.0.1:3006", "endpoint port defaults to 3006")
 }
+
+// TestIssue135_DevHotReloadsEditedHandler — ADR-0125 Decision 2: an edit to the handler source reaches the
+// running dev session with no restart, for an in-place bundle (generic funcdctl.yaml) and an isolated
+// single-file function (<stem>.funcdctl.yaml, whose bundle is a private copy).
+func TestIssue135_DevHotReloadsEditedHandler(t *testing.T) {
+	requireNode(t)
+	for _, tc := range []struct{ name, manifest, handler string }{
+		{"in-place", "funcdctl.yaml", "handler.mjs"},
+		{"stem", "front.funcdctl.yaml", "front.mjs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := devProject(t, map[string]string{
+				tc.manifest: "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+				tc.handler:  "export function handle() { return { v: 1 }; }\n",
+			})
+			inst := runDev(t, dir)
+			waitReady(t, inst)
+			url := inst.gatewayURL + "/function/" + inst.functions[0]
+			_, body := post(t, url, `{"data":{}}`)
+			require.Contains(t, body, `"v":1`)
+
+			edited := "export function handle() { return { v: 999 }; }\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, tc.handler), []byte(edited), 0o600))
+			require.Eventually(t, func() bool {
+				resp, err := http.Post(url, "application/json", strings.NewReader(`{"data":{}}`))
+				if err != nil {
+					return false
+				}
+				defer func() { _ = resp.Body.Close() }()
+				b, _ := io.ReadAll(resp.Body)
+				return strings.Contains(string(b), `"v":999`)
+			}, 20*time.Second, 100*time.Millisecond, "the running dev session serves the edited handler")
+		})
+	}
+}

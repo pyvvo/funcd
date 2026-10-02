@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -27,7 +30,8 @@ type Client struct {
 // Option configures a Client (functional-options facade, ADR-0002).
 type Option func(*Client)
 
-// WithHTTPClient overrides the HTTP client (default http.DefaultClient).
+// WithHTTPClient overrides the HTTP client (default http.DefaultClient). A client without a
+// CheckRedirect policy gets the SDK's, which refuses a redirect that would change the method.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) {
 		if h != nil {
@@ -53,7 +57,26 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(c)
 	}
+	if c.httpClient.CheckRedirect == nil {
+		hc := *c.httpClient
+		hc.CheckRedirect = refuseMethodChange
+		c.httpClient = &hc
+	}
 	return c, nil
+}
+
+// refuseMethodChange stops a redirect that changes the method: on a 301/302/303 Go resends a
+// PUT/POST/DELETE as a body-less GET, so the write is lost while the GET's 2xx reads as success.
+// Method-preserving redirects keep Go's default policy (at most 10 hops).
+func refuseMethodChange(req *http.Request, via []*http.Request) error {
+	if orig := via[0].Method; req.Method != orig {
+		return fmt.Errorf("refusing a %d redirect to %s that would resend %s as %s; point the server URL at the final address",
+			req.Response.StatusCode, req.URL, orig, req.Method)
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // Apply create-or-replaces obj: PUT the named path; on a 404 (the object does not
@@ -251,9 +274,56 @@ func decodeObject(kind v1.Kind, body []byte) (v1.Object, error) {
 	return obj, nil
 }
 
-// DecodeManifest parses a flat JSON resource manifest (apiVersion/kind/metadata/spec)
-// into the concrete v1.Object. An unknown/empty kind is a fault.Invalid, never a panic.
+// DecodeManifest parses a single-document resource manifest (apiVersion/kind/metadata/spec)
+// into the concrete v1.Object. An unknown/empty kind is a fault.Invalid, never a panic; so is a
+// manifest holding more than one document (DecodeManifests decodes each).
 func DecodeManifest(data []byte) (v1.Object, error) {
+	objs, err := DecodeManifests(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(objs) != 1 {
+		return nil, fault.Invalidf("sdk.DecodeManifest", "manifest holds %d documents, want 1", len(objs))
+	}
+	return objs[0], nil
+}
+
+// DecodeManifests parses a manifest that may hold several YAML documents separated by "---" into
+// one v1.Object per document, in order. Empty and comment-only documents are skipped; a manifest
+// with no document is a fault.Invalid.
+func DecodeManifests(data []byte) ([]v1.Object, error) {
+	const op = "sdk.DecodeManifests"
+	dec := yamlv3.NewDecoder(bytes.NewReader(data))
+	var objs []v1.Object
+	for n := 1; ; n++ {
+		var doc yamlv3.Node
+		if err := dec.Decode(&doc); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fault.Invalidf(op, "parse manifest document %d: %v", n, err)
+		}
+		if len(doc.Content) == 0 || doc.Content[0].ShortTag() == "!!null" {
+			continue
+		}
+		quoteKeys(&doc)
+		raw, err := yamlv3.Marshal(&doc)
+		if err != nil {
+			return nil, fault.Invalidf(op, "re-encode manifest document %d: %v", n, err)
+		}
+		obj, err := decodeDocument(raw)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "manifest document %d", n)
+		}
+		objs = append(objs, obj)
+	}
+	if len(objs) == 0 {
+		return nil, fault.Invalidf(op, "manifest holds no document")
+	}
+	return objs, nil
+}
+
+// decodeDocument decodes one manifest document into its concrete v1.Object.
+func decodeDocument(data []byte) (v1.Object, error) {
 	// sigs.k8s.io/yaml accepts YAML *and* JSON (JSON is valid YAML), so `apply` takes either —
 	// the kubectl-style manifest experience, reusing the api/types json tags.
 	var tm v1.TypeMeta
@@ -267,10 +337,28 @@ func DecodeManifest(data []byte) (v1.Object, error) {
 	if !ok {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "unknown kind %q", tm.Kind)
 	}
-	if err := yaml.Unmarshal(data, obj); err != nil {
+	// Strict: a key the typed object lacks would be dropped by toWireBody before the server's
+	// additionalProperties:false edge could reject it (ADR-0108), so the apply would report success.
+	if err := yaml.UnmarshalStrict(data, obj); err != nil {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "decode %s: %v", tm.Kind, err)
 	}
 	return obj, nil
+}
+
+// quoteKeys double-quotes every plain mapping key that YAML 1.2 reads as a string. sigs.k8s.io/yaml
+// decodes YAML 1.1, which turns a bare on/off/yes/no/y/n key into a boolean (the JSON key "true"/"false")
+// that the typed decode then drops (issue #63); values keep the YAML 1.1 decode.
+func quoteKeys(n *yamlv3.Node) {
+	if n.Kind == yamlv3.MappingNode {
+		for i := 0; i < len(n.Content); i += 2 {
+			if k := n.Content[i]; k.Kind == yamlv3.ScalarNode && k.Style == 0 && k.ShortTag() == "!!str" {
+				k.Style = yamlv3.DoubleQuotedStyle
+			}
+		}
+	}
+	for _, c := range n.Content {
+		quoteKeys(c)
+	}
 }
 
 // problemToFault maps a non-2xx response to a typed fault.Error. It keys on the JSON

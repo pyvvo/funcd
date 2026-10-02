@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -81,7 +80,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 		return "", fault.Wrapf(err, fault.Unavailable, op, "listen on %q", path)
 	}
 	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	srv := newServer(h)
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
 	go func() { _ = srv.Serve(ln) }()
 	go func() {
