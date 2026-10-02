@@ -541,34 +541,35 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	const op = "function.Reconcile"
 	fn.Status.Replicas = v.running
 	fn.Status.ObservedGeneration = fn.Generation
+	// ShapeValid is set once, from its final value: setting it True and then False in one pass would move its
+	// LastTransitionTime on every pass, a write that retriggers the pass through the watch (issue #24).
+	if v.shapeFailed || (v.switching && v.currentFailed) {
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
+	} else {
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
+	}
 	switch {
 	case v.shapeFailed:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
 		fn.Status.Phase = v1.PhaseFailed
 	case v.ready >= 1:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseReady
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
 	case v.serving:
 		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseDegraded
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"})
 	case v.running >= 1 || !v.retryAt.IsZero():
 		// replicas started but the shim is not serving yet, or a replica waits out its backoff (ADR-0142) — keep
 		// polling.
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseDeploying
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShimNotReady"})
 	default:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseIdle
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "NoReplicas"})
 	}
 	switch {
 	case v.switching && v.currentFailed:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls"})
 	case v.switching:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one"})
