@@ -75,7 +75,7 @@ type Config struct {
 				AllowOrigins  []string `json:"allowOrigins,omitempty"`
 				AllowMethods  []string `json:"allowMethods,omitempty"`
 				AllowHeaders  []string `json:"allowHeaders,omitempty"`
-				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty"`
+				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty" validate:"min=0"`
 			} `json:"cors,omitempty"`
 			Headers struct {
 				Set    map[string]string `json:"set,omitempty"`
@@ -90,11 +90,11 @@ type Config struct {
 		// worker-reachable resolver + node-service addresses (host:port) passed directly.
 		Network struct {
 			Egress            bool `json:"egress,omitempty" env:"FUNCD_NETWORK_EGRESS"`
-			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT"`
+			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT" validate:"min=0,max=65535"`
 			// DNSForwarderPort is the funcd DNS forwarder host port (ADR-0117, F81): worker :53 is
 			// REDIRECTed into it so it is the only reachable resolver (the domain trust anchor). Wired
 			// with the gateway when Egress is on (Linux/containerd only).
-			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT"`
+			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
 			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
 			InternalAllow    []string `json:"internalAllow,omitempty"`
 		} `json:"network,omitempty"`
@@ -125,7 +125,7 @@ type Config struct {
 			Target     string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
 			Interval   string `json:"interval,omitempty" env:"FUNCD_KVSTORE_BACKUP_INTERVAL"`
 			Rebaseline string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
-			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES"`
+			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES" validate:"min=0"`
 		} `json:"backup,omitempty"`
 		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
 		// without a Sink, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when Storage.Mode
@@ -170,7 +170,7 @@ type Config struct {
 	// (8 MiB / 10s). The sink writes to the blob substrate, so funcd-system is the only Bucket accepted.
 	Funclog struct {
 		Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_FUNCLOG_ENABLED"`
-		SegmentMaxBytes int    `json:"segmentMaxBytes,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_BYTES"`
+		SegmentMaxBytes int    `json:"segmentMaxBytes,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_BYTES" validate:"min=0"`
 		SegmentMaxAge   string `json:"segmentMaxAge,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_AGE"`
 		Bucket          string `json:"bucket,omitempty" env:"FUNCD_FUNCLOG_BUCKET" validate:"omitempty,eq=funcd-system"`
 		Traces          bool   `json:"traces,omitempty" env:"FUNCD_FUNCLOG_TRACES"`
@@ -185,7 +185,7 @@ type Config struct {
 		// netns, so this MUST be a node address the sandbox can reach (the CNI bridge gateway IP, e.g.
 		// http://10.63.0.1:9000), NOT a 127.0.0.1 ListenAddr.
 		Endpoint         string `json:"endpoint,omitempty" env:"FUNCD_S3GATEWAY_ENDPOINT"`
-		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES"`
+		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES" validate:"min=0"`
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`
 
@@ -201,13 +201,13 @@ type Config struct {
 
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
 	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
-	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention (run GC horizon) and
-	// PayloadLimit (max run input bytes) are reserved for the run-GC / admission gates, not yet enforced.
+	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention is the terminal-run GC
+	// horizon and PayloadLimit caps a run's input and a step's output in bytes (0 ⇒ unbounded).
 	Workflow struct {
 		DefaultStepTimeout string `json:"defaultStepTimeout,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_STEP_TIMEOUT"`
-		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY"`
+		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY" validate:"min=0"`
 		Retention          string `json:"retention,omitempty" env:"FUNCD_WORKFLOW_RETENTION"`
-		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT"`
+		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT" validate:"min=0"`
 		// DataDir is the run-state Badger directory. Empty ⇒ derived as <Storage.DataDir>/workflow in
 		// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_WORKFLOW_DATA_DIR"`
@@ -219,10 +219,10 @@ type Config struct {
 	// in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries
 	// (per-namespace count cap) drive the periodic retention sweep.
 	Eventing struct {
-		DeliveryAttempts int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS"`
+		DeliveryAttempts int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS" validate:"min=0"`
 		Deadletter       struct {
 			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
-			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES"`
+			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES" validate:"min=0"`
 			// DataDir is the DLQ's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
 			// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
 			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_DEADLETTER_DATA_DIR"`
