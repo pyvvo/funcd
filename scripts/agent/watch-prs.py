@@ -1,4 +1,4 @@
-"""Wait until an open funcd fix PR needs action (green, red, conflicting, or merged), then print it and exit.
+"""Wait until an open funcd PR (fix/, chore/, docs/ or release) needs action (green, red, conflicting, or merged), then print it and exit.
 
 Usage: watch.py <handled.json> [max_minutes]
 handled.json maps "<number>:<head sha>:<class>" -> true for events already acted on.
@@ -41,7 +41,7 @@ def snapshot():
         return None
     prs = []
     for n in json.loads(out.stdout)["data"]["repository"]["pullRequests"]["nodes"]:
-        if not n["headRefName"].startswith(("fix/", "docs/fix-review-ledger", "release-please--")):
+        if not n["headRefName"].startswith(("fix/", "chore/", "docs/", "release-please--")):
             continue
         roll = (n["commits"]["nodes"] or [{}])[0].get("commit", {}).get("statusCheckRollup") or {}
         ctx = (roll.get("contexts") or {}).get("nodes") or []
