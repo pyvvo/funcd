@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -688,7 +687,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if perr != nil {
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
-	if reason := pythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
+	if reason := process.PythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
 		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
 			"python", python, "reason", reason)
 		return opts, noopClose, nil
@@ -704,20 +703,6 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
-}
-
-// pythonShimLoadError imports the extracted shim (shimDir holds funcd_shim) with the interpreter, so the
-// probe checks what the shim really needs instead of restating it. "" ⇒ it loads; otherwise the
-// interpreter's last output line (e.g. the SyntaxError or ModuleNotFoundError).
-func pythonShimLoadError(ctx context.Context, python, shimDir string) string {
-	out, err := exec.CommandContext(ctx, python, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import funcd_shim.shim", shimDir).CombinedOutput()
-	if err == nil {
-		return ""
-	}
-	if msg := strings.TrimSpace(string(out)); msg != "" {
-		return msg[strings.LastIndexByte(msg, '\n')+1:]
-	}
-	return err.Error()
 }
 
 // pythonAtLeast314 reports whether the interpreter at path is Python ≥3.14 (the floor for the

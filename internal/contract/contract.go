@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -48,6 +49,9 @@ func walk(s *schema, path string) error {
 	// The empty schema {} (and the boolean schema `true`) is the explicit `Json` form: any value.
 	case s.isEmpty():
 		return nil
+	case !s.Type.inProfile():
+		return unsupported(path, "type "+strings.Join(s.Type.values, "|"),
+			`use one supported type, or one type plus "null" for a nullable value`)
 	case s.Ref != "":
 		return unsupported(path, "$ref", "external or recursive references are not supported; inline the type (recursive types are forbidden in v1.1)")
 	case len(s.AnyOf) > 0:
@@ -72,11 +76,8 @@ func walk(s *schema, path string) error {
 			return unsupported(path, "array without items", "declare the element type")
 		}
 		return walk(s.Items, path+"[]")
-	case "string", "integer", "number", "boolean", "null":
-		return nil // scalars (incl. formats/ranges/patterns) and explicit null are supported
-	default:
-		return unsupported(path, "type "+s.primaryType(), "unsupported scalar type")
 	}
+	return nil // scalars (incl. formats/ranges/patterns) and explicit null are supported
 }
 
 // walkObject enforces the closed-record / typed-map rule — the heart of "no open records".

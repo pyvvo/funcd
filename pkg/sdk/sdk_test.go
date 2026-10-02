@@ -196,3 +196,34 @@ func TestIssue136_WritesRefuseMethodChangingRedirect(t *testing.T) {
 		})
 	}
 }
+
+// A 413 or 429 maps back to its own fault kind (the inverse of api/fault's Kind-to-status table),
+// never to Internal. The control plane itself answers 413 for a body over its 1 MiB limit.
+func TestIssue323_TooLargeAndThrottledMapToTheirKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	t.Run("control plane body limit", func(t *testing.T) {
+		t.Parallel()
+		obj, _ := v1.NewObject(v1.KindConfigMap)
+		cm := obj.(*v1.ConfigMap)
+		cm.Name = "big"
+		cm.Namespace = "team-a"
+		cm.ResourceGroup = "rg1"
+		cm.Spec.Data = map[string]string{"BIG": strings.Repeat("x", 2<<20)}
+		_, err := newClient(t).Apply(ctx, cm)
+		require.Equal(t, fault.PayloadTooLarge, fault.KindOf(err), "err: %v", err)
+	})
+	for _, k := range []fault.Kind{fault.PayloadTooLarge, fault.ResourceExhausted} {
+		t.Run(string(k), func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fault.WriteProblem(w, &fault.Error{Kind: k, Op: "test", Msg: "refused"})
+			}))
+			t.Cleanup(srv.Close)
+			c, err := sdk.New(srv.URL)
+			require.NoError(t, err)
+			_, err = c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+			require.Equal(t, k, fault.KindOf(err), "err: %v", err)
+		})
+	}
+}
