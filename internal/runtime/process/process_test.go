@@ -105,3 +105,34 @@ func TestIssue45_WorkerEndReclaimsSubprocesses(t *testing.T) {
 		})
 	}
 }
+
+// Replacing an exited instance deletes the replaced instance's driver-owned log and port files, so a crash loop or a
+// scale-to-zero wake leaves one pair per instance, not one per restart.
+func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	ctx := context.Background()
+	rt := process.New()
+	t.Cleanup(func() { _ = rt.Close() })
+	spec := runtime.WorkerSpec{Namespace: "default", Name: "crasher", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}}
+	files := func() []string {
+		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
+		require.NoError(t, err)
+		return got
+	}
+
+	for range 4 {
+		inst, err := rt.Create(ctx, spec)
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		require.Eventually(t, func() bool {
+			got, serr := rt.Status(ctx, inst.ID)
+			return serr == nil && got.State.Terminal()
+		}, 5*time.Second, 10*time.Millisecond)
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+	}
+	require.Len(t, files(), 2, "only the current instance's log and port files remain")
+
+	require.NoError(t, rt.Remove(ctx, runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)))
+	require.Empty(t, files(), "Remove deletes the last instance's files")
+}

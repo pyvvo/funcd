@@ -78,9 +78,12 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// An exited instance is replaced (ADR-0142), as containerd allows once Stop has deleted the container,
-	// so a replica can be re-created after it stopped or crashed.
-	if old, ok := d.instances[id]; ok && !old.state.Terminal() {
-		return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
+	// so a replica can be re-created after it stopped or crashed. The replaced instance's files go with it.
+	if old, ok := d.instances[id]; ok {
+		if !old.state.Terminal() {
+			return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
+		}
+		removeFiles(old)
 	}
 	inst := &instance{
 		spec:      spec,
@@ -288,11 +291,16 @@ func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	}
 	delete(d.instances, id)
 	d.mu.Unlock()
+	removeFiles(inst)
+	return nil
+}
+
+// removeFiles deletes an instance's driver-owned port file and, when the driver created it, its log file.
+func removeFiles(inst *instance) {
 	_ = os.Remove(inst.portFile)
 	if inst.spec.LogPath == "" {
 		_ = os.Remove(inst.logPath)
 	}
-	return nil
 }
 
 // Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM.
