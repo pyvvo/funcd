@@ -252,11 +252,7 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
 	if pinned != nil && len(pinned.Input) > 0 {
 		if diffs := v1.CheckInput(input, pinned.Input); len(diffs) > 0 {
-			rec.Phase = runFailed
-			if err := e.persist(ctx, rec, rs, outputs); err != nil {
-				return nil, err
-			}
-			return rec, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs))
+			return e.fail(ctx, rec, rs, outputs, spec, input, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs)))
 		}
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
@@ -478,12 +474,15 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 	}
 	// Run-timeout is start-relative and excludes paused time (ADR-0094 guarantee, ADR-0096): a run
 	// now spans reconciles (a builtin wait yields), so a single-drive ctx deadline can't bound it.
+	// runCtx bounds the steps only: fail() runs the onFailure handler on ctx, so a RunTimedOut run
+	// still invokes it.
+	runCtx := ctx
 	if spec.Timeout > 0 {
 		if e.clock.Now().UnixNano() > runDeadline(rec, spec) {
 			return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(context.DeadlineExceeded))
 		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, runDeadline(rec, spec)))
+		runCtx, cancel = context.WithDeadline(ctx, time.Unix(0, runDeadline(rec, spec)))
 		defer cancel()
 	}
 
@@ -510,19 +509,19 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 		//    either a builtin (run in-engine) or a function (dispatched); a builtin wait may PARK
 		//    the run (yield), returning the non-terminal record so the reconciler requeues.
 		for _, n := range batch {
-			if ctx.Err() != nil { // run deadline hit between steps
-				return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+			if runCtx.Err() != nil { // run deadline hit between steps
+				return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(runCtx.Err()))
 			}
 			st := specStep(spec, n.name)
 			if st != nil && st.Builtin != nil {
 				// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
 				// then it Succeeds. No dispatch, no special state (ADR-0096).
 				e.setRunning(n)
-				out, err := e.runBuiltin(ctx, st, n, input, outputs)
+				out, err := e.runBuiltin(runCtx, st, n, input, outputs)
 				if err != nil {
-					e.markFailed(n, err)  // ADR-0100: builtin passes its raw cause straight in
-					if ctx.Err() != nil { // the run deadline interrupted a blocking wait
-						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+					e.markFailed(n, err)     // ADR-0100: builtin passes its raw cause straight in
+					if runCtx.Err() != nil { // the run deadline interrupted a blocking wait
+						return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(runCtx.Err()))
 					}
 					return e.fail(ctx, rec, rs, outputs, spec, input, err)
 				}
@@ -532,7 +531,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 			}
 			if st != nil && st.Workflow != nil { // a sub-workflow step runs a child workflow inline (ADR-0099)
 				e.setRunning(n)
-				out, cerr := e.runChild(ctx, rec, st.Workflow.Ref, n, input, outputs)
+				out, cerr := e.runChild(runCtx, rec, st.Workflow.Ref, n, input, outputs)
 				if cerr != nil {
 					e.markFailed(n, cerr) // ADR-0100: the child's raw failure cause
 					return e.fail(ctx, rec, rs, outputs, spec, input, cerr)
@@ -542,11 +541,11 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 				continue
 			}
 			e.setRunning(n)
-			out, err := e.dispatchStep(ctx, rec, spec, n, input, outputs)
+			out, err := e.dispatchStep(runCtx, rec, spec, n, input, outputs)
 			if err != nil {
-				e.markFailed(n, err)  // ADR-0100: errMsg already stamped (bare cause) by dispatchStep
-				if ctx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
-					return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(ctx.Err()))
+				e.markFailed(n, err)     // ADR-0100: errMsg already stamped (bare cause) by dispatchStep
+				if runCtx.Err() != nil { // the run deadline (not a per-step timeout) caused the failure
+					return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(runCtx.Err()))
 				}
 				return e.fail(ctx, rec, rs, outputs, spec, input, err)
 			}

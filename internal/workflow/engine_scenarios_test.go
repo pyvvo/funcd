@@ -71,6 +71,53 @@ func TestOnFailureHandlerRuns(t *testing.T) {
 	}
 }
 
+// liveCtxDispatcher blocks step block until its context ends and, like the HTTP dispatcher, sends
+// nothing once the context has ended; the rest goes to the embedded fake, which counts it.
+type liveCtxDispatcher struct {
+	*fakeDispatcher
+	block v1.ObjectName
+}
+
+func (d liveCtxDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == d.block {
+		<-ctx.Done()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return d.fakeDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #118: onFailure fires iff the run ends Failed (ADR-0094), including RunTimedOut and the
+// run-start InputSchemaMismatch fast-fail.
+func TestIssue118_OnFailureFiresOnRunTimeoutAndInputMismatch(t *testing.T) {
+	f := newFake()
+	e := newTestEngine(t, liveCtxDispatcher{fakeDispatcher: f, block: "slow"}, Config{})
+	spc := spec(step("slow", ""), step("notify", ""))
+	spc.OnFailure = "notify"
+	spc.Timeout = 20 * time.Millisecond
+	rec, err := e.Execute(context.Background(), "default", "run-to", "wf", spc, json.RawMessage(`{}`), StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "RunTimedOut") || rec.Phase != runFailed {
+		t.Fatalf("want a RunTimedOut Failed run, got %v (err %v)", rec, err)
+	}
+	if f.calls["notify"] != 1 {
+		t.Errorf("RunTimedOut: onFailure handler dispatched %d times, want 1", f.calls["notify"])
+	}
+
+	f = newFake()
+	e = newTestEngine(t, f, Config{})
+	spc = spec(step("a", ""), step("notify", ""))
+	spc.OnFailure = "notify"
+	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
+	rec, err = e.Execute(context.Background(), "default", "run-im", "wf", spc, json.RawMessage(`{}`), StartOptions{Contract: contract})
+	if err == nil || !strings.Contains(err.Error(), "InputSchemaMismatch") || rec.Phase != runFailed {
+		t.Fatalf("want an InputSchemaMismatch Failed run, got %v (err %v)", rec, err)
+	}
+	if f.calls["notify"] != 1 || f.calls["a"] != 0 {
+		t.Errorf("InputSchemaMismatch: dispatches notify=%d a=%d, want the handler once and no step", f.calls["notify"], f.calls["a"])
+	}
+}
+
 // scenario: join-any-exclusive-branch (engine level) — one branch runs, the other is Skipped, and
 // the merge step (join: any) runs with the surviving branch's output in its composite.
 func TestJoinAnyExclusiveBranch(t *testing.T) {
