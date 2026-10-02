@@ -118,8 +118,8 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	require.DirExists(t, filepath.Join(cwd, "data", "blob"))
 }
 
-// issue 331: URL syntax in an absolute storage.dataDir ('#', '?', '%') must not change the file blob store's
-// path: the daemon opens exactly <dataDir>/blob and writes nothing beside the dataDir.
+// issue 331: the daemon starts on an absolute storage.dataDir that holds URL syntax ('#', '?', '%') and creates
+// nothing beside it. Where the bucket's objects land is checked by the gocloud package's TestIssue331 test.
 func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
 	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
 		t.Run(name, func(t *testing.T) {
@@ -137,7 +137,6 @@ func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
 			p, err := funcd.New(all...)
 			require.NoError(t, err)
 			require.NoError(t, p.Shutdown(context.Background()))
-			require.DirExists(t, filepath.Join(dataDir, "blob"))
 			entries, err := os.ReadDir(base)
 			require.NoError(t, err)
 			require.Len(t, entries, 1, "nothing lands outside the dataDir")
