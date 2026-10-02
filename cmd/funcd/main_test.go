@@ -206,6 +206,43 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
 }
 
+// Issue #184: a python that cannot import the shim (too old for its syntax, or missing
+// fastjsonschema) is not registered for the python* family; startup reports why instead. Counts are
+// relative to the wiring with no python, so the host's interpreters and node options don't change them.
+func TestIssue184_UnusablePythonNotRegistered(t *testing.T) {
+	t.Setenv("FUNCD_RUNTIME", "")
+	t.Setenv("FUNCD_NODE", "node")
+	t.Setenv("PATH", "")
+	wire := func(t *testing.T, python string) (int, string) {
+		t.Helper()
+		t.Setenv("FUNCD_PYTHON", python)
+		var logs strings.Builder
+		opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.NewTextHandler(&logs, nil)))
+		require.NoError(t, err, "an unusable python degrades, never errors")
+		t.Cleanup(func() { _ = closeExec() })
+		return len(opts), logs.String()
+	}
+	noPython, _ := wire(t, "")
+
+	for _, tc := range []struct {
+		name      string
+		script    string
+		extraOpts int
+		wantLog   string
+	}{
+		{"cannot-load", "echo \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n", 0, "fastjsonschema"},
+		{"loads", "exit 0\n", 2, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			python := filepath.Join(t.TempDir(), "python3")
+			require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\n"+tc.script), 0o700))
+			n, logs := wire(t, python)
+			require.Equal(t, noPython+tc.extraOpts, n, "the python shim and pool host are wired only when python can load the shim")
+			require.Contains(t, logs, tc.wantLog, "startup names why python functions cannot run")
+		})
+	}
+}
+
 // scenario: container-mode-selected — FUNCD_RUNTIME=containerd routes through the
 // ctrmanager (ADR-0054): with no --containerd it takes the private-managed path, which off
 // Linux reports "Linux-only" and on Linux-non-root reports "needs root" → executionOptions
