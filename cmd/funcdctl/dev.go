@@ -975,11 +975,16 @@ func detectWorkflow(op, path string) (*v1.Workflow, bool, error) {
 	if yaml.Unmarshal(data, &probe) != nil || probe.Kind != string(v1.KindWorkflow) {
 		return nil, false, nil
 	}
-	var wf v1.Workflow
-	if uerr := yaml.Unmarshal(data, &wf); uerr != nil {
-		return nil, false, fault.Invalidf(op, "parse workflow %q: %v", path, uerr)
+	// The same decode as `funcdctl apply`: bare y/n keys stay strings (#63), unknown keys fail (#64).
+	obj, derr := sdk.DecodeManifest(data)
+	if derr != nil {
+		return nil, false, fault.Invalidf(op, "parse workflow %q: %v", path, derr)
 	}
-	return &wf, true, nil
+	wf, ok := obj.(*v1.Workflow)
+	if !ok {
+		return nil, false, fault.Invalidf(op, "parse workflow %q: decoded %T, want a Workflow", path, obj)
+	}
+	return wf, true, nil
 }
 
 // tagStem extracts the tag stem of a workflow step's `function.image` (Decision 8): the segment after the
