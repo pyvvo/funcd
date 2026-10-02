@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gofrs/flock"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
@@ -399,11 +401,11 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 		if merr := os.MkdirAll(dir, 0o750); merr != nil {
 			return nil, "", fault.Wrapf(merr, fault.Internal, op, "create layout dir")
 		}
-		store, serr := oci.New(dir)
-		if serr != nil {
+		var store *oci.Store
+		if serr := withLayout(dir, func(s *oci.Store) error { store = s; return nil }); serr != nil {
 			return nil, "", fault.Wrapf(serr, fault.Internal, op, "open OCI layout %q", dir)
 		}
-		return store, tag, nil
+		return &layoutTarget{ReadOnlyTarget: store, dir: dir}, tag, nil
 	}
 	repo, rerr := remote.NewRepository(ref)
 	if rerr != nil {
@@ -413,6 +415,40 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 		repo.Client = &auth.Client{Client: auth.DefaultClient.Client, Cache: auth.NewCache(), Credential: credentials.Credential(credStore)}
 	}
 	return repo, repo.Reference.Reference, nil
+}
+
+// layoutTarget is a local OCI layout. oras-go's oci.Store reads index.json once, when it opens, and rewrites the whole
+// file on every manifest push and tag, with locking that holds only inside one process. So reads use the store
+// resolveTarget opened, and each write opens the store again under the layout lock: parallel pushes into one layout
+// then add to the index.json the other wrote instead of overwriting it (issue #97).
+type layoutTarget struct {
+	oras.ReadOnlyTarget
+	dir string
+}
+
+func (l *layoutTarget) Push(ctx context.Context, expected ocispec.Descriptor, r io.Reader) error {
+	return withLayout(l.dir, func(s *oci.Store) error { return s.Push(ctx, expected, r) })
+}
+
+func (l *layoutTarget) Tag(ctx context.Context, desc ocispec.Descriptor, reference string) error {
+	return withLayout(l.dir, func(s *oci.Store) error { return s.Tag(ctx, desc, reference) })
+}
+
+// withLayout opens the OCI store at dir and runs fn while it holds an exclusive lock on the layout directory, so no
+// other process rewrites index.json between the store reading it and fn writing it. O_RDONLY without O_CREATE locks
+// the directory itself, so no lock file lands in the layout.
+func withLayout(dir string, fn func(*oci.Store) error) error {
+	const op = "artifact.withLayout"
+	lock := flock.New(dir, flock.SetFlag(os.O_RDONLY))
+	if err := lock.Lock(); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "lock OCI layout %q", dir)
+	}
+	defer func() { _ = lock.Unlock() }()
+	store, err := oci.New(dir)
+	if err != nil {
+		return err
+	}
+	return fn(store)
 }
 
 // parseLocalRef splits oci-layout://<dir>[:<tag>] into its directory + optional tag. A
