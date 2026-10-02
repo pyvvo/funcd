@@ -136,7 +136,8 @@ func gzipMW() func(http.Handler) http.Handler {
 }
 
 // gzipWriter gzips the response, but only for non-streaming, non-upgrade responses; it decides at the
-// first WriteHeader/Write (once the Content-Type/Connection headers are set) and forwards Flusher/Hijacker.
+// final WriteHeader or the first Write (once the Content-Type/Connection headers are set) and forwards
+// Flusher/Hijacker.
 type gzipWriter struct {
 	http.ResponseWriter
 	gz      *gzip.Writer
@@ -165,7 +166,10 @@ func (g *gzipWriter) decide(code int) {
 }
 
 func (g *gzipWriter) WriteHeader(code int) {
-	g.decide(code)
+	// A 1xx is interim: httputil.ReverseProxy relays it and then clears the headers (#305).
+	if code < 100 || code > 199 || code == http.StatusSwitchingProtocols {
+		g.decide(code)
+	}
 	g.ResponseWriter.WriteHeader(code)
 }
 
