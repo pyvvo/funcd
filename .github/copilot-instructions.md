@@ -319,8 +319,10 @@ rules that did it:
   e2e suite or `go test ./...` inside a per-item fixer or reviewer.
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
-  own worktree under the session scratchpad. Lima lanes need a checkout under `$HOME` (colima) and one VM at a
-  time, so they run in a single serial stage.
+  own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of
+  the repo, so parallel agents pop each other's changes (a revert check compares with `git show origin/main:<file>`
+  and `go test -overlay`). Lima lanes need a checkout under `$HOME` (colima) and one VM at a time: two VMs share
+  the forwarded 8080/8081 ports, so the second lane's suite talks to the first VM. They run in a single serial stage.
 - **Append-only shared files conflict.** Parallel PRs that each append to `docs/reviews/model-ledger.json` and
   regenerate `model-scorecard.md` conflict one after another; record a batch's ledger rows in one ledger PR.
 - **Model per role.** Fixers and reviewers on the strongest model (reviews at medium effort held their depth);
@@ -456,6 +458,13 @@ under `$HOME`: from anywhere else (a `/tmp` worktree) a `docker run -v` bind mou
 bundle build, silently writes into the VM instead of the host. colima can stop/die mid-session (sleep, resource pressure); when
 a containerd lane suddenly fails at the image-build step, check colima **first**. Keep it running;
 don't stop it mid-session. (The Venom e2e suites themselves are covered by the `venom-e2e` skill.)
+
+### 4. A test that assembles a platform needs a short data dir
+
+Startup rejects an invoke socket dir whose socket paths overrun the Unix limit (#41: 103 bytes on macOS, 107 on
+Linux). A `t.TempDir()` holds the test name, and under a nix shell's `TMPDIR` it easily passes that limit, so
+`funcd.New` fails with `socket dir … is too long` on one host and not another. Take the data dir from
+`shortDataDir(t)` (`cmd/funcd/main_test.go`) or a short `os.MkdirTemp("", "funcd")`.
 
 ## Before you finish any skill run — propagation checklist
 
