@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -181,7 +183,7 @@ func TestExecutionOptionsProcessExtractsShim(t *testing.T) {
 	t.Setenv("FUNCD_NODE", node)
 	dir := t.TempDir()
 
-	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(dir))
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(dir), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	require.NotEmpty(t, opts, "process mode wires the runtime + shim")
@@ -198,7 +200,7 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	t.Setenv("FUNCD_NODE", "") // no explicit node
 	t.Setenv("PATH", "")       // and none on PATH
 
-	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.DiscardHandler))
 	require.NoError(t, err, "missing node degrades, never errors")
 	t.Cleanup(func() { _ = closeExec() })
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
@@ -219,7 +221,7 @@ func TestExecutionOptionsContainerdMode(t *testing.T) {
 	cfg.Runtime.Containerd.CNIConfDir = filepath.Join(t.TempDir(), "cni")
 	cfg.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
 	cfg.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
-	_, closeExec, err := executionOptions(context.Background(), cfg)
+	_, closeExec, err := executionOptions(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if closeExec != nil {
 		t.Cleanup(func() { _ = closeExec() })
 	}
@@ -368,6 +370,39 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
 	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
 	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
+}
+
+// Issue 192: the fatal startup error and the runtime-detection lines go through the logger built
+// from log.format/level (ADR-0061 §6) — none reaches the global slog default.
+func TestIssue192_StartupLinesUseConfiguredLogger(t *testing.T) {
+	var leaked bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&leaked, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Setenv("FUNCD_RUNTIME", "")
+	t.Setenv("FUNCD_NODE", "")
+	t.Setenv("PATH", "") // node not found ⇒ the WARN detection line
+
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \""+busy.Addr().String()+"\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+
+			"log:\n  format: json\n  level: error\n"), 0o600))
+
+	var out bytes.Buffer
+	cmd := newRootCmd(&out)
+	cmd.SetArgs([]string{"--config", path})
+	require.ErrorContains(t, cmd.Execute(), "bind data-plane listener")
+
+	require.Empty(t, leaked.String(), "a startup line bypassed the configured logger")
+	var line struct{ Level, Msg, Error string }
+	require.NoError(t, json.Unmarshal(out.Bytes(), &line), "want only the fatal error as one JSON line, got %q", out.String())
+	require.Equal(t, "ERROR", line.Level)
+	require.Contains(t, line.Error, "bind data-plane listener")
 }
 
 // scenario: secrets-keyfile-activates-encryption — a 32-byte secrets.encryptionKeyFile wires the

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,13 +53,19 @@ import (
 
 func main() {
 	if err := newRootCmd(os.Stdout).Execute(); err != nil {
-		slog.Error("funcd", "error", err)
+		if !errors.As(err, new(loggedError)) {
+			slog.Error("funcd", "error", err) // failed before the configured logger existed
+		}
 		os.Exit(1)
 	}
 }
 
+// loggedError is a serve failure the configured logger already wrote, so main does not log it again.
+type loggedError struct{ error }
+
 // newRootCmd builds the funcd daemon command tree (ADR-0042): the root runs the platform; the
-// `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam).
+// `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam), and the
+// daemon logs go to out too.
 func newRootCmd(out io.Writer) *cobra.Command {
 	var memoryOnly bool
 	var configPath string
@@ -72,7 +79,7 @@ func newRootCmd(out io.Writer) *cobra.Command {
 			if cmd.Flags().Changed("memory") {
 				memoryFlag = &memoryOnly
 			}
-			return serve(cmd.Context(), configPath, memoryFlag)
+			return serve(cmd.Context(), configPath, memoryFlag, out)
 		},
 	}
 	root.Flags().BoolVar(&memoryOnly, "memory", false,
@@ -96,8 +103,9 @@ func newRootCmd(out io.Writer) *cobra.Command {
 
 // serve resolves the operator config (funcdconfig.yaml, ADR-0061; precedence flag > env > file >
 // default), assembles the platform from it, and runs until a signal arrives. memoryFlag is the
-// --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate).
-func serve(parent context.Context, configPath string, memoryFlag *bool) error {
+// --memory flag value (nil ⇒ the flag was not set; the config/default decides the substrate). The
+// logger writes to out; once it exists, serve logs its own failure and returns it as a loggedError.
+func serve(parent context.Context, configPath string, memoryFlag *bool, out io.Writer) (err error) {
 	// Locate + load funcdconfig.yaml into the effective config (file + env + default, validated; ADR-0062).
 	path, err := config.Locate(configPath)
 	if err != nil {
@@ -113,11 +121,17 @@ func serve(parent context.Context, configPath string, memoryFlag *bool) error {
 	}
 
 	// Logger from log.format/level (overrides the preset's logger, ADR-0061 §6).
-	logger, err := buildLogger(cfg)
+	logger, err := buildLogger(cfg, out)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}
 	root := logger.Root()
+	defer func() {
+		if err != nil {
+			root.ErrorContext(parent, "funcd", "error", err)
+			err = loggedError{err}
+		}
+	}()
 
 	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root)
 	if err != nil {
@@ -338,7 +352,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
-	execOpts, closeExec, err := executionOptions(ctx, cfg)
+	execOpts, closeExec, err := executionOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
@@ -347,12 +361,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 }
 
 // buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
-func buildLogger(cfg config.Config) (*observability.Logger, error) {
+func buildLogger(cfg config.Config, w io.Writer) (*observability.Logger, error) {
 	format := observability.FormatJSON
 	if cfg.Log.Format == "text" {
 		format = observability.FormatText
 	}
-	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.Log.Level)}, os.Stdout)
+	return observability.NewLogger(observability.Config{Format: format, Level: parseLevel(cfg.Log.Level)}, w)
 }
 
 // parseLevel maps a validated level string to a slog.Level (config already rejected bad values).
@@ -582,7 +596,7 @@ func noopClose() error { return nil }
 // (its lane settings from cfg.Runtime.Containerd); else (default) → the process driver running the embedded
 // Node shim. It returns a closer the caller must defer — for containerd mode it stops the
 // ctrmanager-supervised private containerd (ADR-0054); for process mode it is a no-op.
-func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, func() error, error) {
+func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logger) ([]funcd.Option, func() error, error) {
 	if cfg.Runtime.Mode == "containerd" {
 		c := cfg.Runtime.Containerd
 		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
@@ -626,7 +640,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 		}
 	}
 	if node == "" {
-		slog.Warn("funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
+		logger.WarnContext(ctx, "funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
 		return opts, noopClose, nil
 	}
 	shimPath := filepath.Join(cfg.Storage.DataDir, "shim.mjs")
@@ -650,7 +664,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 		}
 	}
 	if python == "" {
-		slog.Info("funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
+		logger.InfoContext(ctx, "funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
 		return opts, noopClose, nil
 	}
 	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.Storage.DataDir, "shim-python"))
@@ -665,7 +679,7 @@ func executionOptions(ctx context.Context, cfg config.Config) ([]funcd.Option, f
 	if pythonAtLeast314(python) {
 		opts = append(opts, funcd.WithPoolShimFor("python", python, poolEntry))
 	} else {
-		slog.Info("funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
+		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
 }
