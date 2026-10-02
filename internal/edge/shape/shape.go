@@ -124,11 +124,7 @@ func (h *headerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hi
 func gzipMW() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !acceptsGzip(r.Header.Values("Accept-Encoding")) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			gw := &gzipWriter{ResponseWriter: w}
+			gw := &gzipWriter{ResponseWriter: w, accept: acceptsGzip(r.Header.Values("Accept-Encoding"))}
 			defer gw.close()
 			next.ServeHTTP(gw, r)
 		})
@@ -169,6 +165,7 @@ func acceptsGzip(values []string) bool {
 type gzipWriter struct {
 	http.ResponseWriter
 	gz      *gzip.Writer
+	accept  bool
 	decided bool
 }
 
@@ -187,6 +184,10 @@ func (g *gzipWriter) decide(code int) {
 		code == http.StatusNotModified || h.Get("Content-Range") != ""
 	if streaming || unencodable || h.Get("Content-Encoding") != "" {
 		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
+	}
+	h.Add("Vary", "Accept-Encoding") // RFC 9110 §12.5.5: both the gzip and the identity variant depend on it
+	if !g.accept {
+		return
 	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown

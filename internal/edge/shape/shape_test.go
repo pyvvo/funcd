@@ -212,6 +212,26 @@ func TestIssue305_CompressionDecidesAtFinalStatusAfter1xx(t *testing.T) {
 	}
 }
 
+// Whether a compressible response is gzipped depends on Accept-Encoding, so both variants carry Vary.
+func TestIssue336_CompressibleResponseVariesOnAcceptEncoding(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "body")
+	})
+	mw := shape.Chain(shape.Config{Compression: true})
+
+	req := httptest.NewRequest("GET", "http://x/y", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := serve(mw, next, req)
+	require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
+	require.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding", "the gzip variant varies on Accept-Encoding")
+
+	rec = serve(mw, next, httptest.NewRequest("GET", "http://x/y", nil))
+	require.Empty(t, rec.Header().Get("Content-Encoding"))
+	require.Equal(t, "body", rec.Body.String())
+	require.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding", "the identity variant varies on Accept-Encoding")
+}
+
 // The shaping wrappers forward http.Flusher + http.Hijacker (SSE/WS must not break).
 func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	// Headers + compression both wrap the writer — both must forward the streaming interfaces.
