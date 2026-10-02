@@ -480,11 +480,6 @@ func (a *cli) printDevEnv(path, entryFlag string, cfg devConfig) error {
 	return werr
 }
 
-// bootDev is the shared boot path for a function set (single, multi, or a workflow's step functions): it
-// synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
-// function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
-// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then any
-// extra objects (the Workflow). It returns once serving; the caller cancels ctx to stop.
 // catalogAliases returns the distinct catalog binding aliases across the planned functions (sorted) —
 // the trigger for wiring the dev process-mode catalog engine (ADR-0125 Decision 5) and what the
 // banner lists as served catalogs. Empty ⇒ no catalog is bound.
@@ -503,6 +498,11 @@ func catalogAliases(pfs []plannedFunc) []string {
 	return out
 }
 
+// bootDev is the shared boot path for a function set (single, multi, or a workflow's step functions): it
+// synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
+// function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
+// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then any
+// extra objects (the Workflow). It returns once serving; the caller cancels ctx to stop.
 func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraObjs []v1.Object, cfg devConfig) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
@@ -1598,11 +1598,6 @@ func resolveSecretData(op, secretName string, entry map[string]string) (map[stri
 	return data, nil
 }
 
-// devShimOptions extracts the embedded Node + Python runtime shims to a temp dir and returns the
-// funcd options that launch them on the process runtime (mirroring cmd/funcd's process-mode wiring).
-// A default shim (node when present, else python) is always registered so the reconciler's
-// materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
-//
 // resolveInterpreter resolves a manifest dev.python/dev.node value: empty ⇒ "", absolute ⇒ as-is, else
 // joined against the manifest dir (so `.venv/bin/python` points at the project's virtualenv).
 func resolveInterpreter(p, baseDir string) string {
@@ -1612,6 +1607,10 @@ func resolveInterpreter(p, baseDir string) string {
 	return filepath.Join(baseDir, p)
 }
 
+// devShimOptions extracts the embedded Node + Python runtime shims to a temp dir and returns the
+// funcd options that launch them on the process runtime (mirroring cmd/funcd's process-mode wiring).
+// A default shim (node when present, else python) is always registered so the reconciler's
+// materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
 func devShimOptions(op string, dev sdk.Dev, baseDir string) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
