@@ -540,24 +540,6 @@ func TestPauseAndResume(t *testing.T) {
 	}
 }
 
-// manualClock is a clock the test moves forward.
-type manualClock struct {
-	mu sync.Mutex
-	t  time.Time
-}
-
-func (c *manualClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
-}
-
-func (c *manualClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
-}
-
 // Issue #177: time spent Paused is excluded from the run timeout (ADR-0094 pause-and-resume-run). A run
 // with a 10s timeout that ran 1s and then stayed paused for 60s (re-paused by a later reconcile) resumes
 // and runs its pending step instead of failing with RunTimedOut.
