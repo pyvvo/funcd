@@ -725,3 +725,43 @@ func TestStatusWithoutRevisionKeepsItsWorker(t *testing.T) {
 	require.False(t, h.rt.wasRemoved(runtime.NewInstanceID("default", "echo", "echo-1", 0)))
 	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
 }
+
+// Issue 24: a pass over a broken redeploy beside a serving revision writes nothing, so its write cannot
+// retrigger the pass through the watch (ADR-0143 Decision 4.6, ADR-0047 Decision 1).
+func TestIssue24_BrokenRedeployPassWritesNothing(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		crash bool
+		phase v1.Phase
+	}{
+		{"serving-ready", false, v1.PhaseReady},
+		{"serving-degraded", true, v1.PhaseDegraded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) {
+				d.SupervisionPeriod = time.Hour // holds a crashed serving worker in its backoff
+			})
+			h.createFn(t, "echo")
+			h.reconcile(t, "echo")
+			h.rt.failRevision("echo-2", true)
+			h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "broken" })
+			h.reconcile(t, "echo")
+			if tc.crash {
+				h.rt.exitRevision("echo", "echo-1", 0, runtime.StateFailed, 0)
+			}
+			h.reconcile(t, "echo")
+			fn := h.getFn(t, "echo")
+			require.Equal(t, tc.phase, fn.Status.Phase)
+			require.Equal(t, "ShapeInvalid", h.condition(t, "echo", "RevisionReady").Reason)
+			require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "echo"))
+
+			for range 3 {
+				h.reconcile(t, "echo")
+			}
+			require.Equal(t, fn.ResourceVersion, h.getFn(t, "echo").ResourceVersion, "a pass that observes no change writes nothing")
+		})
+	}
+}
