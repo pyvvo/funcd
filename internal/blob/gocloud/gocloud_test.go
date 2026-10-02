@@ -2,8 +2,12 @@ package gocloud_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/blobcontract"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
@@ -32,4 +36,70 @@ func TestScenario_DriverConformanceParity(t *testing.T) {
 			return b
 		})
 	})
+}
+
+// TestIssue160_UnstorableKeysAreInvalidAndNeverAlias: keys are opaque on every backend
+// (ADR-0007 §1). The file backend maps a key to an OS path, so a key it cannot hold must
+// fail fault.Invalid (the S3 gateway's 400), not Internal (a retried 500), and a key must
+// never read or write another key's object.
+func TestIssue160_UnstorableKeysAreInvalidAndNeverAlias(t *testing.T) {
+	ctx := context.Background()
+	backends := map[string]string{"memory": "mem://", "file": "file://"}
+	for name, scheme := range backends {
+		open := func(t *testing.T) blob.Bucket {
+			t.Helper()
+			url := scheme
+			if name == "file" {
+				url += t.TempDir()
+			}
+			b, err := gocloud.Open(ctx, url)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			return b
+		}
+		storedOrInvalid := func(t *testing.T, b blob.Bucket, key string) {
+			t.Helper()
+			data := []byte("v:" + key)
+			if err := b.Put(ctx, key, data); err != nil {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "Put: %v", err)
+				return
+			}
+			got, err := b.Get(ctx, key)
+			require.NoError(t, err)
+			require.Equal(t, data, got)
+		}
+		t.Run(name, func(t *testing.T) {
+			for label, key := range map[string]string{
+				"attrs suffix":       "bronze/x.attrs",
+				"300-byte segment":   "bronze/" + strings.Repeat("a", 300),
+				"1024-byte key":      "bronze/" + strings.Repeat("a", 1017),
+				"1999-byte deep key": "bronze/" + strings.Repeat("abcdefghi/", 199) + "x",
+			} {
+				t.Run(label, func(t *testing.T) { storedOrInvalid(t, open(t), key) })
+			}
+			t.Run("object over an existing prefix", func(t *testing.T) {
+				b := open(t)
+				require.NoError(t, b.Put(ctx, "bronze/x", []byte("x")))
+				storedOrInvalid(t, b, "bronze")
+			})
+			t.Run("prefix under an existing object", func(t *testing.T) {
+				b := open(t)
+				require.NoError(t, b.Put(ctx, "bronze", []byte("x")))
+				storedOrInvalid(t, b, "bronze/x")
+			})
+			for key, other := range map[string]string{
+				"bronze/./dot": "bronze/dot",
+				"./dot":        "dot",
+				"bronze/x/..":  "bronze",
+				"/dot":         "dot",
+			} {
+				t.Run("alias "+key, func(t *testing.T) {
+					b := open(t)
+					storedOrInvalid(t, b, key)
+					_, err := b.Get(ctx, other)
+					require.Equal(t, fault.NotFound, fault.KindOf(err), "Get(%q) read the object of %q", other, key)
+				})
+			}
+		})
+	}
 }

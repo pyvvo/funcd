@@ -3,6 +3,7 @@ package function_test
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 )
 
 // testPeriod is the supervision period the ADR-0142 tests run with.
@@ -238,4 +240,50 @@ func TestReclaimDuringRepairBackoffIsNotAShapeFailure(t *testing.T) {
 	time.Sleep(testPeriod)
 	h.reconcile(t, "nap")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "nap").Status.Phase, "the wake serves once the backoff has passed")
+}
+
+// createCounter counts the Creates its runtime serves.
+type createCounter struct {
+	runtime.Runtime
+	creates atomic.Int32
+}
+
+func (c *createCounter) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
+	c.creates.Add(1)
+	return c.Runtime.Create(ctx, spec)
+}
+
+// Issue #73: a worker that cannot start (its interpreter is missing) ends Failed with a reason naming the start error,
+// and a later pass starts the same instances again instead of replacing them, writing nothing while it still fails.
+func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
+	t.Parallel()
+	rt := &createCounter{Runtime: process.New()}
+	t.Cleanup(func() { _ = rt.Close() })
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
+		d.Runtime = rt
+		d.ShimCommand = []string{"/nonexistent/bin/node", "/opt/funcd/shim.mjs"}
+	})
+	h.createFn(t, "calm")
+	fn := h.getFn(t, "calm")
+	fn.Spec.Replicas = 2
+	_, err := h.st.Update(context.Background(), fn)
+	require.NoError(t, err)
+
+	res := h.reconcile(t, "calm")
+	fn = h.getFn(t, "calm")
+	require.Equal(t, v1.PhaseFailed, fn.Status.Phase)
+	require.Equal(t, fn.Generation, fn.Status.ObservedGeneration)
+	ready, ok := fn.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, ready.Status)
+	require.Equal(t, "StartFailed", ready.Reason)
+	require.Contains(t, ready.Message, "/nonexistent/bin/node")
+	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "calm"), "a worker that cannot start is not a shape failure")
+	require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
+
+	rv := fn.ResourceVersion
+	res = h.reconcile(t, "calm")
+	require.EqualValues(t, 2, rt.creates.Load(), "the instances that failed to start are started again, not replaced")
+	require.Equal(t, rv, h.getFn(t, "calm").ResourceVersion, "a repeated start failure writes nothing")
+	require.Equal(t, testPeriod, res.RequeueAfter)
 }
