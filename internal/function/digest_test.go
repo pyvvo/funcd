@@ -174,3 +174,33 @@ func TestScenarioUnresolvableRefFails(t *testing.T) {
 	require.Equal(t, "ArtifactUnresolved", c.Reason)
 	require.Empty(t, h.mat.digest(), "never materialized")
 }
+
+// Issue 14: a Function deleted and then applied again under its name restarts at generation 1, the deleted Function's
+// revision 1 still in the store. The re-created Function's revision 1 pins the artifact its own manifest names.
+func TestIssue14_RecreatedFunctionRunsItsOwnArtifact(t *testing.T) {
+	t.Parallel()
+	res := &fakeResolver{digest: "sha256:V1"}
+	h := newDigestHarness(t, res)
+	h.applyFn(t, "greeter", "oci-layout://x:greeter", "")
+	h.reconcile(t, "greeter")
+	require.Equal(t, "sha256:V1", h.revisionDigest(t, "greeter", 1))
+
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "greeter", ""))
+	h.reconcile(t, "greeter")
+
+	res.mu.Lock()
+	res.digest = "sha256:V2"
+	res.mu.Unlock()
+	h.applyFn(t, "greeter", "oci-layout://x:greeter-v2", "")
+	h.reconcile(t, "greeter")
+
+	obj, err := h.st.Get(context.Background(), v1.KindRevision.GVK(), "default", "greeter-1")
+	require.NoError(t, err)
+	rev := obj.(*v1.Revision)
+	require.Equal(t, "oci-layout://x:greeter-v2", rev.Spec.Image, "revision 1 is the re-created Function's")
+	require.Equal(t, "sha256:V2", rev.Spec.ImageDigest, "revision 1 pins the re-created Function's artifact")
+	require.Equal(t, "sha256:V2", h.mat.digest(), "the worker runs the re-created Function's artifact")
+	obj, err = h.st.Get(context.Background(), v1.KindFunction.GVK(), "default", "greeter")
+	require.NoError(t, err)
+	require.Equal(t, "greeter-1", obj.(*v1.Function).Status.CurrentRevision)
+}
