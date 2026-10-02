@@ -857,10 +857,11 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
 			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
 			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.kv or non-empty data on Delete; still-bound table removal on Update). Binding/owner
-			// EXISTENCE (Function.spec.kv → an existing store/table; KVStore tables[].owner → a real Function)
-			// is RECONCILE-TIME (ADR-0121): the Function reconciler holds a binding not-Ready until it resolves,
-			// and the owner UID is fail-closed at the PDP until the owner exists — no write-time existence gate.
+			// spec.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
+			// Update). Binding/owner EXISTENCE (Function.spec.kv → an existing store/table; KVStore
+			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
+			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
+			// exists — no write-time existence gate.
 			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
 			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
