@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/versity/versitygw/s3err"
@@ -16,6 +17,11 @@ import (
 	authz "github.com/pyvvo/funcd/internal/auth"
 )
 
+// multipartIdleExpiry is how long an upload may go without a part before it counts as
+// abandoned and its buffered parts are dropped: S3 keeps an incomplete upload until it is
+// aborted, but a client that crashed never aborts, and here the parts are daemon RAM.
+const multipartIdleExpiry = time.Hour
+
 // multipartStore buffers in-flight multipart uploads in memory (ADR-0080 Temporary
 // workarounds): the blob port has no streaming-multipart seam, so parts accumulate
 // and CompleteMultipartUpload assembles them into a single Put, bounded by maxUpload.
@@ -23,35 +29,55 @@ type multipartStore struct {
 	mu      sync.Mutex
 	uploads map[string]*upload // uploadID → buffered parts
 	next    uint64
+	now     func() time.Time
 }
 
 type upload struct {
 	bucket, key string
 	parts       map[int32][]byte
+	size        int64     // the sum of the buffered parts' lengths
+	touched     time.Time // the last Create or UploadPart
 }
 
 func newMultipartStore() *multipartStore {
-	return &multipartStore{uploads: map[string]*upload{}}
+	return &multipartStore{uploads: map[string]*upload{}, now: time.Now}
 }
 
+// create starts an upload and drops the abandoned ones: a new upload is the only way the
+// number of buffered uploads grows, so sweeping here keeps it to the recently active ones.
 func (m *multipartStore) create(bucket, key string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := m.now()
+	for id, u := range m.uploads {
+		if now.Sub(u.touched) > multipartIdleExpiry {
+			delete(m.uploads, id)
+		}
+	}
 	m.next++
 	id := "funcd-mpu-" + strconv.FormatUint(m.next, 10)
-	m.uploads[id] = &upload{bucket: bucket, key: key, parts: map[int32][]byte{}}
+	m.uploads[id] = &upload{bucket: bucket, key: key, parts: map[int32][]byte{}, touched: now}
 	return id
 }
 
-func (m *multipartStore) putPart(id string, num int32, data []byte) bool {
+// putPart buffers part num, replacing an earlier part of that number. It fails closed with
+// EntityTooLarge when the upload's total would pass maxUpload (ADR-0080), so an upload never
+// holds more than the cap.
+func (m *multipartStore) putPart(id string, num int32, data []byte, maxUpload int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.uploads[id]
 	if !ok {
-		return false
+		return s3err.GetAPIError(s3err.ErrNoSuchUpload)
+	}
+	size := u.size - int64(len(u.parts[num])) + int64(len(data))
+	if size > maxUpload {
+		return s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
 	u.parts[num] = data
-	return true
+	u.size = size
+	u.touched = m.now()
+	return nil
 }
 
 // assemble concatenates the parts in ascending part-number order and returns the
@@ -110,7 +136,7 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 	return s3response.InitiateMultipartUploadResult{Bucket: bucket, Key: key, UploadId: id}, nil
 }
 
-// UploadPart buffers one part (ADR-0080): s3::write PEP, capped per part by maxUpload.
+// UploadPart buffers one part (ADR-0080): s3::write PEP; the upload's total is capped by maxUpload.
 func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.UploadPartOutput, error) {
 	bucket := deref(in.Bucket)
 	prefix, _ := splitKey(deref(in.Key))
@@ -125,8 +151,8 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	if in.PartNumber != nil {
 		num = *in.PartNumber
 	}
-	if !b.mp.putPart(deref(in.UploadId), num, data) {
-		return nil, s3err.GetAPIError(s3err.ErrNoSuchUpload)
+	if perr := b.mp.putPart(deref(in.UploadId), num, data, b.maxUpload); perr != nil {
+		return nil, perr
 	}
 	return &awss3.UploadPartOutput{ETag: ptr(quotedETag(data))}, nil
 }
