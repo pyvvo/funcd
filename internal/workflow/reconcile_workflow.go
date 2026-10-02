@@ -48,6 +48,11 @@ type ContractResolver interface {
 // convention and the nodejs/python shim's FUNCD_HANDLER default (ADR-0094).
 const materializedHandler = "handle"
 
+// stepIdleTimeout is the idle reclaim delay of a materialized step Function, so minReplicas 0
+// scales it to zero between runs (ADR-0094); the blueprint's example idleTimeout. The workflow
+// spec has no idle-timeout field, and a Function with idleTimeout 0 is never reclaimed (ADR-0016).
+const stepIdleTimeout = 5 * time.Minute
+
 // WorkflowReconciler is the controller.Reconciler for the Workflow kind: it brings a
 // Workflow's owned step Functions and KVStores to the desired state (the Deployment→
 // ReplicaSet analogy, ADR-0094) via the Materializer. Run execution is the RunReconciler's
@@ -216,7 +221,7 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			// validation and serves without the author restating it on every step.
 			Handler:  materializedHandler,
 			Image:    st.Function.Image,
-			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas},
+			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: stepIdleTimeout},
 			Blob:     st.Function.Blob,
 			Secrets:  st.Function.Secrets,
 			Config:   st.Function.Config,

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,45 @@ func (f *fakeWaker) Wake(context.Context, activator.FunctionRef) (string, error)
 }
 
 type fakeGrant struct{ allow bool }
+
+// manualClock is an advancing clock.Clock for driving the activator's idle reclaim.
+type manualClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// zeroScaler records the functions the activator scales to zero.
+type zeroScaler struct {
+	mu   sync.Mutex
+	zero []activator.FunctionRef
+}
+
+func (z *zeroScaler) ScaleTo(_ context.Context, fn activator.FunctionRef, replicas int) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if replicas == 0 {
+		z.zero = append(z.zero, fn)
+	}
+	return nil
+}
+
+func (z *zeroScaler) reclaimed() []activator.FunctionRef {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return append([]activator.FunctionRef(nil), z.zero...)
+}
 
 func (f fakeGrant) Allow(v1.NamespaceName, v1.ObjectName) bool { return f.allow }
 
@@ -225,19 +265,6 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 	})
 }
 
-// recordingScaler records the replica targets the activator asks for.
-type recordingScaler struct{ targets []int }
-
-func (s *recordingScaler) ScaleTo(_ context.Context, _ activator.FunctionRef, replicas int) error {
-	s.targets = append(s.targets, replicas)
-	return nil
-}
-
-// manualClock is a clock the test moves by hand.
-type manualClock struct{ now time.Time }
-
-func (c *manualClock) Now() time.Time { return c.now }
-
 // Issue #48: a step dispatched to a warm function counts as its activity, so idle reclaim never fires
 // while steps keep arriving.
 func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
@@ -255,8 +282,8 @@ func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	ep := fakeEndpoints{upstream: srv.URL, ready: true}
-	clk := &manualClock{now: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)}
-	sc := &recordingScaler{}
+	clk := &manualClock{t: time.Unix(1000, 0)}
+	sc := &zeroScaler{}
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: ep, Scaler: sc, Clock: clk})
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +297,7 @@ func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
-		clk.now = clk.now.Add(40 * time.Second)
+		clk.advance(40 * time.Second)
 		if _, err := d.Dispatch(ctx, dispatchReq("busy")); err != nil {
 			t.Fatalf("Dispatch: %v", err)
 		}
@@ -278,7 +305,7 @@ func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(sc.targets) != 0 {
-		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.targets)
+	if len(sc.reclaimed()) != 0 {
+		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.reclaimed())
 	}
 }

@@ -110,24 +110,9 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 		return nil, fault.Forbiddenf(op, "target %q is not declared in run %q", req.Target, req.Run)
 	}
 	fn := activator.FunctionRef{Namespace: req.Namespace, Name: req.Target}
-	var upstream string
-	if d.waker != nil {
-		// Wake a warm target too: Wake records the call as activity, so idle reclaim never fires while
-		// steps keep arriving (issue #48); a ready target returns its upstream at once.
-		up, err := d.waker.Wake(ctx, fn)
-		if err != nil {
-			return nil, fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", req.Namespace, req.Target)
-		}
-		upstream = up
-	} else {
-		up, ready, err := d.endpoints.Upstream(ctx, fn)
-		if err != nil {
-			return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", req.Namespace, req.Target)
-		}
-		if !ready || up == "" {
-			return nil, fault.Unavailablef(op, "function %s/%s has no ready upstream", req.Namespace, req.Target)
-		}
-		upstream = up
+	upstream, err := d.upstream(ctx, fn)
+	if err != nil {
+		return nil, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(stepEvent(req)))
 	if err != nil {
@@ -179,6 +164,28 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 
 // errBodyMax is how much of a rejection's body its error keeps.
 const errBodyMax = 256
+
+// upstream resolves fn's ready upstream. With a Waker every dispatch goes through Wake, warm
+// ones too, so each step call counts as activity and idle reclaim takes a step function down
+// only when no step has used it (ADR-0033 §5); Wake wakes a cold one.
+func (d *HTTPDispatcher) upstream(ctx context.Context, fn activator.FunctionRef) (string, error) {
+	const op = "workflow.dispatch"
+	if d.waker != nil {
+		upstream, err := d.waker.Wake(ctx, fn)
+		if err != nil {
+			return "", fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", fn.Namespace, fn.Name)
+		}
+		return upstream, nil
+	}
+	upstream, ready, err := d.endpoints.Upstream(ctx, fn)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", fn.Namespace, fn.Name)
+	}
+	if !ready || upstream == "" {
+		return "", fault.Unavailablef(op, "function %s/%s has no ready upstream", fn.Namespace, fn.Name)
+	}
+	return upstream, nil
+}
 
 func truncate(b []byte) string {
 	if len(b) > errBodyMax {
