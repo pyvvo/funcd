@@ -9,18 +9,12 @@ import (
 
 // BlobProber probes whether a Bucket prefix holds any objects (ADR-0080): the deletion-protection
 // admission uses it to block deleting a bucket (or removing a prefix) that still holds data. Declared
-// HERE (like KVProber/StoreReader) so the admission package stays a near-leaf; the wiring adapts the
-// blob driver's List to it. Optional — a nil prober skips the data-emptiness check (binding-protection
-// still applies).
+// HERE (like KVProber/StoreReader) so the admission package stays a near-leaf; the wiring resolves the
+// Bucket to the substrate view the s3gateway writes, so the key layout has one owner. Optional — a nil
+// prober skips the data-emptiness check (binding-protection still applies).
 type BlobProber interface {
-	// HasAny reports whether any object exists under prefix.
-	HasAny(ctx context.Context, prefix string) (bool, error)
-}
-
-// bucketPrefix is the on-disk prefix a Bucket prefix sub-domain owns (ADR-0080): "<ns>/<bucket>/<prefix>/".
-// The s3gateway prefixes every object key by it; the deletion-protection probe uses the same shape.
-func bucketPrefix(ns v1.NamespaceName, bucket v1.ObjectName, prefix string) string {
-	return string(ns) + "/" + string(bucket) + "/" + prefix + "/"
+	// HasAny reports whether any object exists under the prefix of the namespace's bucket.
+	HasAny(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (bool, error)
 }
 
 // --- bucket-count quota (ADR-0080): Create on Bucket ------------------------------------------
@@ -124,7 +118,7 @@ func (a bucketDeletionProtection) admitDelete(ctx context.Context, req Request) 
 
 	if a.p != nil {
 		for _, p := range oldB.Spec.Prefixes {
-			has, perr := a.p.HasAny(ctx, bucketPrefix(ns, bucket, p.Name))
+			has, perr := a.p.HasAny(ctx, ns, bucket, p.Name)
 			if perr != nil {
 				return nil, fault.Wrapf(perr, fault.Internal, op, "probe bucket %q prefix %q for data", bucket, p.Name)
 			}
@@ -185,7 +179,7 @@ func (a bucketDeletionProtection) admitUpdate(ctx context.Context, req Request) 
 			}
 		}
 		if a.p != nil {
-			has, perr := a.p.HasAny(ctx, bucketPrefix(ns, bucket, name))
+			has, perr := a.p.HasAny(ctx, ns, bucket, name)
 			if perr != nil {
 				return nil, fault.Wrapf(perr, fault.Internal, op, "probe bucket %q prefix %q for data", bucket, name)
 			}
