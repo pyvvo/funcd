@@ -673,7 +673,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
 	if reason := pythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
-		slog.Warn("funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
+		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
 			"python", python, "reason", reason)
 		return opts, noopClose, nil
 	}

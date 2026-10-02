@@ -217,10 +217,7 @@ func TestIssue184_UnusablePythonNotRegistered(t *testing.T) {
 		t.Helper()
 		t.Setenv("FUNCD_PYTHON", python)
 		var logs strings.Builder
-		prev := slog.Default()
-		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-		opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
-		slog.SetDefault(prev)
+		opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.NewTextHandler(&logs, nil)))
 		require.NoError(t, err, "an unusable python degrades, never errors")
 		t.Cleanup(func() { _ = closeExec() })
 		return len(opts), logs.String()
