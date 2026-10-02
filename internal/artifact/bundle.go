@@ -245,7 +245,7 @@ func PushBundle(ctx context.Context, ref, dir, entry, runtime string, platform v
 	if platform != "" {
 		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, reproducible(opts))
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}

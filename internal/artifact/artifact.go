@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,20 @@ func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descripto
 	return ocispec.Descriptor{}, false
 }
 
+// packedAt is the creation time stamped into every manifest this package packs. oras stamps the wall clock when none
+// is given, so identical content pushed in different seconds got different digests (#237); a fixed value keeps
+// ADR-0089's same tree, same digest.
+const packedAt = "1970-01-01T00:00:00Z"
+
+// reproducible returns opts with the manifest creation time fixed to packedAt.
+func reproducible(opts oras.PackManifestOptions) oras.PackManifestOptions {
+	annotations := make(map[string]string, len(opts.ManifestAnnotations)+1)
+	maps.Copy(annotations, opts.ManifestAnnotations)
+	annotations[ocispec.AnnotationCreated] = packedAt
+	opts.ManifestAnnotations = annotations
+	return opts
+}
+
 // Push packages file as the §1 OCI artifact and pushes it to ref's target (a local OCI
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
 // rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
@@ -144,7 +159,7 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 		}
 		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, reproducible(opts))
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}
