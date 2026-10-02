@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gofrs/flock"
 )
 
 // repoRoot walks up from this test file to the directory holding go.mod.
@@ -39,7 +41,7 @@ func repoRoot(t *testing.T) string {
 // golangci-lint reports findings).
 func lintFixture(t *testing.T, pkg string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("go", "tool", "golangci-lint", "run", "--build-tags", "lintfixture", "./"+pkg)
+	cmd := exec.Command("go", "tool", "golangci-lint", "run", "--allow-parallel-runners", "--build-tags", "lintfixture", "./"+pkg)
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -115,5 +117,24 @@ func TestScenario_PlatformLeafBlocksOtherInternalImport(t *testing.T) {
 	}
 	if !strings.Contains(out, "depguard") {
 		t.Fatalf("expected a depguard finding for the internal import, got:\n%s", out)
+	}
+}
+
+// Another golangci-lint on the machine holds its lock (os.TempDir()/golangci-lint.lock);
+// a fixture run must still report its finding instead of waiting and giving up.
+func TestIssue289_LintFixtureRunsWhileAnotherLintHoldsTheLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	lock := flock.New(filepath.Join(tmp, "golangci-lint.lock"))
+	if ok, err := lock.TryLock(); !ok || err != nil {
+		t.Fatalf("hold the golangci-lint lock: ok=%v err=%v", ok, err)
+	}
+	t.Cleanup(func() { _ = lock.Unlock() })
+	out, err := lintFixture(t, "tests/lint-fixtures/any-leak")
+	if err == nil || !strings.Contains(out, "forbidigo") {
+		t.Fatalf("expected the forbidigo finding while another golangci-lint holds the lock, got:\n%s", out)
 	}
 }
