@@ -2158,5 +2158,20 @@
     "dod_total": 17,
     "report": "docs/reviews/adr-0143-implementation-claude-opus-5-5-2.md",
     "notes": "review 2: both Blockers closed (crash case uses the revisioned name; pkg/funcd e2e + env-echo redeploy cases pass); process restart + 14 surviving mutants fixed; Venom drain check lists tasks, not containers (model); workflow-step e2e unreachable #17, empty-currentRevision guard, same-name engine #18 (adr); containerd contract not run, one race-runtime crash, no ADR baseline (env)"
+  },
+  {
+    "date": "2026-10-02",
+    "adr": "0144",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 6,
+    "model_attributed": 5,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0144-implementation-claude-opus-5-5.md",
+    "notes": "both packages released+published, funcd on v0.4.0/v0.3.0, every scenario test passes, gate/e2e/hygiene green, 9 Lima lanes PASS; funcd-bundle usage error exits 1 not 2, TS release-PR CI filter misses vite-plugin/package.json, two weak scenario assertions, import-check copy filter drops dist/node_modules dirs, implementation before acceptance with 2 un-judged refinements (model); no ADR baseline (env)"
   }
 ]

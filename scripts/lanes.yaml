@@ -26,7 +26,7 @@ env-echo:
   dir: examples/env-echo
   stage:
     - env-echo.mjs
-    - env-echo.schema.json
+    - funcdctl.yaml
     - configmap.yaml
     - secret.yaml
     - function.yaml
@@ -45,7 +45,6 @@ env-echo:
   push:
     - artifact: env-echo.mjs
       ref: env-echo
-      schema: env-echo.schema.json
   apply:
     - configmap.yaml
     - secret.yaml
@@ -69,18 +68,16 @@ fn-to-fn:
   stage:
     - greeter.mjs
     - front.mjs
-    - greeter.schema.json
-    - front.schema.json
+    - greeter.funcdctl.yaml
+    - front.funcdctl.yaml
     - greeter.yaml
     - front.yaml
     - funcdconfig.yaml
   push:
     - artifact: greeter.mjs
       ref: greeter
-      schema: greeter.schema.json
     - artifact: front.mjs
       ref: front
-      schema: front.schema.json
   apply:
     - greeter.yaml
     - front.yaml
@@ -98,7 +95,7 @@ duckdb:
   dir: examples/catalog-quack
   copy: true
   build:
-    - uv run --group build python build.py
+    - uv run --locked funcd-bundle
   stage:
     - configmap.yaml
     - secret.yaml
@@ -106,9 +103,9 @@ duckdb:
     - catalogservice.yaml
     - funcdconfig.yaml
     - consumer.yaml
-    - bundle
+    - dist/catalog-quack
   push:
-    - artifact: bundle
+    - artifact: dist/catalog-quack
       ref: catalog-reader
       entry: handler.py
   # ADR-0121: no two-phase — apply in any order. The CatalogService binds the Bucket BEFORE it exists
@@ -133,7 +130,7 @@ s3:
   dir: examples/s3-roundtrip
   stage:
     - roundtrip.mjs
-    - roundtrip.schema.json
+    - funcdctl.yaml
     - bucket.yaml
     - function.yaml
     - funcdconfig.yaml
@@ -156,7 +153,6 @@ s3:
   push:
     - artifact: roundtrip.mjs
       ref: s3-roundtrip
-      schema: roundtrip.schema.json
     - artifact: bi
       ref: bi
       site: true
@@ -194,21 +190,22 @@ kv:
   description: The kv-counter JS + Python functions increment a per-name counter via context.kv on a durable Badger store (ADR-0069/0073/0076).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/kv-counter
-  # Both sides collide on the schema-file basenames, so the Python side is staged under a py/ subdir via
-  # the {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root.
+  # Both sides collide on the manifest and file basenames, so the Python side is staged under a py/ subdir
+  # via the {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root.
+  # Each artifact's funcdctl.yaml sits where `funcdctl push` resolves it (ADR-0144): beside the file.
   stage:
     - counter.mjs
-    - counter.schema.json
+    - funcdctl.yaml
     - counter.yaml
     - counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
     - store.yaml
     - funcdconfig.yaml
-    - from: examples/kv-counter/counter.py
+    - from: examples/kv-counter/src/counter.py
       module: github.com/pyvvo/funcd-python
       to: py/counter.py
-    - from: examples/kv-counter/counter.schema.json
+    - from: examples/kv-counter/funcdctl.yaml
       module: github.com/pyvvo/funcd-python
-      to: py/counter.schema.json
+      to: py/counter.funcdctl.yaml
     - from: examples/kv-counter/counter.yaml
       module: github.com/pyvvo/funcd-python
       to: py/counter.yaml
@@ -218,10 +215,8 @@ kv:
   push:
     - artifact: counter.mjs
       ref: counter
-      schema: counter.schema.json
     - artifact: py/counter.py
       ref: pycounter
-      schema: py/counter.schema.json
   # ADR-0073 cycle break: apply each function WITHOUT spec.kv (owner exists), then the owned store, then
   # re-apply WITH spec.kv (the binding IS the capability — default-deny; ADR-0076: no read Policy needed).
   apply:
@@ -251,11 +246,11 @@ workflow:
     - hi.mjs
     - lo.mjs
     - report.mjs
-    - ingest.schema.json
-    - score.schema.json
-    - hi.schema.json
-    - lo.schema.json
-    - report.schema.json
+    - ingest.funcdctl.yaml
+    - score.funcdctl.yaml
+    - hi.funcdctl.yaml
+    - lo.funcdctl.yaml
+    - report.funcdctl.yaml
     - workflow.yaml
     - child.yaml
     - parent.yaml
@@ -269,23 +264,18 @@ workflow:
   push:
     - artifact: ingest.mjs
       ref: ingest
-      schema: ingest.schema.json
       runtime: nodejs22
     - artifact: score.mjs
       ref: score
-      schema: score.schema.json
       runtime: nodejs22
     - artifact: hi.mjs
       ref: hi
-      schema: hi.schema.json
       runtime: nodejs22
     - artifact: lo.mjs
       ref: lo
-      schema: lo.schema.json
       runtime: nodejs22
     - artifact: report.mjs
       ref: report
-      schema: report.schema.json
       runtime: nodejs22
   # Apply the Workflows — orders (the main lane), plus the F70 sub-workflow pair: `scorer` (child) and
   # `pipeline` (parent, whose `sub` step runs scorer inline). The engine materializes each's owned step
@@ -318,15 +308,15 @@ funclog:
   dir: examples/log-burst
   stage:
     - burst.mjs
-    - burst.schema.json
+    - funcdctl.yaml
     - burst.yaml
     - funcdconfig.yaml
-    - from: examples/log-burst/handler.py
+    - from: examples/log-burst/src/handler.py
       module: github.com/pyvvo/funcd-python
       to: py/handler.py
-    - from: examples/log-burst/handler.schema.json
+    - from: examples/log-burst/funcdctl.yaml
       module: github.com/pyvvo/funcd-python
-      to: py/handler.schema.json
+      to: py/handler.funcdctl.yaml
     - from: examples/log-burst/handler.yaml
       module: github.com/pyvvo/funcd-python
       to: py/handler.yaml
@@ -335,10 +325,8 @@ funclog:
   push:
     - artifact: burst.mjs
       ref: log-burst
-      schema: burst.schema.json
     - artifact: py/handler.py
       ref: pylog-burst
-      schema: py/handler.schema.json
   apply:
     - burst.yaml
     - file: py/handler.yaml
@@ -357,7 +345,7 @@ egress:
   dir: examples/egress-probe
   stage:
     - probe.mjs
-    - probe.schema.json
+    - funcdctl.yaml
     - function.yaml
     - egresspolicy-wildcard.yaml   # applied MID-SUITE by the Venom allow-cases (deny-then-allow ordering)
     - egresspolicy-cidr.yaml       # applied MID-SUITE by the Venom CIDR allow-case
@@ -365,7 +353,6 @@ egress:
   push:
     - artifact: probe.mjs
       ref: egress-probe
-      schema: probe.schema.json
   # Only the Function is applied at deploy. The EgressPolicies are applied IN-VM by the Venom suite so the
   # default-deny (no policy) case is observable BEFORE any allow-list exists — the deny-then-allow ordering.
   apply:
