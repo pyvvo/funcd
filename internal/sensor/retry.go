@@ -109,14 +109,15 @@ func (q *retryQueue) backoff(attempts int) time.Duration {
 }
 
 // get blocks until a unit's backoff has elapsed (returns it with the attempts already made) or the queue is
-// shut down (shutdown=true).
+// shut down (shutdown=true). A unit still queued at shutdown is not handed out: only the attempts already in
+// flight finish (ADR-0118 §6).
 func (q *retryQueue) get() (id string, d delivery, attempts int, shutdown bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for len(q.order) == 0 && !q.shuttingDown {
 		q.cond.Wait()
 	}
-	if len(q.order) == 0 {
+	if q.shuttingDown {
 		return "", delivery{}, 0, true
 	}
 	id = q.order[0]
@@ -142,16 +143,18 @@ func (q *retryQueue) shutDown() {
 
 // RunRetryWorkers starts the delivery retry workers and blocks until ctx is cancelled, then shuts down the
 // queue and waits for in-flight attempts to drain (a graceful drain narrows — does not close — the
-// in-memory-retry crash window; ADR-0118 Temporary workarounds). Wire it as a pkg/funcd background
+// in-memory-retry crash window; ADR-0118 Temporary workarounds). The drain lasts at most drain: an attempt
+// still in flight then is cancelled, so shutdown keeps its bound (ADR-0028). Wire it as a pkg/funcd background
 // goroutine. A nil DeadLetters store means dead-lettering is off, so there is no retry loop to run.
-func (r *Reconciler) RunRetryWorkers(ctx context.Context) {
+func (r *Reconciler) RunRetryWorkers(ctx context.Context, drain time.Duration) {
 	if r.deadletters == nil {
 		<-ctx.Done()
 		return
 	}
 	// The workers run on a context shutdown does not cancel: an attempt in flight must finish, and so must its
-	// dead-letter and Invocation writes (ADR-0118 §6).
-	attemptCtx := context.WithoutCancel(ctx)
+	// dead-letter and Invocation writes (ADR-0118 §6), unless the drain bound passes first.
+	attemptCtx, cut := context.WithCancel(context.WithoutCancel(ctx))
+	defer cut()
 	var wg sync.WaitGroup
 	for i := 0; i < retryWorkers; i++ {
 		wg.Add(1)
@@ -162,6 +165,11 @@ func (r *Reconciler) RunRetryWorkers(ctx context.Context) {
 	}
 	<-ctx.Done()
 	r.retry.shutDown()
+	bound := time.AfterFunc(drain, func() {
+		r.logger.WarnContext(ctx, "sensor retry drain reached its bound, cancelling the attempts in flight", "bound", drain)
+		cut()
+	})
+	defer bound.Stop()
 	wg.Wait()
 }
 

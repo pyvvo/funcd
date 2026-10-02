@@ -1080,11 +1080,11 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.runWorkflowRetention(ctx)
 		}()
 	}
-	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel)
+	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel, within the shutdown bound)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.sensorReconciler.RunRetryWorkers(ctx)
+			p.sensorReconciler.RunRetryWorkers(ctx, shutdownTimeout)
 		}()
 	}
 	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) { // ADR-0118: DLQ retention sweep
