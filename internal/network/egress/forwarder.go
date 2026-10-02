@@ -63,30 +63,47 @@ type forwarder struct {
 	upstream netip.AddrPort
 	corr     *correlator
 
-	mu     sync.Mutex
-	server *dns.Server
+	mu      sync.Mutex
+	servers []*dns.Server
 }
 
-// Serve runs the UDP forwarder until ctx is cancelled. Each answered query records (src, domain)→IPs.
+// Serve runs the forwarder on UDP and TCP until ctx is cancelled: F80 redirects worker :53 on both, and a
+// truncated UDP answer is retried over TCP (RFC 7766). Each answered query records (src, domain)→IPs.
 func (f *forwarder) Serve(ctx context.Context) error {
 	const op = "egress.forwarder.Serve"
-	client := &dns.Client{Timeout: 5 * time.Second}
+	udpClient := &dns.Client{Net: "udp", Timeout: 5 * time.Second}
+	tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
+		client := udpClient
+		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
+			client = tcpClient
+		}
 		f.handle(client, w, req)
 	})
-	srv := &dns.Server{Addr: f.listen.String(), Net: "udp", Handler: mux}
+	servers := []*dns.Server{
+		{Addr: f.listen.String(), Net: "udp", Handler: mux},
+		{Addr: f.listen.String(), Net: "tcp", Handler: mux},
+	}
 	f.mu.Lock()
-	f.server = srv
+	f.servers = servers
 	f.mu.Unlock()
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	errCh := make(chan error, len(servers))
+	for _, srv := range servers {
+		go func() { errCh <- srv.ListenAndServe() }()
+	}
+	shutdown := func() {
+		for _, srv := range servers {
+			_ = srv.ShutdownContext(context.Background())
+		}
+	}
 	select {
 	case <-ctx.Done():
-		_ = srv.ShutdownContext(context.Background())
+		shutdown()
 		return ctx.Err()
 	case err := <-errCh:
+		shutdown()
 		if err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "dns forwarder listen %s", f.listen)
 		}
@@ -94,8 +111,8 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	}
 }
 
-// handle forwards one query upstream, records the resolved A/AAAA answers per (src, domain), and relays
-// the response verbatim.
+// handle forwards one query upstream over the transport it arrived on (so a TCP retry gets the whole
+// answer), records the resolved A/AAAA answers per (src, domain), and relays the response verbatim.
 func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Msg) {
 	resp, _, err := client.Exchange(req, f.upstream.String())
 	if err != nil || resp == nil {
@@ -155,6 +172,9 @@ func addrFromNet(a net.Addr) (netip.Addr, bool) {
 // corrKey is a (worker source IP, resolved destination IP) pair — the reverse index the gateway queries.
 type corrKey struct{ src, dst netip.Addr }
 
+// minSweep is the record count below which the correlator never sweeps, so a small map is not rescanned.
+const minSweep = 1024
+
 // correlator records (src, domain)→resolved-IP with a TTL and exposes the reverse DomainsFor(src, dst).
 // It is the trust anchor's data structure: only domains funcd's OWN forwarder resolved for a worker are
 // ever returned. wildcardsFor supplies the namespace's EgressPolicy wildcard patterns so a matched FQDN
@@ -165,10 +185,12 @@ type correlator struct {
 
 	mu      sync.Mutex
 	entries map[corrKey]map[string]time.Time // domain → expiry
+	records int                              // (key, domain) pairs held in entries
+	sweepAt int                              // records count that triggers the next sweep
 }
 
 func newCorrelator(now func() time.Time, wildcardsFor func(netip.Addr) []string) *correlator {
-	return &correlator{now: now, wildcardsFor: wildcardsFor, entries: map[corrKey]map[string]time.Time{}}
+	return &correlator{now: now, wildcardsFor: wildcardsFor, entries: map[corrKey]map[string]time.Time{}, sweepAt: minSweep}
 }
 
 // record binds (src, domain) to each resolved ip until now+ttl (a zero/negative ttl is clamped to a
@@ -177,7 +199,8 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 	if ttl < time.Second {
 		ttl = time.Second
 	}
-	exp := c.now().Add(ttl)
+	now := c.now()
+	exp := now.Add(ttl)
 	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -188,8 +211,33 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 			m = map[string]time.Time{}
 			c.entries[k] = m
 		}
+		if _, ok := m[domain]; !ok {
+			c.records++
+		}
 		m[domain] = exp
 	}
+	if c.records >= c.sweepAt {
+		c.sweep(now)
+	}
+}
+
+// sweep drops every expired (key, domain) pair and every emptied key, then schedules the next sweep at
+// twice the live count. The forwarder lives as long as the daemon, so the TTL must bound retention and not
+// only visibility: memory stays within twice the live count at the last sweep (floor minSweep), at
+// amortized O(1) per record. Caller holds mu.
+func (c *correlator) sweep(now time.Time) {
+	for k, m := range c.entries {
+		for d, exp := range m {
+			if !now.Before(exp) {
+				delete(m, d)
+				c.records--
+			}
+		}
+		if len(m) == 0 {
+			delete(c.entries, k)
+		}
+	}
+	c.sweepAt = max(2*c.records, minSweep)
 }
 
 // DomainsFor returns the non-expired domains this worker resolved to dst, plus any matched namespace
