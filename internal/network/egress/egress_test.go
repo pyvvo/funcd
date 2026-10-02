@@ -201,6 +201,8 @@ func TestIssue138_CorrelatorEvictsExpiredRecords(t *testing.T) {
 		t.Parallel()
 		now := time.Unix(1000, 0)
 		c := newCorrelator(func() time.Time { return now }, nil)
+		pinned := netip.MustParseAddr("198.51.100.7")
+		c.record(worker, "api.example.com", []netip.Addr{pinned}, time.Hour)
 		const perRound = 2000
 		var last netip.Addr
 		for round := range 5 {
@@ -213,7 +215,8 @@ func TestIssue138_CorrelatorEvictsExpiredRecords(t *testing.T) {
 			}
 		}
 		require.LessOrEqual(t, len(c.entries), 2*perRound, "expired keys from past rounds are evicted")
-		require.Equal(t, []string{"svc.example.com"}, c.DomainsFor(worker, last), "a live record survives eviction")
+		require.Equal(t, []string{"api.example.com"}, c.DomainsFor(worker, pinned), "a record live through the sweeps survives them")
+		require.Equal(t, []string{"svc.example.com"}, c.DomainsFor(worker, last), "the newest record is attested")
 	})
 
 	t.Run("one-ip-many-names", func(t *testing.T) {
@@ -221,11 +224,12 @@ func TestIssue138_CorrelatorEvictsExpiredRecords(t *testing.T) {
 		now := time.Unix(1000, 0)
 		c := newCorrelator(func() time.Time { return now }, nil)
 		dst := netip.MustParseAddr("93.184.216.34")
+		c.record(worker, "pinned.example.com", []netip.Addr{dst}, 24*time.Hour)
 		for i := range 50000 {
 			now = now.Add(time.Second)
 			c.record(worker, fmt.Sprintf("n%d.example.com", i), []netip.Addr{dst}, time.Second)
 		}
 		require.LessOrEqual(t, len(c.entries[corrKey{src: worker, dst: dst}]), 2000, "expired domains under one key are evicted")
-		require.Equal(t, []string{"n49999.example.com"}, c.DomainsFor(worker, dst), "only the live name is attested")
+		require.Equal(t, []string{"n49999.example.com", "pinned.example.com"}, c.DomainsFor(worker, dst), "only the live names are attested")
 	})
 }

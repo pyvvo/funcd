@@ -223,7 +223,8 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 
 // sweep drops every expired (key, domain) pair and every emptied key, then schedules the next sweep at
 // twice the live count. The forwarder lives as long as the daemon, so the TTL must bound retention and not
-// only visibility: memory stays within twice the live records at amortized O(1) per record. Caller holds mu.
+// only visibility: memory stays within twice the live count at the last sweep (floor minSweep), at
+// amortized O(1) per record. Caller holds mu.
 func (c *correlator) sweep(now time.Time) {
 	for k, m := range c.entries {
 		for d, exp := range m {
