@@ -936,7 +936,10 @@ func (p *Platform) buildControlPlane() error {
 	// limiter: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its caller's
 	// in-flight slot or rate token (#87).
 	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, edgeShape))
-	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
+	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
+	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
+	// deadline once the body is read, so it does not cut a long-running handler.
+	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)
