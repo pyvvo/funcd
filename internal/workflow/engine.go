@@ -115,6 +115,9 @@ type DispatchRequest struct {
 	Target    v1.ObjectName // the function to invoke (materialized name or referenced)
 	Attempt   int
 	Input     json.RawMessage
+	// MaxOutput is the payload limit on the step's output (ADR-0094); 0 ⇒ unbounded. A dispatcher need
+	// read no more than one byte past it, since a longer output is rejected anyway.
+	MaxOutput int64
 	// TraceID / ParentSpanID are the run's W3C trace context (ADR-0102): the dispatcher sets a
 	// traceparent header from them so the step-function invocation's span joins the run's trace.
 	// Empty TraceID ⇒ no header (additive). ParentSpanID is the step's PRIMARY predecessor (ADR-0105;
@@ -645,7 +648,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 		}
 		out, err := e.dispatch.Dispatch(attemptCtx, DispatchRequest{
 			Namespace: ns, Run: runName, Step: n.name, Target: target,
-			Attempt: attempt, Input: stepInput,
+			Attempt: attempt, Input: stepInput, MaxOutput: e.cfg.PayloadLimit,
 			TraceID: rec.TraceID, ParentSpanID: parentSpan, // ADR-0102/0105: run trace + the predecessor edge
 			SpanID: n.spanID, Links: links, // ADR-0105: the step's own span-id + fan-in links
 		})
@@ -656,7 +659,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 		if err == nil {
 			if e.cfg.PayloadLimit > 0 && int64(len(out)) > e.cfg.PayloadLimit {
 				// An over-cap output is permanent — a retry cannot shrink it (ADR-0094 payload cap).
-				return nil, Permanent(fault.Invalidf(engineOp, "step %q output %d bytes exceeds payload limit %d", n.name, len(out), e.cfg.PayloadLimit))
+				return nil, Permanent(fault.Invalidf(engineOp, "step %q output exceeds payload limit %d", n.name, e.cfg.PayloadLimit))
 			}
 			return out, nil
 		}
@@ -743,7 +746,7 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 		_, _ = e.dispatch.Dispatch(ctx, DispatchRequest{
 			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure,
 			Target:  stepTarget(rec.Workflow, spec, spec.OnFailure),
-			Attempt: 1, Input: fc,
+			Attempt: 1, Input: fc, MaxOutput: e.cfg.PayloadLimit,
 			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
 		}) // handler outcome never changes the run phase (ADR-0094)
 	}

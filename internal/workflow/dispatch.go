@@ -147,24 +147,36 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "invoke %s/%s", req.Namespace, req.Target) // retryable
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	// Read only what the outcome needs: an output up to one byte past its payload limit (a longer one is
+	// rejected anyway), the head of a rejection that its error keeps, and nothing of a retryable failure.
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	rejected := resp.StatusCode >= 400 && resp.StatusCode < 500
+	if !ok && !rejected {
+		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, resp.StatusCode) // retryable
+	}
+	var src io.Reader = resp.Body
+	switch {
+	case rejected:
+		src = io.LimitReader(src, errBodyMax+1)
+	case req.MaxOutput > 0:
+		src = io.LimitReader(src, req.MaxOutput+1)
+	}
+	body, err := io.ReadAll(src)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "read response from %s/%s", req.Namespace, req.Target)
 	}
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return body, nil
-	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+	if rejected {
 		return nil, Permanent(fault.Invalidf(op, "%s/%s rejected the step (%d): %s", req.Namespace, req.Target, resp.StatusCode, truncate(body)))
-	default:
-		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, resp.StatusCode) // retryable
 	}
+	return body, nil
 }
 
+// errBodyMax is how much of a rejection's body its error keeps.
+const errBodyMax = 256
+
 func truncate(b []byte) string {
-	const max = 256
-	if len(b) > max {
-		return string(b[:max]) + "…"
+	if len(b) > errBodyMax {
+		return string(b[:errBodyMax]) + "…"
 	}
 	return string(b)
 }

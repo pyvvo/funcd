@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,12 @@ type EngineTarget struct {
 	Upstream    string         // the netns engine endpoint (an http URL)
 	EngineToken string         // the shared engine token, never exposed to callers
 }
+
+// handshakeHeadMax is how much of a request body the proxy reads before it decides: the handshake
+// preamble, the token field's header and length, and a token far longer than any funcd issues (a JWT
+// over {ns, fn}, or a 44-byte minted Identity token). A longer token does not parse as a handshake and is
+// forwarded un-swapped, which the engine rejects (fail-closed, as for any non-handshake body).
+const handshakeHeadMax = preambleLen + tokenHdrLen + binary.MaxVarintLen64 + 4<<10
 
 // catalogProxy is the catalog PEP proxy (ADR-0137): resolve principal → catalog::query PEP → swap the
 // handshake token → reverse-proxy to the engine. Deny/unresolved ⇒ 403, upstream never called.
@@ -60,14 +67,17 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
+	head, err := io.ReadAll(io.LimitReader(r.Body, handshakeHeadMax))
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	_ = r.Body.Close()
+	length := r.ContentLength
+	if len(head) < handshakeHeadMax {
+		length = int64(len(head)) // the whole body
+	}
 
-	rewritten, callerToken, isHandshake := swapHandshakeToken(body, p.engine.EngineToken)
+	rewritten, callerToken, isHandshake := swapHandshakeToken(head, p.engine.EngineToken)
 	if isHandshake {
 		principal, ok := p.keys.PrincipalFor(callerToken)
 		if !ok {
@@ -92,11 +102,22 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		body = rewritten // authorized: forward with the caller token swapped for the engine token
+		if length >= 0 {
+			length += int64(len(rewritten) - len(head))
+		}
+		head = rewritten // authorized: forward with the caller token swapped for the engine token
 	}
 
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	// The rest of the body streams to the engine unread: only the head is held in memory.
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
+	r.ContentLength = length
+	if length >= 0 {
+		r.Header.Set("Content-Length", strconv.FormatInt(length, 10))
+	} else {
+		r.Header.Del("Content-Length")
+	}
 	p.rp.ServeHTTP(w, r)
 }

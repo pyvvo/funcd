@@ -22,7 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
-// maxInvokeBytes caps an invoke request body (a DoS guard on the local API).
+// maxInvokeBytes caps an invoke request body and the target's response (a DoS guard on the local API).
 const maxInvokeBytes = 1 << 20 // 1 MiB
 
 // Ref identifies a function replica's caller identity (namespace + function).
