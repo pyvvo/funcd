@@ -36,7 +36,7 @@ func newSecretHarness(t *testing.T, sr function.SecretResolver) *harness {
 	st := store.New(memory.New())
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
 	r, err := function.NewReconciler(function.Deps{

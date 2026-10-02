@@ -80,7 +80,7 @@ func TestScenarioResolveSiteRejectsFunctionArtifact(t *testing.T) {
 	ctx := context.Background()
 	dir, entry := goodBundle(t)
 	ref := layoutRef(t, "fn")
-	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "")
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
 	require.NoError(t, err)
 
 	_, rerr := artifact.ResolveSite(ctx, ref)

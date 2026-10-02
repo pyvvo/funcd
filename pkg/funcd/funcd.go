@@ -144,6 +144,8 @@ type config struct {
 	credentials middleware.CredentialStore
 	authorizer  auth.Authorizer
 	localNode   v1.ObjectName
+	// nodePlatform is the platform this node runs (ADR-0145); "" ⇒ v1.HostPlatform().
+	nodePlatform v1.OCIPlatform
 
 	// data plane (ADR-0033): the function-invocation listener address.
 	dataPlaneAddr string
@@ -359,6 +361,9 @@ func (p *Platform) buildControlPlane() error {
 	if c.localNode == "" {
 		c.localNode = defaultLocalNode
 	}
+	if c.nodePlatform == "" {
+		c.nodePlatform = v1.HostPlatform()
+	}
 	if c.listenAddr == "" {
 		c.listenAddr = defaultProdAddr
 	}
@@ -376,7 +381,7 @@ func (p *Platform) buildControlPlane() error {
 		bucketMax = defaultBucketsPerNamespace
 	}
 
-	sched, err := singlenode.New(c.localNode)
+	sched, err := singlenode.New(c.localNode, c.nodePlatform)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build scheduler")
 	}
@@ -389,7 +394,7 @@ func (p *Platform) buildControlPlane() error {
 	materializer := c.materializer
 	if (len(c.runtimeShim) > 0 || c.imageFor != nil) && materializer == nil {
 		if c.artifactDir != "" {
-			materializer = artifact.NewOrasMaterializer(c.artifactDir) // P-V-A: OCI pull by digest
+			materializer = artifact.NewOrasMaterializer(c.artifactDir, c.nodePlatform) // P-V-A: OCI pull by digest
 		} else {
 			materializer = function.NewFileMaterializer() // P-V-1: no-dep file:// stand-in
 		}
@@ -397,6 +402,8 @@ func (p *Platform) buildControlPlane() error {
 	// The oras materializer also resolves a tag → digest (ADR-0035); the file driver does
 	// not, so a type-assert auto-wires the resolver only in OCI mode (nil for file://).
 	resolver, _ := materializer.(function.ArtifactResolver)
+	// ...and lists an artifact's platforms for the placement gate (ADR-0145).
+	platforms, _ := materializer.(function.PlatformResolver)
 	// Secret injection (ADR-0057, F15 last mile): the reconciler resolves a function's bound
 	// Secrets into worker env via the PDP-authorized resolver (ADR-0022) over the same store +
 	// authorizer the control plane uses. DeveloperFor defaults to the namespace-scoped developer.
@@ -596,6 +603,7 @@ func (p *Platform) buildControlPlane() error {
 		EndpointMode:         endpointMode,
 		ImageFor:             c.imageFor,
 		Resolver:             resolver,
+		Platforms:            platforms,
 		PoolShimCommand:      c.poolShim,
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolLimit:            c.poolLimit,

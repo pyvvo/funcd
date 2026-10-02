@@ -34,7 +34,7 @@ func (f fakeResolver) ResolveEnv(context.Context, auth.Identity, v1.NamespaceNam
 // newShimReconciler builds a reconciler in process (shim) mode so workerSpec builds Env.
 func newShimReconciler(t *testing.T, secretsResolver SecretResolver) *Reconciler {
 	t.Helper()
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })

@@ -23,7 +23,7 @@ var s3TestMaster = []byte("function-injection-test-master-secret")
 // deriving via the real s3gateway.DeriveKeypair (deterministic).
 func newS3Reconciler(t *testing.T, enabled bool) *Reconciler {
 	t.Helper()
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
@@ -73,7 +73,7 @@ func TestScenarioKeypairInjected(t *testing.T) {
 // it is injected verbatim, NOT derived from the 127.0.0.1 bind ListenAddr.
 func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 	t.Parallel()
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })

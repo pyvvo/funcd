@@ -33,7 +33,7 @@ func writeStep(t *testing.T, dir, name, body string) {
 func pushStepImage(t *testing.T, layoutDir, srcDir, name string) string {
 	t.Helper()
 	ref := "oci-layout://" + layoutDir + ":" + name
-	_, err := artifact.Push(context.Background(), ref, filepath.Join(srcDir, name+".mjs"), nil, "nodejs22")
+	_, err := artifact.Push(context.Background(), ref, filepath.Join(srcDir, name+".mjs"), nil, "nodejs22", "")
 	require.NoError(t, err)
 	return ref
 }

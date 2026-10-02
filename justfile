@@ -71,6 +71,18 @@ act-build version="dev":
     echo "funcdctl binaries → dist/:"
     ls -lh dist
 
+# run the local multi-arch bundle workflow via nektos/act (.github/workflows/bundle-multiarch.yml, ADR-0145): the
+# catalog-quack bundle for linux/amd64 + linux/arm64, pushed per platform and combined into one OCI image index, left
+# under .act-artifacts/. Needs a docker daemon (colima on macOS). The job drives the VM's Docker socket (QEMU, the
+# hermetic installs), so this recipe overrides .actrc's `--container-daemon-socket -` for this workflow only.
+[group('go')]
+act-bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker pull catthehacker/ubuntu:act-latest   # idempotent; .actrc then runs act with --pull=false
+    act workflow_dispatch -W .github/workflows/bundle-multiarch.yml --container-daemon-socket unix:///var/run/docker.sock
+    echo "multi-arch layout → .act-artifacts/"
+
 # build + EMBED the curated runtime images (ADR-0054): each is a distroless base carrying its
 # language runtime + the funcd shim as entrypoint (node on distroless/nodejs22; python on the
 # custom distroless 3.14). The artifact is still bind-mounted at deploy (ADR-0032 unchanged).

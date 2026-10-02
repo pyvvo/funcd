@@ -14,6 +14,8 @@
   authority** (pull-by-digest, empty digest rejected, tag is a locator) preserving ADR-0020's "validated =
   shipped". Expanded per the user: funcdcli gains `pull`/`login`/`logout` + validate-on-push. Decision: OCI
   artifact distribution via oras-go; one new Apache-2.0 dependency.)
+- **Superseded in part by**: [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) (2026-10-02) —
+  the deferral of multi-arch artifact manifests: a function ref may name an OCI image index.
 - **Deciders**: green-0-rabbit
 - **Tags**: artifact, oci, oras, distribution, funcdcli, materializer, registry, F13
 - **Realizes**: [FEAT-0000/F13](../feat/0000-feat-v1.md) (the **source-artifact deploy** half — how the JS

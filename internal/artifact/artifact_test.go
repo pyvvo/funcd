@@ -33,7 +33,7 @@ func TestScenarioCLIPushesArtifact(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
 
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 	require.Contains(t, digest, "sha256:", "Push prints a sha256 descriptor digest for spec.imageDigest")
 }
@@ -46,11 +46,11 @@ func TestScenarioPushPullRoundtrips(t *testing.T) {
 	body := "export function handle(_, e) { return e; }\n"
 	bundle := writeBundle(t, body)
 
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
-	path, err := artifact.Pull(context.Background(), ref, digest, out)
+	path, err := artifact.Pull(context.Background(), ref, digest, out, "")
 	require.NoError(t, err)
 
 	got, err := os.ReadFile(path) //nolint:gosec // path is test-owned
@@ -64,22 +64,23 @@ func TestScenarioPlatformPullsArtifact(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
 	// empty digest is rejected (the digest is the authority).
-	_, err = artifact.Pull(context.Background(), ref, "", t.TempDir())
+	_, err = artifact.Pull(context.Background(), ref, "", t.TempDir(), "")
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "empty digest → fault.Invalid")
 
 	// a wrong digest → NotFound (no such manifest in the layout).
 	_, err = artifact.Pull(context.Background(), ref, "sha256:"+
-		"0000000000000000000000000000000000000000000000000000000000000000", t.TempDir())
+		"0000000000000000000000000000000000000000000000000000000000000000", t.TempDir(), "")
+
 	require.Error(t, err)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "unknown digest → fault.NotFound")
 
 	// the correct digest pulls.
-	_, err = artifact.Pull(context.Background(), ref, digest, t.TempDir())
+	_, err = artifact.Pull(context.Background(), ref, digest, t.TempDir(), "")
 	require.NoError(t, err)
 }
 
@@ -90,10 +91,10 @@ func TestScenarioMaterializerSatisfiesADR0030Seam(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	body := "export function handle() {}\n"
 	bundle := writeBundle(t, body)
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
-	m := artifact.NewOrasMaterializer(t.TempDir())
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
 
 	obj, ok := v1.NewObject(v1.KindFunction)
 	require.True(t, ok)
@@ -135,10 +136,10 @@ func TestScenarioResolveTagToDigest(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	pushed, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	pushed, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
-	m := artifact.NewOrasMaterializer(t.TempDir())
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
 	resolved, err := m.Resolve(context.Background(), ref)
 	require.NoError(t, err)
 	require.Equal(t, pushed, resolved, "Resolve returns the pushed manifest digest")
@@ -160,7 +161,7 @@ func TestScenarioContractEmbeddedOnPush(t *testing.T) {
 	bundle := writeBundle(t, "export function handle() {}\n")
 	blob, err := artifact.ContractBlob([]byte(schemaIn), []byte(schemaOut))
 	require.NoError(t, err)
-	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "", "")
 	require.NoError(t, err)
 
 	got, err := artifact.Inspect(context.Background(), ref, digest)
@@ -183,7 +184,7 @@ func TestScenarioRuntimeAnnotationRoundtrips(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "nodejs22")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "nodejs22", "")
 	require.NoError(t, err)
 
 	rt, err := artifact.InspectRuntime(context.Background(), ref, digest)
@@ -192,7 +193,7 @@ func TestScenarioRuntimeAnnotationRoundtrips(t *testing.T) {
 
 	// a runtime-less push asserts no runtime.
 	plain := layoutRef(t, "v1")
-	pd, err := artifact.Push(context.Background(), plain, bundle, nil, "")
+	pd, err := artifact.Push(context.Background(), plain, bundle, nil, "", "")
 	require.NoError(t, err)
 	_, err = artifact.InspectRuntime(context.Background(), plain, pd)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "a runtime-less artifact → fault.NotFound")
@@ -204,7 +205,7 @@ func TestScenarioNoContractNoMetadata(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	bundle := writeBundle(t, "export function handle() {}\n")
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
 	_, err = artifact.Inspect(context.Background(), ref, digest)
@@ -260,10 +261,10 @@ func TestScenarioBundleSelectedByMediaType(t *testing.T) {
 	bundle := writeBundle(t, body)
 	blob, err := artifact.ContractBlob([]byte(schemaIn), []byte(artifact.VoidSchema))
 	require.NoError(t, err)
-	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "", "")
 	require.NoError(t, err)
 
-	path, err := artifact.Pull(context.Background(), ref, digest, filepath.Join(t.TempDir(), "out"))
+	path, err := artifact.Pull(context.Background(), ref, digest, filepath.Join(t.TempDir(), "out"), "")
 	require.NoError(t, err)
 	got, err := os.ReadFile(path) //nolint:gosec // path is test-owned
 	require.NoError(t, err)
@@ -277,13 +278,13 @@ func TestScenarioContractDigestPinned(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	blobA, err := artifact.ContractBlob([]byte(schemaIn), []byte(artifact.VoidSchema)) // has "name"
 	require.NoError(t, err)
-	digestA, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle() {}\n"), blobA, "")
+	digestA, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle() {}\n"), blobA, "", "")
 	require.NoError(t, err)
 
 	// move tag v1 to a DIFFERENT artifact (different bundle ⇒ different manifest digest).
 	blobB, err := artifact.ContractBlob([]byte(schemaOut), []byte(artifact.VoidSchema)) // has "ok"
 	require.NoError(t, err)
-	digestB, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle(_, e) { return e; }\n"), blobB, "")
+	digestB, err := artifact.Push(context.Background(), ref, writeBundle(t, "export function handle(_, e) { return e; }\n"), blobB, "", "")
 	require.NoError(t, err)
 	require.NotEqual(t, digestA, digestB, "the moved tag points at a new manifest")
 
@@ -315,10 +316,10 @@ func TestScenarioSchemaDeliveredSingleFile(t *testing.T) {
 	bundle := writeBundle(t, body)
 	blob, berr := artifact.ContractBlob([]byte(schemaIn), []byte(schemaOut))
 	require.NoError(t, berr)
-	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, blob, "", "")
 	require.NoError(t, err)
 
-	m := artifact.NewOrasMaterializer(t.TempDir())
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
 	path, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
 	require.NoError(t, err)
 
@@ -348,10 +349,10 @@ func TestScenarioSchemaDeliveredBundle(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")
 	dir, entry := goodBundle(t)
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "", "")
 	require.NoError(t, err)
 
-	m := artifact.NewOrasMaterializer(t.TempDir())
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
 	path, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
 	require.NoError(t, err)
 	require.Equal(t, entry, filepath.Base(path), "materialize resolves the bundle entry")

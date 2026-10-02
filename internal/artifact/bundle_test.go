@@ -81,7 +81,7 @@ func TestScenarioPushDirectoryBundlesTar(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	dir, entry := goodBundle(t)
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "", "")
 	require.NoError(t, err)
 	require.Contains(t, digest, "sha256:")
 
@@ -100,7 +100,7 @@ func TestScenarioPushSingleFileUnchanged(t *testing.T) {
 	require.NoError(t, os.WriteFile(p, []byte("def handle():\n    return {}\n"), 0o600))
 	contract := mustContract(t)
 
-	digest, err := artifact.Push(context.Background(), ref, p, contract, "")
+	digest, err := artifact.Push(context.Background(), ref, p, contract, "", "")
 	require.NoError(t, err)
 
 	m := fetchManifest(t, ref, digest)
@@ -183,7 +183,7 @@ func TestScenarioPushGatesBundleContract(t *testing.T) {
 		require.Contains(t, string(blob), "\"input\"")
 		require.Contains(t, string(blob), "\"output\"")
 
-		digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+		digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "", "")
 		require.NoError(t, err)
 		// The contract is inspectable straight from the manifest (never pulling the bundle).
 		got, err := artifact.Inspect(context.Background(), ref, digest)
@@ -199,11 +199,11 @@ func TestScenarioPullUntarsBundle(t *testing.T) {
 	ref := layoutRef(t, "v1")
 	dir, entry := goodBundle(t)
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "", "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
-	path, err := artifact.Pull(context.Background(), ref, digest, out)
+	path, err := artifact.Pull(context.Background(), ref, digest, out, "")
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(out, entry), path, "Pull returns <dir>/<entry>")
 
@@ -248,7 +248,7 @@ func TestScenarioPullRejectsPathTraversal(t *testing.T) {
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
-	_, perr := artifact.Pull(ctx, ref, manifest.Digest.String(), out)
+	_, perr := artifact.Pull(ctx, ref, manifest.Digest.String(), out, "")
 	require.Error(t, perr, "a traversal path must be refused")
 	require.Equal(t, fault.Invalid, fault.KindOf(perr), "traversal → fault.Invalid, fail closed")
 
@@ -265,11 +265,11 @@ func TestScenarioPullSingleFileUnchanged(t *testing.T) {
 	body := "def handle():\n    return {}\n"
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
 
-	digest, err := artifact.Push(context.Background(), ref, p, mustContract(t), "")
+	digest, err := artifact.Push(context.Background(), ref, p, mustContract(t), "", "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
-	path, err := artifact.Pull(context.Background(), ref, digest, out)
+	path, err := artifact.Pull(context.Background(), ref, digest, out, "")
 	require.NoError(t, err)
 	require.Equal(t, "handler.py", filepath.Base(path))
 	got, err := os.ReadFile(path) //nolint:gosec // test-owned path
@@ -317,11 +317,11 @@ func TestScenarioPullLargeBundleExceedsFetchAllCap(t *testing.T) {
 	_, _ = rng.Read(big)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "vendored.bin"), big, 0o600))
 
-	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "")
+	digest, err := artifact.PushBundle(context.Background(), ref, dir, entry, "", "")
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "out")
-	path, err := artifact.Pull(context.Background(), ref, digest, out)
+	path, err := artifact.Pull(context.Background(), ref, digest, out, "")
 	require.NoError(t, err, "a >32 MiB bundle layer must stream, not trip the FetchAll cap")
 	require.Equal(t, filepath.Join(out, entry), path)
 	got, err := os.ReadFile(filepath.Join(out, "vendored.bin"))

@@ -28,7 +28,7 @@ func TestScenarioRuntimeSelectsShim(t *testing.T) {
 
 	st := store.New(memory.New())
 	rt := newFakeRuntime("127.0.0.1", 1) // endpoint irrelevant — we assert the recorded spec, not readiness
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	r, err := function.NewReconciler(function.Deps{
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: embedded.New(),

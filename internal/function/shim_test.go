@@ -308,7 +308,7 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	st := store.New(memory.New())
 	rt := newFakeRuntime(host, port)
 	rt.failed = runtimeFailed
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
 	deps := function.Deps{
@@ -400,7 +400,7 @@ func newContainerHarness(t *testing.T, readyStatus int) *shimHarness {
 
 	st := store.New(memory.New())
 	rt := newFakeRuntime(host, port)
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
 	r, err := function.NewReconciler(function.Deps{
@@ -524,7 +524,7 @@ func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.G
 	st := store.New(memory.New())
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
 	r, err := function.NewReconciler(function.Deps{

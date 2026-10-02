@@ -19,7 +19,7 @@ import (
 // takes the ADR-0032 bind-mount branch and we can assert its bundle env.
 func newContainerReconciler(t *testing.T) *Reconciler {
 	t.Helper()
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })

@@ -36,7 +36,7 @@ func TestInspectWithoutPullNeverFetchesBundle(t *testing.T) {
 	require.NoError(t, os.WriteFile(bundlePath, []byte("export function handle() {}\n"), 0o600))
 	blob, err := ContractBlob([]byte(`{"type":"object","additionalProperties":false}`), []byte(VoidSchema))
 	require.NoError(t, err)
-	digest, err := Push(context.Background(), ref, bundlePath, blob, "")
+	digest, err := Push(context.Background(), ref, bundlePath, blob, "", "")
 	require.NoError(t, err)
 
 	store, err := oci.New(dir)

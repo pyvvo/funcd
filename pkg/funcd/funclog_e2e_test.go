@@ -48,7 +48,7 @@ func TestScenarioE2EFunclogCapturesBurst(t *testing.T) {
 	// Push the bare bundle (no I/O contract — the example's point is the log burst) to a local OCI layout.
 	layout := t.TempDir()
 	ref := "oci-layout://" + layout + ":log-burst"
-	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), nil, "")
+	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), nil, "", "")
 	require.NoError(t, err)
 
 	messaging, err := nats.Open(context.Background(), nats.Options{Storage: nats.MemoryStorage})

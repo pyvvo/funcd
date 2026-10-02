@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -63,7 +64,7 @@ func resolveManifest(path string) (*sdk.Manifest, string, error) {
 // pushFromManifest packages a push whose contract and runtime come from a funcdctl.yaml (ADR-0122):
 // it gates each schema side against the funcd profile (contract.Check), then bakes the schema-only
 // contract and pushes — recording the runtime annotation, with no language toolchain invoked.
-func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entryFlag string) error {
+func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entryFlag string, platform v1.OCIPlatform) error {
 	const op = "funcdctl push"
 	input, output, err := m.ContractSides()
 	if err != nil {
@@ -84,7 +85,7 @@ func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Man
 		if werr := writeBundleContract(op, path, input, output); werr != nil {
 			return werr
 		}
-		digest, perr := artifact.PushBundle(ctx, ref, path, entryFlag, runtime)
+		digest, perr := artifact.PushBundle(ctx, ref, path, entryFlag, runtime, platform)
 		if perr != nil {
 			return perr
 		}
@@ -95,7 +96,7 @@ func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Man
 	if berr != nil {
 		return berr
 	}
-	digest, perr := artifact.Push(ctx, ref, path, blob, runtime)
+	digest, perr := artifact.Push(ctx, ref, path, blob, runtime, platform)
 	if perr != nil {
 		return perr
 	}

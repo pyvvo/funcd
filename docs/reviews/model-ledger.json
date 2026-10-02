@@ -2173,5 +2173,20 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0144-implementation-claude-opus-5-5.md",
     "notes": "both packages released+published, funcd on v0.4.0/v0.3.0, every scenario test passes, gate/e2e/hygiene green, 9 Lima lanes PASS; funcd-bundle usage error exits 1 not 2, TS release-PR CI filter misses vite-plugin/package.json, two weak scenario assertions, import-check copy filter drops dist/node_modules dirs, implementation before acceptance with 2 un-judged refinements (model); no ADR baseline (env)"
+  },
+  {
+    "date": "2026-10-02",
+    "adr": "0145",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 6,
+    "model_attributed": 3,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0145-implementation-claude-opus-5-5.md",
+    "notes": "all contracts match, every scenario test passes, gate/Linux lint/hygiene/e2e green, act-bundle re-run (both platforms indexed, tree unchanged), duckdb lane PASS, 9/10 mutants killed; pool.go not gofmt-clean, solo Schedule Platforms untested (surviving mutant), QEMU via tonistiigi/binfmt not setup-qemu-action (model); Decision 5 err.Error() vs Contracts message, in-memory platform cache makes post-restart reconcile need the registry (adr); no ADR baseline (env)"
   }
 ]

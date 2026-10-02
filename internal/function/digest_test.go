@@ -63,7 +63,7 @@ func newDigestHarness(t *testing.T, res *fakeResolver) *digestHarness {
 	t.Helper()
 	st := store.New(memory.New())
 	rt := newFakeRuntime("127.0.0.1", 8080)
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	mat := &recordingMaterializer{}
 	r, err := function.NewReconciler(function.Deps{

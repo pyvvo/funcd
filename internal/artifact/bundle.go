@@ -32,6 +32,7 @@ import (
 	"oras.land/oras-go/v2/errdef"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/contract"
 )
 
@@ -206,7 +207,7 @@ func VerifyBundleContract(dir, _ string) (contractBlob []byte, err error) {
 // PushBundle packs dir (PackBundle) as a BundleTarMediaType layer with the entry annotation,
 // adds the VerifyBundleContract result as the ADR-0059 contract layer, and pushes it — mirroring
 // Push's oras flow. Returns the manifest descriptor digest.
-func PushBundle(ctx context.Context, ref, dir, entry, runtime string) (digest string, err error) {
+func PushBundle(ctx context.Context, ref, dir, entry, runtime string, platform v1.OCIPlatform) (digest string, err error) {
 	const op = "artifact.PushBundle"
 	contract, verr := VerifyBundleContract(dir, entry)
 	if verr != nil {
@@ -240,6 +241,9 @@ func PushBundle(ctx context.Context, ref, dir, entry, runtime string) (digest st
 	}
 	if runtime != "" {
 		opts.ManifestAnnotations[runtimeAnnotation] = runtime
+	}
+	if platform != "" {
+		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
 	}
 	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {
