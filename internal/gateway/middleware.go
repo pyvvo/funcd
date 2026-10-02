@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -29,22 +31,61 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 type requestIDKey struct{}
 
 // Recover is a middleware that turns a handler panic into an RFC 9457
-// problem+json 500 instead of crashing the connection. http.ErrAbortHandler is
-// re-panicked: it is net/http's signal to abort the connection (e.g. a proxied
-// stream whose upstream died mid-body), so the client sees the truncation.
+// problem+json 500 instead of crashing the connection. A panic is re-panicked
+// when no problem can be written: http.ErrAbortHandler (net/http's signal to
+// abort, e.g. a proxied stream whose upstream died mid-body), or any panic after
+// the response committed (#338). net/http then aborts the connection, so the
+// client sees the truncation, and logs any panic other than ErrAbortHandler.
 func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cw := &commitWriter{ResponseWriter: w}
 		defer func() {
 			if rec := recover(); rec != nil {
-				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				if err, ok := rec.(error); cw.committed || ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
 				fault.WriteProblem(w, fault.Internalf("gateway.Recover", "handler panic: %v", rec))
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(cw, r)
 	})
 }
+
+// commitWriter records whether the response has committed (a final status, a
+// body byte, a flush or a hijack). It implements http.Flusher and http.Hijacker
+// directly, as inner wrappers type-assert them, and Unwrap for
+// http.ResponseController.
+type commitWriter struct {
+	http.ResponseWriter
+	committed bool
+}
+
+func (c *commitWriter) WriteHeader(code int) {
+	c.ResponseWriter.WriteHeader(code)
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		c.committed = true
+	}
+}
+
+func (c *commitWriter) Write(b []byte) (int, error) {
+	c.committed = true
+	return c.ResponseWriter.Write(b)
+}
+
+func (c *commitWriter) Flush() {
+	c.committed = true
+	_ = http.NewResponseController(c.ResponseWriter).Flush()
+}
+
+func (c *commitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(c.ResponseWriter).Hijack()
+	if err == nil {
+		c.committed = true
+	}
+	return conn, brw, err
+}
+
+func (c *commitWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
 // RequestID is a middleware that ensures every request carries an X-Request-Id:
 // it reuses an inbound id or mints one, echoes it on the response, and stores it
