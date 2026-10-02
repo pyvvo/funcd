@@ -45,6 +45,9 @@ Write the regression test **before** touching the code:
 
 - Remove the cause; never mask the symptom (no longer timeout, extra retry, swallowed error, `t.Skip`,
   or weakened assertion).
+- Reuse before you write: search the package, its neighbours, `internal/platform`, `api/fault`,
+  `internal/testkit`, the existing test harnesses, the module's dependencies and the standard library for
+  what the fix needs. Never duplicate logic or hand-roll what already exists; `/fix-review` checks this.
 - Change only what this issue needs. A second defect found on the way is a new issue: note it in the
   handoff and file it with `/issue-management` after the user's go.
 - Keep living docs true (blueprint, feat, READMEs, CLI help) if the fix changes what they describe.
