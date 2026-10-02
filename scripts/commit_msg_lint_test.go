@@ -27,4 +27,5 @@ func TestIssue248_CommitMsgLintIgnoresBodyLength(t *testing.T) {
 	out, err := lint("not a conventional subject")
 	require.Error(t, err)
 	require.Contains(t, out, "is not a Conventional Commit")
+	require.Contains(t, out, "\"not a conventional subject\"\n", "the error quotes the subject line alone")
 }
