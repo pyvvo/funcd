@@ -116,7 +116,7 @@ func (a *cli) dlqReplayCmd() *cobra.Command {
 	var ns string
 	cmd := &cobra.Command{
 		Use:   "replay <id>",
-		Short: "Replay a dead letter against the live Sensor spec (removed on success; re-parked on failure)",
+		Short: "Replay a dead letter against the live Sensor spec (removed on success; re-parked if the delivery fails)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := a.sdkClient()
@@ -124,7 +124,7 @@ func (a *cli) dlqReplayCmd() *cobra.Command {
 				return err
 			}
 			if err := c.ReplayDeadLetter(cmd.Context(), v1.NamespaceName(nsOrDefault(ns)), args[0]); err != nil {
-				return fault.Wrapf(err, fault.KindOf(err), "funcdctl eventing dlq replay", "replay %s failed (entry re-parked)", args[0])
+				return fault.Wrapf(err, fault.KindOf(err), "funcdctl eventing dlq replay", "replay %s failed", args[0])
 			}
 			return a.writef("replayed %s (delivered; entry removed)\n", args[0])
 		},

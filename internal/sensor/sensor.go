@@ -296,7 +296,8 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 // Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. The replay is an
 // action-delivery, so it records its Invocation (Ready or Failed). On success the entry is Deleted and nil
 // returned; on failure the entry is re-Put with Attempts reset (never lost) and the delivery error
-// returned. A missing DeadLetter / Sensor / action ⇒ NotFound (the operator discards).
+// returned, marked as re-parked once the re-Put succeeded. A missing DeadLetter / Sensor / action ⇒
+// NotFound (the operator discards).
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
 	if r.deadletters == nil {
@@ -331,8 +332,9 @@ func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string)
 		dl.FailedAt = time.Now().UTC()
 		if perr := r.deadletters.Put(ctx, dl); perr != nil {
 			r.logger.WarnContext(ctx, "re-park after failed replay failed", "sensor", dl.Sensor, "id", id, "error", perr)
+			return derr
 		}
-		return derr
+		return fault.Wrapf(derr, fault.KindOf(derr), "sensor.Replay", "delivery failed (entry re-parked)")
 	}
 	return r.deadletters.Delete(ctx, ns, id)
 }
