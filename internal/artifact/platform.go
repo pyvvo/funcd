@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/scheduler"
 )
 
 // PlatformAnnotation records, on a function manifest, the platform its bundle was built for (ADR-0145).
@@ -129,7 +130,8 @@ func platformList(ps []v1.OCIPlatform) string {
 }
 
 // Platforms lists the platforms the artifact at digest (or at ref's tag when digest is empty) provides: an
-// index's, an annotated manifest's one, or nil for an unannotated manifest, which runs anywhere.
+// index's, an annotated manifest's one, or nil for an unannotated manifest, which runs anywhere. An index none of
+// whose manifests names a platform runs nowhere: an error matching scheduler.ErrNoMatchingPlatform.
 func Platforms(ctx context.Context, ref, digest string) ([]v1.OCIPlatform, error) {
 	const op = "artifact.Platforms"
 	target, reference, terr := resolveTarget(ctx, ref)
@@ -155,7 +157,12 @@ func Platforms(ctx context.Context, ref, digest string) ([]v1.OCIPlatform, error
 		if jerr := json.Unmarshal(data, &index); jerr != nil {
 			return nil, fault.Invalidf(op, "decode index: %v", jerr)
 		}
-		return indexPlatforms(index), nil
+		ps := indexPlatforms(index)
+		if len(ps) == 0 {
+			return nil, fault.Wrapf(scheduler.ErrNoMatchingPlatform, fault.Invalid, op,
+				"artifact %s provides no platform: no manifest in its index names one", desc.Digest)
+		}
+		return ps, nil
 	}
 	var manifest ocispec.Manifest
 	if jerr := json.Unmarshal(data, &manifest); jerr != nil {
