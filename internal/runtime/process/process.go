@@ -304,7 +304,8 @@ func removeFiles(inst *instance) {
 	}
 }
 
-// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM.
+// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM, then deletes
+// every instance's driver-owned files, which no later driver knows to remove.
 func (d *driver) Close() error {
 	d.mu.Lock()
 	var running []runtime.InstanceID
@@ -319,6 +320,11 @@ func (d *driver) Close() error {
 		wg.Go(func() { _ = d.Stop(context.Background(), id) })
 	}
 	wg.Wait()
+	d.mu.Lock()
+	for _, inst := range d.instances {
+		removeFiles(inst)
+	}
+	d.mu.Unlock()
 	return nil
 }
 

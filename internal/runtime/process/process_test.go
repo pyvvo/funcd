@@ -139,10 +139,6 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 
 // A Create rejected because the instance is live (Created or Running) leaves no driver-created log file behind.
 func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
-	ctx := context.Background()
-	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", Name: "live", Command: []string{"sleep", "30"}}
 	logs := func() []string {
@@ -165,4 +161,34 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	require.NoError(t, rt.Stop(ctx, inst.ID))
 	require.NoError(t, rt.Remove(ctx, inst.ID))
 	require.Empty(t, logs())
+}
+
+// Close deletes the driver-owned log and port files of every instance it holds, as Remove does, so a daemon restart
+// leaves no pair per live worker in the temp dir; a log the caller set through LogPath stays.
+func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
+	callerLog := filepath.Join(t.TempDir(), "caller.log")
+	specs := []runtime.WorkerSpec{
+		{Namespace: "default", Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
+		{Namespace: "default", Name: "exited", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}},
+		{Namespace: "default", Name: "own-log", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}, LogPath: callerLog},
+	}
+	for _, spec := range specs {
+		inst, err := rt.Create(ctx, spec)
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		require.Eventually(t, func() bool {
+			got, serr := rt.Status(ctx, inst.ID)
+			return serr == nil && (got.Port > 0 || got.State.Terminal())
+		}, 5*time.Second, 10*time.Millisecond)
+	}
+	driverFiles, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
+	require.NoError(t, err)
+	require.Len(t, driverFiles, 4, "the live and exited workers each have a driver-owned log and port file")
+
+	require.NoError(t, rt.Close())
+	driverFiles, err = filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
+	require.NoError(t, err)
+	require.Empty(t, driverFiles, "Close deletes the driver-owned files")
+	require.NoFileExists(t, callerLog+".port", "Close deletes the driver-owned port file beside a caller's log")
+	require.FileExists(t, callerLog, "Close keeps a log the caller set through LogPath")
 }
