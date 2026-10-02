@@ -426,6 +426,10 @@ func problemToFault(httpStatus int, body []byte) error {
 		return fault.Forbiddenf("sdk", "%s", msg)
 	case http.StatusServiceUnavailable:
 		return fault.Unavailablef("sdk", "%s", msg)
+	case http.StatusTooManyRequests:
+		return fault.ResourceExhaustedf("sdk", "%s", msg)
+	case http.StatusRequestEntityTooLarge:
+		return fault.PayloadTooLargef("sdk", "%s", msg)
 	default:
 		return fault.Internalf("sdk", "%s", msg)
 	}
