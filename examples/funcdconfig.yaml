@@ -41,7 +41,8 @@ storage:
 # --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
 auth:
   token: funcd-dev-token          # control-plane credential. default: a built-in dev token (with a warning)
-  namespaces: [default]           # namespaces the token grants. default: [default]
+  namespaces:                     # namespaces the token grants. default: [default]
+    - default
 
 # --- runtime: the function-execution lane (ADR-0036/0054) --------------------------------------
 runtime:

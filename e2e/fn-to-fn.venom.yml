@@ -19,7 +19,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/front"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":"venom"}}'
         retry: 10            # first call: absorb any warm-up after Ready
         delay: 1
@@ -36,7 +37,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/front"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{}}'
         info: "front response → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
@@ -49,7 +51,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/greeter"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":123}}'                                # name must be a string (input schema)
         assertions:
           - result.statuscode ShouldEqual 422

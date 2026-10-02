@@ -93,7 +93,8 @@ testcases:
       - type: http
         method: POST
         url: "http://127.0.0.1:8081/function/catalog-reader"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
         retry: 20
         delay: 2

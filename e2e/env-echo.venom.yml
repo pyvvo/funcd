@@ -39,7 +39,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/env-echo"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":null}'
         retry: 15
         delay: 2
@@ -70,7 +71,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/echo"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":null}'
         retry: 15
         delay: 2
@@ -88,7 +90,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/env-echo"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         # a body well over the 1024-byte cap (a ~2 KB filler string).
         body: '{"data":"{{.filler}}"}'
         info: "oversized invoke → status {{.result.statuscode}}"
@@ -114,7 +117,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/secure"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":null}'
         info: "anonymous /secure → {{.result.statuscode}}"
         assertions:
@@ -122,7 +126,9 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/secure"
-        headers: { content-type: application/json, Authorization: "Bearer funcd-dev-token" }
+        headers:
+          content-type: application/json
+          Authorization: "Bearer funcd-dev-token"
         body: '{"data":null}'
         retry: 15
         delay: 2
@@ -182,7 +188,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/env-echo"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":null}'
         retry: 15
         delay: 2

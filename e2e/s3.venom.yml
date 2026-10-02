@@ -20,7 +20,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/s3-roundtrip"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         # inv=site pins the object key (gold/roundtrip-site.txt) so the ADR-0139 Site case below can fetch
         # the very object this invoke wrote, through the Site's /data mount.
         body: '{"data":{"inv":"site"}}'
