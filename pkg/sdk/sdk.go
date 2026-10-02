@@ -316,7 +316,9 @@ func decodeDocument(data []byte) (v1.Object, error) {
 	if !ok {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "unknown kind %q", tm.Kind)
 	}
-	if err := yaml.Unmarshal(data, obj); err != nil {
+	// Strict: a key the typed object lacks would be dropped by toWireBody before the server's
+	// additionalProperties:false edge could reject it (ADR-0108), so the apply would report success.
+	if err := yaml.UnmarshalStrict(data, obj); err != nil {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "decode %s: %v", tm.Kind, err)
 	}
 	return obj, nil

@@ -123,8 +123,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:front
+  image: oci-layout:///mnt/funcd-deps/registry:front
   links:
     - alias: greeter
       target: greeter
@@ -240,4 +239,88 @@ spec:
 	require.True(t, ok)
 	require.Equal(t, []v1.BlobEventType{"Removed"}, es.Spec.Blob.Events[0].On)
 	require.ErrorContains(t, es.Validate(), `"Removed" is unsupported`)
+}
+
+// A manifest key the typed object does not know is rejected at decode, not silently dropped before the
+// request is built: the server's additionalProperties:false edge (ADR-0108 no-binding-field-schema) never
+// sees a key the client discarded, so `funcdctl apply` would report a manifest applied that was not.
+func TestIssue64_DecodeManifestRejectsUnknownKeys(t *testing.T) {
+	valid := []byte(`
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+`)
+	obj, err := sdk.DecodeManifest(valid)
+	require.NoError(t, err)
+	es, ok := obj.(*v1.EventSource)
+	require.True(t, ok)
+	require.NotNil(t, es.Spec.Timer)
+	require.Len(t, es.Spec.Timer.Events, 1)
+
+	cases := map[string]struct {
+		manifest string
+		key      string
+	}{
+		"removed v1 eventsource keys": {
+			key: "function",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  function: echo
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+`,
+		},
+		"nested unknown timer key": {
+			key: "cron",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+        cron: "*/5 * * * *"
+`,
+		},
+		"unknown function spec key": {
+			key: "imagePullPolicy",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: front
+  namespace: default
+spec:
+  runtime: nodejs22
+  handler: handle
+  imagePullPolicy: Always
+`,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := sdk.DecodeManifest([]byte(tc.manifest))
+			require.Error(t, err, "an unknown manifest key must not be dropped silently")
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.Contains(t, err.Error(), tc.key)
+		})
+	}
 }
