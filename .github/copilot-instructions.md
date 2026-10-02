@@ -188,6 +188,81 @@ on its merits; reorder or parallelize work within a build tier; and restructure 
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
 the rules above. The judge advises; it never blocks a sound decision on taste.
 
+## Backlog — un-scoped ideas live on the GitHub Project, not in the docs
+
+The four document layers hold **committed, version-scoped** work (a feat row, an ADR, a roadmap
+item). Raw future ideas that are **not yet scoped into a version** — cross-cutting "someday"
+features, research spikes, anything deferred past the current version — do **not** belong in the
+docs (they would rot the feat/roadmap with un-decided scope). They go to the project's GitHub
+**Project board #1** (pyvvo org):
+
+- **Board**: <https://github.com/orgs/pyvvo/projects/1> (`funcd`; copied from the user-owned Project #4 by ADR-0141).
+- **Use the [`/project-management`](../.claude/skills/project-management/SKILL.md) skill — do not hand-write `gh`.**
+  Its `driver.py` bakes in the project/field/option ids (verified) so there is nothing to discover;
+  it needs the `project` token scope (the `green-0-rabbit` token already has it; otherwise
+  `gh auth refresh -s project`). **List first** to avoid duplicates, then create:
+
+  ```bash
+  python3 .claude/skills/project-management/driver.py list
+  python3 .claude/skills/project-management/driver.py create \
+    --title "<short idea title>" \
+    --body "<why · key trade-offs · what it depends on · scope-when-picked-up>"
+  ```
+
+  `create` defaults the item to **Backlog** (never "No Status"). Write a rich body — match the depth
+  of the existing items (`driver.py show "<substring>"`).
+
+Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
+the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
+artifact-contract registry, and distro packaging P-Z.) **And — see below — a *feature* ADR also
+carries a board card** from the moment it's drafted, so the board shows feature work in flight, not
+only un-scoped ideas.
+
+### A feature ADR carries a board card that natively tracks its lifecycle
+
+A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
+FEAT-0001, FEAT-0003) — **gets a board tracking card created when it is first drafted**, and its
+**Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
+it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
+
+**Pure-infra / process / refactor ADRs skip the card** — a rename (ADR-0078/0079), a tooling/e2e ADR
+(ADR-0077), the process ADR (ADR-0000): no card. (If a feature ADR was *scoped from a pre-existing
+board idea*, **reuse that card — don't create a second**; `driver.py list` first.) When unsure, read
+the ADR's `Realizes:` header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
+
+The board's three Status options — **Backlog · In Progress · Done** — map onto the five ADR statuses:
+
+| ADR status | Board card | Moved by |
+|---|---|---|
+| `Draft` | **create the card in `Backlog`** | the `adr` skill, at draft |
+| `Proposed` (+ judge) | stays `Backlog` | — |
+| `Accepted` | `→ In Progress` | the `adr` / `adr-batch` accept step |
+| `Reviewing` | stays `In Progress` | — (no move; `adr-impl` just notes it) |
+| `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
+
+The skill gates carry each move as an explicit step. Create/move the card with the
+[`/project-management`](../.claude/skills/project-management/SKILL.md) skill (it resolves the item by title
+substring — no ids to hand-assemble):
+
+```bash
+python3 .claude/skills/project-management/driver.py create --title "<…> — ADR-NNNN / FEAT-NNNN Fxx" --body "<…>"  # at Draft
+python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
+python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
+```
+
+## Issues — defects and concrete work live in GitHub Issues
+
+Wrong behavior in what is built (a bug, a flaky test) and concrete work items go to
+[GitHub Issues](https://github.com/pyvvo/funcd/issues), in one fixed shape per kind and one label taxonomy.
+**Use the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill — do not hand-write
+`gh issue`.** Its `driver.py` holds the shapes and the labels, checks every issue before filing it, and
+generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-edit them).
+
+- **Where things go**: a defect or a task → an issue; an un-scoped idea → a board card; a decision → an ADR.
+- **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
+- **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
+  PR that implements it closes the issue (`Fixes #N` in the PR description).
+
 ## Dev environment — run everything through Nix
 
 The toolchain is pinned by the flake ([flake.nix](../flake.nix) + `flake.lock`) — Go, `just`, and
@@ -205,6 +280,78 @@ truth and may differ. New tooling dependencies are **added to the flake (pinned)
 the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just bench-containerd-lima`)
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
+
+## The language repos — pinned Go modules, never copies (ADR-0141)
+
+The shims and their examples live in [pyvvo/funcd-typescript](https://github.com/pyvvo/funcd-typescript) and
+[pyvvo/funcd-python](https://github.com/pyvvo/funcd-python), not here. funcd pins both in `go.mod` at release
+tags and reads them through the Go module system:
+
+- **Embedded shims**: `cmd/funcd` and `cmd/funcdctl` import `github.com/pyvvo/funcd-typescript/shim`
+  (`Shim`, `Pool`) and `github.com/pyvvo/funcd-python/shim` (`Extract`).
+- **Files** (examples, the image's shim): `scripts/moddir.sh <module>` in recipes and lanes,
+  `internal/testkit/langmod` in tests. The module cache is **read-only**; anything that writes beside an
+  example works on a copy under `.modcopy/` (`scripts/example-copy.sh`, a lane's `copy: true`).
+- **Only `go.mod`/`go.sum` name a language-module version** (`just check-hygiene` enforces it).
+- **A shim change** is a PR and a release in the language repo, then `go get <module>@<tag>` here. To test
+  an unreleased change, clone the repo next to funcd and add a local `go.work`
+  (`go work init . ../funcd-typescript`); git ignores it. Never commit a `go.work` or a pseudo-version.
+- **One session across repos**: start Claude Code in funcd with the siblings added
+  (`claude --add-dir ../funcd-typescript --add-dir ../funcd-python`), so a shim change, its release and
+  the funcd bump happen in one conversation. Each repo keeps its own CLAUDE.md, PR flow and merge queue.
+- **Design decisions still live here**: a change to the funcd ↔ shim contract needs a funcd ADR first.
+
+## ⛔ Grounding — never present invention as fact
+
+Design work *necessarily* invents: a proposed CRD shape, a new port, a contract that does not exist yet.
+That stays free — it is the job. What is **forbidden** is presenting invention in the same register as
+fact, or smuggling in elements nothing asked for. This binds chat answers and sketches as hard as
+tracked files; a shape the decider reviews is a decision input, and an unmarked invention corrupts it.
+
+- **Every element is grounded or flagged.** A field, kind, status reason, CLI flag, ADR number, or file
+  path is either traced to something real — **cite it** (`api/types/…`, an ADR number, the precedent it
+  mirrors) — or explicitly marked as new and unbuilt. The defect is the *mixed block*: a manifest where
+  some keys map to shipped code and one is your idea, with nothing to tell them apart.
+- **Never add what the request does not need.** A speculative field, a knob "for later", an extra
+  capability — that is scope creep at the design layer, and it costs the decider a review cycle to
+  discover it was never real. Propose the minimum shape; list the rest as open questions.
+- **grep the vocabulary before naming anything.** This repo reuses words precisely, so a new name that
+  collides with a shipped one is a defect, not a taste call (`retain` is already a *deletion policy* on
+  `Workflow.spec.kv[].deletion`; `artifact` is already the OCI *function* bundle). Search the term, then
+  name it.
+- **"Show me X" is answered by what the code says — including "X does not exist."** Never fabricate a
+  path, field, flag, status reason, or ADR number to satisfy the shape of the question. Read it or say
+  it is unbuilt.
+
+## Code & config style conventions
+
+Small house-style rules that apply to every file you write or edit:
+
+- **YAML is block style — never flow style.** No inline `{ key: value }` curly braces and no inline
+  `[a, b]` lists, in any `.yaml`/`.yml` file or any embedded YAML (funcdctl.yaml, resource manifests,
+  `.venom.yml`, YAML inside Go/Python test consts, ADR/doc code fences). Expand every mapping and
+  sequence across lines:
+
+  ```yaml
+  # do                          # not
+  properties:                   properties:
+    name:                         name: { type: string }
+      type: string              required: [name]
+  required:
+    - name
+  ```
+
+- **Imports at module top level.** No `import`/`from … import` inside a function or method (Python, JS/TS,
+  Go). The only exception is a genuine circular-import break.
+
+- **Don't bloat code or examples with comments.** Comment the *why* when it is not derivable from the
+  code — an invariant, a non-obvious constraint, an ADR the line implements. Never narrate the *what*:
+  no line-by-line annotation, no comment restating the identifier next to it, no explanatory comment on
+  every field of a struct or every key of a YAML manifest. This binds **examples, manifests, and answers
+  in chat** as much as tracked code: a sample manifest carries the shape, not a tutorial — if a field
+  needs prose, that prose belongs in the ADR or the example's README, not inline. A package/type doc
+  comment naming the ADR it realizes stays; a wall of per-key commentary does not. Same rule for prose:
+  say it once, at the right altitude.
 
 ## Known pitfalls (Go dev on this project — learned from ADR-0003 implementation)
 
@@ -235,6 +382,24 @@ go build ./... && go test ./... && go tool golangci-lint run ./... && go mod ver
 When all four pass individually, the implementation is green — the `git diff` gate is
 satisfied by committing the changed tracked files. After `go fmt ./...` is clean and the
 four checks above pass, the implementation is done; `just ci` will pass after commit.
+
+### 3. The containerd Lima lanes need colima (Docker) running — start it if a lane fails early
+
+The `just lima-example-*` lanes (KV, fn-to-fn, …) and `build-runtime-images` build the embedded
+runtime images with `docker build` (the shim comes from the pinned module as the `shim` build context,
+ADR-0141), so they require **colima to be running** (it provides the
+Docker daemon on macOS — a *separate host daemon* from the flake-pinned Lima). If colima is
+stopped, the lane fails **early in `build-runtime-images`** with a Docker-socket connection error
+(`failed to connect to the docker API … : no such file or directory`) — *before* the VM ever
+boots or the Venom suite runs. This is environmental, **not** a code/test/suite defect; don't
+chase it in the lane's YAML.
+
+**Mitigation**: `colima start`, confirm `docker info` responds (and `docker context show` is
+`colima`), then re-run the lane. colima shares only `$HOME` with its VM, so run the lanes from a checkout
+under `$HOME`: from anywhere else (a `/tmp` worktree) a `docker run -v` bind mount, like the duckdb lane's
+bundle build, silently writes into the VM instead of the host. colima can stop/die mid-session (sleep, resource pressure); when
+a containerd lane suddenly fails at the image-build step, check colima **first**. Keep it running;
+don't stop it mid-session. (The Venom e2e suites themselves are covered by the `venom-e2e` skill.)
 
 ## Before you finish any skill run — propagation checklist
 
