@@ -37,26 +37,15 @@ func TestIssue163_LocalAPIReapsIdleKeepAliveConns(t *testing.T) {
 //go:embed *.go
 var packageSources embed.FS
 
-// TestIssue357_LocalAPIHasOneListenerPath: the daemon binds a local API socket only through
-// Manager.SocketFor. A second, uncalled binder (the exported Serve) had no test and had to be kept in
-// step with it by hand.
+// TestIssue357_LocalAPIHasOneListenerPath: the local API binds its socket in one place, shared by Serve
+// and Manager.SocketFor. A second binder had no test and had to be kept in step with the first by hand.
+// Any use of the net package's listen family (Listen, ListenUnix, ListenConfig, FileListener, …)
+// counts as a binder.
 func TestIssue357_LocalAPIHasOneListenerPath(t *testing.T) {
-	isNetListen := func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return false
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Listen" {
-			return false
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		return ok && pkg.Name == "net"
-	}
 	files, err := fs.Glob(packageSources, "*.go")
 	require.NoError(t, err)
 	fset := token.NewFileSet()
-	var binders []string
+	binders := map[string]bool{}
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -65,18 +54,35 @@ func TestIssue357_LocalAPIHasOneListenerPath(t *testing.T) {
 		require.NoError(t, err)
 		f, err := parser.ParseFile(fset, name, src, 0)
 		require.NoError(t, err)
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+		netName := ""
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"net"` {
+				netName = "net"
+				if imp.Name != nil {
+					netName = imp.Name.Name
+				}
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				if isNetListen(n) {
-					binders = append(binders, fn.Name.Name)
+		}
+		if netName == "" {
+			continue
+		}
+		for _, decl := range f.Decls {
+			owner := name + " (package scope)"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				owner = fn.Name.Name
+			}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if ok && pkg.Name == netName && (strings.HasPrefix(sel.Sel.Name, "Listen") || sel.Sel.Name == "FileListener") {
+					binders[owner] = true
 				}
 				return true
 			})
 		}
 	}
-	require.Equal(t, []string{"SocketFor"}, binders, "the local API socket must be bound in one place, Manager.SocketFor")
+	require.Len(t, binders, 1, "the local API socket must be bound in one place, shared by Serve and Manager.SocketFor; bound in %v", binders)
 }

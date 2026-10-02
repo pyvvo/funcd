@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,7 +41,7 @@ type Manager struct {
 type serving struct {
 	path   string
 	srv    *http.Server
-	cancel context.CancelFunc // stops this listener's watcher goroutine (and closes srv)
+	cancel context.CancelFunc // closes srv
 }
 
 // NewManager builds a Manager serving sockets under dir. invoker is the (possibly late-bound)
@@ -74,19 +73,14 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 		return "", fault.Wrapf(err, fault.Unavailable, op, "create socket dir %q", m.dir)
 	}
 	path := filepath.Join(m.dir, sockName(key))
-	_ = os.Remove(path) // clear a stale socket
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "listen on %q", path)
-	}
 	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
-	srv := newServer(h)
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
+	ln, srv, err := listen(sctx, op, path, h)
+	if err != nil {
+		scancel()
+		return "", err
+	}
 	go func() { _ = srv.Serve(ln) }()
-	go func() {
-		<-sctx.Done()
-		_ = srv.Close()
-	}()
 	m.active[key] = &serving{path: path, srv: srv, cancel: scancel}
 	m.logger.Debug("serving worker-node local API", "function", key, "socket", path)
 	return path, nil
@@ -103,7 +97,7 @@ func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	if !ok {
 		return
 	}
-	s.cancel() // stops the watcher goroutine, which closes srv (no leak)
+	s.cancel() // closes srv (no leak)
 	_ = os.Remove(s.path)
 }
 

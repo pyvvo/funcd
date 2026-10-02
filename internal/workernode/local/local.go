@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -191,4 +193,32 @@ func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([
 // outlasts the TypeScript shim's 5 s client keep-alive, so the client closes an idle connection first.
 func newServer(h http.Handler) *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
+}
+
+// listen binds the local API's Unix socket at path, after clearing a stale socket file from a prior
+// sandbox, and builds h's server, closed once ctx is done; the caller runs srv.Serve(ln). Serve and
+// Manager.SocketFor both bind through it, so the two cannot drift (issue #357).
+func listen(ctx context.Context, op, path string, h http.Handler) (net.Listener, *http.Server, error) {
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Unavailable, op, "listen on unix socket %q", path)
+	}
+	srv := newServer(h)
+	context.AfterFunc(ctx, func() { _ = srv.Close() })
+	return ln, srv, nil
+}
+
+// Serve runs h on a Unix domain socket at path (bind-mounted into the sandbox) until ctx is done.
+// A stale socket file at path is removed first.
+func Serve(ctx context.Context, path string, h http.Handler) error {
+	const op = "workernode.local.Serve"
+	ln, srv, err := listen(ctx, op, path, h)
+	if err != nil {
+		return err
+	}
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fault.Wrapf(err, fault.Unavailable, op, "serve local API on %q", path)
+	}
+	return nil
 }
