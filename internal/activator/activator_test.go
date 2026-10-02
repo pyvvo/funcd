@@ -2,6 +2,7 @@ package activator_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -612,5 +613,64 @@ func TestIssue47_ReclaimSparesInFlightCall(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "the call wakes the function instead of reaching the stopped worker")
 		require.Equal(t, "woken", rec.Body.String())
 		require.Equal(t, []int{0, 1}, sc.targetList())
+	})
+}
+
+// Issue #146: last activity belongs to one Function, not to its name — a re-created Function gets a
+// full grace window, and a deleted one leaves no tracker entry behind.
+func TestIssue146_LastActivityFollowsFunctionIdentity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	const idle = 10 * time.Minute
+	scaling := v1.Scaling{MinReplicas: 0, IdleTimeout: idle}
+
+	for _, observed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recreated-gets-full-grace-window/observed=%t", observed), func(t *testing.T) {
+			t.Parallel()
+			backend := echoUpstream("ok")
+			defer backend.Close()
+			st := store.New(memory.New())
+			createFunction(t, st, "reborn", scaling)
+			clk := &stepClock{t: base}
+			sc := &fakeScaler{}
+			a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true}, Scaler: sc, Clock: clk})
+
+			require.Equal(t, http.StatusOK, serve(a, activator.FunctionRef{Namespace: "default", Name: "reborn"}).Code)
+			if observed {
+				require.NoError(t, a.ReclaimIdle(ctx))
+			}
+			require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", "reborn", ""))
+			clk.advance(time.Hour)
+			createFunction(t, st, "reborn", scaling)
+
+			require.NoError(t, a.ReclaimIdle(ctx))
+			require.Empty(t, sc.targetList(), "the re-created function must not inherit its predecessor's activity")
+
+			clk.advance(idle + time.Second)
+			require.NoError(t, a.ReclaimIdle(ctx))
+			require.Equal(t, []int{0}, sc.targetList(), "reclaimed once its own grace window has passed")
+		})
+	}
+
+	t.Run("deleted-is-forgotten", func(t *testing.T) {
+		t.Parallel()
+		backend := echoUpstream("ok")
+		defer backend.Close()
+		st := store.New(memory.New())
+		a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true}, Scaler: &fakeScaler{}, Clock: &stepClock{t: base}})
+		names := []string{"keep", "gone-0", "gone-1", "gone-2"}
+		for _, name := range names {
+			createFunction(t, st, name, scaling)
+			require.Equal(t, http.StatusOK, serve(a, activator.FunctionRef{Namespace: "default", Name: v1.ObjectName(name)}).Code)
+		}
+		require.NoError(t, a.ReclaimIdle(ctx))
+		require.Equal(t, len(names), a.TrackedFunctions())
+
+		for _, name := range names[1:] {
+			require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name), ""))
+		}
+		require.NoError(t, a.ReclaimIdle(ctx))
+		require.Equal(t, 1, a.TrackedFunctions(), "only the live function stays tracked")
 	})
 }
