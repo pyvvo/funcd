@@ -385,6 +385,33 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 // scenario: file-sets-addresses — a funcdconfig.yaml sets the (previously code-only) control-plane
 // + data-plane addresses; the assembled platform binds them (the headline ADR-0061 gap closed).
 func TestScenarioFileSetsAddresses(t *testing.T) {
+	p := addressesFromConfigFile(t)
+	// Production's default is 0.0.0.0:8080; the config set 127.0.0.1:0 → a loopback, ephemeral bind.
+	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
+	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
+	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
+}
+
+// Issue #313: the platform the file-sets-addresses scenario assembles is shut down when the test ends, so both
+// of its listeners are released.
+func TestIssue313_FileSetsAddressesReleasesListeners(t *testing.T) {
+	var addrs []string
+	t.Run("scenario", func(t *testing.T) {
+		p := addressesFromConfigFile(t)
+		addrs = []string{p.Addr(), p.DataPlaneAddr()}
+	})
+	require.Len(t, addrs, 2)
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		require.NoError(t, err, "%s is still bound after the test ended", addr)
+		require.NoError(t, ln.Close())
+	}
+}
+
+// addressesFromConfigFile assembles a platform from a funcdconfig.yaml that sets loopback, ephemeral control-plane
+// and data-plane addresses.
+func addressesFromConfigFile(t *testing.T) *funcd.Platform {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "funcdconfig.yaml")
 	dataDir := shortDataDir(t)
@@ -405,10 +432,8 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 
 	p, err := funcd.New(opts...)
 	require.NoError(t, err)
-	// Production's default is 0.0.0.0:8080; the config set 127.0.0.1:0 → a loopback, ephemeral bind.
-	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
-	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
-	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	return p
 }
 
 // TestIssue153_FunclogConfigBlockLoadsAndMaps: the funclog block of ADR-0081/ADR-0101 is a daemon config key. It
