@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,25 +50,82 @@ func TestScenarioS3GatewayDisabledByDefault(t *testing.T) {
 // builds the server; once Run binds the node-private addr, a TCP dial succeeds. Disabled by
 // default is the contrast above.
 func TestScenarioS3GatewayEnabledOpensListener(t *testing.T) {
-	addr := freeLoopbackAddr(t)
-	p, err := New(InMemory(), WithS3Gateway(addr, "", 0, "", t.TempDir()))
+	_, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
+		return New(InMemory(), WithS3Gateway(addr, "", 0, "", t.TempDir()))
+	})
+	conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
+	if derr != nil {
+		t.Fatalf("dial s3 gateway listener: %v", derr)
+	}
+	_ = conn.Close()
+}
+
+// startS3Gateway builds a platform whose S3 gateway listens on an address from reserve, and serves the
+// gateway until it is ready. versitygw binds the address itself (ADR-0085), so a test can only reserve a
+// port and release it, and a parallel test can take it before the gateway binds it (#288): that bind
+// collision rebuilds the platform on a fresh address; any other Run error fails the test.
+func startS3Gateway(t *testing.T, reserve func(*testing.T) string, build func(addr string) (*Platform, error)) (*Platform, string) {
+	t.Helper()
+	const attempts = 5
+	for i := 1; ; i++ {
+		addr := reserve(t)
+		p, err := build(addr)
+		if err != nil {
+			t.Fatalf("New with the S3 gateway on %s: %v", addr, err)
+		}
+		if p.s3gw == nil {
+			t.Fatal("WithS3Gateway must wire the S3 gateway")
+		}
+		runCtx, cancel := context.WithCancel(context.Background())
+		runErr := make(chan error, 1)
+		go func() { runErr <- p.s3gw.Run(runCtx) }()
+		select {
+		case <-p.s3gw.Ready():
+			t.Cleanup(func() {
+				cancel()
+				<-runErr
+				_ = p.Shutdown(context.Background())
+			})
+			return p, addr
+		case err = <-runErr:
+		case <-time.After(10 * time.Second):
+			err = errors.New("s3 gateway did not become ready")
+		}
+		cancel()
+		_ = p.Shutdown(context.Background())
+		if !errors.Is(err, syscall.EADDRINUSE) || i == attempts {
+			t.Fatalf("s3 gateway on %s: %v", addr, err)
+		}
+	}
+}
+
+// TestIssue288_S3GatewayStartsWhenItsReservedPortIsTaken: freeLoopbackAddr releases the port it reserves, so a
+// parallel test can bind it before the gateway does. The gateway must still come up, on another port, instead of
+// the test waiting out the readiness timeout.
+func TestIssue288_S3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
+	dataDir, err := os.MkdirTemp("", "funcd")
 	if err != nil {
-		t.Fatalf("New(InMemory, WithS3Gateway): %v", err)
+		t.Fatalf("data dir: %v", err)
 	}
-	if p.s3gw == nil {
-		t.Fatal("WithS3Gateway must wire the S3 gateway")
+	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
+	var taken net.Listener
+	reserve := func(t *testing.T) string {
+		addr := freeLoopbackAddr(t)
+		if taken == nil {
+			l, lerr := net.Listen("tcp", addr)
+			if lerr != nil {
+				t.Fatalf("take the reserved port: %v", lerr)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			taken = l
+		}
+		return addr
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = p.Run(ctx) }()
-	t.Cleanup(func() { cancel(); _ = p.Shutdown(context.Background()) })
-
-	// Wait until the gateway listener is ready (bound + accepting).
-	select {
-	case <-p.s3gw.Ready():
-	case <-time.After(10 * time.Second):
-		t.Fatal("s3 gateway did not become ready")
+	_, addr := startS3Gateway(t, reserve, func(addr string) (*Platform, error) {
+		return New(InMemory(), WithS3Gateway(addr, "", 0, "", dataDir))
+	})
+	if addr == taken.Addr().String() {
+		t.Fatalf("the gateway reports the port another listener holds: %s", addr)
 	}
 	conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
 	if derr != nil {
@@ -80,13 +139,10 @@ func TestScenarioS3GatewayEnabledOpensListener(t *testing.T) {
 // one at the cap lands; the Bucket view context.blob and the site reconciler write through refuses it too.
 func TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite(t *testing.T) {
 	ctx := context.Background()
-	addr := freeLoopbackAddr(t)
 	dataDir := t.TempDir()
-	p, err := New(InMemory(), WithS3Gateway(addr, "", 0, "", dataDir))
-	if err != nil {
-		t.Fatalf("New(InMemory, WithS3Gateway): %v", err)
-	}
-	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	p, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
+		return New(InMemory(), WithS3Gateway(addr, "", 0, "", dataDir))
+	})
 
 	st := p.cfg.store
 	bucket := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
@@ -99,15 +155,6 @@ func TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite(t *testing.T) {
 		if _, cerr := st.Create(ctx, obj); cerr != nil {
 			t.Fatalf("seed %s: %v", obj.GroupVersionKind().Kind, cerr)
 		}
-	}
-
-	runCtx, cancel := context.WithCancel(ctx)
-	go func() { _ = p.s3gw.Run(runCtx) }()
-	t.Cleanup(cancel)
-	select {
-	case <-p.s3gw.Ready():
-	case <-time.After(10 * time.Second):
-		t.Fatal("s3 gateway did not become ready")
 	}
 
 	master, err := s3gateway.LoadOrCreateMaster("", dataDir)
