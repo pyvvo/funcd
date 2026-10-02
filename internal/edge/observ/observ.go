@@ -86,34 +86,43 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 			}
 			ctx, tgt := WithTarget(r.Context())
 			rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+			completed := false
+			// Deferred so a panicking inner handler (e.g. ReverseProxy's http.ErrAbortHandler) is still
+			// counted, logged and its span ended, as a 5xx; the panic itself keeps unwinding (#311).
+			defer func() {
+				status := rec.status
+				if !completed {
+					status = http.StatusInternalServerError
+				}
+				dur := time.Since(start)
+				fn, ns := tgt.Function, tgt.Namespace
+				if fn == "" {
+					fn = "-"
+				}
+				statusClass := string(rune('0'+status/100)) + "xx"
+				attrs := []attribute.KeyValue{
+					attribute.String("function", fn),
+					attribute.String("namespace", ns),
+					attribute.String("status_class", statusClass),
+				}
+				if reqCounter != nil {
+					opt := metric.WithAttributes(attrs...)
+					reqCounter.Add(r.Context(), 1, opt)
+					durHist.Record(r.Context(), float64(dur.Milliseconds()), opt)
+				}
+				if span != nil {
+					span.SetAttributes(attrs...)
+					span.End()
+				}
+				if cfg.AccessLog {
+					logger.Info("edge request",
+						"method", r.Method, "path", r.URL.Path, "function", fn, "namespace", ns,
+						"status", status, "duration_ms", dur.Milliseconds(),
+						"request_id", gateway.RequestIDFromContext(r.Context()))
+				}
+			}()
 			next.ServeHTTP(rec, r.WithContext(ctx))
-
-			dur := time.Since(start)
-			fn, ns := tgt.Function, tgt.Namespace
-			if fn == "" {
-				fn = "-"
-			}
-			statusClass := string(rune('0'+rec.status/100)) + "xx"
-			attrs := []attribute.KeyValue{
-				attribute.String("function", fn),
-				attribute.String("namespace", ns),
-				attribute.String("status_class", statusClass),
-			}
-			if reqCounter != nil {
-				opt := metric.WithAttributes(attrs...)
-				reqCounter.Add(r.Context(), 1, opt)
-				durHist.Record(r.Context(), float64(dur.Milliseconds()), opt)
-			}
-			if span != nil {
-				span.SetAttributes(attrs...)
-				span.End()
-			}
-			if cfg.AccessLog {
-				logger.Info("edge request",
-					"method", r.Method, "path", r.URL.Path, "function", fn, "namespace", ns,
-					"status", rec.status, "duration_ms", dur.Milliseconds(),
-					"request_id", gateway.RequestIDFromContext(r.Context()))
-			}
+			completed = true
 		})
 	}
 }

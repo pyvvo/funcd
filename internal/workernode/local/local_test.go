@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -252,4 +254,29 @@ func TestIssue134_InvokeWrapsInputInCloudEventEnvelope(t *testing.T) {
 
 	invoke(`{"data":{"name":"wrapped"}}`)
 	require.JSONEq(t, `{"data":{"name":"wrapped"}}`, string(got), "an envelope-shaped input passes through")
+}
+
+// Issue #337: the link timeout can cut the target's body after its headers went out, and then
+// httputil.ReverseProxy (as activator.forward runs it) aborts the in-process data-plane handler with
+// http.ErrAbortHandler. The invoke buffers the response, so the caller still gets a 503, not a
+// dropped connection.
+func TestIssue337_LinkTimeoutMidBodyIs503(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"partial":`))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.FlushInterval = -1
+	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, timeout: 100 * time.Millisecond}
+	api := httptest.NewServer(local.NewHandler(local.Ref{Namespace: "team-a", Function: "a"}, res, local.NewInvoker(rp), nil, nil, nil, nil))
+	defer api.Close()
+
+	resp, err := http.Post(api.URL+"/invoke/b", "application/json", strings.NewReader(`{}`))
+	require.NoError(t, err, "the caller's connection must not be dropped")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }

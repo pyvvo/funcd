@@ -1,9 +1,12 @@
 package gateway_test
 
 import (
+	"bytes"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -82,6 +85,50 @@ func TestIssue91_RecoverRepanicsErrAbortHandler(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "an aborted stream must surface as a truncated body")
 	require.NotContains(t, string(body), "urn:funcd:problem", "no problem may be written into a committed stream")
+}
+
+// Issue #338: a plain panic after the response committed can no longer become a problem+json 500.
+// Recover must abort the connection (the client sees a truncated body, not a clean 200 with a problem
+// appended) and leave the panic to net/http, which logs it.
+func TestIssue338_RecoverAbortsCommittedResponseOnPanic(t *testing.T) {
+	t.Parallel()
+	streamer := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial-"))
+		_ = http.NewResponseController(w).Flush()
+		panic("boom after commit")
+	})
+	srv := httptest.NewUnstartedServer(gateway.Recover(streamer))
+	logs := &syncBuffer{}
+	srv.Config.ErrorLog = log.New(logs, "", 0)
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	body, err := io.ReadAll(resp.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "a panic in a committed response must surface as a truncated body")
+	require.Equal(t, "partial-", string(body), "no problem may be appended to a committed response")
+	require.Contains(t, logs.String(), "boom after commit", "the panic must still be reported")
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // RequestID mints/echoes an X-Request-Id and exposes it via the context.

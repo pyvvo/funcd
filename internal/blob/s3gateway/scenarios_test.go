@@ -515,3 +515,37 @@ func TestIssue158_CompleteHonorsPartList(t *testing.T) {
 	require.Equal(t, "AAABBB", string(mustGet(t, g, "default", "lakehouse", "bronze/mpu.bin")),
 		"the object is exactly the listed parts; the unlisted part 3 is dropped")
 }
+
+// TestIssue380_ETagsAreQuoted: every ETag the gateway sends is the MD5 hex in double quotes, the
+// RFC 9110 entity-tag form S3 uses — PutObject, GetObject and ListParts as well as UploadPart.
+func TestIssue380_ETagsAreQuoted(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	reader := g.client(t, "default", "analytics")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/hello.txt")
+	const want = `"5d41402abc4b2a76b9719d911017c592"` // MD5 of "hello"
+
+	put, err := owner.PutObject(ctx, &awss3.PutObjectInput{Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("hello"))})
+	require.NoError(t, err)
+	require.Equal(t, want, aws.ToString(put.ETag), "PutObject")
+
+	got, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	require.NoError(t, got.Body.Close())
+	require.Equal(t, want, aws.ToString(got.ETag), "GetObject")
+
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	num := int32(1)
+	up, err := owner.UploadPart(ctx, &awss3.UploadPartInput{
+		Bucket: bucket, Key: key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte("hello")),
+	})
+	require.NoError(t, err)
+	require.Equal(t, want, aws.ToString(up.ETag), "UploadPart")
+
+	parts, err := reader.ListParts(ctx, &awss3.ListPartsInput{Bucket: bucket, Key: key, UploadId: create.UploadId})
+	require.NoError(t, err)
+	require.Len(t, parts.Parts, 1)
+	require.Equal(t, want, aws.ToString(parts.Parts[0].ETag), "ListParts")
+}

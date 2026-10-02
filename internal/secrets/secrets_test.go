@@ -3,6 +3,9 @@ package secrets_test
 import (
 	"context"
 	"encoding/base64"
+	"go/parser"
+	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -116,4 +119,14 @@ func TestIssue168_NonUTF8ValueRejected(t *testing.T) {
 	require.Nil(t, env)
 	require.Contains(t, err.Error(), `"BIN"`)
 	require.NotContains(t, err.Error(), "\xff\xfeA\x80\xc3")
+}
+
+func TestIssue342_PackageDocDescribesTheBuiltInjection(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "secrets.go", nil, parser.PackageClauseOnly|parser.ParseComments)
+	require.NoError(t, err)
+	require.NotNil(t, f.Doc)
+	doc := strings.Join(strings.Fields(f.Doc.Text()), " ")
+	require.NotContains(t, doc, "P-M-successor", "the env injection is built (ADR-0057), not deferred")
+	require.Contains(t, doc, "ADR-0057")
+	require.Contains(t, doc, "secret gate")
 }

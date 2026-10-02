@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"bytes"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -144,4 +147,66 @@ func TestManager_PublishHostSplit(t *testing.T) {
 	_, port, err := net.SplitHostPort(url)
 	require.NoError(t, err)
 	require.NotEmpty(t, port, "a real ephemeral port is published")
+}
+
+// TestIssue312_ProxyBoundsStalledAndIdleConns: a peer that connects to a catalog proxy and stalls before
+// the PEP reads its token, or holds a keep-alive connection idle, pins a daemon goroutine without limit
+// unless the proxy's http.Server bounds the header read, the body read and the idle wait. The idle bound
+// must outlast the edge reverse proxy's client keep-alive (http.DefaultTransport), so that client closes first.
+func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	mgr := NewManager("", "", NewCatalogKeys([]byte("i312-master"), st), buildPDP(t, st), nil)
+	t.Cleanup(mgr.Shutdown)
+	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
+	require.NoError(t, err)
+
+	mgr.mu.Lock()
+	srv := mgr.servers[managerKey("data", "lake")].server
+	mgr.mu.Unlock()
+	require.Positive(t, srv.ReadHeaderTimeout, "a peer that never finishes its headers must be cut off")
+	require.Positive(t, srv.ReadTimeout, "a peer that stalls its body before the token is read must be cut off")
+	clientIdle := http.DefaultTransport.(*http.Transport).IdleConnTimeout
+	require.Greater(t, srv.IdleTimeout, clientIdle, "an idle keep-alive connection must be closed, after the client's own idle timeout")
+}
+
+// TestIssue379_ProxyLogsThroughManagerLogger: the catalog PEP proxy logs through the logger the
+// Manager was given (ADR-0002 §6), and an unreachable engine is logged there, not through the
+// stdlib log package. Not parallel: it captures log's output.
+func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
+	var stdlog bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&stdlog)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	pdp := buildPDP(t, st)
+	master := []byte("issue-379-master")
+	keys := NewCatalogKeys(master, st)
+
+	dead := httptest.NewServer((&engineStub{}).handler())
+	dead.Close()
+
+	var logs bytes.Buffer
+	mgr := NewManager("", "", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(mgr.Shutdown)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, dead.URL, engineToken)
+	require.NoError(t, err)
+	post := func(token string) int {
+		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
+		require.NoError(t, perr)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	require.Equal(t, http.StatusForbidden, post("garbage-unresolvable-token"))
+	require.Contains(t, logs.String(), `"msg":"catalog PEP: unresolved credential"`, "the debug line reaches the injected logger")
+	require.Contains(t, logs.String(), `"component":"catalog.gateway"`)
+
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, post(granted))
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+	require.Contains(t, logs.String(), `"level":"WARN"`, "the engine failure is logged through the injected logger")
 }

@@ -1,10 +1,15 @@
 package shape_test
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/http/httputil"
+	"net/textproto"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +149,89 @@ func TestIssue162_CompressionSkipsPartialAndBodylessResponses(t *testing.T) {
 	require.Empty(t, rec.Header().Get("Content-Encoding"), "a 304 is never gzipped")
 }
 
+// httputil.ReverseProxy relays an upstream 1xx through the writer and then clears the headers, so the gzip
+// choice must wait for the final status and headers.
+func TestIssue305_CompressionDecidesAtFinalStatusAfter1xx(t *testing.T) {
+	payload := strings.Repeat("compress me ", 500)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = io.Copy(io.Discard, r.Body) // the first body read answers Expect with 100 Continue
+		} else {
+			w.Header().Set("Link", "</a.css>; rel=preload")
+			w.WriteHeader(http.StatusEarlyHints)
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, payload)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+	edge := httptest.NewServer(shape.Chain(shape.Config{Compression: true})(httputil.NewSingleHostReverseProxy(target)))
+	defer edge.Close()
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	defer client.CloseIdleConnections()
+
+	for _, tc := range []struct {
+		name    string
+		method  string
+		body    io.Reader
+		interim int
+	}{
+		{name: "early-hints", method: http.MethodGet, interim: http.StatusEarlyHints},
+		{name: "expect-continue", method: http.MethodPost, body: bytes.NewReader(make([]byte, 4096)), interim: http.StatusContinue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var codes []int
+			var encodings []string
+			trace := &httptrace.ClientTrace{Got1xxResponse: func(code int, h textproto.MIMEHeader) error {
+				codes = append(codes, code)
+				encodings = append(encodings, h.Get("Content-Encoding"))
+				return nil
+			}}
+			req, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), tc.method, edge.URL, tc.body)
+			require.NoError(t, err)
+			req.Header.Set("Accept-Encoding", "gzip")
+			if tc.body != nil {
+				req.Header.Set("Expect", "100-continue")
+			}
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			require.Contains(t, codes, tc.interim, "the upstream 1xx is relayed")
+			for _, enc := range encodings {
+				require.Empty(t, enc, "a 1xx never carries the gzip choice")
+			}
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "the final response declares its gzip body")
+			gz, err := gzip.NewReader(resp.Body)
+			require.NoError(t, err)
+			got, err := io.ReadAll(gz)
+			require.NoError(t, err)
+			require.Equal(t, payload, string(got), "the body decodes to the upstream payload")
+		})
+	}
+}
+
+// Whether a compressible response is gzipped depends on Accept-Encoding, so both variants carry Vary.
+func TestIssue336_CompressibleResponseVariesOnAcceptEncoding(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "body")
+	})
+	mw := shape.Chain(shape.Config{Compression: true})
+
+	req := httptest.NewRequest("GET", "http://x/y", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := serve(mw, next, req)
+	require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
+	require.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding", "the gzip variant varies on Accept-Encoding")
+
+	rec = serve(mw, next, httptest.NewRequest("GET", "http://x/y", nil))
+	require.Empty(t, rec.Header().Get("Content-Encoding"))
+	require.Equal(t, "body", rec.Body.String())
+	require.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding", "the identity variant varies on Accept-Encoding")
+}
+
 // The shaping wrappers forward http.Flusher + http.Hijacker (SSE/WS must not break).
 func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	// Headers + compression both wrap the writer — both must forward the streaming interfaces.
@@ -167,4 +255,35 @@ func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	<-done // wait for the handler to finish writing the flags before reading them
 	require.True(t, flushed, "the shaping wrapper forwards http.Flusher")
 	require.True(t, hijackable, "the shaping wrapper forwards http.Hijacker")
+}
+
+// RFC 9110 §12.5.3: a coding with q=0 is not acceptable, so the client gets the identity body.
+func TestIssue335_CompressionHonorsQZero(t *testing.T) {
+	payload := strings.Repeat("compress me ", 500)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, payload)
+	})
+	for ae, gzipped := range map[string]bool{
+		"gzip;q=0, identity":       false,
+		"GZIP; Q=0.000":            false,
+		"x-gzip;q=0, *;q=0.1":      false,
+		"identity;q=1, gzip;q=0.5": true,
+		"deflate, x-gzip":          true,
+	} {
+		req := httptest.NewRequest("GET", "http://x/y", nil)
+		req.Header.Set("Accept-Encoding", ae)
+		rec := serve(shape.Chain(shape.Config{Compression: true}), next, req)
+		if !gzipped {
+			require.Empty(t, rec.Header().Get("Content-Encoding"), "Accept-Encoding %q refuses gzip", ae)
+			require.Equal(t, payload, rec.Body.String(), "Accept-Encoding %q gets the identity body", ae)
+			continue
+		}
+		require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"), "Accept-Encoding %q accepts gzip", ae)
+		gz, err := gzip.NewReader(rec.Body)
+		require.NoError(t, err)
+		got, err := io.ReadAll(gz)
+		require.NoError(t, err)
+		require.Equal(t, payload, string(got))
+	}
 }
