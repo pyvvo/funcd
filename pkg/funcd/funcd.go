@@ -92,6 +92,12 @@ const (
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
 	defaultBucketsPerNamespace = 100
+	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
+	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
+	defaultWorkflowStepTimeout  = 300 * time.Second
+	defaultWorkflowRetention    = 720 * time.Hour
+	defaultWorkflowRetry        = 1
+	defaultWorkflowPayloadLimit = 256 << 10
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -206,8 +212,9 @@ type config struct {
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
 	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
-	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core;
-	// retention + payloadLimit are declared here but enforced by later gates (run GC / admission).
+	// workflow.* config keys — defaultStepTimeout + defaultRetry feed the engine core; retention drives
+	// the terminal-run sweep (runWorkflowRetention) and payloadLimit bounds run inputs and step outputs
+	// (the engine and the WorkflowRun admission).
 	workflowDataDir      string
 	workflowStepTimeout  time.Duration
 	workflowRetention    time.Duration
@@ -321,7 +328,12 @@ type Platform struct {
 // fault (and a nil *Platform) on a missing dep or a build/bind failure — never a
 // partial platform, never a panic.
 func New(opts ...Option) (_ *Platform, err error) {
-	cfg := &config{}
+	cfg := &config{
+		workflowStepTimeout:  defaultWorkflowStepTimeout,
+		workflowRetention:    defaultWorkflowRetention,
+		workflowDefaultRetry: defaultWorkflowRetry,
+		workflowPayloadLimit: defaultWorkflowPayloadLimit,
+	}
 	p := &Platform{cfg: cfg}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
@@ -1083,11 +1095,11 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.runWorkflowRetention(ctx)
 		}()
 	}
-	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel)
+	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel, within the shutdown bound)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.sensorReconciler.RunRetryWorkers(ctx)
+			p.sensorReconciler.RunRetryWorkers(ctx, shutdownTimeout)
 		}()
 	}
 	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) { // ADR-0118: DLQ retention sweep

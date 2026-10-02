@@ -92,6 +92,10 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	if isRunTerminal(run.Status.Phase) {
 		return controller.Result{}, nil
 	}
+	started, err := r.started(ctx, run)
+	if err != nil {
+		return controller.Result{}, err
+	}
 
 	wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, run.Spec.Workflow)
 	if err != nil && fault.KindOf(err) != fault.NotFound {
@@ -122,8 +126,6 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
 	// Ready=False (a WorkflowCycle, a type mismatch): such a workflow never runs (ADR-0098/0099). A
 	// started run resumes its pinned spec.
-	_, gerr := r.engine.runs.Get(ctx, req.Namespace, req.Name)
-	started := gerr == nil
 	if !started {
 		if wf == nil {
 			return r.wait(ctx, run, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
@@ -139,22 +141,20 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
 	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
+	// A first record over the run store's value limit even without its input is refused on every requeue.
+	if rec == nil && !started && fault.KindOf(err) == fault.PayloadTooLarge {
+		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(err.Error()), Message: capErr(err.Error())})
+	}
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
 	// a ReplaySeeded=False condition so it terminates (never silently re-reconciles).
 	if rec == nil && run.Spec.Replay != nil && fault.KindOf(err) == fault.Invalid {
-		run.Status.Phase = runFailed
-		run.Status.Conditions.Set(v1.Condition{
+		return r.failUnrecorded(ctx, run, v1.Condition{
 			Type: "ReplaySeeded", Status: v1.ConditionFalse,
 			Reason: replayReason(err), Message: capErr(err.Error()),
 		})
-		if uerr := r.updateRunStatus(ctx, run); uerr != nil {
-			return controller.Result{}, uerr
-		}
-		r.linkRun(ctx, run)
-		return controller.Result{}, nil
 	}
 	// A run failure is a terminal outcome, not a reconcile error.
 	mirror(run, rec)
@@ -188,14 +188,26 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) erro
 	return nil
 }
 
-// wait holds a run that has not started Pending with a Ready=False condition saying why, and
-// re-checks it after waitRequeue.
+// failUnrecorded ends a run that has no run record, and never gets one, Failed with c saying why.
+func (r *RunReconciler) failUnrecorded(ctx context.Context, run *v1.WorkflowRun, c v1.Condition) (controller.Result, error) {
+	run.Status.Phase = runFailed
+	run.Status.Conditions.Set(c)
+	if err := r.updateRunStatus(ctx, run); err != nil {
+		return controller.Result{}, err
+	}
+	r.linkRun(ctx, run)
+	return controller.Result{}, nil
+}
+
+// wait holds a run that has not started Pending with a Ready=False condition saying why, lists it in
+// its Workflow's status.runs.active, and re-checks it after waitRequeue.
 func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, reason, msg string) (controller.Result, error) {
 	run.Status.Phase = runPending
 	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capErr(msg)})
 	if err := r.updateRunStatus(ctx, run); err != nil {
 		return controller.Result{}, err
 	}
+	r.linkRun(ctx, run)
 	return controller.Result{RequeueAfter: waitRequeue}, nil
 }
 
@@ -210,13 +222,38 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 	if run.Spec.Replay != nil {
 		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
 		// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
-		rec, err := r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		rec, err := r.engine.replay(ctx, ns, name, run.UID, wf.Name, *run.Spec.Replay, images)
 		if fault.KindOf(err) == fault.NotFound {
 			err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", run.Spec.Replay.Run)
 		}
 		return rec, err
 	}
-	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
+	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, RunUID: run.UID})
+}
+
+// started reports whether run has an engine record of its own. The record that an earlier WorkflowRun of
+// the same name, since deleted, left behind is deleted instead, so run starts fresh on its own spec and
+// input rather than resuming or reporting that run.
+func (r *RunReconciler) started(ctx context.Context, run *v1.WorkflowRun) (bool, error) {
+	rec, err := r.engine.runs.Get(ctx, run.Namespace, run.Name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return false, nil
+	case err != nil:
+		return false, fault.Wrapf(err, fault.KindOf(err), runOp, "get run record %q", run.Name)
+	case foreignRecord(rec, run.UID):
+		if err := r.engine.runs.Delete(ctx, run.Namespace, run.Name); err != nil {
+			return false, fault.Wrapf(err, fault.KindOf(err), runOp, "delete the record of an earlier run %q", run.Name)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+// foreignRecord reports whether rec belongs to a WorkflowRun other than the one with uid: an earlier one
+// of the same name. A record without a uid predates the stamp and is matched by name.
+func foreignRecord(rec *runstate.Record, uid v1.UID) bool {
+	return rec.RunUID != "" && rec.RunUID != uid
 }
 
 // replayReason extracts the reason token (SeedInvalid / DigestDrift) from a replay-seed rejection's
@@ -381,13 +418,60 @@ func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, run *v1.Workflo
 // and the WorkflowRun object that `workflow runs` lists, whose status is swept with the run (ADR-0100).
 // Returns the number of runs reclaimed.
 func (r *RunReconciler) SweepExpired(ctx context.Context, retention time.Duration) (int, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	if err := r.recordClosedRuns(ctx); err != nil {
+		return 0, err
+	}
 	return r.engine.SweepExpired(ctx, retention, r.deleteRun)
 }
 
-// deleteRun deletes the WorkflowRun object of an expired run record; an inline sub-workflow child run
-// has none.
+// recordClosedRuns gives each closed WorkflowRun that has no engine record (cancelled before its first
+// drive, a rejected replay seed, or a record an earlier sweep deleted alone) a terminal record stamped
+// now, so the record sweep reclaims it retention after it is first seen. A closed run is never driven
+// again, so the record has no other writer.
+func (r *RunReconciler) recordClosedRuns(ctx context.Context) error {
+	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), runOp, "list runs for retention sweep")
+	}
+	now := r.engine.clock.Now().UnixNano()
+	for _, obj := range list.Items {
+		run := obj.(*v1.WorkflowRun)
+		if !isRunTerminal(run.Status.Phase) {
+			continue
+		}
+		_, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)
+		if gerr == nil {
+			continue
+		}
+		if fault.KindOf(gerr) != fault.NotFound {
+			return fault.Wrapf(gerr, fault.KindOf(gerr), runOp, "get record of closed run %q", run.Name)
+		}
+		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now}
+		if err := r.engine.runs.Put(ctx, rec); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), runOp, "record closed run %q", run.Name)
+		}
+	}
+	return nil
+}
+
+// deleteRun deletes the WorkflowRun object of an expired run record. An inline sub-workflow child run
+// has none, and a WorkflowRun re-created under the record's name is not the record's, so it is kept.
 func (r *RunReconciler) deleteRun(ctx context.Context, rec *runstate.Record) error {
-	err := r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, "")
+	obj, err := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := obj.GetObjectMeta()
+	if foreignRecord(rec, meta.UID) {
+		return nil
+	}
+	err = r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, meta.ResourceVersion)
 	if fault.KindOf(err) == fault.NotFound {
 		return nil
 	}

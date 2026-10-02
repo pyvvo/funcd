@@ -237,6 +237,22 @@ func (rs *runState) failedStep() v1.ObjectName {
 	return ""
 }
 
+// skipFailedDownstream marks Skipped the Pending descendants of every Failed DAG step: fail-fast ends
+// the run, so they never run (ADR-0094). A Pending step outside those subtrees, like a cancelled
+// sibling, stays Pending (ADR-0107).
+func (rs *runState) skipFailedDownstream() {
+	for _, name := range rs.dagSteps() {
+		if rs.steps[name].phase != v1.StepFailed {
+			continue
+		}
+		for _, d := range rs.descendants(name) {
+			if n := rs.steps[d]; n.phase == v1.StepPending {
+				n.phase = v1.StepSkipped
+			}
+		}
+	}
+}
+
 // leaves returns the DAG steps that no other DAG step depends on — the run output
 // composite is keyed by their names.
 func (rs *runState) leaves() []v1.ObjectName {

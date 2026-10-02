@@ -328,8 +328,9 @@ func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st 
 
 const checkOp = "workflow.contract-check"
 
-// deriveAndCheck resolves every function step's contract from OCI metadata, type-checks the edges +
-// when: predicates + root merge, and returns the derived workflow contract + per-step statuses (ADR-0098).
+// deriveAndCheck resolves every function step's contract from OCI metadata, type-checks the edges (the
+// onFailure handler's against the FailureContext) + when: predicates + root merge, and returns the
+// derived workflow contract + per-step statuses (ADR-0098).
 // A not-yet-pushed image ⇒ errArtifactNotReady (requeue); a typing failure ⇒ *mismatchError.
 func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow) (*v1.WorkflowContract, []v1.WorkflowStepStatus, error) {
 	rs := newRunState(wf.Spec)
@@ -393,6 +394,12 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 		}
 		if diffs := checkEdge(producer, child.Input, paramsKeys(st)); len(diffs) > 0 {
 			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("edge into step %q: %s", st.Name, v1.FieldDiffs(diffs))}
+		}
+	}
+	// The onFailure handler's producer is the engine's FailureContext, without a params overlay (ADR-0094).
+	if hc, ok := contracts[wf.Spec.OnFailure]; ok {
+		if diffs := checkEdge(failureContextSchema(), hc.Input, nil); len(diffs) > 0 {
+			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("FailureContext into onFailure handler %q: %s", wf.Spec.OnFailure, v1.FieldDiffs(diffs))}
 		}
 	}
 

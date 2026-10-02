@@ -49,7 +49,7 @@ func dlqHarness(t *testing.T, inv sensor.Invoker, attempts int) (store.Store, *e
 	r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: fan, Invoker: inv, DeadLetters: dlq, DeliveryAttempts: attempts})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
-	go r.RunRetryWorkers(ctx)
+	go r.RunRetryWorkers(ctx, time.Minute)
 	t.Cleanup(cancel)
 	return st, fan, dlq, r
 }
@@ -186,7 +186,7 @@ func TestIssue145_ShutdownLetsInflightRetryFinish(t *testing.T) {
 			t.Cleanup(cancel)
 			drained := make(chan struct{})
 			go func() {
-				r.RunRetryWorkers(ctx)
+				r.RunRetryWorkers(ctx, time.Minute)
 				close(drained)
 			}()
 			createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
@@ -215,6 +215,43 @@ func TestIssue145_ShutdownLetsInflightRetryFinish(t *testing.T) {
 			require.Empty(t, dlqList(t, dlq, "team-a"), "a delivery the target served is not dead-lettered")
 		})
 	}
+}
+
+// Shutdown keeps its bound (ADR-0028): a retry attempt still in flight when the drain bound passes is cancelled, so
+// RunRetryWorkers returns. Unbounded, a slow target held the daemon past its 15 s shutdown limit, each attempt up to
+// the 30 s invoker timeout (issue #347).
+func TestIssue347_ShutdownDrainStopsAtBound(t *testing.T) {
+	inv := &heldRetryInvoker{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(inv.release) })
+	st := store.New(memory.New())
+	fan := eventing.NewFanout()
+	r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: fan, Invoker: inv, DeadLetters: dlmemory.New(), DeliveryAttempts: 3})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	drained := make(chan struct{})
+	go func() {
+		r.RunRetryWorkers(ctx, 100*time.Millisecond)
+		close(drained)
+	}()
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+		[]v1.Action{{Name: "notify", On: "d", Function: "mailer"}})
+	_, err = r.Reconcile(context.Background(), reqOf("s"))
+	require.NoError(t, err)
+	fire(t, fan, "git", "push", "")
+
+	select {
+	case <-inv.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retry attempt never started")
+	}
+	cancel()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunRetryWorkers waited past its drain bound for an attempt in flight")
+	}
+	require.Error(t, inv.retryCtx().Err(), "the attempt in flight at the drain bound was not cancelled")
 }
 
 // scenario: replay-restarts-action — a stored DeadLetter with a now-healthy target replays against the LIVE
@@ -315,7 +352,7 @@ func TestDriverIndependent(t *testing.T) {
 			r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: fan, Invoker: inv, DeadLetters: dlq, DeliveryAttempts: 3})
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.Background())
-			go r.RunRetryWorkers(ctx)
+			go r.RunRetryWorkers(ctx, time.Minute)
 			t.Cleanup(cancel)
 
 			createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},

@@ -17,6 +17,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/gateway"
+	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // scenario: inmemory-boots — New(InMemory()) returns a platform with every port wired.
@@ -178,6 +179,31 @@ func TestWithNodePlatform(t *testing.T) {
 
 	_, err = New(InMemory(), WithNodePlatform("linux"))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}
+
+// Issue #350: a platform built without WithWorkflow (funcdctl dev, any InMemory embedding) runs the workflow
+// engine with the daemon's ADR-0094 defaults, so a step that never answers times out instead of hanging.
+func TestIssue350_WorkflowDefaultsWithoutWithWorkflow(t *testing.T) {
+	t.Parallel()
+	daemon, err := platformconfig.Load("", platformconfig.Flags{})
+	require.NoError(t, err)
+	stepTimeout, err := time.ParseDuration(daemon.Workflow.DefaultStepTimeout)
+	require.NoError(t, err)
+	retention, err := time.ParseDuration(daemon.Workflow.Retention)
+	require.NoError(t, err)
+
+	p, err := New(InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Equal(t, stepTimeout, p.cfg.workflowStepTimeout)
+	require.Equal(t, retention, p.workflowRetention)
+	require.Equal(t, daemon.Workflow.PayloadLimit, p.cfg.workflowPayloadLimit)
+	require.Equal(t, daemon.Workflow.DefaultRetry, p.cfg.workflowDefaultRetry)
+
+	p, err = New(WithWorkflow("", 0, 0, 1, 0), InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Zero(t, p.cfg.workflowStepTimeout, "an explicit zero still means no step timeout, in any option order")
 }
 
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial

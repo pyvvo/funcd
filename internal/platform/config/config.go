@@ -201,8 +201,10 @@ type Config struct {
 
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
 	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
-	// memory). DefaultStepTimeout + DefaultRetry feed the engine core; Retention is the terminal-run GC
-	// horizon and PayloadLimit caps a run's input and a step's output in bytes (0 ⇒ unbounded).
+	// memory). DefaultStepTimeout + DefaultRetry feed the engine core. Retention is the terminal-run GC
+	// horizon: a periodic sweep reclaims each closed run (engine record and WorkflowRun object) older than
+	// it; 0 ⇒ no sweep. PayloadLimit caps the bytes of a run input (at WorkflowRun admission and run start)
+	// and of each step output; 0 ⇒ unbounded.
 	Workflow struct {
 		DefaultStepTimeout string `json:"defaultStepTimeout,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_STEP_TIMEOUT"`
 		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY" validate:"min=0"`
@@ -268,11 +270,11 @@ func defaults() Config {
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
 	c.S3Gateway.MaxUploadBytes = 1 << 30
 	// Workflow engine (ADR-0094): one attempt by default (no retry), 300s per-step timeout,
-	// 30-day terminal-run retention, 1 MiB run-payload cap.
+	// 30-day terminal-run retention, 256 KiB run-payload cap.
 	c.Workflow.DefaultRetry = 1
 	c.Workflow.DefaultStepTimeout = "300s"
 	c.Workflow.Retention = "720h"
-	c.Workflow.PayloadLimit = 1 << 20
+	c.Workflow.PayloadLimit = 256 << 10
 	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
 	// per-namespace cap of 1000, swept periodically.
 	c.Eventing.DeliveryAttempts = 3

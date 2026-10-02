@@ -2,8 +2,10 @@ package sensor_test
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +58,30 @@ func TestIssue174_InvokeErrorCarriesResponseBody(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "returned status 422")
 	require.Contains(t, err.Error(), "name is required", "the function's answer explains the failure")
+}
+
+// Deliveries to one function reuse a keep-alive connection, so a busy event source does not churn ephemeral
+// ports into TIME_WAIT (ADR-0041).
+func TestIssue348_InvokeReusesConnection(t *testing.T) {
+	conns := new(atomic.Int32)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	transport := &http.Transport{}
+	t.Cleanup(transport.CloseIdleConnections)
+	inv := &sensor.HTTPInvoker{Endpoints: readyEndpoints{upstream: srv.URL}, Client: &http.Client{Transport: transport}}
+
+	for range 10 {
+		require.NoError(t, inv.Invoke(context.Background(), "default", "target", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1"}))
+	}
+	require.EqualValues(t, 1, conns.Load(), "10 deliveries must share one keep-alive connection")
 }
 
 // recordingScaler records the replica targets the activator asks for.

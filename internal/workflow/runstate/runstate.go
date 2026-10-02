@@ -59,6 +59,10 @@ type Record struct {
 	// Error is the run's failure cause, capped like a step's (ADR-0100): set when the run ends Failed,
 	// including a failure no step carries (the run-start InputSchemaMismatch gate, RunTimedOut).
 	Error string `json:"error,omitempty"`
+	// RunUID is the uid of the WorkflowRun that started the run. A WorkflowRun deleted and re-created
+	// under the same name has a new uid, so it never adopts this record. Empty for an inline sub-workflow
+	// child run and for a record written before the uid was stamped (such a record is matched by name).
+	RunUID v1.UID `json:"runUid,omitempty"`
 }
 
 // StepState is one step's persisted execution state.

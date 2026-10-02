@@ -222,6 +222,47 @@ func TestIssue128_FailFastCancelsRunningSiblings(t *testing.T) {
 	}
 }
 
+// Issue #351: fail-fast records the failed step's downstream Skipped (ADR-0094 "downstream is skipped"),
+// not Pending; a cancelled sibling outside that subtree stays Pending (ADR-0107).
+func TestIssue351_FailedStepDownstreamIsSkipped(t *testing.T) {
+	want := func(t *testing.T, rec *runstate.Record, phases map[string]v1.StepPhase) {
+		t.Helper()
+		if rec == nil || rec.Phase != runFailed {
+			t.Fatalf("run = %+v, want Failed", rec)
+		}
+		for name, p := range phases {
+			if got := phaseOf(rec, name); got != p {
+				t.Errorf("step %s = %s, want %s", name, got, p)
+			}
+		}
+	}
+	t.Run("chain", func(t *testing.T) {
+		f := newFake()
+		f.permanent["a"] = true
+		e := newTestEngine(t, f, Config{})
+		rec, _ := e.Execute(context.Background(), "default", "run-351", "wf",
+			spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"a": v1.StepFailed, "b": v1.StepSkipped, "c": v1.StepSkipped})
+	})
+	t.Run("fan-in with a cancelled sibling", func(t *testing.T) {
+		f := &failWhileSiblingRuns{fakeDispatcher: newFake(), dIn: make(chan struct{})}
+		e := newTestEngine(t, f, Config{})
+		rec, _ := e.Execute(context.Background(), "default", "run-351f", "wf", spec(
+			step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d"),
+		), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"c": v1.StepFailed, "d": v1.StepPending, "e": v1.StepSkipped})
+	})
+	t.Run("output the run store cannot hold", func(t *testing.T) {
+		f := newFake()
+		pad := json.RawMessage(`{"pad":"` + strings.Repeat("x", 600_000) + `"}`)
+		f.outputs["f1"], f.outputs["f2"] = pad, pad
+		e := newTestEngine(t, f, Config{PayloadLimit: 1 << 20})
+		rec, _ := e.Execute(context.Background(), "default", "run-351o", "wf",
+			spec(step("f1", ""), step("f2", ""), step("f3", "")), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"f2": v1.StepFailed, "f3": v1.StepSkipped})
+	})
+}
+
 // scenario: when-skips-step — a false condition skips the step; the run still Succeeds.
 func TestWhenSkipsStep(t *testing.T) {
 	f := newFake()
@@ -256,6 +297,43 @@ func TestWhenRunsStep(t *testing.T) {
 	), json.RawMessage(`{}`), StartOptions{})
 	if f.calls["b"] != 1 || phaseOf(rec, "b") != v1.StepSucceeded {
 		t.Fatalf("b should run when rows>0; calls=%d phase=%s", f.calls["b"], phaseOf(rec, "b"))
+	}
+}
+
+// scenario: guard-allows-optional (ADR-0095) on the runtime path — a `!== undefined` guard on a field
+// the parent's output lacks is false without error in a when, a pass and a dynamic wait.
+func TestIssue308_GuardOnAbsentFieldIsFalse(t *testing.T) {
+	const guard = "step.a.output.x !== undefined && step.a.output.x > 1"
+	f := newFake()
+	f.outputs["a"] = json.RawMessage(`{"y":1}`)
+	e := newTestEngine(t, f, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-308", "wf", spec(
+		step("a", ""),
+		whenStep("b", "${{ "+guard+" }}", "a"),
+		passStep("p", "${{ {big: "+guard+"} }}", "a"),
+		waitStep("w", "${{ "+guard+" ? 1 : 0 }}", "a"),
+	), json.RawMessage(`{}`), StartOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rec.Phase != runSucceeded {
+		t.Fatalf("run phase = %s, want Succeeded", rec.Phase)
+	}
+	if phaseOf(rec, "b") != v1.StepSkipped || f.calls["b"] != 0 {
+		t.Fatalf("b phase = %s (calls %d), want Skipped", phaseOf(rec, "b"), f.calls["b"])
+	}
+	if got := string(outputOf(rec, "p")); got != `{"big":false}` {
+		t.Fatalf("pass output = %s, want {\"big\":false}", got)
+	}
+	if phaseOf(rec, "w") != v1.StepSucceeded {
+		t.Fatalf("w phase = %s, want Succeeded", phaseOf(rec, "w"))
+	}
+
+	if _, err := e.Execute(context.Background(), "default", "run-308-unguarded", "wf", spec(
+		step("a", ""),
+		whenStep("b", "${{ step.a.output.x > 1 }}", "a"),
+	), json.RawMessage(`{}`), StartOptions{}); err == nil {
+		t.Fatal("an unguarded read of the absent field must still fail the run")
 	}
 }
 

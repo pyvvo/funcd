@@ -305,6 +305,60 @@ func TestIssue116_OversizeRecordFailsRunOnce(t *testing.T) {
 	}
 }
 
+// Issue #306: a run whose first record overflows the run store's value limit ends Failed once, naming
+// the limit, instead of being requeued forever. A record its input overflows is kept without the input,
+// so onFailure fires once; a pinned spec that overflows it leaves the run unrecorded.
+func TestIssue306_OversizeFirstRecordFailsRunOnce(t *testing.T) {
+	ctx := context.Background()
+	pad := `{"pad":"` + strings.Repeat("x", 1<<20-60) + `"}`
+	for _, tc := range []struct {
+		name, input string
+		params      json.RawMessage
+		notify      int
+	}{
+		{name: "input", input: pad, notify: 1},
+		{name: "spec", input: `{}`, params: json.RawMessage(pad)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			a := step("a", "")
+			a.Params = tc.params
+			seedWorkflow(t, s, "big", a, step("notify", ""))
+			wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
+			wf := wfObj.(*v1.Workflow)
+			wf.Spec.OnFailure = "notify"
+			if _, err := s.Update(ctx, wf); err != nil {
+				t.Fatalf("set onFailure: %v", err)
+			}
+			seedRun(t, s, "big-1", "big", tc.input)
+
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: 1 << 20}})
+			rr := NewRunReconciler(s, eng, nil, nil)
+			for range 3 {
+				if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
+					t.Fatalf("Reconcile = %v, want the run ended Failed, not requeued", err)
+				}
+			}
+
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "big-1")
+			st := obj.(*v1.WorkflowRun).Status
+			if c, ok := st.Conditions.Get(condReady); st.Phase != runFailed || !ok || c.Status != v1.ConditionFalse || !strings.Contains(c.Message, "value limit") {
+				t.Fatalf("phase=%q Ready=%+v, want Failed with Ready=False naming the run store's value limit", st.Phase, c)
+			}
+			if f.calls["a"] != 0 || f.calls["notify"] != tc.notify {
+				t.Fatalf("dispatches a=%d notify=%d, want a never and notify %d", f.calls["a"], f.calls["notify"], tc.notify)
+			}
+			wfObj, _ = s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
+			if l := wfObj.(*v1.Workflow).Status.Runs; l == nil || l.Failed != 1 || len(l.Active) != 0 {
+				t.Fatalf("workflow status.runs=%+v, want Failed=1 active=[]", l)
+			}
+		})
+	}
+}
+
 // Issue #120: a run that fails outside a step — the run-start InputSchemaMismatch gate, or a when
 // condition that cannot be evaluated — records why in WorkflowRun.status, not only the Failed phase.
 func TestIssue120_RunFailureReasonInStatus(t *testing.T) {
@@ -657,6 +711,181 @@ func TestIssue67_SweepDeletesExpiredWorkflowRuns(t *testing.T) {
 	}
 }
 
+// Issue #346: a WorkflowRun that closed without an engine record (cancelled before its first drive, a
+// rejected replay seed, or one whose record an earlier sweep deleted alone) is swept at retention too.
+func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
+		t.Helper()
+		if _, err := at(base).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun)
+	}
+
+	seedRun(t, s, "cancelled", "missing", `{}`)
+	run := reconcile("cancelled")
+	run.Spec.Cancel = true
+	if _, err := s.Update(ctx, run); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	reconcile("cancelled")
+	replay := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "rejected", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "absent", From: "a"}},
+	}
+	if _, err := s.Create(ctx, replay); err != nil {
+		t.Fatalf("create replay: %v", err)
+	}
+	reconcile("rejected")
+	seedRun(t, s, "orphaned", "wf", `{}`)
+	reconcile("orphaned")
+	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
+		t.Fatalf("delete record: %v", err)
+	}
+	seedRun(t, s, "waiting", "missing", `{}`)
+	if run := reconcile("waiting"); run.Status.Phase != runPending {
+		t.Fatalf("setup: waiting phase=%q, want Pending", run.Status.Phase)
+	}
+	names := []v1.ObjectName{"cancelled", "rejected", "orphaned"}
+	for _, name := range names {
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		if phase := obj.(*v1.WorkflowRun).Status.Phase; !isRunTerminal(phase) {
+			t.Fatalf("setup: %s phase=%q, want a terminal phase", name, phase)
+		}
+		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("setup: %s run record lookup = %v, want NotFound", name, err)
+		}
+	}
+	// A run still waiting for its Workflow must not get a record: a record marks a run as started.
+	keepsWaiting := func() {
+		t.Helper()
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "waiting"); err != nil {
+			t.Fatalf("the Pending run must not be swept: %v", err)
+		}
+		if _, err := rstate.Get(ctx, "default", "waiting"); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("the Pending run must stay without a run record, got %v", err)
+		}
+	}
+
+	if n, err := at(base.Add(time.Hour)).SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("first SweepExpired = %d, %v; want 0 runs reclaimed", n, err)
+	}
+	for _, name := range names {
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name); err != nil {
+			t.Fatalf("%s must be kept for retention after the sweep first sees it: %v", name, err)
+		}
+	}
+	keepsWaiting()
+	n, err := at(base.Add(26*time.Hour)).SweepExpired(ctx, 24*time.Hour)
+	if err != nil || n != len(names) {
+		t.Fatalf("SweepExpired past retention = %d, %v; want %d runs reclaimed", n, err, len(names))
+	}
+	keepsWaiting()
+	for _, name := range names {
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("the closed WorkflowRun %s must be swept at retention, got %v", name, err)
+		}
+		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("no run record may outlive the swept run %s, got %v", name, err)
+		}
+	}
+}
+
+// Issue #346: a replay whose source is a closed run the sweep recorded (it has no pinned spec) is rejected
+// SeedInvalid naming that cause, not a step the source never had.
+func TestIssue346_ReplayOfSweepRecordedSourceNamesTheCause(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "orphaned", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
+		t.Helper()
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun)
+	}
+	reconcile("orphaned")
+	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
+		t.Fatalf("delete record: %v", err)
+	}
+	if n, err := rr.SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("setup: SweepExpired = %d, %v; want the closed run recorded, not reclaimed", n, err)
+	}
+
+	replay := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "replay-orphaned", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "orphaned", From: "a"}},
+	}
+	if _, err := s.Create(ctx, replay); err != nil {
+		t.Fatalf("create replay: %v", err)
+	}
+	run := reconcile("replay-orphaned")
+	c, _ := run.Status.Conditions.Get("ReplaySeeded")
+	if run.Status.Phase != runFailed || c.Reason != "SeedInvalid" || !strings.Contains(c.Message, `"orphaned" has no checkpoint`) {
+		t.Fatalf("replay of a sweep-recorded source: phase=%q ReplaySeeded=%+v, want Failed, SeedInvalid saying \"orphaned\" has no checkpoint", run.Status.Phase, c)
+	}
+}
+
+// failingGet fails every run-record lookup with err.
+type failingGet struct {
+	runstate.Store
+	err error
+}
+
+func (f failingGet) Get(context.Context, v1.NamespaceName, v1.ObjectName) (*runstate.Record, error) {
+	return nil, f.err
+}
+
+// Issue #346: a run-store fault on the record lookup aborts the sweep; it never overwrites a record it
+// could not read.
+func TestIssue346_SweepFailsClosedOnRecordFault(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "done", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
+	if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "done"}); err != nil {
+		t.Fatalf("Reconcile done: %v", err)
+	}
+	before, err := rstate.Get(ctx, "default", "done")
+	if err != nil || !before.Terminal() {
+		t.Fatalf("setup: done record = %+v, %v; want a terminal record", before, err)
+	}
+
+	down := failingGet{Store: rstate, err: fault.Unavailablef("test", "run store down")}
+	sweeper, _ := New(Deps{Runs: down, Dispatch: newFake(), Clock: clock.Fake(base.Add(time.Hour))})
+	if _, err := NewRunReconciler(s, sweeper, nil, nil).SweepExpired(ctx, 24*time.Hour); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("SweepExpired with a failing record lookup = %v, want the Unavailable fault", err)
+	}
+	after, err := rstate.Get(ctx, "default", "done")
+	if err != nil || after.UpdatedAt != before.UpdatedAt || len(after.Spec.Steps) == 0 {
+		t.Fatalf("the sweep must leave a record it could not read alone: got %+v, %v", after, err)
+	}
+}
+
 // Issue #182: Workflow.status.runs lists every Pending/Running/Paused run newest first and is updated on
 // every run transition (ADR-0094), including a run applied paused, which never starts.
 func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {
@@ -684,5 +913,108 @@ func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {
 	links := wfObj.(*v1.Workflow).Status.Runs
 	if want := []v1.ObjectName{"wf-mmm", "wf-aaa", "wf-zzz"}; links == nil || !slices.Equal(links.Active, want) {
 		t.Fatalf("status.runs = %+v, want Active %v (the paused runs, newest first)", links, want)
+	}
+}
+
+// Issue #307: a WorkflowRun deleted and re-created under the same name is a new run. It executes its own
+// input instead of adopting the engine record, and the outcome, that the deleted run left behind.
+func TestIssue307_RecreatedRunExecutesItsOwnInput(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
+
+	seedRun(t, s, "re-1", "wf", `{"try":1}`)
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	f.failing["a"] = true
+	seedRun(t, s, "re-1", "wf", `{"try":2}`)
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the re-created run: %v", err)
+	}
+
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1")
+	if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runFailed || f.calls["a"] != 2 || string(f.inputs["a"]) != `{"try":2}` {
+		t.Fatalf("re-created run: phase %s, step a dispatched %d times, last input %s; want Failed after a second dispatch with its own input", phase, f.calls["a"], f.inputs["a"])
+	}
+}
+
+// Issue #307: the retention sweep reclaims the expired record a deleted run left behind but keeps the
+// WorkflowRun re-created under its name, which then runs fresh.
+func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: f, Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
+
+	seedRun(t, s, "re-1", "wf", `{"try":1}`)
+	if _, err := at(base).Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	seedRun(t, s, "re-1", "wf", `{"try":2}`)
+
+	later := at(base.Add(48 * time.Hour))
+	if n, err := later.SweepExpired(ctx, 24*time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1"); err != nil {
+		t.Fatalf("the sweep must keep the re-created WorkflowRun: %v", err)
+	}
+	if _, err := later.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the re-created run: %v", err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1")
+	if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runSucceeded || f.calls["a"] != 2 {
+		t.Fatalf("re-created run: phase %s, step a dispatched %d times; want Succeeded after a second dispatch", phase, f.calls["a"])
+	}
+}
+
+// Issue #344: a run held Pending because its Workflow is not Ready is listed in the Workflow's
+// status.runs.active (ADR-0094), once, across the wait's re-checks.
+func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWF(t, s, "loop", nil, fnStep("work", "oci:work"), subwfStep("again", "loop", "work"))
+	if wf, _ := reconcileByName(t, s, fakeContracts{}, "loop"); mismatchReason(wf) != "WorkflowCycle" {
+		t.Fatalf("setup: loop reason = %q, want WorkflowCycle", mismatchReason(wf))
+	}
+	seedRun(t, s, "loop-1", "loop", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	for i := range 2 {
+		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "loop-1"})
+		if err != nil {
+			t.Fatalf("Reconcile %d: %v", i, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "loop-1")
+		if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runPending || res.RequeueAfter <= 0 {
+			t.Fatalf("setup: reconcile %d: phase=%q requeueAfter=%v, want a Pending wait", i, phase, res.RequeueAfter)
+		}
+		wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "loop")
+		if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || !slices.Equal(links.Active, []v1.ObjectName{"loop-1"}) {
+			t.Fatalf("reconcile %d: status.runs = %+v, want Active [loop-1]", i, links)
+		}
 	}
 }

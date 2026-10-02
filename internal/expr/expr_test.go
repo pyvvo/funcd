@@ -168,6 +168,19 @@ func TestGuardAllowsOptional(t *testing.T) {
 	}
 }
 
+// A document-backed Resolver reports a missing field as the absent Field: the guard probes it and its
+// && operand goes unchecked, while any other read of it is still an unknown field.
+func TestIssue308_AbsentFieldOnlyProbed(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|x": {}}}
+	e := mustCheck(t, `${{ input.x !== undefined && input.x > 1 }}`, Condition, r)
+	if got, err := e.EvalBool(docs("input", `{}`)); err != nil || got {
+		t.Fatalf("EvalBool = %v, %v; want false, nil", got, err)
+	}
+	mustFailCheck(t, "${{ input.x > 1 }}", Condition, r)
+	mustFailCheck(t, `${{ input.x === undefined && input.x > 1 }}`, Condition, r)
+	mustFailCheck(t, `${{ input.y !== undefined && input.y > 1 }}`, Condition, r)
+}
+
 // scenario: operators-compose
 func TestOperatorsCompose(t *testing.T) {
 	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|a": req("integer"), "input|b": req("boolean")}}

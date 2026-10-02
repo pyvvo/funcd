@@ -62,11 +62,12 @@ func compositeSchema(parentOutputs map[v1.ObjectName]json.RawMessage) json.RawMe
 // deriveWorkflowContract combines the root steps' input schemas (a conflicting primitive on a shared
 // required field ⇒ error, RootSchemaConflict) and composes the leaf outputs: a single leaf ⇒ its output
 // verbatim, multiple leaves ⇒ the composite keyed by step name (symmetric with the run-output model).
+// The onFailure handler is outside the DAG, so it is never a root (ADR-0094).
 func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.WorkflowContract) (v1.WorkflowContract, error) {
 	mergedProps := map[string]string{}
 	requiredSet := map[string]bool{}
 	dialect := ""
-	for _, name := range rs.order {
+	for _, name := range rs.dagSteps() {
 		n := rs.steps[name]
 		if len(n.dependsOn) != 0 {
 			continue // not a root
