@@ -97,7 +97,7 @@ const (
 	defaultWorkflowStepTimeout  = 300 * time.Second
 	defaultWorkflowRetention    = 720 * time.Hour
 	defaultWorkflowRetry        = 1
-	defaultWorkflowPayloadLimit = 1 << 20
+	defaultWorkflowPayloadLimit = 256 << 10
 )
 
 // config holds the injected world — validated by validate() before New returns.
