@@ -49,5 +49,8 @@ done
 
 printf 'duckdb %s\nplatform %s/%s\n' "${ver}" "${os}" "${arch}" > "${work}/VERSION"
 chmod 0755 "${work}/duckdb"
-tar -C "${work}" -czf "${out}" duckdb extensions VERSION
+# Owner names, xattrs and macOS metadata stay out: the placeholder archive is committed.
+meta=(--numeric-owner --no-xattrs)
+tar --version 2>/dev/null | grep -q bsdtar && meta+=(--no-mac-metadata)
+COPYFILE_DISABLE=1 tar "${meta[@]}" -C "${work}" -czf "${out}" duckdb extensions VERSION
 echo "fetch-catalog-engine: bundled ${os}/${arch} → ${out} ($(du -h "${out}" | cut -f1))"
