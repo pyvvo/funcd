@@ -395,14 +395,22 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		if cfg.Kvstore.Backup.Target == "" {
 			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
 		}
+		interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
+		if err != nil {
+			return nil, noop, err
+		}
+		rebaseline, err := parseDurationOr("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour)
+		if err != nil {
+			return nil, noop, err
+		}
 		b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
 		if err != nil {
 			return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
 		}
 		bucket = b
 		bcfg = kvbadger.BackupConfig{
-			Interval:   parseDurationOr(cfg.Kvstore.Backup.Interval, 30*time.Second),
-			Rebaseline: parseDurationOr(cfg.Kvstore.Backup.Rebaseline, 24*time.Hour),
+			Interval:   interval,
+			Rebaseline: rebaseline,
 			ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
 		}
 	}
@@ -416,10 +424,14 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		if theBus == nil {
 			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
 		}
+		retention, err := parseDurationOr("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour)
+		if err != nil {
+			return nil, noop, err
+		}
 		sink = theBus
 		ccfg = kvbadger.CDCConfig{
 			Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
-			Retention: parseDurationOr(cfg.Kvstore.Cdc.Retention, 24*time.Hour),
+			Retention: retention,
 		}
 	}
 
@@ -441,17 +453,17 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 	return kv, start, nil
 }
 
-// parseDurationOr parses a Go duration string, falling back to def on empty or invalid input (config
-// already validated the surface; this is a defensive default for the optional cadence fields).
-func parseDurationOr(s string, def time.Duration) time.Duration {
+// parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
+// value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
+func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
 	if s == "" {
-		return def
+		return def, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
-		return def
+		return 0, fault.Invalidf("buildKVStore", "config key %q has invalid value %q (want a positive Go duration, e.g. 30s)", key, s)
 	}
-	return d
+	return d, nil
 }
 
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {

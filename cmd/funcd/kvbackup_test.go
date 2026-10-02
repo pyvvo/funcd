@@ -108,3 +108,35 @@ func TestScenarioDaemonCDCEnabledBoots(t *testing.T) {
 		require.NoError(t, c.Close())
 	}
 }
+
+// A malformed or non-positive kvstore.backup/cdc duration fails startup with fault.Invalid naming the key,
+// never a silent fall back to the default (issue #190).
+func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
+	cases := []struct {
+		key string
+		set func(*config.Config, string)
+	}{
+		{"kvstore.backup.interval", func(c *config.Config, v string) { c.Kvstore.Backup.Interval = v }},
+		{"kvstore.backup.rebaseline", func(c *config.Config, v string) { c.Kvstore.Backup.Rebaseline = v }},
+		{"kvstore.cdc.retention", func(c *config.Config, v string) { c.Kvstore.Cdc.Retention = v }},
+	}
+	for _, tc := range cases {
+		for _, bad := range []string{"5 minutes", "forever", "-3h", "0s"} {
+			t.Run(tc.key+"="+bad, func(t *testing.T) {
+				cfg := kvBadgerCfg(t)
+				cfg.Kvstore.Backup.Enabled = true
+				cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+				cfg.Kvstore.Cdc.Enabled = true
+				cfg.Kvstore.Cdc.Sink = "kv.changes"
+				tc.set(&cfg, bad)
+				kv, _, err := buildKVStore(context.Background(), cfg, newMemBus(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+				if c, ok := kv.(io.Closer); ok {
+					_ = c.Close()
+				}
+				require.Error(t, err)
+				require.Equal(t, fault.Invalid, fault.KindOf(err))
+				require.ErrorContains(t, err, tc.key)
+			})
+		}
+	}
+}
