@@ -110,7 +110,8 @@ type Config struct {
 	Kvstore struct {
 		// Engine for the function-facing KV service (ADR-0066/0069): memory (default, ephemeral) or
 		// badger (durable). Its own dedicated instance. DataDir is empty ⇒ derived as <Storage.DataDir>/kv
-		// in Load(); an explicit value overrides the default location.
+		// in Load(); an explicit value overrides the default location. Ignored (in-memory) when Storage.Mode
+		// is memory.
 		Engine  string `json:"engine,omitempty" env:"FUNCD_KVSTORE_ENGINE" validate:"omitempty,oneof=memory badger"`
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_KVSTORE_DATA_DIR"`
 		// MaxStoresPerNamespace is the per-namespace KVStore count cap enforced at admission (ADR-0072);

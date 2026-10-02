@@ -373,7 +373,8 @@ func parseLevel(level string) slog.Level {
 // when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
 // unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
-// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger. When
+// or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger and
+// storage.mode is file (storage.mode: memory keeps the KV in memory, ADR-0043). When
 // kvstore.backup (ADR-0067) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
 // the driver — DR export to an object-storage target, and a transactional-outbox change-feed to the bus.
 // The returned start func launches their loops (a no-op otherwise). Enable-without-target / enable-without-
@@ -381,6 +382,10 @@ func parseLevel(level string) slog.Level {
 func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
 	noop := func(context.Context) {}
 	if cfg.Kvstore.Engine != "badger" {
+		return kvmemory.New(), noop, nil
+	}
+	if cfg.Storage.Mode == "memory" {
+		logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
 		return kvmemory.New(), noop, nil
 	}
 	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load

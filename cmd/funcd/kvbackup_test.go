@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -139,4 +140,23 @@ func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
 			})
 		}
 	}
+}
+
+// --memory overrides kvstore.engine: badger, as it does the metastore, workflow and DLQ stores: the KV
+// stays in memory and nothing is written under <dataDir>/kv (ADR-0043: --memory is fully ephemeral).
+func TestIssue191_MemoryFlagKeepsKVOffDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  dataDir: \""+dir+"\"\nkvstore:\n  engine: badger\n"), 0o600))
+	memoryOnly := true
+	cfg, err := config.Load(path, config.Flags{MemoryOnly: &memoryOnly})
+	require.NoError(t, err)
+
+	kv, _, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	if c, ok := kv.(io.Closer); ok {
+		t.Cleanup(func() { _ = c.Close() })
+	}
+	require.NoError(t, kv.Put(context.Background(), "a/b/c", []byte("v")))
+	require.NoDirExists(t, cfg.Kvstore.DataDir, "--memory must not open a durable Badger KV")
 }
