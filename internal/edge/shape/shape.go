@@ -153,8 +153,11 @@ func (g *gzipWriter) decide(code int) {
 	streaming := code == http.StatusSwitchingProtocols ||
 		strings.EqualFold(h.Get("Connection"), "Upgrade") ||
 		strings.HasPrefix(ct, "text/event-stream")
-	if streaming || h.Get("Content-Encoding") != "" {
-		return // passthrough: never gzip a stream/upgrade or an already-encoded body
+	// A 206's Content-Range indexes the identity bytes, and a 204/304 has no body to encode.
+	unencodable := code == http.StatusPartialContent || code == http.StatusNoContent ||
+		code == http.StatusNotModified || h.Get("Content-Range") != ""
+	if streaming || unencodable || h.Get("Content-Encoding") != "" {
+		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
 	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown
