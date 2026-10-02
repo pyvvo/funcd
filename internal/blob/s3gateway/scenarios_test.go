@@ -4,14 +4,20 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
@@ -111,6 +117,88 @@ func TestScenarioListObjectsGlob(t *testing.T) {
 	require.ElementsMatch(t, []string{"gold/a.parquet", "gold/b.parquet", "gold/c.parquet"}, keys)
 }
 
+// Issue 159: ListObjectsV2 and ListObjects honour MaxKeys, Delimiter, StartAfter,
+// ContinuationToken and Marker instead of returning every key under the prefix.
+func TestIssue159_ListObjectsHonoursListingParams(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	all := []string{"gold/a.parquet", "gold/b.parquet", "gold/c.parquet", "gold/d/x.parquet", "gold/e/y.parquet"}
+	for _, k := range all {
+		g.seed(t, "default", "lakehouse", k, []byte("x"))
+	}
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+	two, three := int32(2), int32(3)
+
+	var paged []string
+	var token *string
+	pages := 0
+	for {
+		out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), MaxKeys: &two, ContinuationToken: token,
+		})
+		require.NoError(t, err)
+		pages++
+		require.LessOrEqual(t, len(out.Contents), 2, "page %d exceeds MaxKeys", pages)
+		require.Equal(t, int32(2), *out.MaxKeys)
+		require.Equal(t, int32(len(out.Contents)), *out.KeyCount)
+		paged = append(paged, objectKeys(out.Contents)...)
+		if !*out.IsTruncated {
+			break
+		}
+		require.NotNil(t, out.NextContinuationToken, "a truncated page carries a continuation token")
+		require.Less(t, pages, len(all), "pagination does not terminate")
+		token = out.NextContinuationToken
+	}
+	require.Equal(t, 3, pages)
+	require.Equal(t, all, paged, "pages cover every key once, in order")
+
+	delim, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[:3], objectKeys(delim.Contents))
+	require.Equal(t, []string{"gold/d/", "gold/e/"}, commonPrefixes(delim.CommonPrefixes))
+
+	after, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), StartAfter: ptrS("gold/c.parquet"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[3:], objectKeys(after.Contents))
+
+	v1page, err := c.ListObjects(ctx, &awss3.ListObjectsInput{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"), Marker: ptrS("gold/a.parquet"), MaxKeys: &three,
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[1:3], objectKeys(v1page.Contents))
+	require.Equal(t, []string{"gold/d/"}, commonPrefixes(v1page.CommonPrefixes))
+	require.True(t, *v1page.IsTruncated)
+	require.Equal(t, "gold/d/", *v1page.NextMarker)
+
+	v1rest, err := c.ListObjects(ctx, &awss3.ListObjectsInput{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"), Marker: v1page.NextMarker, MaxKeys: &three,
+	})
+	require.NoError(t, err)
+	require.Empty(t, v1rest.Contents)
+	require.Equal(t, []string{"gold/e/"}, commonPrefixes(v1rest.CommonPrefixes))
+	require.False(t, *v1rest.IsTruncated)
+}
+
+func objectKeys(objs []awstypes.Object) []string {
+	keys := make([]string, 0, len(objs))
+	for _, o := range objs {
+		keys = append(keys, *o.Key)
+	}
+	return keys
+}
+
+func commonPrefixes(cps []awstypes.CommonPrefix) []string {
+	out := make([]string, 0, len(cps))
+	for _, cp := range cps {
+		out = append(out, *cp.Prefix)
+	}
+	return out
+}
+
 // scenario: cross-namespace-rejected (ADR-0080) — a principal scoped to namespace
 // "default" requesting a bucket in namespace "other" is denied (tenancy default-deny):
 // the bucket name resolves under the CALLER's namespace, where it does not exist.
@@ -162,6 +250,93 @@ func TestScenarioRangeReaderFallback(t *testing.T) {
 	defer func() { _ = out.Body.Close() }()
 	body, _ := io.ReadAll(out.Body)
 	require.Equal(t, "2345", string(body))
+}
+
+// getCountingBucket counts the whole-object Gets made on a blob.Bucket.
+type getCountingBucket struct {
+	blob.Bucket
+	gets atomic.Int32
+}
+
+func (c *getCountingBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	c.gets.Add(1)
+	return c.Bucket.Get(ctx, key)
+}
+
+// TestIssue110_HeadObjectDoesNotReadObject: a HEAD answers from the object's metadata (size and
+// modification time) on a file substrate, without reading the object; a missing key is still a 404.
+func TestIssue110_HeadObjectDoesNotReadObject(t *testing.T) {
+	dir := t.TempDir()
+	var sub *getCountingBucket
+	makeFile := func(t *testing.T) blob.Bucket {
+		t.Helper()
+		b, err := gocloud.Open(context.Background(), "file://"+dir)
+		require.NoError(t, err)
+		sub = &getCountingBucket{Bucket: b}
+		return sub
+	}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeFile)
+	data := bytes.Repeat([]byte("x"), 1<<20)
+	g.seed(t, "default", "lakehouse", "gold/q.parquet", data)
+	modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "gold", "q.parquet"), modTime, modTime))
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+
+	out, err := c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet")})
+	require.NoError(t, err)
+	require.Zero(t, sub.gets.Load(), "HEAD must not read the whole object")
+	require.Equal(t, int64(len(data)), aws.ToInt64(out.ContentLength))
+	require.Equal(t, modTime, aws.ToTime(out.LastModified).UTC())
+
+	_, err = c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/missing.parquet")})
+	require.Error(t, err)
+	require.Equal(t, 404, statusCode(err))
+}
+
+// Issue #112: a ranged GET reports the complete object length in Content-Range, honours
+// suffix ranges, and answers 416 for a range that starts at or past the end — on both the
+// RangeReader path and the full-Get fallback.
+func TestIssue112_RangedGetReportsSizeOr416(t *testing.T) {
+	drivers := map[string]func(t *testing.T) blob.Bucket{
+		"range-reader": memBucket,
+		"fallback":     func(t *testing.T) blob.Bucket { return noRangeBucket{inner: memBucket(t)} },
+	}
+	cases := []struct {
+		rng, contentRange, body string
+		status                  int
+	}{
+		{rng: "bytes=2-5", contentRange: "bytes 2-5/10", body: "2345"},
+		{rng: "bytes=5-100", contentRange: "bytes 5-9/10", body: "56789"},
+		{rng: "bytes=7-", contentRange: "bytes 7-9/10", body: "789"},
+		{rng: "bytes=-3", contentRange: "bytes 7-9/10", body: "789"},
+		{rng: "bytes=20-30", status: 416},
+		{rng: "bytes=10-", status: 416},
+	}
+	for name, makeBucket := range drivers {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeBucket)
+			g.seed(t, "default", "lakehouse", "gold/q.parquet", []byte("0123456789"))
+			c := g.client(t, "default", "analytics")
+			for _, tc := range cases {
+				out, err := c.GetObject(context.Background(), &awss3.GetObjectInput{
+					Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet"), Range: ptrS(tc.rng),
+				})
+				if tc.status != 0 {
+					require.Error(t, err, "Range %s", tc.rng)
+					require.Equal(t, tc.status, statusCode(err), "Range %s", tc.rng)
+					continue
+				}
+				require.NoError(t, err, "Range %s", tc.rng)
+				body, rerr := io.ReadAll(out.Body)
+				_ = out.Body.Close()
+				require.NoError(t, rerr)
+				require.Equal(t, tc.contentRange, aws.ToString(out.ContentRange), "Range %s", tc.rng)
+				require.Equal(t, tc.body, string(body), "Range %s", tc.rng)
+				require.Equal(t, int64(len(tc.body)), aws.ToInt64(out.ContentLength), "Range %s", tc.rng)
+			}
+		})
+	}
 }
 
 // scenario: owner multipart write (ADR-0080) — the owner drives an explicit multipart
@@ -243,6 +418,46 @@ func TestIssue30_MultipartTotalCappedAtUploadPart(t *testing.T) {
 	require.Len(t, mustGet(t, g, "default", "lakehouse", "bronze/capped.parquet"), maxUpload)
 }
 
+// TestIssue157_BucketOpsHonorBindings: HeadBucket succeeds only for a caller bound to the
+// Bucket, and ListBuckets returns exactly the Buckets the caller is bound to (ADR-0080).
+// An unbound caller gets the same 403 for an existing and a missing bucket.
+func TestIssue157_BucketOpsHonorBindings(t *testing.T) {
+	meta := lakehouseMeta()
+	meta.buckets["default/scratch"] = &v1.Bucket{
+		ObjectMeta: v1.ObjectMeta{Name: "scratch", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "tmp"}}},
+	}
+	g := newGateway(t, meta, fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	bound := g.client(t, "default", "analytics")
+	unbound := g.client(t, "default", "reporting")
+
+	_, err := bound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("lakehouse")})
+	require.NoError(t, err, "analytics is bound to lakehouse")
+
+	_, err = unbound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("lakehouse")})
+	require.Error(t, err, "reporting has no spec.blob binding to lakehouse")
+	require.Equal(t, 403, statusCode(err))
+
+	_, err = unbound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("nosuch")})
+	require.Equal(t, 403, statusCode(err), "a missing bucket answers like an unbound one")
+
+	_, err = bound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("scratch")})
+	require.Equal(t, 403, statusCode(err), "analytics is not bound to scratch")
+
+	out, err := bound.ListBuckets(ctx, &awss3.ListBucketsInput{})
+	require.NoError(t, err)
+	names := make([]string, 0, len(out.Buckets))
+	for _, b := range out.Buckets {
+		names = append(names, *b.Name)
+	}
+	require.Equal(t, []string{"lakehouse"}, names)
+
+	out, err = unbound.ListBuckets(ctx, &awss3.ListBucketsInput{})
+	require.NoError(t, err)
+	require.Empty(t, out.Buckets)
+}
+
 // mustGet reads a substrate key directly (bypassing the gateway) for assertions.
 func mustGet(t *testing.T, g *gw, ns, bucket, key string) []byte {
 	t.Helper()
@@ -251,4 +466,52 @@ func mustGet(t *testing.T, g *gw, ns, bucket, key string) []byte {
 	data, err := b.Get(context.Background(), key)
 	require.NoError(t, err)
 	return data
+}
+
+// Issue 158: Complete assembles exactly the listed parts, in order, and rejects a listed
+// part whose ETag does not match or that was never uploaded (S3 InvalidPart); a rejected
+// Complete leaves the upload in place.
+func TestIssue158_CompleteHonorsPartList(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/mpu.bin")
+
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	etags := map[int32]*string{}
+	for i, body := range []string{"AAA", "BBB", "CCC"} {
+		num := int32(i + 1)
+		uo, perr := owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: bucket, Key: key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte(body)),
+		})
+		require.NoError(t, perr)
+		etags[num] = uo.ETag
+	}
+	complete := func(parts ...awstypes.CompletedPart) error {
+		_, cerr := owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: bucket, Key: key, UploadId: create.UploadId,
+			MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: parts},
+		})
+		return cerr
+	}
+	part := func(num int32, etag *string) awstypes.CompletedPart {
+		return awstypes.CompletedPart{PartNumber: &num, ETag: etag}
+	}
+
+	err = complete(part(1, ptrS(`"bogus"`)), part(2, etags[2]))
+	require.ErrorContains(t, err, "InvalidPart", "a listed ETag that does not match the stored part")
+	require.Equal(t, 400, statusCode(err))
+
+	err = complete(part(1, etags[1]), part(9, etags[2]))
+	require.ErrorContains(t, err, "InvalidPart", "a listed part that was never uploaded")
+	require.Equal(t, 400, statusCode(err))
+
+	err = complete(part(2, etags[2]), part(1, etags[1]))
+	require.ErrorContains(t, err, "InvalidPartOrder", "parts listed out of ascending order")
+	require.Equal(t, 400, statusCode(err))
+
+	require.NoError(t, complete(part(1, etags[1]), part(2, etags[2])))
+	require.Equal(t, "AAABBB", string(mustGet(t, g, "default", "lakehouse", "bronze/mpu.bin")),
+		"the object is exactly the listed parts; the unlisted part 3 is dropped")
 }

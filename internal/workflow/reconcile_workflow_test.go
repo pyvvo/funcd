@@ -124,6 +124,55 @@ func TestMaterializeDeletionPolicy(t *testing.T) {
 	}
 }
 
+// A re-applied workflow whose kv deletion policy changed must re-derive the store's owner
+// reference from the new policy, not keep the one stored at first creation (ADR-0094).
+func TestIssue149_KVDeletionPolicyChangeUpdatesOwnerRef(t *testing.T) {
+	cases := []struct {
+		from, to   v1.DeletionPolicy
+		wantOwners int
+	}{
+		{from: v1.DeletionDelete, to: v1.DeletionRetain, wantOwners: 0},
+		{from: v1.DeletionRetain, to: v1.DeletionDelete, wantOwners: 1},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.from)+"-to-"+string(tc.to), func(t *testing.T) {
+			s := newStore(t)
+			m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+			ctx := context.Background()
+			wf := &v1.Workflow{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+				ObjectMeta: v1.ObjectMeta{Name: "wfa", Namespace: "default", ResourceGroup: "rg1", UID: "uid-a"},
+				Spec: v1.WorkflowSpec{
+					KV:    []v1.WorkflowKVStore{{Name: "data-kv", Deletion: tc.from, Tables: []v1.KVTable{{Name: "t"}}}},
+					Steps: []v1.WorkflowStep{{Name: "a", Function: &v1.FunctionStep{Image: "oci:a"}}},
+				},
+			}
+			if err := m.Materialize(ctx, wf); err != nil {
+				t.Fatalf("first materialize: %v", err)
+			}
+			first, err := s.Get(ctx, v1.KindKVStore.GVK(), "default", "data-kv")
+			if err != nil {
+				t.Fatalf("get kvstore: %v", err)
+			}
+			wf.Spec.KV[0].Deletion = tc.to
+			if err := m.Materialize(ctx, wf); err != nil {
+				t.Fatalf("re-materialize: %v", err)
+			}
+			obj, err := s.Get(ctx, v1.KindKVStore.GVK(), "default", "data-kv")
+			if err != nil {
+				t.Fatalf("get kvstore: %v", err)
+			}
+			kv := obj.(*v1.KVStore)
+			if kv.UID != first.(*v1.KVStore).UID {
+				t.Fatalf("kvstore UID changed across re-materialize: %q -> %q", first.(*v1.KVStore).UID, kv.UID)
+			}
+			if got := len(kv.OwnerReferences); got != tc.wantOwners {
+				t.Fatalf("deletion %s -> %s: owner refs = %+v, want %d", tc.from, tc.to, kv.OwnerReferences, tc.wantOwners)
+			}
+		})
+	}
+}
+
 // materialize is idempotent (re-running updates, does not error on existing).
 func TestMaterializeIdempotent(t *testing.T) {
 	s := newStore(t)

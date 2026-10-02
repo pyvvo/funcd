@@ -70,8 +70,9 @@ type kvStoreDeletionProtection struct {
 
 // NewKVStoreDeletionProtectionAdmission returns the Validating admission that protects KVStore data
 // (ADR-0073). On Delete: Conflict if any Function.spec.kv names the store OR it still holds keys. On
-// Update: Conflict if a table removed from spec.tables[] is still named by some Function.spec.kv. (Clone
-// of link-deletion-protection, scanning spec.kv.)
+// Update: Conflict if a table removed from spec.tables[] is still named by some Function.spec.kv, or if an
+// added table still holds the data of its removed namesake (not yet reclaimed by the reconciler, which only
+// diffs the current spec against the live data). (Clone of link-deletion-protection, scanning spec.kv.)
 func NewKVStoreDeletionProtectionAdmission(r StoreReader, p KVProber) Admission {
 	return kvStoreDeletionProtection{r: r, p: p}
 }
@@ -127,7 +128,8 @@ func (a kvStoreDeletionProtection) admitDelete(ctx context.Context, req Request)
 	return req.Old, nil
 }
 
-// admitUpdate blocks removing a table from spec.tables[] while it is still named by some Function.spec.kv.
+// admitUpdate blocks removing a table from spec.tables[] while it is still named by some Function.spec.kv,
+// and re-adding a table whose removed namesake's data is not yet reclaimed.
 func (a kvStoreDeletionProtection) admitUpdate(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.kvstore-deletion-protection"
 	if req.Old == nil {
@@ -148,10 +150,26 @@ func (a kvStoreDeletionProtection) admitUpdate(ctx context.Context, req Request)
 	for _, tb := range newKS.Spec.Tables {
 		kept[tb.Name] = true
 	}
+	existing := make(map[string]bool, len(oldKS.Spec.Tables))
 	var removed []string
 	for _, tb := range oldKS.Spec.Tables {
+		existing[tb.Name] = true
 		if !kept[tb.Name] {
 			removed = append(removed, tb.Name)
+		}
+	}
+	if a.p != nil {
+		for _, tb := range newKS.Spec.Tables {
+			if existing[tb.Name] {
+				continue
+			}
+			has, perr := a.p.HasAny(ctx, storePrefix(ns, store)+tb.Name+"/")
+			if perr != nil {
+				return nil, fault.Wrapf(perr, fault.Internal, op, "probe table %q of KVStore %q for data", tb.Name, store)
+			}
+			if has {
+				return nil, fault.Conflictf(op, "table %q of KVStore %q still holds the data of its removed namesake; retry once it is reclaimed", tb.Name, store)
+			}
 		}
 	}
 	if len(removed) == 0 {

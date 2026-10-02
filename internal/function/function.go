@@ -8,6 +8,7 @@
 package function
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,7 +312,9 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          &http.Client{Timeout: probeTimeout},
+		// Its own transport: a CloseIdleConnections on the process-wide http.DefaultTransport fails a probe whose
+		// connection it closes (#287).
+		httpClient:          &http.Client{Timeout: probeTimeout, Transport: http.DefaultTransport.(*http.Transport).Clone()},
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,
@@ -548,7 +552,9 @@ type verdict struct {
 	booting        bool      // a replica of the current revision runs but is not ready yet
 	switching      bool      // the serving revision serves while the current one, which differs, comes up
 	currentFailed  bool      // while switching: the current revision cannot load its handler
+	loadErr        string    // the shim's load error, when shapeFailed or currentFailed
 	switched       bool      // this pass moved the calls to the current revision
+	startErr       error     // the first Start error of a current-revision replica (nil if every Start succeeded)
 }
 
 // finish writes the pass's status from v and returns its requeue. Ready and the phase describe the serving side;
@@ -560,7 +566,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	// ShapeValid is set once, from its final value: setting it True and then False in one pass would move its
 	// LastTransitionTime on every pass, a write that retriggers the pass through the watch (issue #24).
 	if v.shapeFailed || (v.switching && v.currentFailed) {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: v.loadErr})
 	} else {
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 	}
@@ -574,7 +580,15 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	case v.serving:
 		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
 		fn.Status.Phase = v1.PhaseDegraded
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"})
+		msg := "a replica exited and is being replaced"
+		if v.startErr != nil {
+			msg = "a replica exited and its replacement could not start: " + v.startErr.Error()
+		}
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: msg})
+	case v.startErr != nil && v.running == 0:
+		// the blueprint's Deploying → Failed on a worker error; requeueFor retries it once per period
+		fn.Status.Phase = v1.PhaseFailed
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error()})
 	case v.running >= 1 || !v.retryAt.IsZero():
 		// replicas started but the shim is not serving yet, or a replica waits out its backoff (ADR-0142) — keep
 		// polling.
@@ -587,10 +601,14 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	switch {
 	case v.switching && v.currentFailed:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls"})
+	case v.switching && v.startErr != nil:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error()})
 	case v.switching:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one"})
 	case v.shapeFailed:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
+	case v.startErr != nil && fn.Status.Phase == v1.PhaseFailed:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error()})
 	case fn.Status.Phase == v1.PhaseDeploying:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing"})
 	default:
@@ -637,6 +655,10 @@ func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 			return max(time.Until(v.retryAt), time.Millisecond)
 		}
 		return r.supervisionPeriod
+	case v1.PhaseFailed: // a worker that could not start is started again after the period; a shape failure is not
+		if v.startErr != nil {
+			return r.supervisionPeriod
+		}
 	}
 	return 0
 }
@@ -733,37 +755,44 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, secretEnv, catalogEnv)
 	}
 	serving := servingPhase(fn.Status.Phase)
-	running, retryAt, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), serving, untried, true, secretEnv, catalogEnv)
+	running, retryAt, startErr, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), serving, untried, true, secretEnv, catalogEnv)
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
 	if serving {
-		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+		failed = "" // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
 	if ready >= 1 && s == "" {
 		fn.Status.ServingRevision = string(c)
 	}
-	return verdict{running: running, ready: ready, shapeFailed: shapeFailed, serving: serving, retryAt: retryAt, booting: running > ready}, nil
+	return verdict{
+		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
+		serving: serving, retryAt: retryAt, booting: running > ready, startErr: startErr,
+	}, nil
 }
 
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
 // replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
-// worker is replaced from s's Revision.
+// worker is replaced from s's Revision; once that Revision is deleted, s's running workers serve until the switch.
 func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, secretEnv, catalogEnv map[string]string) (verdict, error) {
-	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
-	if err != nil {
-		return verdict{}, err
-	}
 	sIdx, err := r.servingIndexes(ctx, fn, s)
 	if err != nil {
 		return verdict{}, err
 	}
-	runningS, retryS, err := r.convergeRevision(ctx, sfn, s, spinned, sIdx, true, false, false, secretEnv, catalogEnv)
+	var runningS int
+	var retryS time.Time
+	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		runningS, err = r.runningReplicas(ctx, fn.Namespace, fn.Name, s, sIdx)
+	case err == nil:
+		runningS, retryS, _, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, true, false, false, secretEnv, catalogEnv)
+	}
 	if err != nil {
 		return verdict{}, err
 	}
-	runningC, retryC, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), false, untried, true, secretEnv, catalogEnv)
+	runningC, retryC, startC, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), false, untried, true, secretEnv, catalogEnv)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -780,7 +809,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	}
 	return verdict{
 		running: runningS, ready: readyS, serving: true, retryAt: retryAt,
-		booting: runningC > readyC, switching: true, currentFailed: failedC,
+		booting: runningC > readyC, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: startC,
 	}, nil
 }
 
@@ -839,13 +868,14 @@ func maxIndex(idx []int) int {
 // creates a missing replica, starts a Created one, and replaces a terminal one — at once for an untried generation,
 // after the backoff for a Stopped replica or a crash in a serving revision — while a Failed replica of a tried
 // generation that does not serve is kept, so readiness reports the shape failure. With scaleDown it stops rev's
-// replicas outside indexes. tmpl is fn as rev runs it. It returns rev's running count among indexes and the earliest
-// time a replica waiting out its backoff may be replaced (zero if none).
-func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, serving, untried, scaleDown bool, secretEnv, catalogEnv map[string]string) (int, time.Time, error) {
+// replicas outside indexes. tmpl is fn as rev runs it. It returns rev's running count among indexes, the earliest
+// time a replica waiting out its backoff may be replaced (zero if none), and the first Start error, which the pass
+// writes to the status instead of failing before it (issue #73).
+func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, serving, untried, scaleDown bool, secretEnv, catalogEnv map[string]string) (int, time.Time, error, error) {
 	const op = "function.converge"
 	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
-		return 0, time.Time{}, err
+		return 0, time.Time{}, nil, err
 	}
 	want := make(map[int]bool, len(indexes))
 	for _, i := range indexes {
@@ -862,7 +892,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 		if scaleDown && in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
 			if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
-				return 0, time.Time{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
+				return 0, time.Time{}, nil, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
 			}
 		}
 	}
@@ -905,47 +935,60 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		mfn.Spec.ImageDigest = pinnedDigest
 		artifactPath, err = r.materializer.Materialize(ctx, &mfn)
 		if err != nil {
-			return 0, time.Time{}, fault.Wrapf(err, fault.KindOf(err), op, "materialize artifact")
+			return 0, time.Time{}, nil, fault.Wrapf(err, fault.KindOf(err), op, "materialize artifact")
 		}
 	}
 	for _, in := range replace {
 		if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
-			return 0, time.Time{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop exited worker")
+			return 0, time.Time{}, nil, fault.Wrapf(serr, fault.KindOf(serr), op, "stop exited worker")
 		}
 	}
 	platforms, err := r.artifactPlatforms(ctx, tmpl.Spec.Image, pinnedDigest)
 	if err != nil {
-		return 0, time.Time{}, err
+		return 0, time.Time{}, nil, err
 	}
 	for _, i := range launch {
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
-			return 0, time.Time{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
+			return 0, time.Time{}, nil, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
 		spec := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
 		spec.Revision = rev
 		inst, cerr := r.runtime.Create(ctx, spec)
 		if cerr != nil {
-			return 0, time.Time{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create worker")
+			return 0, time.Time{}, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create worker")
 		}
 		start = append(start, inst.ID)
 	}
+	var startErr error
 	for _, id := range start {
 		if serr := r.runtime.Start(ctx, id); serr != nil {
-			return 0, time.Time{}, fault.Wrapf(serr, fault.KindOf(serr), op, "start worker")
+			r.logger.Warn("could not start worker", "instance", id, "err", serr)
+			if startErr == nil {
+				startErr = serr
+			}
 		}
 	}
 
-	insts, err = r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
+	running, err := r.runningReplicas(ctx, tmpl.Namespace, tmpl.Name, rev, indexes)
 	if err != nil {
-		return 0, time.Time{}, err
+		return 0, time.Time{}, nil, err
+	}
+	return running, retryAt, startErr, nil
+}
+
+// runningReplicas counts the running workers of revision rev among replicas `indexes`.
+func (r *Reconciler) runningReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, indexes []int) (int, error) {
+	insts, err := r.namedInstances(ctx, ns, name)
+	if err != nil {
+		return 0, err
 	}
 	running := 0
 	for _, in := range insts {
-		if in.Revision == rev && want[in.Replica] && in.State == runtime.StateRunning {
+		if in.Revision == rev && slices.Contains(indexes, in.Replica) && in.State == runtime.StateRunning {
 			running++
 		}
 	}
-	return running, retryAt, nil
+	return running, nil
 }
 
 // drain stops and removes the workers of revisions that no longer serve (ADR-0143 Decision 4.1): those of the drained
@@ -1105,19 +1148,26 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // It returns the Revision's authoritative artifact digest (ADR-0035): on the create path the
 // digest is the explicit spec digest, else the resolved-and-pinned one; on the early-return
 // path it is the EXISTING Revision's digest — a stamped Revision is NEVER re-resolved, so a
-// moved tag cannot drift it (the immutability guarantee).
+// moved tag cannot drift it (the immutability guarantee). A Revision of the name that a since-deleted Function stamped
+// is dropped with its workers, and the generation is stamped afresh.
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
 	revName := revisionName(fn)
 	existing, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName))
-	if err == nil {
-		fn.Status.CurrentRevision = revName
-		if rev, ok := existing.(*v1.Revision); ok {
-			return rev.Spec.ImageDigest, nil // never re-resolved
+	switch {
+	case err == nil:
+		rev, ok := existing.(*v1.Revision)
+		if !ok || !ownedByAnother(rev, fn) {
+			fn.Status.CurrentRevision = revName
+			if ok {
+				return rev.Spec.ImageDigest, nil // never re-resolved
+			}
+			return fn.Spec.ImageDigest, nil
 		}
-		return fn.Spec.ImageDigest, nil
-	}
-	if fault.KindOf(err) != fault.NotFound {
+		if derr := r.dropRevision(ctx, fn, rev); derr != nil {
+			return "", derr
+		}
+	case fault.KindOf(err) != fault.NotFound:
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
@@ -1134,8 +1184,10 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	rev.Name = v1.ObjectName(revName)
 	rev.Namespace = fn.Namespace
 	rev.ResourceGroup = fn.ResourceGroup
+	fnRef := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
+	rev.OwnerReferences = []v1.OwnerReference{{ObjectRef: fnRef, UID: fn.UID, Controller: true}}
 	rev.Spec = v1.RevisionSpec{
-		Function: v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name},
+		Function: fnRef,
 		Number:   fn.Generation,
 		Runtime:  fn.Spec.Runtime,
 		Handler:  fn.Spec.Handler,
@@ -1158,6 +1210,38 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 
 // revisionName is the Revision a Function's generation stamps (ADR-0020): <name>-<generation>.
 func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name, fn.Generation) }
+
+// ownedByAnother reports whether rev was stamped for another Function of fn's name, one since deleted. A Revision that
+// names no owner is taken as fn's.
+func ownedByAnother(rev *v1.Revision, fn *v1.Function) bool {
+	for _, o := range rev.OwnerReferences {
+		if o.Kind == v1.KindFunction && o.Controller {
+			return o.UID != fn.UID
+		}
+	}
+	return false
+}
+
+// dropRevision retires the workers of rev, a deleted Function's Revision, and deletes it: when the delete and the
+// re-create reach one pass, teardown never ran, and the re-created Function's revision of that name must not adopt them
+// (issue #55).
+func (r *Reconciler) dropRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.Revision == rev.Name {
+			if err := r.retire(ctx, in); err != nil {
+				return err
+			}
+		}
+	}
+	if err := r.store.Delete(ctx, v1.KindRevision.GVK(), rev.Namespace, rev.Name, rev.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
+		return fault.Wrapf(err, fault.KindOf(err), "function.dropRevision", "delete revision %q", rev.Name)
+	}
+	return nil
+}
 
 // pinDigest resolves an OCI artifact ref → digest at Revision stamp (ADR-0035). With no
 // resolver configured (file:// dev / legacy mode) there is no digest to pin — the
@@ -1258,18 +1342,18 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 	return "http://" + host + ":" + port
 }
 
-// readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
-// In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
-// running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
+// readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
+// ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
+// each running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
 // handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
 // bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, shapeFailed bool) {
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID) {
 	if r.materializer == nil {
-		return running, false
+		return running, ""
 	}
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
-		return 0, false
+		return 0, ""
 	}
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
@@ -1277,17 +1361,51 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		}
 		switch in.State {
 		case runtime.StateFailed:
-			shapeFailed = true
+			failed = lowerID(failed, in.ID)
 		case runtime.StateRunning:
 			switch {
 			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
 			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
-				shapeFailed = true
+				failed = lowerID(failed, in.ID)
 			}
 		}
 	}
-	return ready, shapeFailed
+	return ready, failed
+}
+
+// lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not
+// vary with List's order.
+func lowerID(a, b runtime.InstanceID) runtime.InstanceID {
+	if a == "" || b < a {
+		return b
+	}
+	return a
+}
+
+// loadError is the error failed instance id's shim wrote before it exited — the last line of its captured output —
+// which ShapeValid carries (ADR-0030 §4b); "" for no instance, and a generic message when the output is unreadable.
+// An instance still running was failed for never becoming ready (readyReplicas' boot limit), so it has no load error.
+func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) string {
+	if id == "" {
+		return ""
+	}
+	if in, err := r.runtime.Status(ctx, id); err == nil && in.State == runtime.StateRunning {
+		return "the handler did not become ready within " + bootTimeout.String()
+	}
+	last := "the runtime shim could not load the handler"
+	rc, err := r.runtime.Logs(ctx, id)
+	if err != nil {
+		return last
+	}
+	defer func() { _ = rc.Close() }()
+	sc := bufio.NewScanner(rc)
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			last = line
+		}
+	}
+	return last
 }
 
 // The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).

@@ -1,7 +1,7 @@
 package workflow
 
 // Sub-workflows (ADR-0099, F70): a `workflow:` step runs a child workflow inline over the same engine —
-// synchronous recursion on one goroutine (no separate reconciler, no worker to wait on, so no deadlock),
+// synchronous recursion on the step's goroutine (no separate reconciler, no worker to wait on, so no deadlock),
 // consistent with the ADR-0096 blocking model. The child's run output becomes the step's output.
 
 import (

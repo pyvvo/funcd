@@ -51,6 +51,9 @@ type Runtime struct {
 	// catalog metadata survives a restart (the Parquet DATA already persists in blob). Empty ⇒ the
 	// catalog lives in the engine's ephemeral temp dir (fresh each boot), the default.
 	catalogDir string
+	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
+	bundled func() bool
+	extract func(dir string) (embedengine.Paths, error)
 }
 
 // Option configures the dev catalog engine runtime.
@@ -67,8 +70,10 @@ func New(logger *slog.Logger, opts ...Option) *Runtime {
 		logger = slog.Default()
 	}
 	r := &Runtime{
-		logger: logger.With("component", "devengine"),
-		procs:  make(map[provider.ProviderRef]*engineProc),
+		logger:  logger.With("component", "devengine"),
+		procs:   make(map[provider.ProviderRef]*engineProc),
+		bundled: embedengine.Bundled,
+		extract: embedengine.Extract,
 	}
 	for _, o := range opts {
 		o(r)
@@ -84,7 +89,7 @@ func (r *Runtime) Converge(ctx context.Context, spec provider.ProviderSpec) (pro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if !embedengine.Bundled() {
+	if !r.bundled() {
 		r.logger.Warn("catalog engine not embedded in this dev build — catalog unavailable",
 			"provider", spec.Ref.Name, "remedy", "just build-catalog-engine <os> <arch>")
 		return provider.ProviderStatus{Reason: "CatalogEngineNotBundled"}, nil
@@ -138,10 +143,21 @@ type engineProc struct {
 	stdin io.WriteCloser
 	dir   string
 	addr  string
+	done  chan struct{} // closed once the engine has exited and been reaped
 }
 
+// alive reads done, not cmd.ProcessState: only cmd.Wait fills ProcessState, and launch's reaper
+// goroutine is its sole caller, so an engine that crashes between Converges is seen dead.
 func (p *engineProc) alive() bool {
-	return p != nil && p.cmd != nil && p.cmd.Process != nil && p.cmd.ProcessState == nil
+	if p == nil {
+		return false
+	}
+	select {
+	case <-p.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // stop closes the held-open REPL stdin (so duckdb exits cleanly), kills the process if it lingers,
@@ -155,7 +171,7 @@ func (p *engineProc) stop() {
 	}
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
-		_ = p.cmd.Wait()
+		<-p.done
 	}
 	if p.dir != "" {
 		_ = os.RemoveAll(p.dir)
@@ -170,7 +186,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "engine temp dir")
 	}
-	paths, err := embedengine.Extract(dir)
+	paths, err := r.extract(dir)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, err
@@ -218,7 +234,11 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		return nil, fault.Wrapf(serr, fault.Internal, op, "start duckdb engine")
 	}
 
-	p := &engineProc{cmd: cmd, stdin: stdin, dir: dir, addr: addr}
+	p := &engineProc{cmd: cmd, stdin: stdin, dir: dir, addr: addr, done: make(chan struct{})}
+	go func() {
+		_ = cmd.Wait()
+		close(p.done)
+	}()
 	if rerr := waitReady(ctx, addr, 20*time.Second); rerr != nil {
 		p.stop()
 		return nil, fault.Wrapf(rerr, fault.Unavailable, op, "engine did not become ready at %s", addr)

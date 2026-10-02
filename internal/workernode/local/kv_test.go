@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,12 +38,19 @@ func (p kvPDP) Authorize(_ context.Context, req auth.Request) (auth.Decision, er
 
 // fakeKVResolver is a static BindingResolver (ADR-0073): it binds caller "fn" via alias "b" → store "s",
 // table "t", with the given owner, and denies everything else (default-deny). Writes require the caller
-// to be the table owner.
-type fakeKVResolver struct{ owner v1.ObjectName }
+// to be the table owner. maxValueBytes is the store's value cap (0 ⇒ 1 MiB).
+type fakeKVResolver struct {
+	owner         v1.ObjectName
+	maxValueBytes int64
+}
 
 func (b fakeKVResolver) Resolve(_ context.Context, _ v1.NamespaceName, fn v1.ObjectName, alias string) (kvsvc.Binding, error) {
 	if fn == "fn" && alias == "b" {
-		return kvsvc.Binding{Store: "s", Table: "t", Owner: b.owner, MaxValueBytes: 1 << 20, MaxKeyBytes: 1024}, nil
+		maxValue := b.maxValueBytes
+		if maxValue == 0 {
+			maxValue = 1 << 20
+		}
+		return kvsvc.Binding{Store: "s", Table: "t", Owner: b.owner, MaxValueBytes: maxValue, MaxKeyBytes: 1024}, nil
 	}
 	return kvsvc.Binding{}, fault.Forbiddenf("fakeKVResolver", "no kv binding for %s/%s", fn, alias)
 }
@@ -111,4 +119,54 @@ func TestScenarioKVListPrefix(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/"+k, "v").Code)
 	}
 	require.JSONEq(t, `["user/1","user/2"]`, do(t, h, http.MethodGet, "/kv/b?prefix=user/", "").Body.String())
+}
+
+// TestIssue100_PathLikeKeysRoundTrip: a key with an empty or dot segment is stored verbatim. The shims
+// keep a key's "/" separators raw, so these keys arrive as non-canonical paths ("/kv/b/a//b").
+func TestIssue100_PathLikeKeysRoundTrip(t *testing.T) {
+	keys := []string{"/lead", "a//b", "a/./b", "a/../b", ".", "..", "a/b", "trail/"}
+	for _, tc := range []struct {
+		name, route string
+		h           http.Handler
+	}{
+		{"kv", "/kv/b", kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})},
+		{"blob", "/blob/b", blobHandler(t, "default", s3TestPDP{readOK: true, writeOK: true}, newBlobMapBucket())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range keys {
+				require.Equal(t, http.StatusNoContent, do(t, tc.h, http.MethodPut, tc.route+"/"+k, "v:"+k).Code, "put %q", k)
+				rec := do(t, tc.h, http.MethodGet, tc.route+"/"+k, "")
+				require.Equal(t, http.StatusOK, rec.Code, "get %q: %s", k, rec.Body.String())
+				require.Equal(t, "v:"+k, rec.Body.String(), "get %q", k)
+			}
+			var listed []string
+			require.NoError(t, json.Unmarshal(do(t, tc.h, http.MethodGet, tc.route, "").Body.Bytes(), &listed))
+			require.ElementsMatch(t, keys, listed)
+			for _, k := range keys {
+				require.Equal(t, http.StatusNoContent, do(t, tc.h, http.MethodDelete, tc.route+"/"+k, "").Code, "delete %q", k)
+				require.Equal(t, http.StatusNotFound, do(t, tc.h, http.MethodGet, tc.route+"/"+k, "").Code, "get %q after delete", k)
+			}
+		})
+	}
+}
+
+// TestIssue169_DeclaredValueCapIsServable — a maxValueBytes a KVStore passes Validate with is a cap the
+// platform serves: a put of exactly that many bytes over the local API reaches the facade and succeeds.
+func TestIssue169_DeclaredValueCapIsServable(t *testing.T) {
+	served := 0
+	for _, capBytes := range []int64{1 << 20, 1<<20 + 1, 4 << 20} {
+		ks := &v1.KVStore{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
+			ObjectMeta: v1.ObjectMeta{Name: "s", Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.KVStoreSpec{MaxValueBytes: capBytes, Tables: []v1.KVTable{{Name: "t", Owner: "fn"}}},
+		}
+		if ks.Validate() != nil {
+			continue
+		}
+		h := kvHandler(t, "default", fakeKVResolver{owner: "fn", maxValueBytes: ks.Spec.EffectiveMaxValueBytes()}, kvPDP{readOK: true, owner: "fn"})
+		rec := do(t, h, http.MethodPut, "/kv/b/k", strings.Repeat("x", int(capBytes)))
+		require.Equalf(t, http.StatusNoContent, rec.Code, "store cap %d bytes passed Validate, so a put of that size must be served: %s", capBytes, rec.Body.String())
+		served++
+	}
+	require.Positive(t, served, "at least one cap must be accepted and served")
 }

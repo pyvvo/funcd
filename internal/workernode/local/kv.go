@@ -3,7 +3,6 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -11,8 +10,9 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// maxKVBytes caps a KV value (a DoS guard on the local API, matching the invoke cap).
-const maxKVBytes = 1 << 20 // 1 MiB
+// maxKVBytes caps a KV put body (a DoS guard on the local API). It is the KVStore value-cap ceiling, so
+// every cap a store can declare is servable.
+const maxKVBytes = v1.MaxValueBytesLimit
 
 // KV is the function-facing KV port the worker-node local API routes to — the services/kv.Facade
 // satisfies it. The caller's namespace + function are supplied by the handler (connection-scoped from
@@ -27,7 +27,8 @@ type KV interface {
 
 // registerKV adds the KV verbs to mux — GET/PUT/DELETE /kv/{binding}/{key...} and GET /kv/{binding} (list,
 // ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0073). Errors are RFC
-// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500).
+// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500;
+// a body over maxKVBytes → 413).
 func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
@@ -50,9 +51,9 @@ func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 
 	mux.HandleFunc("PUT /kv/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.kv.put"
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxKVBytes))
+		body, err := readBody(w, r, op, maxKVBytes)
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read value: %v", err))
+			fault.WriteProblem(w, err)
 			return
 		}
 		if err := kv.Put(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key"), body); err != nil {

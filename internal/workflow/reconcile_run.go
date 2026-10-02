@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +17,10 @@ import (
 )
 
 const runOp = "workflow.reconcileRun"
+
+// waitRequeue re-checks a run that waits for its Workflow (ADR-0121's bounded requeue for a consumer
+// whose referent is not there or not Ready).
+const waitRequeue = 2 * time.Second
 
 // RunReconciler drives WorkflowRun resources: it runs the engine, mirrors the coarse
 // run state into WorkflowRun.status, and maintains the parent Workflow's status.runs
@@ -88,16 +94,16 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	}
 
 	wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, run.Spec.Workflow)
-	if err != nil {
+	if err != nil && fault.KindOf(err) != fault.NotFound {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), runOp, "get workflow %q", run.Spec.Workflow)
 	}
-	wf := wfObj.(*v1.Workflow)
+	wf, _ := wfObj.(*v1.Workflow) // nil when the Workflow is missing (not created yet, or deleted)
 
 	// Cancel request (declarative, ADR-0094): abandon in-flight work and terminate Cancelled.
 	// Checked before pause/drive — cancel wins over a concurrent pause. The controller workqueue
 	// delivered this reconcile because spec.cancel was written; there is no synchronous path.
 	if run.Spec.Cancel {
-		return controller.Result{}, r.cancelRun(ctx, run, wf)
+		return controller.Result{}, r.cancelRun(ctx, run)
 	}
 
 	// Pause request: mark Paused, dispatch nothing.
@@ -109,12 +115,30 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		if err := r.updateRunStatus(ctx, run); err != nil {
 			return controller.Result{}, err
 		}
+		r.linkRun(ctx, run)
 		return controller.Result{}, nil
+	}
+
+	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
+	// Ready=False (a WorkflowCycle, a type mismatch): such a workflow never runs (ADR-0098/0099). A
+	// started run resumes its pinned spec.
+	_, gerr := r.engine.runs.Get(ctx, req.Namespace, req.Name)
+	started := gerr == nil
+	if !started {
+		if wf == nil {
+			return r.wait(ctx, run, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
+		}
+		if c, ok := wf.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+			return r.wait(ctx, run, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+		}
+	}
+	if c, ok := run.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue}) // the wait is over
 	}
 
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
-	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf)
+	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -129,6 +153,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 			return controller.Result{}, uerr
 		}
+		r.linkRun(ctx, run)
 		return controller.Result{}, nil
 	}
 	// A run failure is a terminal outcome, not a reconcile error.
@@ -137,9 +162,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, uerr
 	}
 	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: one run-root span at the terminal transition (no-op if non-terminal)
-	if lerr := r.updateWorkflowLinks(ctx, wf.Namespace, wf.Name); lerr != nil {
-		r.log.Warn("status.runs update failed", "workflow", wf.Name, "error", lerr)
-	}
+	r.linkRun(ctx, run)
 	return controller.Result{}, nil
 }
 
@@ -147,7 +170,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 // the terminal state into WorkflowRun.status (so describe sees it and the reconciler's terminal
 // short-circuit keeps it from being re-driven) and refreshes the parent's status.runs. It runs
 // on the controller workqueue when it observes spec.cancel — the declarative cancel path.
-func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow) error {
+func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) error {
 	if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
 		return err
 	}
@@ -161,37 +184,61 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 		return uerr
 	}
 	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
-	if lerr := r.updateWorkflowLinks(ctx, wf.Namespace, wf.Name); lerr != nil {
-		r.log.Warn("status.runs update failed after cancel", "workflow", wf.Name, "error", lerr)
-	}
+	r.linkRun(ctx, run)
 	return nil
 }
 
-func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow) (*runstate.Record, error) {
+// wait holds a run that has not started Pending with a Ready=False condition saying why, and
+// re-checks it after waitRequeue.
+func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, reason, msg string) (controller.Result, error) {
+	run.Status.Phase = runPending
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capErr(msg)})
+	if err := r.updateRunStatus(ctx, run); err != nil {
+		return controller.Result{}, err
+	}
+	return controller.Result{RequeueAfter: waitRequeue}, nil
+}
+
+func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow, started bool) (*runstate.Record, error) {
 	ns, name := run.Namespace, run.Name
-	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
+	if started {
 		// A durable record exists → resume from its PINNED spec + contract (the live wf.Spec/status is
 		// not passed; an in-flight run is immune to a mid-run edit or re-push). Covers replay recovery too.
 		return r.engine.Resume(ctx, ns, name)
 	}
 	images := stepImages(wf) // the ADR-0098 cache: step → resolved digest-pinned image (ADR-0107)
 	if run.Spec.Replay != nil {
-		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift.
-		return r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
+		// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
+		rec, err := r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		if fault.KindOf(err) == fault.NotFound {
+			err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", run.Spec.Replay.Run)
+		}
+		return rec, err
 	}
 	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
 }
 
-// replayReason extracts the leading reason token (SeedInvalid / DigestDrift) from a replay-seed
-// rejection's fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
+// replayReason extracts the reason token (SeedInvalid / DigestDrift) from a replay-seed rejection's
+// fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
 func replayReason(err error) string {
-	msg := err.Error()
-	for _, tok := range []string{"SeedInvalid", "DigestDrift"} {
-		if strings.Contains(msg, tok+":") {
+	return reasonToken(err.Error(), "ReplayRejected", "SeedInvalid", "DigestDrift")
+}
+
+// failureReason is the Ready=False reason of a Failed run: the ADR-0094/0099 run failure reason its
+// cause names, else StepFailed (every other run failure is a step's).
+func failureReason(cause string) string {
+	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded")
+}
+
+// reasonToken returns the first of tokens that msg names, else fallback.
+func reasonToken(msg, fallback string, tokens ...string) string {
+	for _, tok := range tokens {
+		if strings.Contains(msg, tok) {
 			return tok
 		}
 	}
-	return "ReplayRejected"
+	return fallback
 }
 
 // stepImages projects the workflow's cached resolved step images (ADR-0098 status.steps[].Image) into
@@ -216,6 +263,9 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	}
 	run.Status.Phase = rec.Phase
 	run.Status.TraceID = rec.TraceID // ADR-0100: mirror the run trace so describe + workflow logs (ADR-0106) find it
+	if rec.Phase == runFailed && rec.Error != "" {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(rec.Error), Message: rec.Error})
+	}
 	run.Status.Steps = run.Status.Steps[:0]
 	for _, s := range rec.Steps {
 		run.Status.Steps = append(run.Status.Steps, v1.RunStepStatus{
@@ -239,9 +289,7 @@ func (r *RunReconciler) mirrorTransition(run *v1.WorkflowRun) func(context.Conte
 			r.log.Warn("run status update failed", "run", run.Name, "error", err)
 			return
 		}
-		if err := r.updateWorkflowLinks(ctx, run.Namespace, run.Spec.Workflow); err != nil {
-			r.log.Warn("status.runs update failed", "workflow", run.Spec.Workflow, "error", err)
-		}
+		r.linkRun(ctx, run)
 	}
 }
 
@@ -256,42 +304,94 @@ func (r *RunReconciler) updateRunStatus(ctx context.Context, run *v1.WorkflowRun
 	return nil
 }
 
-// updateWorkflowLinks recomputes the parent Workflow's status.runs from the metastore:
-// active (non-terminal) run names + lifetime terminal-phase counts (bounded — only
-// active runs are enumerated). It re-reads the Workflow, because each run transition
-// rewrites it.
-func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, name)
+// linkAttempts bounds the optimistic-concurrency retries of a status.runs update: the counts are
+// incremental, so an update lost to a Conflict would lose a count.
+const linkAttempts = 5
+
+// linkRun folds the run's new status into its Workflow's status.runs; a failure is logged, never
+// failing the reconcile.
+func (r *RunReconciler) linkRun(ctx context.Context, run *v1.WorkflowRun) {
+	var err error
+	for range linkAttempts {
+		if err = r.updateWorkflowLinks(ctx, run); fault.KindOf(err) != fault.Conflict {
+			break
+		}
+	}
+	if err != nil {
+		r.log.Warn("status.runs update failed", "workflow", run.Spec.Workflow, "run", run.Name, "error", err)
+	}
+}
+
+// updateWorkflowLinks maintains the parent Workflow's status.runs (ADR-0094) from the run whose status
+// this reconcile just wrote: a non-terminal run joins active (newest first); a terminal one leaves it
+// and is counted. The reconciler writes a run's terminal status once, so it is counted once, and the
+// counts are lifetime: the retention sweep deleting closed runs never lowers them. Only the runs in
+// active are read (bounded); one deleted or closed without this update is dropped from active.
+func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, run *v1.WorkflowRun) error {
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
+	if fault.KindOf(err) == fault.NotFound { // the Workflow is missing: there is no status.runs to keep
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	wf := obj.(*v1.Workflow)
-	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{Namespace: ns})
-	if err != nil {
-		return err
+	links := v1.WorkflowRunLinks{}
+	if wf.Status.Runs != nil {
+		links = *wf.Status.Runs
 	}
-	links := &v1.WorkflowRunLinks{}
-	for _, o := range list.Items {
-		run := o.(*v1.WorkflowRun)
-		if run.Spec.Workflow != wf.Name {
-			continue
-		}
-		switch run.Status.Phase {
-		case runSucceeded:
-			links.Succeeded++
-		case runFailed:
-			links.Failed++
-		case runCancelled:
-			links.Cancelled++
-		default:
+	prev := links.Active
+	links.Active = nil
+	switch run.Status.Phase {
+	case runSucceeded:
+		links.Succeeded++
+	case runFailed:
+		links.Failed++
+	case runCancelled:
+		links.Cancelled++
+	default:
+		if !slices.Contains(prev, run.Name) {
 			links.Active = append(links.Active, run.Name)
 		}
 	}
-	wf.Status.Runs = links
+	for _, name := range prev {
+		phase := run.Status.Phase
+		if name != run.Name {
+			o, gerr := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), run.Namespace, name)
+			if fault.KindOf(gerr) == fault.NotFound {
+				continue
+			}
+			if gerr != nil {
+				return gerr
+			}
+			phase = o.(*v1.WorkflowRun).Status.Phase
+		}
+		if !isRunTerminal(phase) {
+			links.Active = append(links.Active, name)
+		}
+	}
+	wf.Status.Runs = &links
 	if _, err := r.store.Update(ctx, wf); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), runOp, "update workflow links %q", wf.Name)
 	}
 	return nil
+}
+
+// SweepExpired reclaims the closed runs older than retention (ADR-0094): each expired engine record
+// and the WorkflowRun object that `workflow runs` lists, whose status is swept with the run (ADR-0100).
+// Returns the number of runs reclaimed.
+func (r *RunReconciler) SweepExpired(ctx context.Context, retention time.Duration) (int, error) {
+	return r.engine.SweepExpired(ctx, retention, r.deleteRun)
+}
+
+// deleteRun deletes the WorkflowRun object of an expired run record; an inline sub-workflow child run
+// has none.
+func (r *RunReconciler) deleteRun(ctx context.Context, rec *runstate.Record) error {
+	err := r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, "")
+	if fault.KindOf(err) == fault.NotFound {
+		return nil
+	}
+	return err
 }
 
 func isRunTerminal(p v1.Phase) bool {

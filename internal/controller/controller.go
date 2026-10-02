@@ -43,6 +43,11 @@ type Reconciler interface {
 	Reconcile(ctx context.Context, req Request) (Result, error)
 }
 
+// MapFunc maps a changed object to the Requests of the objects whose reconcile reads it, such as a kind
+// whose status is derived from it. A watch event carries no prior state, so the mapping must also cover
+// what the object may have referenced before the change.
+type MapFunc func(ctx context.Context, obj v1.Object) []Request
+
 // Deps configures the engine (internal component, ADR-0002 §1).
 type Deps struct {
 	Store   store.Store
@@ -56,6 +61,7 @@ type Controller struct {
 	logger      *slog.Logger
 	workers     int
 	reconcilers map[v1.GroupVersionKind]Reconciler
+	mappers     map[v1.GroupVersionKind][]MapFunc
 	queue       *queue
 }
 
@@ -82,6 +88,7 @@ func New(d Deps) (*Controller, error) {
 		logger:      logger.With("component", "controller"),
 		workers:     workers,
 		reconcilers: map[v1.GroupVersionKind]Reconciler{},
+		mappers:     map[v1.GroupVersionKind][]MapFunc{},
 		queue:       newQueue(baseBackoff, maxBackoff),
 	}, nil
 }
@@ -91,14 +98,27 @@ func (c *Controller) Register(gvk v1.GroupVersionKind, r Reconciler) {
 	c.reconcilers[gvk] = r
 }
 
-// Run opens a store Watch per registered gvk (the informer), starts the workers,
+// Watches enqueues mapFn's Requests on every change of a gvk, besides the gvk's own Reconciler if one is
+// registered. Call before Run.
+func (c *Controller) Watches(gvk v1.GroupVersionKind, mapFn MapFunc) {
+	c.mappers[gvk] = append(c.mappers[gvk], mapFn)
+}
+
+// Run opens a store Watch per registered or watched gvk (the informer), starts the workers,
 // blocks until ctx is cancelled, then drains the watches and workers — no leak.
 func (c *Controller) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	watchCtx, stopWatches := context.WithCancel(ctx)
 	defer stopWatches()
 
+	gvks := map[v1.GroupVersionKind]bool{}
 	for gvk := range c.reconcilers {
+		gvks[gvk] = true
+	}
+	for gvk := range c.mappers {
+		gvks[gvk] = true
+	}
+	for gvk := range gvks {
 		w, err := c.store.Watch(watchCtx, gvk, store.WatchOptions{})
 		if err != nil {
 			stopWatches()
@@ -128,7 +148,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	return nil
 }
 
-// watch enqueues a Request for every change on the gvk's watch stream (Added /
+// watch enqueues the Requests for every change on the gvk's watch stream (Added /
 // Modified / Deleted, uniformly). The store closes the stream of a watcher that
 // falls behind (ADR-0006), so a close before ctx ends re-watches: it resumes after
 // the highest resourceVersion seen, or re-lists when the store no longer retains it.
@@ -163,7 +183,14 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 			if rv, err := strconv.ParseUint(meta.ResourceVersion, 10, 64); err == nil && rv > seen {
 				seen = rv
 			}
-			c.queue.Add(Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name})
+			if _, ok := c.reconcilers[gvk]; ok {
+				c.queue.Add(Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name})
+			}
+			for _, mapFn := range c.mappers[gvk] {
+				for _, req := range mapFn(ctx, ev.Object) {
+					c.queue.Add(req)
+				}
+			}
 		}
 	}
 }

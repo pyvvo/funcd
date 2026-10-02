@@ -50,6 +50,7 @@ type fakeRuntime struct {
 	failRev map[v1.ObjectName]bool
 	held    map[runtime.InstanceID]bool // a held instance runs without an endpoint, so it is never ready
 	stopped map[runtime.InstanceID]bool // Stop released it, so Remove may forget it, as on the real drivers
+	log     string                      // the captured stdout+stderr Logs returns for every instance
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -107,7 +108,15 @@ func (f *fakeRuntime) Status(_ context.Context, id runtime.InstanceID) (runtime.
 }
 
 func (f *fakeRuntime) Logs(_ context.Context, _ runtime.InstanceID) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("")), nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return io.NopCloser(strings.NewReader(f.log)), nil
+}
+
+func (f *fakeRuntime) setLog(log string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.log = log
 }
 
 func (f *fakeRuntime) Exec(_ context.Context, _ runtime.InstanceID, _ []string) error { return nil }
@@ -527,6 +536,40 @@ func TestScenarioShimShapeFailureBlocksReady(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionFalse, c.Status, "ShapeValid: False on a runtime shape failure")
 	require.Empty(t, h.routes(t), "no route to a shape-failed function")
+}
+
+// Issue 79: ShapeValid=False carries the error the shim wrote before it exited (ADR-0030 §4b), not a fixed message,
+// both on a first deploy and for a redeploy that fails beside the serving revision (ADR-0143).
+func TestIssue79_ShapeValidCarriesShimLoadError(t *testing.T) {
+	t.Parallel()
+	const shimErr = `funcd-shim: shape error: export "handle" is not a function`
+	t.Run("first-deploy", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, true)
+		h.rt.setLog("booting\n" + shimErr + "\n")
+		h.createFn(t, "echo")
+		h.reconcile(t, "echo")
+
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "echo").Status.Phase)
+		c := h.condition(t, "echo", "ShapeValid")
+		require.Equal(t, v1.ConditionFalse, c.Status)
+		require.Equal(t, shimErr, c.Message)
+	})
+	t.Run("redeploy-beside-serving", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch)
+		h.deployReady(t, "echo")
+		h.rt.setLog(shimErr + "\n")
+		h.rt.failRevision("echo-2", true)
+		h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "broken" })
+		h.reconcile(t, "echo")
+		h.reconcile(t, "echo")
+
+		require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+		c := h.condition(t, "echo", "ShapeValid")
+		require.Equal(t, v1.ConditionFalse, c.Status)
+		require.Equal(t, shimErr, c.Message)
+	})
 }
 
 // bringUpRealShim runs the real Node shim via the process driver against a file artifact

@@ -765,3 +765,67 @@ func TestIssue24_BrokenRedeployPassWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// Issue 53: deleting the serving Revision during a switch leaves its running worker serving, and the calls still move to
+// the current revision once it is ready (ADR-0143 Decisions 4.3, 4.4).
+func TestIssue53_DeletedServingRevisionStillSwitches(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch)
+	url1, _ := h.rt.serveRevision(t, "echo-1", http.StatusOK)
+	h.deployReady(t, "echo")
+	url2, setReady2 := h.rt.serveRevision(t, "echo-2", http.StatusServiceUnavailable)
+	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+	h.reconcile(t, "echo")
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindRevision.GVK(), "default", "echo-1", ""))
+
+	h.reconcile(t, "echo")
+	fn := h.getFn(t, "echo")
+	require.Equal(t, fn.Generation, fn.Status.ObservedGeneration, "the pass writes its status")
+	require.Equal(t, "echo-1", fn.Status.ServingRevision, "revision 1's running worker keeps serving")
+	up, ready := h.upstream(t, "echo")
+	require.True(t, ready)
+	require.Equal(t, url1, up)
+
+	setReady2(http.StatusOK)
+	h.reconcile(t, "echo")
+	require.Equal(t, "echo-2", h.getFn(t, "echo").Status.ServingRevision, "the switch completes")
+	up, _ = h.upstream(t, "echo")
+	require.Equal(t, url2, up)
+}
+
+// Issue 55: a delete and a re-create reach the reconciler as one pass, so teardown never runs and the re-created
+// Function's first revision has the deleted one's name. The pass replaces the deleted Function's worker with one of the
+// new spec on every replica, and the next passes keep it.
+func TestIssue55_DeleteRecreateInOnePassReplacesTheWorker(t *testing.T) {
+	t.Parallel()
+	for _, replicas := range []int{1, 2} {
+		t.Run(strconv.Itoa(replicas)+"-replicas", func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withSwitch)
+			h.deployReady(t, "echo")
+			require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "echo", ""))
+			h.create(t, "echo", func(fn *v1.Function) {
+				fn.Spec.Handler = "handleNEW"
+				fn.Spec.Replicas = replicas
+			})
+			h.reconcile(t, "echo")
+
+			require.True(t, h.rt.wasRemoved(runtime.NewInstanceID("default", "echo", "echo-1", 0)), "the deleted Function's worker left the runtime")
+			for i := range replicas {
+				spec := h.rt.specOf(runtime.NewInstanceID("default", "echo", "echo-1", i))
+				require.Equal(t, "handleNEW", spec.Env["FUNCD_HANDLER"], "replica %d runs the re-created spec", i)
+			}
+			obj, err := h.st.Get(context.Background(), v1.KindRevision.GVK(), "default", "echo-1")
+			require.NoError(t, err)
+			require.Equal(t, "handleNEW", obj.(*v1.Revision).Spec.Handler, "revision 1 is the re-created Function's")
+
+			creates, _ := h.rt.counts()
+			for range 3 {
+				h.reconcile(t, "echo")
+			}
+			after, _ := h.rt.counts()
+			require.Equal(t, creates, after, "the next passes keep the new workers")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "echo").Status.Phase)
+		})
+	}
+}

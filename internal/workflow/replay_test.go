@@ -148,24 +148,28 @@ func TestReplayUncoveredFailureRejected(t *testing.T) {
 
 // scenario: replay-completes-pending-branches — a fail-fast-left Pending parallel branch runs on replay.
 func TestReplayCompletesPendingBranches(t *testing.T) {
-	f := newFake()
-	f.failing["b"] = true
-	e := newTestEngine(t, f, Config{})
 	ctx := context.Background()
-	// a → {b, c}: b fails fast, leaving c Pending. Replay --from b re-runs b; c (Pending, never ran) also runs.
-	sp := spec(step("a", ""), step("b", "", "a"), step("c", "", "a"))
-	src, _ := e.Execute(ctx, "default", "src", "wf", sp, json.RawMessage(`{}`), StartOptions{})
-	if stepState(src, "c").Phase != v1.StepPending {
-		t.Fatalf("precondition: c should be Pending in the failed source, got %s", stepState(src, "c").Phase)
+	runs, err := badger.New(badger.Config{InMemory: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	resetFake(f)
-	f.failing["b"] = false
-	rec, err := e.Replay(ctx, "default", "rep", "wf", v1.ReplaySeed{Run: "src", From: "b"}, nil)
+	t.Cleanup(func() { _ = runs.Close() })
+	// a → {c, d}: c fails fast while d is in flight, so d is cancelled back to Pending. Replay --from c
+	// re-runs c; d (Pending, it never finished) also runs.
+	sp := spec(step("a", ""), step("c", "", "a"), step("d", "", "a"))
+	first, _ := New(Deps{Runs: runs, Dispatch: &failWhileSiblingRuns{fakeDispatcher: newFake(), dIn: make(chan struct{})}})
+	src, _ := first.Execute(ctx, "default", "src", "wf", sp, json.RawMessage(`{}`), StartOptions{})
+	if stepState(src, "d").Phase != v1.StepPending {
+		t.Fatalf("precondition: d should be Pending in the failed source, got %s", stepState(src, "d").Phase)
+	}
+	f := newFake()
+	e, _ := New(Deps{Runs: runs, Dispatch: f})
+	rec, err := e.Replay(ctx, "default", "rep", "wf", v1.ReplaySeed{Run: "src", From: "c"}, nil)
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("replay should complete: %v %s", err, rec.Phase)
 	}
-	if f.calls["b"] != 1 || f.calls["c"] != 1 {
-		t.Fatalf("both b (re-run) and c (pending branch) must run, got b=%d c=%d", f.calls["b"], f.calls["c"])
+	if f.calls["c"] != 1 || f.calls["d"] != 1 {
+		t.Fatalf("both c (re-run) and d (pending branch) must run, got c=%d d=%d", f.calls["c"], f.calls["d"])
 	}
 	if f.calls["a"] != 0 {
 		t.Fatalf("a (copied) must not re-run, got %d", f.calls["a"])

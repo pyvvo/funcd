@@ -34,8 +34,11 @@ const maxMultipartParts = 10000
 // Deps configures the s3gateway server (ADR-0080 + ADR-0085).
 type Deps struct {
 	// BucketFor resolves (namespace, Bucket name) → the substrate bucket view. ok=false
-	// when no such Bucket exists for that namespace (⇒ NoSuchBucket / HeadBucket 404).
+	// when no such Bucket exists for that namespace (⇒ NoSuchBucket).
 	BucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+	// Buckets lists a namespace's Bucket resources; HeadBucket and ListBuckets answer
+	// from it, keeping only the Buckets the caller is bound to.
+	Buckets func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
 	// PDP is the cedar authorizer; every backend op is a PEP on it (s3::read/s3::write).
 	PDP authz.Authorizer
 	// Master is the node master secret keypairs are derived from (ADR-0085). Required.
@@ -74,6 +77,9 @@ func New(d Deps) (*Server, error) {
 	if d.BucketFor == nil {
 		return nil, fault.Invalidf(op, "BucketFor is required")
 	}
+	if d.Buckets == nil {
+		return nil, fault.Invalidf(op, "Buckets is required")
+	}
 	if d.PDP == nil {
 		return nil, fault.Invalidf(op, "PDP is required")
 	}
@@ -96,6 +102,7 @@ func New(d Deps) (*Server, error) {
 
 	backendImpl := &be{
 		bucketFor: d.BucketFor,
+		buckets:   d.Buckets,
 		pdp:       d.PDP,
 		external:  d.External,
 		maxUpload: maxUpload,

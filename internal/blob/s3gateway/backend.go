@@ -3,6 +3,7 @@ package s3gateway
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -33,6 +34,7 @@ const region = "us-east-1"
 type be struct {
 	backend.BackendUnsupported
 	bucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) // (ns, Bucket) → substrate bucket
+	buckets   func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
 	pdp       authz.Authorizer
 	external  ExternalKeys
 	maxUpload int64
@@ -59,14 +61,40 @@ func splitKey(key string) (prefix, object string) {
 // request for (action, bucket, prefix), and consults the PDP. It returns the resolved
 // (ns, bucket) substrate handle on Allow, or an S3 error on deny / missing bucket.
 func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix string) (blob.Bucket, principal, error) {
-	acct, ok := accountFromCtx(ctx)
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return nil, principal{}, err
+	}
+	ok, err := b.allowed(ctx, pr, action, bucket, prefix)
+	if err != nil {
+		return nil, principal{}, err
+	}
 	if !ok {
 		return nil, principal{}, accessDenied()
 	}
+	sub, ok := b.bucketFor(pr.namespace, bucket)
+	if !ok {
+		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
+	}
+	return sub, pr, nil
+}
+
+// caller resolves the request's principal; an unauthenticated or unknown caller is denied.
+func (b *be) caller(ctx context.Context) (principal, error) {
+	acct, ok := accountFromCtx(ctx)
+	if !ok {
+		return principal{}, accessDenied()
+	}
 	pr, err := principalFor(acct, b.external)
 	if err != nil {
-		return nil, principal{}, accessDenied()
+		return principal{}, accessDenied()
 	}
+	return pr, nil
+}
+
+// allowed asks the PDP whether pr may perform action on bucket/prefix. The error is
+// an S3 InternalError when the PDP itself fails.
+func (b *be) allowed(ctx context.Context, pr principal, action authz.Action, bucket, prefix string) (bool, error) {
 	req := authz.Request{
 		Identity: authz.Identity{Principal: &pr.ref},
 		Action:   action,
@@ -80,17 +108,12 @@ func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix 
 	dec, err := b.pdp.Authorize(ctx, req)
 	if err != nil {
 		b.log.Error("s3 PEP error", "action", action, "bucket", bucket, "prefix", prefix, "err", err)
-		return nil, principal{}, s3err.GetAPIError(s3err.ErrInternalError)
+		return false, s3err.GetAPIError(s3err.ErrInternalError)
 	}
 	if !dec.Allowed {
 		b.log.Debug("s3 PEP denied", "action", action, "bucket", bucket, "prefix", prefix)
-		return nil, principal{}, accessDenied()
 	}
-	sub, ok := b.bucketFor(pr.namespace, bucket)
-	if !ok {
-		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
-	}
-	return sub, pr, nil
+	return dec.Allowed, nil
 }
 
 // blobKey is the substrate key for an S3 (prefix, object) within a bucket: the prefix
@@ -107,6 +130,8 @@ func mapBlobErr(err error) error {
 	switch fault.KindOf(err) {
 	case fault.NotFound:
 		return s3err.GetAPIError(s3err.ErrNoSuchKey)
+	case fault.Forbidden:
+		return accessDenied()
 	case fault.Invalid:
 		return s3err.GetAPIError(s3err.ErrInvalidRequest)
 	default:
@@ -128,57 +153,84 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 	}
 	key := blobKey(prefix, object)
 
-	offset, length, ranged, rerr := parseRange(deref(in.Range))
-	if rerr != nil {
-		return nil, s3err.GetAPIError(s3err.ErrInvalidRange)
-	}
-
 	var data []byte
-	if ranged {
-		data, err = b.getRange(ctx, sub, key, offset, length)
-	} else {
-		data, err = sub.Get(ctx, key)
+	var contentRange *string
+	if rng := deref(in.Range); rng != "" {
+		data, contentRange, err = getRange(ctx, sub, key, rng)
+	} else if data, err = sub.Get(ctx, key); err != nil {
+		err = mapBlobErr(err)
 	}
-	if err != nil {
-		return nil, mapBlobErr(err)
-	}
-
-	out := &awss3.GetObjectOutput{
-		Body:          io.NopCloser(bytes.NewReader(data)),
-		ContentLength: ptr(int64(len(data))),
-		LastModified:  ptr(time.Now().UTC()),
-		AcceptRanges:  ptr("bytes"),
-		ETag:          ptr(etag(data)),
-	}
-	if ranged {
-		// total length is needed for a correct Content-Range; re-derive from a Head-less
-		// full read only when necessary is avoided — report the served slice bounds.
-		end := offset + int64(len(data)) - 1
-		out.ContentRange = ptr("bytes " + strconv.FormatInt(offset, 10) + "-" + strconv.FormatInt(end, 10) + "/*")
-	}
-	return out, nil
-}
-
-// getRange uses the optional blob.RangeReader capability when the driver implements
-// it, else falls back to a full Get + slice (ADR-0080 rangereader-fallback).
-func (b *be) getRange(ctx context.Context, sub blob.Bucket, key string, offset, length int64) ([]byte, error) {
-	if rr, ok := sub.(blob.RangeReader); ok {
-		return rr.GetRange(ctx, key, offset, length)
-	}
-	full, err := sub.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if offset >= int64(len(full)) {
-		return nil, nil
-	}
-	if length < 0 || offset+length > int64(len(full)) {
-		return full[offset:], nil
-	}
-	return full[offset : offset+length], nil
+
+	return &awss3.GetObjectOutput{
+		Body:          io.NopCloser(bytes.NewReader(data)),
+		ContentLength: ptr(int64(len(data))),
+		ContentRange:  contentRange,
+		LastModified:  ptr(time.Now().UTC()),
+		AcceptRanges:  ptr("bytes"),
+		ETag:          ptr(etag(data)),
+	}, nil
 }
 
-// HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe.
+// getRange serves a Range header the way S3 does (RFC 9110 §14): the object size bounds
+// the range, a range starting at or past the end is a 416, and Content-Range carries the
+// complete length. It reads only the range through the optional blob.RangeReader when the
+// driver has one, else a full Get + slice (ADR-0080 rangereader-fallback). Errors are S3 errors.
+func getRange(ctx context.Context, sub blob.Bucket, key, header string) ([]byte, *string, error) {
+	rr, ranger := sub.(blob.RangeReader)
+	var full []byte
+	var size int64
+	var err error
+	if ranger {
+		size, err = objectSize(ctx, sub, key)
+	} else if full, err = sub.Get(ctx, key); err == nil {
+		size = int64(len(full))
+	}
+	if err != nil {
+		return nil, nil, mapBlobErr(err)
+	}
+
+	offset, length, valid, err := backend.ParseObjectRange(size, header)
+	if err != nil {
+		return nil, nil, err
+	}
+	var data []byte
+	switch {
+	case !ranger:
+		data = full[offset : offset+length]
+	case valid:
+		data, err = rr.GetRange(ctx, key, offset, length)
+	default:
+		data, err = sub.Get(ctx, key)
+	}
+	if err != nil {
+		return nil, nil, mapBlobErr(err)
+	}
+	if !valid {
+		return data, nil, nil
+	}
+	return data, ptr(fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, size)), nil
+}
+
+// objectSize reads an object's size through the port's List, since blob.Bucket has no Stat.
+func objectSize(ctx context.Context, sub blob.Bucket, key string) (int64, error) {
+	items, err := sub.List(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if it.Key == key {
+			return it.Size, nil
+		}
+	}
+	return 0, fault.NotFoundf("s3gateway.GetObject", "%q not found", key)
+}
+
+// HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe answered from the object's
+// attributes, never its body. It reports no ETag, like the listing: the MD5 needs the whole body, and a HEAD
+// ETag that differs from a ranged GET's fails DuckDB's per-read ETag check.
 func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.HeadObjectOutput, error) {
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
@@ -186,14 +238,16 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	if err != nil {
 		return nil, err
 	}
-	data, gerr := sub.Get(ctx, blobKey(prefix, object))
-	if gerr != nil {
-		return nil, mapBlobErr(gerr)
+	attrs, found, serr := blob.Stat(ctx, sub, blobKey(prefix, object))
+	if serr != nil {
+		return nil, mapBlobErr(serr)
+	}
+	if !found {
+		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
 	}
 	return &awss3.HeadObjectOutput{
-		ContentLength: ptr(int64(len(data))),
-		LastModified:  ptr(time.Now().UTC()),
-		ETag:          ptr(etag(data)),
+		ContentLength: ptr(attrs.Size),
+		LastModified:  ptr(attrs.ModTime.UTC()),
 	}, nil
 }
 
@@ -222,6 +276,61 @@ func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix
 	return out, nil
 }
 
+// listPage is one S3 listing page: the keys and common prefixes after a marker, at most
+// limit entries in all, with the marker that resumes the listing when truncated.
+type listPage struct {
+	contents  []s3response.Object
+	prefixes  []awstypes.CommonPrefix
+	truncated bool
+	next      string
+}
+
+// paginate applies the S3 listing parameters to objs, which blob.List returns sorted by
+// key (ADR-0007), so the keys sharing a common prefix are adjacent.
+func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit int32) listPage {
+	var p listPage
+	if limit <= 0 {
+		return p
+	}
+	var last string
+	for _, o := range objs {
+		key := deref(o.Key)
+		if key <= marker {
+			continue
+		}
+		cp := ""
+		if delimiter != "" {
+			if before, _, ok := strings.Cut(strings.TrimPrefix(key, prefix), delimiter); ok {
+				cp = prefix + before + delimiter
+				if cp <= marker || cp == last {
+					continue
+				}
+			}
+		}
+		if int32(len(p.contents)+len(p.prefixes)) == limit {
+			p.truncated = true
+			p.next = last
+			return p
+		}
+		if cp != "" {
+			p.prefixes = append(p.prefixes, awstypes.CommonPrefix{Prefix: ptr(cp)})
+			last = cp
+		} else {
+			p.contents = append(p.contents, o)
+			last = key
+		}
+	}
+	return p
+}
+
+// pageSize is the request's MaxKeys, or the S3 default of 1000 when it names none.
+func pageSize(maxKeys *int32) int32 {
+	if maxKeys == nil {
+		return 1000
+	}
+	return *maxKeys
+}
+
 // ListObjectsV2 lists objects under a bound prefix (ADR-0080 listobjects-glob). The
 // S3 Prefix's leading segment selects the sub-domain; the rest filters within it.
 func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s3response.ListObjectsV2Result, error) {
@@ -230,29 +339,43 @@ func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s
 	if err != nil {
 		return s3response.ListObjectsV2Result{}, err
 	}
+	limit := pageSize(in.MaxKeys)
+	marker := max(deref(in.StartAfter), deref(in.ContinuationToken))
+	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), marker, limit)
 	return s3response.ListObjectsV2Result{
-		Name:        ptr(bucket),
-		Prefix:      in.Prefix,
-		Contents:    objs,
-		KeyCount:    ptr(int32(len(objs))),
-		MaxKeys:     ptr(int32(len(objs))),
-		IsTruncated: ptr(false),
+		Name:                  ptr(bucket),
+		Prefix:                in.Prefix,
+		StartAfter:            backend.GetPtrFromString(deref(in.StartAfter)),
+		ContinuationToken:     backend.GetPtrFromString(deref(in.ContinuationToken)),
+		NextContinuationToken: backend.GetPtrFromString(p.next),
+		Delimiter:             backend.GetPtrFromString(deref(in.Delimiter)),
+		Contents:              p.contents,
+		CommonPrefixes:        p.prefixes,
+		KeyCount:              ptr(int32(len(p.contents) + len(p.prefixes))),
+		MaxKeys:               ptr(limit),
+		IsTruncated:           ptr(p.truncated),
 	}, nil
 }
 
-// ListObjects is the V1 listing (ADR-0080), same semantics as V2.
+// ListObjects is the V1 listing (ADR-0080), same semantics as V2 with Marker.
 func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3response.ListObjectsResult, error) {
 	bucket := deref(in.Bucket)
 	objs, err := b.listing(ctx, authz.ActionS3Read, bucket, deref(in.Prefix))
 	if err != nil {
 		return s3response.ListObjectsResult{}, err
 	}
+	limit := pageSize(in.MaxKeys)
+	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
 	return s3response.ListObjectsResult{
-		Name:        ptr(bucket),
-		Prefix:      in.Prefix,
-		Contents:    objs,
-		MaxKeys:     ptr(int32(len(objs))),
-		IsTruncated: ptr(false),
+		Name:           ptr(bucket),
+		Prefix:         in.Prefix,
+		Marker:         backend.GetPtrFromString(deref(in.Marker)),
+		NextMarker:     backend.GetPtrFromString(p.next),
+		Delimiter:      backend.GetPtrFromString(deref(in.Delimiter)),
+		Contents:       p.contents,
+		CommonPrefixes: p.prefixes,
+		MaxKeys:        ptr(limit),
+		IsTruncated:    ptr(p.truncated),
 	}, nil
 }
 
@@ -317,32 +440,83 @@ func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s
 
 // --- Buckets ---------------------------------------------------------------------
 
-// HeadBucket succeeds iff the caller is bound to (read-authorized on) a real Bucket of
-// that name in its namespace (ADR-0080). We probe read on an empty prefix path; the
-// substrate handle must resolve.
-func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.HeadBucketOutput, error) {
-	acct, ok := accountFromCtx(ctx)
-	if !ok {
-		return nil, accessDenied()
-	}
-	pr, err := principalFor(acct, b.external)
+// namespaceBuckets lists the Bucket resources of the caller's namespace.
+func (b *be) namespaceBuckets(ctx context.Context, pr principal) ([]v1.Bucket, error) {
+	all, err := b.buckets(ctx, pr.namespace)
 	if err != nil {
-		return nil, accessDenied()
+		b.log.Error("s3 list buckets", "namespace", pr.namespace, "err", err)
+		return nil, s3err.GetAPIError(s3err.ErrInternalError)
 	}
-	if _, ok := b.bucketFor(pr.namespace, deref(in.Bucket)); !ok {
-		return nil, s3err.GetAPIError(s3err.ErrNoSuchBucket)
-	}
-	return &awss3.HeadBucketOutput{}, nil
+	return all, nil
 }
 
-// ListBuckets returns the buckets the caller can resolve (ADR-0080). The substrate
-// does not enumerate Bucket resources, so this returns an empty owner-scoped result
-// (DuckDB/httpfs addresses buckets by name, not by listing them).
-func (b *be) ListBuckets(ctx context.Context, _ s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
-	if _, ok := accountFromCtx(ctx); !ok {
-		return s3response.ListAllMyBucketsResult{}, accessDenied()
+// bound reports whether pr is bound to bkt (ADR-0080): the PDP lets it s3::read at
+// least one of the Bucket's prefixes.
+func (b *be) bound(ctx context.Context, pr principal, bkt v1.Bucket) (bool, error) {
+	for _, p := range bkt.Spec.Prefixes {
+		ok, err := b.allowed(ctx, pr, authz.ActionS3Read, string(bkt.Name), p.Name)
+		if err != nil || ok {
+			return ok, err
+		}
 	}
-	return s3response.ListAllMyBucketsResult{}, nil
+	return false, nil
+}
+
+// HeadBucket succeeds iff a Bucket of that name exists in the caller's namespace and
+// the caller is bound to it (ADR-0080). Like the object PEP, any other case is 403, so
+// an unbound caller cannot tell an existing bucket from a missing one.
+func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.HeadBucketOutput, error) {
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all, err := b.namespaceBuckets(ctx, pr)
+	if err != nil {
+		return nil, err
+	}
+	for _, bkt := range all {
+		if string(bkt.Name) != deref(in.Bucket) {
+			continue
+		}
+		ok, berr := b.bound(ctx, pr, bkt)
+		if berr != nil {
+			return nil, berr
+		}
+		if ok {
+			return &awss3.HeadBucketOutput{}, nil
+		}
+	}
+	return nil, accessDenied()
+}
+
+// ListBuckets returns the Buckets the caller is bound to (ADR-0080), filtered by the
+// request prefix.
+func (b *be) ListBuckets(ctx context.Context, in s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return s3response.ListAllMyBucketsResult{}, err
+	}
+	all, err := b.namespaceBuckets(ctx, pr)
+	if err != nil {
+		return s3response.ListAllMyBucketsResult{}, err
+	}
+	res := s3response.ListAllMyBucketsResult{Prefix: in.Prefix}
+	for _, bkt := range all {
+		if !strings.HasPrefix(string(bkt.Name), in.Prefix) {
+			continue
+		}
+		ok, berr := b.bound(ctx, pr, bkt)
+		if berr != nil {
+			return s3response.ListAllMyBucketsResult{}, berr
+		}
+		if ok {
+			res.Buckets.Bucket = append(res.Buckets.Bucket, s3response.ListAllMyBucketsEntry{
+				Name:         string(bkt.Name),
+				CreationDate: bkt.CreationTime,
+			})
+		}
+	}
+	return res, nil
 }
 
 // CreateBucket is Forbidden over S3 (ADR-0080): Buckets are managed via the control plane.

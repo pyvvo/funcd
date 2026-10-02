@@ -206,6 +206,43 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
 }
 
+// Issue #184: a python that cannot import the shim (too old for its syntax, or missing
+// fastjsonschema) is not registered for the python* family; startup reports why instead. Counts are
+// relative to the wiring with no python, so the host's interpreters and node options don't change them.
+func TestIssue184_UnusablePythonNotRegistered(t *testing.T) {
+	t.Setenv("FUNCD_RUNTIME", "")
+	t.Setenv("FUNCD_NODE", "node")
+	t.Setenv("PATH", "")
+	wire := func(t *testing.T, python string) (int, string) {
+		t.Helper()
+		t.Setenv("FUNCD_PYTHON", python)
+		var logs strings.Builder
+		opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.NewTextHandler(&logs, nil)))
+		require.NoError(t, err, "an unusable python degrades, never errors")
+		t.Cleanup(func() { _ = closeExec() })
+		return len(opts), logs.String()
+	}
+	noPython, _ := wire(t, "")
+
+	for _, tc := range []struct {
+		name      string
+		script    string
+		extraOpts int
+		wantLog   string
+	}{
+		{"cannot-load", "echo \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n", 0, "fastjsonschema"},
+		{"loads", "exit 0\n", 2, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			python := filepath.Join(t.TempDir(), "python3")
+			require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\n"+tc.script), 0o700))
+			n, logs := wire(t, python)
+			require.Equal(t, noPython+tc.extraOpts, n, "the python shim and pool host are wired only when python can load the shim")
+			require.Contains(t, logs, tc.wantLog, "startup names why python functions cannot run")
+		})
+	}
+}
+
 // scenario: container-mode-selected — FUNCD_RUNTIME=containerd routes through the
 // ctrmanager (ADR-0054): with no --containerd it takes the private-managed path, which off
 // Linux reports "Linux-only" and on Linux-non-root reports "needs root" → executionOptions
@@ -349,10 +386,11 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 func TestScenarioFileSetsAddresses(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "funcdconfig.yaml")
+	dataDir := shortDataDir(t)
 	// loopback + ephemeral port ⇒ deterministic + conflict-free; memory substrate ⇒ zero-infra.
 	require.NoError(t, os.WriteFile(path, []byte(
 		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
-			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+			"storage:\n  mode: memory\n  dataDir: \""+dataDir+"\"\n"), 0o600))
 
 	loc, err := config.Locate(path)
 	require.NoError(t, err)
@@ -386,7 +424,7 @@ func TestIssue192_StartupLinesUseConfiguredLogger(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = busy.Close() })
-	dir := t.TempDir()
+	dir := shortDataDir(t)
 	path := filepath.Join(dir, "funcdconfig.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(
 		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \""+busy.Addr().String()+"\"\n"+
@@ -524,4 +562,14 @@ func TestExampleConfigResolves(t *testing.T) {
 	require.Equal(t, "memory", cfg.Storage.Mode) // file value (no env tier set) ⇒ deterministic
 	require.Equal(t, "127.0.0.1:8080", cfg.Server.ListenAddr)
 	require.Equal(t, "text", cfg.Log.Format)
+}
+
+// shortDataDir is a data dir for an assembled platform. Not t.TempDir(): on macOS its path overruns the Unix socket
+// path limit for <dataDir>/invoke, which startup rejects (issue #41).
+func shortDataDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

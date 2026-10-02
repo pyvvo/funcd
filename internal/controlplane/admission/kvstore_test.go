@@ -2,6 +2,7 @@ package admission_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -120,4 +121,41 @@ func TestScenarioTableRemovalProtected(t *testing.T) {
 	adm2 := admission.NewKVStoreDeletionProtectionAdmission(rUnbound, fakeProber{has: false})
 	_, err = adm2.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: newKS})
 	require.NoError(t, err, "removing an unbound table is allowed")
+}
+
+// keyProber reports data under a prefix from a fixed key set (the live KV data).
+type keyProber []string
+
+func (p keyProber) HasAny(_ context.Context, prefix string) (bool, error) {
+	for _, k := range p {
+		if strings.HasPrefix(k, prefix) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Issue 150: a table removed and re-added under the same name before the KVStore reconciler reclaims it
+// must not inherit the removed table's data. The re-add is rejected (Conflict) while that data remains;
+// once it is reclaimed the re-add is admitted and the table starts empty.
+func TestIssue150_ReaddedTableDoesNotKeepRemovedData(t *testing.T) {
+	ctx := context.Background()
+	gvk := v1.KindKVStore.GVK()
+	removed := mkStore("s", v1.KVTable{Name: "keep", Owner: "a"})
+	readded := mkStore("s", v1.KVTable{Name: "keep", Owner: "a"}, v1.KVTable{Name: "t", Owner: "b"})
+	update := admission.Request{Operation: admission.Update, GVK: gvk, Old: removed, Object: readded}
+
+	unreclaimed := keyProber{"default/s/keep/k", "default/s/t/secret"}
+	_, err := admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, unreclaimed).Admit(ctx, update)
+	require.Equal(t, fault.Conflict, fault.KindOf(err),
+		"re-adding table t while the removed table's data is not reclaimed ⇒ Conflict, got %v", err)
+
+	reclaimed := keyProber{"default/s/keep/k", "default/s/tt/x"}
+	_, err = admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, reclaimed).Admit(ctx, update)
+	require.NoError(t, err, "re-adding table t after its data is reclaimed is allowed")
+
+	ownerChange := admission.Request{Operation: admission.Update, GVK: gvk, Old: readded,
+		Object: mkStore("s", v1.KVTable{Name: "keep", Owner: "b"}, v1.KVTable{Name: "t", Owner: "b"})}
+	_, err = admission.NewKVStoreDeletionProtectionAdmission(kvReader{}, unreclaimed).Admit(ctx, ownerChange)
+	require.NoError(t, err, "an in-place owner change keeps the table's data")
 }
