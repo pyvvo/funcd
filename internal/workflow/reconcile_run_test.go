@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -515,5 +516,35 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 				t.Fatalf("run record = %v (err %v), want Failed without the over-cap input", rec, err)
 			}
 		})
+	}
+}
+
+// Issue #182: Workflow.status.runs lists every Pending/Running/Paused run newest first and is updated on
+// every run transition (ADR-0094), including a run applied paused, which never starts.
+func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	for _, name := range []v1.ObjectName{"wf-zzz", "wf-aaa", "wf-mmm"} {
+		run := &v1.WorkflowRun{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.WorkflowRunSpec{Workflow: "wf", Paused: true},
+		}
+		if _, err := s.Create(ctx, run); err != nil {
+			t.Fatalf("create run %s: %v", name, err)
+		}
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	links := wfObj.(*v1.Workflow).Status.Runs
+	if want := []v1.ObjectName{"wf-mmm", "wf-aaa", "wf-zzz"}; links == nil || !slices.Equal(links.Active, want) {
+		t.Fatalf("status.runs = %+v, want Active %v (the paused runs, newest first)", links, want)
 	}
 }

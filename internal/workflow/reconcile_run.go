@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -113,6 +114,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		run.Status.Phase = runPaused
 		if err := r.updateRunStatus(ctx, run); err != nil {
 			return controller.Result{}, err
+		}
+		if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
+			r.log.Warn("status.runs update failed after pause", "workflow", wf.Name, "error", lerr)
 		}
 		return controller.Result{}, nil
 	}
@@ -284,8 +288,8 @@ func (r *RunReconciler) updateRunStatus(ctx context.Context, run *v1.WorkflowRun
 }
 
 // updateWorkflowLinks recomputes the parent Workflow's status.runs from the metastore:
-// active (non-terminal) run names + lifetime terminal-phase counts (bounded — only
-// active runs are enumerated).
+// active (non-terminal) run names, newest first, + lifetime terminal-phase counts (bounded —
+// only active runs are enumerated).
 func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, wf *v1.Workflow) error {
 	if wf == nil { // the Workflow is missing: there is no status.runs to keep
 		return nil
@@ -295,6 +299,7 @@ func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, wf *v1.Workflow
 		return err
 	}
 	links := &v1.WorkflowRunLinks{}
+	var active []*v1.WorkflowRun
 	for _, o := range list.Items {
 		run := o.(*v1.WorkflowRun)
 		if run.Spec.Workflow != wf.Name {
@@ -308,8 +313,12 @@ func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, wf *v1.Workflow
 		case runCancelled:
 			links.Cancelled++
 		default:
-			links.Active = append(links.Active, run.Name)
+			active = append(active, run)
 		}
+	}
+	slices.SortStableFunc(active, func(a, b *v1.WorkflowRun) int { return b.CreationTime.Compare(a.CreationTime) })
+	for _, run := range active {
+		links.Active = append(links.Active, run.Name)
 	}
 	wf.Status.Runs = links
 	if _, err := r.store.Update(ctx, wf); err != nil {
