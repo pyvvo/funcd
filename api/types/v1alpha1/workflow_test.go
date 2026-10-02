@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -120,6 +121,28 @@ func TestWorkflowOnFailureAndOwnedStore(t *testing.T) {
 	})
 	if err := w2.Validate(); err == nil {
 		t.Fatal("owned-store owner naming a non-step must be rejected")
+	}
+}
+
+// Issue #179: the engine dispatches the onFailure handler to a Function, so the handler must be a
+// function step (ADR-0096: image or ref). A builtin or workflow: handler has no Function to receive it.
+func TestIssue179_OnFailureHandlerMustBeFunctionStep(t *testing.T) {
+	handlers := map[string]WorkflowStep{
+		"builtin pass": {Name: "notify", Builtin: &BuiltinStep{Pass: "${{ input }}"}},
+		"builtin wait": {Name: "notify", Builtin: &BuiltinStep{Wait: "1s"}},
+		"workflow":     {Name: "notify", Workflow: &WorkflowRef{Ref: "child"}},
+	}
+	for name, h := range handlers {
+		err := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{imgStep("boom"), h}, OnFailure: "notify"}).Validate()
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), `"notify"`) {
+			t.Errorf("%s handler: Validate = %v, want Invalid naming the handler", name, err)
+		}
+	}
+	for name, fn := range map[string]*FunctionStep{"image": {Image: "oci:notify"}, "ref": {Ref: "pager"}} {
+		spec := WorkflowSpec{Steps: []WorkflowStep{imgStep("boom"), {Name: "notify", Function: fn}}, OnFailure: "notify"}
+		if err := newWorkflow(spec).Validate(); err != nil {
+			t.Errorf("function %s handler rejected: %v", name, err)
+		}
 	}
 }
 

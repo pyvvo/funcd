@@ -34,8 +34,8 @@ type WorkflowSpec struct {
 	Contract *WorkflowContract `json:"contract,omitempty"`
 	// Timeout is the wall-clock bound on a whole run (paused time excluded); 0 ⇒ none.
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"604800000000000"`
-	// OnFailure names a handler step (defined in Steps, excluded from the DAG) invoked
-	// once when the run ends Failed. Empty ⇒ no handler.
+	// OnFailure names a handler function step (defined in Steps, excluded from the DAG)
+	// invoked once when the run ends Failed. Empty ⇒ no handler.
 	OnFailure ObjectName `json:"onFailure,omitempty"`
 	// Pooling configures how the workflow's materialized step Functions are pooled and
 	// kept warm (ADR-0046 worker pooling + ADR-0016 scaling). Empty ⇒ the default: all
@@ -400,8 +400,8 @@ func (w *Workflow) validateAcyclic(op string) error {
 	return nil
 }
 
-// validateOnFailure checks the handler names a real step outside the DAG (no
-// dependsOn/when, and no step depends on it).
+// validateOnFailure checks the handler names a real function step (ADR-0096: the engine dispatches it)
+// outside the DAG (no dependsOn/when, and no step depends on it).
 func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error {
 	if w.Spec.OnFailure == "" {
 		return nil
@@ -412,6 +412,9 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 	for i := range w.Spec.Steps {
 		s := &w.Spec.Steps[i]
 		if s.Name == w.Spec.OnFailure {
+			if s.Function == nil {
+				return fault.Invalidf(op, "onFailure handler %q must be a function step (image or ref)", s.Name)
+			}
 			if len(s.DependsOn) != 0 || s.When != nil {
 				return fault.Invalidf(op, "onFailure handler %q must have no dependsOn and no when", s.Name)
 			}
