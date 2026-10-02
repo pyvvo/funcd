@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4](https://github.com/pyvvo/funcd/compare/v0.1.3...v0.1.4) (2026-10-02)
+
+
+### Bug Fixes
+
+* **controlplane:** keep the stored status when a resource is applied ([#16](https://github.com/pyvvo/funcd/issues/16)) ([bc2ce8e](https://github.com/pyvvo/funcd/commit/bc2ce8e86821ac4dca1f22d9991ef3bb89a2c1e8))
+* **function:** switch a redeployed Function to its new revision (ADR-0143) ([#21](https://github.com/pyvvo/funcd/issues/21)) ([1248f8f](https://github.com/pyvvo/funcd/commit/1248f8fad7d8dfaa03858d796cb4e54e292e2ea6))
+
 ## [0.1.3](https://github.com/pyvvo/funcd/compare/v0.1.2...v0.1.3) (2026-09-30)
 
 
