@@ -37,8 +37,10 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -46,6 +48,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -424,7 +427,7 @@ func resolveWorkflowPlan(op, path string, wf *v1.Workflow) ([]plannedFunc, error
 		name := sanitizeName(stem)
 		if !seen[name] {
 			srcDir, entry, isolate := manifestEntry(m, dir, stemEntry(stem, m.Runtime), true)
-			pfs = append(pfs, plannedFunc{m: m, name: name, srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir})
+			pfs = append(pfs, plannedFunc{m: m, name: name, srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: manifestPath})
 			seen[name] = true
 		}
 		// Rewrite the step to dispatch to the from-source Function (ADR-0125): drop any OCI image, target
@@ -510,6 +513,12 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	if rerr != nil {
 		return nil, rerr
 	}
+	plan, perr := resolvePersistPlan(cfg, pfs[0].m)
+	if perr != nil {
+		return nil, perr
+	}
+	// The durable state dirs change while the session runs, so the hot-reload watcher never walks them.
+	stateDirs := []string{plan.storeDir, plan.kvDir, plan.blobDir, plan.catalogDir}
 
 	inst := &devInstance{runErr: make(chan error, 1)}
 	for _, pf := range pfs {
@@ -534,15 +543,22 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		if cerr != nil {
 			return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", pf.name)
 		}
-		imagePath, digest, cleanup, berr := prepareBundle(op, pf, contractBlob)
+		// Fingerprint before the bundle is read, so an edit racing the boot still triggers a reload.
+		h := &devHandler{pf: pf}
+		fp, ferr := h.fingerprint(stateDirs)
+		imagePath, cleanup, berr := prepareBundle(op, pf, contractBlob)
 		if berr != nil {
 			return nil, berr
 		}
 		inst.cleanup = append(inst.cleanup, cleanup)
+		if ferr != nil {
+			return nil, fault.Wrapf(ferr, fault.Internal, op, "fingerprint the sources of %s", pf.name)
+		}
+		h.bundle, h.seen = imagePath, fp
 		fn := synthesizeFunction(pf, imagePath)
-		fn.Spec.ImageDigest = digest
+		fn.Spec.ImageDigest = fp
 		fnObjs = append(fnObjs, fn)
-		handlers = append(handlers, &devHandler{src: filepath.Join(pf.srcDir, pf.entry), bundle: imagePath, isolate: pf.isolate, fn: fn})
+		handlers = append(handlers, h)
 	}
 	// Admission enforces link-target existence, so apply a link's target BEFORE the caller that binds it
 	// (a topological order over the fn-to-fn link graph within this function set).
@@ -553,7 +569,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	var devBlock sdk.Dev
 	var baseDir string
 	if len(pfs) > 0 {
-		devBlock, baseDir = pfs[0].m.Dev, pfs[0].manifestDir
+		devBlock, baseDir = pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
 	}
 	shimOpts, shimCleanup, sherr := devShimOptions(op, devBlock, baseDir)
 	if sherr != nil {
@@ -586,7 +602,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		// metastore) so a dev restart reopens it; ephemeral otherwise. resolvePersistPlan is pure, so the
 		// second call in buildPersistDrivers is harmless.
 		var catOpts []devengine.Option
-		if plan, perr := resolvePersistPlan(cfg, pfs[0].m); perr == nil && plan.catalogDir != "" {
+		if plan.catalogDir != "" {
 			catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
 		}
 		catEngine := devengine.New(slog.Default(), catOpts...)
@@ -697,28 +713,68 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		}
 	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, client, handlers, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, stateDirs, inst.watchDone)
 	return inst, nil
 }
 
-// devHandler is one from-source function's hot-reload state (ADR-0125 Decision 2): the handler file the
-// author edits, the bundle file its worker runs (src itself in place, a private copy when isolated), and
-// the Function as last applied.
+// devHandler is one from-source function's hot-reload state (ADR-0125 boot sequence, "watch files, re-apply on
+// change"): its plan (the manifest is re-read on an edit), the bundle file its worker runs (the entry itself in
+// place, a private copy when isolated), and the fingerprint of the files last acted on.
 type devHandler struct {
-	src, bundle string
-	isolate     bool
-	fn          *v1.Function
+	pf     plannedFunc
+	bundle string
+	seen   string
 }
 
-// sourceDigest is a handler's content digest. The dev Function carries it as spec.imageDigest, so an edit
-// changes the spec and the reconciler rolls out a new revision whose worker loads the edited code, then
-// drains the old one (ADR-0143) — a long-lived worker never re-imports its module.
-func sourceDigest(data []byte) string {
-	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+// fingerprint digests the size and mtime of every file whose edit reloads the function: the manifest, the handler
+// entry and, in place, every file under the bundle root except dot-entries (the delivered contract, .git, .venv),
+// node_modules, __pycache__ and the durable state dirs. The Function carries it as spec.imageDigest, so an edit
+// rolls out a new revision whose worker loads the edited code, then drains the old one (ADR-0143) — a long-lived
+// worker never re-imports a module. A missing manifest or entry (an editor's save swaps the file) is an error,
+// retried on the next poll.
+func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
+	sum := sha256.New()
+	add := func(p string, fi fs.FileInfo) {
+		_, _ = fmt.Fprintf(sum, "%s\x00%d\x00%d\n", p, fi.Size(), fi.ModTime().UnixNano())
+	}
+	for _, p := range []string{h.pf.manifestPath, filepath.Join(h.pf.srcDir, h.pf.entry)} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return "", err
+		}
+		add(p, fi)
+	}
+	if !h.pf.isolate {
+		root, err := filepath.Abs(h.pf.srcDir)
+		if err != nil {
+			return "", err
+		}
+		err = filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
+			if werr != nil {
+				return nil //nolint:nilerr // an entry removed mid-walk changes the fingerprint on the next poll
+			}
+			name := d.Name()
+			ignored := p != root && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "__pycache__")
+			if ignored || d.IsDir() && slices.Contains(stateDirs, p) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if fi, ierr := d.Info(); ierr == nil && fi.Mode().IsRegular() {
+				add(p, fi)
+			}
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("sha256:%x", sum.Sum(nil)), nil
 }
 
-// watchHandlers polls every handler for an edit until ctx is done (ADR-0125 Decision 2, hot-reload on change).
-func watchHandlers(ctx context.Context, c *sdk.Client, hs []*devHandler, done chan<- struct{}) {
+// watchHandlers polls every function's files for an edit until ctx is done (ADR-0125, hot-reload on change).
+func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -727,34 +783,80 @@ func watchHandlers(ctx context.Context, c *sdk.Client, hs []*devHandler, done ch
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, h := range hs {
-				if err := h.reload(ctx, c); err != nil && ctx.Err() == nil {
-					slog.Default().Warn("hot-reload failed", "function", h.fn.Name, "err", err)
-				}
+			if err := reloadChanged(ctx, op, c, hs, stateDirs); err != nil && ctx.Err() == nil {
+				slog.Default().Warn("hot-reload failed", "err", err)
 			}
 		}
 	}
 }
 
-// reload re-delivers an edited handler and re-applies its Function with the new source digest. An
-// unreadable source (an editor's save swaps the file) counts as unchanged and is retried on the next poll.
-func (h *devHandler) reload(ctx context.Context, c *sdk.Client) error {
-	data, rerr := os.ReadFile(h.src)
-	if rerr != nil || sourceDigest(data) == h.fn.Spec.ImageDigest {
-		return nil
+// reloadChanged re-applies every function whose files changed since the last poll, as bootDev applied them: it
+// re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
+// across functions), then re-delivers each edited bundle and contract and re-applies its Function. A failed
+// reload is reported once and retried on the next edit; an apply that lost a race with a concurrent status
+// write (Conflict) is retried on the next poll.
+func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string) error {
+	var changed []*devHandler
+	var errs []error
+	for _, h := range hs {
+		fp, ferr := h.fingerprint(stateDirs)
+		if ferr != nil || fp == h.seen {
+			continue
+		}
+		h.seen = fp
+		m, lerr := loadManifestAt(op, h.pf.manifestPath)
+		if lerr != nil {
+			errs = append(errs, fault.Wrapf(lerr, fault.KindOf(lerr), op, "reload %s", h.pf.name))
+			continue
+		}
+		if m.Main != h.pf.m.Main || m.Dev.Backends != h.pf.m.Dev.Backends || m.Dev.Node != h.pf.m.Dev.Node || m.Dev.Python != h.pf.m.Dev.Python {
+			slog.Default().Warn("restart funcdctl dev to apply a changed main, dev.backends, dev.node or dev.python", "function", h.pf.name)
+		}
+		h.pf.m = m
+		changed = append(changed, h)
 	}
-	if h.isolate {
-		if err := os.WriteFile(h.bundle, data, 0o600); err != nil {
-			return err
+	if len(changed) == 0 {
+		return errors.Join(errs...)
+	}
+	pfs := make([]plannedFunc, 0, len(hs))
+	for _, h := range hs {
+		pfs = append(pfs, h.pf)
+	}
+	resObjs, serr := synthesizeResources(op, pfs)
+	if serr != nil {
+		return errors.Join(append(errs, serr)...)
+	}
+	for _, obj := range resObjs {
+		if _, aerr := c.Apply(ctx, obj); aerr != nil {
+			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
+			if fault.KindOf(aerr) == fault.Conflict {
+				for _, h := range changed {
+					h.seen = ""
+				}
+				return errors.Join(errs...)
+			}
 		}
 	}
-	next := *h.fn
-	next.Spec.ImageDigest = sourceDigest(data)
-	if _, err := c.Apply(ctx, &next); err != nil {
-		return err
+	for _, h := range changed {
+		contractBlob, cerr := artifact.ContractBlob(h.pf.m.Contract.Input, h.pf.m.Contract.Output)
+		if cerr != nil {
+			errs = append(errs, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", h.pf.name))
+			continue
+		}
+		if derr := deliverBundle(op, h.pf, filepath.Dir(h.bundle), contractBlob); derr != nil {
+			errs = append(errs, derr)
+			continue
+		}
+		fn := synthesizeFunction(h.pf, h.bundle)
+		fn.Spec.ImageDigest = h.seen
+		if _, aerr := c.Apply(ctx, fn); aerr != nil {
+			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Function %q", fn.Name))
+			if fault.KindOf(aerr) == fault.Conflict {
+				h.seen = ""
+			}
+		}
 	}
-	h.fn = &next
-	return nil
+	return errors.Join(errs...)
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,
@@ -949,12 +1051,12 @@ func buildPersistDrivers(op string, cfg devConfig, m *sdk.Manifest) (opts []func
 // (a single-file function, so per-function contracts never collide when several share a dir, ADR-0124);
 // !isolate ⇒ run in place in srcDir (the generic-funcdctl.yaml bundle path, Phase 1/2).
 type plannedFunc struct {
-	m           *sdk.Manifest
-	name        v1.ObjectName
-	srcDir      string // the dir holding the handler source
-	entry       string // the handler entry filename within srcDir
-	isolate     bool
-	manifestDir string // the dir holding the funcdctl.yaml (base for a dev.python/dev.node relative path)
+	m            *sdk.Manifest
+	name         v1.ObjectName
+	srcDir       string // the dir holding the handler source
+	entry        string // the handler entry filename within srcDir
+	isolate      bool
+	manifestPath string // the funcdctl.yaml (its dir is the base for a dev.python/dev.node relative path)
 }
 
 // detectWorkflow reports whether path is a Workflow CRD file (`funcdctl dev workflow.yaml`, Decision 8).
@@ -1040,7 +1142,7 @@ func resolveDirFunctions(op, dir, entryFlag, nameFlag string) ([]plannedFunc, er
 			}
 			stem := strings.TrimSuffix(filepath.Base(mp), "."+manifestFileName)
 			srcDir, entry, isolate := manifestEntry(m, dir, stemEntry(stem, m.Runtime), true)
-			pfs = append(pfs, plannedFunc{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir})
+			pfs = append(pfs, plannedFunc{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: mp})
 		}
 		return pfs, nil
 	}
@@ -1054,7 +1156,7 @@ func resolveDirFunctions(op, dir, entryFlag, nameFlag string) ([]plannedFunc, er
 		dflt = defaultEntry(m.Runtime)
 	}
 	srcDir, entry, isolate := manifestEntry(m, dir, dflt, false)
-	return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
+	return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: generic}}, nil
 }
 
 // resolveFileFunction resolves a single existing file (Decision 9): the generic funcdctl.yaml is the
@@ -1074,7 +1176,7 @@ func resolveFileFunction(op, path, entryFlag, nameFlag string) ([]plannedFunc, e
 			dflt = defaultEntry(m.Runtime)
 		}
 		srcDir, entry, isolate := manifestEntry(m, dir, dflt, false)
-		return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
+		return []plannedFunc{{m: m, name: genericFunctionName(nameFlag, dir), srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: path}}, nil
 	}
 	var stem string
 	if strings.HasSuffix(base, "."+manifestFileName) {
@@ -1103,7 +1205,7 @@ func resolveStemInDir(op, dir, stem, entryFlag string) ([]plannedFunc, error) {
 		dflt = stemEntry(stem, m.Runtime)
 	}
 	srcDir, entry, isolate := manifestEntry(m, dir, dflt, true)
-	return []plannedFunc{{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestDir: dir}}, nil
+	return []plannedFunc{{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: mp}}, nil
 }
 
 // loadManifestAt loads a funcdctl.yaml only if it exists (a stat gate so a missing file yields the
@@ -1311,44 +1413,56 @@ func synthesizeFunction(pf plannedFunc, imagePath string) *v1.Function {
 // (removed on stop unless the user already committed one — never clobbered). Isolated, the single handler
 // file is copied into a private temp bundle with its own contract (so several single-file functions in one
 // dir never collide on the shared dotfile) and a best-effort node_modules symlink lets its imports resolve.
-// digest is the sourceDigest of the handler as read here, before any worker loads it.
-func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath, digest string, cleanup func(), err error) {
+func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath string, cleanup func(), err error) {
 	src := filepath.Join(pf.srcDir, pf.entry)
-	data, rerr := os.ReadFile(src) //nolint:gosec // src is the resolved handler entry in the manifest dir
-	if rerr != nil {
-		return "", "", nil, fault.NotFoundf(op, "handler entry %q not found in %q (set --entry): %v", pf.entry, pf.srcDir, rerr)
+	if _, serr := os.Stat(src); serr != nil {
+		return "", nil, fault.NotFoundf(op, "handler entry %q not found in %q (set --entry): %v", pf.entry, pf.srcDir, serr)
 	}
-	digest = sourceDigest(data)
 	if !pf.isolate {
 		contractPath := filepath.Join(pf.srcDir, devContractFile)
 		_, existed := os.Stat(contractPath)
-		if werr := os.WriteFile(contractPath, contractBlob, 0o600); werr != nil {
-			return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
+		if derr := deliverBundle(op, pf, pf.srcDir, contractBlob); derr != nil {
+			return "", nil, derr
 		}
 		cleanup = func() {}
 		if existed != nil {
 			cleanup = func() { _ = os.Remove(contractPath) }
 		}
-		return src, digest, cleanup, nil
+		return src, cleanup, nil
 	}
 
 	tmp, terr := os.MkdirTemp("", "funcdctl-dev-fn-")
 	if terr != nil {
-		return "", "", nil, fault.Wrapf(terr, fault.Internal, op, "create bundle temp dir")
+		return "", nil, fault.Wrapf(terr, fault.Internal, op, "create bundle temp dir")
 	}
 	cleanup = func() { _ = os.RemoveAll(tmp) }
-	if werr := os.WriteFile(filepath.Join(tmp, pf.entry), data, 0o600); werr != nil {
-		cleanup()
-		return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "copy handler into bundle")
-	}
 	if nm := filepath.Join(pf.srcDir, "node_modules"); dirExists(nm) {
 		_ = os.Symlink(nm, filepath.Join(tmp, "node_modules")) // best-effort: let a single-file function's imports resolve
 	}
-	if werr := os.WriteFile(filepath.Join(tmp, devContractFile), contractBlob, 0o600); werr != nil {
+	if derr := deliverBundle(op, pf, tmp, contractBlob); derr != nil {
 		cleanup()
-		return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract into bundle")
+		return "", nil, derr
 	}
-	return filepath.Join(tmp, pf.entry), digest, cleanup, nil
+	return filepath.Join(tmp, pf.entry), cleanup, nil
+}
+
+// deliverBundle writes one function's ADR-0123 contract into its bundle dir and, for an isolated bundle, copies
+// the handler entry beside it — at boot, and again on each hot-reload.
+func deliverBundle(op string, pf plannedFunc, bundleDir string, contractBlob []byte) error {
+	if pf.isolate {
+		data, rerr := os.ReadFile(filepath.Join(pf.srcDir, pf.entry)) //nolint:gosec // the resolved handler entry in the manifest dir
+		if rerr != nil {
+			return fault.Wrapf(rerr, fault.NotFound, op, "read handler entry %q", pf.entry)
+		}
+		if werr := os.WriteFile(filepath.Join(bundleDir, pf.entry), data, 0o600); werr != nil {
+			return fault.Wrapf(werr, fault.Internal, op, "copy handler into bundle")
+		}
+	}
+	contractPath := filepath.Join(bundleDir, devContractFile)
+	if werr := os.WriteFile(contractPath, contractBlob, 0o600); werr != nil {
+		return fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
+	}
+	return nil
 }
 
 // devWorkflowContracts is the `funcdctl dev` workflow ContractResolver (ADR-0125): from-source steps have
