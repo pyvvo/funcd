@@ -274,6 +274,61 @@ func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix
 	return out, nil
 }
 
+// listPage is one S3 listing page: the keys and common prefixes after a marker, at most
+// limit entries in all, with the marker that resumes the listing when truncated.
+type listPage struct {
+	contents  []s3response.Object
+	prefixes  []awstypes.CommonPrefix
+	truncated bool
+	next      string
+}
+
+// paginate applies the S3 listing parameters to objs, which blob.List returns sorted by
+// key (ADR-0007), so the keys sharing a common prefix are adjacent.
+func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit int32) listPage {
+	var p listPage
+	if limit <= 0 {
+		return p
+	}
+	var last string
+	for _, o := range objs {
+		key := deref(o.Key)
+		if key <= marker {
+			continue
+		}
+		cp := ""
+		if delimiter != "" {
+			if before, _, ok := strings.Cut(strings.TrimPrefix(key, prefix), delimiter); ok {
+				cp = prefix + before + delimiter
+				if cp <= marker || cp == last {
+					continue
+				}
+			}
+		}
+		if int32(len(p.contents)+len(p.prefixes)) == limit {
+			p.truncated = true
+			p.next = last
+			return p
+		}
+		if cp != "" {
+			p.prefixes = append(p.prefixes, awstypes.CommonPrefix{Prefix: ptr(cp)})
+			last = cp
+		} else {
+			p.contents = append(p.contents, o)
+			last = key
+		}
+	}
+	return p
+}
+
+// pageSize is the request's MaxKeys, or the S3 default of 1000 when it names none.
+func pageSize(maxKeys *int32) int32 {
+	if maxKeys == nil {
+		return 1000
+	}
+	return *maxKeys
+}
+
 // ListObjectsV2 lists objects under a bound prefix (ADR-0080 listobjects-glob). The
 // S3 Prefix's leading segment selects the sub-domain; the rest filters within it.
 func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s3response.ListObjectsV2Result, error) {
@@ -282,29 +337,43 @@ func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s
 	if err != nil {
 		return s3response.ListObjectsV2Result{}, err
 	}
+	limit := pageSize(in.MaxKeys)
+	marker := max(deref(in.StartAfter), deref(in.ContinuationToken))
+	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), marker, limit)
 	return s3response.ListObjectsV2Result{
-		Name:        ptr(bucket),
-		Prefix:      in.Prefix,
-		Contents:    objs,
-		KeyCount:    ptr(int32(len(objs))),
-		MaxKeys:     ptr(int32(len(objs))),
-		IsTruncated: ptr(false),
+		Name:                  ptr(bucket),
+		Prefix:                in.Prefix,
+		StartAfter:            backend.GetPtrFromString(deref(in.StartAfter)),
+		ContinuationToken:     backend.GetPtrFromString(deref(in.ContinuationToken)),
+		NextContinuationToken: backend.GetPtrFromString(p.next),
+		Delimiter:             backend.GetPtrFromString(deref(in.Delimiter)),
+		Contents:              p.contents,
+		CommonPrefixes:        p.prefixes,
+		KeyCount:              ptr(int32(len(p.contents) + len(p.prefixes))),
+		MaxKeys:               ptr(limit),
+		IsTruncated:           ptr(p.truncated),
 	}, nil
 }
 
-// ListObjects is the V1 listing (ADR-0080), same semantics as V2.
+// ListObjects is the V1 listing (ADR-0080), same semantics as V2 with Marker.
 func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3response.ListObjectsResult, error) {
 	bucket := deref(in.Bucket)
 	objs, err := b.listing(ctx, authz.ActionS3Read, bucket, deref(in.Prefix))
 	if err != nil {
 		return s3response.ListObjectsResult{}, err
 	}
+	limit := pageSize(in.MaxKeys)
+	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
 	return s3response.ListObjectsResult{
-		Name:        ptr(bucket),
-		Prefix:      in.Prefix,
-		Contents:    objs,
-		MaxKeys:     ptr(int32(len(objs))),
-		IsTruncated: ptr(false),
+		Name:           ptr(bucket),
+		Prefix:         in.Prefix,
+		Marker:         backend.GetPtrFromString(deref(in.Marker)),
+		NextMarker:     backend.GetPtrFromString(p.next),
+		Delimiter:      backend.GetPtrFromString(deref(in.Delimiter)),
+		Contents:       p.contents,
+		CommonPrefixes: p.prefixes,
+		MaxKeys:        ptr(limit),
+		IsTruncated:    ptr(p.truncated),
 	}, nil
 }
 

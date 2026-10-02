@@ -117,6 +117,88 @@ func TestScenarioListObjectsGlob(t *testing.T) {
 	require.ElementsMatch(t, []string{"gold/a.parquet", "gold/b.parquet", "gold/c.parquet"}, keys)
 }
 
+// Issue 159: ListObjectsV2 and ListObjects honour MaxKeys, Delimiter, StartAfter,
+// ContinuationToken and Marker instead of returning every key under the prefix.
+func TestIssue159_ListObjectsHonoursListingParams(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	all := []string{"gold/a.parquet", "gold/b.parquet", "gold/c.parquet", "gold/d/x.parquet", "gold/e/y.parquet"}
+	for _, k := range all {
+		g.seed(t, "default", "lakehouse", k, []byte("x"))
+	}
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+	two, three := int32(2), int32(3)
+
+	var paged []string
+	var token *string
+	pages := 0
+	for {
+		out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), MaxKeys: &two, ContinuationToken: token,
+		})
+		require.NoError(t, err)
+		pages++
+		require.LessOrEqual(t, len(out.Contents), 2, "page %d exceeds MaxKeys", pages)
+		require.Equal(t, int32(2), *out.MaxKeys)
+		require.Equal(t, int32(len(out.Contents)), *out.KeyCount)
+		paged = append(paged, objectKeys(out.Contents)...)
+		if !*out.IsTruncated {
+			break
+		}
+		require.NotNil(t, out.NextContinuationToken, "a truncated page carries a continuation token")
+		require.Less(t, pages, len(all), "pagination does not terminate")
+		token = out.NextContinuationToken
+	}
+	require.Equal(t, 3, pages)
+	require.Equal(t, all, paged, "pages cover every key once, in order")
+
+	delim, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[:3], objectKeys(delim.Contents))
+	require.Equal(t, []string{"gold/d/", "gold/e/"}, commonPrefixes(delim.CommonPrefixes))
+
+	after, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), StartAfter: ptrS("gold/c.parquet"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[3:], objectKeys(after.Contents))
+
+	v1page, err := c.ListObjects(ctx, &awss3.ListObjectsInput{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"), Marker: ptrS("gold/a.parquet"), MaxKeys: &three,
+	})
+	require.NoError(t, err)
+	require.Equal(t, all[1:3], objectKeys(v1page.Contents))
+	require.Equal(t, []string{"gold/d/"}, commonPrefixes(v1page.CommonPrefixes))
+	require.True(t, *v1page.IsTruncated)
+	require.Equal(t, "gold/d/", *v1page.NextMarker)
+
+	v1rest, err := c.ListObjects(ctx, &awss3.ListObjectsInput{
+		Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"), Marker: v1page.NextMarker, MaxKeys: &three,
+	})
+	require.NoError(t, err)
+	require.Empty(t, v1rest.Contents)
+	require.Equal(t, []string{"gold/e/"}, commonPrefixes(v1rest.CommonPrefixes))
+	require.False(t, *v1rest.IsTruncated)
+}
+
+func objectKeys(objs []awstypes.Object) []string {
+	keys := make([]string, 0, len(objs))
+	for _, o := range objs {
+		keys = append(keys, *o.Key)
+	}
+	return keys
+}
+
+func commonPrefixes(cps []awstypes.CommonPrefix) []string {
+	out := make([]string, 0, len(cps))
+	for _, cp := range cps {
+		out = append(out, *cp.Prefix)
+	}
+	return out
+}
+
 // scenario: cross-namespace-rejected (ADR-0080) — a principal scoped to namespace
 // "default" requesting a bucket in namespace "other" is denied (tenancy default-deny):
 // the bucket name resolves under the CALLER's namespace, where it does not exist.
