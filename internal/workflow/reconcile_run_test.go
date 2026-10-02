@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	wbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
@@ -420,5 +422,50 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 	}
 	if f.calls["a"] != 0 {
 		t.Fatalf("the paused run dispatched a %d times, want 0", f.calls["a"])
+	}
+}
+
+// Issue #176: a replay whose source run record was swept by retention fails with ReplaySeeded=False
+// (SeedInvalid) instead of being requeued forever: a missing source never comes back (ADR-0107).
+func TestIssue176_ReplayOfSweptSourceFails(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "swept", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	start := time.Unix(1_700_000_000, 0)
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(start)})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
+		t.Helper()
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s returned %v (a requeue), want a terminal status", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun)
+	}
+	if run := reconcile("swept"); run.Status.Phase != runSucceeded {
+		t.Fatalf("setup: source phase=%q, want Succeeded", run.Status.Phase)
+	}
+	sweeper, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(start.Add(721 * time.Hour))})
+	if n, err := sweeper.SweepExpired(ctx, 720*time.Hour); err != nil || n != 1 {
+		t.Fatalf("setup: SweepExpired = %d, %v, want the source record swept", n, err)
+	}
+
+	replay := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "swept-r-1", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "swept", From: "a"}},
+	}
+	if _, err := s.Create(ctx, replay); err != nil {
+		t.Fatalf("create replay: %v", err)
+	}
+	for range 2 {
+		run := reconcile("swept-r-1")
+		c, _ := run.Status.Conditions.Get("ReplaySeeded")
+		if run.Status.Phase != runFailed || c.Status != v1.ConditionFalse || c.Reason != "SeedInvalid" || !strings.Contains(c.Message, `"swept"`) {
+			t.Fatalf("replay of a swept source: phase=%q ReplaySeeded=%+v, want Failed, ReplaySeeded=False/SeedInvalid naming \"swept\"", run.Status.Phase, c)
+		}
 	}
 }

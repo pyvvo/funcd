@@ -209,8 +209,13 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 	}
 	images := stepImages(wf) // the ADR-0098 cache: step → resolved digest-pinned image (ADR-0107)
 	if run.Spec.Replay != nil {
-		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift.
-		return r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
+		// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
+		rec, err := r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		if fault.KindOf(err) == fault.NotFound {
+			err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", run.Spec.Replay.Run)
+		}
+		return rec, err
 	}
 	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
 }
