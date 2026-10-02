@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -762,17 +763,21 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
 // replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
-// worker is replaced from s's Revision.
+// worker is replaced from s's Revision; once that Revision is deleted, s's running workers serve until the switch.
 func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, secretEnv, catalogEnv map[string]string) (verdict, error) {
-	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
-	if err != nil {
-		return verdict{}, err
-	}
 	sIdx, err := r.servingIndexes(ctx, fn, s)
 	if err != nil {
 		return verdict{}, err
 	}
-	runningS, retryS, _, err := r.convergeRevision(ctx, sfn, s, spinned, sIdx, true, false, false, secretEnv, catalogEnv)
+	var runningS int
+	var retryS time.Time
+	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		runningS, err = r.runningReplicas(ctx, fn.Namespace, fn.Name, s, sIdx)
+	case err == nil:
+		runningS, retryS, _, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, true, false, false, secretEnv, catalogEnv)
+	}
 	if err != nil {
 		return verdict{}, err
 	}
@@ -953,17 +958,26 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 	}
 
-	insts, err = r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
+	running, err := r.runningReplicas(ctx, tmpl.Namespace, tmpl.Name, rev, indexes)
 	if err != nil {
 		return 0, time.Time{}, nil, err
 	}
+	return running, retryAt, startErr, nil
+}
+
+// runningReplicas counts the running workers of revision rev among replicas `indexes`.
+func (r *Reconciler) runningReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, indexes []int) (int, error) {
+	insts, err := r.namedInstances(ctx, ns, name)
+	if err != nil {
+		return 0, err
+	}
 	running := 0
 	for _, in := range insts {
-		if in.Revision == rev && want[in.Replica] && in.State == runtime.StateRunning {
+		if in.Revision == rev && slices.Contains(indexes, in.Replica) && in.State == runtime.StateRunning {
 			running++
 		}
 	}
-	return running, retryAt, startErr, nil
+	return running, nil
 }
 
 // drain stops and removes the workers of revisions that no longer serve (ADR-0143 Decision 4.1): those of the drained
