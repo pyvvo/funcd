@@ -282,3 +282,70 @@ func TestIssue120_RunFailureReasonInStatus(t *testing.T) {
 		}
 	})
 }
+
+// Issue #122: a run of a Workflow the F65 gate holds Ready=False (a WorkflowCycle, an edge type
+// mismatch) never runs. It waits Pending with Ready=False/WorkflowNotReady, re-checked on a backoff,
+// and starts once the Workflow is Ready.
+func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWF(t, s, "loop", nil, fnStep("work", "oci:work"), subwfStep("again", "loop", "work"))
+	if wf, _ := reconcileByName(t, s, fakeContracts{}, "loop"); mismatchReason(wf) != "WorkflowCycle" {
+		t.Fatalf("setup: loop reason = %q, want WorkflowCycle", mismatchReason(wf))
+	}
+	bad := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a": {Output: obj(map[string]string{"rows": "string"}, "rows")},
+		"oci:b": {Input: obj(map[string]string{"rows": "integer"}, "rows")},
+	}}
+	seedWF(t, s, "typed", nil, fnStep("a", "oci:a"), fnStep("b", "oci:b", "a"))
+	if wf, _ := reconcileByName(t, s, bad, "typed"); mismatchReason(wf) != "EdgeTypeMismatch" {
+		t.Fatalf("setup: typed reason = %q, want EdgeTypeMismatch", mismatchReason(wf))
+	}
+	seedRun(t, s, "loop-1", "loop", `{}`)
+	seedRun(t, s, "typed-1", "typed", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	reconcile := func(name v1.ObjectName) (controller.Result, v1.WorkflowRunStatus) {
+		t.Helper()
+		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name})
+		if err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return res, obj.(*v1.WorkflowRun).Status
+	}
+
+	for name, reason := range map[v1.ObjectName]string{"loop-1": "WorkflowCycle", "typed-1": "EdgeTypeMismatch"} {
+		res, st := reconcile(name)
+		c, _ := st.Conditions.Get(condReady)
+		if st.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotReady" || !strings.Contains(c.Message, reason) || res.RequeueAfter <= 0 {
+			t.Fatalf("%s: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotReady naming %s, and a requeue", name, st.Phase, c, res.RequeueAfter, reason)
+		}
+	}
+	if len(f.order) != 0 {
+		t.Fatalf("runs of not-Ready workflows dispatched %v, want nothing", f.order)
+	}
+
+	got, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "typed")
+	wf := got.(*v1.Workflow)
+	wf.Spec.Steps[1].Function.Image = "oci:b2"
+	if _, err := s.Update(ctx, wf); err != nil {
+		t.Fatalf("fix typed: %v", err)
+	}
+	good := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a":  bad.byImage["oci:a"],
+		"oci:b2": {Input: obj(map[string]string{"rows": "string"}, "rows")},
+	}}
+	if wf, _ := reconcileByName(t, s, good, "typed"); !ready(wf) {
+		t.Fatalf("setup: fixed typed is not Ready: %+v", wf.Status.Conditions)
+	}
+	if _, st := reconcile("typed-1"); st.Phase != runSucceeded {
+		t.Fatalf("typed-1 after its workflow became Ready: phase=%q, want Succeeded", st.Phase)
+	} else if c, _ := st.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
+		t.Fatalf("typed-1 started but still reports Ready=%+v", c)
+	}
+}
