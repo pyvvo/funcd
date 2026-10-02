@@ -50,7 +50,7 @@ func TestScenarioE2EFunclogCapturesSpans(t *testing.T) {
 
 	layout := t.TempDir()
 	ref := "oci-layout://" + layout + ":log-burst"
-	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), nil, "")
+	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), nil, "", "")
 	require.NoError(t, err)
 
 	messaging, err := nats.Open(context.Background(), nats.Options{Storage: nats.MemoryStorage})

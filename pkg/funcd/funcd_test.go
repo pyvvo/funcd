@@ -121,3 +121,21 @@ func TestScenarioRunShutdownLifecycle(t *testing.T) {
 	// The bus is closed: a Publish on the closed bus now fails.
 	require.Error(t, p.cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")))
 }
+
+// WithNodePlatform (ADR-0145) sets the platform the scheduler and the materializer share; the default is the
+// daemon's own, and a malformed one is refused.
+func TestWithNodePlatform(t *testing.T) {
+	t.Parallel()
+	p, err := New(InMemory(), WithNodePlatform(v1.PlatformLinuxAMD64))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Equal(t, v1.PlatformLinuxAMD64, p.cfg.nodePlatform)
+
+	d, err := New(InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Shutdown(context.Background()) })
+	require.Equal(t, v1.HostPlatform(), d.cfg.nodePlatform)
+
+	_, err = New(InMemory(), WithNodePlatform("linux"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}

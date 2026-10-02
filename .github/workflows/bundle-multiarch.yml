@@ -1,0 +1,75 @@
+name: Build a multi-arch function bundle (local)
+
+# LOCAL-ONLY for now (ADR-0145): run under nektos/act with `just act-bundle`. It builds the catalog-quack bundle for
+# linux/amd64 and linux/arm64 with funcd-bundle (ADR-0144), pushes each with `funcdctl push --platform` into one OCI
+# layout, combines them with `funcdctl index`, checks each platform's native files, and uploads the layout under
+# .act-artifacts/. No release workflow refers to it; moving it into the release phase is a board card.
+#
+# The job drives the Docker daemon of the host VM (`just act-bundle` passes act its socket, overriding .actrc for
+# this workflow only). funcd-bundle copies files in and out of its containers with `docker cp` and binds no host
+# path, so the job container's own files never need to be visible to that daemon.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bundle-multiarch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # the layout lives outside the workspace, which act binds from the host checkout
+      - name: Set the layout path
+        run: echo "LAYOUT=$RUNNER_TEMP/layout" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The foreign platform's hermetic install and import check run under emulation.
+      - name: Register QEMU
+        run: docker run --privileged --rm tonistiigi/binfmt --install amd64,arm64
+
+      - name: Install uv
+        run: python3 -m pip install --user --break-system-packages uv==0.11.19
+
+      - name: Build funcdctl
+        run: go build -o "$RUNNER_TEMP/funcdctl" ./cmd/funcdctl
+
+      - name: Bundle catalog-quack for linux/amd64 and linux/arm64
+        run: |
+          set -euo pipefail
+          ex="$(scripts/example-copy.sh python/catalog-quack)"
+          echo "EXAMPLE=$ex" >> "$GITHUB_ENV"
+          cd "$ex"
+          "$HOME/.local/bin/uv" run --locked --python 3.14 funcd-bundle --platform linux/amd64 --platform linux/arm64
+
+      - name: Push both platforms and index them
+        run: |
+          set -euo pipefail
+          cd "$EXAMPLE"
+          for arch in amd64 arm64; do
+            "$RUNNER_TEMP/funcdctl" push "dist/linux-$arch/catalog-quack" "oci-layout://$LAYOUT:catalog-reader-$arch" \
+              --platform "linux/$arch" --entry handler.py
+          done
+          "$RUNNER_TEMP/funcdctl" index "oci-layout://$LAYOUT:catalog-reader" \
+            "oci-layout://$LAYOUT:catalog-reader-amd64" "oci-layout://$LAYOUT:catalog-reader-arm64" | tee "$RUNNER_TEMP/index.txt"
+
+      - name: Check each platform's native files
+        run: |
+          set -euo pipefail
+          ref="$(cat "$RUNNER_TEMP/index.txt")"
+          "$RUNNER_TEMP/funcdctl" inspect "$ref"
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch="${pair%%:*}"; cpu="${pair##*:}"
+            dir="$RUNNER_TEMP/pull-$arch"
+            "$RUNNER_TEMP/funcdctl" pull "${ref%@*}" "${ref##*@}" "$dir" --platform "linux/$arch"
+            ls "$dir/_duckdb.cpython-314-$cpu-linux-gnu.so"
+            ls -d "$dir"/duckdb-ext/*/"linux_$arch"
+          done
+
+      - name: Upload the layout
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-reader-multiarch
+          path: ${{ runner.temp }}/layout

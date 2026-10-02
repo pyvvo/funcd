@@ -19,6 +19,9 @@
   vendored closure must stream via `target.Fetch` + a verifying reader); `build.py` `PYTHONPATH` export scoping; the
   example's `pydantic` build-dep. The normal rule (correct a frozen ADR via a superseding ADR) is preserved for
   every other ADR.
+- **Superseded in part by**: [ADR-0144](0144-bundling-in-the-language-toolchains.md) (2026-10-02) — Decision 4
+  and the host-pip workaround: `funcd-bundle` installs the locked closure with uv for the target platform and
+  import-checks it; the in-container build is its `hermetic` option.
 - **Deciders**: green-0-rabbit
 - **Tags**: artifact, bundle, python, native-deps, runtime, contract, lakehouse
 - **Realizes**: [FEAT-0003/F59](../feat/0003-feat-data-platform.md)

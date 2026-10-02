@@ -294,6 +294,19 @@ func WithArtifactStore(dir string) Option {
 	return func(c *config) error { c.artifactDir = dir; return nil }
 }
 
+// WithNodePlatform sets the platform this node runs (ADR-0145): the scheduler refuses an artifact built for
+// other platforms, and the materializer pulls an image index's manifest for this one. Default: the daemon's
+// own GOOS/GOARCH (v1.HostPlatform), which is right whenever funcd runs on the node it schedules.
+func WithNodePlatform(p v1.OCIPlatform) Option {
+	return func(c *config) error {
+		if err := p.Validate(); err != nil {
+			return fault.Wrapf(err, fault.Invalid, "funcd.WithNodePlatform", "node platform")
+		}
+		c.nodePlatform = p
+		return nil
+	}
+}
+
 // WithInvokeSocketDir sets the directory for the per-function worker-node local API sockets
 // (ADR-0064, fn-to-fn invoke). cmd/funcd sets it to <dataDir>/invoke from config; unset
 // (InMemory()/tests) ⇒ a temp dir.

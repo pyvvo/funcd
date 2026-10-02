@@ -39,18 +39,18 @@ func TestScenarioMaterializerSatisfiesADR0030SeamNode(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle(_, e) { return { echoed: e }; }\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "")
+	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
 	st := store.New(memory.New())
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	sch, err := singlenode.New("local")
+	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
 	r, err := function.NewReconciler(function.Deps{
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
-		Materializer: artifact.NewOrasMaterializer(t.TempDir()), // the oras driver, not the file stand-in
+		Materializer: artifact.NewOrasMaterializer(t.TempDir(), ""),
 		ShimCommand:  []string{node, shim},
 	})
 	require.NoError(t, err)

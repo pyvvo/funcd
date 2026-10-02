@@ -16,6 +16,8 @@
 - **Superseded in part by**: [ADR-0045](0045-rename-sandbox-to-worker.md) (2026-06-16) — **naming only**:
   `Placement.Worker` → `Placement.WorkerNode` (the node a function is placed on). The port/driver design is unchanged;
   "worker"/"Worker" in this frozen text ≡ "worker node"/"WorkerNode".
+- **Superseded in part by**: [ADR-0145](0145-multi-arch-function-bundles-and-arch-aware-placement.md) (2026-10-02) —
+  Decision 2's "never fails to schedule": a driver refuses a request whose artifact platforms exclude its node.
 - **Deciders**: green-0-rabbit
 - **Tags**: scheduler, placement, control-plane, port, single-node, multi-node-seam
 - **Realizes**: [FEAT-0000/F09](../feat/0000-feat-v1.md) (scheduler — trivial single-node placement behind a pluggable interface)

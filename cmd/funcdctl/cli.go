@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -47,7 +48,7 @@ func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
 		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.eventingCmd(), // control-plane verbs (need the SDK client)
-		a.pushCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + funcdctl.yaml type codegen (ADR-0122)
+		a.pushCmd(), a.indexCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + funcdctl.yaml type codegen (ADR-0122)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
 		a.devCmd(),   // ADR-0125: run a function locally from source (real under -tags dev; a rebuild-hint stub otherwise)
 	)
@@ -191,6 +192,7 @@ func (a *cli) pushCmd() *cobra.Command {
 	var schemaPath string
 	var entry string
 	var runtime string
+	var platform string
 	var isSite bool
 	cmd := &cobra.Command{
 		Use:   "push <path> <ref>",
@@ -200,14 +202,19 @@ func (a *cli) pushCmd() *cobra.Command {
 			path, ref := args[0], args[1]
 			// ADR-0139: a static-site bundle is its own artifact type — no contract, no runtime, no entry.
 			if isSite {
-				if schemaPath != "" || runtime != "" || cmd.Flags().Changed("entry") {
-					return fault.Invalidf("funcdctl push", "--site is mutually exclusive with --schema, --runtime and --entry (a site has no contract, runtime, or handler)")
+				if schemaPath != "" || runtime != "" || platform != "" || cmd.Flags().Changed("entry") {
+					return fault.Invalidf("funcdctl push", "--site is mutually exclusive with --schema, --runtime, --platform and --entry (a site has no contract, runtime, platform, or handler)")
 				}
 				digest, err := artifact.PushSite(cmd.Context(), ref, path)
 				if err != nil {
 					return err
 				}
 				return a.writef("%s@%s\n", ref, digest)
+			}
+			// ADR-0145: --platform records the platform the bundle was built for, so `funcdctl index` can combine
+			// per-platform pushes into one image index.
+			if platform != "" && !artifact.IsArtifactPlatform(v1.OCIPlatform(platform)) {
+				return fault.Invalidf("funcdctl push", "--platform %q is not one of %s, %s", platform, v1.PlatformLinuxAMD64, v1.PlatformLinuxARM64)
 			}
 			// ADR-0122: a colocated funcdctl.yaml is the PRIMARY contract source. When present (in the
 			// pushed bundle dir, or beside a single-file push), funcdctl gates + bakes the manifest's
@@ -217,14 +224,14 @@ func (a *cli) pushCmd() *cobra.Command {
 				return merr
 			}
 			if m != nil {
-				return a.pushFromManifest(cmd.Context(), path, ref, m, entry)
+				return a.pushFromManifest(cmd.Context(), path, ref, m, entry, v1.OCIPlatform(platform))
 			}
 			// A DIRECTORY is a multi-file bundle (ADR-0089): the mandatory {input, output} contract
 			// travels IN the bundle as __funcd_contract.json (not --schema), and PushBundle gates it
 			// (VerifyBundleContract, ADR-0090) + promotes it to the OCI contract layer. A FILE is the
 			// unchanged single-blob push whose contract comes from --schema.
 			if info, serr := os.Stat(path); serr == nil && info.IsDir() {
-				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry, runtime)
+				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry, runtime, v1.OCIPlatform(platform))
 				if err != nil {
 					return err
 				}
@@ -243,7 +250,7 @@ func (a *cli) pushCmd() *cobra.Command {
 			if berr != nil {
 				return berr
 			}
-			digest, err := artifact.Push(cmd.Context(), ref, path, blob, runtime)
+			digest, err := artifact.Push(cmd.Context(), ref, path, blob, runtime, v1.OCIPlatform(platform))
 			if err != nil {
 				return err
 			}
@@ -256,6 +263,8 @@ func (a *cli) pushCmd() *cobra.Command {
 		"handler entry file relative to the bundle root (directory push only, ADR-0089)")
 	cmd.Flags().StringVar(&runtime, "runtime", "",
 		"runtime class recorded on the manifest (dev.funcd.runtime.v1, ADR-0094) so the workflow materializer resolves a step image's runtime without pulling the bundle")
+	cmd.Flags().StringVar(&platform, "platform", "",
+		"the platform the artifact was built for (linux/amd64 or linux/arm64), recorded on the manifest so `funcdctl index` can combine per-platform pushes (ADR-0145)")
 	cmd.Flags().BoolVar(&isSite, "site", false,
 		"push <path> (a directory) as a static-site bundle for a Site (ADR-0139): one deterministic tar+gzip layer, no contract/runtime/entry")
 	return cmd
@@ -327,8 +336,25 @@ func splitRefDigest(arg string) (ref, digest string) {
 	return arg, ""
 }
 
-func (a *cli) pullCmd() *cobra.Command {
+// indexCmd combines per-platform pushes into one OCI image index (ADR-0145), printing "<ref>@<digest>".
+func (a *cli) indexCmd() *cobra.Command {
 	return &cobra.Command{
+		Use:   "index <ref> <source-ref>...",
+		Short: "Combine per-platform pushes (push --platform) into one multi-arch OCI image index (prints <ref>@<digest>)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			digest, err := artifact.PushIndex(cmd.Context(), args[0], args[1:])
+			if err != nil {
+				return err
+			}
+			return a.writef("%s@%s\n", args[0], digest)
+		},
+	}
+}
+
+func (a *cli) pullCmd() *cobra.Command {
+	var platform string
+	cmd := &cobra.Command{
 		Use:   "pull <ref> <digest> [dir]",
 		Short: "Fetch an artifact by digest into a dir (verifies the digest)",
 		Args:  cobra.RangeArgs(2, 3),
@@ -344,13 +370,21 @@ func (a *cli) pullCmd() *cobra.Command {
 				}
 				dir = tmp
 			}
-			path, err := artifact.Pull(cmd.Context(), args[0], args[1], dir)
+			node := v1.OCIPlatform(platform)
+			if verr := node.Validate(); verr != nil {
+				return fault.Wrapf(verr, fault.Invalid, "funcdctl pull", "--platform")
+			}
+			path, err := artifact.Pull(cmd.Context(), args[0], args[1], dir, node)
 			if err != nil {
 				return err
 			}
 			return a.writef("%s\n", path)
 		},
 	}
+	// function artifacts target Linux, so a pull on any host defaults to linux/<host arch>
+	cmd.Flags().StringVar(&platform, "platform", "linux/"+goruntime.GOARCH,
+		"the platform whose manifest to pull from a multi-arch index (ADR-0145)")
+	return cmd
 }
 
 func (a *cli) loginCmd() *cobra.Command {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -102,6 +103,14 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 			continue
 		}
 		if k, isPooled := r.poolKeyFor(fn); isPooled && k == key {
+			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
+			// own reconcile reports NoMatchingPlatform, and the pool serves its peers.
+			if perr := r.placeable(ctx, fn, fn.Spec.Image, fn.Spec.ImageDigest); perr != nil {
+				if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
+					continue
+				}
+				return nil, perr
+			}
 			out = append(out, fn)
 		}
 	}

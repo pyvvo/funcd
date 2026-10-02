@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
@@ -101,8 +102,9 @@ func layerByMediaType(layers []ocispec.Descriptor, mt string) (ocispec.Descripto
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
 // rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
 // contract is non-nil (ADR-0059), it adds a content-addressed contract blob layer +
-// the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact.
-func Push(ctx context.Context, ref, file string, contract []byte, runtime string) (digest string, err error) {
+// the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact. A non-empty
+// platform records PlatformAnnotation (ADR-0145); "" records none.
+func Push(ctx context.Context, ref, file string, contract []byte, runtime string, platform v1.OCIPlatform) (digest string, err error) {
 	const op = "artifact.Push"
 	data, rerr := os.ReadFile(file) //nolint:gosec // file is a user-supplied CLI argument
 	if rerr != nil {
@@ -136,6 +138,12 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 		}
 		opts.ManifestAnnotations[runtimeAnnotation] = runtime
 	}
+	if platform != "" {
+		if opts.ManifestAnnotations == nil {
+			opts.ManifestAnnotations = map[string]string{}
+		}
+		opts.ManifestAnnotations[PlatformAnnotation] = string(platform)
+	}
 	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType, opts)
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
@@ -149,8 +157,9 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 }
 
 // Pull fetches the artifact named by ref, verifies it against digest (the authority —
-// empty digest is rejected), and writes the bundle blob into dir, returning its path.
-func Pull(ctx context.Context, ref, digest, dir string) (path string, err error) {
+// empty digest is rejected), and writes the bundle blob into dir, returning its path. When digest
+// names an OCI image index (ADR-0145), the manifest for node ("" ⇒ the daemon's own platform) is used.
+func Pull(ctx context.Context, ref, digest, dir string, node v1.OCIPlatform) (path string, err error) {
 	const op = "artifact.Pull"
 	if digest == "" {
 		return "", fault.Invalidf(op, "artifact digest is required (the digest is the authority)")
@@ -160,16 +169,9 @@ func Pull(ctx context.Context, ref, digest, dir string) (path string, err error)
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
 	// Fetch the manifest BY DIGEST so a mutable tag can never swap what was deployed.
-	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, digest, oras.DefaultFetchBytesOptions)
+	_, manifest, ferr := fetchManifest(ctx, op, target, digest, digest, nodeOrHost(node))
 	if ferr != nil {
-		return "", fault.NotFoundf(op, "fetch artifact %s@%s: %v", ref, digest, ferr)
-	}
-	if manifestDesc.Digest.String() != digest {
-		return "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
-	}
-	var manifest ocispec.Manifest
-	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
-		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
+		return "", ferr
 	}
 	// A multi-file bundle (ADR-0089) is a BundleTarMediaType layer: untar it into dir (traversal-safe)
 	// and return dir/<entry>. This is selected before the single-blob layer so a bundle artifact takes
@@ -304,16 +306,10 @@ func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, er
 	if fetchRef == "" {
 		return "", fault.Invalidf(op, "inspect needs a digest or a tag (e.g. <ref>@<digest>)")
 	}
-	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	// An index is read through its first manifest: a funcd index shares one runtime (ADR-0145).
+	_, manifest, ferr := fetchManifest(ctx, op, target, fetchRef, digest, "")
 	if ferr != nil {
-		return "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
-	}
-	if digest != "" && manifestDesc.Digest.String() != digest {
-		return "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
-	}
-	var manifest ocispec.Manifest
-	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
-		return "", fault.Invalidf(op, "decode manifest: %v", jerr)
+		return "", ferr
 	}
 	rt := manifest.Annotations[runtimeAnnotation]
 	if rt == "" {
@@ -327,17 +323,11 @@ func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, er
 // contract blob ONLY; wantDigest (if non-empty) pins the manifest.
 func inspectFrom(ctx context.Context, target oras.ReadOnlyTarget, fetchRef, wantDigest string) ([]byte, string, error) {
 	const op = "artifact.Inspect"
-	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, fetchRef, oras.DefaultFetchBytesOptions)
+	// An index is read through its first manifest (one contract across platforms, ADR-0145); resolved stays
+	// the index digest, the pinned authority.
+	resolved, manifest, ferr := fetchManifest(ctx, op, target, fetchRef, wantDigest, "")
 	if ferr != nil {
-		return nil, "", fault.NotFoundf(op, "fetch artifact %s: %v", fetchRef, ferr)
-	}
-	resolved := manifestDesc.Digest.String()
-	if wantDigest != "" && resolved != wantDigest {
-		return nil, "", fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", resolved, wantDigest)
-	}
-	var manifest ocispec.Manifest
-	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
-		return nil, "", fault.Invalidf(op, "decode manifest: %v", jerr)
+		return nil, "", ferr
 	}
 	contractLayer, ok := layerByMediaType(manifest.Layers, contractMediaType)
 	if !ok {
@@ -431,12 +421,38 @@ func parseLocalRef(ref string) (dir, tag string, ok bool) {
 // Function's artifact by digest into a per-digest cache dir (immutable) and returns the
 // local path the shim reads. The local-file driver (ADR-0030) stays the no-dep test stand-in.
 type OrasMaterializer struct {
-	artifactDir string // root for the per-digest artifact cache
+	artifactDir string         // root for the per-digest artifact cache
+	node        v1.OCIPlatform // the platform this node runs: selects an index's manifest (ADR-0145)
+
+	mu        sync.Mutex
+	platforms map[string][]v1.OCIPlatform // per digest; an artifact digest is immutable
 }
 
-// NewOrasMaterializer builds the OCI-backed Materializer caching under artifactDir.
-func NewOrasMaterializer(artifactDir string) *OrasMaterializer {
-	return &OrasMaterializer{artifactDir: artifactDir}
+// NewOrasMaterializer builds the OCI-backed Materializer caching under artifactDir, for a node running
+// node ("" ⇒ the daemon's own platform).
+func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMaterializer {
+	return &OrasMaterializer{artifactDir: artifactDir, node: nodeOrHost(node), platforms: map[string][]v1.OCIPlatform{}}
+}
+
+// Platforms implements function.PlatformResolver (ADR-0145): the platforms the artifact at digest provides,
+// cached per digest.
+func (m *OrasMaterializer) Platforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error) {
+	m.mu.Lock()
+	cached, ok := m.platforms[digest]
+	m.mu.Unlock()
+	if ok && digest != "" {
+		return cached, nil
+	}
+	ps, err := Platforms(ctx, uri, digest)
+	if err != nil {
+		return nil, err
+	}
+	if digest != "" {
+		m.mu.Lock()
+		m.platforms[digest] = ps
+		m.mu.Unlock()
+	}
+	return ps, nil
 }
 
 // Materialize resolves fn.spec.image → target, pulls by fn.spec.imageDigest
@@ -451,7 +467,8 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if digest == "" {
 		return "", fault.Invalidf(op, "function %s/%s has no spec.imageDigest (the digest is the authority)", fn.Namespace, fn.Name)
 	}
-	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest))
+	// keyed by the node platform too: an index materializes a different bundle per platform (ADR-0145)
+	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest)+"-"+m.node.OS()+"-"+m.node.Arch())
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
 		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
 		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
@@ -468,7 +485,7 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 		}
 		// Only dotfiles cached (no handler) — fall through to Pull to re-materialize.
 	}
-	path, perr := Pull(ctx, ref, digest, cacheDir)
+	path, perr := Pull(ctx, ref, digest, cacheDir, m.node)
 	if perr != nil {
 		return "", fault.Wrapf(perr, fault.KindOf(perr), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
@@ -502,3 +519,5 @@ func sanitizeDigest(digest string) string {
 }
 
 var _ function.Materializer = (*OrasMaterializer)(nil) // implements the ADR-0030 seam
+
+var _ function.PlatformResolver = (*OrasMaterializer)(nil) // implements the ADR-0145 platform seam

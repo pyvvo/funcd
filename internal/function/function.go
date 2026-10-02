@@ -82,6 +82,8 @@ type Deps struct {
 	// Resolver (ADR-0035) resolves an OCI artifact ref → digest at Revision-stamp time, so
 	// the user need not pin the digest. nil → no resolution (file:// dev / legacy mode).
 	Resolver ArtifactResolver
+	// Platforms (ADR-0145) lists an artifact digest's platforms for the placement gate. nil → no gate.
+	Platforms PlatformResolver
 
 	// EndpointMode + ImageFor select container execution (ADR-0032). EndpointLoopback
 	// (default) is the process driver: ShimCommand launches the shim, loopback+portfile.
@@ -201,6 +203,7 @@ type Reconciler struct {
 	endpointMode EndpointMode
 	imageFor     func(string) string
 	resolver     ArtifactResolver // nil → no digest resolution (ADR-0035)
+	platformsOf  PlatformResolver // nil → no platform gate (ADR-0145)
 	httpClient   *http.Client
 
 	// secrets (ADR-0057) resolves a function's bound Secret names → env vars; nil → injection
@@ -305,7 +308,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
-		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver,
+		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
 		httpClient:          &http.Client{Timeout: 2 * time.Second},
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
@@ -376,6 +379,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			return controller.Result{}, derr
 		}
 		drainAfter = earliest(drainAfter, again)
+	}
+
+	// 2b. platform gate (ADR-0145): an artifact built for no platform the node runs fails here, before any
+	// worker starts, rather than as a handler that cannot load. Before pooling's assign, so pooled members are
+	// gated too; a resolver error (a registry outage) is retried, never a status.
+	if perr := r.placeable(ctx, fn, fn.Spec.Image, pinned); perr != nil {
+		if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
+			msg := placementMessage(perr)
+			return r.gateFailed(ctx, fn, gateFailure{reason: "NoMatchingPlatform", message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter)
+		}
+		return controller.Result{}, perr
 	}
 
 	// 3. shape gate (materialization): a failure blocks Ready + programs no route.
@@ -873,8 +887,12 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 			return 0, time.Time{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop exited worker")
 		}
 	}
+	platforms, err := r.artifactPlatforms(ctx, tmpl.Spec.Image, pinnedDigest)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
 	for _, i := range launch {
-		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i}); perr != nil {
+		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return 0, time.Time{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
 		spec := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
@@ -1501,4 +1519,38 @@ func (basicValidator) Validate(_ context.Context, fn *v1.Function) error {
 		return fault.Invalidf("function.shape", "function %q: spec.image is required", fn.Name)
 	}
 	return nil
+}
+
+// artifactPlatforms lists the platforms the artifact at digest provides (ADR-0145): nil when no platform resolver is
+// wired, no digest is pinned, or the artifact runs anywhere.
+func (r *Reconciler) artifactPlatforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error) {
+	if r.platformsOf == nil || digest == "" {
+		return nil, nil
+	}
+	ps, err := r.platformsOf.Platforms(ctx, uri, digest)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), "function.artifactPlatforms", "list the platforms of %s@%s", uri, digest)
+	}
+	return ps, nil
+}
+
+// placeable asks the scheduler whether fn's artifact at digest can run on a node (ADR-0145): an error matching
+// scheduler.ErrNoMatchingPlatform when none of the artifact's platforms is a node's.
+func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest string) error {
+	platforms, err := r.artifactPlatforms(ctx, uri, digest)
+	if err != nil || len(platforms) == 0 {
+		return err
+	}
+	_, err = r.scheduler.Schedule(ctx, scheduler.Request{Namespace: fn.Namespace, Name: fn.Name, Replica: 0, Platforms: platforms})
+	return err
+}
+
+// placementMessage is the scheduler's own message for a refused placement ("artifact provides [...]; node ... runs
+// ..."), without the operation prefix.
+func placementMessage(err error) string {
+	var fe *fault.Error
+	if errors.As(err, &fe) && fe.Msg != "" {
+		return fe.Msg
+	}
+	return err.Error()
 }

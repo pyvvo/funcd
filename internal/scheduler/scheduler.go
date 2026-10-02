@@ -8,6 +8,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
@@ -19,7 +20,13 @@ type Request struct {
 	Namespace v1.NamespaceName
 	Name      v1.ObjectName
 	Replica   int
+	// Platforms the artifact provides (ADR-0145); empty means any.
+	Platforms []v1.OCIPlatform
 }
+
+// ErrNoMatchingPlatform is wrapped (fault.Invalid) by Schedule when no worker node's platform is in
+// Request.Platforms (ADR-0145).
+var ErrNoMatchingPlatform = errors.New("no worker node matches the artifact's platforms")
 
 // Placement is the scheduler's decision: which worker/node runs the replica.
 type Placement struct {

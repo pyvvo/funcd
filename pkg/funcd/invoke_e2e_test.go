@@ -4,7 +4,6 @@ package funcd_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -54,33 +53,41 @@ func shimPlatformOCI(t *testing.T) (*sdk.Client, string) {
 }
 
 // tsExample returns a TypeScript example's dir in the pinned funcd-typescript module (ADR-0141). Its
-// bundles and {input, output} contracts are committed there and kept fresh by that repo's CI, so nothing
-// is built here. Read-only.
+// bundles are committed there and kept fresh by that repo's CI, so nothing is built here; each contract
+// lives in its funcdctl.yaml (ADR-0144). Read-only.
 func tsExample(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join(langmod.Dir(t, langmod.TypeScript), "examples", name)
 }
 
-// pushExampleFn pushes a built handler + its generated contract to a local OCI layout — exactly what
-// `funcdctl push <mjs> <ref> --schema <name>.schema.json` does (gates the schemas against the funcd
-// profile, then embeds them as OCI metadata, ADR-0058/0059/0090). Returns the ref + digest.
+// exampleContract reads a function's {input, output} contract from the manifest funcdctl push resolves
+// for <name>.mjs: <name>.funcdctl.yaml, else funcdctl.yaml (ADR-0122/0144), and gates both sides
+// against the funcd profile, as push does.
+func exampleContract(t *testing.T, dir, name string) (input, output []byte) {
+	t.Helper()
+	path := filepath.Join(dir, name+".funcdctl.yaml")
+	if _, err := os.Stat(path); err != nil {
+		path = filepath.Join(dir, "funcdctl.yaml")
+	}
+	m, err := sdk.LoadManifest(path)
+	require.NoError(t, err, "%s has a manifest", name)
+	input, output, err = m.ContractSides()
+	require.NoError(t, err)
+	require.NoError(t, contract.Check(input), "%s input schema is in the funcd profile", name)
+	require.NoError(t, contract.Check(output), "%s output schema is in the funcd profile", name)
+	return input, output
+}
+
+// pushExampleFn pushes a built handler + its manifest contract to a local OCI layout — exactly what
+// `funcdctl push <mjs> <ref>` does with the manifest beside the file (gates the schemas against the
+// funcd profile, then embeds them as OCI metadata, ADR-0059/0122). Returns the ref + digest.
 func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest string) {
 	t.Helper()
-	// The build emits ONE combined {input, output} contract file (the ADR-0090 --schema surface).
-	docBytes, rerr := os.ReadFile(filepath.Join(exDir, name+".schema.json"))
-	require.NoError(t, rerr)
-	var doc struct {
-		Input  json.RawMessage `json:"input"`
-		Output json.RawMessage `json:"output"`
-	}
-	require.NoError(t, json.Unmarshal(docBytes, &doc), "%s schema is a {input, output} document", name)
-	in, out := []byte(doc.Input), []byte(doc.Output)
-	require.NoError(t, contract.Check(in), "%s input schema is in the funcd profile", name)
-	require.NoError(t, contract.Check(out), "%s output schema is in the funcd profile", name)
+	in, out := exampleContract(t, exDir, name)
 	blob, err := artifact.ContractBlob(in, out)
 	require.NoError(t, err)
 	ref = "oci-layout://" + layoutDir + ":" + name
-	digest, err = artifact.Push(context.Background(), ref, filepath.Join(exDir, name+".mjs"), blob, "")
+	digest, err = artifact.Push(context.Background(), ref, filepath.Join(exDir, name+".mjs"), blob, "", "")
 	require.NoError(t, err)
 	return ref, digest
 }
