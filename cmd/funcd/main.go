@@ -307,18 +307,13 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	// Workflow engine (ADR-0094): durable run state in its own Badger instance at Workflow.DataDir
 	// (default <dataDir>/workflow; in-memory when the substrate is memory), plus the workflow.* tunables.
-	var stepTimeout, retention time.Duration
-	if cfg.Workflow.DefaultStepTimeout != "" {
-		stepTimeout, err = time.ParseDuration(cfg.Workflow.DefaultStepTimeout)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.defaultStepTimeout %q: %w", cfg.Workflow.DefaultStepTimeout, err)
-		}
+	stepTimeout, err := parseDuration("workflow.defaultStepTimeout", cfg.Workflow.DefaultStepTimeout, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
-	if cfg.Workflow.Retention != "" {
-		retention, err = time.ParseDuration(cfg.Workflow.Retention)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.retention %q: %w", cfg.Workflow.Retention, err)
-		}
+	retention, err := parseDuration("workflow.retention", cfg.Workflow.Retention, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	workflowDir := ""
 	if cfg.Storage.Mode != "memory" {
@@ -328,12 +323,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
-	var dlRetention time.Duration
-	if cfg.Eventing.Deadletter.Retention != "" {
-		dlRetention, err = time.ParseDuration(cfg.Eventing.Deadletter.Retention)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.deadletter.retention %q: %w", cfg.Eventing.Deadletter.Retention, err)
-		}
+	dlRetention, err := parseDuration("eventing.deadletter.retention", cfg.Eventing.Deadletter.Retention, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	deadletterDir := ""
 	if cfg.Storage.Mode != "memory" {
@@ -342,12 +334,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries))
 
 	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
-	var blobPoll time.Duration
-	if cfg.Eventing.BlobPollInterval != "" {
-		blobPoll, err = time.ParseDuration(cfg.Eventing.BlobPollInterval)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.blobPollInterval %q: %w", cfg.Eventing.BlobPollInterval, err)
-		}
+	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithBlobPollInterval(blobPoll))
 	// Site default index document (ADR-0139, F103).
@@ -501,14 +490,24 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 // parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
 // value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
 func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
+	return parseDuration(key, s, def, false)
+}
+
+// parseDuration is parseDurationOr that, with zeroOK, also accepts 0 for a key where 0 keeps its documented
+// meaning (none, never or the default). A negative value is always fault.Invalid.
+func parseDuration(key, s string, def time.Duration, zeroOK bool) (time.Duration, error) {
 	if s == "" {
 		return def, nil
 	}
 	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fault.Invalidf("buildKVStore", "config key %q has invalid value %q (want a positive Go duration, e.g. 30s)", key, s)
+	if err == nil && (d > 0 || d == 0 && zeroOK) {
+		return d, nil
 	}
-	return d, nil
+	want := "a positive"
+	if zeroOK {
+		want = "a non-negative"
+	}
+	return 0, fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s Go duration, e.g. 30s)", key, s, want)
 }
 
 // buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
