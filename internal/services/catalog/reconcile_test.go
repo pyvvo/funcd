@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +26,14 @@ type fakeProvider struct {
 	converged []provider.ProviderSpec
 	tornDown  []provider.ProviderRef
 	status    provider.ProviderStatus
+	err       error
 }
 
 func (f *fakeProvider) Converge(_ context.Context, spec provider.ProviderSpec) (provider.ProviderStatus, error) {
 	f.converged = append(f.converged, spec)
+	if f.err != nil {
+		return provider.ProviderStatus{}, f.err
+	}
 	return f.status, nil
 }
 
@@ -336,6 +341,57 @@ func TestScenarioCrashedCatalogEngineRestarts(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, get().Status.Phase)
 	require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
 	require.Equal(t, period, res.RequeueAfter)
+}
+
+// TestIssue104_ConvergeErrorMarksCatalogNotReady: a Ready catalog whose engine cannot be recreated (Converge fails)
+// is reported not Ready, drops the endpoint of the dead engine and retracts its edge route, while the pass still
+// fails so the controller backs off; once Converge succeeds it is Ready again on the same proxy URL.
+func TestIssue104_ConvergeErrorMarksCatalogNotReady(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	routes := newRecordingRoutes()
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Proxy = mgr
+		d.Routes = routes
+	})
+	cs := mkCatalogService("lake")
+	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+	_, err := st.Create(ctx, cs)
+	require.NoError(t, err)
+	req := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
+	get := func() *v1.CatalogService {
+		obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+		require.NoError(t, gerr)
+		return obj.(*v1.CatalogService)
+	}
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, v1.PhaseReady, get().Status.Phase)
+	proxyURL := get().Status.Endpoint
+	require.Len(t, routes.get(lakeRouteSource), 1)
+
+	prov.err = errors.New("create engine replica 0: pull image: not found")
+	_, err = r.Reconcile(ctx, req)
+	require.Error(t, err, "a failed converge still fails the pass, so the controller backs off")
+	got := get()
+	require.Equal(t, v1.PhasePending, got.Status.Phase, "an engine that cannot be recreated is not Ready")
+	cond, ok := got.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "EngineConvergeFailed", cond.Reason)
+	require.NotEqual(t, proxyURL, got.Status.Endpoint, "the endpoint of the dead engine is no longer published")
+	require.Empty(t, routes.get(lakeRouteSource), "the edge route is retracted while the engine is down")
+
+	prov.err = nil
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, v1.PhaseReady, get().Status.Phase)
+	require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
 }
 
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine

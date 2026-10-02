@@ -119,7 +119,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	st, cerr := r.prov.Converge(ctx, spec)
 	if cerr != nil {
-		return controller.Result{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "converge provider engine %s/%s", cs.Namespace, cs.Name)
+		// An engine that cannot be (re)created is not Ready: write that before failing the pass, else the last Ready
+		// status and the dead engine's endpoint outlive it (issue #104).
+		st = provider.ProviderStatus{Reason: "EngineConvergeFailed"}
 	}
 
 	// Reflect the provider status. status.Function is KEPT (ADR-0086 API shape) — repointed at the
@@ -177,6 +179,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
+	}
+	if cerr != nil {
+		return controller.Result{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "converge provider engine %s/%s", cs.Namespace, cs.Name)
 	}
 	if !st.Ready {
 		// The engine is still starting (the container is up but its Quack endpoint isn't answering the
