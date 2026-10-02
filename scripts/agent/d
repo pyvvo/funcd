@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# d — run a command in the pinned dev-shell environment without re-evaluating the flake.
+#
+#   scripts/agent/d go test ./internal/function/
+#
+# `nix develop -c <cmd>` costs ~2 s per call; this sources a cached `nix print-dev-env` (~0.02 s), regenerated
+# whenever flake.nix or flake.lock change. Same toolchain, same Go env. Meant for agents and scripts that run
+# many short commands; interactive work can keep using `nix develop`.
+set -euo pipefail
+root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+key=$(cat "$root/flake.nix" "$root/flake.lock" | shasum | cut -c1-16)
+env_file="$root/.cache/devshell-env-$key.sh"
+if [ ! -s "$env_file" ]; then
+  mkdir -p "$root/.cache"
+  (cd "$root" && nix print-dev-env >"$env_file.tmp") && mv "$env_file.tmp" "$env_file"
+fi
+orig_path=$PATH
+set +eu # the generated environment script is not written for errexit/nounset
+# shellcheck disable=SC1090
+source "$env_file" >/dev/null 2>&1
+export PATH="$PATH:$orig_path"
+exec "$@"

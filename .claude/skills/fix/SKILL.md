@@ -55,17 +55,19 @@ Write the regression test **before** touching the code:
 
 ## Step 5 — Prove it
 
-All through `nix develop -c`; keep each command's real output:
+Run Go and `just` through `scripts/agent/d <cmd>` (the pinned dev shell, cached; see `CLAUDE.md` → *Running
+subagents and workflows efficiently*); keep each command's real output, filtered to what matters:
 
 1. The regression test passes, un-skipped, under `-race` for its package.
 2. **Revert check**: build the pre-fix version of each changed non-test file as an overlay
    (`git show origin/main:<file>` into a scratch file, `go test -overlay`) and confirm the regression
    test fails again. A test that passes without the fix proves nothing.
-3. The checks: `gofmt -l`; `go build ./...` and `GOOS=linux go build ./...`; `go vet ./...` (also Linux);
-   `go tool golangci-lint run ./...` and on Linux (`LINT=$(go tool -n golangci-lint) && GOOS=linux "$LINT" run ./...`);
-   `go test -count=1 ./...`; `go test -tags e2e -count=1 ./pkg/funcd/...` when the e2e suite covers the
-   path; `just check-hygiene`; the regenerated OpenAPI spec when `api/types` changed; and the Lima lane
-   when the fix touches `internal/runtime/containerd`, `internal/network`, `e2e/` or `scripts/lanes.yaml`.
+3. The touched packages: their tests (`-race`), `go vet` and `go tool golangci-lint run` on them, and
+   `go build ./...`.
+4. The repo-wide checks, once, when the branch is ready for its PR: `scripts/agent/gate.sh` (`just ci-full`
+   with e2e, the Linux build/vet/lint, a clean tree). In a `/fix-batch` the group's integrator runs it instead.
+   Add the Lima lane when the fix touches `internal/runtime/containerd`, `internal/network`, `e2e/` or
+   `scripts/lanes.yaml`. Never run the e2e suite or `go test ./...` more than this once.
 
 ## Step 6 — Commit
 
@@ -89,8 +91,9 @@ re-review; stop and surface after 3 loops. `issue`/`adr`/`env` findings are repo
 
 ## Step 8 — PR (after a pass)
 
-Add the review report and the ledger change the gate wrote (`docs/reviews/`) to the branch, push, and
-open the PR: the title is the commit subject; the body has **Summary**, **Cause**, **Fix**, **Test** (the
+Add the review report and the ledger change the gate wrote (`docs/reviews/`) to the branch — in a
+`/fix-batch`, only the report: one ledger PR records the batch, since parallel PRs appending to the ledger
+conflict — push, and open the PR: the title is the commit subject; the body has **Summary**, **Cause**, **Fix**, **Test** (the
 regression test and the revert-check evidence), **Checks** (what ran), the review report link, and
 `Fixes #<N>`, ending with the attribution line. Then follow the session's PR tools for CI. Merge only on
 the user's go, through the merge queue: repo auto-merge is off, so `gh pr merge` fails — enqueue with
