@@ -9,6 +9,7 @@ package limit
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"math"
 	"net"
 	"net/http"
@@ -97,12 +98,16 @@ type rateLimiter struct {
 	burst   int
 	key     Key
 	maxKeys int
-	ll      *list.List               // front = most-recently-used
-	entries map[string]*list.Element // key → element holding *bucket
+	ll      *list.List                  // front = most-recently-used
+	entries map[bucketKey]*list.Element // key digest → element holding *bucket
 }
 
+// bucketKey is the SHA-256 of a bucket's key: a fixed size, so a long request path cannot grow the
+// map past MaxKeys × a constant (the limiter must not itself be a memory-DoS, ADR-0112).
+type bucketKey [sha256.Size]byte
+
 type bucket struct {
-	key string
+	key bucketKey
 	lim *rate.Limiter
 }
 
@@ -125,13 +130,13 @@ func newRateLimiter(cfg Config) *rateLimiter {
 		key:     key,
 		maxKeys: maxKeys,
 		ll:      list.New(),
-		entries: map[string]*list.Element{},
+		entries: map[bucketKey]*list.Element{},
 	}
 }
 
 // allow reserves a token for the request's key; ok=false ⇒ over limit, with the delay until the next.
 func (rl *rateLimiter) allow(r *http.Request) (time.Duration, bool) {
-	k := rl.keyFor(r)
+	k := bucketKey(sha256.Sum256([]byte(rl.keyFor(r))))
 	rl.mu.Lock()
 	lim := rl.getLocked(k)
 	rl.mu.Unlock()
@@ -147,7 +152,7 @@ func (rl *rateLimiter) allow(r *http.Request) (time.Duration, bool) {
 }
 
 // getLocked returns the key's bucket, creating it (and evicting the LRU tail past maxKeys) as needed.
-func (rl *rateLimiter) getLocked(k string) *rate.Limiter {
+func (rl *rateLimiter) getLocked(k bucketKey) *rate.Limiter {
 	if el, ok := rl.entries[k]; ok {
 		rl.ll.MoveToFront(el)
 		return el.Value.(*bucket).lim

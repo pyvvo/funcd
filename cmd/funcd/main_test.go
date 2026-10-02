@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -84,6 +86,34 @@ func TestDaemonSubstrate(t *testing.T) {
 	}
 }
 
+// issue 189: a relative storage.dataDir must reach the file substrate as an absolute path under the
+// working directory, not as a "file://data/blob" URL whose host swallows the first segment.
+func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("funcdconfig.yaml", []byte("storage:\n  dataDir: data\n"), 0o600))
+
+	cfg, err := config.Load("funcdconfig.yaml", config.Flags{})
+	require.NoError(t, err)
+
+	opts, label, _, err := substrateOptions(context.Background(), false, cfg.Storage.DataDir)
+	require.NoError(t, err)
+	require.Equal(t, "file", label)
+	require.Equal(t, filepath.Join(cwd, "data"), cfg.Storage.DataDir)
+	require.Equal(t, filepath.Join(cwd, "data", "store"), cfg.Storage.MetastoreDir)
+	all := append([]funcd.Option{
+		funcd.Production(),
+		funcd.WithStore(store.New(memory.New())),
+		funcd.WithRuntime(process.New()),
+		funcd.WithDevAuth("t", "default"),
+	}, opts...)
+	p, err := funcd.New(all...)
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+	require.DirExists(t, filepath.Join(cwd, "data", "blob"))
+}
+
 // scenario: daemon-version-and-serve (ADR-0042) — `funcd version` prints the stamped build
 // identity via the cobra root (the root's RunE serves; the version subcommand prints to out).
 func TestDaemonVersion(t *testing.T) {
@@ -154,7 +184,7 @@ func TestExecutionOptionsProcessExtractsShim(t *testing.T) {
 	t.Setenv("FUNCD_NODE", node)
 	dir := t.TempDir()
 
-	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(dir))
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(dir), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	require.NotEmpty(t, opts, "process mode wires the runtime + shim")
@@ -171,7 +201,7 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	t.Setenv("FUNCD_NODE", "") // no explicit node
 	t.Setenv("PATH", "")       // and none on PATH
 
-	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
+	opts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.DiscardHandler))
 	require.NoError(t, err, "missing node degrades, never errors")
 	t.Cleanup(func() { _ = closeExec() })
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
@@ -192,7 +222,7 @@ func TestExecutionOptionsContainerdMode(t *testing.T) {
 	cfg.Runtime.Containerd.CNIConfDir = filepath.Join(t.TempDir(), "cni")
 	cfg.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
 	cfg.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
-	_, closeExec, err := executionOptions(context.Background(), cfg)
+	_, closeExec, err := executionOptions(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if closeExec != nil {
 		t.Cleanup(func() { _ = closeExec() })
 	}
@@ -246,7 +276,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 // ephemeral ports, and returns a client and the data-plane URL.
 func startDaemonPlatform(t *testing.T, extra ...funcd.Option) (*sdk.Client, string) {
 	t.Helper()
-	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
+	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	opts := append(append([]funcd.Option{funcd.InMemory()}, extra...), execOpts...)
@@ -393,6 +423,39 @@ type captureSpy struct {
 
 func (s *captureSpy) SetLogCapture(fn fnruntime.LogCaptureFunc) { s.installed = fn != nil }
 
+// Issue 192: the fatal startup error and the runtime-detection lines go through the logger built
+// from log.format/level (ADR-0061 §6) — none reaches the global slog default.
+func TestIssue192_StartupLinesUseConfiguredLogger(t *testing.T) {
+	var leaked bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&leaked, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Setenv("FUNCD_RUNTIME", "")
+	t.Setenv("FUNCD_NODE", "")
+	t.Setenv("PATH", "") // node not found ⇒ the WARN detection line
+
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \""+busy.Addr().String()+"\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+
+			"log:\n  format: json\n  level: error\n"), 0o600))
+
+	var out bytes.Buffer
+	cmd := newRootCmd(&out)
+	cmd.SetArgs([]string{"--config", path})
+	require.ErrorContains(t, cmd.Execute(), "bind data-plane listener")
+
+	require.Empty(t, leaked.String(), "a startup line bypassed the configured logger")
+	var line struct{ Level, Msg, Error string }
+	require.NoError(t, json.Unmarshal(out.Bytes(), &line), "want only the fatal error as one JSON line, got %q", out.String())
+	require.Equal(t, "ERROR", line.Level)
+	require.Contains(t, line.Error, "bind data-plane listener")
+}
+
 // scenario: secrets-keyfile-activates-encryption — a 32-byte secrets.encryptionKeyFile wires the
 // store's at-rest encryptor (ADR-0022): the value bytes are ciphertext. No key ⇒ unencrypted (+ a
 // warning); a non-32-byte key ⇒ rejected (never silently weak).
@@ -427,6 +490,57 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 	require.NoError(t, os.WriteFile(badFile, []byte("too-short"), 0o600))
 	_, err = buildStore(cfgWithKeyFile(badFile), root)
 	require.Error(t, err, "a non-32-byte key is rejected")
+}
+
+// Issue #93: a durable metastore whose stored Secrets do not decode with the configured
+// secrets.encryptionKeyFile (a different key, a removed key, or a key added over plaintext Secrets)
+// must fail buildStore at startup with an error naming the key setting, not break every Secret read.
+func TestIssue93_KeyMismatchFailsAtStartup(t *testing.T) {
+	ctx := context.Background()
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	keyFile := func(seed byte) string {
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = seed + byte(i)
+		}
+		f := filepath.Join(t.TempDir(), "secret.key")
+		require.NoError(t, os.WriteFile(f, key, 0o600))
+		return f
+	}
+	keyA, keyB := keyFile(1), keyFile(2)
+	fileCfg := func(dir, key string) config.Config {
+		var c config.Config
+		c.Storage.Mode = "file"
+		c.Storage.MetastoreDir = dir
+		c.Secrets.EncryptionKeyFile = key
+		return c
+	}
+	seed := func(dir, key string) {
+		st, err := buildStore(fileCfg(dir, key), root)
+		require.NoError(t, err)
+		obj, _ := v1.NewObject(v1.KindSecret)
+		sec := obj.(*v1.Secret)
+		sec.Namespace, sec.ResourceGroup, sec.Name = "default", "rg1", "creds"
+		sec.Spec.Data = map[string][]byte{"API_KEY": []byte("s3cr3t")}
+		_, err = st.Create(ctx, sec)
+		require.NoError(t, err)
+		require.NoError(t, st.Close())
+	}
+
+	encrypted := t.TempDir()
+	seed(encrypted, keyA)
+	for name, key := range map[string]string{"different key": keyB, "key removed": ""} {
+		_, err := buildStore(fileCfg(encrypted, key), root)
+		require.ErrorContains(t, err, "secrets.encryptionKeyFile", name)
+	}
+	st, err := buildStore(fileCfg(encrypted, keyA), root)
+	require.NoError(t, err, "the original key still opens the store")
+	require.NoError(t, st.Close())
+
+	plaintext := t.TempDir()
+	seed(plaintext, "")
+	_, err = buildStore(fileCfg(plaintext, keyA), root)
+	require.ErrorContains(t, err, "secrets.encryptionKeyFile", "key added over plaintext Secrets")
 }
 
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be
