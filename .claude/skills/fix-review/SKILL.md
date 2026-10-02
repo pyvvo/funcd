@@ -1,6 +1,6 @@
 ---
 name: fix-review
-description: The review gate for a funcd bug fix — independently verify a `/fix` change against its GitHub issue by RUNNING it — the regression test fails without the fix and passes with it, the root cause (not the symptom) is fixed, nothing unrelated changed, no Accepted ADR is contradicted, and the checks are green. Produces an evidence-cited verdict (pass / changes-requested / fail), writes `docs/reviews/issue-<N>-fix-<model>.md`, and records a ledger row so the per-model scorecard covers fixes. Use for "review the fix for issue 24", "check this fix", "run the fix review". It reviews and records; it never edits the work.
+description: The review gate for a funcd bug fix — independently verify a `/fix` change against its GitHub issue by RUNNING it — the regression test fails without the fix and passes with it, the root cause (not the symptom) is fixed, nothing unrelated changed, the change reuses what the codebase already has instead of duplicating or reinventing it, the conventions hold, no Accepted ADR is contradicted, and the checks are green. Produces an evidence-cited verdict (pass / changes-requested / fail), writes `docs/reviews/issue-<N>-fix-<model>.md`, and records a ledger row so the per-model scorecard covers fixes. Use for "review the fix for issue 24", "check this fix", "run the fix review". It reviews and records; it never edits the work.
 ---
 
 # Fix review
@@ -35,12 +35,21 @@ Through `nix develop -c`; capture real output for every claim:
    A longer timeout, an extra retry, a swallowed error or a skipped test that hides the defect → Blocker.
 5. **Mutants**: 1–3 overlay mutants on the fix's key lines; each must fail a test. A survivor is a test gap.
 6. **Scope**: every hunk serves the issue. An unrelated change → Major; a weakened or deleted test → Blocker.
-7. **ADRs**: the fix contradicts no Accepted/Implemented ADR's Decision or Contracts (if it must, that is
+7. **Reuse, no duplication**: for everything the change adds — a helper, a type, a constant, a test harness,
+   a dependency — search the package, its neighbours, `internal/platform`, `api/fault`, `internal/testkit`,
+   the existing test harnesses, the module's dependencies and the standard library for what already does
+   it. Duplicated logic, a copy-pasted block, or a hand-rolled version of an existing helper or library
+   feature → Major (Minor when trivial), naming the existing code to use instead.
+8. **Conventions**: ADR-0002 (ports and drivers, `api/fault` errors, typed IDs and enums, ctx-first, slog
+   only, no `any` in signatures, the import graph), the `CLAUDE.md` style rules (block-style YAML,
+   top-level imports, no comment bloat), and the surrounding code's naming and idiom. A breach → Major
+   (Minor when cosmetic).
+9. **ADRs**: the fix contradicts no Accepted/Implemented ADR's Decision or Contracts (if it must, that is
    an `adr` finding — the fix needs an ADR), and no Accepted/Implemented ADR file was edited (Blocker).
-8. **Checks**: rerun `/fix` Step 5's list yourself — format, build, vet and lint (host and Linux), tests,
+10. **Checks**: rerun `/fix` Step 5's list yourself — format, build, vet and lint (host and Linux), tests,
    e2e and the Lima lane where the path is covered, hygiene, the spec when `api/types` changed.
-9. **Shape**: a conventional `fix(<scope>):` subject, `Fixes #N`, the attribution trailer, one issue per commit.
-10. **No dev-machine references** — a silent check, as in `adr-impl-review` Step 2: never write a hygiene
+11. **Shape**: a conventional `fix(<scope>):` subject, `Fixes #N`, the attribution trailer, one issue per commit.
+12. **No dev-machine references** — a silent check, as in `adr-impl-review` Step 2: never write a hygiene
     section, never transcribe a path, username or grep pattern; a leak is a Blocker described generically.
 
 ## The fix checklist (the Definition of Done)
@@ -55,8 +64,10 @@ Count the items that apply (`--dod-total`) and those that hold (`--dod-passed`):
 6. Only the issue's scope changed; no test was weakened or deleted.
 7. No Accepted/Implemented ADR is contradicted or edited; living docs stay true.
 8. Build, vet, lint (host and Linux) and tests are green; e2e and the lane too where they cover the path.
-9. Conventions hold (ADR-0002, the `CLAUDE.md` style rules).
-10. The commit and PR shape: `fix(<scope>):`, `Fixes #N`, trailers.
+9. Conventions hold: ADR-0002, the `CLAUDE.md` style rules, and the surrounding code's naming and idiom.
+10. The change reuses what exists: no duplicated logic, and no new helper, type, harness or dependency where
+    an existing one, or the standard library, does the job.
+11. The commit and PR shape: `fix(<scope>):`, `Fixes #N`, trailers.
 
 ## Step 3 — Attribute
 

@@ -85,7 +85,7 @@ decision takes the fix pipeline**, which starts from a GitHub issue instead of a
 | Order | Skill | Does | Writes | Must also update on exit |
 |---|---|---|---|---|
 | fix | [fix](../.claude/skills/fix/SKILL.md) | issue → regression test that fails → root-cause fix → revert check → checks → PR (`Fixes #N`) | code + a `TestIssue<N>_…` test | — (the merged PR closes the issue) |
-| review | [fix-review](../.claude/skills/fix-review/SKILL.md) | independent review of the fix by **running** it: the test fails without the fix and passes with it, cause not symptom, scope, ADR conformance; score the model | `docs/reviews/issue-<N>-fix-<model>.md` + a ledger row | nothing — it never edits the work |
+| review | [fix-review](../.claude/skills/fix-review/SKILL.md) | independent review of the fix by **running** it: the test fails without the fix and passes with it, cause not symptom, scope, reuse with no duplication, conventions, ADR conformance; score the model | `docs/reviews/issue-<N>-fix-<model>.md` + a ledger row | nothing — it never edits the work |
 | batch | [fix-batch](../.claude/skills/fix-batch/SKILL.md) | many issues (a tracker's sub-issues, a list, a label): fix → review per issue, one PR per group | a branch + PR per group | — |
 
 An issue labelled `needs-adr`, or a fix that would change an Accepted ADR's decision, leaves the fix
