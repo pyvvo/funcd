@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/provider"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 )
 
 // fakeRuntime is a containerrt.Runtime double: it records Create/Start/Stop and returns an Instance
@@ -372,4 +374,82 @@ func TestIssue106_StartsEngineLeftInCreated(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, st.Ready, "the started engine becomes Ready")
 	require.Equal(t, 1, st.Running)
+}
+
+// processEngine runs the real process driver with a stand-in engine command (the driver needs a Command; a provider's
+// engine is its image entrypoint) and records the Create and Remove calls the provider makes.
+type processEngine struct {
+	containerrt.Runtime
+	mu    sync.Mutex
+	calls []string
+}
+
+func (p *processEngine) Create(ctx context.Context, spec containerrt.WorkerSpec) (containerrt.Instance, error) {
+	p.record("create")
+	spec.Command = []string{"sleep", "60"}
+	return p.Runtime.Create(ctx, spec)
+}
+
+func (p *processEngine) Remove(ctx context.Context, id containerrt.InstanceID) error {
+	p.record("remove")
+	return p.Runtime.Remove(ctx, id)
+}
+
+func (p *processEngine) record(call string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, call)
+}
+
+// A stopped engine instance is removed with its files: on Teardown, and before a terminal replica is recreated
+// (ADR-0143), so the driver neither lists it nor keeps its log and port files.
+func TestIssue373_RemovesStoppedEngine(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	ctx := context.Background()
+	spec := specFor(host, port, nil)
+	newEngine := func(t *testing.T) (*processEngine, provider.Runtime) {
+		t.Helper()
+		rt := &processEngine{Runtime: process.New()}
+		t.Cleanup(func() { _ = rt.Close() })
+		pr, err := provider.NewRuntime(provider.Deps{Runtime: rt})
+		require.NoError(t, err)
+		_, err = pr.Converge(ctx, spec)
+		require.NoError(t, err)
+		return rt, pr
+	}
+
+	t.Run("teardown", func(t *testing.T) {
+		rt, pr := newEngine(t)
+		insts, err := rt.List(ctx, spec.Ref.Namespace)
+		require.NoError(t, err)
+		require.Len(t, insts, 1)
+		logs, err := rt.Logs(ctx, insts[0].ID)
+		require.NoError(t, err)
+		logFile, ok := logs.(*os.File)
+		require.True(t, ok)
+		logPath := logFile.Name()
+		require.NoError(t, logs.Close())
+
+		require.NoError(t, pr.Teardown(ctx, spec.Ref))
+		insts, err = rt.List(ctx, spec.Ref.Namespace)
+		require.NoError(t, err)
+		require.Empty(t, insts, "a torn-down provider leaves no stopped engine instance")
+		require.NoFileExists(t, logPath, "the stopped engine's log file is removed")
+	})
+
+	t.Run("recreate", func(t *testing.T) {
+		rt, pr := newEngine(t)
+		insts, err := rt.List(ctx, spec.Ref.Namespace)
+		require.NoError(t, err)
+		require.Len(t, insts, 1)
+		require.NoError(t, rt.Stop(ctx, insts[0].ID))
+
+		_, err = pr.Converge(ctx, spec)
+		require.NoError(t, err)
+		rt.mu.Lock()
+		calls := append([]string(nil), rt.calls...)
+		rt.mu.Unlock()
+		require.Equal(t, []string{"create", "remove", "create"}, calls, "the stopped replica is removed before it is recreated")
+	})
 }

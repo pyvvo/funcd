@@ -28,7 +28,7 @@ type Runtime interface {
 // Deps wires the runtime over the EXISTING ports — no new execution/routing model, no new driver.
 type Deps struct {
 	// Runtime is the existing container port (internal/runtime, ADR-0032/0054): Create/Start/
-	// Status/Stop/List. Required.
+	// Status/Stop/Remove/List. Required.
 	Runtime containerrt.Runtime
 	// Gateway is the ingress reverse-proxy (ADR-0013) — ProgramRoutes is replace-all; used only
 	// when a Route is set. Optional: a nil gateway means an internal-only deployment (a provider
@@ -106,9 +106,8 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 		// Recreate a missing / terminal (failed/stopped) instance (supervision = re-convergence).
 		case !ok || inst.State.Terminal():
 			if ok {
-				// best-effort stop the terminal instance before recreating it (idempotent).
-				if serr := r.rt.Stop(ctx, inst.ID); serr != nil {
-					return ProviderStatus{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop terminal engine replica %d", i)
+				if rerr := r.retire(ctx, inst.ID); rerr != nil {
+					return ProviderStatus{}, fault.Wrapf(rerr, fault.KindOf(rerr), op, "retire terminal engine replica %d", i)
 				}
 			}
 			created, cerr := r.rt.Create(ctx, r.workerSpec(spec, i))
@@ -159,7 +158,7 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 	return status, nil
 }
 
-// Teardown stops every engine replica of the provider and removes any ingress route it programmed
+// Teardown stops and removes every engine replica of the provider and removes any ingress route it programmed
 // (ADR-0087). It is idempotent: a missing engine / route is fine.
 func (r *engineRuntime) Teardown(ctx context.Context, ref ProviderRef) error {
 	const op = "provider.Teardown"
@@ -168,14 +167,26 @@ func (r *engineRuntime) Teardown(ctx context.Context, ref ProviderRef) error {
 		return err
 	}
 	for _, in := range insts {
-		if serr := r.rt.Stop(ctx, in.ID); serr != nil {
-			return fault.Wrapf(serr, fault.KindOf(serr), op, "stop engine %s", in.ID)
+		if rerr := r.retire(ctx, in.ID); rerr != nil {
+			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "retire engine %s", in.ID)
 		}
 	}
 	if r.gateway != nil {
 		if rerr := r.removeRoute(ctx, ref); rerr != nil {
 			return rerr
 		}
+	}
+	return nil
+}
+
+// retire stops an engine worker and removes it with its per-instance files (ADR-0143).
+func (r *engineRuntime) retire(ctx context.Context, id containerrt.InstanceID) error {
+	const op = "provider.retire"
+	if err := r.rt.Stop(ctx, id); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "stop engine")
+	}
+	if err := r.rt.Remove(ctx, id); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "remove engine")
 	}
 	return nil
 }
