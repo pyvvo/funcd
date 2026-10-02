@@ -42,19 +42,7 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 // ephemeral ports into TIME_WAIT (ADR-0041).
 func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 	t.Parallel()
-	var conns atomic.Int32
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	}))
-	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
-		if s == http.StateNew {
-			conns.Add(1)
-		}
-	}
-	srv.Start()
-	t.Cleanup(srv.Close)
-	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
-	require.True(t, ok)
+	addr, conns := countingServer(t, func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
 
 	r := newShimReconciler(t, fakeResolver{})
 	for range 50 {
@@ -67,10 +55,21 @@ func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 // closes that transport's idle connections, and one landing while a probe's connection is parked fails the probe.
 func TestIssue287_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
 	t.Parallel()
-	var conns atomic.Int32
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	addr, conns := countingServer(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusOK) })
+
+	r := newShimReconciler(t, fakeResolver{})
+	ctx := context.Background()
+	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
+	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the probe's")
+}
+
+// countingServer serves respond on loopback and counts the TCP connections it accepts.
+func countingServer(t *testing.T, respond func(http.ResponseWriter)) (*net.TCPAddr, *atomic.Int32) {
+	t.Helper()
+	conns := new(atomic.Int32)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { respond(w) }))
 	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
 		if s == http.StateNew {
 			conns.Add(1)
@@ -80,11 +79,5 @@ func TestIssue287_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
 	t.Cleanup(srv.Close)
 	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
 	require.True(t, ok)
-
-	r := newShimReconciler(t, fakeResolver{})
-	ctx := context.Background()
-	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
-	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
-	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
-	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the probe's")
+	return addr, conns
 }
