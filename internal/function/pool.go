@@ -147,7 +147,10 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1)
+	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
+	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
+	// (ADR-0046 Decision 5).
+	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath)
 	serving := servingPhase(fn.Status.Phase)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair

@@ -39,7 +39,7 @@ func (f *fakeRuntime) serveCalls(t *testing.T, rev v1.ObjectName, pooled bool) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name, routed := strings.CutPrefix(r.URL.Path, "/function/")
 		switch {
-		case r.URL.Path == "/health/readiness":
+		case r.URL.Path == "/health/readiness" || r.URL.Path == "/health/liveness":
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && pooled && routed && name != "" && !strings.Contains(name, "/"):
 			_, _ = io.WriteString(w, `{"served":"`+name+`"}`)
@@ -285,4 +285,24 @@ func TestIssue71_PoolFullMemberReadmittedWhenSlotFrees(t *testing.T) {
 	require.Equal(t, "Admitted", h.condition(t, "p3", "PoolFull").Reason)
 	_, ready := h.upstream(t, "p3")
 	require.True(t, ready, "p3 is reachable")
+}
+
+// A pool host fails its readiness while any one handler's worker thread respawns after a fault, and keeps serving the
+// others (ADR-0044 Decision 4), so a sibling's fault leaves the healthy members Ready and routed.
+func TestIssue72_SiblingThreadFaultKeepsMembersReady(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	_, setReadiness := h.rt.serveRevision(t, "", http.StatusOK)
+	h.create(t, "crasher", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "faults" })
+	h.create(t, "good", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "faults" })
+	h.reconcile(t, "crasher")
+	h.reconcile(t, "good")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "good").Status.Phase)
+
+	setReadiness(http.StatusServiceUnavailable)
+	h.reconcile(t, "good")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "good").Status.Phase, "a sibling's thread fault is not good's")
+	_, ready := h.upstream(t, "good")
+	require.True(t, ready, "good stays reachable")
+	require.NotEmpty(t, h.routes(t), "good keeps its route")
 }

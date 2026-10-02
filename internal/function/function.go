@@ -722,7 +722,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired)
+	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
@@ -752,13 +752,13 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired)
+	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath)
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := time.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
-	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1)
+	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath)
 	retryAt := retryS
 	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
 		retryAt = retryC
@@ -1245,9 +1245,9 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 
 // readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
 // In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
-// running replica's /health/readiness and treats a failed instance (the shim exited because it could not load the
+// running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
 // handler) as a shape failure. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int) (ready int, shapeFailed bool) {
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string) (ready int, shapeFailed bool) {
 	if r.materializer == nil {
 		return running, false
 	}
@@ -1263,7 +1263,7 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		case runtime.StateFailed:
 			shapeFailed = true
 		case runtime.StateRunning:
-			if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port) {
+			if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path) {
 				ready++
 			}
 		}
@@ -1271,13 +1271,19 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 	return ready, shapeFailed
 }
 
-// probeReady issues GET /health/readiness against a shim and reports a 200 (ADR-0030 §4b).
-func (r *Reconciler) probeReady(ctx context.Context, ip string, port int) bool {
+// The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).
+const (
+	readinessPath = "/health/readiness"
+	livenessPath  = "/health/liveness"
+)
+
+// probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
+func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
 	host := ip
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	url := fmt.Sprintf("http://%s:%d/health/readiness", host, port)
+	url := fmt.Sprintf("http://%s:%d%s", host, port, path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
