@@ -424,6 +424,9 @@ func (p *Platform) buildControlPlane() error {
 		}
 		invokeSockDir = tmp
 	}
+	if err := local.CheckDir(invokeSockDir); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
+	}
 	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
 	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
 	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via

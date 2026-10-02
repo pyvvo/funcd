@@ -2,13 +2,15 @@ package local
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -109,8 +111,25 @@ func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 // Close stops every serving listener.
 func (m *Manager) Close() { m.cancel() }
 
+// maxSocketPath is the longest socket path that binds and that a shim can dial: sun_path less its
+// terminating NUL (103 bytes on macOS, 107 on Linux).
+const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+
+// CheckDir reports an error when dir is too long to hold the local API sockets. Every socket name has
+// the same length, so a dir that passes holds a socket for any function.
+func CheckDir(dir string) error {
+	if n := len(filepath.Join(dir, sockName(""))); n > maxSocketPath {
+		return fault.Invalidf("workernode.local.CheckDir",
+			"socket dir %q is too long: its socket paths are %d bytes, over the %d-byte Unix socket limit", dir, n, maxSocketPath)
+	}
+	return nil
+}
+
+// sockName is a fixed-length name for key, so a socket path's length does not depend on the
+// namespace and function names (issue #41).
 func sockName(key string) string {
-	return strings.ReplaceAll(key, "/", "-") + ".sock"
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:10]) + ".sock"
 }
 
 // HandlerHolder is a settable http.Handler indirection. The local API Invoker is built from it

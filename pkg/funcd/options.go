@@ -309,7 +309,8 @@ func WithNodePlatform(p v1.OCIPlatform) Option {
 
 // WithInvokeSocketDir sets the directory for the per-function worker-node local API sockets
 // (ADR-0064, fn-to-fn invoke). cmd/funcd sets it to <dataDir>/invoke from config; unset
-// (InMemory()/tests) ⇒ a temp dir.
+// (InMemory()/tests) ⇒ a temp dir. New fails with fault.Invalid when the dir is too long for a Unix
+// socket path.
 func WithInvokeSocketDir(dir string) Option {
 	return func(c *config) error { c.invokeSocketDir = dir; return nil }
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +96,19 @@ func TestScenarioMissingRequiredDep(t *testing.T) {
 	require.Nil(t, p)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), "store is required")
+}
+
+// Issue #41: an invoke socket dir too long for a Unix socket path fails New, instead of every function
+// coming up Ready without its local API.
+func TestIssue41_RejectsInvokeSocketDirOverUnixLimit(t *testing.T) {
+	t.Parallel()
+	p, err := New(InMemory(), WithInvokeSocketDir(filepath.Join(t.TempDir(), strings.Repeat("d", 100))))
+	if p != nil {
+		t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	}
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "Unix socket limit")
 }
 
 // scenario: run-shutdown-lifecycle — Run returns nil on ctx cancel; concurrent

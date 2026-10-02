@@ -319,10 +319,14 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 func TestScenarioFileSetsAddresses(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "funcdconfig.yaml")
+	// not t.TempDir(): its path overruns the macOS socket path limit for <dataDir>/invoke (issue #41)
+	dataDir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
 	// loopback + ephemeral port ⇒ deterministic + conflict-free; memory substrate ⇒ zero-infra.
 	require.NoError(t, os.WriteFile(path, []byte(
 		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
-			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+			"storage:\n  mode: memory\n  dataDir: \""+dataDir+"\"\n"), 0o600))
 
 	loc, err := config.Locate(path)
 	require.NoError(t, err)
