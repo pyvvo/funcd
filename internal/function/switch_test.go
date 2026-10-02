@@ -765,3 +765,30 @@ func TestIssue24_BrokenRedeployPassWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// Issue 53: deleting the serving Revision during a switch leaves its running worker serving, and the calls still move to
+// the current revision once it is ready (ADR-0143 Decisions 4.3, 4.4).
+func TestIssue53_DeletedServingRevisionStillSwitches(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch)
+	url1, _ := h.rt.serveRevision(t, "echo-1", http.StatusOK)
+	h.deployReady(t, "echo")
+	url2, setReady2 := h.rt.serveRevision(t, "echo-2", http.StatusServiceUnavailable)
+	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+	h.reconcile(t, "echo")
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindRevision.GVK(), "default", "echo-1", ""))
+
+	h.reconcile(t, "echo")
+	fn := h.getFn(t, "echo")
+	require.Equal(t, fn.Generation, fn.Status.ObservedGeneration, "the pass writes its status")
+	require.Equal(t, "echo-1", fn.Status.ServingRevision, "revision 1's running worker keeps serving")
+	up, ready := h.upstream(t, "echo")
+	require.True(t, ready)
+	require.Equal(t, url1, up)
+
+	setReady2(http.StatusOK)
+	h.reconcile(t, "echo")
+	require.Equal(t, "echo-2", h.getFn(t, "echo").Status.ServingRevision, "the switch completes")
+	up, _ = h.upstream(t, "echo")
+	require.Equal(t, url2, up)
+}
