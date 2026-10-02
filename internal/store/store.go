@@ -506,6 +506,8 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 	if err != nil {
 		return err
 	}
+	// The event is the change at rev, and an event's resourceVersion is the watch cursor (ADR-0006 §2).
+	deleted.GetObjectMeta().ResourceVersion = strconv.FormatUint(rev, 10)
 	s.publish(rev, Event{Type: Deleted, Object: deleted})
 	return nil
 }

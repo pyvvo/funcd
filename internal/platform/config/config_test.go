@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -210,6 +211,59 @@ func TestIssue164_NegativeLimitsRejected(t *testing.T) {
 	}
 }
 
+// An out-of-range port, or a negative size or count, is rejected with a field error instead of
+// wrapping in a uint16 conversion or turning a cap off; a negative maxStoresPerNamespace keeps its
+// documented meaning (quota off, ADR-0072).
+func TestIssue326_OutOfRangeNumbersRejected(t *testing.T) {
+	yamlAt := func(key, val string) string {
+		var b strings.Builder
+		parts := strings.Split(key, ".")
+		for i, p := range parts {
+			b.WriteString(strings.Repeat("  ", i) + p + ":")
+			if i == len(parts)-1 {
+				b.WriteString(" " + val)
+			}
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		key       string
+		bad, good []string
+	}{
+		{"server.network.egressGatewayPort", []string{"-1", "65536"}, []string{"0", "65535"}},
+		{"server.network.dnsForwarderPort", []string{"-1", "65536"}, []string{"0", "65535"}},
+		{"server.shaping.cors.maxAgeSeconds", []string{"-1"}, []string{"0"}},
+		{"kvstore.backup.chunkBytes", []string{"-1"}, []string{"0"}},
+		{"funclog.segmentMaxBytes", []string{"-1"}, []string{"0"}},
+		{"s3gateway.maxUploadBytes", []string{"-1"}, []string{"0"}},
+		{"workflow.defaultRetry", []string{"-1"}, []string{"0"}},
+		{"workflow.payloadLimit", []string{"-1"}, []string{"0"}},
+		{"eventing.deliveryAttempts", []string{"-1"}, []string{"0"}},
+		{"eventing.deadletter.maxEntries", []string{"-1"}, []string{"0"}},
+		{"kvstore.maxStoresPerNamespace", nil, []string{"-1", "0"}},
+	} {
+		for _, v := range tc.bad {
+			t.Run(tc.key+"="+v, func(t *testing.T) {
+				_, err := config.Load(writeCfg(t, yamlAt(tc.key, v)), config.Flags{})
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "%s=%s is rejected", tc.key, v)
+				require.ErrorContains(t, err, tc.key)
+			})
+		}
+		for _, v := range tc.good {
+			t.Run(tc.key+"="+v, func(t *testing.T) {
+				_, err := config.Load(writeCfg(t, yamlAt(tc.key, v)), config.Flags{})
+				require.NoError(t, err, "%s=%s is in range", tc.key, v)
+			})
+		}
+	}
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_NETWORK_DNS_FORWARDER_PORT", "65536")
+		_, err := config.Load("", config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "an out-of-range port from env is rejected")
+	})
+}
+
 // scenario: unknown-key-rejected — a misspelled key ⇒ strict-decode fault.Invalid.
 func TestScenarioUnknownKeyRejected(t *testing.T) {
 	_, err := config.Load(writeCfg(t, "server:\n  listen: \"0.0.0.0:9000\"\n"), config.Flags{}) // typo: listen
@@ -291,4 +345,12 @@ func TestLocate(t *testing.T) {
 	got, err = config.Locate("")
 	require.NoError(t, err)
 	require.Equal(t, "", got, "no file found ⇒ zero-config")
+}
+
+// An explicit empty storage.dataDir is rejected at Load, naming the key, instead of deriving relative
+// store paths ("store", "kv", …) that fail later at startup with a message that does not name it.
+func TestIssue332_EmptyDataDirRejected(t *testing.T) {
+	_, err := config.Load(writeCfg(t, "storage:\n  dataDir: \"\"\n"), config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an empty storage.dataDir is rejected")
+	require.ErrorContains(t, err, "storage.dataDir")
 }
