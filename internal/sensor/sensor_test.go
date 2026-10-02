@@ -245,3 +245,21 @@ func TestIssue113_FunctionActionReceivesProjectedInput(t *testing.T) {
 	require.Equal(t, eventing.SourceURI("team-a", "drops"), got[0].Source, "the rest of the CloudEvent is unchanged")
 	require.Equal(t, "arrived", got[0].Type)
 }
+
+func TestIssue173_NullInputPassesEventData(t *testing.T) {
+	st, fan, inv, r := harness(t)
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "drops", "arrived")}, []v1.Action{
+		{Name: "build", On: "d", Workflow: "ci", Input: json.RawMessage("null")},
+		{Name: "load", On: "d", Function: "loader", Input: json.RawMessage("null")},
+	})
+	_, err := r.Reconcile(context.Background(), reqOf("s"))
+	require.NoError(t, err)
+	fire(t, fan, "drops", "arrived", `{"key":"drop/a"}`)
+
+	rs := runs(t, st)
+	require.Len(t, rs, 1)
+	require.JSONEq(t, `{"key":"drop/a"}`, string(rs[0].Spec.Input), "a null input is an absent input: the run gets the event data")
+	got := inv.delivered()
+	require.Len(t, got, 1)
+	require.JSONEq(t, `{"key":"drop/a"}`, string(got[0].Data), "a null input is an absent input: the function gets the event data")
+}

@@ -410,7 +410,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, se *v1.Sensor) error {
 func (r *Reconciler) staticCheck(se *v1.Sensor) (reason, msg string, ok bool) {
 	for i := range se.Spec.Do {
 		a := &se.Spec.Do[i]
-		if len(a.Input) == 0 {
+		if inputAbsent(a.Input) {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -438,7 +438,7 @@ func (r *Reconciler) staticCheck(se *v1.Sensor) (reason, msg string, ok bool) {
 // verbatim; else each field is a literal (passed through) or a `${{ event.* }}` Select expression
 // evaluated against {"event": <the CloudEvent JSON>}.
 func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, error) {
-	if len(raw) == 0 {
+	if inputAbsent(raw) {
 		if len(ev.Data) == 0 {
 			return json.RawMessage("{}"), nil
 		}
@@ -474,6 +474,12 @@ func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, e
 		out[field] = res
 	}
 	return json.Marshal(out)
+}
+
+// inputAbsent reports whether an action has no input: the key is omitted, or set to null (a bare `input:`,
+// `input: null` or `input: ~` in YAML).
+func inputAbsent(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
 }
 
 // asExprString reports whether a JSON value is a `${{ … }}` expression string (and returns it).
