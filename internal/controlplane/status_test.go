@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -114,4 +115,41 @@ func TestApplyIgnoresClientStatus(t *testing.T) {
 	after := storedEcho(t, st)
 	require.Equal(t, before.Status, after.Status, "a replace keeps the stored status, not the client's")
 	require.Equal(t, before.ResourceVersion, after.ResourceVersion, "the client's status alone changes nothing")
+}
+
+// TestIssue328_ApplyIgnoresClientOwnerAndDeletionMeta: ownerReferences and deletionTimestamp are server-set
+// (ADR-0048). A create drops the client's values; a replace keeps the stored ones, which reconcilers write
+// through the store.
+func TestIssue328_ApplyIgnoresClientOwnerAndDeletionMeta(t *testing.T) {
+	st := store.New(memory.New())
+	srv := newServerOn(t, st)
+	deleted := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	forged := v1.Function{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "echo", Namespace: "team-a", ResourceGroup: "rg1",
+			DeletionTime:    &deleted,
+			OwnerReferences: []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindSite, Name: "forged"}, UID: "u-forged"}},
+		},
+		Spec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "app.handler", Image: "oci://example/app:v1"},
+	}
+	body, err := json.Marshal(forged)
+	require.NoError(t, err)
+
+	apply(t, srv, http.MethodPost, fnBase, body)
+	created := storedEcho(t, st)
+	require.Empty(t, created.OwnerReferences, "a create takes no owner reference from the client")
+	require.Nil(t, created.DeletionTime, "a create takes no deletionTimestamp from the client")
+
+	owned := []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindSite, Name: "real"}, UID: "u-real", Controller: true}}
+	created.OwnerReferences = owned
+	_, err = st.Update(context.Background(), created)
+	require.NoError(t, err)
+
+	apply(t, srv, http.MethodPut, fnBase+"/echo", body)
+	after := storedEcho(t, st)
+	require.Equal(t, owned, after.OwnerReferences, "a replace keeps the stored owner references, not the client's")
+	require.Nil(t, after.DeletionTime, "a replace keeps the stored deletionTimestamp, not the client's")
+
+	apply(t, srv, http.MethodPut, fnBase+"/echo", fnManifest(t, "oci://example/app:v1", nil))
+	require.Equal(t, owned, storedEcho(t, st).OwnerReferences, "a replace without owner references keeps the stored ones")
 }
