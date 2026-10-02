@@ -110,18 +110,24 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 		return nil, fault.Forbiddenf(op, "target %q is not declared in run %q", req.Target, req.Run)
 	}
 	fn := activator.FunctionRef{Namespace: req.Namespace, Name: req.Target}
-	upstream, ready, err := d.endpoints.Upstream(ctx, fn)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", req.Namespace, req.Target)
-	}
-	if !ready || upstream == "" {
-		if d.waker == nil {
-			return nil, fault.Unavailablef(op, "function %s/%s has no ready upstream", req.Namespace, req.Target)
-		}
-		upstream, err = d.waker.Wake(ctx, fn)
+	var upstream string
+	if d.waker != nil {
+		// Wake a warm target too: Wake records the call as activity, so idle reclaim never fires while
+		// steps keep arriving (issue #48); a ready target returns its upstream at once.
+		up, err := d.waker.Wake(ctx, fn)
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", req.Namespace, req.Target)
 		}
+		upstream = up
+	} else {
+		up, ready, err := d.endpoints.Upstream(ctx, fn)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", req.Namespace, req.Target)
+		}
+		if !ready || up == "" {
+			return nil, fault.Unavailablef(op, "function %s/%s has no ready upstream", req.Namespace, req.Target)
+		}
+		upstream = up
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(stepEvent(req)))
 	if err != nil {

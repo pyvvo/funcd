@@ -82,6 +82,7 @@ type Activator struct {
 	lastActive map[FunctionRef]time.Time       // last-activity tracker feeding idle reclaim
 	upstreams  map[FunctionRef]map[string]bool // upstreams Wake handed out, whose calls in flight idle reclaim spares
 	reclaiming map[FunctionRef]chan struct{}   // a reclaim writing fn's scale-to-zero; closed when it is written
+	stopped    bool                            // Run has returned: no new activation starts
 
 	// life bounds every activation and is cancelled when Run returns: the platform that would start a woken worker
 	// stops with it, so a held request could never be served. drives counts the running activations.

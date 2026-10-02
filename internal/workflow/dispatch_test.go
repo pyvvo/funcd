@@ -12,6 +12,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 type fakeEndpoints struct {
@@ -221,4 +223,62 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 			t.Fatalf("read %d bytes of a 5xx answer that is thrown away", body.read)
 		}
 	})
+}
+
+// recordingScaler records the replica targets the activator asks for.
+type recordingScaler struct{ targets []int }
+
+func (s *recordingScaler) ScaleTo(_ context.Context, _ activator.FunctionRef, replicas int) error {
+	s.targets = append(s.targets, replicas)
+	return nil
+}
+
+// manualClock is a clock the test moves by hand.
+type manualClock struct{ now time.Time }
+
+func (c *manualClock) Now() time.Time { return c.now }
+
+// Issue #48: a step dispatched to a warm function counts as its activity, so idle reclaim never fires
+// while steps keep arriving.
+func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
+	ctx := context.Background()
+	srv := echoServer(t, 200, `{"ok":true}`)
+	st := store.New(memory.New())
+	obj, ok := v1.NewObject(v1.KindFunction)
+	if !ok {
+		t.Fatal("no Function kind")
+	}
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "busy", "default", "rg1"
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: time.Minute}
+	if _, err := st.Create(ctx, fn); err != nil {
+		t.Fatal(err)
+	}
+	ep := fakeEndpoints{upstream: srv.URL, ready: true}
+	clk := &manualClock{now: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)}
+	sc := &recordingScaler{}
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: ep, Scaler: sc, Clock: clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewHTTPDispatcher(DispatchDeps{Endpoints: ep, Waker: act, Grant: fakeGrant{allow: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := act.ReclaimIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		clk.now = clk.now.Add(40 * time.Second)
+		if _, err := d.Dispatch(ctx, dispatchReq("busy")); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if err := act.ReclaimIdle(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sc.targets) != 0 {
+		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.targets)
+	}
 }
