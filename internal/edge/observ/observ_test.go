@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -199,6 +200,74 @@ func TestIssue85_EdgeServerSpanEmittedWithInjectedSpanID(t *testing.T) {
 			} else {
 				require.False(t, sp.Parent().IsValid(), "the edge span is a root")
 			}
+		})
+	}
+}
+
+// Issue #311: a panicking inner handler is still counted (as 5xx), logged once, and its edge span
+// ends — under gateway.Recover exactly as funcd wires it — and the panic still propagates.
+func TestIssue311_PanicStillCountedLoggedAndSpanEnded(t *testing.T) {
+	cases := []struct {
+		name      string
+		next      http.HandlerFunc
+		wantPanic error
+	}{
+		{
+			name: "plain panic answered 500 by Recover",
+			next: func(http.ResponseWriter, *http.Request) { panic("boom") },
+		},
+		{
+			name: "abort after a 200 header re-panics",
+			next: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				panic(http.ErrAbortHandler)
+			},
+			wantPanic: http.ErrAbortHandler,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := metric.NewManualReader()
+			sr := tracetest.NewSpanRecorder()
+			tel := observability.NewFromProviders(
+				metric.NewMeterProvider(metric.WithReader(reader)),
+				sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)),
+			)
+			var buf bytes.Buffer
+			mw := observ.Chain(observ.Config{Metrics: true, AccessLog: true, Trace: true}, tel, slog.New(slog.NewJSONHandler(&buf, nil)))
+			h := gateway.Chain(tc.next, gateway.Recover, gateway.RequestID, mw)
+
+			var got error
+			func() {
+				defer func() { got, _ = recover().(error) }()
+				h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "http://x/y", nil))
+			}()
+			require.Equal(t, tc.wantPanic, got, "the panic continues past observ")
+
+			var rm metricdata.ResourceMetrics
+			require.NoError(t, reader.Collect(context.Background(), &rm))
+			var counted int64
+			var classes []string
+			for _, sm := range rm.ScopeMetrics {
+				for _, m := range sm.Metrics {
+					if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "funcd.edge.requests" {
+						for _, dp := range sum.DataPoints {
+							counted += dp.Value
+							v, _ := dp.Attributes.Value("status_class")
+							classes = append(classes, v.AsString())
+						}
+					}
+				}
+			}
+			require.Equal(t, int64(1), counted, "the panicked request is counted")
+			require.Equal(t, []string{"5xx"}, classes, "a panic counts as 5xx")
+
+			spans := sr.Ended()
+			require.Len(t, spans, 1, "the edge span ends")
+			require.Contains(t, spans[0].Attributes(), attribute.String("status_class", "5xx"))
+
+			require.Equal(t, 1, strings.Count(buf.String(), `"msg":"edge request"`), "one access-log line")
+			require.Contains(t, buf.String(), `"status":500`)
 		})
 	}
 }
