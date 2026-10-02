@@ -293,9 +293,10 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 }
 
 // Replay performs ONE synchronous delivery attempt of a stored DeadLetter's CloudEvent through the LIVE
-// Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. On success the
-// entry is Deleted and nil returned; on failure the entry is re-Put with Attempts reset (never lost) and
-// the delivery error returned. A missing DeadLetter / Sensor / action ⇒ NotFound (the operator discards).
+// Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. The replay is an
+// action-delivery, so it records its Invocation (Ready or Failed). On success the entry is Deleted and nil
+// returned; on failure the entry is re-Put with Attempts reset (never lost) and the delivery error
+// returned. A missing DeadLetter / Sensor / action ⇒ NotFound (the operator discards).
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
 	if r.deadletters == nil {
@@ -322,7 +323,9 @@ func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string)
 		return fault.Invalidf("sensor.Replay", "stored payload is not a CloudEvent: %v", uerr)
 	}
 	d := delivery{ns: ns, rg: se.ResourceGroup, sensor: dl.Sensor, source: dl.Source, event: dl.Event, action: action, ce: ce, firedAt: time.Now().UTC()}
-	if derr := r.deliver(ctx, d); derr != nil {
+	derr := r.deliver(ctx, d)
+	r.recordTerminal(ctx, d, derr)
+	if derr != nil {
 		dl.Attempts = 0 // reset — a fresh attempt count for the re-parked entry
 		dl.Reason = derr.Error()
 		dl.FailedAt = time.Now().UTC()
