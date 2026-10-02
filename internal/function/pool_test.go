@@ -389,3 +389,27 @@ func TestIssue72_SiblingThreadFaultKeepsMembersReady(t *testing.T) {
 	require.True(t, ready, "good stays reachable")
 	require.NotEmpty(t, h.routes(t), "good keeps its route")
 }
+
+// A pooled member whose pool host runs but never serves (a member's handler blocks while the pool loads it) ends Failed
+// (ShapeInvalid) once the pool worker has run for the boot timeout since its last (re)start, as a solo replica does
+// (issue #76): a pool worker restarted after a crash is timed from its restart.
+func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	pool := v1.ObjectName("__pool__nodejs22__hang")
+	h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), true)
+	h.create(t, "hang", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hang" })
+	h.reconcile(t, "hang")
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a pool worker that just started is still booting")
+
+	h.rt.exitRevision(pool, "", 0, runtime.StateFailed, time.Hour)
+	h.reconcile(t, "hang")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates(pool)[""][0], "the dead pool worker is restarted")
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a restarted pool worker is timed from its restart")
+
+	h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
+	res := h.reconcile(t, "hang")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
+	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready")
+	require.Zero(t, res.RequeueAfter, "a Failed member is not polled again")
+}

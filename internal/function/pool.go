@@ -172,8 +172,8 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	}
 	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
 	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
-	// (ADR-0046 Decision 5). No boot limit: a pool worker restarts in place and keeps its CreatedAt, so its age is not its boot time.
-	ready, failed, err := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, 0)
+	// (ADR-0046 Decision 5). Every (re)start creates the pool worker again, so it gets a solo replica's boot limit.
+	ready, failed, err := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, bootTimeout)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -237,9 +237,9 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 		}
 		r.setPoolSig(key, sig)
 	case !running:
-		// the pool worker exists but is stopped (a prior reclaim) and a member now wants it up
-		// with the same manifest → just start it back (no rebuild).
-		if err := r.startPoolInstance(ctx, insts); err != nil {
+		// the pool worker exists but is stopped (a prior reclaim) or exited, and a member now wants
+		// it up with the same manifest → restart it.
+		if err := r.restartPool(ctx, key, insts, manifest); err != nil {
 			return 0, err
 		}
 	default:
@@ -351,32 +351,15 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manife
 	return nil
 }
 
-// restartPool rewrites the pool worker's manifest file (same stable path the existing instance
-// launched with) and restarts the existing instance so the pool host re-reads the new manifest
-// at boot. The instance id is reused; the restart is observable as a new PID (ADR-0046 V1
-// rebuild). The members' artifacts are already materialized by poolManifest.
+// restartPool stops the existing pool worker and creates it again under the same instance id from
+// the rewritten manifest, so the pool host re-reads the manifest at boot and its CreatedAt is its
+// boot time, which readiness times (ADR-0030 §4b). The restart is observable as a new PID
+// (ADR-0046 V1 rebuild). The members' artifacts are already materialized by poolManifest.
 func (r *Reconciler) restartPool(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, manifest []poolManifestEntry) error {
-	const op = "function.restartPool"
-	if _, err := writePoolManifest(key, manifest); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "rewrite pool manifest")
-	}
 	if err := r.stopPool(ctx, insts); err != nil {
 		return err
 	}
-	return r.startPoolInstance(ctx, insts)
-}
-
-// startPoolInstance (re)starts the existing pool worker instance(s) — used both to wake a
-// reclaimed pool back up and as the second half of a rebuild. The process driver re-execs the
-// command, so the pool host re-reads its (possibly rewritten) manifest file.
-func (r *Reconciler) startPoolInstance(ctx context.Context, insts []runtime.Instance) error {
-	const op = "function.startPoolInstance"
-	for _, in := range insts {
-		if serr := r.runtime.Start(ctx, in.ID); serr != nil {
-			return fault.Wrapf(serr, fault.KindOf(serr), op, "start pool worker")
-		}
-	}
-	return nil
+	return r.createPool(ctx, key, manifest)
 }
 
 // writePoolManifest serializes the manifest to a stable per-key file and returns its path. The
