@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -254,6 +255,81 @@ func TestCrashRecoveryResumesRun(t *testing.T) {
 	}
 	if f.calls["b"] != 1 {
 		t.Fatalf("b was in-flight — must re-dispatch once, got %d", f.calls["b"])
+	}
+}
+
+// crashAt keeps run's record as the store held it when step at was dispatched on attempt n: what a
+// crash during that dispatch leaves for recovery. The call itself goes to the embedded dispatcher.
+type crashAt struct {
+	*capturingDispatcher
+	runs runstate.Store
+	run  v1.ObjectName
+	at   v1.ObjectName
+	n    int
+	left *runstate.Record
+}
+
+func (c *crashAt) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == c.at && req.Attempt == c.n {
+		c.left, _ = c.runs.Get(ctx, req.Namespace, c.run)
+	}
+	return c.capturingDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #124: a write-ahead intent precedes every dispatch (ADR-0094) and every step's start. Recovery
+// from a crash re-runs only the in-flight step, with a fresh attempt ID and the rest of its retry budget.
+func TestIssue124_RecoveryRedispatchesOnlyTheInFlightStep(t *testing.T) {
+	ctx := context.Background()
+	retried := step("b", "", "a")
+	retried.Function.Retry = &v1.StepRetry{MaxAttempts: 3}
+	children := fakeChildren{"child": spec(step("x", ""))}
+	for _, tc := range []struct {
+		name     string
+		spec     v1.WorkflowSpec
+		at       v1.ObjectName
+		n        int
+		failing  bool
+		attempts map[v1.ObjectName][]int
+	}{
+		{name: "fan-out", spec: spec(step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d")), at: "d", n: 1,
+			attempts: map[v1.ObjectName][]int{"d": {2}, "e": {1}}},
+		{name: "retry", spec: spec(step("a", ""), retried), at: "b", n: 2, failing: true,
+			attempts: map[v1.ObjectName][]int{"b": {3}}},
+		{name: "sub-workflow sibling", spec: spec(step("b", ""), step("c", "", "b"), subwfStep("sub", "child", "b"), step("e", "", "c", "sub")), at: "x", n: 1,
+			attempts: map[v1.ObjectName][]int{"x": {1}, "e": {1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, _ := badger.New(badger.Config{InMemory: true})
+			t.Cleanup(func() { _ = first.Close() })
+			crash := &crashAt{capturingDispatcher: &capturingDispatcher{}, runs: first, run: "run-124", at: tc.at, n: tc.n}
+			if tc.failing {
+				crash.failN = map[v1.ObjectName]int{tc.at: tc.n}
+			}
+			e1, _ := New(Deps{Runs: first, Dispatch: crash, Children: children})
+			_, _ = e1.Execute(ctx, "default", "run-124", "wf", tc.spec, json.RawMessage(`{}`), StartOptions{})
+			if crash.left == nil {
+				t.Fatalf("step %s was never dispatched on attempt %d", tc.at, tc.n)
+			}
+
+			restarted, _ := badger.New(badger.Config{InMemory: true})
+			t.Cleanup(func() { _ = restarted.Close() })
+			if err := restarted.Put(ctx, crash.left); err != nil {
+				t.Fatalf("seed the crashed record: %v", err)
+			}
+			again := &capturingDispatcher{}
+			if tc.failing {
+				again.failN = map[v1.ObjectName]int{tc.at: 99}
+			}
+			e2, _ := New(Deps{Runs: restarted, Dispatch: again, Children: children})
+			_, _ = e2.Resume(ctx, "default", "run-124")
+			got := map[v1.ObjectName][]int{}
+			for _, r := range again.reqs {
+				got[r.Step] = append(got[r.Step], r.Attempt)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.attempts) {
+				t.Fatalf("recovery dispatched %v (step: attempts), want %v", got, tc.attempts)
+			}
+		})
 	}
 }
 
