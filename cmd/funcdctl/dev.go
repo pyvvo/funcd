@@ -72,6 +72,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -571,7 +572,8 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	if len(pfs) > 0 {
 		devBlock, baseDir = pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
 	}
-	shimOpts, shimCleanup, sherr := devShimOptions(op, devBlock, baseDir)
+	needPython := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") })
+	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython)
 	if sherr != nil {
 		return nil, sherr
 	}
@@ -1611,15 +1613,17 @@ func resolveInterpreter(p, baseDir string) string {
 // funcd options that launch them on the process runtime (mirroring cmd/funcd's process-mode wiring).
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
-func devShimOptions(op string, dev sdk.Dev, baseDir string) (_ []funcd.Option, cleanup func(), err error) {
+// A python that cannot import the shim is never registered, as in the daemon; when the run has a
+// python handler (needPython) that is a startup error naming the interpreter's reason.
+func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython bool) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
 		return nil, nil, fault.Wrapf(derr, fault.Internal, op, "create shim temp dir")
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	defer func() {
-		if err != nil {
-			cleanup()
+		if err != nil { // an error return has already set cleanup to nil
+			_ = os.RemoveAll(dir)
 		}
 	}()
 
@@ -1660,10 +1664,15 @@ func devShimOptions(op string, dev sdk.Dev, baseDir string) (_ []funcd.Option, c
 		if perr != nil {
 			return nil, nil, fault.Wrapf(perr, fault.Internal, op, "extract python shim")
 		}
-		opts = append(opts, funcd.WithRuntimeShimFor("python", python, shimEntry))
-		if !haveDefault {
-			opts = append(opts, funcd.WithRuntimeShim(python, shimEntry))
-			haveDefault = true
+		switch reason := process.PythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); {
+		case reason == "":
+			opts = append(opts, funcd.WithRuntimeShimFor("python", python, shimEntry))
+			if !haveDefault {
+				opts = append(opts, funcd.WithRuntimeShim(python, shimEntry))
+				haveDefault = true
+			}
+		case needPython:
+			return nil, nil, fault.Invalidf(op, "python %s cannot load the runtime shim (needs Python ≥3.12 with fastjsonschema; set FUNCD_PYTHON or dev.python): %s", python, reason)
 		}
 	}
 
