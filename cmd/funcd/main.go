@@ -474,7 +474,27 @@ func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return store.New(eng, opts...), nil
+	st := store.New(eng, opts...)
+	if err := checkSecretsDecode(st, enc != nil); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	return st, nil
+}
+
+// checkSecretsDecode reads every stored Secret once at startup, so a secrets.encryptionKeyFile that
+// does not match how the durable store's Secrets were written (issue #93) stops funcd with a clear
+// error instead of failing every Secret read, write and delete later.
+func checkSecretsDecode(st store.Store, keyed bool) error {
+	_, err := st.List(context.Background(), v1.KindSecret.GVK(), store.ListOptions{})
+	switch {
+	case err == nil:
+		return nil
+	case keyed:
+		return fmt.Errorf("stored Secrets do not decrypt with secrets.encryptionKeyFile: they were written with a different key or with none — restore the setting they were written with: %w", err)
+	default:
+		return fmt.Errorf("stored Secrets are encrypted but secrets.encryptionKeyFile is not set — set it to the key they were written with: %w", err)
+	}
 }
 
 // secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a

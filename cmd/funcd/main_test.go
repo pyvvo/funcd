@@ -378,6 +378,57 @@ func TestScenarioSecretsKeyfileActivatesEncryption(t *testing.T) {
 	require.Error(t, err, "a non-32-byte key is rejected")
 }
 
+// Issue #93: a durable metastore whose stored Secrets do not decode with the configured
+// secrets.encryptionKeyFile (a different key, a removed key, or a key added over plaintext Secrets)
+// must fail buildStore at startup with an error naming the key setting, not break every Secret read.
+func TestIssue93_KeyMismatchFailsAtStartup(t *testing.T) {
+	ctx := context.Background()
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	keyFile := func(seed byte) string {
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = seed + byte(i)
+		}
+		f := filepath.Join(t.TempDir(), "secret.key")
+		require.NoError(t, os.WriteFile(f, key, 0o600))
+		return f
+	}
+	keyA, keyB := keyFile(1), keyFile(2)
+	fileCfg := func(dir, key string) config.Config {
+		var c config.Config
+		c.Storage.Mode = "file"
+		c.Storage.MetastoreDir = dir
+		c.Secrets.EncryptionKeyFile = key
+		return c
+	}
+	seed := func(dir, key string) {
+		st, err := buildStore(fileCfg(dir, key), root)
+		require.NoError(t, err)
+		obj, _ := v1.NewObject(v1.KindSecret)
+		sec := obj.(*v1.Secret)
+		sec.Namespace, sec.ResourceGroup, sec.Name = "default", "rg1", "creds"
+		sec.Spec.Data = map[string][]byte{"API_KEY": []byte("s3cr3t")}
+		_, err = st.Create(ctx, sec)
+		require.NoError(t, err)
+		require.NoError(t, st.Close())
+	}
+
+	encrypted := t.TempDir()
+	seed(encrypted, keyA)
+	for name, key := range map[string]string{"different key": keyB, "key removed": ""} {
+		_, err := buildStore(fileCfg(encrypted, key), root)
+		require.ErrorContains(t, err, "secrets.encryptionKeyFile", name)
+	}
+	st, err := buildStore(fileCfg(encrypted, keyA), root)
+	require.NoError(t, err, "the original key still opens the store")
+	require.NoError(t, st.Close())
+
+	plaintext := t.TempDir()
+	seed(plaintext, "")
+	_, err = buildStore(fileCfg(plaintext, keyA), root)
+	require.ErrorContains(t, err, "secrets.encryptionKeyFile", "key added over plaintext Secrets")
+}
+
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be
 // a flat literal). Memory mode keeps this encryptor-wiring test engine-agnostic — buildStore must not
 // open a real Badger directory (ADR-0065) for a test that only checks encryptor selection.
