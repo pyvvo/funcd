@@ -39,11 +39,16 @@ func fnStep(name, image string, deps ...string) v1.WorkflowStep {
 
 func reconcileWF(t *testing.T, s store.Store, c ContractResolver, steps ...v1.WorkflowStep) (*v1.Workflow, controller.Result) {
 	t.Helper()
+	return reconcileSpec(t, s, c, v1.WorkflowSpec{Steps: steps})
+}
+
+func reconcileSpec(t *testing.T, s store.Store, c ContractResolver, spec v1.WorkflowSpec) (*v1.Workflow, controller.Result) {
+	t.Helper()
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1", UID: "u"},
-		Spec:       v1.WorkflowSpec{Steps: steps},
+		Spec:       spec,
 	}
 	if _, err := s.Create(ctx, wf); err != nil {
 		t.Fatalf("create workflow: %v", err)
@@ -192,4 +197,42 @@ func TestRunInputValidDrives(t *testing.T) {
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("a valid input should drive to Succeeded, got %s err %v", rec.Phase, err)
 	}
+}
+
+// The onFailure handler is outside the DAG (ADR-0094): its input stays out of the derived workflow
+// contract, and the gate checks it against the FailureContext instead.
+func TestIssue296_OnFailureHandlerOutsideWorkflowContract(t *testing.T) {
+	day := obj(map[string]string{"day": "string"}, "day")
+	t.Run("excluded from the derived input", func(t *testing.T) {
+		c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+			"oci:a":      {Input: day},
+			"oci:notify": {Input: obj(map[string]string{"workflow": "string", "run": "string", "reason": "string", "input": "object"}, "workflow", "run", "reason", "input")},
+		}}
+		wf, _ := reconcileSpec(t, newStore(t), c, v1.WorkflowSpec{
+			Steps:     []v1.WorkflowStep{fnStep("a", "oci:a"), fnStep("notify", "oci:notify")},
+			OnFailure: "notify",
+		})
+		if !ready(wf) {
+			t.Fatalf("a handler typed for the FailureContext must leave the workflow Ready, conditions=%+v", wf.Status.Conditions)
+		}
+		if d := v1.CheckInput(sc(`{"day":"x"}`), wf.Status.Contract.Input); len(d) != 0 {
+			t.Fatalf("a run input satisfying the root must satisfy the derived contract, missing %v (input %s)", d, wf.Status.Contract.Input)
+		}
+	})
+	t.Run("checked against the FailureContext", func(t *testing.T) {
+		c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+			"oci:a":      {Input: day},
+			"oci:notify": {Input: obj(map[string]string{"reason": "string", "extra": "string"}, "reason", "extra")},
+		}}
+		wf, _ := reconcileSpec(t, newStore(t), c, v1.WorkflowSpec{
+			Steps:     []v1.WorkflowStep{fnStep("a", "oci:a"), fnStep("notify", "oci:notify")},
+			OnFailure: "notify",
+		})
+		if ready(wf) {
+			t.Fatal("a handler requiring a field the FailureContext lacks must NOT be Ready")
+		}
+		if mismatchReason(wf) != "EdgeTypeMismatch" {
+			t.Fatalf("expected SchemaMismatch/EdgeTypeMismatch, got %+v", wf.Status.Conditions)
+		}
+	})
 }

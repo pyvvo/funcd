@@ -897,6 +897,15 @@ type failureContext struct {
 	Input      json.RawMessage `json:"input"`
 }
 
+// failureContextSchema is failureContext's schema: the producer the reconcile gate checks the onFailure
+// handler's input against (ADR-0094). The run input is an object (the derived contract input's type).
+func failureContextSchema() json.RawMessage {
+	return marshalObjectSchema(
+		map[string]string{"workflow": "string", "run": "string", "failedStep": "string", "reason": "string", "input": "object"},
+		map[string]bool{"workflow": true, "run": true, "failedStep": true, "reason": true, "input": true},
+	)
+}
+
 // fail finalizes a Failed run, invoking the onFailure handler once if present.
 func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, cause error) (*runstate.Record, error) {
 	rec.Phase, rec.Error = runFailed, capErr(cause.Error())
