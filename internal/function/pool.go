@@ -166,7 +166,7 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // per-function catalog token, so neither env reaches the pool (a catalog-consuming function runs solo, ADR-0086). The
 // serving revision follows the current one once the pool worker is ready (ADR-0143 Decision 8).
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment) (verdict, error) {
-	running, err := r.ensurePool(ctx, a.Key, fn)
+	running, startErr, err := r.ensurePool(ctx, a.Key, fn)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -184,63 +184,65 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if ready >= 1 {
 		fn.Status.ServingRevision = fn.Status.CurrentRevision
 	}
-	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving}, nil
+	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, startErr: startErr}, nil
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions
 // 4 & 6): it builds the manifest from the key's admitted members, computes the pool's desired
 // replica as the max over those members' effective desired, and ensures exactly one pool
 // worker — created/restarted only when the desired manifest differs from the running one
-// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count. self is
-// the member being reconciled.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (int, error) {
+// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count and its Start error, which the
+// pass writes to the member's status, as for a solo worker (issue #73); the manifest is applied either way, so the next
+// pass starts the same worker again. self is the member being reconciled.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (int, error, error) {
 	members, err := r.admittedMembers(ctx, key)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	manifest, desired, err := r.poolManifest(ctx, members, self)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	sig := manifestSignature(manifest)
 
 	poolName := poolInstanceName(key)
 	insts, err := r.namedInstances(ctx, key.Namespace, poolName)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	exists := len(insts) > 0
 	running := runningCount(insts) > 0
 
+	var startErr error
 	switch {
 	case desired == 0:
 		// all members idle → reclaim the pool worker (RSS→0); next request wakes it.
 		if running {
 			if err := r.stopPool(ctx, insts); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 		}
 		r.forgetPoolSig(key)
-		return 0, nil
+		return 0, nil, nil
 	case !exists:
 		// first bring-up → create + start the pool worker from the current manifest.
-		if err := r.createPool(ctx, key, manifest); err != nil {
-			return 0, err
+		if startErr, err = r.createPool(ctx, key, manifest); err != nil {
+			return 0, nil, err
 		}
 		r.setPoolSig(key, sig)
 	case sig != r.poolSig(key):
 		// membership/artifact changed → rebuild: rewrite the manifest file then restart the
 		// existing pool worker (pool.mjs reads its manifest at boot only, ADR-0046 workaround).
 		// Restart reuses the instance id (a new PID), so a member never gets a second worker.
-		if err := r.restartPool(ctx, key, insts, manifest); err != nil {
-			return 0, err
+		if startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
+			return 0, nil, err
 		}
 		r.setPoolSig(key, sig)
 	case !running:
 		// the pool worker exists but is stopped (a prior reclaim) or exited, and a member now wants
 		// it up with the same manifest → restart it.
-		if err := r.restartPool(ctx, key, insts, manifest); err != nil {
-			return 0, err
+		if startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
+			return 0, nil, err
 		}
 	default:
 		// up, manifest unchanged → no-op (the idempotent path; no restart).
@@ -248,9 +250,9 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 
 	insts, err = r.namedInstances(ctx, key.Namespace, poolName)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return runningCount(insts), nil
+	return runningCount(insts), startErr, nil
 }
 
 // admittedMembers returns the key's admitted members (the first PoolLimit by name), the set
@@ -322,16 +324,16 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 // its manifest from the FILE named by FUNCD_POOL_MANIFEST (not inline JSON), so the reconciler
 // writes the admitted members' manifest to a temp file and passes its path. The process driver
 // injects FUNCD_PORTFILE and the pool host writes its bound port back (ADR-0030 handshake), so
-// the pool worker's address resolves exactly like a solo shim.
-func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manifest []poolManifestEntry) error {
+// the pool worker's address resolves exactly like a solo shim. It returns the Start error apart (startPoolInstance).
+func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manifest []poolManifestEntry) (startErr, err error) {
 	const op = "function.createPool"
 	manifestPath, err := writePoolManifest(key, manifest)
 	if err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "write pool manifest")
+		return nil, fault.Wrapf(err, fault.Internal, op, "write pool manifest")
 	}
 	poolName := poolInstanceName(key)
 	if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: key.Namespace, Name: poolName, Replica: 0}); perr != nil {
-		return fault.Wrapf(perr, fault.KindOf(perr), op, "schedule pool worker")
+		return nil, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule pool worker")
 	}
 	spec := runtime.WorkerSpec{
 		Namespace: key.Namespace,
@@ -343,23 +345,36 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manife
 	}
 	inst, cerr := r.runtime.Create(ctx, spec)
 	if cerr != nil {
-		return fault.Wrapf(cerr, fault.KindOf(cerr), op, "create pool worker")
+		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create pool worker")
 	}
-	if serr := r.runtime.Start(ctx, inst.ID); serr != nil {
-		return fault.Wrapf(serr, fault.KindOf(serr), op, "start pool worker")
-	}
-	return nil
+	return r.startPoolInstance(ctx, []runtime.Instance{inst}), nil
 }
 
 // restartPool stops the existing pool worker and creates it again under the same instance id from
 // the rewritten manifest, so the pool host re-reads the manifest at boot and its CreatedAt is its
 // boot time, which readiness times (ADR-0030 §4b). The restart is observable as a new PID
-// (ADR-0046 V1 rebuild). The members' artifacts are already materialized by poolManifest.
-func (r *Reconciler) restartPool(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, manifest []poolManifestEntry) error {
+// (ADR-0046 V1 rebuild). The members' artifacts are already materialized by poolManifest. It returns the Start error
+// apart (startPoolInstance).
+func (r *Reconciler) restartPool(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, manifest []poolManifestEntry) (startErr, err error) {
 	if err := r.stopPool(ctx, insts); err != nil {
-		return err
+		return nil, err
 	}
 	return r.createPool(ctx, key, manifest)
+}
+
+// startPoolInstance (re)starts the existing pool worker instance(s) — used both to wake a
+// reclaimed pool back up and as the second half of a rebuild. The process driver re-execs the
+// command, so the pool host re-reads its (possibly rewritten) manifest file. Its error is a Start error, which the pass
+// writes to the member's status instead of failing before it (issue #359).
+func (r *Reconciler) startPoolInstance(ctx context.Context, insts []runtime.Instance) error {
+	const op = "function.startPoolInstance"
+	for _, in := range insts {
+		if serr := r.runtime.Start(ctx, in.ID); serr != nil {
+			r.logger.Warn("could not start pool worker", "instance", in.ID, "err", serr)
+			return fault.Wrapf(serr, fault.KindOf(serr), op, "start pool worker")
+		}
+	}
+	return nil
 }
 
 // writePoolManifest serializes the manifest to a stable per-key file and returns its path. The

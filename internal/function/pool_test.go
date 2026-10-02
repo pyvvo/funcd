@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/workflow"
 )
@@ -412,4 +413,39 @@ func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
 	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
 	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready")
 	require.Zero(t, res.RequeueAfter, "a Failed member is not polled again")
+}
+
+// Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
+// naming the start error, as a solo worker does (#73), and a later pass creates the pool worker again, writing
+// nothing while it still fails.
+func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
+	t.Parallel()
+	rt := &createCounter{Runtime: process.New()}
+	t.Cleanup(func() { _ = rt.Close() })
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
+		d.Runtime = rt
+		d.PoolShimCommand = []string{"/nonexistent/bin/node", "/opt/funcd/pool.mjs"}
+	})
+	members := []string{"m1", "m2"}
+	for _, name := range members {
+		h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "issue359" })
+	}
+	for _, name := range members {
+		res := h.reconcile(t, name)
+		fn := h.getFn(t, name)
+		require.Equal(t, v1.PhaseFailed, fn.Status.Phase, name)
+		require.Equal(t, fn.Generation, fn.Status.ObservedGeneration, name)
+		ready := h.condition(t, name, "Ready")
+		require.Equal(t, v1.ConditionFalse, ready.Status, name)
+		require.Equal(t, "StartFailed", ready.Reason, name)
+		require.Contains(t, ready.Message, "/nonexistent/bin/node", name)
+		require.Equal(t, v1.ConditionTrue, h.shapeValid(t, name), "a pool worker that cannot start is not a shape failure")
+		require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
+	}
+
+	rv := h.getFn(t, "m1").ResourceVersion
+	res := h.reconcile(t, "m1")
+	require.EqualValues(t, 3, rt.creates.Load(), "a pool worker that is not running is created again on each pass (issue #355)")
+	require.Equal(t, rv, h.getFn(t, "m1").ResourceVersion, "a repeated start failure writes nothing")
+	require.Equal(t, testPeriod, res.RequeueAfter)
 }
