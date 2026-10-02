@@ -124,22 +124,48 @@ func (h *headerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hi
 func gzipMW() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-				next.ServeHTTP(w, r)
-				return
-			}
-			gw := &gzipWriter{ResponseWriter: w}
+			gw := &gzipWriter{ResponseWriter: w, accept: acceptsGzip(r.Header.Values("Accept-Encoding"))}
 			defer gw.close()
 			next.ServeHTTP(gw, r)
 		})
 	}
 }
 
+// acceptsGzip reports whether Accept-Encoding names gzip (or its alias x-gzip) with a q-value above zero:
+// q=0 means "not acceptable" (RFC 9110 §12.5.3). A malformed q-value counts as zero, since identity is
+// always safe.
+func acceptsGzip(values []string) bool {
+	accept := false
+	for _, v := range values {
+		for member := range strings.SplitSeq(v, ",") {
+			coding, params, _ := strings.Cut(member, ";")
+			if c := strings.ToLower(strings.TrimSpace(coding)); c != "gzip" && c != "x-gzip" {
+				continue
+			}
+			q := 1.0
+			for p := range strings.SplitSeq(params, ";") {
+				k, val, ok := strings.Cut(p, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+					continue
+				}
+				var err error
+				if q, err = strconv.ParseFloat(strings.TrimSpace(val), 64); err != nil {
+					q = 0
+				}
+			}
+			accept = q > 0
+		}
+	}
+	return accept
+}
+
 // gzipWriter gzips the response, but only for non-streaming, non-upgrade responses; it decides at the
-// first WriteHeader/Write (once the Content-Type/Connection headers are set) and forwards Flusher/Hijacker.
+// final WriteHeader or the first Write (once the Content-Type/Connection headers are set) and forwards
+// Flusher/Hijacker.
 type gzipWriter struct {
 	http.ResponseWriter
 	gz      *gzip.Writer
+	accept  bool
 	decided bool
 }
 
@@ -159,13 +185,20 @@ func (g *gzipWriter) decide(code int) {
 	if streaming || unencodable || h.Get("Content-Encoding") != "" {
 		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
 	}
+	h.Add("Vary", "Accept-Encoding") // RFC 9110 §12.5.5: both the gzip and the identity variant depend on it
+	if !g.accept {
+		return
+	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown
 	g.gz = gzip.NewWriter(g.ResponseWriter)
 }
 
 func (g *gzipWriter) WriteHeader(code int) {
-	g.decide(code)
+	// A 1xx is interim: httputil.ReverseProxy relays it and then clears the headers (#305).
+	if code < 100 || code > 199 || code == http.StatusSwitchingProtocols {
+		g.decide(code)
+	}
 	g.ResponseWriter.WriteHeader(code)
 }
 

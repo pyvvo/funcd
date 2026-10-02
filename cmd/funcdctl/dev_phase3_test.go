@@ -175,6 +175,27 @@ func TestDetectWorkflow(t *testing.T) {
 	require.False(t, isWf, "a directory is never a workflow")
 }
 
+// `funcdctl dev workflow.yaml` decodes the Workflow as `funcdctl apply` does: a bare y/n key stays a
+// string key (#63) and an unknown key is rejected, not dropped (#64).
+func TestIssue317_DevDecodesWorkflowStrictly(t *testing.T) {
+	dir := t.TempDir()
+	const head = "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: w\nspec:\n"
+	okPath := filepath.Join(dir, "ok.yaml")
+	require.NoError(t, os.WriteFile(okPath, []byte(head+
+		"  steps:\n    - name: a\n      builtin:\n        pass: \"x\"\n      params:\n        y: 1\n        n: 2\n"), 0o600))
+	wf, isWf, err := detectWorkflow("op", okPath)
+	require.NoError(t, err)
+	require.True(t, isWf)
+	require.Len(t, wf.Spec.Steps, 1)
+	require.JSONEq(t, `{"y":1,"n":2}`, string(wf.Spec.Steps[0].Params))
+
+	bogusPath := filepath.Join(dir, "bogus.yaml")
+	require.NoError(t, os.WriteFile(bogusPath, []byte(head+
+		"  bogus: 1\n  steps:\n    - name: a\n      builtin:\n        pass: \"x\"\n"), 0o600))
+	_, _, err = detectWorkflow("op", bogusPath)
+	require.ErrorContains(t, err, "bogus")
+}
+
 // TestTagStem — the step-image tag stem is the segment after the last ':' (registry:ingest → ingest);
 // a tag-less or digest-pinned ref has no stem.
 func TestTagStem(t *testing.T) {

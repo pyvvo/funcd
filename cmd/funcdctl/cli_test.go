@@ -251,6 +251,27 @@ func TestScenarioCLIInspectReadsContract(t *testing.T) {
 	require.Contains(t, out.String(), "2020-12", "inspect renders the JSON Schema dialect")
 }
 
+// Issue #325: inspect splits off only a trailing @<digest>; an '@' inside a layout path stays in the path.
+func TestIssue325_InspectKeepsAtSignInLayoutPath(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.js")
+	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
+	ref := "oci-layout://" + filepath.Join(dir, "a@b") + ":tag"
+	schema := writeSchemaFile(t, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
+		`"additionalProperties":false},"output":{"type":"null"}}`)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", schema))
+	digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
+
+	for _, arg := range []string{ref, ref + "@" + digest} {
+		out.Reset()
+		require.NoError(t, execCLI(&out, nil, "inspect", arg), arg)
+		require.Contains(t, out.String(), `"name"`, arg)
+	}
+	require.NoDirExists(t, filepath.Join(dir, "a"), "inspect creates no layout at the path's prefix")
+}
+
 // scenario: cli-push-site (ADR-0139) — `push --site <dir> <ref>` packs a prebuilt web app as a site
 // artifact (no --schema needed) and prints <ref>@<digest>; the digest resolves as a site; and --site is
 // mutually exclusive with the function flags.
@@ -391,4 +412,25 @@ func TestIssue62_ApplyMultiDocumentAppliesEveryDocument(t *testing.T) {
 	require.Contains(t, err.Error(), `"md-bad"`)
 	_, err = c.Get(context.Background(), v1.KindConfigMap, "team-a", "md-valid")
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "no document is applied when one fails the pre-flight")
+}
+
+// Issue #316: a server rejection during a multi-document apply names the document (counted as the
+// decode errors count it) and the object; apply's help says it stops there and keeps what it applied.
+func TestIssue316_ApplyRejectionNamesTheDocument(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+
+	otherNS := strings.Replace(configMapDoc("md-rejected"), "namespace: team-a", "namespace: team-b", 1)
+	multi := configMapDoc("md-kept") + "---\n# a comment-only document still counts\n---\n" + otherNS
+	var out bytes.Buffer
+	err := execCLI(&out, c, "apply", "-f", writeManifest(t, multi))
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "%v", err)
+	require.Contains(t, err.Error(), `document 3 (ConfigMap "md-rejected")`)
+	require.Contains(t, out.String(), "applied ConfigMap/md-kept")
+	_, err = c.Get(context.Background(), v1.KindConfigMap, "team-a", "md-kept")
+	require.NoError(t, err, "a document before the rejected one stays applied")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, nil, "apply", "--help"))
+	require.Contains(t, out.String(), "stops at the first error")
 }

@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -150,6 +154,62 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	gotBlob, err := inst2.blob.Get(ctx, blobKey)
 	require.NoError(t, err, "the blob object survived the restart")
 	require.Equal(t, blobVal, gotBlob)
+}
+
+// conflictOnFirstPut answers the first PUT of one Function with the store conflict the control plane returns
+// when a controller writes the object's status between the API's read and its update (ADR-0018 read-RV-then-
+// update), and passes every other request through.
+type conflictOnFirstPut struct {
+	next http.RoundTripper
+	name string
+	hit  atomic.Bool
+}
+
+func (c *conflictOnFirstPut) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodPut || r.URL.Path != "/apis/funcd.io/v1alpha1/namespaces/default/functions/"+c.name ||
+		!c.hit.CompareAndSwap(false, true) {
+		return c.next.RoundTrip(r)
+	}
+	rec := httptest.NewRecorder()
+	fault.WriteProblem(rec, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", c.name))
+	return rec.Result(), nil
+}
+
+// The second boot of a --persist instance re-applies the restored resources while its controllers already
+// write their status, so a re-apply can lose the optimistic update with a Conflict: the boot must re-apply,
+// not fail.
+func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
+	requireRuntime(t)
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	a := &cli{out: io.Discard}
+	cfg := devConfig{persist: true, persistTo: t.TempDir()}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	inst1, err := a.startDev(ctx1, dir, "", cfg)
+	require.NoError(t, err)
+	name := inst1.functions[0]
+	cancel1()
+	require.NoError(t, inst1.stop())
+
+	// startDev builds its SDK client from http.DefaultClient, so its transport is the only seam on the re-apply.
+	prev := http.DefaultClient.Transport
+	next := prev
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	conflict := &conflictOnFirstPut{next: next, name: name}
+	http.DefaultClient.Transport = conflict
+	t.Cleanup(func() { http.DefaultClient.Transport = prev })
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	t.Cleanup(cancel2)
+	inst2, err := a.startDev(ctx2, dir, "", cfg)
+	require.NoError(t, err, "a Conflict on the re-apply is retried, not fatal to the boot")
+	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
+	require.True(t, conflict.hit.Load(), "the re-apply met the injected Conflict")
 }
 
 // scenario: dev-persist-survives-restart (secrets facet) — secrets are NEVER served from the durable

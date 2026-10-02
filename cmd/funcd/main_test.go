@@ -3,7 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -22,6 +26,7 @@ import (
 
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -112,6 +117,32 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.Shutdown(context.Background()))
 	require.DirExists(t, filepath.Join(cwd, "data", "blob"))
+}
+
+// issue 331: the daemon starts on an absolute storage.dataDir that holds URL syntax ('#', '?', '%') and creates
+// nothing beside it. Where the bucket's objects land is checked by the gocloud package's TestIssue331 test.
+func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			base := shortDataDir(t)
+			dataDir := filepath.Join(base, name)
+			opts, label, _, err := substrateOptions(context.Background(), false, dataDir)
+			require.NoError(t, err)
+			require.Equal(t, "file", label)
+			all := append([]funcd.Option{
+				funcd.Production(),
+				funcd.WithStore(store.New(memory.New())),
+				funcd.WithRuntime(process.New()),
+				funcd.WithDevAuth("t", "default"),
+			}, opts...)
+			p, err := funcd.New(all...)
+			require.NoError(t, err)
+			require.NoError(t, p.Shutdown(context.Background()))
+			entries, err := os.ReadDir(base)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "nothing lands outside the dataDir")
+		})
+	}
 }
 
 // scenario: daemon-version-and-serve (ADR-0042) — `funcd version` prints the stamped build
@@ -478,6 +509,52 @@ func TestIssue153_FunclogConfigBlockLoadsAndMaps(t *testing.T) {
 	}
 }
 
+// A negative workflow or eventing duration fails startup with fault.Invalid naming the key, as a malformed one
+// does, instead of silently turning the setting off; 0 keeps its documented meaning (issue #333).
+func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	load := func(t *testing.T) config.Config {
+		dir := shortDataDir(t)
+		path := filepath.Join(dir, "funcdconfig.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+				"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+		cfg, err := config.Load(path, config.Flags{})
+		require.NoError(t, err)
+		return cfg
+	}
+	keys := []struct {
+		key string
+		set func(*config.Config, string)
+	}{
+		{"workflow.defaultStepTimeout", func(c *config.Config, v string) { c.Workflow.DefaultStepTimeout = v }},
+		{"workflow.retention", func(c *config.Config, v string) { c.Workflow.Retention = v }},
+		{"eventing.deadletter.retention", func(c *config.Config, v string) { c.Eventing.Deadletter.Retention = v }},
+		{"eventing.blobPollInterval", func(c *config.Config, v string) { c.Eventing.BlobPollInterval = v }},
+	}
+	for _, k := range keys {
+		for _, bad := range []string{"-3h", "bogus"} {
+			t.Run(k.key+"="+bad, func(t *testing.T) {
+				cfg := load(t)
+				k.set(&cfg, bad)
+				_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+				require.Error(t, err)
+				require.Equal(t, fault.Invalid, fault.KindOf(err))
+				require.ErrorContains(t, err, k.key)
+			})
+		}
+	}
+	t.Run("zero", func(t *testing.T) {
+		cfg := load(t)
+		for _, k := range keys {
+			k.set(&cfg, "0s")
+		}
+		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+		require.NoError(t, err)
+		require.NoError(t, closeExec())
+	})
+}
+
 // captureSpy records whether the platform installed the funclog capture hook (runtime.LogCapturer, ADR-0081).
 type captureSpy struct {
 	fnruntime.Runtime
@@ -604,6 +681,27 @@ func TestIssue93_KeyMismatchFailsAtStartup(t *testing.T) {
 	seed(plaintext, "")
 	_, err = buildStore(fileCfg(plaintext, keyA), root)
 	require.ErrorContains(t, err, "secrets.encryptionKeyFile", "key added over plaintext Secrets")
+}
+
+// mainSource is main.go as compiled, so a doc-comment check reads the same bytes the build does.
+//
+//go:embed main.go
+var mainSource []byte
+
+// Issue #329: buildStore's doc comment ran straight into buildKVStore's, so Go attached both to
+// buildKVStore and left buildStore undocumented. Each must carry its own doc comment.
+func TestIssue329_BuildFuncsCarryTheirOwnDocComment(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", mainSource, parser.ParseComments)
+	require.NoError(t, err)
+	docs := map[string]string{}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+			docs[fn.Name.Name] = fn.Doc.Text()
+		}
+	}
+	for _, name := range []string{"buildStore", "buildKVStore"} {
+		assert.Truef(t, strings.HasPrefix(docs[name], name+" "), "doc comment on %s = %q, want it to start with %q", name, docs[name], name)
+	}
 }
 
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be

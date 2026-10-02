@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -307,18 +306,13 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	// Workflow engine (ADR-0094): durable run state in its own Badger instance at Workflow.DataDir
 	// (default <dataDir>/workflow; in-memory when the substrate is memory), plus the workflow.* tunables.
-	var stepTimeout, retention time.Duration
-	if cfg.Workflow.DefaultStepTimeout != "" {
-		stepTimeout, err = time.ParseDuration(cfg.Workflow.DefaultStepTimeout)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.defaultStepTimeout %q: %w", cfg.Workflow.DefaultStepTimeout, err)
-		}
+	stepTimeout, err := parseDuration("workflow.defaultStepTimeout", cfg.Workflow.DefaultStepTimeout, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
-	if cfg.Workflow.Retention != "" {
-		retention, err = time.ParseDuration(cfg.Workflow.Retention)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse workflow.retention %q: %w", cfg.Workflow.Retention, err)
-		}
+	retention, err := parseDuration("workflow.retention", cfg.Workflow.Retention, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	workflowDir := ""
 	if cfg.Storage.Mode != "memory" {
@@ -328,12 +322,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
-	var dlRetention time.Duration
-	if cfg.Eventing.Deadletter.Retention != "" {
-		dlRetention, err = time.ParseDuration(cfg.Eventing.Deadletter.Retention)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.deadletter.retention %q: %w", cfg.Eventing.Deadletter.Retention, err)
-		}
+	dlRetention, err := parseDuration("eventing.deadletter.retention", cfg.Eventing.Deadletter.Retention, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	deadletterDir := ""
 	if cfg.Storage.Mode != "memory" {
@@ -342,12 +333,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries))
 
 	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
-	var blobPoll time.Duration
-	if cfg.Eventing.BlobPollInterval != "" {
-		blobPoll, err = time.ParseDuration(cfg.Eventing.BlobPollInterval)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse eventing.blobPollInterval %q: %w", cfg.Eventing.BlobPollInterval, err)
-		}
+	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithBlobPollInterval(blobPoll))
 	// Site default index document (ADR-0139, F103).
@@ -400,23 +388,38 @@ func parseLevel(level string) slog.Level {
 	}
 }
 
-// buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
-// when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
-// unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
 // or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger and
 // storage.mode is file (storage.mode: memory keeps the KV in memory, ADR-0043). When
 // kvstore.backup (ADR-0067) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
 // the driver — DR export to an object-storage target, and a transactional-outbox change-feed to the bus.
 // The returned start func launches their loops (a no-op otherwise). Enable-without-target / enable-without-
-// sink ⇒ fault.Invalid at startup.
+// sink, or either enabled on the memory engine ⇒ fault.Invalid at startup; storage.mode memory ignores them
+// with a warning.
 func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
 	noop := func(context.Context) {}
-	if cfg.Kvstore.Engine != "badger" {
-		return kvmemory.New(), noop, nil
+	if cfg.Kvstore.Backup.Enabled && cfg.Kvstore.Backup.Target == "" {
+		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+	}
+	if cfg.Kvstore.Cdc.Enabled && cfg.Kvstore.Cdc.Sink == "" {
+		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
 	}
 	if cfg.Storage.Mode == "memory" {
-		logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
+		if cfg.Kvstore.Engine == "badger" {
+			logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
+		}
+		if cfg.Kvstore.Backup.Enabled || cfg.Kvstore.Cdc.Enabled {
+			logger.Warn("funcd: storage.mode memory ignores kvstore.backup and kvstore.cdc — no KV backup or change feed runs")
+		}
+		return kvmemory.New(), noop, nil
+	}
+	if cfg.Kvstore.Engine != "badger" {
+		if cfg.Kvstore.Backup.Enabled {
+			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled requires kvstore.engine: badger")
+		}
+		if cfg.Kvstore.Cdc.Enabled {
+			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled requires kvstore.engine: badger")
+		}
 		return kvmemory.New(), noop, nil
 	}
 	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load
@@ -428,9 +431,6 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 	var bucket blob.Bucket
 	var bcfg kvbadger.BackupConfig
 	if cfg.Kvstore.Backup.Enabled {
-		if cfg.Kvstore.Backup.Target == "" {
-			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
-		}
 		interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
 		if err != nil {
 			return nil, noop, err
@@ -454,9 +454,6 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 	var sink bus.Bus
 	var ccfg kvbadger.CDCConfig
 	if cfg.Kvstore.Cdc.Enabled {
-		if cfg.Kvstore.Cdc.Sink == "" {
-			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
-		}
 		if theBus == nil {
 			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
 		}
@@ -492,16 +489,29 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 // parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
 // value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
 func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
+	return parseDuration(key, s, def, false)
+}
+
+// parseDuration is parseDurationOr that, with zeroOK, also accepts 0 for a key where 0 keeps its documented
+// meaning (none, never or the default). A negative value is always fault.Invalid.
+func parseDuration(key, s string, def time.Duration, zeroOK bool) (time.Duration, error) {
 	if s == "" {
 		return def, nil
 	}
 	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fault.Invalidf("buildKVStore", "config key %q has invalid value %q (want a positive Go duration, e.g. 30s)", key, s)
+	if err == nil && (d > 0 || d == 0 && zeroOK) {
+		return d, nil
 	}
-	return d, nil
+	want := "a positive"
+	if zeroOK {
+		want = "a non-negative"
+	}
+	return 0, fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s Go duration, e.g. 30s)", key, s, want)
 }
 
+// buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
+// when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
+// unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {
@@ -594,7 +604,7 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 	if err := os.MkdirAll(natsDir, 0o700); err != nil {
 		return nil, "", nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
 	}
-	bucket, err := gocloud.Open(ctx, "file://"+blobDir)
+	bucket, err := gocloud.Open(ctx, gocloud.FileURL(blobDir))
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("open file blob: %w", err)
 	}
@@ -688,7 +698,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if perr != nil {
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
-	if reason := pythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
+	if reason := process.PythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
 		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
 			"python", python, "reason", reason)
 		return opts, noopClose, nil
@@ -704,20 +714,6 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
-}
-
-// pythonShimLoadError imports the extracted shim (shimDir holds funcd_shim) with the interpreter, so the
-// probe checks what the shim really needs instead of restating it. "" ⇒ it loads; otherwise the
-// interpreter's last output line (e.g. the SyntaxError or ModuleNotFoundError).
-func pythonShimLoadError(ctx context.Context, python, shimDir string) string {
-	out, err := exec.CommandContext(ctx, python, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import funcd_shim.shim", shimDir).CombinedOutput()
-	if err == nil {
-		return ""
-	}
-	if msg := strings.TrimSpace(string(out)); msg != "" {
-		return msg[strings.LastIndexByte(msg, '\n')+1:]
-	}
-	return err.Error()
 }
 
 // pythonAtLeast314 reports whether the interpreter at path is Python ≥3.14 (the floor for the

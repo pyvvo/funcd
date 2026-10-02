@@ -3,7 +3,10 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -394,6 +397,90 @@ func TestIssue104_ConvergeErrorMarksCatalogNotReady(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, v1.PhaseReady, get().Status.Phase)
 	require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
+}
+
+// TestIssue372_NotReadyGateStopsServing: a Ready catalog that loses its Bucket or a bound Secret stops its engine,
+// unpublishes its endpoint and stops forwarding through the proxy consumers were injected with; once the binding is
+// back it is Ready again on the same proxy URL (#59).
+func TestIssue372_NotReadyGateStopsServing(t *testing.T) {
+	cases := []struct {
+		name   string
+		unbind func(t *testing.T, st store.Store, secrets *fakeSecrets)
+		rebind func(t *testing.T, st store.Store, secrets *fakeSecrets)
+	}{
+		{
+			name: "bucket-deleted",
+			unbind: func(t *testing.T, st store.Store, _ *fakeSecrets) {
+				require.NoError(t, st.Delete(context.Background(), v1.KindBucket.GVK(), "default", "lakehouse", ""))
+			},
+			rebind: func(t *testing.T, st store.Store, _ *fakeSecrets) { seedCatalogBucket(t, st) },
+		},
+		{
+			name: "secret-deleted",
+			unbind: func(_ *testing.T, _ store.Store, secrets *fakeSecrets) {
+				secrets.err = errors.New(`secret "quack" not found`)
+			},
+			rebind: func(_ *testing.T, _ store.Store, secrets *fakeSecrets) { secrets.err = nil },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var engineHits atomic.Int32
+			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				engineHits.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(engine.Close)
+			st := store.New(storemem.New())
+			seedCatalogBucket(t, st)
+			secrets := &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			t.Cleanup(mgr.Shutdown)
+			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: strings.TrimPrefix(engine.URL, "http://")}}
+			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+				d.Secrets = secrets
+				d.Proxy = mgr
+			})
+			cs := mkCatalogService("lake")
+			cs.Spec.Secrets = []v1.ObjectName{"quack"}
+			_, err := st.Create(ctx, cs)
+			require.NoError(t, err)
+			get := func() *v1.CatalogService {
+				obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+				require.NoError(t, gerr)
+				return obj.(*v1.CatalogService)
+			}
+			query := func(addr string) int {
+				resp, qerr := http.Get("http://" + addr + "/")
+				require.NoError(t, qerr)
+				require.NoError(t, resp.Body.Close())
+				return resp.StatusCode
+			}
+
+			reconcileOnce(t, r, "lake")
+			require.Equal(t, v1.PhaseReady, get().Status.Phase)
+			proxyURL := get().Status.Endpoint
+			require.Equal(t, http.StatusOK, query(proxyURL))
+			require.Equal(t, int32(1), engineHits.Load())
+
+			tc.unbind(t, st, secrets)
+			reconcileOnce(t, r, "lake")
+			got := get()
+			require.Equal(t, v1.PhasePending, got.Status.Phase)
+			require.Empty(t, got.Status.Endpoint, "a not-Ready catalog publishes no endpoint")
+			require.Equal(t, []provider.ProviderRef{{Namespace: "default", Name: "lake"}}, prov.tornDown, "the engine is stopped")
+			require.Equal(t, http.StatusServiceUnavailable, query(proxyURL), "the proxy consumers hold no longer forwards")
+			require.Equal(t, int32(1), engineHits.Load(), "no query reached the engine")
+
+			tc.rebind(t, st, secrets)
+			reconcileOnce(t, r, "lake")
+			require.Equal(t, v1.PhaseReady, get().Status.Phase)
+			require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
+			require.Equal(t, http.StatusOK, query(proxyURL))
+			require.Equal(t, int32(2), engineHits.Load())
+		})
+	}
 }
 
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine

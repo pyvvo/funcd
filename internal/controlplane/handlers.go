@@ -89,6 +89,7 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	if admitted, err = withStatus(admitted, nil); err != nil {
 		return nil, err
 	}
+	withServerMeta(admitted, nil)
 	return h.store.Create(ctx, admitted)
 }
 
@@ -178,6 +179,7 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	if admitted, err = withStatus(admitted, cur); err != nil {
 		return nil, err
 	}
+	withServerMeta(admitted, cur)
 	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
 	return h.store.Update(ctx, admitted)
 }
@@ -224,6 +226,18 @@ func withStatus(obj, from v1.Object) (v1.Object, error) {
 		return nil, fault.Internalf(op, "unmarshal: %v", err)
 	}
 	return fresh, nil
+}
+
+// withServerMeta sets obj's ownerReferences and deletionTimestamp to from's, or clears them when from is nil.
+// ADR-0048 ignores both on input, and the store cannot drop them itself: reconcilers set owner references
+// through store.Create and store.Update.
+func withServerMeta(obj, from v1.Object) {
+	m := obj.GetObjectMeta()
+	m.OwnerReferences, m.DeletionTime = nil, nil
+	if from != nil {
+		fm := from.GetObjectMeta()
+		m.OwnerReferences, m.DeletionTime = fm.OwnerReferences, fm.DeletionTime
+	}
 }
 
 // jsonFields returns obj's top-level JSON fields.

@@ -3,6 +3,7 @@ package funclog_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -310,6 +312,24 @@ func TestIssue32_LongLineIsSkipped(t *testing.T) {
 		_, err = r.Read(context.Background())
 		require.ErrorIs(t, err, io.EOF)
 	})
+}
+
+// A failed channel returns the same error on every read (a reset socket). Pump seals what it read
+// and returns, with one warning, instead of retrying the read in a loop (issue #364).
+func TestIssue364_ChannelReadErrorEndsPump(t *testing.T) {
+	b := memBucket(t)
+	channel := io.MultiReader(
+		strings.NewReader(`{"sev":"INFO","body":"before","funcd.source":"console"}`+"\n"),
+		iotest.ErrReader(errors.New("connection reset by peer")),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	warns := &warnCounter{limit: 100, cancel: cancel}
+
+	err := funclog.Pump(ctx, funclog.NewNDJSONReader(channel), newSink(t, b, 1<<20), defaultRes(), slog.New(slog.NewTextHandler(warns, nil)))
+	require.Equal(t, 1, warns.n, "one warning for the failed channel, not a spin")
+	require.NoError(t, err)
+	require.Equal(t, []string{"before"}, logBodies(readBackOne(t, b, "logs/")))
 }
 
 // tickClock advances one nanosecond per call, so every Flush gets its own segment key, and yields

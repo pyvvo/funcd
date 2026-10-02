@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -14,13 +15,15 @@ import (
 // Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private
 // http.Server per catalog, each fronting that catalog's engine. The CatalogService reconciler calls
 // Ensure on its Ready branch to (re)bind a node-private listener for the catalog and learn the proxy
-// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), and Remove on teardown.
+// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), Suspend while it is not Ready,
+// and Remove on teardown.
 // One listener endpoint per catalog fixes the PEP's target catalog by the endpoint (the proxy takes
 // the namespace from the resolved principal — see NewCatalogProxy).
 type Manager struct {
-	keys CatalogKeys
-	pdp  auth.Authorizer
-	log  *slog.Logger
+	keys     CatalogKeys
+	pdp      auth.Authorizer
+	log      *slog.Logger
+	proxyLog *slog.Logger // the proxies' logger (component catalog.gateway)
 
 	// bindHost is the interface each proxy listens on; publishHost is the host injected into functions as
 	// FUNCD_CATALOG_<ALIAS>_URL. They differ under containerd (ADR-0137, mirroring the s3gateway
@@ -86,6 +89,7 @@ func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authori
 		keys:        keys,
 		pdp:         pdp,
 		log:         log.With("component", "catalog.gateway.manager"),
+		proxyLog:    log.With("component", "catalog.gateway"),
 		bindHost:    bindHost,
 		publishHost: publishHost,
 		servers:     make(map[string]*managedProxy),
@@ -115,7 +119,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		if existing.upstream != upstream || existing.engineToken != engineToken {
 			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
 			// consumers already hold keeps working.
-			existing.handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
+			existing.handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
 			existing.upstream, existing.engineToken = upstream, engineToken
 			m.log.Debug("catalog proxy retargeted", "catalog", key, "upstream", upstream)
 		}
@@ -127,8 +131,8 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
 	handler := &retargetable{}
-	handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
-	srv := &http.Server{Handler: handler}
+	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
+	srv := newProxyServer(handler)
 	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp
 
@@ -154,6 +158,22 @@ func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	}
 }
 
+// Suspend keeps a catalog's listener, so the URL consumers were injected with stays valid (#59), but answers every
+// request 503 and drops the engine target and token until Ensure retargets it: a not-Ready catalog serves no caller
+// (#372). Suspending an unknown catalog is a no-op.
+func (m *Manager) Suspend(ns v1.NamespaceName, name v1.ObjectName) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mp, ok := m.servers[managerKey(ns, name)]; ok {
+		mp.handler.set(http.HandlerFunc(catalogNotReady))
+		mp.upstream, mp.engineToken = "", ""
+	}
+}
+
+func catalogNotReady(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "catalog not ready", http.StatusServiceUnavailable)
+}
+
 // Shutdown stops every running proxy (daemon shutdown). Thread-safe and idempotent.
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
@@ -169,6 +189,14 @@ func (m *Manager) closeProxy(key string, mp *managedProxy) {
 	_ = mp.server.Close()
 	delete(m.servers, key)
 	m.log.Debug("catalog proxy removed", "catalog", key)
+}
+
+// newProxyServer builds a proxy's http.Server. The read timeouts cut off a peer that stalls before the PEP has
+// read its token, as on the data plane (issue #312); net/http clears the read deadline once the body is read,
+// so a long query is not cut. IdleTimeout outlasts the 90 s client keep-alive of the data plane's edge reverse
+// proxy (ADR-0138), so that client closes an idle connection first.
+func newProxyServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 }
 
 // publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral

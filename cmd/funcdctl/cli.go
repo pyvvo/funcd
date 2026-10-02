@@ -133,7 +133,10 @@ func (a *cli) applyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply a manifest of one or more YAML documents, or JSON (- for stdin)",
-		Args:  cobra.NoArgs,
+		Long: "Apply a manifest of one or more YAML documents, or JSON (- for stdin).\n\n" +
+			"Every document is validated offline first; then the documents are applied in order. Apply stops at " +
+			"the first error the server returns and names that document; the documents before it stay applied.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
 				return fault.Invalidf("funcdctl apply", "usage: apply -f <file.yaml>")
@@ -142,12 +145,13 @@ func (a *cli) applyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			objs, err := sdk.DecodeManifests(data)
+			docs, err := sdk.DecodeManifestDocuments(data)
 			if err != nil {
 				return err
 			}
 			// Pre-flight: the shared api/types validator, offline, on every document before any network call.
-			for _, obj := range objs {
+			for _, doc := range docs {
+				obj := doc.Object
 				if verr := obj.Validate(); verr != nil {
 					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
 						obj.GroupVersionKind().Kind, obj.GetName())
@@ -157,10 +161,12 @@ func (a *cli) applyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, obj := range objs {
+			for _, doc := range docs {
+				obj := doc.Object
 				applied, err := c.Apply(cmd.Context(), obj)
 				if err != nil {
-					return err
+					return fault.Wrapf(err, fault.KindOf(err), "funcdctl apply", "document %d (%s %q)",
+						doc.Number, obj.GroupVersionKind().Kind, obj.GetName())
 				}
 				if err := a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName()); err != nil {
 					return err
@@ -342,7 +348,7 @@ func (a *cli) inspectCmd() *cobra.Command {
 // splitRefDigest splits "<ref>@<digest>" into the ref and the (possibly empty) digest. A local layout
 // ref keeps its own "oci-layout://…" scheme; only a trailing "@sha256:…" is treated as the digest.
 func splitRefDigest(arg string) (ref, digest string) {
-	if i := strings.LastIndex(arg, "@"); i >= 0 {
+	if i := strings.LastIndex(arg, "@"); i >= 0 && artifact.IsDigest(arg[i+1:]) {
 		return arg[:i], arg[i+1:]
 	}
 	return arg, ""

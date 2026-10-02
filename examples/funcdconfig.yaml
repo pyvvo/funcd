@@ -19,6 +19,42 @@ kind: FuncdConfig                 # optional
 server:
   listenAddr: 127.0.0.1:8080      # control-plane API. default: 0.0.0.0:8080
   dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress. default: 127.0.0.1:0 (ephemeral)
+  # tls:                          # HTTPS on both listeners (ADR-0111)
+  #   enabled: false              # default: false (plaintext)
+  #   mode: selfsigned            # selfsigned | provided | acme. default: selfsigned
+  #   hosts:                      # extra certificate hosts, merged with the routed hosts. default: none
+  #   certFile: ""                # PEM cert (chain), mode: provided. default: ""
+  #   keyFile: ""                 # PEM key, mode: provided. default: ""
+  #   email: ""                   # ACME account email, mode: acme. default: ""
+  #   caDir: ""                   # ACME directory URL, mode: acme. default: "" ⇒ Let's Encrypt
+  # limits:                       # data-plane ingress limits (ADR-0112)
+  #   ratePerMin: 0               # requests per minute per key. default: 0 (rate limit off)
+  #   burst: 0                    # token-bucket depth. default: 0 ⇒ ratePerMin
+  #   key: clientIP               # clientIP | function. default: clientIP
+  #   maxBodyBytes: 0             # request body cap. default: 0 (off)
+  #   maxInFlight: 0              # concurrent request cap. default: 0 (off)
+  # auth:
+  #   edge: false                 # enforce each target's auth stance on the data plane (ADR-0113). default: false
+  # observability:                # edge observability (ADR-0114)
+  #   metrics: false              # RED metrics. default: false
+  #   accessLog: false            # access log. default: false
+  #   trace: false                # edge trace span. default: false
+  # shaping:                      # edge response shaping (ADR-0114)
+  #   cors:
+  #     allowOrigins:             # setting origins turns CORS on. default: none (CORS off)
+  #     allowMethods:             # default: none
+  #     allowHeaders:             # default: none
+  #     maxAgeSeconds: 0          # preflight cache lifetime. default: 0 (no Access-Control-Max-Age)
+  #   headers:
+  #     set:                      # header → value, set on every response. default: none
+  #     remove:                   # headers removed from every response. default: none
+  #   compression: false          # gzip responses. default: false
+  # network:                      # worker egress isolation (ADR-0115/0117); Linux + containerd only
+  #   egress: false               # default-deny worker egress. default: false
+  #   egressGatewayPort: 0        # egress gateway host port; required when egress is on. default: 0
+  #   dnsForwarderPort: 0         # DNS forwarder host port; 0 ⇒ no egress gateway. default: 0
+  #   dnsResolver: ""             # upstream resolver host:port; required when egress is on. default: ""
+  #   internalAllow:              # node-service host:port addresses workers may reach. default: none
 
 # --- storage: the blob+bus substrate (ADR-0043) + the data root --------------------------------
 storage:
@@ -26,17 +62,37 @@ storage:
   dataDir: /tmp/funcd-demo        # data root (process shim + file-mode blob/nats). default: /var/lib/funcd
   # metastoreDir: ""              # control-plane metastore Badger dir (ADR-0065). default: <dataDir>/store
 
-# --- per-service store dirs: each service owns its OWN dedicated Badger instance (restore-class +
-#     service-ownership — never merged). Each defaults under <dataDir>; uncomment to relocate one.
-#     In storage.mode: memory these are unused (in-memory engines). --------------------------------
+# --- per-service stores: each service owns its OWN dedicated Badger instance (restore-class +
+#     service-ownership — never merged). Each store dir defaults under <dataDir>; uncomment to
+#     relocate one or to tune a service. In storage.mode: memory the dirs are unused (in-memory
+#     engines). ----------------------------------------------------------------------------------
 # kvstore:                        # function-facing KV service (ADR-0066)
 #   engine: memory                # memory | badger. default: memory (ephemeral)
 #   dataDir: ""                   # KV Badger dir when engine: badger. default: <dataDir>/kv
+#   maxStoresPerNamespace: 100    # KVStore count cap per namespace (ADR-0072); negative ⇒ no cap. default: 100
+#   backup:                       # DR export to object storage (ADR-0067); engine: badger only
+#     enabled: false              # default: false
+#     target: ""                  # bucket URL; required when enabled. default: ""
+#     interval: 30s               # incremental export cadence. default: 30s
+#     rebaseline: 24h             # full re-baseline cadence. default: 24h
+#     chunkBytes: 67108864        # max bytes per exported object. default: 67108864 (64 MiB)
+#   cdc:                          # change feed to the bus (ADR-0068); engine: badger only
+#     enabled: false              # default: false
+#     sink: ""                    # bus subject; required when enabled. default: ""
+#     retention: 24h              # change-log retention. default: 24h
 # workflow:                       # workflow engine (ADR-0094)
 #   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
+#   defaultStepTimeout: 300s      # per-step invocation timeout. default: 300s
+#   defaultRetry: 1               # per-step attempt cap when a step declares no retry. default: 1
+#   retention: 720h               # how long a terminal run is kept. default: 720h
+#   payloadLimit: 1048576         # max run input / step output bytes. default: 1048576 (1 MiB)
 # eventing:                       # Sensor delivery reliability (ADR-0118)
+#   deliveryAttempts: 3           # attempts before a failed action is dead-lettered. default: 3
+#   blobPollInterval: 15s         # poll cadence of blob: EventSources (ADR-0119). default: 15s
 #   deadletter:
 #     dataDir: ""                 # dead-letter-queue Badger dir. default: <dataDir>/deadletter
+#     retention: 720h             # how long a parked entry is kept. default: 720h
+#     maxEntries: 1000            # parked entries per namespace. default: 1000
 
 # --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
 auth:
@@ -53,9 +109,10 @@ runtime:
   #   snapshotter: overlayfs      # default: overlayfs
   #   cniBinDir: /opt/cni/bin     # CNI plugin dir. default: /opt/cni/bin
   #   cniConfDir: ""              # CNI conflist dir. default: <dataDir>/cni
+  #   stateDir: ""                # files funcd bind-mounts into workers (e.g. resolv.conf). default: <dataDir>/run
   #   subnetCIDR: 10.63.0.0/16    # lateral bridge subnet. default: 10.63.0.0/16
   #   imagePrefix: funcd/runtime- # curated image prefix. default: funcd/runtime-
-  #   imageOverride: {}           # map[runtimeFamily]ref — pull a runtime from a registry instead of the embedded tar
+  #   imageOverride:              # runtimeFamily → image ref, pulled instead of the embedded tar. default: none
 
 # --- secrets: at-rest encryption of Secret values (ADR-0022) -----------------------------------
 # secrets:
@@ -79,3 +136,19 @@ log:
 #   segmentMaxAge: 10s            # ...or after this age, whichever comes first. default: 10s
 #   bucket: funcd-system          # the observability bucket; funcd-system is the only value. default: funcd-system
 #   traces: true                  # capture per-invocation spans (moot when enabled: false). default: true
+
+# --- s3gateway: the S3-protocol frontend over the blob substrate (ADR-0080/0085) ----------------
+# s3gateway:
+#   enabled: false                # default: false (no listener)
+#   listenAddr: 127.0.0.1:9000    # default: 127.0.0.1:9000
+#   endpoint: ""                  # S3 URL given to spec.blob workers; a node address under containerd. default: "" ⇒ http://<listenAddr>
+#   maxUploadBytes: 1073741824    # buffered-object cap. default: 1073741824 (1 GiB)
+#   masterSecretFile: ""          # IAM master secret. default: "" ⇒ generated under <dataDir>/s3gateway
+
+# --- catalog: the per-CatalogService query proxies (ADR-0137) ----------------------------------
+# catalog:
+#   proxyHost: ""                 # host the proxies publish to functions; a node address under containerd. default: "" ⇒ 127.0.0.1
+
+# --- site: declarative static web apps (ADR-0139) ----------------------------------------------
+# site:
+#   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html

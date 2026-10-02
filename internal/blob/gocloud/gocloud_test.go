@@ -2,6 +2,8 @@ package gocloud_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,6 +38,38 @@ func TestScenario_DriverConformanceParity(t *testing.T) {
 			return b
 		})
 	})
+}
+
+// issue 331: FileURL keeps URL syntax in a directory name ('#', '?', '%') in the path, so an object written through
+// the bucket lands in exactly that directory: not in the sibling a "%41" escape decodes to, not in the working directory.
+func TestIssue331_FileURLBucketWritesIntoExactlyThatDirectory(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			t.Chdir(base)
+			dir, decoy := filepath.Join(base, name), filepath.Join(base, "pAq")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+			require.NoError(t, os.Mkdir(decoy, 0o700))
+			b, err := gocloud.Open(ctx, gocloud.FileURL(dir))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			require.NoError(t, b.Put(ctx, "k", []byte("v")))
+			got, err := os.ReadFile(filepath.Join(dir, "k"))
+			require.NoError(t, err)
+			require.Equal(t, "v", string(got))
+			inDecoy, err := os.ReadDir(decoy)
+			require.NoError(t, err)
+			require.Empty(t, inDecoy)
+			inBase, err := os.ReadDir(base)
+			require.NoError(t, err)
+			names := make([]string, 0, len(inBase))
+			for _, e := range inBase {
+				names = append(names, e.Name())
+			}
+			require.ElementsMatch(t, []string{name, "pAq"}, names)
+		})
+	}
 }
 
 // TestIssue160_UnstorableKeysAreInvalidAndNeverAlias: keys are opaque on every backend
@@ -100,6 +134,42 @@ func TestIssue160_UnstorableKeysAreInvalidAndNeverAlias(t *testing.T) {
 					require.Equal(t, fault.NotFound, fault.KindOf(err), "Get(%q) read the object of %q", other, key)
 				})
 			}
+		})
+	}
+}
+
+// TestIssue375_EscapeSequenceKeysNeverAlias: fileblob hex-escapes some runes of a key as
+// "__0x<hex>__" and decodes every such sequence when it lists, so a raw key holding one must
+// fail fault.Invalid rather than read another key's object or list under another name.
+func TestIssue375_EscapeSequenceKeysNeverAlias(t *testing.T) {
+	ctx := context.Background()
+	for name, scheme := range map[string]string{"memory": "mem://", "file": "file://"} {
+		t.Run(name, func(t *testing.T) {
+			url := scheme
+			if name == "file" {
+				url += t.TempDir()
+			}
+			b, err := gocloud.Open(ctx, url)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+
+			require.NoError(t, b.Put(ctx, "a//b", []byte("v:a//b")))
+			got, err := b.Get(ctx, "a/__0x2f__b")
+			require.Error(t, err, "Get(a/__0x2f__b) read the object of a//b: %q", got)
+			require.Contains(t, []fault.Kind{fault.NotFound, fault.Invalid}, fault.KindOf(err), "Get: %v", err)
+
+			key := "c/__0x41__"
+			if err := b.Put(ctx, key, []byte("v:"+key)); err != nil {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "Put: %v", err)
+				return
+			}
+			items, err := b.List(ctx, "c/")
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			require.Equal(t, key, items[0].Key)
+			data, err := b.Get(ctx, items[0].Key)
+			require.NoError(t, err)
+			require.Equal(t, []byte("v:"+key), data)
 		})
 	}
 }

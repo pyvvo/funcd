@@ -400,3 +400,64 @@ func TestIssue135_DevHotReloadsEditedHandler(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue320_DevHotReloadsImportsAndManifest — ADR-0125 boot sequence ("watch files, re-apply on change"): an
+// edit to a module the handler imports, or to the manifest's contract and dev block, reaches the running dev
+// session with no restart.
+func TestIssue320_DevHotReloadsImportsAndManifest(t *testing.T) {
+	requireNode(t)
+	eventuallyServes := func(t *testing.T, url, payload string, status int, want string) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			resp, err := http.Post(url, "application/json", strings.NewReader(payload))
+			if err != nil {
+				return false
+			}
+			defer func() { _ = resp.Body.Close() }()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode == status && strings.Contains(string(b), want)
+		}, 20*time.Second, 100*time.Millisecond, "the running dev session serves the edit: %d %s", status, want)
+	}
+
+	t.Run("imported-module", func(t *testing.T) {
+		dir := devProject(t, map[string]string{
+			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+			"handler.mjs":   "import { v } from './lib.mjs';\nexport function handle() { return { v }; }\n",
+			"lib.mjs":       "export const v = 1;\n",
+		})
+		inst := runDev(t, dir)
+		waitReady(t, inst)
+		url := inst.gatewayURL + "/function/" + inst.functions[0]
+		_, body := post(t, url, `{"data":{}}`)
+		require.Contains(t, body, `"v":1`)
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "lib.mjs"), []byte("export const v = 7;\n"), 0o600))
+		eventuallyServes(t, url, `{"data":{}}`, http.StatusOK, `"v":7`)
+	})
+
+	manifest := func(contract, mode string) string {
+		return "runtime: nodejs22\nhandler: handle\nbindings:\n  config:\n    - app-config\n" + contract +
+			"dev:\n  config:\n    app-config:\n      APP_MODE: " + mode + "\n"
+	}
+	for _, tc := range []struct{ name, manifest, handler string }{
+		{"manifest-in-place", "funcdctl.yaml", "handler.mjs"},
+		{"manifest-stem", "front.funcdctl.yaml", "front.mjs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := devProject(t, map[string]string{
+				tc.manifest: manifest(strictContract, "one"),
+				tc.handler:  "export function handle() { return { mode: process.env.APP_MODE }; }\n",
+			})
+			inst := runDev(t, dir)
+			waitReady(t, inst)
+			url := inst.gatewayURL + "/function/" + inst.functions[0]
+			bad, body := post(t, url, `{"data":{"oops":1}}`)
+			require.Equal(t, http.StatusUnprocessableEntity, bad.StatusCode, body)
+			_, body = post(t, url, `{"data":{"name":"ada"}}`)
+			require.Contains(t, body, `"mode":"one"`)
+
+			require.NoError(t, os.WriteFile(filepath.Join(dir, tc.manifest), []byte(manifest(permissiveContract, "two")), 0o600))
+			eventuallyServes(t, url, `{"data":{"oops":1}}`, http.StatusOK, `"mode":"two"`)
+		})
+	}
+}

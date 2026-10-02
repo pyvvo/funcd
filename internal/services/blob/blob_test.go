@@ -167,6 +167,23 @@ func TestScenarioBlobSignedURL(t *testing.T) {
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a PUT-sign needs s3::write — no read→write escalation")
 }
 
+// TestIssue374_PresignedPutRefusedOnCappedBucket: a presigned PUT uploads straight to the substrate, so a
+// Bucket with maxObjectBytes (the Capped view s3BucketFor builds) refuses to sign one rather than hand out a
+// URL that accepts any size (ADR-0080). GET and DELETE signing are unaffected.
+func TestIssue374_PresignedPutRefusedOnCappedBucket(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFacade(t, iblob.Capped(newMapBucket(), 16), s3PDP{readOK: true, writeOK: true})
+
+	_, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: iblob.SignPut})
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a presigned PUT cannot enforce maxObjectBytes, so it is Forbidden: %v", err)
+
+	for _, m := range []iblob.SignMethod{"", iblob.SignGet, iblob.SignDelete} {
+		_, err := f.SignedURL(ctx, "default", "fn", "files", "report.txt", iblob.SignOptions{Method: m})
+		require.NoError(t, err, "sign %q", m)
+	}
+}
+
 // TestBlobTypeHandler covers the unchanged Service-dispatcher TypeHandler (ADR-0021).
 func TestBlobTypeHandler(t *testing.T) {
 	t.Parallel()

@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	neturl "net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -28,6 +30,8 @@ const (
 	defaultExpiry = 15 * time.Minute
 	// fileAttrsSuffix is the sidecar suffix fileblob reserves for its own attribute files.
 	fileAttrsSuffix = ".attrs"
+	// fileEscapePrefix opens fileblob's "__0x<hex>__" rune escape, which it decodes on List.
+	fileEscapePrefix = "__0x"
 )
 
 // Open adapts a gocloud bucket to blob.Bucket.
@@ -43,20 +47,30 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 	return &bucket{b: b, file: strings.HasPrefix(url, fileblob.Scheme+"://")}, nil
 }
 
+// FileURL is the file:// bucket URL for the absolute directory dir, path-escaped so URL syntax in a
+// directory name ('#', '?', '%') stays part of the path (issue #331).
+func FileURL(dir string) string {
+	return (&neturl.URL{Scheme: fileblob.Scheme, Path: filepath.ToSlash(dir)}).String()
+}
+
 type bucket struct {
 	b    *gcblob.Bucket
 	file bool
 }
 
 // checkKey rejects a key the file backend cannot keep as its own object: fileblob
-// reserves the ".attrs" suffix, and its filepath.Join cleans a "." segment, a trailing
-// ".." and a leading "/", which would land the key on another key's file.
+// reserves the ".attrs" suffix and its "__0x<hex>__" escape (a raw one shares the path of
+// the key it encodes and lists decoded), and its filepath.Join cleans a "." segment, a
+// trailing ".." and a leading "/", which would land the key on another key's file.
 func (k *bucket) checkKey(op, key string) error {
 	if !k.file {
 		return nil
 	}
 	if strings.HasSuffix(key, fileAttrsSuffix) {
 		return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, fileAttrsSuffix)
+	}
+	if strings.Contains(key, fileEscapePrefix) {
+		return fault.Invalidf(op, "%q: the %q escape is reserved by the file backend", key, fileEscapePrefix)
 	}
 	segs := strings.Split(key, "/")
 	for i, s := range segs {

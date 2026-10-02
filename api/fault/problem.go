@@ -1,6 +1,7 @@
 package fault
 
 import (
+	"encoding/json"
 	"net/http"
 )
 
@@ -49,12 +50,6 @@ func ToProblem(err error) Problem {
 		Detail: err.Error(),
 	}
 
-	// Surface detail from a ferr.Error if present.
-	var ferr *Error
-	// errors.As is imported via fault.go but we only use stdlib here.
-	// Just use the KindOf result — the detail is already in err.Error().
-	_ = ferr // keep the var for potential future use
-
 	return p
 }
 
@@ -64,55 +59,5 @@ func WriteProblem(w http.ResponseWriter, err error) {
 	p := ToProblem(err)
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(p.Status)
-
-	// Simple JSON encoding without importing encoding/json for now — this is a
-	// convenience helper; the real encoding lives in the API server middleware.
-	// We write a minimal valid JSON body.
-	body := `{"type":"` + p.Type + `","title":"` + p.Title + `","status":` + itoa(p.Status) + `,"detail":"` + jsonEscape(p.Detail) + `"}`
-	_, _ = w.Write([]byte(body))
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
-
-func jsonEscape(s string) string {
-	// Minimal escaping for the simple case — the middleware will use encoding/json.
-	var out []byte
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '"':
-			out = append(out, '\\', '"')
-		case '\\':
-			out = append(out, '\\', '\\')
-		case '\n':
-			out = append(out, '\\', 'n')
-		case '\r':
-			out = append(out, '\\', 'r')
-		case '\t':
-			out = append(out, '\\', 't')
-		default:
-			out = append(out, s[i])
-		}
-	}
-	return string(out)
+	_ = json.NewEncoder(w).Encode(p)
 }

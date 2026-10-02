@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -159,4 +160,65 @@ func TestIssue191_MemoryFlagKeepsKVOffDisk(t *testing.T) {
 	}
 	require.NoError(t, kv.Put(context.Background(), "a/b/c", []byte("v")))
 	require.NoDirExists(t, cfg.Kvstore.DataDir, "--memory must not open a durable Badger KV")
+}
+
+// kvstore.backup/cdc are validated whatever the engine: enabled without a target or sink fails, enabled on
+// the in-memory engine fails (it has no seam to serve them), and storage.mode memory ignores them with a
+// warning, as it does kvstore.engine badger.
+func TestIssue303_KVSeamsNotSilentlyIgnoredOffBadger(t *testing.T) {
+	file := func(engine string) config.Config {
+		var cfg config.Config
+		cfg.Storage.Mode = "file"
+		cfg.Storage.DataDir = t.TempDir()
+		cfg.Kvstore.Engine = engine
+		return cfg
+	}
+	memoryMode := func() config.Config {
+		cfg := kvBadgerCfg(t)
+		cfg.Storage.Mode = "memory"
+		return cfg
+	}
+	rejected := []struct {
+		name string
+		cfg  config.Config
+		set  func(*config.Config)
+		want string
+	}{
+		{"default engine, backup without target", file(""), func(c *config.Config) { c.Kvstore.Backup.Enabled = true }, "kvstore.backup.target"},
+		{"memory engine, cdc without sink", file("memory"), func(c *config.Config) { c.Kvstore.Cdc.Enabled = true }, "kvstore.cdc.sink"},
+		{"memory mode, backup without target", memoryMode(), func(c *config.Config) { c.Kvstore.Backup.Enabled = true }, "kvstore.backup.target"},
+		{"memory mode, cdc without sink", memoryMode(), func(c *config.Config) { c.Kvstore.Cdc.Enabled = true }, "kvstore.cdc.sink"},
+		{"memory engine, backup with target", file("memory"), func(c *config.Config) {
+			c.Kvstore.Backup.Enabled = true
+			c.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+		}, "kvstore.engine"},
+		{"default engine, cdc with sink", file(""), func(c *config.Config) {
+			c.Kvstore.Cdc.Enabled = true
+			c.Kvstore.Cdc.Sink = "kv.changes"
+		}, "kvstore.engine"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.set(&tc.cfg)
+			_, _, err := buildKVStore(context.Background(), tc.cfg, newMemBus(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	t.Run("memory mode warns that backup and cdc are ignored", func(t *testing.T) {
+		cfg := memoryMode()
+		cfg.Kvstore.Backup.Enabled = true
+		cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+		cfg.Kvstore.Cdc.Enabled = true
+		cfg.Kvstore.Cdc.Sink = "kv.changes"
+		var logs bytes.Buffer
+		kv, _, err := buildKVStore(context.Background(), cfg, newMemBus(t), slog.New(slog.NewTextHandler(&logs, nil)))
+		require.NoError(t, err)
+		require.NotNil(t, kv)
+		require.NoDirExists(t, cfg.Kvstore.DataDir)
+		require.Contains(t, logs.String(), "kvstore.backup")
+		require.Contains(t, logs.String(), "kvstore.cdc")
+	})
 }

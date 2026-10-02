@@ -18,9 +18,9 @@ import (
 )
 
 // workflowCmd groups the workflow-run verbs (ADR-0094): run|runs|pause|resume|cancel|describe|logs|replay.
-// run/runs/pause/resume/describe are sugar over the WorkflowRun CRUD surface; cancel calls the
-// imperative control-plane cancel endpoint; logs reads a whole run's logs by trace-id (ADR-0106); replay
-// re-runs a finished run from a chosen step (ADR-0107).
+// run/runs/pause/resume/cancel/describe are sugar over the WorkflowRun CRUD surface (cancel patches
+// spec.cancel); logs reads a whole run's logs by trace-id (ADR-0106); replay re-runs a finished run from a
+// chosen step (ADR-0107).
 func (a *cli) workflowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "workflow",
