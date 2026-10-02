@@ -102,10 +102,8 @@ func (a *cli) workflowLogsCmd() *cobra.Command {
 		Short: "Print a whole workflow run's logs (the full error/logs by run, tenant-scoped)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			switch output {
-			case "", "wide", "json":
-			default:
-				return fault.Invalidf("funcdctl workflow logs", "unknown output %q (want: wide or json)", output)
+			if err := checkOutput("funcdctl workflow logs", output, "wide", "json"); err != nil {
+				return err
 			}
 			c, err := a.sdkClient()
 			if err != nil {
@@ -184,6 +182,9 @@ func (a *cli) workflowRunsCmd() *cobra.Command {
 		Short: "List workflow runs (newest first; --phase to filter)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutput("funcdctl workflow runs", output, "json"); err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
@@ -285,6 +286,9 @@ func (a *cli) workflowDescribeCmd() *cobra.Command {
 		Short: "Show a workflow run's per-step troubleshooting state (phase, attempts, duration, error)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput("funcdctl workflow describe", output, "json"); err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err

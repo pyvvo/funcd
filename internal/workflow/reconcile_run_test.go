@@ -450,7 +450,7 @@ func TestIssue176_ReplayOfSweptSourceFails(t *testing.T) {
 		t.Fatalf("setup: source phase=%q, want Succeeded", run.Status.Phase)
 	}
 	sweeper, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(start.Add(721 * time.Hour))})
-	if n, err := sweeper.SweepExpired(ctx, 720*time.Hour); err != nil || n != 1 {
+	if n, err := NewRunReconciler(s, sweeper, nil, nil).SweepExpired(ctx, 720*time.Hour); err != nil || n != 1 {
 		t.Fatalf("setup: SweepExpired = %d, %v, want the source record swept", n, err)
 	}
 
@@ -516,6 +516,78 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 				t.Fatalf("run record = %v (err %v), want Failed without the over-cap input", rec, err)
 			}
 		})
+	}
+}
+
+// Issue 67: the retention sweep deletes closed WorkflowRun objects, so the parent's status.runs must
+// keep its lifetime terminal counts instead of recounting only the runs that are still stored.
+func TestIssue67_RunCountsSurviveRunDeletion(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	run := func(name v1.ObjectName) {
+		t.Helper()
+		seedRun(t, s, string(name), "wf", `{}`)
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+
+	run("run-1")
+	run("run-2")
+	for _, name := range []v1.ObjectName{"run-1", "run-2"} {
+		if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", name, ""); err != nil {
+			t.Fatalf("delete %s: %v", name, err)
+		}
+	}
+	run("run-3")
+
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Succeeded != 3 || len(links.Active) != 0 {
+		t.Fatalf("status.runs = %+v, want the lifetime count Succeeded=3 and no active run", links)
+	}
+}
+
+// Issue 67: the reconciler's retention sweep deletes an expired run's WorkflowRun object with its
+// engine record, keeps a run still inside retention, and leaves the lifetime counts intact.
+func TestIssue67_SweepDeletesExpiredWorkflowRuns(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	for name, ended := range map[v1.ObjectName]time.Time{"old": base, "fresh": base.Add(40 * time.Hour)} {
+		seedRun(t, s, string(name), "wf", `{}`)
+		if _, err := at(ended).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+
+	n, err := at(base.Add(48*time.Hour)).SweepExpired(ctx, 24*time.Hour)
+	if err != nil || n != 1 {
+		t.Fatalf("SweepExpired = %d, %v; want 1 run reclaimed", n, err)
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "old"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("the expired WorkflowRun must be deleted, got %v", err)
+	}
+	if _, err := rstate.Get(ctx, "default", "old"); err == nil {
+		t.Fatal("the expired run record must be deleted")
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "fresh"); err != nil {
+		t.Fatalf("a run inside retention must be kept: %v", err)
+	}
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Succeeded != 2 {
+		t.Fatalf("status.runs = %+v, want the lifetime count Succeeded=2", links)
 	}
 }
 

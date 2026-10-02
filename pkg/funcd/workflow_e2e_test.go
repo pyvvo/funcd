@@ -349,6 +349,64 @@ func TestIssue28_StepLongerThan30sHonorsStepTimeout(t *testing.T) {
 	require.Equal(t, "Succeeded", string(got.Status.Phase), "the 32s step finishes within its 60s timeout; steps: %+v", got.Status.Steps)
 }
 
+// Issue 67: the retention sweep reclaims closed runs including their WorkflowRun objects (what
+// `workflow runs` lists), and the parent's status.runs keeps its lifetime counts across the sweep.
+func TestIssue67_RetentionSweepsWorkflowRuns(t *testing.T) {
+	p, err := funcd.New(funcd.InMemory(), funcd.WithWorkflow("", 0, time.Second, 1, 0))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("platform Run did not return after cancel")
+		}
+	})
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	require.NoError(t, err)
+
+	_, err = c.Apply(ctx, &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "echo", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "echo", Builtin: &v1.BuiltinStep{Pass: `${{ input }}`}}}},
+	})
+	require.NoError(t, err)
+	runToSuccess := func(name v1.ObjectName) {
+		t.Helper()
+		_, err := c.Apply(ctx, &v1.WorkflowRun{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.WorkflowRunSpec{Workflow: "echo", Input: json.RawMessage(`{}`)},
+		})
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			obj, err := c.Get(ctx, v1.KindWorkflowRun, "default", name)
+			return err == nil && obj.(*v1.WorkflowRun).Status.Phase == "Succeeded"
+		}, 10*time.Second, 20*time.Millisecond, "%s reaches Succeeded", name)
+	}
+	succeeded := func() int {
+		obj, err := c.Get(ctx, v1.KindWorkflow, "default", "echo")
+		if err != nil || obj.(*v1.Workflow).Status.Runs == nil {
+			return -1
+		}
+		return obj.(*v1.Workflow).Status.Runs.Succeeded
+	}
+
+	runToSuccess("echo-1")
+	runToSuccess("echo-2")
+	require.Eventually(t, func() bool {
+		list, err := c.List(ctx, v1.KindWorkflowRun, "default")
+		return err == nil && len(list) == 0
+	}, 15*time.Second, 100*time.Millisecond, "closed WorkflowRuns are swept after workflow.retention")
+	require.Equal(t, 2, succeeded(), "the sweep keeps the lifetime Succeeded count")
+
+	runToSuccess("echo-3")
+	require.Eventually(t, func() bool { return succeeded() == 3 }, 5*time.Second, 20*time.Millisecond, "a run after the sweep adds to the lifetime count")
+}
+
 // Issue #125: re-applying a WorkflowRun under an existing name with another workflow or input is rejected
 // over the real control plane (ADR-0094 duplicate-run-name-rejected): the run keeps the spec it ran, and
 // pause still patches spec.paused.

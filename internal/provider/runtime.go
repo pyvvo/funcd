@@ -74,8 +74,8 @@ func NewRuntime(d Deps) (Runtime, error) {
 // it adopts an existing instance or Creates+Starts a fresh one from the curated image (WorkerSpec
 // .Command empty — the image entrypoint IS the engine, no artifact, no shape gate), reads the
 // netns address, probes the engine's HTTP readiness, and — only once Ready AND a Route is declared
-// — programs the gateway. A crashed/terminal/NotFound instance is recreated on this pass
-// (supervision = re-convergence). It returns the observed ProviderStatus.
+// — programs the gateway. A crashed/terminal/NotFound instance is recreated and a Created one is
+// started on this pass (supervision = re-convergence). It returns the observed ProviderStatus.
 func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (ProviderStatus, error) {
 	const op = "provider.Converge"
 	if spec.Replicas <= 0 {
@@ -102,8 +102,9 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 	haveReady := false
 	for i := 0; i < spec.Replicas; i++ {
 		inst, ok := byReplica[i]
+		switch {
 		// Recreate a missing / terminal (failed/stopped) instance (supervision = re-convergence).
-		if !ok || inst.State.Terminal() {
+		case !ok || inst.State.Terminal():
 			if ok {
 				// best-effort stop the terminal instance before recreating it (idempotent).
 				if serr := r.rt.Stop(ctx, inst.ID); serr != nil {
@@ -114,10 +115,13 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 			if cerr != nil {
 				return ProviderStatus{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create engine replica %d", i)
 			}
-			if serr := r.rt.Start(ctx, created.ID); serr != nil {
+			inst = created
+			fallthrough
+		// A failed Start leaves the instance Created (ADR-0142): start it.
+		case inst.State == containerrt.StateCreated:
+			if serr := r.rt.Start(ctx, inst.ID); serr != nil {
 				return ProviderStatus{}, fault.Wrapf(serr, fault.KindOf(serr), op, "start engine replica %d", i)
 			}
-			inst = created
 		}
 		if inst.State == containerrt.StateRunning {
 			running++

@@ -293,12 +293,16 @@ func TestSweepExpired(t *testing.T) {
 	_ = rs.Put(ctx, &runstate.Record{Namespace: "default", Name: "fresh", Phase: runSucceeded, UpdatedAt: base.Add(-1 * time.Hour).UnixNano()})
 	_ = rs.Put(ctx, &runstate.Record{Namespace: "default", Name: "running", Phase: runRunning, UpdatedAt: base.Add(-48 * time.Hour).UnixNano()})
 
-	n, err := e.SweepExpired(ctx, 24*time.Hour)
+	var reclaimed []v1.ObjectName
+	n, err := e.SweepExpired(ctx, 24*time.Hour, func(_ context.Context, rec *runstate.Record) error {
+		reclaimed = append(reclaimed, rec.Name)
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("SweepExpired: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("sweep reclaimed %d, want 1 (only the old terminal run)", n)
+	if n != 1 || len(reclaimed) != 1 || reclaimed[0] != "old" {
+		t.Fatalf("sweep reclaimed %d (hook saw %v), want only the old terminal run", n, reclaimed)
 	}
 	if _, err := rs.Get(ctx, "default", "old"); err == nil {
 		t.Fatal("the old terminal run should have been swept")

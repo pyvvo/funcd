@@ -432,11 +432,13 @@ func rebuildState(spec v1.WorkflowSpec, rec *runstate.Record) (*runState, map[v1
 }
 
 // SweepExpired deletes terminal run records whose last update is older than retention (ADR-0094:
-// terminal runs "swept after workflow.retention"). retention ≤ 0 disables the sweep. Returns the
-// number of records reclaimed. Non-terminal runs are never swept. Callers invoke it periodically
-// (pkg/funcd lifecycle); it is idempotent and safe to run concurrently with reconciles (the store
-// is the single writer per run and a terminal run is immutable).
-func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration) (int, error) {
+// terminal runs "swept after workflow.retention"). retention ≤ 0 disables the sweep. reclaim, when
+// non-nil, runs before each expired record is deleted (the run reconciler deletes the run's
+// WorkflowRun there); its error keeps the record for the next sweep. Returns the number of records
+// reclaimed. Non-terminal runs are never swept. Callers invoke it periodically (pkg/funcd lifecycle);
+// it is idempotent and safe to run concurrently with reconciles (the store is the single writer per
+// run and a terminal run is immutable).
+func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration, reclaim func(context.Context, *runstate.Record) error) (int, error) {
 	if retention <= 0 {
 		return 0, nil
 	}
@@ -449,6 +451,11 @@ func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration) (int
 	for _, rec := range recs {
 		if !rec.Terminal() || rec.UpdatedAt == 0 || rec.UpdatedAt >= cutoff {
 			continue
+		}
+		if reclaim != nil {
+			if rerr := reclaim(ctx, rec); rerr != nil {
+				return swept, fault.Wrapf(rerr, fault.KindOf(rerr), engineOp, "reclaim expired run %q", rec.Name)
+			}
 		}
 		if derr := e.runs.Delete(ctx, rec.Namespace, rec.Name); derr != nil {
 			return swept, fault.Wrapf(derr, fault.KindOf(derr), engineOp, "delete expired run %q", rec.Name)

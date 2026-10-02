@@ -336,6 +336,33 @@ func TestScenarioCLIApplySite(t *testing.T) {
 	require.Contains(t, err.Error(), "spec.prefix is immutable")
 }
 
+// Issue #193: a verb whose only machine format is json must reject any other -o value, not fall
+// back to the table with exit 0 (the logs verbs already do).
+func TestIssue193_UnknownOutputIsRejected(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+	mkfn(context.Background(), t, c)
+
+	for _, args := range [][]string{
+		{"get", "function", "fn1", "-n", "team-a", "-o", "yaml"},
+		{"get", "function", "-n", "team-a", "-o", "jsn"},
+		{"workflow", "runs", "-n", "team-a", "-o", "yaml"},
+		{"workflow", "describe", "run1", "-n", "team-a", "-o", "garbage"},
+		{"eventing", "dlq", "list", "-n", "team-a", "-o", "yaml"},
+	} {
+		var out bytes.Buffer
+		err := execCLI(&out, c, args...)
+		require.Error(t, err, "%v", args)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v: %v", args, err)
+		require.Contains(t, err.Error(), "unknown output", "%v", args)
+		require.Empty(t, out.String(), "%v prints nothing", args)
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "get", "function", "fn1", "-n", "team-a", "-o", "json"))
+	require.Contains(t, out.String(), `"name": "fn1"`)
+}
+
 func configMapDoc(name string) string {
 	return "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: " + name +
 		"\n  namespace: team-a\n  resourceGroup: rg1\nspec:\n  data:\n    k: v\n"

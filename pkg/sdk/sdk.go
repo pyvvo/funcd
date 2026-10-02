@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -29,7 +30,8 @@ type Client struct {
 // Option configures a Client (functional-options facade, ADR-0002).
 type Option func(*Client)
 
-// WithHTTPClient overrides the HTTP client (default http.DefaultClient).
+// WithHTTPClient overrides the HTTP client (default http.DefaultClient). A client without a
+// CheckRedirect policy gets the SDK's, which refuses a redirect that would change the method.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) {
 		if h != nil {
@@ -55,7 +57,26 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(c)
 	}
+	if c.httpClient.CheckRedirect == nil {
+		hc := *c.httpClient
+		hc.CheckRedirect = refuseMethodChange
+		c.httpClient = &hc
+	}
 	return c, nil
+}
+
+// refuseMethodChange stops a redirect that changes the method: on a 301/302/303 Go resends a
+// PUT/POST/DELETE as a body-less GET, so the write is lost while the GET's 2xx reads as success.
+// Method-preserving redirects keep Go's default policy (at most 10 hops).
+func refuseMethodChange(req *http.Request, via []*http.Request) error {
+	if orig := via[0].Method; req.Method != orig {
+		return fmt.Errorf("refusing a %d redirect to %s that would resend %s as %s; point the server URL at the final address",
+			req.Response.StatusCode, req.URL, orig, req.Method)
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // Apply create-or-replaces obj: PUT the named path; on a 404 (the object does not
