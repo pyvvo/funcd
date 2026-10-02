@@ -386,10 +386,7 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 func TestScenarioFileSetsAddresses(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "funcdconfig.yaml")
-	// not t.TempDir(): its path overruns the macOS socket path limit for <dataDir>/invoke (issue #41)
-	dataDir, err := os.MkdirTemp("", "funcd")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
+	dataDir := shortDataDir(t)
 	// loopback + ephemeral port ⇒ deterministic + conflict-free; memory substrate ⇒ zero-infra.
 	require.NoError(t, os.WriteFile(path, []byte(
 		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
@@ -427,7 +424,7 @@ func TestIssue192_StartupLinesUseConfiguredLogger(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = busy.Close() })
-	dir := t.TempDir()
+	dir := shortDataDir(t)
 	path := filepath.Join(dir, "funcdconfig.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(
 		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \""+busy.Addr().String()+"\"\n"+
@@ -565,4 +562,14 @@ func TestExampleConfigResolves(t *testing.T) {
 	require.Equal(t, "memory", cfg.Storage.Mode) // file value (no env tier set) ⇒ deterministic
 	require.Equal(t, "127.0.0.1:8080", cfg.Server.ListenAddr)
 	require.Equal(t, "text", cfg.Log.Format)
+}
+
+// shortDataDir is a data dir for an assembled platform. Not t.TempDir(): on macOS its path overruns the Unix socket
+// path limit for <dataDir>/invoke, which startup rejects (issue #41).
+func shortDataDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
