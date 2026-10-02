@@ -242,12 +242,16 @@ func (r *Reconciler) admittedMembers(ctx context.Context, key pooling.PoolKey) (
 // the pool's desired replica = max over members' effective desired (ADR-0046 Decision 6), so a
 // warm/woken member keeps the pool up for idle siblings and reclaim fires only when all are idle.
 // A member whose artifact cannot be materialized fails alone (ADR-0046 bounded blast radius): it
-// is left out of the manifest, and only self's own failure is returned.
+// is left out of the manifest, and only self's own failure is returned. A member the pooled
+// config/secret gate fails closed is left out too: no worker runs its code (ADR-0057).
 func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function) ([]poolManifestEntry, int, error) {
 	const op = "function.poolManifest"
 	manifest := make([]poolManifestEntry, 0, len(members))
 	desired := 0
 	for _, m := range members {
+		if _, gerr := r.resolveBindingEnv(ctx, m, true); gerr != nil {
+			continue
+		}
 		path := ""
 		contractPath := ""
 		if r.materializer != nil {

@@ -234,3 +234,27 @@ func TestIssue68_PoolReclaimedWithItsLastMember(t *testing.T) {
 		require.Equal(t, runtime.StateRunning, h.rt.revisionStates("lonely")["lonely-2"][0], "the former member runs solo")
 	})
 }
+
+// A pooled member that declares a Secret or a ConfigMap fails closed (ADR-0057, ADR-0093 Decision 3), so no pool worker
+// loads its code: a sibling's reconcile leaves it out of the pool manifest.
+func TestIssue69_GatedMemberNotLoadedIntoPool(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "a-ok", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "gated" })
+	h.create(t, "b-secret", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "gated"; fn.Spec.Secrets = []v1.ObjectName{"db"} })
+	h.create(t, "c-config", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "gated"; fn.Spec.Config = []v1.ObjectName{"settings"} })
+	for _, name := range []string{"b-secret", "c-config", "a-ok"} {
+		h.reconcile(t, name)
+	}
+	require.Equal(t, "SecretResolveFailed", h.condition(t, "b-secret", "Ready").Reason)
+	require.Equal(t, "SecretResolveFailed", h.condition(t, "c-config", "Ready").Reason)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a-ok").Status.Phase)
+
+	pool, ok := h.rt.specFor("__pool__nodejs22__gated")
+	require.True(t, ok, "the pool worker runs")
+	manifest, err := os.ReadFile(pool.Env["FUNCD_POOL_MANIFEST"])
+	require.NoError(t, err)
+	require.Contains(t, string(manifest), `"a-ok"`)
+	require.NotContains(t, string(manifest), "b-secret", "the member gated on its Secret gets no worker")
+	require.NotContains(t, string(manifest), "c-config", "the member gated on its ConfigMap gets no worker")
+}
