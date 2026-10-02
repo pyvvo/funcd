@@ -54,6 +54,22 @@ func (s *schema) primaryType() string {
 // typeField captures JSON Schema's `type`, which is a string OR an array of strings.
 type typeField struct{ values []string }
 
+// inProfile reports whether `type` is absent, one profile type, or the nullable list of one profile type
+// plus "null"; any other list is an untagged union (ADR-0058).
+func (t typeField) inProfile() bool {
+	nulls := 0
+	for _, n := range t.values {
+		switch n {
+		case "null":
+			nulls++
+		case "object", "array", "string", "integer", "number", "boolean":
+		default:
+			return false
+		}
+	}
+	return len(t.values) <= 1 || (len(t.values) == 2 && nulls == 1)
+}
+
 // errNullType rejects a JSON null type value (an unquoted YAML `type: null`): it is not JSON Schema, and
 // dropping it would turn the side into the `Json` (any) form.
 var errNullType = errors.New(`"type" is JSON null, not a type name; a void side is {"type":"null"} (quote "null" in YAML)`)
