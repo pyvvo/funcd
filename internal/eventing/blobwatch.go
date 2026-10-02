@@ -43,6 +43,7 @@ type BlobWatcher struct {
 
 	mu      sync.Mutex
 	watches map[eventKey]watchEntry
+	polling map[eventKey]bool // named events with a poll in flight
 }
 
 // NewBlobWatcher builds the watcher. lister/publisher/marks are required; interval ≤ 0 ⇒ the 15s default.
@@ -69,6 +70,7 @@ func NewBlobWatcher(lister BucketLister, pub Publisher, marks Watermark, interva
 		interval:  interval,
 		logger:    log.With("component", "eventing.blobwatch"),
 		watches:   map[eventKey]watchEntry{},
+		polling:   map[eventKey]bool{},
 	}, nil
 }
 
@@ -109,34 +111,55 @@ func (w *BlobWatcher) ActiveWatches() int {
 	return len(w.watches)
 }
 
-// Run polls the registered set every interval until ctx is cancelled. Started by the pkg/funcd lifecycle
-// beside the timer Source.Run; it is not part of the reconciler.
+// Run polls the registered set every interval until ctx is cancelled. Each poll runs on its own goroutine,
+// so a poll held up by a slow subscriber does not stop the next interval's poll of the other prefixes.
+// Started by the pkg/funcd lifecycle beside the timer Source.Run; it is not part of the reconciler.
 func (w *BlobWatcher) Run(ctx context.Context) error {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			w.poll(ctx)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				w.poll(ctx)
+			}()
 		}
 	}
 }
 
-// poll snapshots the registry, then lists-diffs-publishes each watched prefix once.
+// poll snapshots the registry, then lists-diffs-publishes each watched prefix once, concurrently, and
+// returns when all are done. A prefix whose previous poll is still in flight is skipped, so a slow
+// subscriber delays only its own prefix.
 func (w *BlobWatcher) poll(ctx context.Context) {
 	w.mu.Lock()
 	snapshot := make(map[eventKey]watchEntry, len(w.watches))
 	for k, e := range w.watches {
-		snapshot[k] = e
-	}
-	w.mu.Unlock()
-	for k, e := range snapshot {
-		if err := w.pollOne(ctx, k, e); err != nil {
-			w.logger.WarnContext(ctx, "blob poll failed", "eventsource", k.source, "event", k.event, "bucket", e.bucket, "error", err)
+		if !w.polling[k] {
+			w.polling[k] = true
+			snapshot[k] = e
 		}
 	}
+	w.mu.Unlock()
+	var wg sync.WaitGroup
+	for k, e := range snapshot {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := w.pollOne(ctx, k, e); err != nil {
+				w.logger.WarnContext(ctx, "blob poll failed", "eventsource", k.source, "event", k.event, "bucket", e.bucket, "error", err)
+			}
+			w.mu.Lock()
+			delete(w.polling, k)
+			w.mu.Unlock()
+		}()
+	}
+	wg.Wait()
 }
 
 // pollOne lists one watched prefix, publishes a named CloudEvent for every object new against the persisted

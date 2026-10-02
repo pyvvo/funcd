@@ -64,8 +64,10 @@ type Source struct {
 
 // timerEntry is a registered named event's firing state.
 type timerEntry struct {
+	key      eventKey
 	interval time.Duration
 	lastFire time.Time
+	firing   bool // a publish is in flight: the event is not due again until it returns
 }
 
 // NewSource builds the Source. Store and Publisher are required.
@@ -176,7 +178,7 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, t *v1.
 		if e, ok := s.timers[k]; ok && e.interval == ev.Interval {
 			continue // unchanged — keep its lastFire
 		}
-		s.timers[k] = &timerEntry{interval: ev.Interval, lastFire: time.Now()}
+		s.timers[k] = &timerEntry{key: k, interval: ev.Interval, lastFire: time.Now()}
 	}
 	for k := range s.timers { // prune events dropped from the spec
 		if k.ns == ns && k.source == source && !want[k] {
@@ -220,34 +222,50 @@ func (s *Source) Fire(ctx context.Context, ns v1.NamespaceName, source, event v1
 }
 
 // Run ticks the registered named-event set until ctx is cancelled, publishing each event whose Interval
-// has elapsed. Started by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler.
+// has elapsed. Each publish runs on its own goroutine, so a slow subscriber delays only its own event,
+// never the other timers. Started by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler.
 func (s *Source) Run(ctx context.Context) error {
 	ticker := time.NewTicker(runTick)
 	defer ticker.Stop()
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			for _, k := range s.dueTimers(time.Now()) {
-				if err := s.Fire(ctx, k.ns, k.source, k.event); err != nil {
-					s.logger.WarnContext(ctx, "timer publish failed", "eventsource", k.source, "event", k.event, "error", err)
-				}
+			for _, e := range s.dueTimers(time.Now()) {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					s.fireDue(ctx, e)
+				}()
 			}
 		}
 	}
 }
 
-// dueTimers marks and returns the named events whose interval has elapsed, advancing their lastFire
-// under the lock so a fire is never double-counted across ticks.
-func (s *Source) dueTimers(now time.Time) []eventKey {
+// fireDue publishes one due named event, then makes it eligible to fire again.
+func (s *Source) fireDue(ctx context.Context, e *timerEntry) {
+	if err := s.Fire(ctx, e.key.ns, e.key.source, e.key.event); err != nil {
+		s.logger.WarnContext(ctx, "timer publish failed", "eventsource", e.key.source, "event", e.key.event, "error", err)
+	}
+	s.mu.Lock()
+	e.firing = false
+	s.mu.Unlock()
+}
+
+// dueTimers marks and returns the named events whose interval has elapsed and whose previous publish has
+// returned, advancing their lastFire under the lock so a fire is never double-counted across ticks.
+func (s *Source) dueTimers(now time.Time) []*timerEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var due []eventKey
-	for k, e := range s.timers {
-		if now.Sub(e.lastFire) >= e.interval {
+	var due []*timerEntry
+	for _, e := range s.timers {
+		if !e.firing && now.Sub(e.lastFire) >= e.interval {
 			e.lastFire = now
-			due = append(due, k)
+			e.firing = true
+			due = append(due, e)
 		}
 	}
 	return due
