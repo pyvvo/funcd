@@ -2203,5 +2203,35 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-24-fix-claude-opus-5-5.md",
     "notes": "pass: test fails pre-fix (rv 7->10) and passes under -race; 3/3 mutants killed; real-engine probe ~13k reconciles/5s -> 0. Minor(model): unused HandOutSettle knob in the test. Minor(env): pre-existing PushSite created-timestamp flake in internal/artifact."
+  },
+  {
+    "date": "2026-10-02",
+    "issue": "98",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-98-fix-claude-opus-5-5.md",
+    "notes": "pass; minor(model): no test covers the error path of the seam-wired DropPrefix (a mutant that swallows the g.Wait error would survive); minor(model): the seam-wired path holds the whole prefix's key list in RAM before deleting; revert check fails for the issue's reason in both subtests (cdc, backup); 3 of 3 mutants killed; vet, lint, fmt and tidy clean on the touched packages."
+  },
+  {
+    "date": "2026-10-02",
+    "issue": "99",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-99-fix-claude-opus-5-5.md",
+    "notes": "pass; Minor(model): mutant M3, which removes the ctx.Done branch of RunCDC's retry wait, survives, so prompt shutdown during the retry wait is untested; Minor(model): the fixed 1s retry has no backoff, so a sustained sink outage logs an error every second (RunBackup logs once per 30s interval). Revert fails for the issue's reason, 2 of 3 mutants are killed, and -race, vet and lint are green on internal/kvstore/badger. DoD item 8 was checked on the host for the touched package only; Linux lint, e2e and the lanes are deferred to the group gate."
   }
 ]
