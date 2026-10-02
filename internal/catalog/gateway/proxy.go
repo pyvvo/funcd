@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
@@ -33,13 +34,15 @@ type EngineTarget struct {
 // forwarded un-swapped, which the engine rejects (fail-closed, as for any non-handshake body).
 const handshakeHeadMax = preambleLen + tokenHdrLen + binary.MaxVarintLen64 + 4<<10
 
+const proxyOp = "catalog.gateway.catalogProxy"
+
 // catalogProxy is the catalog PEP proxy (ADR-0137): resolve principal → catalog::query PEP → swap the
 // handshake token → reverse-proxy to the engine. Deny/unresolved ⇒ 403, upstream never called.
 type catalogProxy struct {
 	keys   CatalogKeys
 	pdp    auth.Authorizer
 	engine EngineTarget
-	rp     *httputil.ReverseProxy // nil ⇒ a malformed Upstream (every request 502s)
+	rp     *httputil.ReverseProxy // nil ⇒ a malformed Upstream (every request is an Internal problem)
 	log    *slog.Logger
 }
 
@@ -53,8 +56,17 @@ func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget)
 	}
 	if u, err := url.Parse(engine.Upstream); err == nil && u.Host != "" {
 		p.rp = httputil.NewSingleHostReverseProxy(u)
+		p.rp.ErrorHandler = p.engineFailed
 	}
 	return p
+}
+
+// engineFailed answers a failed engine call with an Unavailable problem+json logged through slog
+// (ADR-0002), not the ReverseProxy default (a bare 502 logged through the stdlib log package). The
+// cause stays in the log: it names the engine's netns endpoint.
+func (p *catalogProxy) engineFailed(w http.ResponseWriter, r *http.Request, err error) {
+	p.log.WarnContext(r.Context(), "catalog engine call failed", "catalog", p.engine.Catalog.Name, "err", err)
+	fault.WriteProblem(w, fault.Unavailablef(proxyOp, "catalog engine unavailable"))
 }
 
 // ServeHTTP is the per-request PEP (ADR-0137). On the token-bearing handshake it resolves the caller
@@ -64,12 +76,12 @@ func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget)
 // caller token, which the engine rejects). Deny/unresolved ⇒ 403 with the upstream never called.
 func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.rp == nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		fault.WriteProblem(w, fault.Internalf(proxyOp, "catalog engine upstream is not a valid URL"))
 		return
 	}
 	head, err := io.ReadAll(io.LimitReader(r.Body, handshakeHeadMax))
 	if err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		fault.WriteProblem(w, fault.Wrapf(err, fault.Invalid, proxyOp, "read request body"))
 		return
 	}
 	length := r.ContentLength
@@ -82,7 +94,7 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		principal, ok := p.keys.PrincipalFor(callerToken)
 		if !ok {
 			p.log.Debug("catalog PEP: unresolved credential", "catalog", p.engine.Catalog.Name)
-			http.Error(w, "forbidden", http.StatusForbidden)
+			fault.WriteProblem(w, fault.Forbiddenf(proxyOp, "catalog query denied"))
 			return
 		}
 		resource := p.engine.Catalog
@@ -94,12 +106,12 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		if aerr != nil {
 			p.log.Error("catalog PEP error", "catalog", p.engine.Catalog.Name, "err", aerr)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			fault.WriteProblem(w, fault.Internalf(proxyOp, "catalog query authorization failed"))
 			return
 		}
 		if !dec.Allowed {
 			p.log.Debug("catalog PEP denied", "catalog", p.engine.Catalog.Name, "principal", principal.Name)
-			http.Error(w, "forbidden", http.StatusForbidden)
+			fault.WriteProblem(w, fault.Forbiddenf(proxyOp, "catalog query denied"))
 			return
 		}
 		if length >= 0 {
