@@ -386,3 +386,36 @@ func TestScenarioDisabledConfigNoOp(t *testing.T) {
 		t.Fatalf("open-window raw must be untouched, got %v", raw)
 	}
 }
+
+// Issue #83: a raw segment that lands in a window a pass already compacted (a Put in flight across the window
+// boundary, or a wall clock stepped back) is merged into that window's Parquet instead of replacing it.
+func TestIssue83_LateSegmentKeepsCompactedRows(t *testing.T) {
+	b := memBucket(t)
+	sealNano := baseTime().UnixNano()
+	early := make([]logRec, 100)
+	for i := range early {
+		early[i] = logRec{ts: sealNano + int64(i), sev: "INFO", sevNum: 9, body: fmt.Sprintf("early-%d", i), source: "console"}
+	}
+	seedRaw(t, b, "default", "fn", "0", sealNano, early)
+
+	c := newCompactor(t, b, baseTime().Add(testWindow+time.Minute), 0)
+	if _, err := c.CompactOnce(context.Background()); err != nil {
+		t.Fatalf("pass1: %v", err)
+	}
+	lateNano := baseTime().Add(30*time.Minute - 10*time.Millisecond).UnixNano()
+	seedRaw(t, b, "default", "fn", "0", lateNano, []logRec{{ts: lateNano, sev: "INFO", sevNum: 9, body: "late", source: "console"}})
+	if _, err := c.CompactOnce(context.Background()); err != nil {
+		t.Fatalf("pass2: %v", err)
+	}
+
+	compacted := listSuffix(t, b, ".parquet")
+	if len(compacted) != 1 {
+		t.Fatalf("compacted = %v, want exactly 1", compacted)
+	}
+	if rows := readCompacted(t, b, compacted[0]); len(rows) != len(early)+1 {
+		t.Fatalf("rows after the late segment = %d, want %d (earlier compacted rows + the late one)", len(rows), len(early)+1)
+	}
+	if raw := listSuffix(t, b, ".otlp.jsonl"); len(raw) != 0 {
+		t.Fatalf("raw should be deleted, got %v", raw)
+	}
+}

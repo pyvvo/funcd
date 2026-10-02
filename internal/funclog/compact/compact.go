@@ -11,8 +11,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -37,6 +40,10 @@ const (
 	attrSource = "funcd.source" // → Row.Source
 	attrInv    = "inv"          // → Row.Invocation
 )
+
+// rawKeysMeta is the compacted Parquet key/value metadata entry listing the raw keys its rows came from, so a later
+// pass merges a late raw object into the window (issue #83) and skips raw already folded in (a retried delete).
+const rawKeysMeta = "funcd.raw_keys"
 
 // Row is one LogRecord as a Parquet row: fixed typed columns + a single attrs_json column for the rest. The
 // schema is STABLE (F54 reads it); new OTLP attributes land in attrs_json, never as new columns.
@@ -144,9 +151,10 @@ type window struct {
 	raw   []string
 }
 
-// CompactOnce runs exactly one pass: discover raw → group into closed windows → write one Parquet per
+// CompactOnce runs exactly one pass: discover raw → group into closed windows → merge into one Parquet per
 // (ns, fn, window) → delete the consumed raw (only after the Put succeeds) → prune compacted past Retention.
-// Deterministic and idempotent (re-running over the same raw overwrites the same compacted key).
+// Deterministic and idempotent: the window's existing Parquet is read back and its rows kept, and raw it already
+// holds is not re-added, so a re-pass rewrites the same compacted key with no loss and no duplicate.
 func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 	const op = "compact.Compactor.CompactOnce"
 	objs, err := c.bucket.List(ctx, logsPrefix)
@@ -193,14 +201,27 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 
 	var st Stats
 	for _, w := range windows {
-		rows, rerr := c.readRaw(ctx, w.raw)
+		key := compactedKey(w.ns, w.fn, w.start)
+		rows, folded, rerr := c.readCompacted(ctx, key)
 		if rerr != nil {
 			return st, rerr
 		}
+		var pending []string
+		for _, bkey := range w.raw {
+			if _, ok := folded[bkey]; !ok {
+				pending = append(pending, bkey)
+				folded[bkey] = struct{}{}
+			}
+		}
+		fresh, rerr := c.readRaw(ctx, pending)
+		if rerr != nil {
+			return st, rerr
+		}
+		rows = append(rows, fresh...)
 		if len(rows) == 0 {
 			continue
 		}
-		if werr := c.writeCompacted(ctx, w, rows); werr != nil {
+		if werr := c.writeCompacted(ctx, key, rows, folded); werr != nil {
 			return st, werr
 		}
 		// Parquet durably written — only NOW delete the consumed raw (crash-safe: a crash here re-Puts
@@ -231,6 +252,33 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 		}
 	}
 	return st, nil
+}
+
+// readCompacted reads the window's existing Parquet at key, if any: its rows and the raw keys already folded into it.
+func (c *Compactor) readCompacted(ctx context.Context, key string) ([]Row, map[string]struct{}, error) {
+	const op = "compact.Compactor.readCompacted"
+	folded := map[string]struct{}{}
+	data, err := c.bucket.Get(ctx, key)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, folded, nil
+	}
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "get compacted %q", key)
+	}
+	f, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Internal, op, "open compacted %q", key)
+	}
+	if v, ok := f.Lookup(rawKeysMeta); ok {
+		for _, bkey := range strings.Split(v, "\n") {
+			folded[bkey] = struct{}{}
+		}
+	}
+	rows, err := parquet.Read[Row](bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Internal, op, "read compacted %q", key)
+	}
+	return rows, folded, nil
 }
 
 // readRaw reads + decodes every raw object of a window into Rows (one Row per LogRecord).
@@ -272,18 +320,19 @@ func DecodeJSONL(data []byte) ([]Row, error) {
 	return rows, nil
 }
 
-// writeCompacted marshals rows to Parquet and Puts them at the deterministic compacted key for the window.
-func (c *Compactor) writeCompacted(ctx context.Context, w *window, rows []Row) error {
+// writeCompacted marshals rows to Parquet, recording the raw keys they came from, and Puts them at the window's
+// deterministic compacted key.
+func (c *Compactor) writeCompacted(ctx context.Context, key string, rows []Row, rawKeys map[string]struct{}) error {
 	const op = "compact.Compactor.writeCompacted"
 	var buf bytes.Buffer
-	pw := parquet.NewGenericWriter[Row](&buf)
+	pw := parquet.NewGenericWriter[Row](&buf,
+		parquet.KeyValueMetadata(rawKeysMeta, strings.Join(slices.Sorted(maps.Keys(rawKeys)), "\n")))
 	if _, err := pw.Write(rows); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "write parquet rows")
 	}
 	if err := pw.Close(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "close parquet writer")
 	}
-	key := compactedKey(w.ns, w.fn, w.start)
 	if err := c.bucket.Put(ctx, key, buf.Bytes()); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "put compacted %q", key)
 	}
