@@ -307,7 +307,7 @@ func DecodeManifests(data []byte) ([]v1.Object, error) {
 		if len(doc.Content) == 0 || doc.Content[0].ShortTag() == "!!null" {
 			continue
 		}
-		quoteKeys(&doc)
+		quoteStrings(&doc)
 		raw, err := yamlv3.Marshal(&doc)
 		if err != nil {
 			return nil, fault.Invalidf(op, "re-encode manifest document %d: %v", n, err)
@@ -347,19 +347,16 @@ func decodeDocument(data []byte) (v1.Object, error) {
 	return obj, nil
 }
 
-// quoteKeys double-quotes every plain mapping key that YAML 1.2 reads as a string. sigs.k8s.io/yaml
-// decodes YAML 1.1, which turns a bare on/off/yes/no/y/n key into a boolean (the JSON key "true"/"false")
-// that the typed decode then drops (issue #63); values keep the YAML 1.1 decode.
-func quoteKeys(n *yamlv3.Node) {
-	if n.Kind == yamlv3.MappingNode {
-		for i := 0; i < len(n.Content); i += 2 {
-			if k := n.Content[i]; k.Kind == yamlv3.ScalarNode && k.Style == 0 && k.ShortTag() == "!!str" {
-				k.Style = yamlv3.DoubleQuotedStyle
-			}
-		}
+// quoteStrings double-quotes every plain scalar, key or value, that YAML 1.2 reads as a string.
+// sigs.k8s.io/yaml decodes YAML 1.1, which turns a bare on/off/yes/no/y/n into a boolean: a key becomes
+// "true"/"false" that the typed decode drops (issue #63), a string value is rewritten to "true"/"false"
+// and a json.RawMessage value becomes a JSON boolean (issue #299).
+func quoteStrings(n *yamlv3.Node) {
+	if n.Kind == yamlv3.ScalarNode && n.Style == 0 && n.ShortTag() == "!!str" {
+		n.Style = yamlv3.DoubleQuotedStyle
 	}
 	for _, c := range n.Content {
-		quoteKeys(c)
+		quoteStrings(c)
 	}
 }
 

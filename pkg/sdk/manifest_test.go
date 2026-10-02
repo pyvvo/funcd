@@ -1,6 +1,7 @@
 package sdk_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,6 +241,66 @@ spec:
 	require.True(t, ok)
 	require.Equal(t, []v1.BlobEventType{"Removed"}, es.Spec.Blob.Events[0].On)
 	require.ErrorContains(t, es.Validate(), `"Removed" is unsupported`)
+}
+
+// A plain value that YAML 1.2 reads as a string (no, on, y) keeps its text: a string field never gets
+// YAML 1.1's "false"/"true", a json.RawMessage field gets a JSON string, and a bool field written that
+// way fails the decode and names the field.
+func TestIssue299_BareBoolWordValueKeepsText(t *testing.T) {
+	obj, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: c
+  namespace: default
+spec:
+  data:
+    ENABLED: no
+    MODE: on
+    Y: y
+    QUOTED: "yes"
+    FLAG: true
+    PORT: 8080
+`))
+	require.NoError(t, err)
+	cm, ok := obj.(*v1.ConfigMap)
+	require.True(t, ok)
+	require.Equal(t, map[string]string{
+		"ENABLED": "no",
+		"MODE":    "on",
+		"Y":       "y",
+		"QUOTED":  "yes",
+		"FLAG":    "true",
+		"PORT":    "8080",
+	}, cm.Spec.Data)
+
+	run := `
+apiVersion: funcd.io/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: r
+  namespace: default
+spec:
+  workflow: w
+  input:
+    answer: no
+    choices:
+      - yes
+      - no
+    count: 2
+  paused: %s
+`
+	obj, err = sdk.DecodeManifest(fmt.Appendf(nil, run, "true"))
+	require.NoError(t, err)
+	wr, ok := obj.(*v1.WorkflowRun)
+	require.True(t, ok)
+	require.JSONEq(t, `{"answer":"no","choices":["yes","no"],"count":2}`, string(wr.Spec.Input))
+	require.True(t, wr.Spec.Paused)
+
+	_, err = sdk.DecodeManifest(fmt.Appendf(nil, run, "yes"))
+	require.Error(t, err, "a YAML 1.2 string in a bool field must not decode as true")
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "paused")
 }
 
 // A manifest key the typed object does not know is rejected at decode, not silently dropped before the
