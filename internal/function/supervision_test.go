@@ -163,6 +163,45 @@ func TestIssue76_NeverReadyHandlerFailsAfterBootTimeout(t *testing.T) {
 	require.Empty(t, h.routes(t))
 }
 
+// Issue #309: a serving Function whose replacement runs but never becomes ready is not re-probed every 200 ms for good.
+// Once the replacement has run for the boot timeout with no replica ready, it is stopped and replaced after the
+// backoff, as a crash under repair is (ADR-0142, ADR-0030 §4b).
+func TestIssue309_NeverReadyReplacementIsReplacedAfterBackoff(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.deployReady(t, "stall")
+	id := runtime.NewInstanceID("default", "stall", "stall-1", 0)
+	h.rt.exit("stall", runtime.StateFailed, time.Minute)
+	h.rt.hold(id, true)
+	h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the replacement boots")
+
+	h.rt.exitRevision("stall", "stall-1", 0, runtime.StateRunning, time.Hour)
+	res := h.reconcile(t, "stall")
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a replica is kept while the Function has been Degraded for less than the boot timeout")
+
+	fn := h.getFn(t, "stall")
+	for i := range fn.Status.Conditions {
+		if fn.Status.Conditions[i].Type == "Ready" {
+			fn.Status.Conditions[i].LastTransitionTime = time.Now().Add(-time.Hour)
+		}
+	}
+	_, err := h.st.Update(context.Background(), fn)
+	require.NoError(t, err)
+	creates, _ := h.rt.counts()
+	res = h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
+	require.Equal(t, testPeriod, res.RequeueAfter, "the pass waits out the backoff instead of re-probing the hung replica")
+	require.Contains(t, h.condition(t, "stall", "Ready").Message, "did not become ready")
+	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "stall"), "a hung replacement of a serving Function is not a shape failure")
+
+	h.rt.hold(id, false)
+	h.reconcile(t, "stall")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates+1, after, "the hung replacement is replaced")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+}
+
 // scenario: fixed-spec-recovers-failed-function (ADR-0142) — applying a fixed spec to a Failed (ShapeInvalid)
 // function deploys the new spec, and the function becomes Ready.
 func TestScenarioFixedSpecRecoversFailedFunction(t *testing.T) {

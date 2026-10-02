@@ -555,6 +555,7 @@ type verdict struct {
 	loadErr        string    // the shim's load error, when shapeFailed or currentFailed
 	switched       bool      // this pass moved the calls to the current revision
 	startErr       error     // the first Start error of a current-revision replica (nil if every Start succeeded)
+	repairErr      string    // a serving pass: why it stopped a replica that never became ready (issue #309)
 }
 
 // finish writes the pass's status from v and returns its requeue. Ready and the phase describe the serving side;
@@ -581,8 +582,11 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
 		fn.Status.Phase = v1.PhaseDegraded
 		msg := "a replica exited and is being replaced"
-		if v.startErr != nil {
+		switch {
+		case v.startErr != nil:
 			msg = "a replica exited and its replacement could not start: " + v.startErr.Error()
+		case v.repairErr != "":
+			msg = "a replica exited and its replacement was stopped: " + v.repairErr
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: msg})
 	case v.startErr != nil && v.running == 0:
@@ -760,16 +764,45 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		return verdict{}, err
 	}
 	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	var repairErr string
 	if serving {
-		failed = "" // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+		// ADR-0142: in a pass that started serving, a Failed replica is a crash under repair, and so is one that never
+		// became ready (issue #309)
+		stopped, serr := r.stopNeverReady(ctx, fn, failed)
+		if serr != nil {
+			return verdict{}, serr
+		}
+		if stopped {
+			running--
+			repairErr = notReadyError()
+		}
+		failed = ""
 	}
 	if ready >= 1 && s == "" {
 		fn.Status.ServingRevision = string(c)
 	}
 	return verdict{
 		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
-		serving: serving, retryAt: retryAt, booting: running > ready, startErr: startErr,
+		serving: serving, retryAt: retryAt, booting: running > ready, startErr: startErr, repairErr: repairErr,
 	}, nil
+}
+
+// stopNeverReady stops failed, the replica readiness judged failed, if it still runs — it ran for bootTimeout without
+// becoming ready (ADR-0030 §4b) — and fn has been Degraded as long, so convergeRevision replaces it after the backoff
+// like a crash under repair (ADR-0142). A replica that served before fn lost its last ready one keeps bootTimeout from
+// then, so one failed probe of a busy worker does not stop it. It reports whether it stopped the replica.
+func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed runtime.InstanceID) (bool, error) {
+	rc, _ := fn.Status.Conditions.Get(condReady)
+	if failed == "" || fn.Status.Phase != v1.PhaseDegraded || time.Since(rc.LastTransitionTime) < bootTimeout {
+		return false, nil
+	}
+	if in, err := r.runtime.Status(ctx, failed); err != nil || in.State != runtime.StateRunning {
+		return false, nil
+	}
+	if err := r.runtime.Stop(ctx, failed); err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), "function.converge", "stop a worker that never became ready")
+	}
+	return true, nil
 }
 
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
@@ -1391,7 +1424,7 @@ func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) strin
 		return ""
 	}
 	if in, err := r.runtime.Status(ctx, id); err == nil && in.State == runtime.StateRunning {
-		return "the handler did not become ready within " + bootTimeout.String()
+		return notReadyError()
 	}
 	last := "the runtime shim could not load the handler"
 	rc, err := r.runtime.Logs(ctx, id)
@@ -1407,6 +1440,9 @@ func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) strin
 	}
 	return last
 }
+
+// notReadyError is why a replica that ran for bootTimeout without becoming ready failed.
+func notReadyError() string { return "the handler did not become ready within " + bootTimeout.String() }
 
 // The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).
 const (
