@@ -64,14 +64,17 @@ func createObject(t *testing.T, st store.Store, kind v1.Kind, name string) {
 	require.NoError(t, err)
 }
 
-// run starts a controller registered for gvk in a goroutine; the returned func
+// run starts a controller registered for gvk (then set up by configure) in a goroutine; the returned func
 // cancels it and waits for a clean drain. The object is created first so the watch
 // snapshot delivers it (deterministic, no watch-startup race).
-func run(t *testing.T, st store.Store, gvk v1.GroupVersionKind, r controller.Reconciler) func() {
+func run(t *testing.T, st store.Store, gvk v1.GroupVersionKind, r controller.Reconciler, configure ...func(*controller.Controller)) func() {
 	t.Helper()
 	c, err := controller.New(controller.Deps{Store: st, Workers: 2})
 	require.NoError(t, err)
 	c.Register(gvk, r)
+	for _, fn := range configure {
+		fn(c)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -241,71 +244,153 @@ func (w *pausedWatch) forward(hold *sync.Mutex) {
 	}
 }
 
+// presence records, per object name, whether a reconcile found the object or saw it as NotFound.
+type presence struct {
+	mu          sync.Mutex
+	found, gone map[string]bool
+}
+
+// presenceReconciler returns a reconciler that records in the returned presence what each reconcile reads
+// from st.
+func presenceReconciler(st store.Store) (*fakeReconciler, *presence) {
+	p := &presence{found: map[string]bool{}, gone: map[string]bool{}}
+	return &fakeReconciler{hook: func(ctx context.Context, req controller.Request) {
+		_, err := st.Get(ctx, req.GVK, req.Namespace, req.Name)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if fault.KindOf(err) == fault.NotFound {
+			p.gone[string(req.Name)] = true
+			return
+		}
+		p.found[string(req.Name)] = true
+	}}, p
+}
+
+// missing counts the names not yet reconciled as found, or as NotFound when gone is set.
+func (p *presence) missing(gone bool, names ...string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	seen := p.found
+	if gone {
+		seen = p.gone
+	}
+	n := 0
+	for _, name := range names {
+		if !seen[name] {
+			n++
+		}
+	}
+	return n
+}
+
 // Issue #25: when the store drops the controller's watch (a burst outran its buffer), the controller
-// re-watches, so every object written during and after the burst is reconciled. It resumes after the
-// last revision it saw, so a delete made during the burst is reconciled too; a burst longer than the
-// store's replay ring (1024 events) forces a full re-list instead, which cannot see that delete.
+// re-watches, so every object written during and after the burst is reconciled, and so is a delete made
+// during the burst: it resumes after the last revision it saw, or re-lists when the burst outgrew the
+// store's replay ring (1024 events).
 func TestIssue25_ReconcilesAfterWatchDrop(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name    string
-		burst   int
-		resumes bool
+		name  string
+		burst int
 	}{
-		{name: "resumes after the last revision", burst: 100, resumes: true},
+		{name: "resumes after the last revision", burst: 100},
 		{name: "re-lists when the revision is no longer retained", burst: 1100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := store.New(memory.New())
 			paused := &pausedStore{Store: st}
-
-			var mu sync.Mutex
-			found, gone := map[string]bool{}, map[string]bool{}
-			fr := &fakeReconciler{hook: func(ctx context.Context, req controller.Request) {
-				_, err := st.Get(ctx, req.GVK, req.Namespace, req.Name)
-				mu.Lock()
-				defer mu.Unlock()
-				if fault.KindOf(err) == fault.NotFound {
-					gone[string(req.Name)] = true
-					return
-				}
-				found[string(req.Name)] = true
-			}}
+			fr, seen := presenceReconciler(st)
 			createObject(t, st, v1.KindConfigMap, "doomed")
 			stop := run(t, paused, v1.KindConfigMap.GVK(), fr)
 			defer stop()
 
-			require.Eventually(t, func() bool {
-				mu.Lock()
-				defer mu.Unlock()
-				return found["doomed"]
-			}, 3*time.Second, 10*time.Millisecond, "the existing object is reconciled")
+			require.Eventually(t, func() bool { return seen.missing(false, "doomed") == 0 },
+				3*time.Second, 10*time.Millisecond, "the existing object is reconciled")
 
+			burst := make([]string, tc.burst)
 			func() {
 				paused.hold.Lock()
 				defer paused.hold.Unlock()
-				for i := range tc.burst {
-					createObject(t, st, v1.KindConfigMap, "burst-"+strconv.Itoa(i))
+				for i := range burst {
+					burst[i] = "burst-" + strconv.Itoa(i)
+					createObject(t, st, v1.KindConfigMap, burst[i])
 				}
 				require.NoError(t, st.Delete(context.Background(), v1.KindConfigMap.GVK(), "default", "doomed", ""))
 			}()
 			createObject(t, st, v1.KindConfigMap, "late")
 
 			require.EventuallyWithT(t, func(c *assert.CollectT) {
-				mu.Lock()
-				defer mu.Unlock()
-				missing := 0
-				for i := range tc.burst {
-					if !found["burst-"+strconv.Itoa(i)] {
-						missing++
-					}
+				assert.Zero(c, seen.missing(false, burst...), "burst objects never reconciled")
+				assert.Zero(c, seen.missing(false, "late"), "object created after the burst never reconciled")
+				assert.Zero(c, seen.missing(true, "doomed"), "object deleted during the burst never reconciled as NotFound")
+			}, 5*time.Second, 20*time.Millisecond)
+		})
+	}
+}
+
+// Issue #302: after the store drops the controller's watch during a burst of deletes, every delete still
+// reaches its reconcile as NotFound, and so do the Requests a MapFunc derived from the deleted object. A
+// Deleted event carries the revision of the delete, so the re-watch resumes after the last delete seen even
+// when the objects were last written long before; a re-list after a gap longer than the replay ring
+// enqueues what each vanished object last drove.
+func TestIssue302_ReconcilesDeletesAfterWatchDrop(t *testing.T) {
+	t.Parallel()
+	const doomed, filler = 200, 1100
+	for _, tc := range []struct {
+		name        string
+		fillerFirst bool
+	}{
+		{name: "resumes after the last delete seen", fillerFirst: true},
+		{name: "re-lists after a gap longer than the ring"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := store.New(memory.New())
+			paused := &pausedStore{Store: st}
+			fr, seen := presenceReconciler(st)
+			gvk := v1.KindConfigMap.GVK()
+			var names, dependents []string
+			for i := range doomed {
+				name := "doomed-" + strconv.Itoa(i)
+				createObject(t, st, v1.KindConfigMap, name)
+				names, dependents = append(names, name), append(dependents, name+"-dependent")
+			}
+			stop := run(t, paused, gvk, fr, func(c *controller.Controller) {
+				c.Watches(gvk, func(_ context.Context, obj v1.Object) []controller.Request {
+					return []controller.Request{{GVK: gvk, Namespace: obj.GetNamespace(), Name: obj.GetName() + "-dependent"}}
+				})
+			})
+			defer stop()
+
+			require.Eventually(t, func() bool { return seen.missing(false, names...)+seen.missing(true, dependents...) == 0 },
+				3*time.Second, 10*time.Millisecond, "the existing objects and their dependents are reconciled")
+			seen.mu.Lock()
+			clear(seen.gone)
+			seen.mu.Unlock()
+
+			fill := func() {
+				for i := range filler {
+					createObject(t, st, v1.KindSecret, "filler-"+strconv.Itoa(i))
 				}
-				assert.Zero(c, missing, "burst objects never reconciled")
-				assert.True(c, found["late"], "object created after the burst reconciled")
-				if tc.resumes {
-					assert.True(c, gone["doomed"], "object deleted during the burst reconciled as NotFound")
+			}
+			if tc.fillerFirst {
+				fill()
+			}
+			func() {
+				paused.hold.Lock()
+				defer paused.hold.Unlock()
+				for _, name := range names {
+					require.NoError(t, st.Delete(context.Background(), gvk, "default", v1.ObjectName(name), ""))
 				}
+				if !tc.fillerFirst {
+					fill()
+				}
+			}()
+
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				assert.Zero(c, seen.missing(true, names...), "deleted objects never reconciled as NotFound")
+				assert.Zero(c, seen.missing(true, dependents...), "mapped Requests of deleted objects never reconciled")
 			}, 5*time.Second, 20*time.Millisecond)
 		})
 	}
