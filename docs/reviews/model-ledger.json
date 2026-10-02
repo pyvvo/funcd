@@ -2203,5 +2203,35 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-24-fix-claude-opus-5-5.md",
     "notes": "pass: test fails pre-fix (rv 7->10) and passes under -race; 3/3 mutants killed; real-engine probe ~13k reconciles/5s -> 0. Minor(model): unused HandOutSettle knob in the test. Minor(env): pre-existing PushSite created-timestamp flake in internal/artifact."
+  },
+  {
+    "date": "2026-10-02",
+    "issue": "31",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-31-fix-claude-opus-5-5.md",
+    "notes": "pass 0/0/1. Minor (model): the issue's maxKeyBytes facet is left open and the commit does not mention it. KVStoreSpec.Validate allows caps above Badger's 65000-byte key limit, so such a key still returns an Internal 500 with a hex dump of the internal key; it now fails only its own write; may need /adr like #169. Not counted (env): a one-off fasthttp DATA RACE in internal/blob/s3gateway; the rerun was clean."
+  },
+  {
+    "date": "2026-10-02",
+    "issue": "101",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-101-fix-claude-opus-5-5.md",
+    "notes": "pass, no findings (0 model / 0 issue / 0 adr / 0 env); revert fails with the issue's 'Txn is too big' in both the TTL and cap subtests, passes under -race, 3/3 mutants killed, WriteBatch reuses Badger's bulk path (same idiom as bench/badger), build/vet/lint host+linux, eventing -race and pkg/funcd e2e green"
   }
 ]
