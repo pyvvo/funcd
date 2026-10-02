@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -670,9 +671,9 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	opts = append(opts, funcd.WithRuntimeShim(node, shimPath), funcd.WithPoolShim(node, poolPath))
 
-	// Optional second curated language — the Python shim (ADR-0049). If a python3 is present,
-	// extract the embedded (stdlib-only, no pip) shim package and register it for the `python*`
-	// runtime family; node functions are unaffected when it is absent.
+	// Optional second curated language — the Python shim (ADR-0049). If a python3 is present and can
+	// import the extracted shim package (it needs Python ≥3.12 and fastjsonschema, ADR-0123), register
+	// it for the `python*` runtime family; node functions are unaffected when it is absent or unusable.
 	python := envOr("FUNCD_PYTHON", "")
 	if python == "" {
 		if p, lerr := exec.LookPath("python3"); lerr == nil {
@@ -687,6 +688,11 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if perr != nil {
 		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
+	if reason := pythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
+		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
+			"python", python, "reason", reason)
+		return opts, noopClose, nil
+	}
 	opts = append(opts, funcd.WithRuntimeShimFor("python", python, shimEntry))
 
 	// Python worker pooling (ADR-0050) needs `concurrent.interpreters` (Python ≥3.14). Register the
@@ -698,6 +704,20 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
 	return opts, noopClose, nil
+}
+
+// pythonShimLoadError imports the extracted shim (shimDir holds funcd_shim) with the interpreter, so the
+// probe checks what the shim really needs instead of restating it. "" ⇒ it loads; otherwise the
+// interpreter's last output line (e.g. the SyntaxError or ModuleNotFoundError).
+func pythonShimLoadError(ctx context.Context, python, shimDir string) string {
+	out, err := exec.CommandContext(ctx, python, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import funcd_shim.shim", shimDir).CombinedOutput()
+	if err == nil {
+		return ""
+	}
+	if msg := strings.TrimSpace(string(out)); msg != "" {
+		return msg[strings.LastIndexByte(msg, '\n')+1:]
+	}
+	return err.Error()
 }
 
 // pythonAtLeast314 reports whether the interpreter at path is Python ≥3.14 (the floor for the

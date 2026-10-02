@@ -2,8 +2,11 @@ package storescaler_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -119,4 +122,92 @@ func TestScenarioScalerConflictRetry(t *testing.T) {
 	require.NoError(t, sc.ScaleTo(ctx, ref("racy"), 1), "conflict must be retried, not surfaced")
 	require.Equal(t, v1.PhaseDeploying, phaseOf(t, base, "racy"), "intent converged despite the race")
 	require.GreaterOrEqual(t, racing.getCount(), 2, "the conflict forced a re-read")
+}
+
+// coldEndpoints never reports a ready upstream, as for a Failed function whose worker is not restarted (ADR-0142).
+type coldEndpoints struct{}
+
+func (coldEndpoints) Upstream(context.Context, activator.FunctionRef) (string, bool, error) {
+	return "", false, nil
+}
+
+// failShape writes what the reconciler writes when the shim cannot load the handler (finish in internal/function).
+func failShape(ctx context.Context, st store.Store, name string) error {
+	obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name))
+	if err != nil {
+		return err
+	}
+	fn := obj.(*v1.Function)
+	fn.Status.Phase = v1.PhaseFailed
+	fn.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
+	_, err = st.Update(ctx, fn)
+	return err
+}
+
+// failsAfterWake is the real scaler followed by the reconciler failing the function it just woke.
+type failsAfterWake struct {
+	activator.Scaler
+	st store.Store
+}
+
+func (s failsAfterWake) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas int) error {
+	if err := s.Scaler.ScaleTo(ctx, fn, replicas); err != nil {
+		return err
+	}
+	return failShape(ctx, s.st, string(fn.Name))
+}
+
+// call serves one call to name through a real activator.
+func call(t *testing.T, st store.Store, sc activator.Scaler, name string) *httptest.ResponseRecorder {
+	t.Helper()
+	a, err := activator.New(activator.Deps{
+		Store:             st,
+		Endpoints:         coldEndpoints{},
+		Scaler:            sc,
+		ActivationTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, activator.WithFunction(httptest.NewRequest(http.MethodPost, "/", nil), ref(name)))
+	return rec
+}
+
+// Issue #142: a call to a Failed (ShapeInvalid) function is answered at once with the function's state, instead of
+// being held for the whole activation timeout and then told the function "did not become ready".
+func TestIssue142_FailedFunctionIsAnsweredWithItsState(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	putFunction(t, st, "broken", v1.PhaseFailed)
+	require.NoError(t, failShape(context.Background(), st, "broken"))
+
+	rec := call(t, st, storescaler.New(st), "broken")
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), "function default/broken is Failed (ShapeInvalid)")
+	require.NotContains(t, rec.Body.String(), "did not become ready", "the call must not wait out the activation timeout")
+	require.Equal(t, v1.PhaseFailed, phaseOf(t, st, "broken"), "a wake does not move a Failed function")
+}
+
+// Issue #142: a scale-to-zero function the reconciler fails after the wake, because its shim cannot load the handler,
+// is answered as soon as it is Failed, not at the end of the activation timeout.
+func TestIssue142_FunctionFailedDuringActivationIsAnsweredAtOnce(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	putFunction(t, st, "late", v1.PhaseIdle)
+
+	rec := call(t, st, failsAfterWake{Scaler: storescaler.New(st), st: st}, "late")
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), "function default/late is Failed (ShapeInvalid)")
+	require.NotContains(t, rec.Body.String(), "did not become ready", "the call must not wait out the activation timeout")
+}
+
+// Issue #142 refuses only the wake: the reclaim edge (* → Idle) still scales a Failed function to zero.
+func TestIssue142_ReclaimOfAFailedFunctionStillSucceeds(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	putFunction(t, st, "broken", v1.PhaseFailed)
+
+	require.NoError(t, storescaler.New(st).ScaleTo(context.Background(), ref("broken"), 0))
+	require.Equal(t, v1.PhaseIdle, phaseOf(t, st, "broken"))
 }

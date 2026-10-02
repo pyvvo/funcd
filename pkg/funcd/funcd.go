@@ -291,10 +291,10 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager   // per-function worker-node local API broker (ADR-0064)
-	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
-	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
-	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
+	invokeMgr         *local.Manager          // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
+	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
 	deadLetters          deadletter.Store          // eventing DLQ (ADR-0118); closed on shutdown
 	sensorReconciler     *sensor.Reconciler        // owns the retry workers (drained on shutdown) + the DLQ replay seam
@@ -433,6 +433,9 @@ func (p *Platform) buildControlPlane() error {
 		}
 		invokeSockDir = tmp
 	}
+	if err := local.CheckDir(invokeSockDir); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
+	}
 	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
 	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
 	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via
@@ -553,6 +556,7 @@ func (p *Platform) buildControlPlane() error {
 		bucketFor := s3BucketFor(c.blob, c.store)
 		srv, gerr := s3gateway.New(s3gateway.Deps{
 			BucketFor:      bucketFor,
+			Buckets:        s3Buckets(c.store),
 			PDP:            cedarPDP,
 			Master:         master,
 			Listen:         c.s3gwListenAddr,
@@ -730,6 +734,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
+	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.kv
 	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
 	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
 	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
@@ -810,8 +815,10 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
 		Grant:     storeGranter{store: c.store},
-		Client:    &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second},
-		Logger:    p.logger,
+		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
+		// (ADR-0094), and a client-wide cap would cut a longer step short.
+		Client: &http.Client{Transport: calls.Wrap(nil)},
+		Logger: p.logger,
 	})
 	if derr != nil {
 		return fault.Wrapf(derr, fault.KindOf(derr), op, "build workflow dispatcher")
@@ -831,7 +838,6 @@ func (p *Platform) buildControlPlane() error {
 	if eerr != nil {
 		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
 	}
-	p.workflowEngine = wfEngine
 	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
 	wfContracts := workflow.ContractResolver(contractResolver{})
@@ -839,7 +845,8 @@ func (p *Platform) buildControlPlane() error {
 		wfContracts = c.workflowContracts
 	}
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger))
-	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger))
+	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger)
+	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -866,18 +873,19 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
 			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
 			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.kv or non-empty data on Delete; still-bound table removal on Update). Binding/owner
-			// EXISTENCE (Function.spec.kv → an existing store/table; KVStore tables[].owner → a real Function)
-			// is RECONCILE-TIME (ADR-0121): the Function reconciler holds a binding not-Ready until it resolves,
-			// and the owner UID is fail-closed at the PDP until the owner exists — no write-time existence gate.
+			// spec.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
+			// Update). Binding/owner EXISTENCE (Function.spec.kv → an existing store/table; KVStore
+			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
+			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
+			// exists — no write-time existence gate.
 			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
 			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
 			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
-			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober is nil
-			// until the s3gateway data plane lands — binding-protection still applies (nil ⇒ skip the data check).
+			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
+			// the same substrate view the s3gateway writes (s3BucketFor).
 			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
-			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
+			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, blobProber{blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}}),
 			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -889,6 +897,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
+			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
+			admission.NewWorkflowRunSpecImmutableAdmission(),
 		},
 	})
 	if err != nil {
@@ -936,7 +946,10 @@ func (p *Platform) buildControlPlane() error {
 	// limiter: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its caller's
 	// in-flight slot or rate token (#87).
 	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, edgeShape))
-	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
+	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
+	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
+	// deadline once the body is read, so it does not cut a long-running handler.
+	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)
@@ -1059,7 +1072,7 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	if p.workflowEngine != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
+	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1313,8 +1326,8 @@ func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
 	return err == nil
 }
 
-// runWorkflowRetention periodically reclaims terminal WorkflowRun records older than the retention
-// horizon (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
+// runWorkflowRetention periodically reclaims terminal workflow runs older than the retention horizon,
+// engine records and WorkflowRun objects alike (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
 // cancel. A sweep failure is logged, not fatal — the next tick retries.
 func (p *Platform) runWorkflowRetention(ctx context.Context) {
 	interval := p.workflowRetention
@@ -1328,7 +1341,7 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := p.workflowEngine.SweepExpired(ctx, p.workflowRetention)
+			n, err := p.workflowSweeper.SweepExpired(ctx, p.workflowRetention)
 			if err != nil {
 				p.logger.WarnContext(ctx, "workflow retention sweep failed", "error", err)
 				continue
@@ -1601,16 +1614,40 @@ func maxRevision(revs ...string) string {
 // one substrate bucket, many logical S3 buckets — so distinct namespaces and buckets
 // never collide. Existence-by-namespace here gives tenancy a second guard (a missing /
 // cross-namespace bucket is NoSuchBucket); the binding-as-grant Cedar PEP is the
-// authorization gate on every object op.
+// authorization gate on every object op. The view carries the Bucket's spec.maxObjectBytes,
+// so every write path through it (S3 frontend, context.blob, site) enforces that policy.
 func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 		if bucket == "" {
 			return nil, false
 		}
-		if _, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket)); err != nil {
+		obj, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket))
+		if err != nil {
 			return nil, false
 		}
-		return blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), true
+		var maxObjectBytes int64
+		if b, ok := obj.(*v1.Bucket); ok {
+			maxObjectBytes = b.Spec.MaxObjectBytes
+		}
+		return blob.Capped(blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), maxObjectBytes), true
+	}
+}
+
+// s3Buckets lists a namespace's Bucket resources for the S3 gateway's HeadBucket and
+// ListBuckets (ADR-0080).
+func s3Buckets(st store.Store) func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+	return func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+		l, err := st.List(ctx, v1.KindBucket.GVK(), store.ListOptions{Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]v1.Bucket, 0, len(l.Items))
+		for _, o := range l.Items {
+			if b, ok := o.(*v1.Bucket); ok {
+				out = append(out, *b)
+			}
+		}
+		return out, nil
 	}
 }
 
@@ -1628,6 +1665,18 @@ func (l blobBucketLister) List(ctx context.Context, ns v1.NamespaceName, bucket 
 		return nil, fault.NotFoundf("funcd.blobBucketLister", "bucket %q not found in namespace %q", bucket, ns)
 	}
 	return b.List(ctx, prefix)
+}
+
+// blobProber adapts blobBucketLister to admission.BlobProber (ADR-0080 deletion-protection): HasAny reports
+// whether any object exists under "<prefix>/" of the Bucket's substrate view.
+type blobProber struct{ lister blobBucketLister }
+
+func (p blobProber) HasAny(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (bool, error) {
+	items, err := p.lister.List(ctx, ns, bucket, prefix+"/")
+	if err != nil {
+		return false, err
+	}
+	return len(items) > 0, nil
 }
 
 // kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):

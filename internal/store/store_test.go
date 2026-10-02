@@ -106,8 +106,8 @@ func TestScenario_InputNotMutated(t *testing.T) {
 		t.Fatalf("Create mutated the caller's input: uid=%q gen=%d rv=%q", cfg.UID, cfg.Generation, cfg.ResourceVersion)
 	}
 	cm := created.GetObjectMeta()
-	if cm.UID == "" || cm.ResourceVersion == "" || cm.Generation != 1 {
-		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d", cm.UID, cm.ResourceVersion, cm.Generation)
+	if cm.UID == "" || cm.ResourceVersion == "" || cm.Generation != 1 || cm.CreationTime.IsZero() {
+		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d creationTimestamp=%v", cm.UID, cm.ResourceVersion, cm.Generation, cm.CreationTime)
 	}
 
 	up, _ := v1.NewObject(v1.KindConfigMap)
@@ -316,5 +316,57 @@ func TestCreateWithGenerateName(t *testing.T) {
 	}
 	if b.GetName() == a.GetName() {
 		t.Fatalf("two generateName creates collided on %q", name)
+	}
+}
+
+// Issue #60: creationTimestamp is server-set and ignored on input (ADR-0048). Create stamps the
+// current time whether the client left it unset or sent its own; Update keeps the stored value.
+func TestIssue60_CreateStampsCreationTimestamp(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	forged := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
+
+	for _, in := range []struct {
+		name string
+		sent time.Time
+	}{
+		{name: "unset"},
+		{name: "forged", sent: forged},
+	} {
+		obj, _ := v1.NewObject(v1.KindConfigMap)
+		cfg, _ := obj.(*v1.ConfigMap)
+		cfg.Name = v1.ObjectName(in.name)
+		cfg.Namespace = "default"
+		cfg.ResourceGroup = "rg1"
+		cfg.CreationTime = in.sent
+
+		before := time.Now()
+		created, err := s.Create(ctx, cfg)
+		after := time.Now()
+		if err != nil {
+			t.Fatalf("%s: Create: %v", in.name, err)
+		}
+		ct := created.GetObjectMeta().CreationTime
+		if ct.Before(before) || ct.After(after) {
+			t.Fatalf("%s: Create returned creationTimestamp %v, want the server time in [%v, %v]", in.name, ct, before, after)
+		}
+		got, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", cfg.Name)
+		if err != nil {
+			t.Fatalf("%s: Get: %v", in.name, err)
+		}
+		if !got.GetObjectMeta().CreationTime.Equal(ct) {
+			t.Fatalf("%s: stored creationTimestamp %v, want %v", in.name, got.GetObjectMeta().CreationTime, ct)
+		}
+
+		up, _ := got.(*v1.ConfigMap)
+		up.CreationTime = forged
+		up.Spec.Data = map[string]string{"k": "v2"}
+		updated, err := s.Update(ctx, up)
+		if err != nil {
+			t.Fatalf("%s: Update: %v", in.name, err)
+		}
+		if !updated.GetObjectMeta().CreationTime.Equal(ct) {
+			t.Fatalf("%s: Update changed creationTimestamp to %v, want %v", in.name, updated.GetObjectMeta().CreationTime, ct)
+		}
 	}
 }

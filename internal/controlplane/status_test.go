@@ -33,9 +33,10 @@ func newServerOn(t *testing.T, st store.Store) http.Handler {
 func fnManifest(t *testing.T, image string, status map[string]interface{}) []byte {
 	t.Helper()
 	m := map[string]interface{}{
-		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "Function"},
-		"metadata": map[string]interface{}{"name": "echo", "namespace": "team-a", "resourceGroup": "rg1"},
-		"spec":     map[string]interface{}{"runtime": "nodejs22", "handler": "app.handler", "image": image},
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Function",
+		"metadata":   map[string]interface{}{"name": "echo", "namespace": "team-a", "resourceGroup": "rg1"},
+		"spec":       map[string]interface{}{"runtime": "nodejs22", "handler": "app.handler", "image": image},
 	}
 	if status != nil {
 		m["status"] = status
@@ -99,9 +100,8 @@ func TestApplyOfChangedSpecKeepsStatus(t *testing.T) {
 func TestApplyIgnoresClientStatus(t *testing.T) {
 	st := store.New(memory.New())
 	srv := newServerOn(t, st)
-	// huma does not honor ",inline", so the common status fields nest under "Status" (as TypeMeta does).
 	claimed := map[string]interface{}{
-		"Status":          map[string]interface{}{"phase": "Failed"},
+		"phase":           "Failed",
 		"currentRevision": "bogus-9",
 		"replicas":        7,
 	}

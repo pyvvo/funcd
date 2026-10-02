@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -86,9 +88,9 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		const op = "workernode.local.invoke"
 		start := time.Now()
 		alias := r.PathValue("alias")
-		input, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxInvokeBytes))
+		input, err := readBody(w, r, op, maxInvokeBytes)
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read request body: %v", err))
+			fault.WriteProblem(w, err)
 			return
 		}
 		target, timeout, err := res.Resolve(r.Context(), caller, alias)
@@ -140,7 +142,57 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
 	})
-	return mux
+	return opaqueKeys(mux)
+}
+
+// opaqueKeys keeps http.ServeMux from cleaning a KV or blob key: the shims send a key's "/" separators
+// raw, and ServeMux redirects a path with an empty or dot segment ("/kv/b/a//b", "/kv/b/..") before any
+// handler runs (issue #100). Keys are opaque strings, so the key part of the path is escaped into one
+// canonical segment, which the {key...} wildcard unescapes back verbatim.
+func opaqueKeys(mux http.Handler) http.Handler {
+	keyEscaper := strings.NewReplacer("/", "%2F", ".", "%2E")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, route := range []string{"/kv/", "/blob/"} {
+			rest, ok := strings.CutPrefix(r.URL.EscapedPath(), route)
+			if !ok {
+				continue
+			}
+			if binding, key, ok := strings.Cut(rest, "/"); ok {
+				rawPath := route + binding + "/" + keyEscaper.Replace(key)
+				if path, err := url.PathUnescape(rawPath); err == nil {
+					r2 := new(http.Request)
+					*r2 = *r
+					r2.URL = new(url.URL)
+					*r2.URL = *r.URL
+					r2.URL.Path, r2.URL.RawPath = path, rawPath
+					r = r2
+				}
+			}
+			break
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// readBody reads r's body capped at limit bytes (a DoS guard). An over-cap body is PayloadTooLarge
+// (413, as on the data plane, ADR-0134); any other read failure is Invalid.
+func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err == nil {
+		return body, nil
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return nil, fault.PayloadTooLargef(op, "request body exceeds %d bytes", limit)
+	}
+	return nil, fault.Invalidf(op, "read request body: %v", err)
+}
+
+// newServer builds the local API's http.Server. IdleTimeout closes a keep-alive connection left idle
+// between requests (a DoS guard on the local API: each held connection pins a daemon goroutine); it
+// outlasts the TypeScript shim's 5 s client keep-alive, so the client closes an idle connection first.
+func newServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 }
 
 // Serve runs h on a Unix domain socket at path (bind-mounted into the sandbox) until ctx is done.
@@ -152,7 +204,7 @@ func Serve(ctx context.Context, path string, h http.Handler) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.Unavailable, op, "listen on unix socket %q", path)
 	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	srv := newServer(h)
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

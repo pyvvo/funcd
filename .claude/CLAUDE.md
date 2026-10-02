@@ -325,6 +325,11 @@ rules that did it:
   regenerate `model-scorecard.md` conflict one after another; record a batch's ledger rows in one ledger PR.
 - **Model per role.** Fixers and reviewers on the strongest model (reviews at medium effort held their depth);
   integration, gates and PR plumbing on a fast model at low effort.
+- **The host is shared.** Concurrent gates contend on one machine: the `tests/lint-fixtures` tests fail with
+  "parallel golangci-lint is running" while another lint holds the lock, and many e2e runs, or a probe that opens a
+  fresh connection per request, exhaust the ~16k ephemeral ports ("connect: can't assign requested address";
+  count `TIME_WAIT` with `netstat -an`). Run at most two gates at once, rerun only the step that failed for the
+  environment, and keep probes to a few thousand keep-alive connections.
 - **Merging and waiting.** Repo auto-merge is off, so `gh pr merge` fails: enqueue with the GraphQL
   `enqueuePullRequest` mutation after reading every check's conclusion; the queue builds up to 5 PRs together.
   Wait in the background (`scripts/agent/watch-prs.py` exits when a PR turns green, red or conflicted), never in a

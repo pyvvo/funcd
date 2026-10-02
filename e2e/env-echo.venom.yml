@@ -7,7 +7,8 @@
 #   2. the injected values reach the RUNNING handler — config=prod (ConfigMap), secret=s3cr3t (Secret),
 #      and shared=from-secret (the key present in both: the Secret wins, config-then-secrets order).
 # It also proves ADR-0143's redeploy on containerd: a spec change switches revisions with no failed call, and a
-# revision that cannot run leaves the serving one answering.
+# revision that cannot run leaves the serving one answering. Last, it kills the daemon and starts it again: the
+# serving revision answers again (issue 40).
 # The http step hits the VM's forwarded 127.0.0.1 data plane; the exec step reads phase in-VM via limactl.
 name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
 
@@ -364,6 +365,41 @@ testcases:
           content-type: application/json
         body: '{"data":null}'
         info: "the serving revision still answers → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual staging
+
+  # Issue 40: containerd keeps a worker's container and snapshot when the daemon dies, and the restarted daemon must
+  # re-create the worker under the same name. Kill the daemon, start it again on the same data dir, and the serving
+  # revision answers again.
+  - name: daemon-restart-recovers — after a hard daemon restart the serving revision answers again
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"'
+        assertions:
+          - result.code ShouldEqual 0
+      # retry/delay is the wait: systemd must finish stopping the killed unit before the same unit name runs again.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            systemctl is-active -q funcd-demo && exit 1
+            sudo systemctl reset-failed funcd-demo 2>/dev/null
+            sudo systemd-run --unit funcd-demo /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        retry: 10
+        delay: 3
+        info: "invoke after the daemon restart → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.config ShouldEqual staging

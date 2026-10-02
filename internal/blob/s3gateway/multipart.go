@@ -11,6 +11,8 @@ import (
 	"time"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/versity/versitygw/backend"
 	"github.com/versity/versitygw/s3err"
 	"github.com/versity/versitygw/s3response"
 
@@ -81,25 +83,37 @@ func (m *multipartStore) putPart(id string, num int32, data []byte, maxUpload in
 	return nil
 }
 
-// assemble concatenates the parts in ascending part-number order and returns the
-// object bytes plus its total size; it does NOT delete the upload (Complete does).
-func (m *multipartStore) assemble(id string) ([]byte, bool) {
+// assemble concatenates the parts the client listed, in its order (S3
+// CompleteMultipartUpload): part numbers must ascend and each must be buffered with a
+// matching ETag; unlisted parts are dropped. It does NOT delete the upload (Complete does).
+func (m *multipartStore) assemble(id string, mpu *awstypes.CompletedMultipartUpload) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.uploads[id]
 	if !ok {
-		return nil, false
+		return nil, s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
-	nums := make([]int, 0, len(u.parts))
-	for n := range u.parts {
-		nums = append(nums, int(n))
+	if mpu == nil || len(mpu.Parts) == 0 {
+		return nil, s3err.GetAPIError(s3err.ErrMalformedXML)
 	}
-	sort.Ints(nums)
 	var buf []byte
-	for _, n := range nums {
-		buf = append(buf, u.parts[int32(n)]...)
+	var prev int32
+	for _, p := range mpu.Parts {
+		if p.PartNumber == nil || p.ETag == nil {
+			return nil, s3err.GetAPIError(s3err.ErrMalformedXML)
+		}
+		num := *p.PartNumber
+		if num <= prev {
+			return nil, s3err.GetAPIError(s3err.ErrInvalidPartOrder)
+		}
+		prev = num
+		data, ok := u.parts[num]
+		if !ok || !backend.AreEtagsSame(etag(data), *p.ETag) {
+			return nil, s3err.GetInvalidPartErr(id, num, *p.ETag)
+		}
+		buf = append(buf, data...)
 	}
-	return buf, true
+	return buf, nil
 }
 
 func (m *multipartStore) abort(id string) { m.mu.Lock(); delete(m.uploads, id); m.mu.Unlock() }
@@ -168,9 +182,9 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 		return s3response.CompleteMultipartUploadResult{}, "", err
 	}
 	id := deref(in.UploadId)
-	data, ok := b.mp.assemble(id)
-	if !ok {
-		return s3response.CompleteMultipartUploadResult{}, "", s3err.GetAPIError(s3err.ErrNoSuchUpload)
+	data, aerr := b.mp.assemble(id, in.MultipartUpload)
+	if aerr != nil {
+		return s3response.CompleteMultipartUploadResult{}, "", aerr
 	}
 	if int64(len(data)) > b.maxUpload {
 		b.mp.abort(id)

@@ -69,9 +69,9 @@ func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
 
 	mux.HandleFunc("PUT /blob/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.blob.put"
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBlobBytes))
+		body, err := readBody(w, r, op, maxBlobBytes)
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read object (max %d bytes): %v", maxBlobBytes, err))
+			fault.WriteProblem(w, err)
 			return
 		}
 		if err := b.Put(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key"), body); err != nil {

@@ -2,10 +2,11 @@
 // component backing a gateway route's upstream. For a request to a scaled-to-zero
 // function it buffers the request, single-flights a wake (Scaler.ScaleTo(fn,1)),
 // waits for a ready upstream to appear, then forwards the held request (or 503s on
-// timeout); and it runs a periodic idle-reclaim pass that scales idle functions to
-// zero. It emits a scale INTENT through two seams (Endpoints read / Scaler write);
-// it does not provision workeres (that is the P-M Function reconciler) and it does
-// not register a Function reconciler (one-reconciler-per-gvk, ADR-0015).
+// timeout, or at once for a Failed function); and it runs a periodic idle-reclaim
+// pass that scales idle functions to zero. It emits a scale INTENT through two seams
+// (Endpoints read / Scaler write); it does not provision workeres (that is the P-M
+// Function reconciler) and it does not register a Function reconciler
+// (one-reconciler-per-gvk, ADR-0015).
 package activator
 
 import (
@@ -46,7 +47,7 @@ type Scaler interface {
 
 // Deps configures the activator (internal component, ADR-0002 §1).
 type Deps struct {
-	Store             store.Store   // lists Functions for idle reclaim
+	Store             store.Store   // lists Functions for idle reclaim; read for a Failed phase while activating
 	Endpoints         Endpoints     // ready-upstream resolver (required)
 	Scaler            Scaler        // scale-intent writer (required)
 	Clock             clock.Clock   // default clock.System()
@@ -56,6 +57,9 @@ type Deps struct {
 	ReclaimInterval   time.Duration // idle-reclaim cadence for Run; default 30s
 	Calls             *CallTracker  // counts the calls to each worker (ADR-0143), which idle reclaim also reads; nil ⇒ uncounted
 }
+
+// condReady is the Function condition whose reason says why a Failed function cannot serve.
+const condReady v1.ConditionType = "Ready"
 
 const (
 	defaultActivationTimeout = 30 * time.Second
@@ -192,7 +196,8 @@ func functionFrom(ctx context.Context) (FunctionRef, bool) {
 
 // ServeHTTP serves one request: warm → proxy now; cold → single-flight ScaleTo(1),
 // wait for a ready upstream (bounded by ActivationTimeout), then forward. On activation
-// timeout → 503 problem+json; a request with no FunctionRef in context → 500 problem+json.
+// timeout or for a Failed function → 503 problem+json; a request with no FunctionRef in
+// context → 500 problem+json.
 func (a *Activator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const op = "activator.ServeHTTP"
 	fn, ok := functionFrom(r.Context())
@@ -292,9 +297,10 @@ func (a *Activator) activate(ctx context.Context, fn FunctionRef) (string, error
 	}
 }
 
-// drive runs one shared activation: trigger the wake once, then poll Endpoints until a
-// ready upstream appears, ActivationTimeout elapses or Run returns, and resolve all waiters. It
-// uses its own bounded context (not a request's) so the shared wake is not tied to one caller.
+// drive runs one shared activation: trigger the wake once, then poll until a ready
+// upstream appears, the Function turns Failed, ActivationTimeout elapses or Run returns,
+// and resolve all waiters. It uses its own bounded context (not a request's) so the shared
+// wake is not tied to one caller.
 func (a *Activator) drive(fn FunctionRef, act *activation) {
 	ctx, cancel := context.WithTimeout(a.life, a.activationTimeout)
 	defer cancel()
@@ -317,6 +323,10 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 			a.logger.WarnContext(ctx, "endpoint resolve failed during activation",
 				"namespace", string(fn.Namespace), "name", string(fn.Name), "error", err)
 		}
+		if ferr := a.failed(ctx, fn); ferr != nil {
+			a.resolve(fn, act, "", ferr)
+			return
+		}
 		select {
 		case <-ctx.Done():
 			var err error = fault.Unavailablef("activator.activate",
@@ -329,6 +339,38 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// failed returns FailedFault for fn's Function: once the wake is accepted, the reconciler
+// may fail the function during the activation (a shim that cannot load the handler).
+// Without a Store, or when the read fails, it is nil and the poll goes on.
+func (a *Activator) failed(ctx context.Context, fn FunctionRef) error {
+	if a.store == nil {
+		return nil
+	}
+	obj, err := a.store.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
+	if err != nil {
+		a.logger.DebugContext(ctx, "function read failed during activation",
+			"namespace", string(fn.Namespace), "name", string(fn.Name), "error", err)
+		return nil
+	}
+	f, ok := obj.(*v1.Function)
+	if !ok {
+		return nil
+	}
+	return FailedFault("activator.activate", f)
+}
+
+// FailedFault is the fault.Unavailable a call to f is answered with when f is Failed, naming
+// its Ready reason, else nil. A wake does not leave Failed (ADR-0016 C2) and the reconciler
+// does not restart a ShapeInvalid worker (ADR-0142), so a held call could only time out
+// (issue #142).
+func FailedFault(op string, f *v1.Function) error {
+	if f.Status.Phase != v1.PhaseFailed {
+		return nil
+	}
+	ready, _ := f.Status.Conditions.Get(condReady)
+	return fault.Unavailablef(op, "function %s/%s is Failed (%s)", f.Namespace, f.Name, ready.Reason)
 }
 
 // resolve records the activation result, removes it from the in-flight map (so a later
@@ -352,11 +394,14 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 }
 
 // forward reverse-proxies r to upstream, streaming each write immediately
-// (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity).
+// (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity). A failed
+// upstream call is an Unavailable problem+json logged through slog (ADR-0002), not the
+// ReverseProxy default (a bare 502 logged through the stdlib log package).
 func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream string) {
+	const op = "activator.forward"
 	target, err := url.Parse(upstream)
 	if err != nil || target.Scheme == "" || target.Host == "" {
-		fault.WriteProblem(w, fault.Internalf("activator.forward", "invalid upstream %q", upstream))
+		fault.WriteProblem(w, fault.Internalf(op, "invalid upstream %q", upstream))
 		return
 	}
 	if target.Path != "" {
@@ -366,6 +411,10 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		a.logger.WarnContext(r.Context(), "upstream call failed", "upstream", upstream, "error", perr)
+		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
+	}
 	rp.ServeHTTP(w, r)
 }
 

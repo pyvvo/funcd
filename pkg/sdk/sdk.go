@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
 
@@ -29,7 +31,8 @@ type Client struct {
 // Option configures a Client (functional-options facade, ADR-0002).
 type Option func(*Client)
 
-// WithHTTPClient overrides the HTTP client (default http.DefaultClient).
+// WithHTTPClient overrides the HTTP client (default http.DefaultClient). A client without a
+// CheckRedirect policy gets the SDK's, which refuses a redirect that would change the method.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) {
 		if h != nil {
@@ -55,7 +58,26 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	for _, o := range opts {
 		o(c)
 	}
+	if c.httpClient.CheckRedirect == nil {
+		hc := *c.httpClient
+		hc.CheckRedirect = refuseMethodChange
+		c.httpClient = &hc
+	}
 	return c, nil
+}
+
+// refuseMethodChange stops a redirect that changes the method: on a 301/302/303 Go resends a
+// PUT/POST/DELETE as a body-less GET, so the write is lost while the GET's 2xx reads as success.
+// Method-preserving redirects keep Go's default policy (at most 10 hops).
+func refuseMethodChange(req *http.Request, via []*http.Request) error {
+	if orig := via[0].Method; req.Method != orig {
+		return fmt.Errorf("refusing a %d redirect to %s that would resend %s as %s; point the server URL at the final address",
+			req.Response.StatusCode, req.URL, orig, req.Method)
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // Apply create-or-replaces obj: PUT the named path; on a 404 (the object does not
@@ -75,15 +97,7 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if obj.GetObjectMeta().GenerateName == "" {
 			return nil, fault.Invalidf("sdk.Apply", "object has no name and no generateName")
 		}
-		colURL, cerr := c.collectionURL(kind, ns)
-		if cerr != nil {
-			return nil, cerr
-		}
-		resp, derr := c.do(ctx, http.MethodPost, colURL, body)
-		if derr != nil {
-			return nil, derr
-		}
-		return decodeObject(kind, resp)
+		return c.create(ctx, kind, ns, body)
 	}
 	itemURL, err := c.itemURL(kind, ns, name)
 	if err != nil {
@@ -94,14 +108,29 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if fault.KindOf(err) != fault.NotFound {
 			return nil, err
 		}
-		colURL, cerr := c.collectionURL(kind, ns)
-		if cerr != nil {
-			return nil, cerr
-		}
-		resp, err = c.do(ctx, http.MethodPost, colURL, body)
-		if err != nil {
-			return nil, err
-		}
+		return c.create(ctx, kind, ns, body)
+	}
+	return decodeObject(kind, resp)
+}
+
+// Create creates obj by POSTing the collection path, never replacing an existing object: a taken
+// name is a fault.Conflict. An empty name with GenerateName set lets the server assign one.
+func (c *Client) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	body, err := toWireBody(obj)
+	if err != nil {
+		return nil, err
+	}
+	return c.create(ctx, obj.GroupVersionKind().Kind, obj.GetNamespace(), body)
+}
+
+func (c *Client) create(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, body []byte) (v1.Object, error) {
+	colURL, err := c.collectionURL(kind, ns)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(ctx, http.MethodPost, colURL, body)
+	if err != nil {
+		return nil, err
 	}
 	return decodeObject(kind, resp)
 }
@@ -212,11 +241,8 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 	return respBody, nil
 }
 
-// toWireBody marshals obj into the shape huma's request schema requires: a NESTED
-// "TypeMeta" object (huma ignores the `,inline` tag; the schema is
-// additionalProperties:false + requires TypeMeta), with apiVersion/kind taken
-// authoritatively from the object's GVK. (The server re-stamps TypeMeta; responses
-// come back flat and decode via decodeObject.)
+// toWireBody marshals obj with apiVersion/kind taken authoritatively from the object's GVK.
+// Status is server-owned, so a write never sends it. (The server re-stamps TypeMeta.)
 func toWireBody(obj v1.Object) ([]byte, error) {
 	flat, err := json.Marshal(obj)
 	if err != nil {
@@ -226,17 +252,14 @@ func toWireBody(obj v1.Object) ([]byte, error) {
 	if err := json.Unmarshal(flat, &m); err != nil {
 		return nil, fault.Internalf("sdk", "normalize body: %v", err)
 	}
-	delete(m, "apiVersion")
-	delete(m, "kind")
-	// status is server-owned and its embedded Status doesn't round-trip through huma's
-	// nested-schema (like TypeMeta); never send it on a write.
 	delete(m, "status")
 	gvk := obj.GroupVersionKind()
-	tm, err := json.Marshal(v1.TypeMeta{APIVersion: gvk.APIVersion(), Kind: gvk.Kind})
-	if err != nil {
-		return nil, fault.Internalf("sdk", "marshal typemeta: %v", err)
+	if m["apiVersion"], err = json.Marshal(gvk.APIVersion()); err != nil {
+		return nil, fault.Internalf("sdk", "marshal apiVersion: %v", err)
 	}
-	m["TypeMeta"] = tm
+	if m["kind"], err = json.Marshal(gvk.Kind); err != nil {
+		return nil, fault.Internalf("sdk", "marshal kind: %v", err)
+	}
 	return json.Marshal(m)
 }
 
@@ -341,16 +364,31 @@ func quoteKeys(n *yamlv3.Node) {
 }
 
 // problemToFault maps a non-2xx response to a typed fault.Error. It keys on the JSON
-// `status` field (handler faults arrive as application/json, huma's own 422/401 as
-// application/problem+json) — never on the Content-Type.
+// `status` field of the problem+json body — never on the Content-Type. huma's errors[] (field,
+// reason, value) is appended to the message: on a 422 it is the only place that names the bad field.
 func problemToFault(httpStatus int, body []byte) error {
-	var p fault.Problem
+	var p struct {
+		fault.Problem
+		Errors []huma.ErrorDetail `json:"errors"`
+	}
 	_ = json.Unmarshal(body, &p) // best-effort; falls back to httpStatus
 	status := p.Status
 	if status == 0 {
 		status = httpStatus
 	}
 	msg := p.Detail
+	if len(p.Errors) > 0 {
+		details := make([]string, 0, len(p.Errors))
+		for i := range p.Errors {
+			details = append(details, p.Errors[i].Error())
+		}
+		joined := strings.Join(details, "; ")
+		if msg == "" {
+			msg = joined
+		} else {
+			msg += ": " + joined
+		}
+	}
 	if msg == "" {
 		msg = strings.TrimSpace(string(body))
 	}

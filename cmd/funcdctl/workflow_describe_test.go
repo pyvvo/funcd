@@ -72,3 +72,21 @@ func TestRenderRunDescribeReplayProvenance(t *testing.T) {
 		t.Fatalf("replay provenance line missing:\n%s", out)
 	}
 }
+
+// Issue #120: a run that failed outside a step shows why — describe prints its Ready=False reason
+// and message, not only the Failed phase over Pending steps.
+func TestIssue120_DescribeShowsRunFailureReason(t *testing.T) {
+	var buf bytes.Buffer
+	a := &cli{out: &buf}
+	run := &v1.WorkflowRun{}
+	run.Name = "run-3"
+	run.Status.Phase = v1.PhaseFailed
+	run.Status.Steps = []v1.RunStepStatus{{Name: "a", Phase: v1.StepPending}}
+	run.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "InputSchemaMismatch", Message: `"day" (want string) is missing`})
+	if err := a.renderRunDescribe(run); err != nil {
+		t.Fatalf("renderRunDescribe: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, `condition: Ready=False   reason: InputSchemaMismatch   message: "day" (want string) is missing`) {
+		t.Fatalf("describe output missing the run failure reason\n---\n%s", out)
+	}
+}

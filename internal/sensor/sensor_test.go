@@ -263,3 +263,28 @@ func TestIssue173_NullInputPassesEventData(t *testing.T) {
 	require.Len(t, got, 1)
 	require.JSONEq(t, `{"key":"drop/a"}`, string(got[0].Data), "a null input is an absent input: the function gets the event data")
 }
+
+// Issue #56: a delete and a re-create coalesced by the controller queue reach Reconcile as one request that
+// sees only the new object (same name, Generation 1 again). Its subscriptions must replace the old ones.
+func TestIssue56_RecreateSameNameReplacesSubscriptions(t *testing.T) {
+	st, fan, _, r := harness(t)
+	ctx := context.Background()
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "old-src", "tick")},
+		[]v1.Action{{Name: "run", On: "d", Workflow: "old-wf"}})
+	_, err := r.Reconcile(ctx, reqOf("s"))
+	require.NoError(t, err)
+
+	cur, err := st.Get(ctx, v1.KindSensor.GVK(), "team-a", "s")
+	require.NoError(t, err)
+	require.NoError(t, st.Delete(ctx, v1.KindSensor.GVK(), "team-a", "s", cur.GetObjectMeta().ResourceVersion))
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "new-src", "tick")},
+		[]v1.Action{{Name: "run", On: "d", Workflow: "new-wf"}})
+	_, err = r.Reconcile(ctx, reqOf("s"))
+	require.NoError(t, err)
+
+	fire(t, fan, "old-src", "tick", "")
+	fire(t, fan, "new-src", "tick", "")
+	rs := runs(t, st)
+	require.Len(t, rs, 1, "only the re-created sensor's dependency fires")
+	require.Equal(t, v1.ObjectName("new-wf"), rs[0].Spec.Workflow)
+}

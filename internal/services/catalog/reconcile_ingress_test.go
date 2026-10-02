@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -141,4 +142,66 @@ func TestReconcile_ExternalTeardown(t *testing.T) {
 	require.NoError(t, st.Delete(ctx, v1.KindCatalogService.GVK(), "default", "lake", ""))
 	reconcileLake(t, r)
 	require.Empty(t, routes.get(lakeRouteSource), "a deleted catalog's edge entry is retracted")
+}
+
+// TestIssue103_NotReadyRetractsEdgeEntry covers scenario: catalog-external-teardown (not-Ready half) — an
+// exposed Ready catalog that goes not-Ready on a binding (Bucket deleted → BucketNotFound, Secret gone →
+// BindingResolveFailed) retracts its edge entry, like the post-Converge not-Ready branch does.
+func TestIssue103_NotReadyRetractsEdgeEntry(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		unbind func(t *testing.T, st store.Store, secrets *fakeSecrets)
+	}{
+		{
+			name:   "bucket-deleted",
+			reason: "BucketNotFound",
+			unbind: func(t *testing.T, st store.Store, _ *fakeSecrets) {
+				require.NoError(t, st.Delete(context.Background(), v1.KindBucket.GVK(), "default", "lakehouse", ""))
+			},
+		},
+		{
+			name:   "secret-deleted",
+			reason: "BindingResolveFailed",
+			unbind: func(_ *testing.T, _ store.Store, secrets *fakeSecrets) {
+				secrets.err = errors.New(`secret "quack" not found`)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			seedCatalogBucket(t, st)
+			routes := newRecordingRoutes()
+			secrets := &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			t.Cleanup(mgr.Shutdown)
+			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+				d.Secrets = secrets
+				d.Proxy = mgr
+				d.Routes = routes
+			})
+
+			cs := mkCatalogService("lake")
+			cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+			cs.Spec.Secrets = []v1.ObjectName{"quack"}
+			_, err := st.Create(ctx, cs)
+			require.NoError(t, err)
+			reconcileLake(t, r)
+			require.Len(t, routes.get(lakeRouteSource), 1, "exposed + Ready ⇒ edge entry present")
+
+			tc.unbind(t, st, secrets)
+			reconcileLake(t, r)
+
+			obj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+			require.NoError(t, err)
+			cond, ok := obj.(*v1.CatalogService).Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, v1.ConditionFalse, cond.Status)
+			require.Equal(t, tc.reason, cond.Reason)
+			require.Empty(t, routes.get(lakeRouteSource), "a not-Ready catalog's edge entry is retracted")
+		})
+	}
 }

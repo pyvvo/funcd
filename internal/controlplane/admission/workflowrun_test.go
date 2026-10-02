@@ -102,3 +102,39 @@ func TestWorkflowRunContractAdmission(t *testing.T) {
 	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindWorkflowRun.GVK(), Object: replay})
 	require.NoError(t, err, "a replay run has empty input by design — the contract check is skipped")
 }
+
+// Issue #125: an Update that changes a WorkflowRun's workflow, input or replay is a second run under a
+// taken name, so it is a Conflict (ADR-0094 duplicate-run-name-rejected); the same spec spelled with other
+// whitespace and a pause/cancel patch are admitted; Create is not handled.
+func TestIssue125_RunSpecIsImmutableOnUpdate(t *testing.T) {
+	t.Parallel()
+	a := admission.NewWorkflowRunSpecImmutableAdmission()
+	gvk := v1.KindWorkflowRun.GVK()
+	require.Equal(t, "workflowrun-spec-immutable", a.Name())
+	require.Equal(t, admission.Validating, a.Phase())
+	require.True(t, a.Handles(gvk, admission.Update))
+	require.False(t, a.Handles(gvk, admission.Create))
+	require.False(t, a.Handles(v1.KindWorkflow.GVK(), admission.Update))
+
+	update := func(old, obj *v1.WorkflowRun) error {
+		_, err := a.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: obj})
+		return err
+	}
+	old := runObj(`{"n":1,"day":"mon"}`)
+
+	newInput := runObj(`{"n":42,"day":"mon"}`)
+	newWorkflow := runObj(`{"n":1,"day":"mon"}`)
+	newWorkflow.Spec.Workflow = "other"
+	newReplay := runObj(`{"n":1,"day":"mon"}`)
+	newReplay.Spec.Replay = &v1.ReplaySeed{Run: "src", From: "a"}
+	for name, obj := range map[string]*v1.WorkflowRun{"input": newInput, "workflow": newWorkflow, "replay": newReplay} {
+		err := update(old, obj)
+		require.Equal(t, fault.Conflict, fault.KindOf(err), "a changed spec.%s is a Conflict", name)
+		require.Contains(t, err.Error(), `WorkflowRun "run" already exists`)
+	}
+
+	paused := runObj(`{ "n": 1, "day": "mon" }`)
+	paused.Spec.Paused, paused.Spec.Cancel = true, true
+	require.NoError(t, update(old, paused), "a pause/cancel patch with the same input spelled with other whitespace is admitted")
+	require.NoError(t, update(runObj(""), runObj("")), "a run with no input is admitted unchanged")
+}

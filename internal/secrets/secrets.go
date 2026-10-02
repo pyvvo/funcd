@@ -8,6 +8,7 @@ package secrets
 import (
 	"context"
 	"log/slog"
+	"unicode/utf8"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -45,7 +46,8 @@ func NewResolver(d Deps) (*Resolver, error) {
 }
 
 // ResolveEnv reads the named Secrets in ns (store-decrypted), PDP-authorized (read), and
-// returns their merged Data as an env-var map for worker injection.
+// returns their merged Data as an env-var map for worker injection. A value that is not valid
+// UTF-8 is fault.Invalid: env delivery would hand the worker U+FFFD instead of the bytes.
 func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error) {
 	const op = "secrets.ResolveEnv"
 	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns})
@@ -66,6 +68,9 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 			return nil, fault.Internalf(op, "object %s/%s is not a Secret", ns, name)
 		}
 		for k, v := range sec.Spec.Data {
+			if !utf8.Valid(v) {
+				return nil, fault.Invalidf(op, "secret %q key %q is not valid UTF-8; env delivery cannot carry binary data (base64-encode it)", name, k)
+			}
 			env[k] = string(v)
 		}
 	}

@@ -19,10 +19,8 @@ import (
 
 func makeFunction(ns, name string) map[string]interface{} {
 	return map[string]interface{}{
-		"TypeMeta": map[string]interface{}{
-			"apiVersion": "funcd.io/v1alpha1",
-			"kind":       "Function",
-		},
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Function",
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": ns,
@@ -77,11 +75,8 @@ func TestErrorIsProblemJSON(t *testing.T) {
 		t.Fatalf("expected 404, got %d", resp.Code)
 	}
 
-	ct := resp.Header().Get("Content-Type")
-	// huma v2 uses application/json for error bodies by default; the body is still
-	// RFC 9457 problem+json shape (type, title, status, detail fields).
-	if !strings.HasPrefix(ct, "application/json") && !strings.HasPrefix(ct, "application/problem+json") {
-		t.Errorf("expected application/json or application/problem+json, got %q", ct)
+	if ct := resp.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("expected application/problem+json, got %q", ct)
 	}
 
 	// Decode the response body as a Problem (RFC 9457 shape).
@@ -283,9 +278,10 @@ func TestScenarioSiteSchemaRequiresIngress(t *testing.T) {
 		"prefix": "bi",
 	}
 	body := map[string]interface{}{
-		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "Site"},
-		"metadata": map[string]interface{}{"name": "bi", "namespace": "my-ns", "resourceGroup": "rg1"},
-		"spec":     spec,
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Site",
+		"metadata":   map[string]interface{}{"name": "bi", "namespace": "my-ns", "resourceGroup": "rg1"},
+		"spec":       spec,
 	}
 	if resp := ta.Post(path, "Content-Type: application/json", body); resp.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("missing spec.ingress: want 422 (schema required), got %d: %s", resp.Code, resp.Body.String())

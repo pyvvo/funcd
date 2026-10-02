@@ -5,9 +5,9 @@
 // same per-namespace Bucket view the S3 frontend serves (ADR-0080), read over the blob.Bucket port.
 //
 // Security (ADR-0120 B1): the traversal defense is OWNED here, not inherited from the blob driver.
-// It URL-decodes + path.Cleans the request remainder, rejects any `..`-containing path, and asserts
-// the resolved object key has the declared Prefix BEFORE any blob Get — no read can escape the
-// prefix / bucket / namespace.
+// It path.Cleans the (already percent-decoded) request remainder, rejects any `..`-containing path,
+// and asserts the resolved object key has the declared Prefix BEFORE any blob Get — no read can
+// escape the prefix / bucket / namespace.
 package static
 
 import (
@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -65,7 +64,8 @@ func New(d Deps) (*Handler, error) {
 var hashShaped = regexp.MustCompile(`[.\-][0-9a-f]{8,}\.`)
 
 // Serve writes the object at <back.Prefix><cleaned-remainder> in back.Bucket. remainder is the
-// function-relative path (the matched Route prefix already stripped), always starting "/". It owns
+// function-relative path (the matched Route prefix already stripped), always starting "/", and already
+// percent-decoded (it is cut from r.URL.Path, which net/http decodes), so it is not decoded again. It owns
 // the 405 (non-GET/HEAD), the traversal defense (B1), the weak (ModTime,Size) ETag validator (M1),
 // the three-tier Cache-Control (M3), index resolution and the SPA fallback; the stdlib
 // http.ServeContent handles Last-Modified / If-Modified-Since / If-Range / If-None-Match → 304 / Range → 206.
@@ -94,7 +94,7 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 
 	// Look up the object's attributes (ModTime, Size) for the weak validator — no full Get needed
 	// yet (this also lets a matching If-None-Match short-circuit to 304 without reading the body).
-	attrs, found, err := stat(r, bucket, key)
+	attrs, found, err := blob.Stat(r.Context(), bucket, key)
 	if err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "stat %q", key))
 		return
@@ -107,7 +107,7 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 			return
 		}
 		key = back.Prefix + index
-		attrs, found, err = stat(r, bucket, key)
+		attrs, found, err = blob.Stat(r.Context(), bucket, key)
 		if err != nil {
 			fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "stat %q", key))
 			return
@@ -145,13 +145,9 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 }
 
 // resolveKey cleans the decoded remainder, rejects traversal, and computes the object key. bad=true
-// on a malformed decode, a `..` segment, or a key that would escape the prefix (B1). "/" or a
-// directory ("…/") resolves to <prefix><dir>index.
-func resolveKey(prefix, index, remainder string) (key string, bad bool) {
-	dec, err := url.PathUnescape(remainder)
-	if err != nil {
-		return "", true
-	}
+// on a `..` segment or a key that would escape the prefix (B1). "/" or a directory ("…/") resolves
+// to <prefix><dir>index.
+func resolveKey(prefix, index, dec string) (key string, bad bool) {
 	if dec == "" {
 		dec = "/"
 	}
@@ -177,24 +173,11 @@ func resolveKey(prefix, index, remainder string) (key string, bad bool) {
 	return key, false
 }
 
-// stat returns the object's attributes via a List keyed by the exact object path (the blob.Bucket
-// port is Get/List-only, no per-key Stat — ADR-0007). found=false ⇒ no object at that exact key.
-func stat(r *http.Request, b blob.Bucket, key string) (blob.Attributes, bool, error) {
-	items, err := b.List(r.Context(), key)
-	if err != nil {
-		return blob.Attributes{}, false, err
-	}
-	for i := range items {
-		if items[i].Key == key {
-			return items[i], true, nil
-		}
-	}
-	return blob.Attributes{}, false, nil
-}
-
-// weakETag derives the (ModTime,Size) weak validator (M1) — no per-request sha256 of the body.
+// weakETag derives the (ModTime,Size) weak validator (M1) — no per-request sha256 of the body. ModTime
+// keeps its full precision (as ADR-0119's fingerprint does): whole seconds would let a same-length
+// rewrite within one second keep its ETag and answer a stale 304 (issue #161).
 func weakETag(a blob.Attributes) string {
-	return `W/"` + strconv.FormatInt(a.Size, 10) + "-" + strconv.FormatInt(a.ModTime.Unix(), 10) + `"`
+	return `W/"` + strconv.FormatInt(a.Size, 10) + "-" + strconv.FormatInt(a.ModTime.UnixNano(), 10) + `"`
 }
 
 // setContentType sets Content-Type from the key extension (mime), leaving it unset for an unknown

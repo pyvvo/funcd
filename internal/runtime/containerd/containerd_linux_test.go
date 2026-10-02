@@ -10,7 +10,9 @@
 package containerd_test
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -48,6 +50,39 @@ func TestScenarioContainerdWorkerLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		return rt
 	})
+}
+
+// Issue 40: containerd keeps a worker's container and snapshot when funcd stops or dies, so the driver of the next
+// funcd run must re-create the worker under the same name.
+func TestIssue40_RestartReclaimsLeftoverWorker(t *testing.T) {
+	requireIntegration(t)
+	ctx := context.Background()
+	spec := runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "issue40",
+		Revision:  "issue40-1",
+		Image:     "docker.io/library/busybox:1.36",
+		Command:   []string{"sleep", "60"},
+		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+	}
+
+	previous, err := containerd.New(integrationConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = previous.Close() })
+	inst, err := previous.Create(ctx, spec)
+	require.NoError(t, err)
+	require.NoError(t, previous.Start(ctx, inst.ID))
+
+	next, err := containerd.New(integrationConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = next.Close() })
+	again, err := next.Create(ctx, spec)
+	require.NoError(t, err, "the worker the previous run left must not block its re-create")
+	t.Cleanup(func() { _ = next.Stop(ctx, again.ID) })
+	require.NoError(t, next.Start(ctx, again.ID))
+	got, err := next.Status(ctx, again.ID)
+	require.NoError(t, err)
+	require.Equal(t, runtime.StateRunning, got.State)
 }
 
 // scenario: worker-lateral-deny — two containerd workeres on their own netns
