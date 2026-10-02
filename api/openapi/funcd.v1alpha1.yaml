@@ -994,6 +994,7 @@ components:
       properties:
         maxKeyBytes:
           format: int64
+          maximum: 64000
           minimum: 0
           type: integer
         maxValueBytes:
