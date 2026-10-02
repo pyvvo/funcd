@@ -108,13 +108,19 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 				return nil, err
 			}
 			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
-			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. Nor is one whose platforms
-			// cannot be listed now (a registry outage): its own reconcile retries, and its peers keep their pool.
+			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. One whose platforms cannot be
+			// listed now (a registry outage) keeps the revision it serves, or is left out: its own reconcile retries,
+			// and its peers keep their pool.
 			if perr := r.placeable(ctx, fn, fn.Spec.Image, fn.Spec.ImageDigest); perr != nil {
-				if !errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
-					r.logger.Warn("pool member left out: its platforms cannot be listed", "function", fn.Name, "err", perr)
+				if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
+					continue
 				}
-				continue
+				s := r.servingMember(ctx, fn)
+				if s == nil || r.placeable(ctx, s, s.Spec.Image, s.Spec.ImageDigest) != nil {
+					r.logger.Warn("pool member left out: its platforms cannot be listed", "function", fn.Name, "err", perr)
+					continue
+				}
+				fn = s
 			}
 			out = append(out, fn)
 		}
@@ -135,6 +141,23 @@ func (r *Reconciler) pinnedMember(ctx context.Context, m *v1.Function) (*v1.Func
 	}
 	tmpl.Spec.ImageDigest = digest
 	return tmpl, nil
+}
+
+// servingMember is m at the revision it serves, for a member whose current revision cannot be gated or materialized:
+// while m serves (Ready or Degraded) a revision other than its current generation's, its pool entry stays at that
+// revision, as a solo Function's serving revision keeps its calls while the current one fails (ADR-0143). nil when m
+// serves no other revision or that Revision cannot be read.
+func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Function {
+	s := m.Status.ServingRevision
+	if !servingPhase(m.Status.Phase) || s == "" || s == revisionName(m) {
+		return nil
+	}
+	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(s))
+	if err != nil {
+		return nil
+	}
+	tmpl.Spec.ImageDigest = digest
+	return tmpl
 }
 
 // convergePooled provisions a pooled member's shared pool worker, driven to the max desired over the key's admitted
@@ -245,8 +268,9 @@ func (r *Reconciler) admittedMembers(ctx context.Context, key pooling.PoolKey) (
 // the pool's desired replica = max over members' effective desired (ADR-0046 Decision 6), so a
 // warm/woken member keeps the pool up for idle siblings and reclaim fires only when all are idle.
 // A member whose artifact cannot be materialized fails alone (ADR-0046 bounded blast radius): it
-// is left out of the manifest, and only self's own failure is returned. A member the pooled
-// config/secret gate fails closed is left out too: no worker runs its code (ADR-0057).
+// keeps the revision it serves (servingMember) or is left out of the manifest, and only self's own
+// failure is returned. A member the pooled config/secret gate fails closed is left out too: no
+// worker runs its code (ADR-0057).
 func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function) ([]poolManifestEntry, int, error) {
 	const op = "function.poolManifest"
 	manifest := make([]poolManifestEntry, 0, len(members))
@@ -259,6 +283,13 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 		contractPath := ""
 		if r.materializer != nil {
 			p, err := r.materializer.Materialize(ctx, m)
+			if err != nil && m.Name != self.Name {
+				if s := r.servingMember(ctx, m); s != nil {
+					if sp, serr := r.materializer.Materialize(ctx, s); serr == nil {
+						m, p, err = s, sp, nil
+					}
+				}
+			}
 			if err != nil {
 				err = fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
 				if m.Name == self.Name {

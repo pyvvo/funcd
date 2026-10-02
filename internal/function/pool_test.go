@@ -59,6 +59,16 @@ func (f *fakeRuntime) serveCalls(t *testing.T, rev v1.ObjectName, pooled bool) {
 	f.mu.Unlock()
 }
 
+// poolManifest reads the manifest file of the pool worker named pool.
+func (h *shimHarness) poolManifest(t *testing.T, pool v1.ObjectName) string {
+	t.Helper()
+	spec, ok := h.rt.specFor(pool)
+	require.True(t, ok, "the pool worker runs")
+	data, err := os.ReadFile(spec.Env["FUNCD_POOL_MANIFEST"])
+	require.NoError(t, err)
+	return string(data)
+}
+
 // invokeDataPlane POSTs a call to name through the data plane, the activator and the reconciler's Endpoints.
 func (h *shimHarness) invokeDataPlane(t *testing.T, name string) (int, string) {
 	t.Helper()
@@ -160,6 +170,79 @@ func TestIssue38_PlatformOutageMemberFailsAlone(t *testing.T) {
 	h.reconcile(t, "b-here")
 	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "b-here's reconcile restarts the dead pool")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "b-here").Status.Phase)
+}
+
+// A serving pool member whose update cannot be materialized, or whose new digest's platforms cannot be listed, keeps
+// the revision it serves in its pool, as a solo Function's serving revision keeps its calls (ADR-0143).
+func TestIssue38_ServingMemberKeepsItsRevisionOnBrokenUpdate(t *testing.T) {
+	t.Parallel()
+	missing := "file://" + filepath.Join(t.TempDir(), "missing.mjs")
+	for _, tc := range []struct {
+		worker string
+		update func(*v1.Function)
+	}{
+		{"unmaterializable", func(fn *v1.Function) { fn.Spec.Image = missing }},
+		{"outage", func(fn *v1.Function) { fn.Spec.ImageDigest = digestOutage }},
+	} {
+		t.Run(tc.worker, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, withPlatforms(&fakePlatforms{}))
+			pool := v1.ObjectName("__pool__nodejs22__" + tc.worker)
+			for _, name := range []string{"a", "c"} {
+				h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = tc.worker; fn.Spec.ImageDigest = digestHere })
+			}
+			h.reconcile(t, "a")
+			h.reconcile(t, "c")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "c").Status.Phase)
+			before := h.poolManifest(t, pool)
+			require.Contains(t, before, `"c"`)
+
+			h.apply(t, "c", tc.update)
+			_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "c"})
+			require.Error(t, err, "c's own reconcile retries its update")
+			h.rt.exit(pool, runtime.StateFailed, time.Hour)
+			h.reconcile(t, "a")
+			require.Equal(t, runtime.StateRunning, h.rt.revisionStates(pool)[""][0], "a's reconcile restarts the dead pool")
+			require.JSONEq(t, before, h.poolManifest(t, pool), "c keeps the revision it serves in the pool")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "c").Status.Phase)
+		})
+	}
+}
+
+// Only a serving member keeps its revision in the pool: an idle one whose update cannot be materialized cannot be woken
+// (its own reconcile fails), so a sibling's reconcile leaves it out.
+func TestIssue38_IdleMemberWithBrokenUpdateLeftOut(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	for _, name := range []string{"a", "c"} {
+		h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "idle" })
+	}
+	h.reconcile(t, "a")
+	h.reconcile(t, "c")
+	require.Contains(t, h.poolManifest(t, "__pool__nodejs22__idle"), `"c"`)
+
+	h.setPhase(t, "c", v1.PhaseIdle)
+	h.apply(t, "c", func(fn *v1.Function) { fn.Spec.Image = "file://" + filepath.Join(t.TempDir(), "missing.mjs") })
+	h.reconcile(t, "a")
+	require.NotContains(t, h.poolManifest(t, "__pool__nodejs22__idle"), `"c"`)
+}
+
+// A member left out of its pool keeps no pool replica up: once its siblings are idle, the pool is reclaimed (ADR-0046
+// Decision 6).
+func TestIssue38_LeftOutMemberKeepsNoPoolUp(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "a", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "reclaim" })
+	h.reconcile(t, "a")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase)
+	h.create(t, "c", func(fn *v1.Function) {
+		fn.Spec.Pooling.Worker = "reclaim"
+		fn.Spec.Image = "file://" + filepath.Join(t.TempDir(), "missing.mjs")
+	})
+
+	h.setPhase(t, "a", v1.PhaseIdle)
+	h.reconcile(t, "a")
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("__pool__nodejs22__reclaim")[""][0], "only the left-out c wants a replica")
 }
 
 // refResolver resolves each artifact ref to its own digest (ADR-0035).
