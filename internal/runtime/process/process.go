@@ -33,6 +33,7 @@ type instance struct {
 	pid       int
 	state     runtime.State
 	stopping  bool
+	released  bool // Stop has run and the process is gone, so Remove may forget it (ADR-0143)
 	done      chan struct{}
 	createdAt time.Time
 }
@@ -62,7 +63,7 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 	if len(spec.Command) == 0 {
 		return runtime.Instance{}, fault.Invalidf(op, "spec.Command must not be empty for the process driver")
 	}
-	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Replica)
+	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 
 	logPath := spec.LogPath
 	if logPath == "" {
@@ -104,6 +105,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	if inst.state == runtime.StateRunning {
 		return nil
 	}
+	inst.released = false // a restarted instance runs again, so Remove must wait for its next Stop (ADR-0143)
 
 	if err := os.MkdirAll(filepath.Dir(inst.logPath), 0o750); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create log dir")
@@ -191,6 +193,7 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 		// idempotent: already exited or never started. The instance reads Stopped afterwards, as containerd
 		// reports once Stop has deleted the container (ADR-0142: a reclaimed replica is Stopped, never Failed).
 		inst.state = runtime.StateStopped
+		inst.released = true
 		d.mu.Unlock()
 		return nil
 	}
@@ -206,6 +209,9 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 		_ = proc.Kill()
 		<-done
 	}
+	d.mu.Lock()
+	inst.released = true
+	d.mu.Unlock()
 	return nil
 }
 
@@ -269,6 +275,28 @@ func (d *driver) List(_ context.Context, ns v1alpha1.NamespaceName) ([]runtime.I
 	return out, nil
 }
 
+// Remove forgets an instance Stop has released, with the driver-owned port file and, when the driver created it, the
+// log file (ADR-0143).
+func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
+	d.mu.Lock()
+	inst, ok := d.instances[id]
+	if !ok {
+		d.mu.Unlock()
+		return nil
+	}
+	if !inst.released {
+		d.mu.Unlock()
+		return fault.Conflictf("runtime.process.Remove", "instance %q has not been stopped", id)
+	}
+	delete(d.instances, id)
+	d.mu.Unlock()
+	_ = os.Remove(inst.portFile)
+	if inst.spec.LogPath == "" {
+		_ = os.Remove(inst.logPath)
+	}
+	return nil
+}
+
 func (d *driver) Close() error {
 	d.mu.Lock()
 	var running []*instance
@@ -297,6 +325,7 @@ func (d *driver) snapshotLocked(id runtime.InstanceID, inst *instance) runtime.I
 		ID:        id,
 		Namespace: inst.spec.Namespace,
 		Name:      inst.spec.Name,
+		Revision:  inst.spec.Revision,
 		Replica:   inst.spec.Replica,
 		PID:       inst.pid,
 		State:     inst.state,

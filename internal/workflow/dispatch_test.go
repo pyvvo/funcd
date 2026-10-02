@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -107,4 +108,41 @@ func TestDispatchStatusClassification(t *testing.T) {
 			t.Fatalf("5xx should be a retryable (non-permanent) error, got %v", err)
 		}
 	})
+}
+
+// ADR-0143: a step call made through a CallTracker's transport is counted until its answer has been read.
+func TestDispatchIsCountedWhileInFlight(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	calls := activator.NewCallTracker(nil)
+	d, err := NewHTTPDispatcher(DispatchDeps{
+		Endpoints: fakeEndpoints{upstream: srv.URL, ready: true}, Grant: fakeGrant{allow: true},
+		Client: &http.Client{Transport: calls.Wrap(nil)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, derr := d.Dispatch(context.Background(), dispatchReq("s-fn"))
+		done <- derr
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Idle(srv.URL, 0) {
+		if time.Now().After(deadline) {
+			t.Fatal("the step call is never counted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !calls.Idle(srv.URL, 0) {
+		t.Fatal("the step call still counts after its answer was read")
+	}
 }

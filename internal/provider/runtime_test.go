@@ -41,7 +41,7 @@ func (f *fakeRuntime) Create(_ context.Context, spec containerrt.WorkerSpec) (co
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, spec)
-	id := containerrt.NewInstanceID(spec.Namespace, spec.Name, spec.Replica)
+	id := containerrt.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	in := containerrt.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, Replica: spec.Replica,
 		State: f.state, IP: f.ip, Port: f.port,
@@ -91,6 +91,7 @@ func (f *fakeRuntime) Logs(context.Context, containerrt.InstanceID) (io.ReadClos
 	return nil, nil
 }
 func (f *fakeRuntime) Exec(context.Context, containerrt.InstanceID, []string) error { return nil }
+func (f *fakeRuntime) Remove(context.Context, containerrt.InstanceID) error         { return nil }
 func (f *fakeRuntime) Close() error                                                 { return nil }
 
 // stubGateway is a gateway.Gateway double recording ProgramRoutes and holding the live table.

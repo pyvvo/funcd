@@ -1,0 +1,18 @@
+# ADR-0143: env-echo redeployed with a second ConfigMap — a spec change, so a new revision with the same artifact.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: env-echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  config:
+    - app-config-v2
+  secrets:
+    - app-secret

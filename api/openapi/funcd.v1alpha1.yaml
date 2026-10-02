@@ -690,9 +690,16 @@ components:
           $ref: "#/components/schemas/Status"
         currentRevision:
           type: string
+        drainingRevision:
+          type: string
+        drainingSince:
+          format: date-time
+          type: string
         replicas:
           format: int64
           type: integer
+        servingRevision:
+          type: string
       required:
         - Status
       type: object

@@ -52,6 +52,7 @@ type Deps struct {
 	ActivationTimeout time.Duration // cold-start hold bound; default 30s
 	PollInterval      time.Duration // ready-poll cadence; default 25ms
 	ReclaimInterval   time.Duration // idle-reclaim cadence for Run; default 30s
+	Calls             *CallTracker  // counts the calls forwarded to each worker (ADR-0143); nil ⇒ uncounted
 }
 
 const (
@@ -71,7 +72,7 @@ type Activator struct {
 	pollInterval      time.Duration
 	reclaimInterval   time.Duration
 
-	transport *http.Transport // shared, pooled upstream transport (ADR-0041)
+	transport http.RoundTripper // shared, pooled upstream transport (ADR-0041), counted when Calls is set (ADR-0143)
 
 	mu         sync.Mutex
 	inflight   map[FunctionRef]*activation // singleflight: one activation per cold fn
@@ -130,6 +131,10 @@ func New(d Deps) (*Activator, error) {
 	if reclaimInterval <= 0 {
 		reclaimInterval = defaultReclaimInterval
 	}
+	var transport http.RoundTripper = newPooledTransport()
+	if d.Calls != nil {
+		transport = d.Calls.Wrap(transport)
+	}
 	return &Activator{
 		store:             d.Store,
 		endpoints:         d.Endpoints,
@@ -139,7 +144,7 @@ func New(d Deps) (*Activator, error) {
 		activationTimeout: activationTimeout,
 		pollInterval:      pollInterval,
 		reclaimInterval:   reclaimInterval,
-		transport:         newPooledTransport(),
+		transport:         transport,
 		inflight:          map[FunctionRef]*activation{},
 		lastActive:        map[FunctionRef]time.Time{},
 	}, nil

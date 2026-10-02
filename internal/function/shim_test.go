@@ -44,6 +44,12 @@ type fakeRuntime struct {
 	failed  bool // Start marks instances Failed (the shim exited on a shape error)
 	creates int
 	lists   int
+	removed []runtime.InstanceID
+	// ADR-0143: a revision can get its own readiness endpoint, and its Starts can fail.
+	revPort map[v1.ObjectName]int
+	failRev map[v1.ObjectName]bool
+	held    map[runtime.InstanceID]bool // a held instance runs without an endpoint, so it is never ready
+	stopped map[runtime.InstanceID]bool // Stop released it, so Remove may forget it, as on the real drivers
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -52,11 +58,15 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		state:   map[runtime.InstanceID]runtime.State{},
 		created: map[runtime.InstanceID]time.Time{},
 		ip:      ip, port: port,
+		revPort: map[v1.ObjectName]int{},
+		failRev: map[v1.ObjectName]bool{},
+		held:    map[runtime.InstanceID]bool{},
+		stopped: map[runtime.InstanceID]bool{},
 	}
 }
 
 func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
-	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Replica)
+	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if st, ok := f.state[id]; ok && !st.Terminal() {
@@ -65,6 +75,7 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	f.specs[id] = spec
 	f.state[id] = runtime.StateCreated
 	f.created[id] = time.Now()
+	delete(f.stopped, id)
 	f.creates++
 	return f.snapshot(id), nil
 }
@@ -72,11 +83,12 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 func (f *fakeRuntime) Start(_ context.Context, id runtime.InstanceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failed {
+	if f.failed || f.failRev[f.specs[id].Revision] {
 		f.state[id] = runtime.StateFailed
 	} else {
 		f.state[id] = runtime.StateRunning
 	}
+	delete(f.stopped, id)
 	return nil
 }
 
@@ -84,6 +96,7 @@ func (f *fakeRuntime) Stop(_ context.Context, id runtime.InstanceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = runtime.StateStopped
+	f.stopped[id] = true
 	return nil
 }
 
@@ -112,29 +125,131 @@ func (f *fakeRuntime) List(_ context.Context, ns v1.NamespaceName) ([]runtime.In
 	return out, nil
 }
 
+func (f *fakeRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.state[id]; ok && !f.stopped[id] {
+		return fault.Conflictf("fake.Remove", "instance %q has not been stopped", id)
+	}
+	delete(f.specs, id)
+	delete(f.state, id)
+	delete(f.created, id)
+	delete(f.stopped, id)
+	f.removed = append(f.removed, id)
+	return nil
+}
+
 func (f *fakeRuntime) Close() error { return nil }
 
 // snapshot builds an Instance; caller holds f.mu. A running instance surfaces the endpoint.
 func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	spec := f.specs[id]
 	in := runtime.Instance{
-		ID: id, Namespace: spec.Namespace, Name: spec.Name, Replica: spec.Replica,
+		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
 		State: f.state[id], CreatedAt: f.created[id],
 	}
-	if in.State == runtime.StateRunning {
+	if in.State == runtime.StateRunning && !f.held[id] {
 		in.IP = f.ip
 		in.Port = f.port
+		if p, ok := f.revPort[spec.Revision]; ok {
+			in.Port = p
+		}
 	}
 	return in
 }
 
-// exit marks replica 0 of name as exited in state st, created age ago (a crash of a worker that ran that long).
+// hold keeps instance id unready while it runs (true), or lets it serve (false).
+func (f *fakeRuntime) hold(id runtime.InstanceID, held bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held[id] = held
+}
+
+// forget drops every instance, as a daemon restart leaves the runtime listing none.
+func (f *fakeRuntime) forget() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	clear(f.specs)
+	clear(f.state)
+	clear(f.created)
+	clear(f.stopped)
+}
+
+// exit marks replica 0 of name — of whichever revision runs it — as exited in state st, created age ago (a crash of a
+// worker that ran that long).
 func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Duration) {
-	id := runtime.NewInstanceID("default", name, 0)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id, spec := range f.specs {
+		if spec.Name == name && spec.Replica == 0 && !f.state[id].Terminal() {
+			f.state[id] = st
+			f.created[id] = time.Now().Add(-age)
+		}
+	}
+}
+
+// exitRevision marks replica i of revision rev of name as exited in state st, created age ago.
+func (f *fakeRuntime) exitRevision(name, rev v1.ObjectName, i int, st runtime.State, age time.Duration) {
+	id := runtime.NewInstanceID("default", name, rev, i)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = st
 	f.created[id] = time.Now().Add(-age)
+}
+
+// serveRevision gives revision rev its own readiness endpoint, answering status (ADR-0143 tests tell the revisions'
+// workers apart by it); setStatus changes the answer.
+func (f *fakeRuntime) serveRevision(t *testing.T, rev v1.ObjectName, status int) (url string, setStatus func(int)) {
+	t.Helper()
+	var mu sync.Mutex
+	cur := status
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		code := cur
+		mu.Unlock()
+		if r.URL.Path == "/health/readiness" {
+			w.WriteHeader(code)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	f.mu.Lock()
+	f.revPort[rev] = port
+	f.mu.Unlock()
+	return srv.URL, func(code int) {
+		mu.Lock()
+		cur = code
+		mu.Unlock()
+	}
+}
+
+// failRevision makes later Starts of revision rev fail (true) or succeed (false).
+func (f *fakeRuntime) failRevision(rev v1.ObjectName, failing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failRev[rev] = failing
+}
+
+// revisionStates returns the state of each listed instance of name, by revision and replica.
+func (f *fakeRuntime) revisionStates(name v1.ObjectName) map[v1.ObjectName]map[int]runtime.State {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[v1.ObjectName]map[int]runtime.State{}
+	for id, spec := range f.specs {
+		if spec.Name != name {
+			continue
+		}
+		if out[spec.Revision] == nil {
+			out[spec.Revision] = map[int]runtime.State{}
+		}
+		out[spec.Revision][spec.Replica] = f.state[id]
+	}
+	return out
 }
 
 // setFailing makes later Starts fail (true) or succeed (false).

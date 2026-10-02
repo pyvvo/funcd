@@ -64,13 +64,16 @@ type worker struct {
 	ctrID     string
 	namespace v1alpha1.NamespaceName
 	name      v1alpha1.ObjectName
+	revision  v1alpha1.ObjectName
 	replica   int
 	cniID     string
 	netnsPath string
 	ip        string
 	port      int // the fixed FUNCD_PORT the shim binds in this netns (ADR-0032); 0 if unset
 	logPath   string
+	ownLog    bool // the driver created logPath, so Remove deletes it
 	createdAt time.Time
+	released  bool // Stop has released the task, the CNI attachment and the container, so Remove may forget it
 
 	// Path B structured-log channel (ADR-0081): a per-instance host UDS bind-mounted into the
 	// sandbox; the shim connects and writes NDJSON, the accept loop hands each conn to the hook.
@@ -215,9 +218,8 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if spec.Image == "" {
 		return runtime.Instance{}, fault.Invalidf(op, "spec.Image must not be empty for the containerd driver")
 	}
-	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Replica)
-	ctrID := fmt.Sprintf("%s-r%d", spec.Name, spec.Replica)
-	cniID := fmt.Sprintf("%s-%s-r%d", spec.Namespace, spec.Name, spec.Replica)
+	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
+	ctrID, cniID := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), strconv.Itoa(spec.Replica))
 	nctx := d.nsCtx(ctx, spec.Namespace)
 
 	image, err := d.resolveImage(nctx, op, spec.Image)
@@ -229,7 +231,8 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	// containerd shim's cio.LogFile needs an ABSOLUTE path, so a "" (or relative) LogPath must be
 	// resolved here — otherwise the shim rejects the task with `"." must be absolute`.
 	logPath := spec.LogPath
-	if logPath == "" {
+	ownLog := logPath == ""
+	if ownLog {
 		f, ferr := os.CreateTemp("", fmt.Sprintf("funcd-%s-r%d-*.log", spec.Name, spec.Replica))
 		if ferr != nil {
 			return runtime.Instance{}, fault.Wrapf(ferr, fault.Internal, op, "create log file")
@@ -273,15 +276,19 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: d.resolvPath, Target: "/etc/resolv.conf", ReadOnly: true})
 	}
 
+	labels := map[string]string{
+		"funcd/namespace": string(spec.Namespace),
+		"funcd/name":      string(spec.Name),
+		"funcd/replica":   fmt.Sprintf("%d", spec.Replica),
+	}
+	if spec.Revision != "" {
+		labels["funcd/revision"] = string(spec.Revision)
+	}
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
 		containerd.WithNewSnapshot(ctrID+"-snap", image),
 		containerd.WithRuntime(runcShim, &runcoptions.Options{BinaryName: ociRuntimeBinary}),
-		containerd.WithContainerLabels(map[string]string{
-			"funcd/namespace": string(spec.Namespace),
-			"funcd/name":      string(spec.Name),
-			"funcd/replica":   fmt.Sprintf("%d", spec.Replica),
-		}),
+		containerd.WithContainerLabels(labels),
 		containerd.WithNewSpec(ociOpts(spec, image)...),
 	)
 	if err != nil {
@@ -303,9 +310,9 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	}
 
 	sb := &worker{
-		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, replica: spec.Replica,
+		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, revision: spec.Revision, replica: spec.Replica,
 		cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
-		logPath: logPath, createdAt: time.Now(),
+		logPath: logPath, ownLog: ownLog, createdAt: time.Now(),
 		logListener: logLn, logDir: logDir,
 	}
 	d.mu.Lock()
@@ -314,9 +321,18 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 
 	success = true // keep the log channel; teardown is owned by Stop now
 	return runtime.Instance{
-		ID: id, Namespace: spec.Namespace, Name: spec.Name, Replica: spec.Replica,
+		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
 		PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
 	}, nil
+}
+
+// workerNames returns a worker's container ID and CNI attachment ID (ADR-0143). A revisioned worker joins its parts with
+// '.', which a DNS-1123 name cannot contain, so a revisioned name never equals an unrevisioned one.
+func workerNames(ns, name, revision, replica string) (ctrID, cniID string) {
+	if revision == "" {
+		return name + "-r" + replica, ns + "-" + name + "-r" + replica
+	}
+	return revision + ".r" + replica, ns + "." + revision + ".r" + replica
 }
 
 // fixedPort reads the FUNCD_PORT the shim binds (ADR-0032 container mode); 0 if unset.
@@ -353,6 +369,7 @@ func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
 	}
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
 	if err != nil {
+		d.markReleased(sb)
 		return nil // already gone — idempotent
 	}
 	task, err := container.Task(nctx, nil)
@@ -369,6 +386,33 @@ func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
 	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
 	_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
 	closeLogChannel(sb) // close the Path B UDS listener + remove its dir (ADR-0081)
+	d.markReleased(sb)
+	return nil
+}
+
+func (d *driver) markReleased(sb *worker) {
+	d.mu.Lock()
+	sb.released = true
+	d.mu.Unlock()
+}
+
+// Remove forgets an instance Stop has released, with its log file when the driver created it (ADR-0143).
+func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
+	d.mu.Lock()
+	sb, ok := d.instances[id]
+	if !ok {
+		d.mu.Unlock()
+		return nil
+	}
+	if !sb.released {
+		d.mu.Unlock()
+		return fault.Conflictf("runtime.containerd.Remove", "instance %q has not been stopped", id)
+	}
+	delete(d.instances, id)
+	d.mu.Unlock()
+	if sb.ownLog {
+		_ = os.Remove(sb.logPath)
+	}
 	return nil
 }
 
@@ -408,7 +452,7 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 			_, _ = task.Delete(nctx)
 		}
 		if labels, lerr := c.Labels(nctx); lerr == nil {
-			cniID := fmt.Sprintf("%s-%s-r%s", labels["funcd/namespace"], labels["funcd/name"], labels["funcd/replica"])
+			_, cniID := workerNames(labels["funcd/namespace"], labels["funcd/name"], labels["funcd/revision"], labels["funcd/replica"])
 			_ = d.cni.Remove(nctx, cniID, "")
 		}
 		_ = c.Delete(nctx, containerd.WithSnapshotCleanup)
@@ -431,7 +475,7 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 		return runtime.Instance{}, err
 	}
 	inst := runtime.Instance{
-		ID: id, Namespace: sb.namespace, Name: sb.name, Replica: sb.replica,
+		ID: id, Namespace: sb.namespace, Name: sb.name, Revision: sb.revision, Replica: sb.replica,
 		IP: sb.ip, Port: sb.port, State: runtime.StateCreated, CreatedAt: sb.createdAt,
 	}
 	task, err := d.task(nctx, sb)
@@ -505,7 +549,7 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 	out := make([]runtime.Instance, 0, len(sbs))
 	for i, sb := range sbs {
 		inst := runtime.Instance{
-			ID: ids[i], Namespace: sb.namespace, Name: sb.name, Replica: sb.replica,
+			ID: ids[i], Namespace: sb.namespace, Name: sb.name, Revision: sb.revision, Replica: sb.replica,
 			IP: sb.ip, Port: sb.port, State: runtime.StateStopped, CreatedAt: sb.createdAt,
 		}
 		// Reflect the real task status (ADR-0032): never hardcode Running, or a

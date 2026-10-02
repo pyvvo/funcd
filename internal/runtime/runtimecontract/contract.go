@@ -136,6 +136,112 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.Equal(t, runtime.StateStopped, got.State, "after Stop an exited instance is Stopped")
 	})
 
+	// ADR-0143: a worker records the Revision it was created from.
+	t.Run("worker-revision-round-trips", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		spec := specOf(t, "rev", []string{"sleep", "30"})
+		spec.Revision = "rev-2"
+		inst, err := rt.Create(ctx, spec)
+		require.NoError(t, err)
+		require.Equal(t, runtime.NewInstanceID("default", "rev", "rev-2", 0), inst.ID)
+		require.Equal(t, v1alpha1.ObjectName("rev-2"), inst.Revision)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+
+		got, err := rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.Equal(t, v1alpha1.ObjectName("rev-2"), got.Revision)
+		list, err := rt.List(ctx, "default")
+		require.NoError(t, err)
+		found := false
+		for _, in := range list {
+			if in.ID == inst.ID {
+				found = true
+				require.Equal(t, v1alpha1.ObjectName("rev-2"), in.Revision)
+			}
+		}
+		require.True(t, found, "List reports the instance")
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+	})
+
+	// ADR-0143: two revisions of one replica run at once, under distinct IDs.
+	t.Run("two-revisions-of-a-replica-coexist", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		var ids []runtime.InstanceID
+		for _, rev := range []v1alpha1.ObjectName{"pair-1", "pair-2"} {
+			spec := specOf(t, "pair", []string{"sleep", "30"})
+			spec.Revision = rev
+			inst, err := rt.Create(ctx, spec)
+			require.NoError(t, err)
+			require.NoError(t, rt.Start(ctx, inst.ID))
+			ids = append(ids, inst.ID)
+		}
+		require.NotEqual(t, ids[0], ids[1])
+		for _, id := range ids {
+			got, err := rt.Status(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, runtime.StateRunning, got.State, "both revisions run")
+			require.NoError(t, rt.Stop(ctx, id))
+		}
+	})
+
+	// ADR-0143: Remove forgets an instance once Stop has released it, and only then.
+	t.Run("worker-remove-after-stop", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		inst, err := rt.Create(ctx, specOf(t, "remove", []string{"sleep", "30"}))
+		require.NoError(t, err)
+		require.Equal(t, fault.Conflict, fault.KindOf(rt.Remove(ctx, inst.ID)), "a created instance is not removed")
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		require.Equal(t, fault.Conflict, fault.KindOf(rt.Remove(ctx, inst.ID)), "a running instance is not removed")
+
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+		require.NoError(t, rt.Remove(ctx, inst.ID))
+		_, err = rt.Status(ctx, inst.ID)
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "a removed instance is unknown")
+		list, err := rt.List(ctx, "default")
+		require.NoError(t, err)
+		for _, in := range list {
+			require.NotEqual(t, inst.ID, in.ID, "List omits a removed instance")
+		}
+		require.NoError(t, rt.Remove(ctx, inst.ID), "removing an unknown instance is a no-op")
+
+		exited, err := rt.Create(ctx, specOf(t, "exited", []string{"sh", "-c", "exit 0"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, exited.ID))
+		waitState(t, rt, exited.ID, runtime.StateStopped)
+		require.Equal(t, fault.Conflict, fault.KindOf(rt.Remove(ctx, exited.ID)), "an instance that exited without a Stop is kept")
+		require.NoError(t, rt.Stop(ctx, exited.ID))
+		require.NoError(t, rt.Remove(ctx, exited.ID))
+	})
+
+	// ADR-0143: an instance started again after Stop runs, so Remove waits for its next Stop. A driver that cannot
+	// restart a stopped instance fails that Start instead, and the instance stays released.
+	t.Run("worker-remove-after-restart", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		inst, err := rt.Create(ctx, specOf(t, "restart", []string{"sleep", "30"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+		if err := rt.Start(ctx, inst.ID); err != nil {
+			require.NoError(t, rt.Remove(ctx, inst.ID), "an instance that did not start again stays released")
+			return
+		}
+		require.Equal(t, fault.Conflict, fault.KindOf(rt.Remove(ctx, inst.ID)), "a restarted instance is running")
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+		require.NoError(t, rt.Remove(ctx, inst.ID))
+	})
+
 	t.Run("instance-not-found", func(t *testing.T) {
 		ctx := context.Background()
 		rt := newRuntime(t)

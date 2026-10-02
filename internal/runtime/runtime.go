@@ -58,6 +58,7 @@ type Mount struct {
 type WorkerSpec struct {
 	Namespace v1alpha1.NamespaceName
 	Name      v1alpha1.ObjectName
+	Revision  v1alpha1.ObjectName // the Revision this worker runs (ADR-0143); "" outside the Function lifecycle
 	Replica   int
 	Image     string            // runtime image (containerd driver)
 	Command   []string          // launch command / container args
@@ -72,6 +73,7 @@ type Instance struct {
 	ID        InstanceID
 	Namespace v1alpha1.NamespaceName
 	Name      v1alpha1.ObjectName
+	Revision  v1alpha1.ObjectName // as created (ADR-0143)
 	Replica   int
 	PID       int
 	State     State
@@ -98,6 +100,10 @@ type Runtime interface {
 	Exec(ctx context.Context, id InstanceID, cmd []string) error
 	// List returns the instances in a namespace.
 	List(ctx context.Context, ns v1alpha1.NamespaceName) ([]Instance, error)
+	// Remove forgets an instance after Stop has released it, with its per-instance files: Status then reports
+	// fault.NotFound and List omits it. An instance Stop has not released — running, created, or exited on its own —
+	// is fault.Conflict; an unknown one is a no-op (ADR-0143).
+	Remove(ctx context.Context, id InstanceID) error
 	// Close releases the driver's resources.
 	Close() error
 }
@@ -117,7 +123,11 @@ type LogCapturer interface {
 	SetLogCapture(LogCaptureFunc)
 }
 
-// NewInstanceID builds the canonical id "<ns>/<name>/r<replica>".
-func NewInstanceID(ns v1alpha1.NamespaceName, name v1alpha1.ObjectName, replica int) InstanceID {
-	return InstanceID(fmt.Sprintf("%s/%s/r%d", ns, name, replica))
+// NewInstanceID builds the canonical id "<ns>/<name>/r<replica>", or "<ns>/<name>/<revision>/r<replica>" for a worker
+// of a Revision, so two revisions of one replica can run at once (ADR-0143).
+func NewInstanceID(ns v1alpha1.NamespaceName, name, revision v1alpha1.ObjectName, replica int) InstanceID {
+	if revision == "" {
+		return InstanceID(fmt.Sprintf("%s/%s/r%d", ns, name, replica))
+	}
+	return InstanceID(fmt.Sprintf("%s/%s/%s/r%d", ns, name, revision, replica))
 }

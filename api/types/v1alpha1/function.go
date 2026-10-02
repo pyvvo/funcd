@@ -165,6 +165,13 @@ type FunctionStatus struct {
 	Status          `json:",inline"`
 	Replicas        int    `json:"replicas,omitempty"`        // running worker count (ADR-0020)
 	CurrentRevision string `json:"currentRevision,omitempty"` // the latest stamped Revision name (ADR-0020)
+	// ServingRevision is the Revision whose workers receive the calls (ADR-0143); empty until the first deploy serves,
+	// and again once no replica is desired.
+	ServingRevision string `json:"servingRevision,omitempty"`
+	// DrainingRevision is the Revision demoted at the last switch while any of its workers remain, and DrainingSince
+	// the time of that switch (ADR-0143); both are cleared together.
+	DrainingRevision string     `json:"drainingRevision,omitempty"`
+	DrainingSince    *time.Time `json:"drainingSince,omitempty"`
 }
 
 // GroupVersionKind returns the constant GVK for Function.
