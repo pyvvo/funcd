@@ -197,6 +197,72 @@ func TestRunReconcilerPause(t *testing.T) {
 	}
 }
 
+// stepGate holds one step's dispatch until released, so a test can read status while that step runs.
+type stepGate struct {
+	*fakeDispatcher
+	step    v1.ObjectName
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *stepGate) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == g.step {
+		close(g.entered)
+		<-g.release
+	}
+	return g.fakeDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #119: WorkflowRun.status and the parent's status.runs follow every run transition (ADR-0094),
+// not only the terminal one — a run whose step b is still executing reads as Running, with step a done,
+// its trace id (ADR-0100), and listed as active on its workflow.
+func TestIssue119_StatusMirroredWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""), step("b", ""), step("c", ""))
+	seedRun(t, s, "run-1", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	gate := &stepGate{fakeDispatcher: newFake(), step: "b", entered: make(chan struct{}), release: make(chan struct{})}
+	eng, _ := New(Deps{Runs: rstate, Dispatch: gate})
+	rr := NewRunReconciler(s, eng, nil, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-1"})
+		done <- err
+	}()
+	<-gate.entered
+	runObj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-1")
+	mid := runObj.(*v1.WorkflowRun).Status
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	midLinks := wfObj.(*v1.Workflow).Status.Runs
+	rec, _ := rstate.Get(ctx, "default", "run-1")
+	close(gate.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if mid.Phase != runRunning || mid.TraceID == "" || mid.TraceID != rec.TraceID {
+		t.Fatalf("while step b runs: status.phase=%q traceId=%q, want Running and the engine trace %q", mid.Phase, mid.TraceID, rec.TraceID)
+	}
+	if len(mid.Steps) != 3 || mid.Steps[0].Name != "a" || mid.Steps[0].Phase != v1.StepSucceeded {
+		t.Fatalf("while step b runs: status.steps=%+v, want 3 steps with a Succeeded", mid.Steps)
+	}
+	if midLinks == nil || len(midLinks.Active) != 1 || midLinks.Active[0] != "run-1" {
+		t.Fatalf("while step b runs: workflow status.runs=%+v, want active=[run-1]", midLinks)
+	}
+
+	runObj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-1")
+	wfObj, _ = s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
+	if p := runObj.(*v1.WorkflowRun).Status.Phase; p != runSucceeded {
+		t.Fatalf("final status.phase=%q, want Succeeded", p)
+	}
+	if l := wfObj.(*v1.Workflow).Status.Runs; l == nil || l.Succeeded != 1 || len(l.Active) != 0 {
+		t.Fatalf("final workflow status.runs=%+v, want Succeeded=1 active=[]", l)
+	}
+}
+
 // Issue #116: two outputs under the payload limit overflow the in-memory run store's 1 MiB value
 // limit together. The run must end Failed on the step whose output no longer fits, not re-dispatch
 // that step on every requeue.

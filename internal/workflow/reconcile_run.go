@@ -138,7 +138,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
-	rec, err := r.drive(ctx, run, wf, started)
+	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -275,10 +275,32 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	}
 }
 
+// mirrorTransition returns the engine's write observer for run: each non-terminal write of run's own
+// record is mirrored into WorkflowRun.status and the parent's status.runs as it happens (ADR-0094 "per
+// transition"). An inline sub-workflow child's record is not run's; the terminal write is mirrored after
+// drive returns, with the run-root span. Best-effort: a failed write is logged, never failing the run.
+func (r *RunReconciler) mirrorTransition(run *v1.WorkflowRun) func(context.Context, *runstate.Record) {
+	return func(ctx context.Context, rec *runstate.Record) {
+		if rec.Namespace != run.Namespace || rec.Name != run.Name || rec.Terminal() {
+			return
+		}
+		mirror(run, rec)
+		if err := r.updateRunStatus(ctx, run); err != nil {
+			r.log.Warn("run status update failed", "run", run.Name, "error", err)
+			return
+		}
+		r.linkRun(ctx, run)
+	}
+}
+
+// updateRunStatus writes run and adopts the new resourceVersion, so a later write in the same
+// reconcile (the next transition) is not rejected as stale.
 func (r *RunReconciler) updateRunStatus(ctx context.Context, run *v1.WorkflowRun) error {
-	if _, err := r.store.Update(ctx, run); err != nil {
+	out, err := r.store.Update(ctx, run)
+	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), runOp, "update run status %q", run.Name)
 	}
+	run.ResourceVersion = out.GetObjectMeta().ResourceVersion
 	return nil
 }
 

@@ -1006,7 +1006,23 @@ func (e *Engine) persist(ctx context.Context, rec *runstate.Record, rs *runState
 		rec.Steps = append(rec.Steps, ss)
 	}
 	rec.UpdatedAt = e.clock.Now().UnixNano()
-	return e.runs.Put(ctx, rec)
+	if err := e.runs.Put(ctx, rec); err != nil {
+		return err
+	}
+	if fn, ok := ctx.Value(transitionKey{}).(func(context.Context, *runstate.Record)); ok {
+		fn(ctx, rec)
+	}
+	return nil
+}
+
+// transitionKey carries a per-drive observer of run-record writes on the context (the net/http/httptrace
+// pattern), so the run reconciler can mirror every transition into the metastore (ADR-0094) while the
+// engine stays metastore-free and shared across concurrent reconciles.
+type transitionKey struct{}
+
+// withTransitions returns ctx carrying fn, which persist calls after every successful run-record write.
+func withTransitions(ctx context.Context, fn func(context.Context, *runstate.Record)) context.Context {
+	return context.WithValue(ctx, transitionKey{}, fn)
 }
 
 func specStep(spec v1.WorkflowSpec, name v1.ObjectName) *v1.WorkflowStep {
