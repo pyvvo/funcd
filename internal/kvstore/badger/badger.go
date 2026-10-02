@@ -140,42 +140,12 @@ func startDriver(db *badger.DB, cfg config) *driver {
 }
 
 // gateway is THE single writer: it blocks for one request, greedy-drains whatever else is queued (up to
-// batchMax) into one Badger txn (group commit — no fixed timer), commits, and releases every waiter. When a
-// CDC seam is wired, each write also appends its change-log entry IN THE SAME txn (the outbox property).
+// batchMax), group-commits the batch (no fixed timer), and releases every waiter.
 func (d *driver) gateway(batchMax int) {
 	defer d.wg.Done()
 	batch := make([]*writeReq, 0, batchMax)
 	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		err := d.db.Update(func(txn *badger.Txn) error {
-			for _, r := range batch {
-				if r.del {
-					if e := txn.Delete([]byte(r.key)); e != nil {
-						return e
-					}
-					if d.cdc != nil {
-						if e := d.cdc.OnWrite(txn, r.key, OpDelete); e != nil {
-							return e
-						}
-					}
-					continue
-				}
-				if e := txn.Set([]byte(r.key), r.val); e != nil {
-					return e
-				}
-				if d.cdc != nil {
-					if e := d.cdc.OnWrite(txn, r.key, OpPut); e != nil {
-						return e
-					}
-				}
-			}
-			return nil
-		})
-		for _, r := range batch {
-			r.done <- err
-		}
+		d.commit(batch)
 		batch = batch[:0]
 	}
 	for {
@@ -206,6 +176,58 @@ func (d *driver) gateway(batchMax int) {
 		}
 		flush()
 	}
+}
+
+// commit writes batch in as few Badger txns as it fits. A request that overflows the open txn
+// (ErrTxnTooBig) starts the next txn, and a request Badger rejects on its own (an over-limit key) fails
+// alone, so one caller's write never fails a co-batched caller's. Requests that share a txn share its commit.
+func (d *driver) commit(batch []*writeReq) {
+	for len(batch) > 0 {
+		n, err := d.update(batch)
+		if n == len(batch) {
+			for _, r := range batch {
+				r.done <- err
+			}
+			return
+		}
+		if n > 0 {
+			d.commit(batch[:n]) // the requests before batch[n] fit one txn
+		} else {
+			batch[0].done <- err // batch[0] fails even in an empty txn
+			n = 1
+		}
+		batch = batch[n:]
+	}
+}
+
+// update stages batch in one txn and commits it. On a staging error the txn is discarded, and applied is the
+// number of leading requests that staged before it.
+func (d *driver) update(batch []*writeReq) (applied int, err error) {
+	err = d.db.Update(func(txn *badger.Txn) error {
+		for _, r := range batch {
+			if e := d.apply(txn, r); e != nil {
+				return e
+			}
+			applied++
+		}
+		return nil
+	})
+	return applied, err
+}
+
+// apply stages one write in txn. When a CDC seam is wired, the write's change-log entry goes IN THE SAME txn
+// (the outbox property).
+func (d *driver) apply(txn *badger.Txn, r *writeReq) error {
+	op, err := OpPut, error(nil)
+	if r.del {
+		op, err = OpDelete, txn.Delete([]byte(r.key))
+	} else {
+		err = txn.Set([]byte(r.key), r.val)
+	}
+	if err != nil || d.cdc == nil {
+		return err
+	}
+	return d.cdc.OnWrite(txn, r.key, op)
 }
 
 func (d *driver) gcLoop(interval time.Duration) {
