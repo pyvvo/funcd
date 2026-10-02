@@ -904,7 +904,9 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
 	}
-	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	// ReadTimeout bounds the request read, as on the data plane (issue #90); with no IdleTimeout set,
+	// net/http also uses it as the keep-alive idle bound, so a silent client cannot hold a connection (#300).
+	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
 
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
