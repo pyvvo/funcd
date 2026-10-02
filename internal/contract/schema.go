@@ -6,7 +6,7 @@ import (
 )
 
 // schema is the subset of JSON Schema 2020-12 keywords the profile gate inspects. Unknown
-// keywords (title, description, format, minimum, pattern, …) are ignored — they constrain a
+// keywords (title, description, minimum, pattern, …) are ignored — they constrain a
 // supported type but never change whether it is in profile.
 type schema struct {
 	Type                 typeField          `json:"type,omitempty"`
@@ -23,6 +23,7 @@ type schema struct {
 	Then                 *schema            `json:"then,omitempty"`
 	Else                 *schema            `json:"else,omitempty"`
 	Ref                  string             `json:"$ref,omitempty"`
+	Format               string             `json:"format,omitempty"`
 	Discriminator        *discriminator     `json:"discriminator,omitempty"`
 }
 

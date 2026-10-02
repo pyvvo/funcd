@@ -4,7 +4,8 @@
 // code type (typia / pydantic) and then run through Check before it is shipped or embedded,
 // so a contract can never advertise a shape a peer runtime (or the registry) can't honor.
 //
-// Supported: scalars (string + formats/pattern/length, integer, number, boolean), string
+// Supported: scalars (string + format date-time/uuid/email/uri, pattern, length; integer +
+// format int32/int64; number; boolean), string
 // enums, CLOSED objects (additionalProperties:false), arrays, string-keyed maps
 // (additionalProperties:<type>, no properties), DISCRIMINATED unions (oneOf + discriminator),
 // optional/nullable, and the explicit `Json` form (the empty schema {} — arbitrary JSON).
@@ -18,6 +19,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -45,6 +47,9 @@ func Check(schemaJSON []byte) error {
 // walk validates one schema node against the profile, recursing into children. path is a
 // human-readable location used in the error so the author can find the offending construct.
 func walk(s *schema, path string) error {
+	if err := checkFormat(s, path); err != nil {
+		return err
+	}
 	switch {
 	// The empty schema {} (and the boolean schema `true`) is the explicit `Json` form: any value.
 	case s.isEmpty():
@@ -77,7 +82,7 @@ func walk(s *schema, path string) error {
 		}
 		return walk(s.Items, path+"[]")
 	}
-	return nil // scalars (incl. formats/ranges/patterns) and explicit null are supported
+	return nil // scalars (incl. profile formats/ranges/patterns) and explicit null are supported
 }
 
 // walkObject enforces the closed-record / typed-map rule — the heart of "no open records".
@@ -119,6 +124,27 @@ func walkUnion(s *schema, path string) error {
 		}
 	}
 	return nil
+}
+
+// checkFormat admits only the profile's `format` values (ADR-0058). Every runtime must compile them; any
+// other format would pass push and fail the worker's validator compile instead.
+func checkFormat(s *schema, path string) error {
+	switch s.primaryType() {
+	case "string":
+		if slices.Contains([]string{"", "date-time", "uuid", "email", "uri"}, s.Format) {
+			return nil
+		}
+	case "integer":
+		if slices.Contains([]string{"", "int32", "int64"}, s.Format) {
+			return nil
+		}
+	default:
+		if s.Format == "" {
+			return nil
+		}
+	}
+	return unsupported(path, "format "+s.Format,
+		"the profile allows only date-time, uuid, email or uri on a string and int32 or int64 on an integer")
 }
 
 func unsupported(path, construct, fix string) error {
