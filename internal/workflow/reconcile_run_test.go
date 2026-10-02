@@ -711,6 +711,82 @@ func TestIssue67_SweepDeletesExpiredWorkflowRuns(t *testing.T) {
 	}
 }
 
+// Issue #346: a WorkflowRun that closed without an engine record (cancelled before its first drive, a
+// rejected replay seed, or one whose record an earlier sweep deleted alone) is swept at retention too.
+func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
+		t.Helper()
+		if _, err := at(base).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun)
+	}
+
+	seedRun(t, s, "cancelled", "missing", `{}`)
+	run := reconcile("cancelled")
+	run.Spec.Cancel = true
+	if _, err := s.Update(ctx, run); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	reconcile("cancelled")
+	replay := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "rejected", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "absent", From: "a"}},
+	}
+	if _, err := s.Create(ctx, replay); err != nil {
+		t.Fatalf("create replay: %v", err)
+	}
+	reconcile("rejected")
+	seedRun(t, s, "orphaned", "wf", `{}`)
+	reconcile("orphaned")
+	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
+		t.Fatalf("delete record: %v", err)
+	}
+	names := []v1.ObjectName{"cancelled", "rejected", "orphaned"}
+	for _, name := range names {
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		if phase := obj.(*v1.WorkflowRun).Status.Phase; !isRunTerminal(phase) {
+			t.Fatalf("setup: %s phase=%q, want a terminal phase", name, phase)
+		}
+		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("setup: %s run record lookup = %v, want NotFound", name, err)
+		}
+	}
+
+	if n, err := at(base.Add(time.Hour)).SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("first SweepExpired = %d, %v; want 0 runs reclaimed", n, err)
+	}
+	for _, name := range names {
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name); err != nil {
+			t.Fatalf("%s must be kept for retention after the sweep first sees it: %v", name, err)
+		}
+	}
+	n, err := at(base.Add(26*time.Hour)).SweepExpired(ctx, 24*time.Hour)
+	if err != nil || n != len(names) {
+		t.Fatalf("SweepExpired past retention = %d, %v; want %d runs reclaimed", n, err, len(names))
+	}
+	for _, name := range names {
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("the closed WorkflowRun %s must be swept at retention, got %v", name, err)
+		}
+		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("no run record may outlive the swept run %s, got %v", name, err)
+		}
+	}
+}
+
 // Issue #182: Workflow.status.runs lists every Pending/Running/Paused run newest first and is updated on
 // every run transition (ADR-0094), including a run applied paused, which never starts.
 func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {

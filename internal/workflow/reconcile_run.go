@@ -418,7 +418,43 @@ func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, run *v1.Workflo
 // and the WorkflowRun object that `workflow runs` lists, whose status is swept with the run (ADR-0100).
 // Returns the number of runs reclaimed.
 func (r *RunReconciler) SweepExpired(ctx context.Context, retention time.Duration) (int, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	if err := r.recordClosedRuns(ctx); err != nil {
+		return 0, err
+	}
 	return r.engine.SweepExpired(ctx, retention, r.deleteRun)
+}
+
+// recordClosedRuns gives each closed WorkflowRun that has no engine record (cancelled before its first
+// drive, a rejected replay seed, or a record an earlier sweep deleted alone) a terminal record stamped
+// now, so the record sweep reclaims it retention after it is first seen. A closed run is never driven
+// again, so the record has no other writer.
+func (r *RunReconciler) recordClosedRuns(ctx context.Context) error {
+	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), runOp, "list runs for retention sweep")
+	}
+	now := r.engine.clock.Now().UnixNano()
+	for _, obj := range list.Items {
+		run := obj.(*v1.WorkflowRun)
+		if !isRunTerminal(run.Status.Phase) {
+			continue
+		}
+		_, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)
+		if gerr == nil {
+			continue
+		}
+		if fault.KindOf(gerr) != fault.NotFound {
+			return fault.Wrapf(gerr, fault.KindOf(gerr), runOp, "get record of closed run %q", run.Name)
+		}
+		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now}
+		if err := r.engine.runs.Put(ctx, rec); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), runOp, "record closed run %q", run.Name)
+		}
+	}
+	return nil
 }
 
 // deleteRun deletes the WorkflowRun object of an expired run record. An inline sub-workflow child run
