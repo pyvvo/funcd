@@ -84,6 +84,29 @@ func TestWorkflowEdgesAndCycles(t *testing.T) {
 	}
 }
 
+// Issue #115: a step without dependsOn follows the previous step in list order, so a cycle that
+// closes only through that implicit edge is as unbuildable as an explicit one.
+func TestIssue115_ValidateRejectsListOrderCycle(t *testing.T) {
+	cycles := map[string][]WorkflowStep{
+		"a dependsOn b, b":    {imgStep("a", "b"), imgStep("b")},
+		"a dependsOn c, b, c": {imgStep("a", "c"), imgStep("b"), imgStep("c")},
+	}
+	for name, steps := range cycles {
+		if err := newWorkflow(WorkflowSpec{Steps: steps}).Validate(); err == nil || fault.KindOf(err) != fault.Invalid {
+			t.Errorf("%s: want an Invalid cycle error, got %v", name, err)
+		}
+	}
+	acyclic := map[string]WorkflowSpec{
+		"explicit edge to a later step": {Steps: []WorkflowStep{imgStep("a"), imgStep("b", "c"), imgStep("c", "a")}},
+		"handler between chained steps": {Steps: []WorkflowStep{imgStep("a"), imgStep("notify"), imgStep("b")}, OnFailure: "notify"},
+	}
+	for name, spec := range acyclic {
+		if err := newWorkflow(spec).Validate(); err != nil {
+			t.Errorf("%s: valid workflow rejected: %v", name, err)
+		}
+	}
+}
+
 func TestWorkflowOnFailureAndOwnedStore(t *testing.T) {
 	// onFailure must name a step.
 	w := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{imgStep("a")}, OnFailure: "ghost"})

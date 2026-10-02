@@ -344,12 +344,30 @@ func (s *WorkflowStep) validateKind(op string) error {
 	return nil
 }
 
-// validateAcyclic rejects a dependsOn cycle via DFS (a cycle is unbuildable).
-func (w *Workflow) validateAcyclic(op string) error {
-	deps := make(map[ObjectName][]ObjectName, len(w.Spec.Steps))
-	for i := range w.Spec.Steps {
-		deps[w.Spec.Steps[i].Name] = w.Spec.Steps[i].DependsOn
+// EffectiveDependsOn returns each step's parents as the engine schedules them (ADR-0094 Control flow):
+// its dependsOn, else the previous step in list order. The onFailure handler is outside the DAG: it gets
+// no implicit parent and is never the previous step.
+func (s WorkflowSpec) EffectiveDependsOn() map[ObjectName][]ObjectName {
+	deps := make(map[ObjectName][]ObjectName, len(s.Steps))
+	var prev ObjectName
+	for i := range s.Steps {
+		st := &s.Steps[i]
+		deps[st.Name] = st.DependsOn
+		if st.Name == s.OnFailure {
+			continue
+		}
+		if len(st.DependsOn) == 0 && prev != "" {
+			deps[st.Name] = []ObjectName{prev}
+		}
+		prev = st.Name
 	}
+	return deps
+}
+
+// validateAcyclic rejects a cycle in the scheduled graph (EffectiveDependsOn) via DFS: a cycle is
+// unbuildable, including one that closes only through an implicit list-order edge.
+func (w *Workflow) validateAcyclic(op string) error {
+	deps := w.Spec.EffectiveDependsOn()
 	const (
 		white = 0
 		gray  = 1
@@ -362,7 +380,7 @@ func (w *Workflow) validateAcyclic(op string) error {
 		for _, d := range deps[n] {
 			switch color[d] {
 			case gray:
-				return fault.Invalidf(op, "dependsOn cycle through step %q", d)
+				return fault.Invalidf(op, "dependsOn cycle through step %q (a step without dependsOn follows the previous step in list order)", d)
 			case white:
 				if err := visit(d); err != nil {
 					return err

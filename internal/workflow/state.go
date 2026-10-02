@@ -52,8 +52,8 @@ type runState struct {
 }
 
 // newRunState builds the scheduling state from a Workflow spec. List order chains
-// implicitly: a step with no dependsOn (other than the onFailure handler) follows the
-// previous DAG step. The onFailure handler is excluded from the DAG.
+// implicitly (v1.WorkflowSpec.EffectiveDependsOn, the graph admission checks for cycles).
+// The onFailure handler is excluded from the DAG: the engine schedules it on run failure.
 func newRunState(spec v1.WorkflowSpec) *runState {
 	rs := &runState{
 		steps:     make(map[v1.ObjectName]*stepNode, len(spec.Steps)),
@@ -61,28 +61,17 @@ func newRunState(spec v1.WorkflowSpec) *runState {
 		onFailure: spec.OnFailure,
 		failFast:  true,
 	}
-	var prevDAG v1.ObjectName
+	deps := spec.EffectiveDependsOn()
 	for i := range spec.Steps {
 		s := &spec.Steps[i]
-		n := &stepNode{
+		rs.steps[s.Name] = &stepNode{
 			name:      s.Name,
-			dependsOn: append([]v1.ObjectName(nil), s.DependsOn...),
+			dependsOn: append([]v1.ObjectName(nil), deps[s.Name]...),
 			join:      s.Join,
 			hasWhen:   s.When != nil,
 			phase:     v1.StepPending,
 		}
-		if s.Name == spec.OnFailure {
-			// The handler is scheduled by the engine on run failure, not by the DAG.
-			rs.steps[s.Name] = n
-			rs.order = append(rs.order, s.Name)
-			continue
-		}
-		if len(n.dependsOn) == 0 && prevDAG != "" {
-			n.dependsOn = []v1.ObjectName{prevDAG}
-		}
-		rs.steps[s.Name] = n
 		rs.order = append(rs.order, s.Name)
-		prevDAG = s.Name
 	}
 	return rs
 }
