@@ -3,7 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -579,6 +583,27 @@ func TestIssue93_KeyMismatchFailsAtStartup(t *testing.T) {
 	seed(plaintext, "")
 	_, err = buildStore(fileCfg(plaintext, keyA), root)
 	require.ErrorContains(t, err, "secrets.encryptionKeyFile", "key added over plaintext Secrets")
+}
+
+// mainSource is main.go as compiled, so a doc-comment check reads the same bytes the build does.
+//
+//go:embed main.go
+var mainSource []byte
+
+// Issue #329: buildStore's doc comment ran straight into buildKVStore's, so Go attached both to
+// buildKVStore and left buildStore undocumented. Each must carry its own doc comment.
+func TestIssue329_BuildFuncsCarryTheirOwnDocComment(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", mainSource, parser.ParseComments)
+	require.NoError(t, err)
+	docs := map[string]string{}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+			docs[fn.Name.Name] = fn.Doc.Text()
+		}
+	}
+	for _, name := range []string{"buildStore", "buildKVStore"} {
+		assert.Truef(t, strings.HasPrefix(docs[name], name+" "), "doc comment on %s = %q, want it to start with %q", name, docs[name], name)
+	}
 }
 
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be

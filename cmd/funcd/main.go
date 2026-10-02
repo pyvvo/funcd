@@ -400,9 +400,6 @@ func parseLevel(level string) slog.Level {
 	}
 }
 
-// buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
-// when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
-// unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
 // or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger and
 // storage.mode is file (storage.mode: memory keeps the KV in memory, ADR-0043). When
@@ -514,6 +511,9 @@ func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
+// buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
+// when secrets.encryptionKeyFile is set. Absent ⇒ no encryptor + a warning that Secret values are
+// unencrypted in the durable-store lane (the default in-memory store is ephemeral, ADR-0061 §5).
 func buildStore(cfg config.Config, log *slog.Logger) (store.Store, error) {
 	enc, err := secretEncryptor(cfg)
 	if err != nil {
