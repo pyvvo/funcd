@@ -39,6 +39,9 @@ func TestScenarioZeroConfigDefaults(t *testing.T) {
 	require.Equal(t, "info", c.Log.Level)
 	require.Equal(t, "", c.Telemetry.Endpoint)
 	require.Equal(t, "index.html", c.Site.DefaultIndex, "ADR-0139 site default index")
+	require.True(t, c.Funclog.Enabled, "ADR-0081 capture on by default")
+	require.True(t, c.Funclog.Traces, "ADR-0101 traces on by default")
+	require.Equal(t, "funcd-system", c.Funclog.Bucket)
 }
 
 // scenario: site-default-index-config (ADR-0139) — site.defaultIndex is a config-level knob with the web
@@ -134,6 +137,8 @@ func TestEnvVarsMapToFields(t *testing.T) {
 		"FUNCD_LOG_FORMAT":                  {"text", func(c config.Config) string { return c.Log.Format }},
 		"FUNCD_LOG_LEVEL":                   {"warn", func(c config.Config) string { return c.Log.Level }},
 		"FUNCD_TELEMETRY_ENDPOINT":          {"otel:4317", func(c config.Config) string { return c.Telemetry.Endpoint }},
+		"FUNCD_FUNCLOG_SEGMENT_MAX_AGE":     {"2s", func(c config.Config) string { return c.Funclog.SegmentMaxAge }},
+		"FUNCD_FUNCLOG_ENABLED":             {"false", func(c config.Config) string { return strconv.FormatBool(c.Funclog.Enabled) }},
 	}
 	for envName, tc := range cases {
 		t.Run(envName, func(t *testing.T) {
@@ -225,6 +230,9 @@ func TestValidateMatrix(t *testing.T) {
 		{"log.level", func(c *config.Config, v string) { c.Log.Level = v }, []vc{
 			{"debug", true}, {"info", true}, {"warn", true}, {"error", true},
 			{"loud", false}, {"INFO", false}, {"", false},
+		}},
+		{"funclog.bucket", func(c *config.Config, v string) { c.Funclog.Bucket = v }, []vc{
+			{"funcd-system", true}, {"", true}, {"logs", false},
 		}},
 	} {
 		for _, c := range field.cases {

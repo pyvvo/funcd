@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -341,6 +342,56 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
 	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
 }
+
+// TestIssue153_FunclogConfigBlockLoadsAndMaps: the funclog block of ADR-0081/ADR-0101 is a daemon config key. It
+// loads (strict decode used to reject it as unknown) and reaches the platform: funclog.enabled: false installs no
+// capture hook, and a bad segmentMaxAge fails startup instead of being ignored.
+func TestIssue153_FunclogConfigBlockLoadsAndMaps(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		name    string
+		funclog string
+		capture bool
+		wantErr bool
+	}{
+		{"documented-keys", "  enabled: true\n  segmentMaxBytes: 1048576\n  segmentMaxAge: 2s\n  bucket: funcd-system\n  traces: false\n", true, false},
+		{"disabled", "  enabled: false\n", false, false},
+		{"bad-segment-max-age", "  segmentMaxAge: bogus\n", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "funcdconfig.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(
+				"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+					"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+
+					"funclog:\n"+tc.funclog), 0o600))
+			cfg, err := config.Load(path, config.Flags{})
+			require.NoError(t, err, "the funclog block is a known config key")
+
+			opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "funclog.segmentMaxAge")
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = closeExec() })
+
+			spy := &captureSpy{Runtime: process.New()}
+			p, err := funcd.New(append(opts, funcd.WithRuntime(spy))...)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+			require.Equal(t, tc.capture, spy.installed, "funclog.enabled reaches the platform")
+		})
+	}
+}
+
+// captureSpy records whether the platform installed the funclog capture hook (runtime.LogCapturer, ADR-0081).
+type captureSpy struct {
+	fnruntime.Runtime
+	installed bool
+}
+
+func (s *captureSpy) SetLogCapture(fn fnruntime.LogCaptureFunc) { s.installed = fn != nil }
 
 // scenario: secrets-keyfile-activates-encryption — a 32-byte secrets.encryptionKeyFile wires the
 // store's at-rest encryptor (ADR-0022): the value bytes are ciphertext. No key ⇒ unencrypted (+ a
