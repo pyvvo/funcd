@@ -79,6 +79,18 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 acceptance); the review reads the *code* (after implementation) and records a per-model
 quality entry in `docs/reviews/` — see [ADR-0000 gate 5](../docs/adr/0000-adr-process.md).
 
+**A new feature or a refactor concept takes the ADR pipeline above; a bug fix that needs no design
+decision takes the fix pipeline**, which starts from a GitHub issue instead of an ADR:
+
+| Order | Skill | Does | Writes | Must also update on exit |
+|---|---|---|---|---|
+| fix | [fix](../.claude/skills/fix/SKILL.md) | issue → regression test that fails → root-cause fix → revert check → checks → PR (`Fixes #N`) | code + a `TestIssue<N>_…` test | — (the merged PR closes the issue) |
+| review | [fix-review](../.claude/skills/fix-review/SKILL.md) | independent review of the fix by **running** it: the test fails without the fix and passes with it, cause not symptom, scope, ADR conformance; score the model | `docs/reviews/issue-<N>-fix-<model>.md` + a ledger row | nothing — it never edits the work |
+| batch | [fix-batch](../.claude/skills/fix-batch/SKILL.md) | many issues (a tracker's sub-issues, a list, a label): fix → review per issue, one PR per group | a branch + PR per group | — |
+
+An issue labelled `needs-adr`, or a fix that would change an Accepted ADR's decision, leaves the fix
+pipeline for `/adr`.
+
 ## ⚠️ Cross-document propagation rules
 
 When you change the **row**, you owe the checked **columns** — in the same session.
@@ -262,6 +274,10 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
   PR that implements it closes the issue (`Fixes #N` in the PR description).
+- **Every other fix** goes through [`/fix`](../.claude/skills/fix/SKILL.md) (test-first, one issue per commit) and
+  the independent [`/fix-review`](../.claude/skills/fix-review/SKILL.md) gate; [`/fix-batch`](../.claude/skills/fix-batch/SKILL.md)
+  works through a tracker issue's sub-issues. A security finding is a private draft security advisory, not a
+  public issue, and is fixed in the advisory's private fork.
 
 ## Dev environment — run everything through Nix
 
