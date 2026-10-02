@@ -3,6 +3,7 @@ package sdk_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -319,6 +320,58 @@ spec:
 		t.Run(name, func(t *testing.T) {
 			_, err := sdk.DecodeManifest([]byte(tc.manifest))
 			require.Error(t, err, "an unknown manifest key must not be dropped silently")
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.Contains(t, err.Error(), tc.key)
+		})
+	}
+}
+
+// funcdctl.yaml gets the resource-manifest key handling (#63, #64): a plain y/on/no key keeps its text
+// (contract property names and dev.config keys are user-named), and an unknown key is a fault.Invalid
+// naming it instead of a silent drop (a typo in `bindings` dropped every binding).
+func TestIssue298_ManifestKeepsKeyTextAndRejectsUnknownKeys(t *testing.T) {
+	const body = `runtime: python314
+handler: h.py
+bindings:
+  kv:
+    - alias: cache
+      store: cache-kv
+      table: entries
+contract:
+  input:
+    type: object
+    properties:
+      x:
+        type: number
+      y:
+        type: number
+  output:
+    type: "null"
+dev:
+  config:
+    app:
+      on: "1"
+  secrets:
+    creds:
+      no: ${NO_TOKEN}
+`
+	m, err := sdk.LoadManifest(writeManifest(t, body))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}}}`, string(m.Contract.Input))
+	require.Equal(t, map[string]map[string]string{"app": {"on": "1"}}, m.Dev.Config)
+	require.Equal(t, map[string]map[string]string{"creds": {"no": "${NO_TOKEN}"}}, m.Dev.Secrets)
+	require.Len(t, m.Bindings.KV, 1)
+
+	cases := map[string]struct {
+		from, to, key string
+	}{
+		"misspelled bindings": {from: "bindings:", to: "bindigns:", key: "bindigns"},
+		"nested unknown key":  {from: "      table: entries", to: "      tabel: entries", key: "tabel"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := sdk.LoadManifest(writeManifest(t, strings.Replace(body, tc.from, tc.to, 1)))
+			require.Error(t, err, "an unknown funcdctl.yaml key must not be dropped silently")
 			require.Equal(t, fault.Invalid, fault.KindOf(err))
 			require.Contains(t, err.Error(), tc.key)
 		})
