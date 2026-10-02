@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/activator/storescaler"
@@ -158,4 +160,42 @@ func TestIssue38_PlatformOutageMemberFailsAlone(t *testing.T) {
 	h.reconcile(t, "b-here")
 	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "b-here's reconcile restarts the dead pool")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "b-here").Status.Phase)
+}
+
+// refResolver resolves each artifact ref to its own digest (ADR-0035).
+type refResolver map[string]string
+
+func (r refResolver) Resolve(_ context.Context, uri string) (string, error) { return r[uri], nil }
+
+// pinnedMaterializer materializes only at a digest, as the OCI materializer does (the digest is the authority).
+type pinnedMaterializer struct{ path string }
+
+func (m pinnedMaterializer) Materialize(_ context.Context, fn *v1.Function) (string, error) {
+	if fn.Spec.ImageDigest == "" {
+		return "", fault.Invalidf("test.Materialize", "function %s/%s has no spec.imageDigest", fn.Namespace, fn.Name)
+	}
+	return m.path, nil
+}
+
+// A pooled Function deployed from a tag alone runs like a solo one: each pool member is gated and materialized at its
+// Revision's pinned digest, so the healthy member serves and the one built for no node platform is left out.
+func TestIssue43_TagOnlyPooledFunctionDeploys(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, withPlatforms(&fakePlatforms{}), func(d *function.Deps) {
+		d.Resolver = refResolver{"oci-layout://hello:v1": digestHere, "oci-layout://other:v1": digestElsewhere}
+		d.Materializer = pinnedMaterializer{path: filepath.Join(t.TempDir(), "handler.mjs")}
+	})
+	h.create(t, "a-elsewhere", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents"; fn.Spec.Image = "oci-layout://other:v1" })
+	h.create(t, "hello-pooled", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents"; fn.Spec.Image = "oci-layout://hello:v1" })
+	h.reconcile(t, "a-elsewhere")
+	h.reconcile(t, "hello-pooled")
+
+	require.Equal(t, "NoMatchingPlatform", h.condition(t, "a-elsewhere", "Ready").Reason)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "hello-pooled").Status.Phase)
+	require.Empty(t, h.getFn(t, "hello-pooled").Spec.ImageDigest, "the spec keeps the user's tag-only input")
+	pool, ok := h.rt.specFor("__pool__nodejs22__agents")
+	require.True(t, ok, "the pool worker runs")
+	manifest, err := os.ReadFile(pool.Env["FUNCD_POOL_MANIFEST"])
+	require.NoError(t, err)
+	require.NotContains(t, string(manifest), "a-elsewhere", "the member built for no node platform is left out of the pool")
 }

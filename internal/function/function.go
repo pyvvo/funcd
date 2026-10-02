@@ -1083,7 +1083,7 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // moved tag cannot drift it (the immutability guarantee).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
-	revName := fmt.Sprintf("%s-%d", fn.Name, fn.Generation)
+	revName := revisionName(fn)
 	existing, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName))
 	if err == nil {
 		fn.Status.CurrentRevision = revName
@@ -1130,6 +1130,9 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	fn.Status.CurrentRevision = revName
 	return pinned, nil
 }
+
+// revisionName is the Revision a Function's generation stamps (ADR-0020): <name>-<generation>.
+func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name, fn.Generation) }
 
 // pinDigest resolves an OCI artifact ref → digest at Revision stamp (ADR-0035). With no
 // resolver configured (file:// dev / legacy mode) there is no digest to pin — the

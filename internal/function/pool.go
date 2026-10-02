@@ -90,7 +90,8 @@ func (r *Reconciler) assign(ctx context.Context, fn *v1.Function) (pooling.Assig
 }
 
 // sameKeyFunctions returns every function in the store declaring key (ns, runtime, worker-id),
-// Ready or not — the membership the cap + manifest are computed over (ADR-0046 Decision 3/4).
+// Ready or not — the membership the cap + manifest are computed over (ADR-0046 Decision 3/4) —
+// each as pinnedMember returns it.
 func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) ([]*v1.Function, error) {
 	list, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
 	if err != nil {
@@ -103,6 +104,9 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 			continue
 		}
 		if k, isPooled := r.poolKeyFor(fn); isPooled && k == key {
+			if fn, err = r.pinnedMember(ctx, fn); err != nil {
+				return nil, err
+			}
 			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
 			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. Nor is one whose platforms
 			// cannot be listed now (a registry outage): its own reconcile retries, and its peers keep their pool.
@@ -116,6 +120,21 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 		}
 	}
 	return out, nil
+}
+
+// pinnedMember is m at its current generation's Revision digest (ADR-0035), the digest the pool
+// gates and materializes it at, as the solo path does: a Function deployed from a tag alone has no
+// spec.imageDigest. A member whose Revision is not stamped yet is returned as stored.
+func (r *Reconciler) pinnedMember(ctx context.Context, m *v1.Function) (*v1.Function, error) {
+	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(revisionName(m)))
+	if err != nil {
+		if fault.KindOf(err) == fault.NotFound {
+			return m, nil
+		}
+		return nil, err
+	}
+	tmpl.Spec.ImageDigest = digest
+	return tmpl, nil
 }
 
 // convergePooled provisions a pooled member's shared pool worker, driven to the max desired over the key's admitted
