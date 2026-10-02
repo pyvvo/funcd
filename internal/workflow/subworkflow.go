@@ -24,15 +24,16 @@ type ChildResolver interface {
 
 // runChild executes a sub-workflow step: guard the nesting depth, resolve the referenced workflow, run it
 // inline (a recursive execute at depth+1) with the step's flowing input, and return its run output. A
-// non-Succeeded child fails the step (the cause propagates → fail-fast fails the parent run).
-func (e *Engine) runChild(ctx context.Context, parent *runstate.Record, child v1.ObjectName, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+// non-Succeeded child fails the step (the cause propagates → fail-fast fails the parent run). The child's
+// steps stop with the parent's (stop); its record, onFailure handler and run span use the parent run's ctx.
+func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, child v1.ObjectName, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	if e.children == nil {
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: no child resolver configured", n.name)
 	}
 	if parent.Depth+1 > e.cfg.MaxSubworkflowDepth { // backstop for a cycle that slipped the reconcile check
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: max nesting depth %d exceeded (SubworkflowDepthExceeded)", n.name, e.cfg.MaxSubworkflowDepth)
 	}
-	childSpec, childImages, err := e.children.Child(ctx, parent.Namespace, child)
+	childSpec, childImages, err := e.children.Child(stop, parent.Namespace, child)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
@@ -42,7 +43,7 @@ func (e *Engine) runChild(ctx context.Context, parent *runstate.Record, child v1
 	// span under the parent run's span. The child runs inline (never through the reconciler), so the ENGINE
 	// emits its run-root span here — before the error check, so a FAILED child still gets its span.
 	// ADR-0107: the child's own step images digest-pin its record (no contract gate on the inline child).
-	rec, err := e.execute(ctx, parent.Namespace, childRun, child, childSpec, childInput, StartOptions{StepImages: childImages}, parent.Depth+1, parent.TraceID, parent.RootSpanID)
+	rec, err := e.execute(ctx, stop, parent.Namespace, childRun, child, childSpec, childInput, StartOptions{StepImages: childImages}, parent.Depth+1, parent.TraceID, parent.RootSpanID)
 	emitRunSpan(ctx, e.traces, rec, e.log)
 	if err != nil {
 		return nil, err // the child run failed → the step fails (propagate the cause)

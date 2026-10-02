@@ -214,14 +214,15 @@ type StartOptions struct {
 // (wiring is a separate layer). Every ready step is dispatched at once (ADR-0094: fan-out
 // is parallel dispatch).
 func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions) (*runstate.Record, error) {
-	return e.execute(ctx, ns, runName, workflow, spec, input, opts, 0, "", "") // top-level run: depth 0, fresh trace
+	return e.execute(ctx, ctx, ns, runName, workflow, spec, input, opts, 0, "", "") // top-level run: depth 0, fresh trace
 }
 
 // execute is Execute threading the sub-workflow nesting depth (ADR-0099): the public Execute starts at 0;
 // runChild recurses at depth+1. inheritTraceID/inheritRootParent carry the parent run's trace context for a
 // sub-workflow child (ADR-0104): empty ⇒ a top-level run mints a fresh trace with no parent; non-empty ⇒ the
 // child shares the parent's TraceID (one trace) and nests its run-root span under the parent run's span.
-func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
+// stop ends the run's steps: ctx for a top-level run, the parent's step context for a child (ADR-0099).
+func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions, depth int, inheritTraceID, inheritRootParent string) (*runstate.Record, error) {
 	pinned := opts.Contract
 	rs := newRunState(spec)
 	// ADR-0105: pre-mint a span-id per DAG step so a successor parents on it (the nested DAG waterfall). The
@@ -269,7 +270,7 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 		}
 		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded", runName))
 	}
-	return e.drive(ctx, rec, rs, outputs, spec, input)
+	return e.drive(ctx, stop, rec, rs, outputs, spec, input)
 }
 
 // failAtStart fails a run at the run-start gate. It records the Failed run before fail() fires onFailure:
@@ -309,7 +310,7 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	}
 	rec.Paused = false // resume clears the pause
 	rec.Phase = runRunning
-	return e.drive(ctx, rec, rs, outputs, spec, rec.Input)
+	return e.drive(ctx, ctx, rec, rs, outputs, spec, rec.Input)
 }
 
 // Replay seeds runName from a finished source run's checkpoint and drives it (ADR-0107): a NEW run that
@@ -408,7 +409,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
 	}
-	return e.drive(ctx, rec, rs, outputs, spec, src.Input)
+	return e.drive(ctx, ctx, rec, rs, outputs, spec, src.Input)
 }
 
 // isCopied reports whether a source step's phase means "reuse it verbatim" in a replay (a terminal
@@ -515,8 +516,9 @@ func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.Object
 	return e.runs.Put(ctx, rec)
 }
 
-// drive advances a run to a terminal phase from the given scheduling state.
-func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
+// drive advances a run to a terminal phase from the given scheduling state. Its steps run until stop ends;
+// its record and onFailure handler use ctx, so a child its parent stopped still records and handles its failure.
+func (e *Engine) drive(ctx, stop context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage) (*runstate.Record, error) {
 	if rec.Paused {
 		rec.Phase = runPaused
 		if err := e.persist(ctx, rec, rs, outputs); err != nil {
@@ -528,13 +530,13 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 	// now spans reconciles (a builtin wait yields), so a single-drive ctx deadline can't bound it.
 	// runCtx bounds the steps only: fail() runs the onFailure handler on ctx, so a RunTimedOut run
 	// still invokes it.
-	runCtx := ctx
+	runCtx := stop
 	if spec.Timeout > 0 {
 		if e.clock.Now().UnixNano() > runDeadline(rec, spec) {
 			return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(context.DeadlineExceeded))
 		}
 		var cancel context.CancelFunc
-		runCtx, cancel = context.WithDeadline(ctx, time.Unix(0, runDeadline(rec, spec)))
+		runCtx, cancel = context.WithDeadline(stop, time.Unix(0, runDeadline(rec, spec)))
 		defer cancel()
 	}
 
@@ -548,7 +550,7 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 	var end func() (*runstate.Record, error) // set by the first failure; nothing new starts after it
 	for {
 		if end == nil {
-			started, err := e.startReady(stepCtx, runCtx, rec, rs, outputs, spec, input, results)
+			started, err := e.startReady(ctx, stepCtx, runCtx, rec, rs, outputs, spec, input, results)
 			running += started
 			if err != nil {
 				end = func() (*runstate.Record, error) { return e.fail(ctx, rec, rs, outputs, spec, input, err) }
@@ -595,8 +597,8 @@ type stepResult struct {
 
 // startReady settles the skip cascade and starts every step that may run now (its join satisfied, its
 // when.condition true) on its own goroutine, which reports to results. It returns how many it started;
-// an error fails the run: a when.condition that cannot be evaluated, or the run deadline.
-func (e *Engine) startReady(ctx, runCtx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, results chan<- stepResult) (int, error) {
+// an error fails the run: a when.condition that cannot be evaluated, or the end of runCtx.
+func (e *Engine) startReady(ctx, stepCtx, runCtx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, results chan<- stepResult) (int, error) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	started := 0
@@ -617,15 +619,15 @@ func (e *Engine) startReady(ctx, runCtx context.Context, rec *runstate.Record, r
 			}
 			return started, nil
 		}
-		if runCtx.Err() != nil { // the run deadline hit between steps
-			return started, runTimedOut(runCtx.Err())
+		if err := runCtx.Err(); err != nil { // the run's context ended between steps
+			return started, runStopped(err)
 		}
 		for _, n := range batch {
 			e.setRunning(n)
 			parents := parentOutputs(n, outputs)
 			started++
 			go func() {
-				out, err := e.runStep(ctx, rec, rs, outputs, spec, n, input, parents)
+				out, err := e.runStep(ctx, stepCtx, rec, rs, outputs, spec, n, input, parents)
 				results <- stepResult{n: n, out: out, err: err}
 			}()
 		}
@@ -633,11 +635,12 @@ func (e *Engine) startReady(ctx, runCtx context.Context, rec *runstate.Record, r
 }
 
 // runStep runs one started step: a builtin in-engine, a sub-workflow inline, or a function by dispatch.
-// It builds its input from parents (its parents' outputs); the shared outputs are only persisted.
-func (e *Engine) runStep(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, parents map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+// It builds its input from parents (its parents' outputs); the shared outputs are only persisted. The step
+// runs on stepCtx; a sub-workflow child also gets the run's ctx for its own record and handler.
+func (e *Engine) runStep(ctx, stepCtx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, n *stepNode, input json.RawMessage, parents map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	st := specStep(spec, n.name)
 	if functionOf(st) == nil { // a builtin or sub-workflow step; dispatchStep records each attempt itself
-		if err := e.persist(ctx, rec, rs, outputs); err != nil {
+		if err := e.persist(stepCtx, rec, rs, outputs); err != nil {
 			return nil, &writeAheadError{err: err}
 		}
 	}
@@ -645,11 +648,11 @@ func (e *Engine) runStep(ctx context.Context, rec *runstate.Record, rs *runState
 	case st != nil && st.Builtin != nil:
 		// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
 		// then it Succeeds. No dispatch, no special state (ADR-0096).
-		return e.runBuiltin(ctx, st, n, input, parents)
+		return e.runBuiltin(stepCtx, st, n, input, parents)
 	case st != nil && st.Workflow != nil: // a sub-workflow step runs a child workflow inline (ADR-0099)
-		return e.runChild(ctx, rec, st.Workflow.Ref, n, input, parents)
+		return e.runChild(ctx, stepCtx, rec, st.Workflow.Ref, n, input, parents)
 	default:
-		return e.dispatchStep(ctx, rec, rs, outputs, spec, n, e.stepInput(n, input, parents, st))
+		return e.dispatchStep(stepCtx, rec, rs, outputs, spec, n, e.stepInput(n, input, parents, st))
 	}
 }
 
@@ -693,9 +696,9 @@ func (e *Engine) settle(ctx, runCtx context.Context, rec *runstate.Record, rs *r
 	switch {
 	case errors.As(r.err, &wa): // the run store refused the intent: the step never ran
 		return func() (*runstate.Record, error) { return e.recordFailed(ctx, rec, rs, outputs, spec, input, wa.err) }
-	case runCtx.Err() != nil && (st == nil || st.Workflow == nil): // the run deadline, not the step, failed it
+	case runCtx.Err() != nil && (st == nil || st.Workflow == nil): // the end of the run's context, not the step, failed it
 		return func() (*runstate.Record, error) {
-			return e.fail(ctx, rec, rs, outputs, spec, input, runTimedOut(runCtx.Err()))
+			return e.fail(ctx, rec, rs, outputs, spec, input, runStopped(runCtx.Err()))
 		}
 	default:
 		return func() (*runstate.Record, error) { return e.fail(ctx, rec, rs, outputs, spec, input, r.err) }
@@ -1075,6 +1078,16 @@ func functionOf(st *v1.WorkflowStep) *v1.FunctionStep {
 // paused time (paused time excluded from the clock, ADR-0094; wait time counts, ADR-0096).
 func runDeadline(rec *runstate.Record, spec v1.WorkflowSpec) int64 {
 	return rec.StartedAt + int64(spec.Timeout) + rec.PausedNanos
+}
+
+// runStopped is the failure of a run whose context ended under its steps: RunTimedOut when a deadline
+// passed (its own, or the parent's a child inherits, ADR-0099); a child its parent's fail-fast stopped did
+// not time out.
+func runStopped(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return runTimedOut(err)
+	}
+	return fault.Wrapf(err, fault.Unavailable, engineOp, "run stopped")
 }
 
 // runTimedOut wraps a run-deadline cause as the ADR-0094 RunTimedOut failure reason (distinct

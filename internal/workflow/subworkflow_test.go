@@ -3,7 +3,10 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -221,5 +224,76 @@ func TestSubworkflowChildNotReadyRequeues(t *testing.T) {
 	}
 	if mismatchReason(wf) != "" {
 		t.Fatalf("a not-Ready child must NOT be a mismatch, got %s", mismatchReason(wf))
+	}
+}
+
+// stopChildDispatcher fails step x permanently once the child's c_slow is in flight; c_slow blocks until
+// its context ends, and nothing is sent on an ended context (liveCtxDispatcher). With slowSucceeds, c_slow
+// then succeeds, like a step that finished just as it was stopped.
+type stopChildDispatcher struct {
+	liveCtxDispatcher
+	slowIn       chan struct{}
+	slowSucceeds bool
+}
+
+func (d stopChildDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	switch req.Step {
+	case "c_slow":
+		close(d.slowIn)
+		if d.slowSucceeds {
+			<-ctx.Done()
+			return json.RawMessage(`{}`), nil
+		}
+	case "x":
+		select {
+		case <-d.slowIn:
+		case <-time.After(2 * time.Second):
+			return nil, Permanent(errors.New("c_slow was not dispatched while x was in flight"))
+		}
+	}
+	return d.liveCtxDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #349: an inline child run that its parent stops (the parent's run deadline, or a sibling's
+// fail-fast) ends Failed, so it still invokes its onFailure handler (ADR-0094); only a deadline labels it
+// RunTimedOut.
+func TestIssue349_StoppedChildRunsItsOnFailureHandler(t *testing.T) {
+	kid := spec(step("c_slow", ""), step("c_next", ""), step("c_notify", ""))
+	kid.OnFailure = "c_notify"
+	timedOut := spec(subwfStep("sub", "kid"), step("p_notify", ""))
+	timedOut.OnFailure = "p_notify"
+	timedOut.Timeout = 50 * time.Millisecond
+	failFast := spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r"))
+	for _, tc := range []struct {
+		name         string
+		parent       v1.WorkflowSpec
+		slowSucceeds bool
+		deadline     bool
+	}{
+		{"parent-timeout", timedOut, false, true},
+		{"sibling-fail-fast", failFast, false, false},
+		{"sibling-fail-fast-between-steps", failFast, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			f.permanent["x"] = true
+			d := stopChildDispatcher{liveCtxDispatcher: liveCtxDispatcher{fakeDispatcher: f, block: "c_slow"}, slowIn: make(chan struct{}), slowSucceeds: tc.slowSucceeds}
+			e := childEngine(t, d, fakeChildren{"kid": kid}, Config{})
+			rec, err := e.Execute(context.Background(), "default", "run-p", "top", tc.parent, json.RawMessage(`{}`), StartOptions{})
+			if err == nil || rec == nil || rec.Phase != runFailed {
+				t.Fatalf("parent run must end Failed, got err %v", err)
+			}
+			child, err := e.runs.Get(context.Background(), "default", "run-p-sub")
+			if err != nil {
+				t.Fatalf("child run record: %v", err)
+			}
+			if child.Phase != runFailed || f.calls["c_notify"] != 1 || phaseOf(child, "c_notify") != v1.StepSucceeded {
+				t.Fatalf("child run %s: handler dispatched %d times and recorded %s, want a Failed child whose handler ran once and Succeeded",
+					child.Phase, f.calls["c_notify"], phaseOf(child, "c_notify"))
+			}
+			if got := strings.Contains(child.Error, "RunTimedOut"); got != tc.deadline {
+				t.Fatalf("child error %q: RunTimedOut %v, want %v", child.Error, got, tc.deadline)
+			}
+		})
 	}
 }
