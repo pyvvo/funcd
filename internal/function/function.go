@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -437,7 +438,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
 		}
-		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
+		var requeue time.Duration
+		if fault.KindOf(serr) == fault.NotFound {
+			requeue = 2 * time.Second
+		}
+		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true, requeue: requeue}, drainAfter)
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -651,6 +657,11 @@ func earliest(a, b time.Duration) time.Duration {
 // readinessPoll is how soon a pass re-checks a booting shim.
 const readinessPoll = 200 * time.Millisecond
 
+// bootTimeout bounds how long a solo replica may run without becoming ready before readiness judges it a shape failure
+// (ADR-0030 §4b's timeout), as when its handler blocks while it loads. It exceeds the activator's 30 s activation hold,
+// so it never cuts short a boot that a cold call still waits for.
+const bootTimeout = time.Minute
+
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
 
@@ -724,7 +735,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath)
+	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
 	if serving {
 		failed = "" // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
@@ -757,13 +768,13 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath)
+	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath, bootTimeout)
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := time.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
-	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath)
+	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath, bootTimeout)
 	retryAt := retryS
 	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
 		retryAt = retryC
@@ -1251,8 +1262,9 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 // readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
 // ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
 // each running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
-// handler) as a shape failure. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string) (ready int, failed runtime.InstanceID) {
+// handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
+// bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID) {
 	if r.materializer == nil {
 		return running, ""
 	}
@@ -1266,23 +1278,37 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		}
 		switch in.State {
 		case runtime.StateFailed:
-			if failed == "" || in.ID < failed { // the lowest, so the reported error does not vary with List's order
-				failed = in.ID
-			}
+			failed = lowerID(failed, in.ID)
 		case runtime.StateRunning:
-			if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path) {
+			switch {
+			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
+			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
+				failed = lowerID(failed, in.ID)
 			}
 		}
 	}
 	return ready, failed
 }
 
+// lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not
+// vary with List's order.
+func lowerID(a, b runtime.InstanceID) runtime.InstanceID {
+	if a == "" || b < a {
+		return b
+	}
+	return a
+}
+
 // loadError is the error failed instance id's shim wrote before it exited — the last line of its captured output —
 // which ShapeValid carries (ADR-0030 §4b); "" for no instance, and a generic message when the output is unreadable.
+// An instance still running was failed for never becoming ready (readyReplicas' boot limit), so it has no load error.
 func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) string {
 	if id == "" {
 		return ""
+	}
+	if in, err := r.runtime.Status(ctx, id); err == nil && in.State == runtime.StateRunning {
+		return "the handler did not become ready within " + bootTimeout.String()
 	}
 	last := "the runtime shim could not load the handler"
 	rc, err := r.runtime.Logs(ctx, id)
@@ -1305,6 +1331,10 @@ const (
 	livenessPath  = "/health/liveness"
 )
 
+// probeBodyMax bounds the body drained before close: a body read to EOF returns the connection to
+// the keep-alive pool, so repeated probes do not churn ephemeral ports (ADR-0041).
+const probeBodyMax = 4 << 10
+
 // probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
 func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
 	host := ip
@@ -1320,7 +1350,10 @@ func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path s
 	if err != nil {
 		return false
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyMax))
+		_ = resp.Body.Close()
+	}()
 	return resp.StatusCode == http.StatusOK
 }
 

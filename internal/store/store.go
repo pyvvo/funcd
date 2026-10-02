@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -36,7 +37,7 @@ const (
 type Store interface {
 	Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error)
 	List(ctx context.Context, gvk v1.GroupVersionKind, opts ListOptions) (List, error)
-	Create(ctx context.Context, obj v1.Object) (v1.Object, error) // stamps uid, generation=1, resourceVersion
+	Create(ctx context.Context, obj v1.Object) (v1.Object, error) // stamps uid, generation=1, resourceVersion, creationTimestamp
 	Update(ctx context.Context, obj v1.Object) (v1.Object, error) // RV precondition; bumps generation iff spec changed
 	Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 	Watch(ctx context.Context, gvk v1.GroupVersionKind, opts WatchOptions) (Watch, error)
@@ -327,6 +328,7 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 		meta.UID = uid
 		meta.Generation = 1
 		meta.ResourceVersion = strconv.FormatUint(rev, 10)
+		meta.CreationTime = time.Now().UTC()
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
 			return eerr

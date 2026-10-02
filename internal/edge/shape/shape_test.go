@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -105,6 +106,42 @@ func TestScenarioCompressionSkipsStreaming(t *testing.T) {
 	rec := serve(shape.Chain(shape.Config{Compression: true}), next, req)
 	require.Empty(t, rec.Header().Get("Content-Encoding"), "an SSE stream is never gzipped")
 	require.Equal(t, "data: hello\n\n", rec.Body.String(), "the stream bytes pass through untouched")
+}
+
+// A 206 carries a Content-Range over the identity bytes and a 204/304 has no body, so none is gzipped.
+func TestIssue162_CompressionSkipsPartialAndBodylessResponses(t *testing.T) {
+	content := strings.Repeat("0123456789", 100)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/nocontent" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("ETag", `"v1"`)
+		http.ServeContent(w, r, "a.txt", time.Time{}, strings.NewReader(content))
+	})
+	get := func(path string, hdr map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "http://x"+path, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		return serve(shape.Chain(shape.Config{Compression: true}), next, req)
+	}
+
+	rec := get("/range", map[string]string{"Range": "bytes=100-199"})
+	require.Equal(t, http.StatusPartialContent, rec.Code)
+	require.Empty(t, rec.Header().Get("Content-Encoding"), "a 206 is never gzipped")
+	require.Equal(t, "bytes 100-199/1000", rec.Header().Get("Content-Range"))
+	require.Equal(t, "100", rec.Header().Get("Content-Length"))
+	require.Equal(t, content[100:200], rec.Body.String(), "the body is the requested identity bytes")
+
+	rec = get("/nocontent", nil)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Empty(t, rec.Header().Get("Content-Encoding"), "a 204 is never gzipped")
+
+	rec = get("/notmod", map[string]string{"If-None-Match": `"v1"`})
+	require.Equal(t, http.StatusNotModified, rec.Code)
+	require.Empty(t, rec.Header().Get("Content-Encoding"), "a 304 is never gzipped")
 }
 
 // The shaping wrappers forward http.Flusher + http.Hijacker (SSE/WS must not break).

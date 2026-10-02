@@ -416,3 +416,47 @@ func TestRouteAndNamespaceAuthValidate(t *testing.T) {
 	require.NoError(t, ns(AuthOpen).Validate())
 	require.Equal(t, fault.Invalid, fault.KindOf(ns(AuthMode("nope")).Validate()))
 }
+
+// TestIssue167_DataKeysMustBeEnvVarNames: ConfigMap and Secret data keys become worker env vars
+// (ADR-0057, ADR-0093), so admission rejects any key that is not an env-var name (ADR-0048) — a
+// key like "CHAOS_A=B" would otherwise reach the worker as the variable CHAOS_A.
+func TestIssue167_DataKeysMustBeEnvVarNames(t *testing.T) {
+	cm := func(key string) *ConfigMap {
+		c := &ConfigMap{Spec: ConfigMapSpec{Data: map[string]string{key: "v"}}}
+		c.TypeMeta = TypeMeta{APIVersion: KindConfigMap.GVK().APIVersion(), Kind: KindConfigMap}
+		c.Name, c.Namespace, c.ResourceGroup = "c", "default", "rg1"
+		return c
+	}
+	sec := func(key string) *Secret {
+		s := &Secret{Spec: SecretSpec{Type: SecretTypeOpaque, Data: map[string][]byte{key: []byte("v")}}}
+		s.TypeMeta = TypeMeta{APIVersion: KindSecret.GVK().APIVersion(), Kind: KindSecret}
+		s.Name, s.Namespace, s.ResourceGroup = "s", "default", "rg1"
+		return s
+	}
+	for _, tc := range []struct {
+		key   string
+		valid bool
+	}{
+		{"CHAOS_OK", true},
+		{"_private", true},
+		{"accessKeyId", true},
+		{"A1", true},
+		{"", false},
+		{"1BAD", false},
+		{"BAD-DASH", false},
+		{"HAS SPACE", false},
+		{"CHAOS_A=B", false},
+		{"dotted.key", false},
+		{"NEW\nLINE", false},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			for kind, err := range map[Kind]error{KindConfigMap: cm(tc.key).Validate(), KindSecret: sec(tc.key).Validate()} {
+				if tc.valid {
+					require.NoError(t, err, "%s key %q", kind, tc.key)
+					continue
+				}
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "%s key %q must be rejected as fault.Invalid", kind, tc.key)
+			}
+		})
+	}
+}
