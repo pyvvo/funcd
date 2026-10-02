@@ -1,6 +1,6 @@
 // Package langmod locates the language repos funcd pins as Go modules (ADR-0141): a pinned module's
-// root, for the committed example builds, and the embedded Node shims written to a temp dir, for the
-// tests that exec them.
+// root, for the committed example builds, and the embedded Node and Python shims written to a temp dir,
+// for the tests that exec them.
 package langmod
 
 import (
@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 )
 
@@ -44,6 +45,15 @@ func NodeShim(t testing.TB) string {
 func PoolShim(t testing.TB) string {
 	t.Helper()
 	return write(t, "pool.mjs", shimnode.Pool)
+}
+
+// PythonShim extracts the embedded Python shim package into t.TempDir() and returns its entry scripts:
+// the solo shim and the subinterpreter pool host (Python 3.14 or later).
+func PythonShim(t testing.TB) (shimEntry, poolEntry string) {
+	t.Helper()
+	shimEntry, poolEntry, err := shimpython.Extract(t.TempDir())
+	require.NoError(t, err, "extract the Python shim")
+	return shimEntry, poolEntry
 }
 
 func write(t testing.TB, name string, data []byte) string {
