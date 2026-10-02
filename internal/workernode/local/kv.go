@@ -3,7 +3,6 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -27,7 +26,8 @@ type KV interface {
 
 // registerKV adds the KV verbs to mux — GET/PUT/DELETE /kv/{binding}/{key...} and GET /kv/{binding} (list,
 // ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0073). Errors are RFC
-// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500).
+// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500;
+// a body over maxKVBytes → 413).
 func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
@@ -50,9 +50,9 @@ func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 
 	mux.HandleFunc("PUT /kv/{binding}/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.kv.put"
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxKVBytes))
+		body, err := readBody(w, r, op, maxKVBytes)
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read value: %v", err))
+			fault.WriteProblem(w, err)
 			return
 		}
 		if err := kv.Put(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key"), body); err != nil {
