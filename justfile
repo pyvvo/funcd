@@ -4,6 +4,8 @@
 
 # ---- helpers ----
 _has-packages := `go list ./... 2>/dev/null`
+# the packages with files built only under `-tags dev` (ADR-0125); lint and test them again with the tag
+_dev-packages := "./cmd/funcdctl ./internal/catalog/devengine ./internal/catalog/embedengine"
 
 # ---- recipes ----
 
@@ -32,12 +34,14 @@ fmt:
 [group('go')]
 lint:
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
+    go tool golangci-lint run --build-tags dev {{_dev-packages}}
 
 # run the fast test lane; no-op when no Go packages exist. The heavy pkg/funcd e2e
 # scenario suite is build-tagged (`//go:build e2e`) and excluded here — see `test-e2e`.
 [group('go')]
 test:
     @if [ -n "{{_has-packages}}" ]; then go test ./...; fi
+    go test -tags dev {{_dev-packages}}
 
 # run the heavy pkg/funcd e2e scenario suite (build-tagged `e2e`; excluded from the fast
 # `test`/`ci` lane). CI runs this in a path-gated job (+ always on main); locally,
@@ -366,7 +370,9 @@ ci: tidy generate check-hygiene
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
+    go tool golangci-lint run --build-tags dev {{_dev-packages}}
     @if [ -n "{{_has-packages}}" ]; then go test ./...; fi
+    go test -tags dev {{_dev-packages}}
     go build ./...
     go mod verify
     @if [ -n "$(git diff --name-only -- go.mod go.sum)" ]; then echo "go.mod or go.sum is not tidy — run just tidy and commit the result" && exit 1; fi
