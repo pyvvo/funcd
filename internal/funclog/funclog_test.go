@@ -2,6 +2,8 @@ package funclog_test
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/plog"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog"
@@ -226,4 +229,80 @@ func TestNewBlobSinkValidation(t *testing.T) {
 	require.Error(t, err) // nil bucket
 	_, err = funclog.NewBlobSink(funclog.Deps{Bucket: memBucket(t)})
 	require.Error(t, err) // nil clock
+}
+
+// warnCounter is a log destination that counts warnings and cancels the drain at limit, so a drain
+// that spins on one bad line ends instead of hanging the test.
+type warnCounter struct {
+	n, limit int
+	cancel   context.CancelFunc
+}
+
+func (w *warnCounter) Write(p []byte) (int, error) {
+	w.n++
+	if w.n >= w.limit {
+		w.cancel()
+	}
+	return len(p), nil
+}
+
+func logBodies(logs plog.Logs) []string {
+	var out []string
+	recs := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	for i := range recs.Len() {
+		out = append(out, recs.At(i).Body().Str())
+	}
+	return out
+}
+
+// A record longer than the 1 MiB line cap is dropped with one warning; the drain goes on, so the
+// records and the span written after it are still captured (issue #32).
+func TestIssue32_LongLineIsSkipped(t *testing.T) {
+	logLine := func(body string) string {
+		return `{"sev":"INFO","body":"` + body + `","funcd.source":"console"}`
+	}
+	long := logLine(strings.Repeat("x", 1100*1024))
+	spanLine := `{"funcd.signal":"traces","trace_id":"` + testTraceID + `","span_id":"` + testSpanID +
+		`","name":"greeter","kind":"SERVER","start":1,"end":2,"status":"OK","attrs":{},"inv":"i"}`
+
+	t.Run("route", func(t *testing.T) {
+		b := memBucket(t)
+		channel := strings.Join([]string{logLine("before"), long, logLine("after"), spanLine}, "\n") + "\n"
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		warns := &warnCounter{limit: 100, cancel: cancel}
+		sinks := funclog.Sinks{Logs: newSink(t, b, 1<<20), Traces: newTraceSink(t, b, 1<<20)}
+
+		require.NoError(t, funclog.Route(ctx, strings.NewReader(channel), sinks, defaultRes(), slog.New(slog.NewTextHandler(warns, nil))))
+		require.Equal(t, []string{"before", "after"}, logBodies(readBackOne(t, b, "logs/")))
+		require.Equal(t, 1, readBackTraces(t, b, "traces/").SpanCount(), "the span after the long line is captured")
+		require.Equal(t, 1, warns.n, "one warning for the dropped line")
+	})
+
+	t.Run("pump", func(t *testing.T) {
+		b := memBucket(t)
+		channel := strings.Join([]string{logLine("before"), long, logLine("after")}, "\n") + "\n"
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		warns := &warnCounter{limit: 100, cancel: cancel}
+
+		err := funclog.Pump(ctx, funclog.NewNDJSONReader(strings.NewReader(channel)), newSink(t, b, 1<<20), defaultRes(), slog.New(slog.NewTextHandler(warns, nil)))
+		require.Equal(t, 1, warns.n, "one warning for the dropped line, not a spin")
+		require.NoError(t, err)
+		require.Equal(t, []string{"before", "after"}, logBodies(readBackOne(t, b, "logs/")))
+	})
+
+	t.Run("raw", func(t *testing.T) {
+		r := funclog.NewRawReader(strings.NewReader("before\n"+strings.Repeat("x", 1100*1024)+"\nafter\n"), funclog.SourceStdout)
+		e, err := r.Read(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "before", e.Body)
+		_, err = r.Read(context.Background())
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "the long line is a skippable record")
+		e, err = r.Read(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "after", e.Body)
+		_, err = r.Read(context.Background())
+		require.ErrorIs(t, err, io.EOF)
+	})
 }
