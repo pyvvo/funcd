@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -384,5 +385,94 @@ func TestScenarioDisabledConfigNoOp(t *testing.T) {
 	}
 	if raw := listSuffix(t, b, ".otlp.jsonl"); len(raw) != 1 {
 		t.Fatalf("open-window raw must be untouched, got %v", raw)
+	}
+}
+
+// Issue #83: a raw segment that lands in a window a pass already compacted (a Put in flight across the window
+// boundary, or a wall clock stepped back) is merged into that window's Parquet instead of replacing it.
+func TestIssue83_LateSegmentKeepsCompactedRows(t *testing.T) {
+	b := memBucket(t)
+	sealNano := baseTime().UnixNano()
+	early := make([]logRec, 100)
+	for i := range early {
+		early[i] = logRec{ts: sealNano + int64(i), sev: "INFO", sevNum: 9, body: fmt.Sprintf("early-%d", i), source: "console"}
+	}
+	seedRaw(t, b, "default", "fn", "0", sealNano, early)
+
+	c := newCompactor(t, b, baseTime().Add(testWindow+time.Minute), 0)
+	if _, err := c.CompactOnce(context.Background()); err != nil {
+		t.Fatalf("pass1: %v", err)
+	}
+	lateNano := baseTime().Add(30*time.Minute - 10*time.Millisecond).UnixNano()
+	seedRaw(t, b, "default", "fn", "0", lateNano, []logRec{{ts: lateNano, sev: "INFO", sevNum: 9, body: "late", source: "console"}})
+	if _, err := c.CompactOnce(context.Background()); err != nil {
+		t.Fatalf("pass2: %v", err)
+	}
+
+	compacted := listSuffix(t, b, ".parquet")
+	if len(compacted) != 1 {
+		t.Fatalf("compacted = %v, want exactly 1", compacted)
+	}
+	if rows := readCompacted(t, b, compacted[0]); len(rows) != len(early)+1 {
+		t.Fatalf("rows after the late segment = %d, want %d (earlier compacted rows + the late one)", len(rows), len(early)+1)
+	}
+	if raw := listSuffix(t, b, ".otlp.jsonl"); len(raw) != 0 {
+		t.Fatalf("raw should be deleted, got %v", raw)
+	}
+}
+
+// Issue #84: an undecodable raw object (a torn write) must not block the other windows or retention. Its
+// window stays raw, and each pass names the key in a WARN.
+func TestIssue84_UndecodableRawObjectDoesNotBlockCompaction(t *testing.T) {
+	ctx := context.Background()
+	b := memBucket(t)
+	sealNano := baseTime().UnixNano()
+	for _, fn := range []string{"aaa", "zzz"} {
+		seedRaw(t, b, "default", fn, "0", sealNano, []logRec{{ts: sealNano, sev: "INFO", sevNum: 9, body: fn, source: "console"}})
+	}
+	date := time.Unix(0, sealNano).UTC().Format("2006-01-02")
+	badKey := fmt.Sprintf("logs/default/mmm/%s/%d-0.otlp.jsonl", date, sealNano)
+	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`)); err != nil {
+		t.Fatalf("put truncated raw: %v", err)
+	}
+	oldStart := baseTime().Add(-48 * time.Hour).UnixNano()
+	oldCompacted := fmt.Sprintf("logs/default/aaa/%s/%d.parquet", time.Unix(0, oldStart).UTC().Format("2006-01-02"), oldStart)
+	if err := b.Put(ctx, oldCompacted, []byte("compacted")); err != nil {
+		t.Fatalf("seed compacted: %v", err)
+	}
+
+	var logs bytes.Buffer
+	c, err := compact.New(compact.Deps{
+		Bucket: b, Clock: clock.Fake(baseTime().Add(testWindow + time.Minute)), Window: testWindow,
+		Retention: 24 * time.Hour, Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("compact.New: %v", err)
+	}
+	st, err := c.CompactOnce(ctx)
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if st.Windows != 2 || st.RawDeleted != 2 || st.CompactedPruned != 1 {
+		t.Fatalf("pass 1 stats = %+v, want Windows=2 RawDeleted=2 CompactedPruned=1", st)
+	}
+	if st, err = c.CompactOnce(ctx); err != nil || st.Windows != 0 {
+		t.Fatalf("pass 2 = %+v, %v; want no work and no error", st, err)
+	}
+
+	windowStart := (sealNano / int64(testWindow)) * int64(testWindow)
+	wdate := time.Unix(0, windowStart).UTC().Format("2006-01-02")
+	want := []string{
+		fmt.Sprintf("logs/default/aaa/%s/%d.parquet", wdate, windowStart),
+		fmt.Sprintf("logs/default/zzz/%s/%d.parquet", wdate, windowStart),
+	}
+	if got := listSuffix(t, b, ".parquet"); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("compacted = %v, want %v", got, want)
+	}
+	if raw := listSuffix(t, b, ".otlp.jsonl"); len(raw) != 1 || raw[0] != badKey {
+		t.Fatalf("raw = %v, want only the undecodable %q left in place", raw, badKey)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(badKey)) {
+		t.Fatalf("the skipped key must be named in the log, got:\n%s", logs.String())
 	}
 }

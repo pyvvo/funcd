@@ -103,30 +103,28 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list %q", prefix)
 	}
 
-	var rows []compact.Row
-	for _, o := range objs {
-		switch {
-		case strings.HasSuffix(o.Key, compactSuffix):
-			data, gerr := r.bucket.Get(ctx, o.Key)
-			if gerr != nil {
-				return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get %q", o.Key)
-			}
-			decoded, perr := parquet.Read[compact.Row](bytes.NewReader(data), int64(len(data)))
-			if perr != nil {
-				return nil, fault.Wrapf(perr, fault.Internal, op, "read parquet %q", o.Key)
-			}
-			rows = append(rows, decoded...)
-		case strings.HasSuffix(o.Key, rawSuffix):
-			data, gerr := r.bucket.Get(ctx, o.Key)
-			if gerr != nil {
-				return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get %q", o.Key)
-			}
-			decoded, derr := compact.DecodeJSONL(data)
-			if derr != nil {
-				return nil, fault.Wrapf(derr, fault.KindOf(derr), op, "decode %q", o.Key)
-			}
-			rows = append(rows, decoded...)
+	rows, vanished, err := r.readObjects(ctx, objs, func(string) bool { return true })
+	if err != nil {
+		return nil, err
+	}
+	if vanished {
+		// A compaction pass deleted listed raw after the List; it deletes raw only once the window's Parquet
+		// is written (ADR-0084), so a re-list holds that Parquet. Read the Parquet the first listing missed.
+		listed := make(map[string]bool, len(objs))
+		for _, o := range objs {
+			listed[o.Key] = true
 		}
+		again, lerr := r.bucket.List(ctx, prefix)
+		if lerr != nil {
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "list %q", prefix)
+		}
+		more, _, merr := r.readObjects(ctx, again, func(key string) bool {
+			return !listed[key] && strings.HasSuffix(key, compactSuffix)
+		})
+		if merr != nil {
+			return nil, merr
+		}
+		rows = append(rows, more...)
 	}
 
 	lines := make([]Line, 0, len(rows))
@@ -151,6 +149,42 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 		lines = lines[len(lines)-limit:]
 	}
 	return lines, nil
+}
+
+// readObjects decodes the listed Parquet and raw objects whose key passes want. An object deleted between
+// the List and its Get (raw compacted, Parquet pruned) is skipped and reported as vanished.
+func (r *BlobReader) readObjects(ctx context.Context, objs []blob.Attributes, want func(key string) bool) ([]compact.Row, bool, error) {
+	const op = "logread.BlobReader.Read"
+	var rows []compact.Row
+	vanished := false
+	for _, o := range objs {
+		parquetObj := strings.HasSuffix(o.Key, compactSuffix)
+		if (!parquetObj && !strings.HasSuffix(o.Key, rawSuffix)) || !want(o.Key) {
+			continue
+		}
+		data, gerr := r.bucket.Get(ctx, o.Key)
+		if fault.KindOf(gerr) == fault.NotFound {
+			vanished = true
+			continue
+		}
+		if gerr != nil {
+			return nil, false, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get %q", o.Key)
+		}
+		if parquetObj {
+			decoded, perr := parquet.Read[compact.Row](bytes.NewReader(data), int64(len(data)))
+			if perr != nil {
+				return nil, false, fault.Wrapf(perr, fault.Internal, op, "read parquet %q", o.Key)
+			}
+			rows = append(rows, decoded...)
+			continue
+		}
+		decoded, derr := compact.DecodeJSONL(data)
+		if derr != nil {
+			continue // one undecodable object (a torn write) must not fail the read; the compactor logs its key
+		}
+		rows = append(rows, decoded...)
+	}
+	return rows, vanished, nil
 }
 
 // lineFromRow maps a compact.Row (the Parquet/raw schema) to the caller-facing Line DTO.

@@ -1,16 +1,21 @@
 package funclog_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -304,5 +309,108 @@ func TestIssue32_LongLineIsSkipped(t *testing.T) {
 		require.Equal(t, "after", e.Body)
 		_, err = r.Read(context.Background())
 		require.ErrorIs(t, err, io.EOF)
+	})
+}
+
+// tickClock advances one nanosecond per call, so every Flush gets its own segment key, and yields
+// first, so a writer holding a segment lock is descheduled the way a contended Pump is.
+type tickClock struct{ n atomic.Int64 }
+
+func (c *tickClock) Now() time.Time {
+	runtime.Gosched()
+	return time.Unix(1_700_000_000, c.n.Add(1))
+}
+
+// appendWhileFlushing races writers*perWriter appends on one Resource against a Flush loop, then
+// closes the sink; it returns how many records were appended.
+func appendWhileFlushing(t *testing.T, appendOne, flush, closeSink func() error) int {
+	t.Helper()
+	const writers, perWriter = 4, 5000
+	stop := make(chan struct{})
+	var flusher sync.WaitGroup
+	flusher.Add(1)
+	go func() {
+		defer flusher.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				assert.NoError(t, flush())
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perWriter {
+				assert.NoError(t, appendOne())
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	flusher.Wait()
+	require.NoError(t, closeSink())
+	return writers * perWriter
+}
+
+// persistedRecords sums the records of every segment object under prefix.
+func persistedRecords(t *testing.T, b blob.Bucket, prefix string, count func([]byte) (int, error)) int {
+	t.Helper()
+	objs, err := b.List(context.Background(), prefix)
+	require.NoError(t, err)
+	total := 0
+	for _, o := range objs {
+		data, err := b.Get(context.Background(), o.Key)
+		require.NoError(t, err)
+		n, err := count(bytes.TrimSpace(data))
+		require.NoError(t, err)
+		total += n
+	}
+	return total
+}
+
+// An Append that looked up its segment just before a concurrent Flush detached it must still land
+// in a persisted segment, for both the logs and the traces sink.
+func TestIssue152_AppendRacingFlushKeepsEveryRecord(t *testing.T) {
+	ctx := context.Background()
+	res := defaultRes()
+	deps := func(b blob.Bucket) funclog.Deps {
+		return funclog.Deps{Bucket: b, SegmentMaxBytes: 1 << 30, SegmentMaxAge: time.Hour, Clock: &tickClock{}}
+	}
+
+	t.Run("logs", func(t *testing.T) {
+		b := memBucket(t)
+		s, err := funclog.NewBlobSink(deps(b))
+		require.NoError(t, err)
+		e := funclog.Entry{Severity: funclog.SevInfo, Body: "x", Source: funclog.SourceConsole}
+		appended := appendWhileFlushing(t,
+			func() error { return s.Append(ctx, res, e) },
+			func() error { _, err := s.Flush(ctx, res); return err },
+			s.Close)
+		require.Equal(t, appended, persistedRecords(t, b, "logs/", func(data []byte) (int, error) {
+			var u plog.JSONUnmarshaler
+			logs, err := u.UnmarshalLogs(data)
+			return logs.LogRecordCount(), err
+		}))
+	})
+
+	t.Run("traces", func(t *testing.T) {
+		b := memBucket(t)
+		s, err := funclog.NewBlobTraceSink(deps(b))
+		require.NoError(t, err)
+		sp := serverSpan()
+		appended := appendWhileFlushing(t,
+			func() error { return s.AppendSpan(ctx, res, sp) },
+			func() error { _, err := s.Flush(ctx, res); return err },
+			s.Close)
+		require.Equal(t, appended, persistedRecords(t, b, "traces/", func(data []byte) (int, error) {
+			var u ptrace.JSONUnmarshaler
+			tr, err := u.UnmarshalTraces(data)
+			return tr.SpanCount(), err
+		}))
 	})
 }

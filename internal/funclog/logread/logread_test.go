@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 func baseTime() time.Time { return time.Date(2026, 6, 29, 10, 30, 0, 0, time.UTC) }
@@ -184,10 +186,81 @@ func TestScenarioEmptyWhenNone(t *testing.T) {
 	}
 }
 
+// getHookBucket runs hook once, before the first Get: after the reader's List, before it reads an object.
+type getHookBucket struct {
+	blob.Bucket
+	once sync.Once
+	hook func()
+}
+
+func (b *getHookBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	b.once.Do(b.hook)
+	return b.Bucket.Get(ctx, key)
+}
+
+// A compaction pass that folds the listed raw tail into Parquet between the reader's List and its Gets
+// must not fail the read or lose the window: its lines are in the new Parquet.
+func TestIssue151_ReadDuringCompactionReturnsCompactedLines(t *testing.T) {
+	b := memBucket(t)
+	base := baseTime().UnixNano()
+	for i := int64(0); i < 3; i++ {
+		seedRaw(t, b, "default", "fn", "0", base+i, []compact.Row{row(base+i, "INFO", 9, fmt.Sprintf("m%d", i))})
+	}
+	c, err := compact.New(compact.Deps{Bucket: b, Clock: clock.Fake(baseTime().Add(2 * compact.DefaultWindow))})
+	if err != nil {
+		t.Fatalf("compact.New: %v", err)
+	}
+	hooked := &getHookBucket{Bucket: b, hook: func() {
+		st, cerr := c.CompactOnce(context.Background())
+		if cerr != nil || st.RawDeleted != 3 {
+			t.Errorf("CompactOnce = %+v, %v; want 3 raw deleted", st, cerr)
+		}
+	}}
+
+	lines, err := logread.NewBlobReader(hooked).Read(context.Background(), logread.Query{Namespace: "default", Function: "fn"})
+	if err != nil {
+		t.Fatalf("Read during compaction: %v", err)
+	}
+	if got := bodies(lines); len(got) != 3 || got[0] != "m0" || got[2] != "m2" {
+		t.Fatalf("got %v, want [m0 m1 m2] from the new Parquet", got)
+	}
+}
+
 func bodies(lines []logread.Line) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
 		out[i] = l.Body
 	}
 	return out
+}
+
+// Issue #84: one undecodable raw object (a torn write) must fail neither the function's read nor a
+// namespace-wide run read; every readable object is still returned.
+func TestIssue84_UndecodableRawObjectDoesNotFailReads(t *testing.T) {
+	ctx := context.Background()
+	b := memBucket(t)
+	base := baseTime().UnixNano()
+	seedRaw(t, b, "default", "mmm", "0", base, []compact.Row{row(base, "INFO", 9, "good")})
+	date := time.Unix(0, base).UTC().Format("2006-01-02")
+	badKey := fmt.Sprintf("logs/default/mmm/%s/%d-1.otlp.jsonl", date, base+1)
+	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`)); err != nil {
+		t.Fatalf("put truncated raw: %v", err)
+	}
+	seedCompacted(t, b, "default", "step", base, []compact.Row{rowTrace(base, "run-A line", "step", traceA)})
+
+	r := logread.NewBlobReader(b)
+	lines, err := r.Read(ctx, logread.Query{Namespace: "default", Function: "mmm"})
+	if err != nil {
+		t.Fatalf("function read: %v", err)
+	}
+	if got := bodies(lines); len(got) != 1 || got[0] != "good" {
+		t.Fatalf("function read = %v, want [good]", got)
+	}
+	lines, err = r.Read(ctx, logread.Query{Namespace: "default", TraceID: traceA})
+	if err != nil {
+		t.Fatalf("namespace-wide run read: %v", err)
+	}
+	if got := bodies(lines); len(got) != 1 || got[0] != "run-A line" {
+		t.Fatalf("namespace-wide run read = %v, want [run-A line]", got)
+	}
 }

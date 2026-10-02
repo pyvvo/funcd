@@ -163,6 +163,16 @@ type Config struct {
 		Endpoint string `json:"endpoint,omitempty" env:"FUNCD_TELEMETRY_ENDPOINT"`
 		Insecure bool   `json:"insecure,omitempty" env:"FUNCD_TELEMETRY_INSECURE"`
 	} `json:"telemetry,omitempty"`
+	// Funclog tunes structured function-log capture (ADR-0081) and its traces signal (ADR-0101); both on by
+	// default. A zero SegmentMaxBytes / empty SegmentMaxAge (a Go duration, "10s") keeps the sink default
+	// (8 MiB / 10s). The sink writes to the blob substrate, so funcd-system is the only Bucket accepted.
+	Funclog struct {
+		Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_FUNCLOG_ENABLED"`
+		SegmentMaxBytes int    `json:"segmentMaxBytes,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_BYTES"`
+		SegmentMaxAge   string `json:"segmentMaxAge,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_AGE"`
+		Bucket          string `json:"bucket,omitempty" env:"FUNCD_FUNCLOG_BUCKET" validate:"omitempty,eq=funcd-system"`
+		Traces          bool   `json:"traces,omitempty" env:"FUNCD_FUNCLOG_TRACES"`
+	} `json:"funclog,omitempty"`
 	// S3Gateway is the opt-in S3-protocol frontend over the blob substrate (ADR-0080/0085).
 	// Disabled by default ⇒ no listener, no IAM, no keypair injection.
 	S3Gateway struct {
@@ -248,6 +258,9 @@ func defaults() Config {
 	c.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
 	c.Log.Format = "json"
 	c.Log.Level = "info"
+	c.Funclog.Enabled = true
+	c.Funclog.Bucket = "funcd-system"
+	c.Funclog.Traces = true
 	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"

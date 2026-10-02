@@ -70,3 +70,11 @@ log:
 # telemetry:
 #   endpoint: localhost:4317      # OTLP gRPC collector. default: "" ⇒ telemetry disabled
 #   insecure: true                # plaintext OTLP (no TLS), for a local collector. default: false
+
+# --- funclog: structured function-log capture (ADR-0081) + its traces signal (ADR-0101) ---------
+# funclog:
+#   enabled: true                 # capture function logs (raw stdout/stderr still flows if false). default: true
+#   segmentMaxBytes: 8388608      # seal + Put a log segment at this size. default: 8388608 (8 MiB)
+#   segmentMaxAge: 10s            # ...or after this age, whichever comes first. default: 10s
+#   bucket: funcd-system          # the observability bucket; funcd-system is the only value. default: funcd-system
+#   traces: true                  # capture per-invocation spans (moot when enabled: false). default: true

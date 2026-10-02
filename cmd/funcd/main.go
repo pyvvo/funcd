@@ -353,6 +353,22 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
+	// Function-log capture (ADR-0081) and its traces signal (ADR-0101); a zero segment size/age keeps the sink default.
+	var segmentMaxAge time.Duration
+	if cfg.Funclog.SegmentMaxAge != "" {
+		segmentMaxAge, err = time.ParseDuration(cfg.Funclog.SegmentMaxAge)
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("parse funclog.segmentMaxAge %q: %w", cfg.Funclog.SegmentMaxAge, err)
+		}
+	}
+	opts = append(opts, funcd.WithFunclog(segmentMaxAge, cfg.Funclog.SegmentMaxBytes))
+	if !cfg.Funclog.Enabled {
+		opts = append(opts, funcd.WithoutFunclog())
+	}
+	if !cfg.Funclog.Traces {
+		opts = append(opts, funcd.WithoutFunclogTraces())
+	}
+
 	execOpts, closeExec, err := executionOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
