@@ -299,6 +299,8 @@ globally-installed binary when a `nix develop -c …` invocation will use the pi
 
 For many short commands (agents, scripts), use `scripts/agent/d <cmd>` instead: the same pinned environment from a
 cached `nix print-dev-env` (regenerated when `flake.nix`/`flake.lock` change), ~0.02 s per call instead of ~2 s.
+It caches the flake of the repo it sits in. funcd-typescript and funcd-python have their own flakes and ship the
+same `scripts/agent/d`, so work in a sibling repo goes through that repo's wrapper, not this one.
 
 ## Running subagents and workflows efficiently
 
