@@ -312,7 +312,9 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          &http.Client{Timeout: 2 * time.Second},
+		// Its own transport: a CloseIdleConnections on the process-wide http.DefaultTransport fails a probe whose
+		// connection it closes (#287).
+		httpClient:          &http.Client{Timeout: 2 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()},
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,

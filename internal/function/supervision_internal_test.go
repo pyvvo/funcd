@@ -42,10 +42,34 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 // ephemeral ports into TIME_WAIT (ADR-0041).
 func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 	t.Parallel()
-	var conns atomic.Int32
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	}))
+	addr, conns := countingServer(t, func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
+
+	r := newShimReconciler(t, fakeResolver{})
+	for range 50 {
+		require.True(t, r.probeReady(context.Background(), addr.IP.String(), addr.Port, readinessPath))
+	}
+	require.EqualValues(t, 1, conns.Load(), "50 probes must share one keep-alive connection")
+}
+
+// The readiness probe keeps its connections out of http.DefaultTransport: every httptest.Server.Close in the process
+// closes that transport's idle connections, and one landing while a probe's connection is parked fails the probe.
+func TestIssue287_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
+	t.Parallel()
+	addr, conns := countingServer(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusOK) })
+
+	r := newShimReconciler(t, fakeResolver{})
+	ctx := context.Background()
+	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	require.True(t, r.probeReady(ctx, addr.IP.String(), addr.Port, readinessPath))
+	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the probe's")
+}
+
+// countingServer serves respond on loopback and counts the TCP connections it accepts.
+func countingServer(t *testing.T, respond func(http.ResponseWriter)) (*net.TCPAddr, *atomic.Int32) {
+	t.Helper()
+	conns := new(atomic.Int32)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { respond(w) }))
 	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
 		if s == http.StateNew {
 			conns.Add(1)
@@ -55,14 +79,5 @@ func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 	t.Cleanup(srv.Close)
 	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
 	require.True(t, ok)
-
-	r := newShimReconciler(t, fakeResolver{})
-	// A transport of its own: a parallel test's httptest.Server.Close drops the idle connections of the default one.
-	tr := &http.Transport{}
-	t.Cleanup(tr.CloseIdleConnections)
-	r.httpClient.Transport = tr
-	for range 50 {
-		require.True(t, r.probeReady(context.Background(), addr.IP.String(), addr.Port, readinessPath))
-	}
-	require.EqualValues(t, 1, conns.Load(), "50 probes must share one keep-alive connection")
+	return addr, conns
 }
