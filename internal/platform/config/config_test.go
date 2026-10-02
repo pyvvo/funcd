@@ -210,6 +210,18 @@ func TestIssue164_NegativeLimitsRejected(t *testing.T) {
 	}
 }
 
+// The zero-config workflow.payloadLimit is ADR-0094's 256 KiB; an explicit value still overrides it.
+func TestIssue343_WorkflowPayloadLimitDefault256KiB(t *testing.T) {
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, int64(256<<10), c.Workflow.PayloadLimit, "ADR-0094 default payload cap")
+
+	t.Setenv("FUNCD_WORKFLOW_PAYLOAD_LIMIT", "1048576")
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, int64(1<<20), c.Workflow.PayloadLimit, "an explicit cap overrides the default")
+}
+
 // scenario: unknown-key-rejected — a misspelled key ⇒ strict-decode fault.Invalid.
 func TestScenarioUnknownKeyRejected(t *testing.T) {
 	_, err := config.Load(writeCfg(t, "server:\n  listen: \"0.0.0.0:9000\"\n"), config.Flags{}) // typo: listen
