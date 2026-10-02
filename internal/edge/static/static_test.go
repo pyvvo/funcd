@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -170,4 +171,41 @@ func TestUnknownBucketNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Serve(w, r, "analytics", &v1.StaticBackend{Bucket: "nope", Index: "index.html"}, "/")
 	require.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// pinnedModTime reports a test-chosen ModTime from List, so two writes land deterministically in the
+// same wall-clock second.
+type pinnedModTime struct {
+	blob.Bucket
+	modTime time.Time
+}
+
+func (p *pinnedModTime) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
+	items, err := p.Bucket.List(ctx, prefix)
+	for i := range items {
+		items[i].ModTime = p.modTime
+	}
+	return items, err
+}
+
+// A same-length rewrite within the same second must not revalidate as unchanged (a stale 304).
+func TestIssue161_SameSecondRedeployIsNotStale304(t *testing.T) {
+	mem, err := gocloud.Open(context.Background(), "mem://")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mem.Close() })
+	b := &pinnedModTime{Bucket: mem, modTime: time.Unix(1790905216, 100_000_000)}
+	h, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, bool) { return b, true }})
+	require.NoError(t, err)
+
+	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v1</title>")))
+	first := serve(h, http.MethodGet, "/", backend("bi/", false), nil)
+	require.Equal(t, http.StatusOK, first.Code)
+	etag := first.Header().Get("ETag")
+
+	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v2</title>")))
+	b.modTime = b.modTime.Add(300 * time.Millisecond)
+	revalidate := serve(h, http.MethodGet, "/", backend("bi/", false), map[string]string{"If-None-Match": etag})
+	require.Equal(t, http.StatusOK, revalidate.Code, "changed content revalidated as unchanged (ETag %s)", etag)
+	require.Equal(t, "<title>build v2</title>", revalidate.Body.String())
+	require.NotEqual(t, etag, revalidate.Header().Get("ETag"))
 }

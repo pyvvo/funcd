@@ -188,9 +188,11 @@ func stat(r *http.Request, b blob.Bucket, key string) (blob.Attributes, bool, er
 	return blob.Attributes{}, false, nil
 }
 
-// weakETag derives the (ModTime,Size) weak validator (M1) — no per-request sha256 of the body.
+// weakETag derives the (ModTime,Size) weak validator (M1) — no per-request sha256 of the body. ModTime
+// keeps its full precision (as ADR-0119's fingerprint does): whole seconds would let a same-length
+// rewrite within one second keep its ETag and answer a stale 304 (issue #161).
 func weakETag(a blob.Attributes) string {
-	return `W/"` + strconv.FormatInt(a.Size, 10) + "-" + strconv.FormatInt(a.ModTime.Unix(), 10) + `"`
+	return `W/"` + strconv.FormatInt(a.Size, 10) + "-" + strconv.FormatInt(a.ModTime.UnixNano(), 10) + `"`
 }
 
 // setContentType sets Content-Type from the key extension (mime), leaving it unset for an unknown
