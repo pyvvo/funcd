@@ -292,6 +292,7 @@ type Platform struct {
 	dataPlaneAddr     string
 
 	invokeMgr         *local.Manager          // per-function worker-node local API broker (ADR-0064)
+	invokeTmpDir      string                  // the temp socket dir New created (no WithInvokeSocketDir); removed by Shutdown
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
 	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
@@ -431,7 +432,7 @@ func (p *Platform) buildControlPlane() error {
 		if terr != nil {
 			return fault.Wrapf(terr, fault.Internal, op, "create invoke socket dir")
 		}
-		invokeSockDir = tmp
+		invokeSockDir, p.invokeTmpDir = tmp, tmp
 	}
 	if err := local.CheckDir(invokeSockDir); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
@@ -1249,6 +1250,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.deadLetters != nil { // ADR-0118: close the dedicated DLQ Badger instance
 			errs = append(errs, p.deadLetters.Close())
+		}
+		if p.invokeTmpDir != "" { // after the runtime stopped the workers that dial its sockets (issue #330)
+			errs = append(errs, os.RemoveAll(p.invokeTmpDir))
 		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))
