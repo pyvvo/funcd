@@ -335,6 +335,9 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	if src.Workflow != workflow {
 		return nil, fault.Invalidf(engineOp, "SeedInvalid: replay workflow %q does not match the source run's workflow %q", workflow, src.Workflow)
 	}
+	if len(src.Spec.Steps) == 0 { // the retention sweep's record of a run that closed without one (#346)
+		return nil, fault.Invalidf(engineOp, "SeedInvalid: source run %q has no checkpoint to replay", seed.Run)
+	}
 	spec := src.Spec
 	rs := newRunState(spec)
 	if _, ok := rs.steps[seed.From]; !ok || seed.From == rs.onFailure {

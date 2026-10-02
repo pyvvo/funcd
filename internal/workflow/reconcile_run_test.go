@@ -754,6 +754,10 @@ func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
 	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
 		t.Fatalf("delete record: %v", err)
 	}
+	seedRun(t, s, "waiting", "missing", `{}`)
+	if run := reconcile("waiting"); run.Status.Phase != runPending {
+		t.Fatalf("setup: waiting phase=%q, want Pending", run.Status.Phase)
+	}
 	names := []v1.ObjectName{"cancelled", "rejected", "orphaned"}
 	for _, name := range names {
 		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
@@ -762,6 +766,16 @@ func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
 		}
 		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
 			t.Fatalf("setup: %s run record lookup = %v, want NotFound", name, err)
+		}
+	}
+	// A run still waiting for its Workflow must not get a record: a record marks a run as started.
+	keepsWaiting := func() {
+		t.Helper()
+		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "waiting"); err != nil {
+			t.Fatalf("the Pending run must not be swept: %v", err)
+		}
+		if _, err := rstate.Get(ctx, "default", "waiting"); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("the Pending run must stay without a run record, got %v", err)
 		}
 	}
 
@@ -773,10 +787,12 @@ func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
 			t.Fatalf("%s must be kept for retention after the sweep first sees it: %v", name, err)
 		}
 	}
+	keepsWaiting()
 	n, err := at(base.Add(26*time.Hour)).SweepExpired(ctx, 24*time.Hour)
 	if err != nil || n != len(names) {
 		t.Fatalf("SweepExpired past retention = %d, %v; want %d runs reclaimed", n, err, len(names))
 	}
+	keepsWaiting()
 	for _, name := range names {
 		if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name); fault.KindOf(err) != fault.NotFound {
 			t.Fatalf("the closed WorkflowRun %s must be swept at retention, got %v", name, err)
@@ -784,6 +800,89 @@ func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
 		if _, err := rstate.Get(ctx, "default", name); fault.KindOf(err) != fault.NotFound {
 			t.Fatalf("no run record may outlive the swept run %s, got %v", name, err)
 		}
+	}
+}
+
+// Issue #346: a replay whose source is a closed run the sweep recorded (it has no pinned spec) is rejected
+// SeedInvalid naming that cause, not a step the source never had.
+func TestIssue346_ReplayOfSweepRecordedSourceNamesTheCause(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "orphaned", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
+		t.Helper()
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun)
+	}
+	reconcile("orphaned")
+	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
+		t.Fatalf("delete record: %v", err)
+	}
+	if n, err := rr.SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("setup: SweepExpired = %d, %v; want the closed run recorded, not reclaimed", n, err)
+	}
+
+	replay := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "replay-orphaned", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "orphaned", From: "a"}},
+	}
+	if _, err := s.Create(ctx, replay); err != nil {
+		t.Fatalf("create replay: %v", err)
+	}
+	run := reconcile("replay-orphaned")
+	c, _ := run.Status.Conditions.Get("ReplaySeeded")
+	if run.Status.Phase != runFailed || c.Reason != "SeedInvalid" || !strings.Contains(c.Message, `"orphaned" has no checkpoint`) {
+		t.Fatalf("replay of a sweep-recorded source: phase=%q ReplaySeeded=%+v, want Failed, SeedInvalid saying \"orphaned\" has no checkpoint", run.Status.Phase, c)
+	}
+}
+
+// failingGet fails every run-record lookup with err.
+type failingGet struct {
+	runstate.Store
+	err error
+}
+
+func (f failingGet) Get(context.Context, v1.NamespaceName, v1.ObjectName) (*runstate.Record, error) {
+	return nil, f.err
+}
+
+// Issue #346: a run-store fault on the record lookup aborts the sweep; it never overwrites a record it
+// could not read.
+func TestIssue346_SweepFailsClosedOnRecordFault(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "done", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
+	if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "done"}); err != nil {
+		t.Fatalf("Reconcile done: %v", err)
+	}
+	before, err := rstate.Get(ctx, "default", "done")
+	if err != nil || !before.Terminal() {
+		t.Fatalf("setup: done record = %+v, %v; want a terminal record", before, err)
+	}
+
+	down := failingGet{Store: rstate, err: fault.Unavailablef("test", "run store down")}
+	sweeper, _ := New(Deps{Runs: down, Dispatch: newFake(), Clock: clock.Fake(base.Add(time.Hour))})
+	if _, err := NewRunReconciler(s, sweeper, nil, nil).SweepExpired(ctx, 24*time.Hour); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("SweepExpired with a failing record lookup = %v, want the Unavailable fault", err)
+	}
+	after, err := rstate.Get(ctx, "default", "done")
+	if err != nil || after.UpdatedAt != before.UpdatedAt || len(after.Spec.Steps) == 0 {
+		t.Fatalf("the sweep must leave a record it could not read alone: got %+v, %v", after, err)
 	}
 }
 
