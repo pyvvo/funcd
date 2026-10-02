@@ -29,6 +29,7 @@ import (
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/credentials"
@@ -451,19 +452,29 @@ func withLayout(dir string, fn func(*oci.Store) error) error {
 	return fn(store)
 }
 
-// parseLocalRef splits oci-layout://<dir>[:<tag>] into its directory + optional tag. A
-// tag is the suffix after the last ':' that contains no path separator.
+// parseLocalRef splits oci-layout://<dir>[:<tag>][@<digest>] into its directory + optional reference. A
+// tag is the suffix after the last ':' that contains no path separator; a digest wins over a tag, as in a
+// registry ref.
 func parseLocalRef(ref string) (dir, tag string, ok bool) {
 	if !strings.HasPrefix(ref, ociLayoutScheme) {
 		return "", "", false
 	}
 	rest := strings.TrimPrefix(ref, ociLayoutScheme)
+	if i := strings.LastIndex(rest, "@"); i >= 0 && isDigest(rest[i+1:]) {
+		dir, _, _ = parseLocalRef(ociLayoutScheme + rest[:i])
+		return dir, rest[i+1:], true
+	}
 	if i := strings.LastIndex(rest, ":"); i >= 0 {
 		if cand := rest[i+1:]; cand != "" && !strings.ContainsAny(cand, `/\`) {
 			return rest[:i], cand, true
 		}
 	}
 	return rest, "", true
+}
+
+// isDigest reports whether a ref's reference part is a digest rather than a tag.
+func isDigest(reference string) bool {
+	return registry.Reference{Reference: reference}.ValidateReferenceAsDigest() == nil
 }
 
 // OrasMaterializer is a DRIVER of ADR-0030's internal/function.Materializer: it pulls a

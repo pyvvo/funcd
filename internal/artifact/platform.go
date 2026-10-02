@@ -197,7 +197,7 @@ func PushIndex(ctx context.Context, ref string, sources []string) (digest string
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
-	if tag == "" || strings.HasPrefix(tag, "sha256:") {
+	if tag == "" || isDigest(tag) {
 		return "", fault.Invalidf(op, "index ref %q needs a tag", ref)
 	}
 	home, herr := repositoryOf(ref)
@@ -269,7 +269,7 @@ func readIndexSource(ctx context.Context, op string, target oras.ReadOnlyTarget,
 		return src, fault.Invalidf(op, "source %s is not in the index's repository %s", source, home)
 	}
 	_, tag, _ := resolveTargetRef(source)
-	if tag == "" {
+	if tag == "" || isDigest(tag) {
 		return src, fault.Invalidf(op, "source %s needs a tag", source)
 	}
 	desc, data, ferr := oras.FetchBytes(ctx, target, tag, oras.DefaultFetchBytesOptions)
