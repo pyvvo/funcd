@@ -1124,7 +1124,7 @@ func synthesizeResources(op string, pfs []plannedFunc) ([]v1.Object, error) {
 		dc := devCatalogs[name]
 		tokenSecret := v1.ObjectName(string(name) + "-quack-token")
 		// The token Secret is appended BEFORE the CatalogService so it is in the store when the catalog
-		// reconciler resolves engineEnv (whose secret-missing path does not requeue, unlike BucketNotFound).
+		// reconciler resolves engineEnv (a missing Secret would hold the engine until a 2 s requeue).
 		sobj, _ := v1.NewObject(v1.KindSecret)
 		s := sobj.(*v1.Secret)
 		setMeta(&s.ObjectMeta, tokenSecret)

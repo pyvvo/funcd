@@ -41,7 +41,7 @@ func PushSite(ctx context.Context, ref, dir string) (digest string, err error) {
 	if len(entries) == 0 {
 		return "", fault.Invalidf(op, "site dir %q is empty", dir)
 	}
-	data, perr := packDir(op, dir)
+	data, perr := packDir(op, dir, "")
 	if perr != nil {
 		return "", perr
 	}
@@ -54,7 +54,7 @@ func PushSite(ctx context.Context, ref, dir string) (digest string, err error) {
 		return "", fault.Wrapf(perr, fault.Internal, op, "push site layer")
 	}
 	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, SiteArtifactType,
-		oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}})
+		reproducible(oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}}))
 	if merr != nil {
 		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}

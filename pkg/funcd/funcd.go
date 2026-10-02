@@ -302,6 +302,7 @@ type Platform struct {
 	deadletterMaxEntries int                       // DLQ per-namespace count cap (0 ⇒ unbounded)
 	logSink              *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
 	traceSink            *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
+	logRoutes            logRoutes                 // the live capture Routes feeding logSink/traceSink, drained by Shutdown
 	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
 	catalogProxy         *cataloggw.Manager        // per-CatalogService node-private catalog PEP proxies (ADR-0137); Shutdown-closed
@@ -318,8 +319,17 @@ type Platform struct {
 // control-plane listener (so Addr() is ready before Run). It returns a typed
 // fault (and a nil *Platform) on a missing dep or a build/bind failure — never a
 // partial platform, never a panic.
-func New(opts ...Option) (*Platform, error) {
+func New(opts ...Option) (_ *Platform, err error) {
 	cfg := &config{}
+	p := &Platform{cfg: cfg}
+	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
+	defer func() {
+		if err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			_ = p.Shutdown(ctx)
+		}
+	}()
 	for _, o := range opts {
 		if err := o(cfg); err != nil {
 			return nil, err
@@ -342,7 +352,7 @@ func New(opts ...Option) (*Platform, error) {
 		return nil, fault.Wrapf(err, fault.Internal, "funcd.New", "build provider catalog")
 	}
 
-	p := &Platform{cfg: cfg, logger: cfg.logger, providers: pc}
+	p.logger, p.providers = cfg.logger, pc
 	if err := p.buildControlPlane(); err != nil {
 		return nil, err
 	}
@@ -923,12 +933,13 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpHandler := gateway.Chain(dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger),
-		gateway.Recover, gateway.RequestID,
-		observ.Chain(c.observ, c.telemetry, p.logger),
-		limit.Chain(c.limits),
-		shape.Chain(c.shaping))
-	dpHolder.Set(dpHandler) // late-bind the data-plane handler into the worker-node local API invoker (ADR-0064)
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger)
+	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
+	dpHandler := gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
+	// limiter: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its caller's
+	// in-flight slot or rate token (#87).
+	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, edgeShape))
 	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
@@ -966,10 +977,7 @@ func (p *Platform) buildControlPlane() error {
 				Function:  string(spec.Name),
 				Replica:   strconv.Itoa(spec.Replica),
 			}
-			go func() {
-				defer func() { _ = r.Close() }()
-				_ = funclog.Route(context.Background(), r, sinks, res, p.logger)
-			}()
+			p.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, p.logger) })
 		})
 	}
 
@@ -1202,9 +1210,11 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.s3gw != nil {
 			s3gwErr = p.s3gw.Close()
 		}
-		// Close the runtime first (stops instances → log channels EOF → pumps flush), then seal any
-		// remaining funclog segments, all before blob.Close() (the sink writes to blob) — ADR-0081.
-		runtimeErr := p.cfg.runtime.Close()
+		// Close the runtime first (stops instances → log channels EOF), let every capture Route read its
+		// channel to the end and flush, then seal any remaining funclog segments, all before blob.Close()
+		// (the sink writes to blob) — ADR-0081.
+		runtimeErr := closeDriver(p.cfg.runtime)
+		p.logRoutes.drain(ctx)
 		var logSinkErr, traceSinkErr error
 		if p.logSink != nil {
 			logSinkErr = p.logSink.Close()
@@ -1214,13 +1224,13 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		errs := []error{
 			s3gwErr,
-			p.cfg.bus.Close(),
-			p.cfg.gateway.Close(),
+			closeDriver(p.cfg.bus),
+			closeDriver(p.cfg.gateway),
 			runtimeErr,
 			logSinkErr,
 			traceSinkErr,
-			p.cfg.blob.Close(),
-			p.cfg.store.Close(),
+			closeDriver(p.cfg.blob),
+			closeDriver(p.cfg.store),
 		}
 		if p.workflowRuns != nil {
 			errs = append(errs, p.workflowRuns.Close())
@@ -1234,6 +1244,14 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		p.shutdownErr = errors.Join(errs...)
 	})
 	return p.shutdownErr
+}
+
+// closeDriver closes a required driver, which is nil when New failed before an option set it.
+func closeDriver(c io.Closer) error {
+	if c == nil {
+		return nil
+	}
+	return c.Close()
 }
 
 // runtimeResolver is the production workflow.RuntimeResolver: it reads a step image's runtime
@@ -1587,16 +1605,22 @@ func maxRevision(revs ...string) string {
 // one substrate bucket, many logical S3 buckets — so distinct namespaces and buckets
 // never collide. Existence-by-namespace here gives tenancy a second guard (a missing /
 // cross-namespace bucket is NoSuchBucket); the binding-as-grant Cedar PEP is the
-// authorization gate on every object op.
+// authorization gate on every object op. The view carries the Bucket's spec.maxObjectBytes,
+// so every write path through it (S3 frontend, context.blob, site) enforces that policy.
 func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 		if bucket == "" {
 			return nil, false
 		}
-		if _, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket)); err != nil {
+		obj, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket))
+		if err != nil {
 			return nil, false
 		}
-		return blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), true
+		var maxObjectBytes int64
+		if b, ok := obj.(*v1.Bucket); ok {
+			maxObjectBytes = b.Spec.MaxObjectBytes
+		}
+		return blob.Capped(blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), maxObjectBytes), true
 	}
 }
 

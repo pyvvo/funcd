@@ -58,6 +58,10 @@ type BlobSink struct {
 
 	stop     chan struct{} // closes to stop the background age-flusher
 	stopOnce sync.Once
+
+	// flushing is read-held by each Flush from taking its segment until its Put returns, and write-held by
+	// Close: a taken segment is no longer in segments, so Close must wait for that Put instead.
+	flushing sync.RWMutex
 }
 
 type segment struct {
@@ -162,6 +166,13 @@ func (s *BlobSink) Append(ctx context.Context, res Resource, e Entry) error {
 // Flush seals res's current segment and Puts it as one OTLP-JSONL object; returns the blob key
 // ("" if the segment was empty/absent).
 func (s *BlobSink) Flush(ctx context.Context, res Resource) (string, error) {
+	s.flushing.RLock()
+	defer s.flushing.RUnlock()
+	return s.flush(ctx, res)
+}
+
+// flush is Flush for a caller that already holds flushing.
+func (s *BlobSink) flush(ctx context.Context, res Resource) (string, error) {
 	s.mu.Lock()
 	seg := s.segments[res]
 	delete(s.segments, res)
@@ -188,9 +199,12 @@ func (s *BlobSink) Flush(ctx context.Context, res Resource) (string, error) {
 	return key, nil
 }
 
-// Close stops the age-flusher, then seals and Puts every open segment (the loss-safe shutdown boundary).
+// Close stops the age-flusher, waits for any Flush still Putting a segment, then seals and Puts every open
+// segment (the loss-safe shutdown boundary).
 func (s *BlobSink) Close() error {
 	s.stopOnce.Do(func() { close(s.stop) })
+	s.flushing.Lock()
+	defer s.flushing.Unlock()
 	s.mu.Lock()
 	res := make([]Resource, 0, len(s.segments))
 	for r := range s.segments {
@@ -199,7 +213,7 @@ func (s *BlobSink) Close() error {
 	s.mu.Unlock()
 	var firstErr error
 	for _, r := range res {
-		if _, err := s.Flush(context.Background(), r); err != nil && firstErr == nil {
+		if _, err := s.flush(context.Background(), r); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

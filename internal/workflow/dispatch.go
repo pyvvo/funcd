@@ -110,18 +110,9 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 		return nil, fault.Forbiddenf(op, "target %q is not declared in run %q", req.Target, req.Run)
 	}
 	fn := activator.FunctionRef{Namespace: req.Namespace, Name: req.Target}
-	upstream, ready, err := d.endpoints.Upstream(ctx, fn)
+	upstream, err := d.upstream(ctx, fn)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", req.Namespace, req.Target)
-	}
-	if !ready || upstream == "" {
-		if d.waker == nil {
-			return nil, fault.Unavailablef(op, "function %s/%s has no ready upstream", req.Namespace, req.Target)
-		}
-		upstream, err = d.waker.Wake(ctx, fn)
-		if err != nil {
-			return nil, fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", req.Namespace, req.Target)
-		}
+		return nil, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(stepEvent(req)))
 	if err != nil {
@@ -147,24 +138,58 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "invoke %s/%s", req.Namespace, req.Target) // retryable
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	// Read only what the outcome needs: an output up to one byte past its payload limit (a longer one is
+	// rejected anyway), the head of a rejection that its error keeps, and nothing of a retryable failure.
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	rejected := resp.StatusCode >= 400 && resp.StatusCode < 500
+	if !ok && !rejected {
+		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, resp.StatusCode) // retryable
+	}
+	var src io.Reader = resp.Body
+	switch {
+	case rejected:
+		src = io.LimitReader(src, errBodyMax+1)
+	case req.MaxOutput > 0:
+		src = io.LimitReader(src, req.MaxOutput+1)
+	}
+	body, err := io.ReadAll(src)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "read response from %s/%s", req.Namespace, req.Target)
 	}
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return body, nil
-	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+	if rejected {
 		return nil, Permanent(fault.Invalidf(op, "%s/%s rejected the step (%d): %s", req.Namespace, req.Target, resp.StatusCode, truncate(body)))
-	default:
-		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, resp.StatusCode) // retryable
 	}
+	return body, nil
+}
+
+// errBodyMax is how much of a rejection's body its error keeps.
+const errBodyMax = 256
+
+// upstream resolves fn's ready upstream. With a Waker every dispatch goes through Wake, warm
+// ones too, so each step call counts as activity and idle reclaim takes a step function down
+// only when no step has used it (ADR-0033 §5); Wake wakes a cold one.
+func (d *HTTPDispatcher) upstream(ctx context.Context, fn activator.FunctionRef) (string, error) {
+	const op = "workflow.dispatch"
+	if d.waker != nil {
+		upstream, err := d.waker.Wake(ctx, fn)
+		if err != nil {
+			return "", fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", fn.Namespace, fn.Name)
+		}
+		return upstream, nil
+	}
+	upstream, ready, err := d.endpoints.Upstream(ctx, fn)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", fn.Namespace, fn.Name)
+	}
+	if !ready || upstream == "" {
+		return "", fault.Unavailablef(op, "function %s/%s has no ready upstream", fn.Namespace, fn.Name)
+	}
+	return upstream, nil
 }
 
 func truncate(b []byte) string {
-	const max = 256
-	if len(b) > max {
-		return string(b[:max]) + "…"
+	if len(b) > errBodyMax {
+		return string(b[:errBodyMax]) + "…"
 	}
 	return string(b)
 }

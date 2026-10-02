@@ -10,11 +10,13 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
+	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -148,4 +150,57 @@ func TestScenarioSecretValueNotPersisted(t *testing.T) {
 	raw, err := json.Marshal(fn)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), plaintext, "the resolved secret value is never written to the Function resource")
+}
+
+// A Function applied before the ConfigMap or Secret it binds is held not-Ready and requeued, so it comes up once
+// the binding exists (ADR-0093 Decision 5): no ConfigMap or Secret event reconciles the Function again (issue #77).
+func TestIssue77_MissingBindingRecoversWhenApplied(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind   v1.Kind
+		reason string
+	}{
+		{kind: v1.KindConfigMap, reason: "ConfigResolveFailed"},
+		{kind: v1.KindSecret, reason: "SecretResolveFailed"},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			h := newHarness(t, func(d *function.Deps) {
+				sr, err := secrets.NewResolver(secrets.Deps{Store: d.Store, Authorizer: rbac.New()})
+				require.NoError(t, err)
+				d.Secrets = sr
+			})
+			obj, ok := v1.NewObject(v1.KindFunction)
+			require.True(t, ok)
+			fn := obj.(*v1.Function)
+			fn.Name, fn.Namespace, fn.ResourceGroup = "early", "default", "rg1"
+			fn.Spec.Replicas = 1
+			fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "app.handler", "blob://artifacts/early"
+			if tc.kind == v1.KindConfigMap {
+				fn.Spec.Config = []v1.ObjectName{"late"}
+			} else {
+				fn.Spec.Secrets = []v1.ObjectName{"late"}
+			}
+			_, err := h.st.Create(ctx, fn)
+			require.NoError(t, err)
+
+			res, err := h.r.Reconcile(ctx, controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "early"})
+			require.NoError(t, err)
+			cond, _ := h.getFn(t, "early").Status.Conditions.Get("Ready")
+			require.Equal(t, tc.reason, cond.Reason)
+			require.Positive(t, res.RequeueAfter, "a missing binding requeues the Function")
+
+			binding, ok := v1.NewObject(tc.kind)
+			require.True(t, ok)
+			meta := binding.GetObjectMeta()
+			meta.Name, meta.Namespace, meta.ResourceGroup = "late", "default", "rg1"
+			_, err = h.st.Create(ctx, binding)
+			require.NoError(t, err)
+
+			h.reconcile(t, "early")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "early").Status.Phase, "the Function comes up once its binding exists")
+			require.Equal(t, 1, h.running(t, "early"))
+		})
+	}
 }

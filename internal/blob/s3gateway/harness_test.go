@@ -79,8 +79,9 @@ type gw struct {
 
 // newGateway builds the full in-process stack (ADR-0080/0085): a real gocloud mem://
 // bucket per seeded Bucket, a real cedar PDP over the seeded resources, and the gateway
-// on an ephemeral loopback port. policies/external may be nil. It registers cleanup.
-func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3gateway.ExternalKeys, makeBucket func(t *testing.T) blob.Bucket) *gw {
+// on an ephemeral loopback port. policies/external may be nil; opts adjust the Deps. It
+// registers cleanup.
+func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3gateway.ExternalKeys, makeBucket func(t *testing.T) blob.Bucket, opts ...func(*s3gateway.Deps)) *gw {
 	t.Helper()
 	ctx := context.Background()
 
@@ -101,14 +102,18 @@ func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3
 		return b, ok
 	}
 
-	srv, err := s3gateway.New(s3gateway.Deps{
+	deps := s3gateway.Deps{
 		BucketFor: bucketFor,
 		PDP:       pdp,
 		Master:    testMaster,
 		External:  external,
 		Listen:    freeAddr(t),
 		Logger:    nil,
-	})
+	}
+	for _, o := range opts {
+		o(&deps)
+	}
+	srv, err := s3gateway.New(deps)
 	require.NoError(t, err)
 
 	runCtx, cancel := context.WithCancel(ctx)

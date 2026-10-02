@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -94,24 +95,22 @@ func (c *Controller) Register(gvk v1.GroupVersionKind, r Reconciler) {
 // blocks until ctx is cancelled, then drains the watches and workers — no leak.
 func (c *Controller) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
-	watches := make([]store.Watch, 0, len(c.reconcilers))
+	watchCtx, stopWatches := context.WithCancel(ctx)
+	defer stopWatches()
 
 	for gvk := range c.reconcilers {
-		w, err := c.store.Watch(ctx, gvk, store.WatchOptions{})
+		w, err := c.store.Watch(watchCtx, gvk, store.WatchOptions{})
 		if err != nil {
-			for _, sw := range watches {
-				sw.Stop()
-			}
+			stopWatches()
 			if ctx.Err() != nil {
 				return nil // ctx cancelled during setup — graceful shutdown, not a failure
 			}
 			return fault.Wrapf(err, fault.Unavailable, "controller.Run", "watch %s", gvk.Kind)
 		}
-		watches = append(watches, w)
 		wg.Add(1)
 		go func(gvk v1.GroupVersionKind, w store.Watch) {
 			defer wg.Done()
-			c.watch(ctx, gvk, w)
+			c.watch(watchCtx, gvk, w)
 		}(gvk, w)
 	}
 
@@ -125,26 +124,72 @@ func (c *Controller) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	c.queue.ShutDown()
-	for _, w := range watches {
-		w.Stop()
-	}
 	wg.Wait()
 	return nil
 }
 
 // watch enqueues a Request for every change on the gvk's watch stream (Added /
-// Modified / Deleted, uniformly).
+// Modified / Deleted, uniformly). The store closes the stream of a watcher that
+// falls behind (ADR-0006), so a close before ctx ends re-watches: it resumes after
+// the highest resourceVersion seen, or re-lists when the store no longer retains it.
 func (c *Controller) watch(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch) {
+	var seen uint64
+	for {
+		seen = c.forward(ctx, gvk, w, seen)
+		w.Stop()
+		if ctx.Err() != nil {
+			return
+		}
+		c.logger.WarnContext(ctx, "store closed the watch, re-watching",
+			"kind", gvk.Kind, "resourceVersion", seen)
+		if w = c.rewatch(ctx, gvk, seen); w == nil {
+			return
+		}
+	}
+}
+
+// forward enqueues every event of w until its stream closes or ctx ends, and
+// returns the highest object resourceVersion seen.
+func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch, seen uint64) uint64 {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return seen
 		case ev, ok := <-w.ResultChan():
 			if !ok {
-				return
+				return seen
 			}
 			meta := ev.Object.GetObjectMeta()
+			if rv, err := strconv.ParseUint(meta.ResourceVersion, 10, 64); err == nil && rv > seen {
+				seen = rv
+			}
 			c.queue.Add(Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name})
+		}
+	}
+}
+
+// rewatch opens a Watch that replays the changes after resourceVersion seen,
+// falling back to a full re-list when that revision is too old (fault.Unavailable),
+// and retries other failures with backoff. It returns nil once ctx ends.
+func (c *Controller) rewatch(ctx context.Context, gvk v1.GroupVersionKind, seen uint64) store.Watch {
+	opts := store.WatchOptions{SinceResourceVersion: strconv.FormatUint(seen, 10)}
+	for failures := 1; ; failures++ {
+		w, err := c.store.Watch(ctx, gvk, opts)
+		if err == nil {
+			return w
+		}
+		if opts.SinceResourceVersion != "" && fault.KindOf(err) == fault.Unavailable {
+			opts.SinceResourceVersion = ""
+			continue
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		c.logger.WarnContext(ctx, "re-watch failed, retrying", "kind", gvk.Kind, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(c.queue.backoff(failures)):
 		}
 	}
 }

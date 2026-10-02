@@ -3,14 +3,18 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 type fakeEndpoints struct {
@@ -33,6 +37,45 @@ func (f *fakeWaker) Wake(context.Context, activator.FunctionRef) (string, error)
 }
 
 type fakeGrant struct{ allow bool }
+
+// manualClock is an advancing clock.Clock for driving the activator's idle reclaim.
+type manualClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// zeroScaler records the functions the activator scales to zero.
+type zeroScaler struct {
+	mu   sync.Mutex
+	zero []activator.FunctionRef
+}
+
+func (z *zeroScaler) ScaleTo(_ context.Context, fn activator.FunctionRef, replicas int) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if replicas == 0 {
+		z.zero = append(z.zero, fn)
+	}
+	return nil
+}
+
+func (z *zeroScaler) reclaimed() []activator.FunctionRef {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return append([]activator.FunctionRef(nil), z.zero...)
+}
 
 func (f fakeGrant) Allow(v1.NamespaceName, v1.ObjectName) bool { return f.allow }
 
@@ -144,5 +187,125 @@ func TestDispatchIsCountedWhileInFlight(t *testing.T) {
 	}
 	if !calls.Idle(srv.URL, 0) {
 		t.Fatal("the step call still counts after its answer was read")
+	}
+}
+
+// streamedBody is a response body of size bytes that counts how many of them were read.
+type streamedBody struct{ left, read int64 }
+
+func (b *streamedBody) Read(p []byte) (int, error) {
+	if b.left == 0 {
+		return 0, io.EOF
+	}
+	n := min(int64(len(p)), b.left)
+	clear(p[:n])
+	b.left -= n
+	b.read += n
+	return int(n), nil
+}
+
+func (b *streamedBody) Close() error { return nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestIssue126_DispatchReadsOnlyWhatTheStepNeeds: the payload limit bounds the daemon's memory, not
+// only the stored output — the dispatcher reads an answer up to one byte past the limit, only the
+// head of a 4xx that the error keeps, and none of a 5xx it throws away.
+func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
+	const limit = 1 << 20
+	answering := func(t *testing.T, status int) (*HTTPDispatcher, *streamedBody) {
+		t.Helper()
+		body := &streamedBody{left: 8 << 20}
+		d, err := NewHTTPDispatcher(DispatchDeps{
+			Endpoints: fakeEndpoints{upstream: "http://step.invalid", ready: true}, Grant: fakeGrant{allow: true},
+			Client: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Header: http.Header{}, Body: body, Request: r}, nil
+			})},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d, body
+	}
+
+	t.Run("an over-limit output", func(t *testing.T) {
+		d, body := answering(t, http.StatusOK)
+		e := newTestEngine(t, d, Config{PayloadLimit: limit})
+		rec, err := e.Execute(context.Background(), "default", "run-big", "wf", spec(step("a", "")), json.RawMessage(`{}`), StartOptions{})
+		if err == nil || rec.Phase != runFailed {
+			t.Fatalf("an over-limit output must fail the run: phase=%s err=%v", rec.Phase, err)
+		}
+		if body.read > limit+1 {
+			t.Fatalf("read %d bytes of the answer under a %d-byte payload limit", body.read, limit)
+		}
+	})
+	t.Run("a 4xx", func(t *testing.T) {
+		d, body := answering(t, http.StatusUnprocessableEntity)
+		req := dispatchReq("s")
+		req.MaxOutput = limit
+		if _, err := d.Dispatch(context.Background(), req); !isPermanent(err) {
+			t.Fatalf("4xx should be permanent, got %v", err)
+		}
+		if body.read > errBodyMax+1 {
+			t.Fatalf("read %d bytes of a rejection whose error keeps %d", body.read, errBodyMax)
+		}
+	})
+	t.Run("a 5xx", func(t *testing.T) {
+		d, body := answering(t, http.StatusInternalServerError)
+		req := dispatchReq("s")
+		req.MaxOutput = limit
+		if _, err := d.Dispatch(context.Background(), req); err == nil || isPermanent(err) {
+			t.Fatalf("5xx should be retryable, got %v", err)
+		}
+		if body.read != 0 {
+			t.Fatalf("read %d bytes of a 5xx answer that is thrown away", body.read)
+		}
+	})
+}
+
+// Issue #48: a step dispatched to a warm function counts as its activity, so idle reclaim never fires
+// while steps keep arriving.
+func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
+	ctx := context.Background()
+	srv := echoServer(t, 200, `{"ok":true}`)
+	st := store.New(memory.New())
+	obj, ok := v1.NewObject(v1.KindFunction)
+	if !ok {
+		t.Fatal("no Function kind")
+	}
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "busy", "default", "rg1"
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: time.Minute}
+	if _, err := st.Create(ctx, fn); err != nil {
+		t.Fatal(err)
+	}
+	ep := fakeEndpoints{upstream: srv.URL, ready: true}
+	clk := &manualClock{t: time.Unix(1000, 0)}
+	sc := &zeroScaler{}
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: ep, Scaler: sc, Clock: clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewHTTPDispatcher(DispatchDeps{Endpoints: ep, Waker: act, Grant: fakeGrant{allow: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := act.ReclaimIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		clk.advance(40 * time.Second)
+		if _, err := d.Dispatch(ctx, dispatchReq("busy")); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if err := act.ReclaimIdle(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sc.reclaimed()) != 0 {
+		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.reclaimed())
 	}
 }

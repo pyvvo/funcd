@@ -23,7 +23,7 @@ touched code. The bar is the **fix checklist** below plus the governing ADRs' Co
 
 ## Step 2 — Run the verification
 
-Through `nix develop -c`; capture real output for every claim:
+Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real output for every claim, filtered to what matters:
 
 1. **The regression test fails without the fix.** Overlay the `origin/main` version of each changed
    non-test file (`git show origin/main:<file>` into a scratch file, `go test -overlay`) and run the
@@ -46,8 +46,9 @@ Through `nix develop -c`; capture real output for every claim:
    (Minor when cosmetic).
 9. **ADRs**: the fix contradicts no Accepted/Implemented ADR's Decision or Contracts (if it must, that is
    an `adr` finding — the fix needs an ADR), and no Accepted/Implemented ADR file was edited (Blocker).
-10. **Checks**: rerun `/fix` Step 5's list yourself — format, build, vet and lint (host and Linux), tests,
-   e2e and the Lima lane where the path is covered, hygiene, the spec when `api/types` changed.
+10. **Checks**: rerun the touched packages' tests (`-race`), vet and lint yourself, through `scripts/agent/d`.
+   The repo-wide set (`scripts/agent/gate.sh`, then CI) runs once per PR: read its result, and run it yourself
+   only for a single fix that no gate has run on. Never run the e2e suite per review.
 11. **Shape**: a conventional `fix(<scope>):` subject, `Fixes #N`, the attribution trailer, one issue per commit.
 12. **No dev-machine references** — a silent check, as in `adr-impl-review` Step 2: never write a hygiene
     section, never transcribe a path, username or grep pattern; a leak is a Blocker described generically.

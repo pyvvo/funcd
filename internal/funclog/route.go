@@ -1,7 +1,6 @@
 package funclog
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,20 +74,23 @@ func Route(ctx context.Context, r io.Reader, sinks Sinks, res Resource, log *slo
 	if log == nil {
 		log = slog.Default()
 	}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024) // tolerate long structured lines
+	lr := newLineReader(r)
 	for {
 		if err := ctx.Err(); err != nil {
 			return flushSinks(ctx, sinks, res)
 		}
-		if !sc.Scan() {
-			if err := sc.Err(); err != nil {
+		line, err := lr.next()
+		if errors.Is(err, errLineTooLong) {
+			log.WarnContext(ctx, "funclog: skipping unreadable record", "function", res.Function, "error", err)
+			continue
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
 				log.WarnContext(ctx, "funclog: channel scan error", "function", res.Function, "error", err)
 			}
-			// EOF or a scan error: channel gone → seal remaining segments.
+			// EOF or a read error: channel gone → seal remaining segments.
 			return flushSinks(context.Background(), sinks, res)
 		}
-		line := sc.Bytes()
 		if len(line) == 0 {
 			continue // skip blank lines
 		}

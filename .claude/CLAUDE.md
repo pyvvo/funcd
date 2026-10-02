@@ -297,6 +297,41 @@ the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just b
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
+For many short commands (agents, scripts), use `scripts/agent/d <cmd>` instead: the same pinned environment from a
+cached `nix print-dev-env` (regenerated when `flake.nix`/`flake.lock` change), ~0.02 s per call instead of ~2 s.
+
+## Running subagents and workflows efficiently
+
+Measured on the 2026-10-02 fix waves (first wave vs the rebuilt pipeline): a fix went from 6.3 to 3.0 agent-minutes,
+a review from 7.1 to 1.5, and a two-issue group from over an hour to 11 minutes, with review depth unchanged. The
+rules that did it:
+
+- **Turns are the cost.** Each tool call is a model round trip (median ~6 s, slower as the context grows). Send
+  independent calls together in one turn, read a file once with Read rather than in `sed`/`grep` slices, chain
+  dependent shell steps with `&&`, and filter test output (`-run`, `| tail -25`). Large pasted outputs slow every
+  later turn.
+- **One job per item, in parallel; integrate at the end.** Give each issue its own worktree from `origin/main` and
+  review it the moment its fix is committed. Group barriers and sequential chunks leave slots idle; a cheap
+  integrator cherry-picks a group's passing commits onto the latest main.
+- **Each check runs once, in one place.** Per-item agents run only the regression test (with `-race`) and the
+  touched packages' tests, vet and lint. The repo-wide checks — `just ci-full` (e2e included), the Linux
+  build/vet/lint, a clean tree — run once per PR via `scripts/agent/gate.sh`, then CI runs them again. Never run the
+  e2e suite or `go test ./...` inside a per-item fixer or reviewer.
+- **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
+- **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
+  own worktree under the session scratchpad. Lima lanes need a checkout under `$HOME` (colima) and one VM at a
+  time, so they run in a single serial stage.
+- **Append-only shared files conflict.** Parallel PRs that each append to `docs/reviews/model-ledger.json` and
+  regenerate `model-scorecard.md` conflict one after another; record a batch's ledger rows in one ledger PR.
+- **Model per role.** Fixers and reviewers on the strongest model (reviews at medium effort held their depth);
+  integration, gates and PR plumbing on a fast model at low effort.
+- **Merging and waiting.** Repo auto-merge is off, so `gh pr merge` fails: enqueue with the GraphQL
+  `enqueuePullRequest` mutation after reading every check's conclusion; the queue builds up to 5 PRs together.
+  Wait in the background (`scripts/agent/watch-prs.py` exits when a PR turns green, red or conflicted), never in a
+  foreground loop.
+- **Measure, don't guess.** Subagent transcripts (`agent-*.jsonl` beside each workflow's journal) carry per-call
+  timestamps and token usage: compute tool time versus model time and turns per item before changing a pipeline.
+
 ## The language repos — pinned Go modules, never copies (ADR-0141)
 
 The shims and their examples live in [pyvvo/funcd-typescript](https://github.com/pyvvo/funcd-typescript) and

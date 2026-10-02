@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/store"
@@ -193,4 +195,118 @@ func TestScenarioGracefulShutdown(t *testing.T) {
 	st := store.New(memory.New())
 	stop := run(t, st, v1.KindConfigMap.GVK(), &fakeReconciler{}) // run() asserts a clean drain within 3s
 	stop()
+}
+
+// pausedStore lets a test stop the controller from draining its watches: while hold is locked, each
+// watch's forwarder blocks, the store's per-watcher buffer fills, and the store drops the watcher
+// (closes its stream) exactly as it does for a watcher that falls behind a burst of writes.
+type pausedStore struct {
+	store.Store
+	hold sync.Mutex
+}
+
+func (p *pausedStore) Watch(ctx context.Context, gvk v1.GroupVersionKind, opts store.WatchOptions) (store.Watch, error) {
+	w, err := p.Store.Watch(ctx, gvk, opts)
+	if err != nil {
+		return nil, err
+	}
+	pw := &pausedWatch{Watch: w, out: make(chan store.Event), done: make(chan struct{})}
+	go pw.forward(&p.hold)
+	return pw, nil
+}
+
+type pausedWatch struct {
+	store.Watch
+	out  chan store.Event
+	done chan struct{}
+	once sync.Once
+}
+
+func (w *pausedWatch) ResultChan() <-chan store.Event { return w.out }
+
+func (w *pausedWatch) Stop() {
+	w.once.Do(func() { close(w.done) })
+	w.Watch.Stop()
+}
+
+func (w *pausedWatch) forward(hold *sync.Mutex) {
+	defer close(w.out)
+	for ev := range w.Watch.ResultChan() {
+		hold.Lock()
+		select {
+		case w.out <- ev:
+		case <-w.done:
+		}
+		hold.Unlock()
+	}
+}
+
+// Issue #25: when the store drops the controller's watch (a burst outran its buffer), the controller
+// re-watches, so every object written during and after the burst is reconciled. It resumes after the
+// last revision it saw, so a delete made during the burst is reconciled too; a burst longer than the
+// store's replay ring (1024 events) forces a full re-list instead, which cannot see that delete.
+func TestIssue25_ReconcilesAfterWatchDrop(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		burst   int
+		resumes bool
+	}{
+		{name: "resumes after the last revision", burst: 100, resumes: true},
+		{name: "re-lists when the revision is no longer retained", burst: 1100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := store.New(memory.New())
+			paused := &pausedStore{Store: st}
+
+			var mu sync.Mutex
+			found, gone := map[string]bool{}, map[string]bool{}
+			fr := &fakeReconciler{hook: func(ctx context.Context, req controller.Request) {
+				_, err := st.Get(ctx, req.GVK, req.Namespace, req.Name)
+				mu.Lock()
+				defer mu.Unlock()
+				if fault.KindOf(err) == fault.NotFound {
+					gone[string(req.Name)] = true
+					return
+				}
+				found[string(req.Name)] = true
+			}}
+			createObject(t, st, v1.KindConfigMap, "doomed")
+			stop := run(t, paused, v1.KindConfigMap.GVK(), fr)
+			defer stop()
+
+			require.Eventually(t, func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return found["doomed"]
+			}, 3*time.Second, 10*time.Millisecond, "the existing object is reconciled")
+
+			func() {
+				paused.hold.Lock()
+				defer paused.hold.Unlock()
+				for i := range tc.burst {
+					createObject(t, st, v1.KindConfigMap, "burst-"+strconv.Itoa(i))
+				}
+				require.NoError(t, st.Delete(context.Background(), v1.KindConfigMap.GVK(), "default", "doomed", ""))
+			}()
+			createObject(t, st, v1.KindConfigMap, "late")
+
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				mu.Lock()
+				defer mu.Unlock()
+				missing := 0
+				for i := range tc.burst {
+					if !found["burst-"+strconv.Itoa(i)] {
+						missing++
+					}
+				}
+				assert.Zero(c, missing, "burst objects never reconciled")
+				assert.True(c, found["late"], "object created after the burst reconciled")
+				if tc.resumes {
+					assert.True(c, gone["doomed"], "object deleted during the burst reconciled as NotFound")
+				}
+			}, 5*time.Second, 20*time.Millisecond)
+		})
+	}
 }

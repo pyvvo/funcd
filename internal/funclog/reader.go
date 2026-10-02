@@ -4,10 +4,55 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
+
+// maxLineBytes caps one channel line; a longer line is dropped, never buffered past the cap.
+const maxLineBytes = 1024 * 1024
+
+// errLineTooLong reports a line over maxLineBytes that was read through its newline and dropped.
+var errLineTooLong = errors.New("line exceeds the 1 MiB cap")
+
+// lineReader splits a channel into lines like bufio.ScanLines, but drops an over-long line and keeps
+// reading where bufio.Scanner stops for good (bufio.ErrTooLong), so one huge record cannot end the
+// drain (issue #32).
+type lineReader struct {
+	br   *bufio.Reader
+	line []byte
+}
+
+func newLineReader(r io.Reader) *lineReader {
+	return &lineReader{br: bufio.NewReaderSize(r, 64*1024)}
+}
+
+// next returns the next line without its line end, valid until the following call. It returns
+// errLineTooLong for a dropped line, and io.EOF (or the channel's read error) when the channel ends.
+func (l *lineReader) next() ([]byte, error) {
+	l.line = l.line[:0]
+	tooLong := false
+	for {
+		frag, more, err := l.br.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if len(l.line)+len(frag) > maxLineBytes {
+			tooLong = true
+		}
+		if !tooLong {
+			l.line = append(l.line, frag...)
+		}
+		if !more {
+			break
+		}
+	}
+	if tooLong {
+		return nil, errLineTooLong
+	}
+	return l.line, nil
+}
 
 // Reader decodes one instance's telemetry channel into Entries. NDJSON (Path B) or raw fd lines
 // (Path A). A frozen instance stops sending, so Read blocks — which pauses the Pump and prevents
@@ -30,30 +75,31 @@ type wireRecord struct {
 }
 
 // ndjsonReader decodes Path B: one JSON record per line.
-type ndjsonReader struct{ sc *bufio.Scanner }
+type ndjsonReader struct{ lr *lineReader }
 
 // NewNDJSONReader decodes Path B (one JSON record per line) from the fd3/UDS channel.
 func NewNDJSONReader(r io.Reader) Reader {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024) // tolerate long structured lines
-	return &ndjsonReader{sc: sc}
+	return &ndjsonReader{lr: newLineReader(r)}
 }
 
 func (r *ndjsonReader) Read(_ context.Context) (Entry, error) {
+	const op = "funclog.ndjsonReader.Read"
 	for {
-		if !r.sc.Scan() {
-			if err := r.sc.Err(); err != nil {
-				return Entry{}, fault.Wrapf(err, fault.Internal, "funclog.ndjsonReader.Read", "scan channel")
-			}
+		line, err := r.lr.next()
+		switch {
+		case errors.Is(err, io.EOF):
 			return Entry{}, io.EOF
+		case errors.Is(err, errLineTooLong):
+			return Entry{}, fault.Invalidf(op, "record skipped: %v", err)
+		case err != nil:
+			return Entry{}, fault.Wrapf(err, fault.Internal, op, "read channel")
 		}
-		line := r.sc.Bytes()
 		if len(line) == 0 {
 			continue // skip blank lines
 		}
 		var w wireRecord
 		if err := json.Unmarshal(line, &w); err != nil {
-			return Entry{}, fault.Invalidf("funclog.ndjsonReader.Read", "malformed NDJSON record: %v", err)
+			return Entry{}, fault.Invalidf(op, "malformed NDJSON record: %v", err)
 		}
 		return w.toEntry(), nil
 	}
@@ -82,28 +128,30 @@ func (w wireRecord) toEntry() Entry {
 
 // rawReader decodes Path A: raw fd 1/2 lines into coarse Entries (no structure, fd-based severity).
 type rawReader struct {
-	sc  *bufio.Scanner
+	lr  *lineReader
 	src Source
 }
 
 // NewRawReader decodes Path A (raw lines) from fd 1 or fd 2, assigning coarse severity by src
 // (SourceStdout → INFO, SourceStderr → ERROR).
 func NewRawReader(r io.Reader, src Source) Reader {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	return &rawReader{sc: sc, src: src}
+	return &rawReader{lr: newLineReader(r), src: src}
 }
 
 func (r *rawReader) Read(_ context.Context) (Entry, error) {
-	if !r.sc.Scan() {
-		if err := r.sc.Err(); err != nil {
-			return Entry{}, fault.Wrapf(err, fault.Internal, "funclog.rawReader.Read", "scan fd")
-		}
+	const op = "funclog.rawReader.Read"
+	line, err := r.lr.next()
+	switch {
+	case errors.Is(err, io.EOF):
 		return Entry{}, io.EOF
+	case errors.Is(err, errLineTooLong):
+		return Entry{}, fault.Invalidf(op, "line skipped: %v", err)
+	case err != nil:
+		return Entry{}, fault.Wrapf(err, fault.Internal, op, "read fd")
 	}
 	sev := SevInfo
 	if r.src == SourceStderr {
 		sev = SevError
 	}
-	return Entry{Severity: sev, Body: r.sc.Text(), Source: r.src}, nil
+	return Entry{Severity: sev, Body: string(line), Source: r.src}, nil
 }

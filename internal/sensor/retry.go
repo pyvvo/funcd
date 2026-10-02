@@ -149,12 +149,15 @@ func (r *Reconciler) RunRetryWorkers(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	// The workers run on a context shutdown does not cancel: an attempt in flight must finish, and so must its
+	// dead-letter and Invocation writes (ADR-0118 §6).
+	attemptCtx := context.WithoutCancel(ctx)
 	var wg sync.WaitGroup
 	for i := 0; i < retryWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.retryWorker(ctx)
+			r.retryWorker(attemptCtx)
 		}()
 	}
 	<-ctx.Done()

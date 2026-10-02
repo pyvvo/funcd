@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -138,4 +139,41 @@ func TestWithNodePlatform(t *testing.T) {
 
 	_, err = New(InMemory(), WithNodePlatform("linux"))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}
+
+// Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial
+// platform), so the caller can fix the cause and call New again with the same data dirs.
+func TestIssue94_FailedNewReleasesResources(t *testing.T) {
+	t.Parallel()
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	controlAddr := free.Addr().String()
+	require.NoError(t, free.Close())
+
+	persist := []Option{
+		WithWorkflow(t.TempDir(), time.Second, 0, 1, 0),
+		WithDeadLetterQueue(t.TempDir(), 1, 0, 0),
+	}
+	var cfg *config
+	capture := func(c *config) error { cfg = c; return nil }
+	publish := func() error { return cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")) }
+
+	p, err := New(append([]Option{InMemory(), capture, WithListenAddr(controlAddr), WithDataPlaneAddr(busy.Addr().String())}, persist...)...)
+	require.ErrorContains(t, err, "bind data-plane listener")
+	require.Nil(t, p)
+	ln, err := net.Listen("tcp", controlAddr)
+	require.NoError(t, err, "the control-plane port is released")
+	require.NoError(t, ln.Close())
+	require.Error(t, publish(), "the preset's bus is closed")
+
+	_, err = New(InMemory(), capture, func(*config) error { return fault.Invalidf("test", "bad option") })
+	require.Error(t, err)
+	require.Error(t, publish(), "a failed option releases the preset's bus")
+
+	p, err = New(append([]Option{InMemory()}, persist...)...)
+	require.NoError(t, err, "a retry with the same data dirs succeeds")
+	require.NoError(t, p.Shutdown(context.Background()))
 }

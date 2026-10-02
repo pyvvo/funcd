@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,11 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/secrets"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 	storemem "github.com/pyvvo/funcd/internal/store/memory"
@@ -25,10 +28,14 @@ type fakeProvider struct {
 	converged []provider.ProviderSpec
 	tornDown  []provider.ProviderRef
 	status    provider.ProviderStatus
+	err       error
 }
 
 func (f *fakeProvider) Converge(_ context.Context, spec provider.ProviderSpec) (provider.ProviderStatus, error) {
 	f.converged = append(f.converged, spec)
+	if f.err != nil {
+		return provider.ProviderStatus{}, f.err
+	}
 	return f.status, nil
 }
 
@@ -338,6 +345,57 @@ func TestScenarioCrashedCatalogEngineRestarts(t *testing.T) {
 	require.Equal(t, period, res.RequeueAfter)
 }
 
+// TestIssue104_ConvergeErrorMarksCatalogNotReady: a Ready catalog whose engine cannot be recreated (Converge fails)
+// is reported not Ready, drops the endpoint of the dead engine and retracts its edge route, while the pass still
+// fails so the controller backs off; once Converge succeeds it is Ready again on the same proxy URL.
+func TestIssue104_ConvergeErrorMarksCatalogNotReady(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	routes := newRecordingRoutes()
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Proxy = mgr
+		d.Routes = routes
+	})
+	cs := mkCatalogService("lake")
+	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+	_, err := st.Create(ctx, cs)
+	require.NoError(t, err)
+	req := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
+	get := func() *v1.CatalogService {
+		obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+		require.NoError(t, gerr)
+		return obj.(*v1.CatalogService)
+	}
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, v1.PhaseReady, get().Status.Phase)
+	proxyURL := get().Status.Endpoint
+	require.Len(t, routes.get(lakeRouteSource), 1)
+
+	prov.err = errors.New("create engine replica 0: pull image: not found")
+	_, err = r.Reconcile(ctx, req)
+	require.Error(t, err, "a failed converge still fails the pass, so the controller backs off")
+	got := get()
+	require.Equal(t, v1.PhasePending, got.Status.Phase, "an engine that cannot be recreated is not Ready")
+	cond, ok := got.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "EngineConvergeFailed", cond.Reason)
+	require.NotEqual(t, proxyURL, got.Status.Endpoint, "the endpoint of the dead engine is no longer published")
+	require.Empty(t, routes.get(lakeRouteSource), "the edge route is retracted while the engine is down")
+
+	prov.err = nil
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, v1.PhaseReady, get().Status.Phase)
+	require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
+}
+
 // scenario: provider-torn-down (delete path) — a deleted (absent) CatalogService tears the engine
 // down via the provider-runtime; it is idempotent (a missing engine is fine).
 func TestReconcile_delete_tears_down_provider(t *testing.T) {
@@ -413,6 +471,47 @@ func TestReconcile_waits_for_bucket(t *testing.T) {
 	seedCatalogBucket(t, st)
 	reconcileOnce(t, r, "lake")
 	require.NotEmpty(t, prov.converged, "once the Bucket exists the engine converges")
+}
+
+// A CatalogService applied before the ConfigMap or Secret it binds is held not-Ready and requeued, so its engine
+// converges once the binding exists: no ConfigMap or Secret event reconciles the CatalogService again (issue #77).
+func TestIssue77_MissingBindingRecoversWhenApplied(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []v1.Kind{v1.KindConfigMap, v1.KindSecret} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			seedCatalogBucket(t, st)
+			prov := &fakeProvider{}
+			sr, err := secrets.NewResolver(secrets.Deps{Store: st, Authorizer: rbac.New()})
+			require.NoError(t, err)
+			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Secrets = sr })
+			cs := mkCatalogService("lake")
+			if kind == v1.KindConfigMap {
+				cs.Spec.Config = []v1.ObjectName{"late"}
+			} else {
+				cs.Spec.Secrets = []v1.ObjectName{"late"}
+			}
+			_, err = st.Create(ctx, cs)
+			require.NoError(t, err)
+
+			res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"})
+			require.NoError(t, err)
+			require.Empty(t, prov.converged, "no engine converges while a bound %s is absent", kind)
+			require.Positive(t, res.RequeueAfter, "a missing binding requeues the CatalogService")
+
+			binding, ok := v1.NewObject(kind)
+			require.True(t, ok)
+			meta := binding.GetObjectMeta()
+			meta.Name, meta.Namespace, meta.ResourceGroup = "late", "default", "rg1"
+			_, err = st.Create(ctx, binding)
+			require.NoError(t, err)
+
+			reconcileOnce(t, r, "lake")
+			require.NotEmpty(t, prov.converged, "the engine converges once its binding exists")
+		})
+	}
 }
 
 // DEFERRED node-gated scenarios (ADR-0086/0087): the live-DuckDB scenarios need the native DuckDB
