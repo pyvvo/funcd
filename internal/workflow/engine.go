@@ -961,9 +961,11 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			}
 		}
 	}
+	rs.skipFailedDownstream()
 	err := e.persist(ctx, rec, rs, outputs)
 	if fault.KindOf(err) == fault.PayloadTooLarge {
 		if err = e.dropUnrecordedOutputs(ctx, rec, rs, outputs, err); err == nil {
+			rs.skipFailedDownstream()
 			err = e.persist(ctx, rec, rs, outputs)
 		}
 	}

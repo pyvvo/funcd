@@ -222,6 +222,47 @@ func TestIssue128_FailFastCancelsRunningSiblings(t *testing.T) {
 	}
 }
 
+// Issue #351: fail-fast records the failed step's downstream Skipped (ADR-0094 "downstream is skipped"),
+// not Pending; a cancelled sibling outside that subtree stays Pending (ADR-0107).
+func TestIssue351_FailedStepDownstreamIsSkipped(t *testing.T) {
+	want := func(t *testing.T, rec *runstate.Record, phases map[string]v1.StepPhase) {
+		t.Helper()
+		if rec == nil || rec.Phase != runFailed {
+			t.Fatalf("run = %+v, want Failed", rec)
+		}
+		for name, p := range phases {
+			if got := phaseOf(rec, name); got != p {
+				t.Errorf("step %s = %s, want %s", name, got, p)
+			}
+		}
+	}
+	t.Run("chain", func(t *testing.T) {
+		f := newFake()
+		f.permanent["a"] = true
+		e := newTestEngine(t, f, Config{})
+		rec, _ := e.Execute(context.Background(), "default", "run-351", "wf",
+			spec(step("a", ""), step("b", ""), step("c", "")), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"a": v1.StepFailed, "b": v1.StepSkipped, "c": v1.StepSkipped})
+	})
+	t.Run("fan-in with a cancelled sibling", func(t *testing.T) {
+		f := &failWhileSiblingRuns{fakeDispatcher: newFake(), dIn: make(chan struct{})}
+		e := newTestEngine(t, f, Config{})
+		rec, _ := e.Execute(context.Background(), "default", "run-351f", "wf", spec(
+			step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d"),
+		), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"c": v1.StepFailed, "d": v1.StepPending, "e": v1.StepSkipped})
+	})
+	t.Run("output the run store cannot hold", func(t *testing.T) {
+		f := newFake()
+		pad := json.RawMessage(`{"pad":"` + strings.Repeat("x", 600_000) + `"}`)
+		f.outputs["f1"], f.outputs["f2"] = pad, pad
+		e := newTestEngine(t, f, Config{PayloadLimit: 1 << 20})
+		rec, _ := e.Execute(context.Background(), "default", "run-351o", "wf",
+			spec(step("f1", ""), step("f2", ""), step("f3", "")), json.RawMessage(`{}`), StartOptions{})
+		want(t, rec, map[string]v1.StepPhase{"f2": v1.StepFailed, "f3": v1.StepSkipped})
+	})
+}
+
 // scenario: when-skips-step — a false condition skips the step; the run still Succeeds.
 func TestWhenSkipsStep(t *testing.T) {
 	f := newFake()
