@@ -240,14 +240,16 @@ func (s *Source) Run(ctx context.Context) error {
 }
 
 // dueTimers marks and returns the named events whose interval has elapsed, advancing their lastFire
-// under the lock so a fire is never double-counted across ticks.
+// under the lock so a fire is never double-counted across ticks. lastFire advances to the latest period
+// boundary, not to the tick time, so tick lateness never stretches the period, and periods missed while a
+// publish was in flight are skipped rather than fired in a burst.
 func (s *Source) dueTimers(now time.Time) []eventKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var due []eventKey
 	for k, e := range s.timers {
-		if now.Sub(e.lastFire) >= e.interval {
-			e.lastFire = now
+		if elapsed := now.Sub(e.lastFire); elapsed >= e.interval {
+			e.lastFire = now.Add(-(elapsed % e.interval))
 			due = append(due, k)
 		}
 	}
