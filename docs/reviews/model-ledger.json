@@ -4333,5 +4333,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-148-fix-claude-opus-5-5.md",
     "notes": "pass 0/0/2: Minor\u00b7model the timer branch's condition removal was tested only from a NotReady blob source (fixed after review: a Ready source too, mutant killed); Minor\u00b7model normalizedBlob has no observable effect while the V1 watcher ignores on (kept to hand Register the same spec as before). Revert fails all subtests; 3/5 mutants killed at review; -race, vet, gofmt, lint host+linux green."
+  },
+  {
+    "date": "2026-10-02",
+    "issue": "19",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-19-fix-claude-opus-5-5.md",
+    "notes": "pass 0/0/0: one-line ensureKVStore status carry-over (mirrors ensureFunction); revert check reproduces the issue's exact wipe; 3/3 mutants killed; -race, vet, gofmt, lint host+linux green."
   }
 ]
