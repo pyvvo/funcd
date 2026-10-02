@@ -17,6 +17,7 @@ not needed. Paths below are relative to the repo root.
 |---|---|
 | Wrong behavior in what is built, a flaky test, a concrete task | an **issue** — this skill |
 | An un-scoped idea for later | a **board card** — [`/project-management`](../project-management/SKILL.md) |
+| A security vulnerability | a **private draft security advisory** (`gh api -X POST repos/pyvvo/funcd/security-advisories`), never a public issue; fixed with [`/fix`](../fix/SKILL.md)'s advisory flow |
 | A decision on how something works | an **ADR** — [`/adr`](../adr/SKILL.md) |
 
 A bug whose fix needs a design decision is both: the issue records the defect and carries `needs-adr`, the ADR
