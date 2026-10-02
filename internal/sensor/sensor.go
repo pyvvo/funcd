@@ -219,8 +219,9 @@ func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.R
 	r.attemptDelivery(ctx, newRetryID(), d, 1) // inline attempt #1; retries run async on the retry queue
 }
 
-// deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun
-// (`workflow:`) or invoke a Function (`function:`). Returns the delivery error (nil on success).
+// deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun with it
+// (`workflow:`) or invoke a Function with the CloudEvent carrying it as its data (`function:`). Returns the
+// delivery error (nil on success).
 func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
 	input, err := buildInput(d.action.Input, d.ce)
 	if err != nil {
@@ -230,7 +231,9 @@ func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
 	case d.action.Workflow != "":
 		return r.startWorkflow(ctx, d.ns, d.rg, d.sensor, d.action, input)
 	case d.action.Function != "":
-		return r.invoker.Invoke(ctx, d.ns, d.action.Function, d.ce)
+		ce := d.ce
+		ce.Data = input
+		return r.invoker.Invoke(ctx, d.ns, d.action.Function, ce)
 	}
 	return nil
 }
@@ -290,9 +293,11 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 }
 
 // Replay performs ONE synchronous delivery attempt of a stored DeadLetter's CloudEvent through the LIVE
-// Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. On success the
-// entry is Deleted and nil returned; on failure the entry is re-Put with Attempts reset (never lost) and
-// the delivery error returned. A missing DeadLetter / Sensor / action ⇒ NotFound (the operator discards).
+// Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. The replay is an
+// action-delivery, so it records its Invocation (Ready or Failed). On success the entry is Deleted and nil
+// returned; on failure the entry is re-Put with Attempts reset (never lost) and the delivery error
+// returned, marked as re-parked once the re-Put succeeded. A missing DeadLetter / Sensor / action ⇒
+// NotFound (the operator discards).
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
 	if r.deadletters == nil {
@@ -319,14 +324,17 @@ func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string)
 		return fault.Invalidf("sensor.Replay", "stored payload is not a CloudEvent: %v", uerr)
 	}
 	d := delivery{ns: ns, rg: se.ResourceGroup, sensor: dl.Sensor, source: dl.Source, event: dl.Event, action: action, ce: ce, firedAt: time.Now().UTC()}
-	if derr := r.deliver(ctx, d); derr != nil {
+	derr := r.deliver(ctx, d)
+	r.recordTerminal(ctx, d, derr)
+	if derr != nil {
 		dl.Attempts = 0 // reset — a fresh attempt count for the re-parked entry
 		dl.Reason = derr.Error()
 		dl.FailedAt = time.Now().UTC()
 		if perr := r.deadletters.Put(ctx, dl); perr != nil {
 			r.logger.WarnContext(ctx, "re-park after failed replay failed", "sensor", dl.Sensor, "id", id, "error", perr)
+			return derr
 		}
-		return derr
+		return fault.Wrapf(derr, fault.KindOf(derr), "sensor.Replay", "delivery failed (entry re-parked)")
 	}
 	return r.deadletters.Delete(ctx, ns, id)
 }
@@ -407,7 +415,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, se *v1.Sensor) error {
 func (r *Reconciler) staticCheck(se *v1.Sensor) (reason, msg string, ok bool) {
 	for i := range se.Spec.Do {
 		a := &se.Spec.Do[i]
-		if len(a.Input) == 0 {
+		if inputAbsent(a.Input) {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -435,7 +443,7 @@ func (r *Reconciler) staticCheck(se *v1.Sensor) (reason, msg string, ok bool) {
 // verbatim; else each field is a literal (passed through) or a `${{ event.* }}` Select expression
 // evaluated against {"event": <the CloudEvent JSON>}.
 func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, error) {
-	if len(raw) == 0 {
+	if inputAbsent(raw) {
 		if len(ev.Data) == 0 {
 			return json.RawMessage("{}"), nil
 		}
@@ -471,6 +479,12 @@ func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, e
 		out[field] = res
 	}
 	return json.Marshal(out)
+}
+
+// inputAbsent reports whether an action has no input: the key is omitted, or set to null (a bare `input:`,
+// `input: null` or `input: ~` in YAML).
+func inputAbsent(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
 }
 
 // asExprString reports whether a JSON value is a `${{ … }}` expression string (and returns it).

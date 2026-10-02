@@ -40,3 +40,17 @@ func TestInvokeIsCountedWhileInFlight(t *testing.T) {
 	require.NoError(t, <-done)
 	require.True(t, calls.Idle(srv.URL, 0), "the action no longer counts once its answer was read")
 }
+
+func TestIssue174_InvokeErrorCarriesResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":"event data does not match the input contract","details":["name is required"]}`))
+	}))
+	t.Cleanup(srv.Close)
+	inv := &sensor.HTTPInvoker{Endpoints: readyEndpoints{upstream: srv.URL}}
+
+	err := inv.Invoke(context.Background(), "default", "strict", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "returned status 422")
+	require.Contains(t, err.Error(), "name is required", "the function's answer explains the failure")
+}

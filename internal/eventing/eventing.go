@@ -14,8 +14,9 @@ import (
 )
 
 // runTick is the base resolution of the Run loop; a named event fires when at least its Interval has
-// elapsed since its last fire.
-const runTick = 250 * time.Millisecond
+// elapsed since its last fire. It is a quarter of the 100ms interval floor, so every interval gets a tick
+// in each period and a firing is at most one tick late.
+const runTick = 25 * time.Millisecond
 
 // condReady is the EventSource readiness condition type (ADR-0119): a blob source with a missing Bucket is
 // NotReady with a reason, mirroring the Route BackendNotFound pattern.
@@ -239,14 +240,16 @@ func (s *Source) Run(ctx context.Context) error {
 }
 
 // dueTimers marks and returns the named events whose interval has elapsed, advancing their lastFire
-// under the lock so a fire is never double-counted across ticks.
+// under the lock so a fire is never double-counted across ticks. lastFire advances to the latest period
+// boundary, not to the tick time, so tick lateness never stretches the period, and periods missed while a
+// publish was in flight are skipped rather than fired in a burst.
 func (s *Source) dueTimers(now time.Time) []eventKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var due []eventKey
 	for k, e := range s.timers {
-		if now.Sub(e.lastFire) >= e.interval {
-			e.lastFire = now
+		if elapsed := now.Sub(e.lastFire); elapsed >= e.interval {
+			e.lastFire = now.Add(-(elapsed % e.interval))
 			due = append(due, k)
 		}
 	}

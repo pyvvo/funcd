@@ -273,3 +273,28 @@ func TestRetentionEvicts(t *testing.T) {
 	require.Equal(t, "01C", teamA[0].ID, "the newest survivor remains")
 	require.Len(t, dlqList(t, dlq, "team-b"), 1, "another namespace under cap/TTL is untouched")
 }
+
+func TestIssue174_ReplayRecordsInvocation(t *testing.T) {
+	inv := &scriptedInvoker{failFirst: -1}
+	st, fan, dlq, r := dlqHarness(t, inv, 1)
+	createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+		[]v1.Action{{Name: "notify", On: "d", Function: "mailer"}})
+	_, err := r.Reconcile(context.Background(), reqOf("s"))
+	require.NoError(t, err)
+	fire(t, fan, "git", "push", "")
+	require.Len(t, dlqList(t, dlq, "team-a"), 1)
+	id := dlqList(t, dlq, "team-a")[0].ID
+
+	require.Error(t, r.Replay(context.Background(), "team-a", id))
+	ready, failed := invocationsByPhase(t, st)
+	require.Equal(t, 0, ready)
+	require.Equal(t, 2, failed, "a failed replay is an action delivery: it records a Failed Invocation")
+
+	inv.mu.Lock()
+	inv.failFirst = 0
+	inv.mu.Unlock()
+	require.NoError(t, r.Replay(context.Background(), "team-a", id))
+	ready, failed = invocationsByPhase(t, st)
+	require.Equal(t, 1, ready, "a successful replay records a Ready Invocation")
+	require.Equal(t, 2, failed)
+}
