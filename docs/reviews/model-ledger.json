@@ -2203,20 +2203,5 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-24-fix-claude-opus-5-5.md",
     "notes": "pass: test fails pre-fix (rv 7->10) and passes under -race; 3/3 mutants killed; real-engine probe ~13k reconciles/5s -> 0. Minor(model): unused HandOutSettle knob in the test. Minor(env): pre-existing PushSite created-timestamp flake in internal/artifact."
-  },
-  {
-    "date": "2026-10-02",
-    "issue": "25",
-    "phase": "fix",
-    "model": "claude-opus-5-5",
-    "verdict": "pass",
-    "blockers": 0,
-    "majors": 0,
-    "minors": 1,
-    "model_attributed": 1,
-    "dod_passed": 11,
-    "dod_total": 11,
-    "report": "docs/reviews/issue-25-fix-claude-opus-5-5.md",
-    "notes": "pass 0/0/1; Minor (model): the resume-from-seen path is not pinned, because a mutant that keeps seen at 0 passes when the fresh store's ring still holds revision 1. Revert check: both subtests fail (34/100 and 1034/1100 missed, late lost). The issue's unit probe went from 65/201 to 201/201 at GOMAXPROCS=1. 2 of 3 mutants were killed. Build, vet and lint (host and linux), race tests and pkg/funcd e2e are green."
   }
 ]
