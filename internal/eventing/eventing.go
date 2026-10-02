@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -115,8 +116,10 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		return controller.Result{}, nil
 	}
 	s.registerTimer(req.Namespace, req.Name, es.Spec.Timer)
-	if es.Status.Phase != v1.PhaseReady {
+	_, blobCond := es.Status.Conditions.Get(condReady) // left by an earlier blob kind; a timer source has none
+	if es.Status.Phase != v1.PhaseReady || blobCond {
 		es.Status.Phase = v1.PhaseReady
+		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condReady })
 		if _, err := s.store.Update(ctx, es); err != nil {
 			return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.Reconcile", "set eventsource ready")
 		}
@@ -127,12 +130,11 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 // reconcileBlob owns the `blob:` source branch (ADR-0119): it resolves the watched Bucket, registers the
 // source's named events on the BlobWatcher and sets Ready — or, when the Bucket does not exist in the
 // namespace, deregisters and sets NotReady with a BucketNotFound condition (never Ready-but-not-polling).
-// Either way it requeues, so a Bucket created or deleted later is picked up. `on` is defaulted here
-// (decode/normalize), not in Validate.
+// Either way it requeues, so a Bucket created or deleted later is picked up. `on` is defaulted on the
+// watcher's copy (decode/normalize), not in Validate and not in the stored spec.
 func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (controller.Result, error) {
 	ns, name := es.Namespace, es.Name
 	s.deregisterTimers(ns, name) // a source that became a blob kind must stop any prior timers
-	es.Normalize()               // default each event's empty `on` to [Created] (pure defaulting, not Validate)
 	if s.blob == nil {
 		return controller.Result{}, s.setBlobNotReady(ctx, es, "BlobWatcherUnavailable", "blob event watching is not enabled")
 	}
@@ -145,8 +147,8 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
 	}
-	s.blob.Register(ns, name, es.Spec.Blob)
-	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || es.Status.Phase != v1.PhaseReady {
+	s.blob.Register(ns, name, normalizedBlob(es))
+	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || es.Status.Phase != v1.PhaseReady {
 		es.Status.Phase = v1.PhaseReady
 		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
 		if _, uerr := s.store.Update(ctx, es); uerr != nil {
@@ -154,6 +156,15 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		}
 	}
 	return controller.Result{RequeueAfter: bucketRecheckInterval}, nil
+}
+
+// normalizedBlob returns es's blob source with the ADR-0119 defaults applied to a copy. es is written back
+// for its status, so defaulting es itself would rewrite the user's spec and bump its generation past the
+// condition stamped with it.
+func normalizedBlob(es *v1.EventSource) *v1.BlobSource {
+	view := v1.EventSource{Spec: v1.EventSourceSpec{Blob: &v1.BlobSource{Bucket: es.Spec.Blob.Bucket, Events: slices.Clone(es.Spec.Blob.Events)}}}
+	view.Normalize()
+	return view.Spec.Blob
 }
 
 // setBlobNotReady marks a blob source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).

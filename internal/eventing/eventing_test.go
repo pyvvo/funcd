@@ -221,3 +221,89 @@ func TestIssue102_BlobSourceNotReadyAfterBucketDeleted(t *testing.T) {
 	require.Equal(t, v1.ConditionFalse, cond.Status)
 	require.Equal(t, "BucketNotFound", cond.Reason)
 }
+
+func getSource(t *testing.T, st store.Store, name string) *v1.EventSource {
+	t.Helper()
+	obj, err := st.Get(context.Background(), v1.KindEventSource.GVK(), "team-a", v1.ObjectName(name))
+	require.NoError(t, err)
+	return obj.(*v1.EventSource)
+}
+
+func newBlobSource(t *testing.T, st store.Store) *eventing.Source {
+	t.Helper()
+	watcher, err := eventing.NewBlobWatcher(stubLister{}, &capturePublisher{}, eventing.NewMemWatermark(), time.Second, nil)
+	require.NoError(t, err)
+	src, err := eventing.NewSource(eventing.Deps{Store: st, Publisher: &capturePublisher{}, Blob: watcher})
+	require.NoError(t, err)
+	return src
+}
+
+// Issue #148: the reconciler's status write must not carry a defaulted spec (that bumps the generation past
+// the condition it stamps), a spec edit must refresh the Ready condition's observedGeneration, and a source
+// that stops being a blob source must not keep the blob-only Ready condition.
+func TestIssue148_StatusMatchesCurrentSpec(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("ready reconcile keeps the user's spec", func(t *testing.T) {
+		t.Parallel()
+		st := newStore()
+		createBucket(t, st, "raw")
+		createBlobSource(t, st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+		src := newBlobSource(t, st)
+		for range 2 {
+			_, err := src.Reconcile(ctx, reqOf("drops"))
+			require.NoError(t, err)
+		}
+		es := getSource(t, st, "drops")
+		require.Equal(t, int64(1), es.Generation, "a status write must not bump the generation")
+		require.Empty(t, es.Spec.Blob.Events[0].On, "the default is not written into the stored spec")
+		cond, ok := es.Status.Conditions.Get("Ready")
+		require.True(t, ok)
+		require.Equal(t, v1.ConditionTrue, cond.Status)
+		require.Equal(t, es.Generation, cond.ObservedGeneration)
+	})
+
+	t.Run("spec edit refreshes the condition", func(t *testing.T) {
+		t.Parallel()
+		st := newStore()
+		createBucket(t, st, "raw")
+		createBlobSource(t, st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/", On: []v1.BlobEventType{v1.BlobCreated}})
+		src := newBlobSource(t, st)
+		_, err := src.Reconcile(ctx, reqOf("drops"))
+		require.NoError(t, err)
+
+		es := getSource(t, st, "drops")
+		es.Spec.Blob.Events[0].Prefix = "in/"
+		_, err = st.Update(ctx, es)
+		require.NoError(t, err)
+		_, err = src.Reconcile(ctx, reqOf("drops"))
+		require.NoError(t, err)
+		es = getSource(t, st, "drops")
+		require.Equal(t, int64(2), es.Generation)
+		cond, ok := es.Status.Conditions.Get("Ready")
+		require.True(t, ok)
+		require.Equal(t, es.Generation, cond.ObservedGeneration, "the Ready condition observes the edited spec")
+	})
+
+	t.Run("timer source drops the blob condition", func(t *testing.T) {
+		t.Parallel()
+		st := newStore()
+		createBlobSource(t, st, "drops", "missing", v1.BlobEvent{Name: "arrived"})
+		src := newBlobSource(t, st)
+		_, err := src.Reconcile(ctx, reqOf("drops"))
+		require.NoError(t, err)
+
+		es := getSource(t, st, "drops")
+		es.Spec.Blob, es.Spec.Timer = nil, &v1.TimerSource{Events: []v1.TimerEvent{timerEvent("tick", time.Minute)}}
+		_, err = st.Update(ctx, es)
+		require.NoError(t, err)
+		_, err = src.Reconcile(ctx, reqOf("drops"))
+		require.NoError(t, err)
+		require.Equal(t, 1, src.ActiveTimers())
+		es = getSource(t, st, "drops")
+		require.Equal(t, v1.PhaseReady, es.Status.Phase)
+		cond, ok := es.Status.Conditions.Get("Ready")
+		require.False(t, ok, "a timer source keeps no blob Ready condition, got %+v", cond)
+	})
+}
