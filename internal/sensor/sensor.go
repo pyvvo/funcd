@@ -61,9 +61,10 @@ type Deps struct {
 }
 
 // subEntry is a Sensor's live subscription bookkeeping (ADR-0109 B1 idempotency): the cancels for its
-// current subscriptions + the generation they were made for, so a resync re-reconcile is a no-op and a
-// spec change cancels-and-replaces.
+// current subscriptions + the object (UID) and generation they were made for, so a resync re-reconcile is
+// a no-op and a spec change or a re-create under the same name (Generation restarts at 1) cancels-and-replaces.
 type subEntry struct {
+	uid        v1.UID
 	generation int64
 	cancels    []func()
 }
@@ -146,7 +147,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// Subscription idempotency (B1): a resync with an unchanged generation is a no-op; a spec change
 	// cancels-and-replaces so a firing invokes each dependency's callback exactly once.
 	r.mu.Lock()
-	if e, present := r.subs[k]; present && e.generation == se.Generation {
+	if e, present := r.subs[k]; present && e.uid == se.UID && e.generation == se.Generation {
 		r.mu.Unlock() // already subscribed for this generation — nothing to do
 	} else {
 		if present {
@@ -154,7 +155,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 				c()
 			}
 		}
-		r.subs[k] = &subEntry{generation: se.Generation, cancels: r.subscribe(se)}
+		r.subs[k] = &subEntry{uid: se.UID, generation: se.Generation, cancels: r.subscribe(se)}
 		r.mu.Unlock()
 	}
 

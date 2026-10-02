@@ -41,9 +41,14 @@ type metaResolver struct {
 	r   MetaReader
 	ttl time.Duration
 
-	mu    sync.Mutex
-	cache map[string]cachedBinding
+	mu      sync.Mutex
+	cache   map[string]cachedBinding
+	sweepAt int // cache size that triggers the next sweep of expired entries
 }
+
+// minSweepLen is the floor of sweepAt: an insert sweeps expired entries once the cache reaches twice its
+// size after the last sweep, so the cache stays bounded by the live bindings at amortized O(1) per insert.
+const minSweepLen = 64
 
 type cachedBinding struct {
 	b      Binding
@@ -71,9 +76,12 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	key := resolverKey(ns, fn, alias)
 
 	m.mu.Lock()
-	if c, ok := m.cache[key]; ok && time.Now().Before(c.expiry) {
-		m.mu.Unlock()
-		return c.b, nil
+	if c, ok := m.cache[key]; ok {
+		if time.Now().Before(c.expiry) {
+			m.mu.Unlock()
+			return c.b, nil
+		}
+		delete(m.cache, key)
 	}
 	m.mu.Unlock()
 
@@ -101,8 +109,17 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	}
 
 	b := Binding{Bucket: bind.Bucket, Prefix: bind.Prefix}
+	now := time.Now()
 	m.mu.Lock()
-	m.cache[key] = cachedBinding{b: b, expiry: time.Now().Add(m.ttl)}
+	if len(m.cache) >= m.sweepAt {
+		for k, c := range m.cache {
+			if !now.Before(c.expiry) {
+				delete(m.cache, k)
+			}
+		}
+		m.sweepAt = max(2*len(m.cache), minSweepLen)
+	}
+	m.cache[key] = cachedBinding{b: b, expiry: now.Add(m.ttl)}
 	m.mu.Unlock()
 	return b, nil
 }

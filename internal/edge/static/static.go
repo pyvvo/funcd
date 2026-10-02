@@ -94,7 +94,7 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 
 	// Look up the object's attributes (ModTime, Size) for the weak validator — no full Get needed
 	// yet (this also lets a matching If-None-Match short-circuit to 304 without reading the body).
-	attrs, found, err := stat(r, bucket, key)
+	attrs, found, err := blob.Stat(r.Context(), bucket, key)
 	if err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "stat %q", key))
 		return
@@ -107,7 +107,7 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 			return
 		}
 		key = back.Prefix + index
-		attrs, found, err = stat(r, bucket, key)
+		attrs, found, err = blob.Stat(r.Context(), bucket, key)
 		if err != nil {
 			fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "stat %q", key))
 			return
@@ -171,21 +171,6 @@ func resolveKey(prefix, index, dec string) (key string, bad bool) {
 		return "", true
 	}
 	return key, false
-}
-
-// stat returns the object's attributes via a List keyed by the exact object path (the blob.Bucket
-// port is Get/List-only, no per-key Stat — ADR-0007). found=false ⇒ no object at that exact key.
-func stat(r *http.Request, b blob.Bucket, key string) (blob.Attributes, bool, error) {
-	items, err := b.List(r.Context(), key)
-	if err != nil {
-		return blob.Attributes{}, false, err
-	}
-	for i := range items {
-		if items[i].Key == key {
-			return items[i], true, nil
-		}
-	}
-	return blob.Attributes{}, false, nil
 }
 
 // weakETag derives the (ModTime,Size) weak validator (M1) — no per-request sha256 of the body. ModTime

@@ -93,6 +93,12 @@ func TestKVStoreValidate(t *testing.T) {
 	if err := kvStore("neg", -1, 0).Validate(); fault.KindOf(err) != fault.Invalid {
 		t.Errorf("negative maxValueBytes: want Invalid, got %v", err)
 	}
+	if err := kvStore("at-limit", MaxValueBytesLimit, 0).Validate(); err != nil {
+		t.Errorf("maxValueBytes at the limit rejected: %v", err)
+	}
+	if err := kvStore("over-limit", MaxValueBytesLimit+1, 0).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("maxValueBytes over the limit: want Invalid, got %v", err)
+	}
 	if err := kvStore("neg2", 0, -1).Validate(); fault.KindOf(err) != fault.Invalid {
 		t.Errorf("negative maxKeyBytes: want Invalid, got %v", err)
 	}

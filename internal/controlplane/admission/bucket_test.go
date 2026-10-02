@@ -45,7 +45,9 @@ func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Names
 
 type blobFakeProber struct{ has bool }
 
-func (p blobFakeProber) HasAny(_ context.Context, _ string) (bool, error) { return p.has, nil }
+func (p blobFakeProber) HasAny(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, _ string) (bool, error) {
+	return p.has, nil
+}
 
 func mkBucket(name string, prefixes ...v1.BucketPrefix) *v1.Bucket {
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}

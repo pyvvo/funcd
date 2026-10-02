@@ -11,7 +11,10 @@ import (
 
 // ===== Service (namespaced) =====
 
-type createServiceInput struct{ Body v1.Service }
+type createServiceInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Service
+}
 type serviceOutput struct{ Body v1.Service }
 type listServiceOutput struct{ Body []v1.Service }
 
@@ -33,6 +36,9 @@ func registerService(api huma.API, h Handlers) {
 		OperationID: "createService", Method: http.MethodPost, Path: base,
 		Tags: []string{"Service"},
 	}, func(ctx context.Context, in *createServiceInput) (*serviceOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateService(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -76,7 +82,10 @@ func registerService(api huma.API, h Handlers) {
 
 // ===== EventSource (namespaced) =====
 
-type createEventSourceInput struct{ Body v1.EventSource }
+type createEventSourceInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.EventSource
+}
 type eventSourceOutput struct{ Body v1.EventSource }
 type listEventSourceOutput struct{ Body []v1.EventSource }
 
@@ -98,6 +107,9 @@ func registerEventSource(api huma.API, h Handlers) {
 		OperationID: "createEventSource", Method: http.MethodPost, Path: base,
 		Tags: []string{"EventSource"},
 	}, func(ctx context.Context, in *createEventSourceInput) (*eventSourceOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateEventSource(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -141,7 +153,10 @@ func registerEventSource(api huma.API, h Handlers) {
 
 // ===== ConfigMap (namespaced) =====
 
-type createConfigMapInput struct{ Body v1.ConfigMap }
+type createConfigMapInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.ConfigMap
+}
 type configMapOutput struct{ Body v1.ConfigMap }
 type listConfigMapOutput struct{ Body []v1.ConfigMap }
 
@@ -163,6 +178,9 @@ func registerConfigMap(api huma.API, h Handlers) {
 		OperationID: "createConfigMap", Method: http.MethodPost, Path: base,
 		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *createConfigMapInput) (*configMapOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateConfigMap(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -206,7 +224,10 @@ func registerConfigMap(api huma.API, h Handlers) {
 
 // ===== Secret (namespaced) =====
 
-type createSecretInput struct{ Body v1.Secret }
+type createSecretInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Secret
+}
 type secretOutput struct{ Body v1.Secret }
 type listSecretOutput struct{ Body []v1.Secret }
 
@@ -228,6 +249,9 @@ func registerSecret(api huma.API, h Handlers) {
 		OperationID: "createSecret", Method: http.MethodPost, Path: base,
 		Tags: []string{"Secret"},
 	}, func(ctx context.Context, in *createSecretInput) (*secretOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateSecret(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -271,7 +295,10 @@ func registerSecret(api huma.API, h Handlers) {
 
 // ===== Grant (namespaced) =====
 
-type createGrantInput struct{ Body v1.Grant }
+type createGrantInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Grant
+}
 type grantOutput struct{ Body v1.Grant }
 type listGrantOutput struct{ Body []v1.Grant }
 
@@ -293,6 +320,9 @@ func registerGrant(api huma.API, h Handlers) {
 		OperationID: "createGrant", Method: http.MethodPost, Path: base,
 		Tags: []string{"Grant"},
 	}, func(ctx context.Context, in *createGrantInput) (*grantOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateGrant(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -336,7 +366,10 @@ func registerGrant(api huma.API, h Handlers) {
 
 // ===== Identity (namespaced) — ADR-0135, FEAT-0008/F100 =====
 
-type createIdentityInput struct{ Body v1.Identity }
+type createIdentityInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Identity
+}
 type identityOutput struct{ Body v1.Identity }
 type listIdentityOutput struct{ Body []v1.Identity }
 
@@ -358,6 +391,9 @@ func registerIdentity(api huma.API, h Handlers) {
 		OperationID: "createIdentity", Method: http.MethodPost, Path: base,
 		Tags: []string{"Identity"},
 	}, func(ctx context.Context, in *createIdentityInput) (*identityOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateIdentity(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -401,10 +437,16 @@ func registerIdentity(api huma.API, h Handlers) {
 
 // ===== Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 =====
 
-type createRoleInput struct{ Body v1.Role }
+type createRoleInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Role
+}
 type roleOutput struct{ Body v1.Role }
 type listRoleOutput struct{ Body []v1.Role }
-type createRolesAssignmentInput struct{ Body v1.RolesAssignment }
+type createRolesAssignmentInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.RolesAssignment
+}
 type rolesAssignmentOutput struct{ Body v1.RolesAssignment }
 type listRolesAssignmentOutput struct{ Body []v1.RolesAssignment }
 
@@ -420,6 +462,9 @@ func registerRole(api huma.API, h Handlers) {
 		})
 	huma.Register(api, huma.Operation{OperationID: "createRole", Method: http.MethodPost, Path: base, Tags: []string{"Role"}},
 		func(ctx context.Context, in *createRoleInput) (*roleOutput, error) {
+			if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+				return nil, wrapFaultError(err)
+			}
 			item, err := h.CreateRole(ctx, in.Body)
 			if err != nil {
 				return nil, wrapFaultError(err)
@@ -464,6 +509,9 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 		})
 	huma.Register(api, huma.Operation{OperationID: "createRolesAssignment", Method: http.MethodPost, Path: base, Tags: []string{"RolesAssignment"}},
 		func(ctx context.Context, in *createRolesAssignmentInput) (*rolesAssignmentOutput, error) {
+			if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+				return nil, wrapFaultError(err)
+			}
 			item, err := h.CreateRolesAssignment(ctx, in.Body)
 			if err != nil {
 				return nil, wrapFaultError(err)
@@ -498,7 +546,10 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 
 // ===== KVStore (namespaced) — ADR-0072 =====
 
-type createKVStoreInput struct{ Body v1.KVStore }
+type createKVStoreInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.KVStore
+}
 type kvStoreOutput struct{ Body v1.KVStore }
 type listKVStoreOutput struct{ Body []v1.KVStore }
 
@@ -520,6 +571,9 @@ func registerKVStore(api huma.API, h Handlers) {
 		OperationID: "createKVStore", Method: http.MethodPost, Path: base,
 		Tags: []string{"KVStore"},
 	}, func(ctx context.Context, in *createKVStoreInput) (*kvStoreOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateKVStore(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -563,7 +617,10 @@ func registerKVStore(api huma.API, h Handlers) {
 
 // ===== Bucket (namespaced) — ADR-0080 =====
 
-type createBucketInput struct{ Body v1.Bucket }
+type createBucketInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Bucket
+}
 type bucketOutput struct{ Body v1.Bucket }
 type listBucketOutput struct{ Body []v1.Bucket }
 
@@ -585,6 +642,9 @@ func registerBucket(api huma.API, h Handlers) {
 		OperationID: "createBucket", Method: http.MethodPost, Path: base,
 		Tags: []string{"Bucket"},
 	}, func(ctx context.Context, in *createBucketInput) (*bucketOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateBucket(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -628,7 +688,10 @@ func registerBucket(api huma.API, h Handlers) {
 
 // ===== CatalogService (namespaced) — ADR-0086 =====
 
-type createCatalogServiceInput struct{ Body v1.CatalogService }
+type createCatalogServiceInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.CatalogService
+}
 type catalogServiceOutput struct{ Body v1.CatalogService }
 type listCatalogServiceOutput struct{ Body []v1.CatalogService }
 
@@ -650,6 +713,9 @@ func registerCatalogService(api huma.API, h Handlers) {
 		OperationID: "createCatalogService", Method: http.MethodPost, Path: base,
 		Tags: []string{"CatalogService"},
 	}, func(ctx context.Context, in *createCatalogServiceInput) (*catalogServiceOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateCatalogService(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -693,7 +759,10 @@ func registerCatalogService(api huma.API, h Handlers) {
 
 // ===== Policy (namespaced) — ADR-0074 =====
 
-type createPolicyInput struct{ Body v1.Policy }
+type createPolicyInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Policy
+}
 type policyOutput struct{ Body v1.Policy }
 type listPolicyOutput struct{ Body []v1.Policy }
 
@@ -715,6 +784,9 @@ func registerPolicy(api huma.API, h Handlers) {
 		OperationID: "createPolicy", Method: http.MethodPost, Path: base,
 		Tags: []string{"Policy"},
 	}, func(ctx context.Context, in *createPolicyInput) (*policyOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreatePolicy(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -758,7 +830,10 @@ func registerPolicy(api huma.API, h Handlers) {
 
 // ===== EgressPolicy (namespaced) =====
 
-type createEgressPolicyInput struct{ Body v1.EgressPolicy }
+type createEgressPolicyInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.EgressPolicy
+}
 type egressPolicyOutput struct{ Body v1.EgressPolicy }
 type listEgressPolicyOutput struct{ Body []v1.EgressPolicy }
 
@@ -780,6 +855,9 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 		OperationID: "createEgressPolicy", Method: http.MethodPost, Path: base,
 		Tags: []string{"EgressPolicy"},
 	}, func(ctx context.Context, in *createEgressPolicyInput) (*egressPolicyOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateEgressPolicy(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -823,7 +901,10 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 
 // ===== Invocation (namespaced) =====
 
-type createInvocationInput struct{ Body v1.Invocation }
+type createInvocationInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Invocation
+}
 type invocationOutput struct{ Body v1.Invocation }
 type listInvocationOutput struct{ Body []v1.Invocation }
 
@@ -845,6 +926,9 @@ func registerInvocation(api huma.API, h Handlers) {
 		OperationID: "createInvocation", Method: http.MethodPost, Path: base,
 		Tags: []string{"Invocation"},
 	}, func(ctx context.Context, in *createInvocationInput) (*invocationOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateInvocation(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1080,7 +1164,10 @@ func registerGateway(api huma.API, h Handlers) {
 
 // ===== Workflow (namespaced) — ADR-0094 =====
 
-type createWorkflowInput struct{ Body v1.Workflow }
+type createWorkflowInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Workflow
+}
 type workflowOutput struct{ Body v1.Workflow }
 type listWorkflowOutput struct{ Body []v1.Workflow }
 
@@ -1102,6 +1189,9 @@ func registerWorkflow(api huma.API, h Handlers) {
 		OperationID: "createWorkflow", Method: http.MethodPost, Path: base,
 		Tags: []string{"Workflow"},
 	}, func(ctx context.Context, in *createWorkflowInput) (*workflowOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateWorkflow(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1145,7 +1235,10 @@ func registerWorkflow(api huma.API, h Handlers) {
 
 // ===== WorkflowRun (namespaced) — ADR-0094 =====
 
-type createWorkflowRunInput struct{ Body v1.WorkflowRun }
+type createWorkflowRunInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.WorkflowRun
+}
 type workflowRunOutput struct{ Body v1.WorkflowRun }
 type listWorkflowRunOutput struct{ Body []v1.WorkflowRun }
 
@@ -1167,6 +1260,9 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 		OperationID: "createWorkflowRun", Method: http.MethodPost, Path: base,
 		Tags: []string{"WorkflowRun"},
 	}, func(ctx context.Context, in *createWorkflowRunInput) (*workflowRunOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateWorkflowRun(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1208,7 +1304,10 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 	})
 }
 
-type createSensorInput struct{ Body v1.Sensor }
+type createSensorInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Sensor
+}
 type sensorOutput struct{ Body v1.Sensor }
 type listSensorOutput struct{ Body []v1.Sensor }
 
@@ -1228,6 +1327,9 @@ func registerSensor(api huma.API, h Handlers) {
 	huma.Register(api, huma.Operation{
 		OperationID: "createSensor", Method: http.MethodPost, Path: base, Tags: []string{"Sensor"},
 	}, func(ctx context.Context, in *createSensorInput) (*sensorOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateSensor(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1268,7 +1370,10 @@ func registerSensor(api huma.API, h Handlers) {
 
 // ===== Site (namespaced) — ADR-0139, FEAT-0003/F103 =====
 
-type createSiteInput struct{ Body v1.Site }
+type createSiteInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Site
+}
 type siteOutput struct{ Body v1.Site }
 type listSiteOutput struct{ Body []v1.Site }
 
@@ -1290,6 +1395,9 @@ func registerSite(api huma.API, h Handlers) {
 		OperationID: "createSite", Method: http.MethodPost, Path: base,
 		Tags: []string{"Site"},
 	}, func(ctx context.Context, in *createSiteInput) (*siteOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		item, err := h.CreateSite(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)

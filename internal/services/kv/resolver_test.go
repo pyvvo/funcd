@@ -2,7 +2,9 @@ package kv_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -85,4 +87,35 @@ func TestResolverDanglingBindingForbidden(t *testing.T) {
 	)
 	_, err = r2.Resolve(ctx, "default", "svc", "a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
+}
+
+// TestIssue170_ResolverCacheEvictsExpiredEntries — churning functions under unique names must not grow
+// the resolver cache by one entry per function ever resolved: expired entries are evicted, and a
+// Forbidden re-resolve of a deleted function drops its stale entry.
+func TestIssue170_ResolverCacheEvictsExpiredEntries(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "svc"}))
+	require.NoError(t, err)
+	// A negative TTL expires each entry as soon as it is cached: the deterministic "wait past the TTL".
+	r, err := kvsvc.NewResolverTTL(metaReader{st}, -time.Nanosecond)
+	require.NoError(t, err)
+	churn := func(name string) {
+		_, err := st.Create(ctx, mkFunctionWithKV(name, v1.FunctionKV{Alias: "a", Store: "orders", Table: "customers"}))
+		require.NoError(t, err)
+		_, err = r.Resolve(ctx, "default", v1.ObjectName(name), "a")
+		require.NoError(t, err)
+		require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name), ""))
+	}
+
+	churn("svc")
+	_, err = r.Resolve(ctx, "default", "svc", "a")
+	require.Equal(t, fault.Forbidden, fault.KindOf(err))
+	require.Zero(t, kvsvc.CacheLen(r), "a Forbidden re-resolve must drop the deleted function's expired entry")
+
+	const n = 1000
+	for i := range n {
+		churn(fmt.Sprintf("svc-%d", i))
+	}
+	require.Less(t, kvsvc.CacheLen(r), n/10, "expired entries must be evicted, not kept per function ever resolved")
 }
