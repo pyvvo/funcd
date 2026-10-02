@@ -199,6 +199,38 @@ func TestIndexShape(t *testing.T) {
 	}
 }
 
+// Issue 95: a restarted daemon gates a Function's cached artifact on its platforms, so a digest this node already
+// materialized must not need the artifact's source after a restart.
+func TestIssue95_CachedPlatformsNeedNoSourceAfterRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	single := filepath.Join(t.TempDir(), "layout")
+	singleRef := "oci-layout://" + single + ":v1"
+	singleDigest, err := artifact.Push(ctx, singleRef, writeBundle(t, "export function handle() {}\n"), nil, "", "")
+	require.NoError(t, err)
+	index, indexRef, indexDigest := multiArch(t)
+
+	for name, a := range map[string]struct{ layout, ref, digest string }{
+		"unannotated manifest": {single, singleRef, singleDigest},
+		"index":                {index, indexRef, indexDigest},
+	} {
+		cache := t.TempDir()
+		before := artifact.NewOrasMaterializer(cache, v1.PlatformLinuxAMD64)
+		want, err := before.Platforms(ctx, a.ref, a.digest)
+		require.NoError(t, err, name)
+		_, err = before.Materialize(ctx, mkFunction(t, a.ref, a.digest))
+		require.NoError(t, err, name)
+
+		require.NoError(t, os.RemoveAll(a.layout))
+		after := artifact.NewOrasMaterializer(cache, v1.PlatformLinuxAMD64)
+		got, err := after.Platforms(ctx, a.ref, a.digest)
+		require.NoError(t, err, "%s: the platforms of a cached digest need no source", name)
+		require.Equal(t, want, got, name)
+		_, err = after.Materialize(ctx, mkFunction(t, a.ref, a.digest))
+		require.NoError(t, err, name)
+	}
+}
+
 // A digest-form source is refused with "needs a tag" on both an OCI layout and a registry (ADR-0145 Decision 2).
 func TestIssue156_IndexRefusesDigestSourceConsistently(t *testing.T) {
 	t.Parallel()
