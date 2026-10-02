@@ -142,6 +142,24 @@ func TestScenarioBootFailureStaysFailed(t *testing.T) {
 	require.Equal(t, v1.PhaseFailed, h.getFn(t, "broken").Status.Phase)
 }
 
+// A new function whose handler blocks while it loads — the shim runs but never binds its port — ends Failed
+// (ShapeInvalid) once its replica has run for the boot timeout without becoming ready (issue #76, ADR-0030 §4b).
+func TestIssue76_NeverReadyHandlerFailsAfterBootTimeout(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.rt.hold(runtime.NewInstanceID("default", "hang", "hang-1", 0), true)
+	h.createFn(t, "hang")
+	h.reconcile(t, "hang")
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a replica that just started is still booting")
+
+	h.rt.exitRevision("hang", "hang-1", 0, runtime.StateRunning, time.Hour) // still running, started an hour ago
+	res := h.reconcile(t, "hang")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
+	require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "hang"))
+	require.Zero(t, res.RequeueAfter, "a Failed function is not polled again")
+	require.Empty(t, h.routes(t))
+}
+
 // scenario: fixed-spec-recovers-failed-function (ADR-0142) — applying a fixed spec to a Failed (ShapeInvalid)
 // function deploys the new spec, and the function becomes Ready.
 func TestScenarioFixedSpecRecoversFailedFunction(t *testing.T) {
