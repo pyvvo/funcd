@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,37 @@ func TestIssue118_OnFailureFiresOnRunTimeoutAndInputMismatch(t *testing.T) {
 	}
 	if f.calls["notify"] != 1 || f.calls["a"] != 0 {
 		t.Errorf("InputSchemaMismatch: dispatches notify=%d a=%d, want the handler once and no step", f.calls["notify"], f.calls["a"])
+	}
+}
+
+// handlerDeadline fails step boom permanently and records the time left on the onFailure handler's
+// dispatch context (0 ⇒ no deadline).
+type handlerDeadline struct{ left time.Duration }
+
+func (d *handlerDeadline) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == "boom" {
+		return nil, Permanent(errors.New("permanent 4xx"))
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		d.left = time.Until(dl)
+	}
+	return json.RawMessage(`{}`), nil
+}
+
+// Issue #28: with no fixed client timeout left, the onFailure handler's dispatch is bounded by its
+// own step timeout, like every other step.
+func TestIssue28_OnFailureHandlerHonorsStepTimeout(t *testing.T) {
+	d := &handlerDeadline{}
+	e := newTestEngine(t, d, Config{})
+	notify := step("notify", "")
+	notify.Function.Timeout = 2 * time.Second
+	spc := spec(step("boom", ""), notify)
+	spc.OnFailure = "notify"
+	if _, err := e.Execute(context.Background(), "default", "run-ht", "wf", spc, json.RawMessage(`{}`), StartOptions{}); err == nil {
+		t.Fatal("run should have failed")
+	}
+	if d.left <= 0 || d.left > notify.Function.Timeout {
+		t.Fatalf("handler dispatch deadline in %v, want within its 2s step timeout", d.left)
 	}
 }
 

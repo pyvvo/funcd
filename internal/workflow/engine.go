@@ -631,13 +631,9 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 			}
 		}
 	}
-	// Per-step invocation bound: the step's own timeout, else the engine default (0 ⇒ none).
 	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
 	// separately in drive and maps to RunTimedOut.
-	stepTimeout := e.cfg.DefaultStepTimeout
-	if fn != nil && fn.Timeout > 0 {
-		stepTimeout = fn.Timeout
-	}
+	stepTimeout := e.stepTimeout(fn)
 	var lastErr error
 	for attempt := 1; attempt <= max; attempt++ {
 		attemptCtx := ctx
@@ -680,6 +676,15 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, spec v1
 	// describe names the step's actual error (e.g. "scorer returned 503"), not the engine envelope.
 	n.errMsg = capErr(lastErr.Error())
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
+}
+
+// stepTimeout is a function step's per-invocation bound: its own timeout, else the engine default
+// (0 ⇒ none).
+func (e *Engine) stepTimeout(fn *v1.FunctionStep) time.Duration {
+	if fn != nil && fn.Timeout > 0 {
+		return fn.Timeout
+	}
+	return e.cfg.DefaultStepTimeout
 }
 
 // stepInput builds a step's input: a single-parent step gets the parent's output
@@ -742,7 +747,13 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			"workflow": string(rec.Workflow), "run": string(rec.Name),
 			"reason": cause.Error(),
 		})
-		_, _ = e.dispatch.Dispatch(ctx, DispatchRequest{
+		hctx := ctx
+		if d := e.stepTimeout(functionOf(specStep(spec, spec.OnFailure))); d > 0 {
+			var cancel context.CancelFunc
+			hctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+		_, _ = e.dispatch.Dispatch(hctx, DispatchRequest{
 			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure,
 			Target:  stepTarget(rec.Workflow, spec, spec.OnFailure),
 			Attempt: 1, Input: fc,
