@@ -1,9 +1,11 @@
 package fault
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -109,5 +111,28 @@ func TestWriteProblem_SetsHeaders(t *testing.T) {
 	}
 	if p.Status == 0 {
 		t.Error("Status should not be zero")
+	}
+}
+
+func TestIssue339_WriteProblemEscapesControlCharacters(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteProblem(rec, Invalidf("op", "bad key a\x01b\x1f\"\\\n<&>"))
+
+	body := rec.Body.Bytes()
+	if !json.Valid(body) {
+		t.Fatalf("problem body is not valid JSON: %q", body)
+	}
+	var p Problem
+	if err := json.Unmarshal(body, &p); err != nil {
+		t.Fatalf("unmarshal problem body: %v", err)
+	}
+	if want := ToProblem(Invalidf("op", "bad key a\x01b\x1f\"\\\n<&>")); p != want {
+		t.Fatalf("decoded problem = %+v, want %+v", p, want)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
