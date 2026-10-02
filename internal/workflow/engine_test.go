@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -115,6 +117,108 @@ func TestFanoutAndJoin(t *testing.T) {
 	}
 	if _, ok := composite["d"]; !ok {
 		t.Fatalf("e composite missing d: %s", f.inputs["e"])
+	}
+}
+
+// rendezvous holds each step in meet inside Dispatch until all of them are in flight together; a step
+// left alone fails after a bound, so a sequential fan-out fails instead of hanging.
+type rendezvous struct {
+	*fakeDispatcher
+	meet map[v1.ObjectName]bool
+	mu   sync.Mutex
+	in   int
+	all  chan struct{}
+}
+
+func (r *rendezvous) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if r.meet[req.Step] {
+		r.mu.Lock()
+		if r.in++; r.in == len(r.meet) {
+			close(r.all)
+		}
+		r.mu.Unlock()
+		select {
+		case <-r.all:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil, Permanent(fmt.Errorf("step %s: no sibling was dispatched while it was in flight", req.Step))
+		}
+	}
+	return r.fakeDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #128: fan-out siblings dispatch concurrently (ADR-0094 fanout-parallel-and-join: "C and D
+// dispatch concurrently"), and the join still waits for both.
+func TestIssue128_FanoutSiblingsDispatchConcurrently(t *testing.T) {
+	r := &rendezvous{fakeDispatcher: newFake(), meet: map[v1.ObjectName]bool{"c": true, "d": true}, all: make(chan struct{})}
+	r.outputs["c"] = json.RawMessage(`{"cv":1}`)
+	r.outputs["d"] = json.RawMessage(`{"dv":2}`)
+	e := newTestEngine(t, r, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-128", "wf", spec(
+		step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d"),
+	), json.RawMessage(`{}`), StartOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rec.Phase != runSucceeded {
+		t.Fatalf("run phase = %s, want Succeeded", rec.Phase)
+	}
+	if got := string(r.inputs["e"]); got != `{"c":{"cv":1},"d":{"dv":2}}` {
+		t.Fatalf("e input = %s, want the composite of c and d", got)
+	}
+}
+
+// failWhileSiblingRuns fails c permanently once d is in flight; d runs until its context ends.
+type failWhileSiblingRuns struct {
+	*fakeDispatcher
+	dIn       chan struct{}
+	dCanceled bool
+}
+
+func (f *failWhileSiblingRuns) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	switch req.Step {
+	case "c":
+		select {
+		case <-f.dIn:
+		case <-time.After(2 * time.Second):
+			return nil, Permanent(errors.New("d was not dispatched while c was in flight"))
+		}
+		_, _ = f.fakeDispatcher.Dispatch(ctx, req)
+		return nil, Permanent(errors.New("c rejected 422"))
+	case "d":
+		_, _ = f.fakeDispatcher.Dispatch(ctx, req)
+		close(f.dIn)
+		<-ctx.Done()
+		f.dCanceled = errors.Is(ctx.Err(), context.Canceled)
+		return nil, ctx.Err()
+	}
+	return f.fakeDispatcher.Dispatch(ctx, req)
+}
+
+// Issue #128: fail-fast cancels the running siblings (ADR-0094): c fails while d is in flight, so d's
+// invocation is cancelled and d goes back to Pending (it never finished, so a replay runs it, ADR-0107);
+// e never runs and the run ends Failed with c's cause.
+func TestIssue128_FailFastCancelsRunningSiblings(t *testing.T) {
+	f := &failWhileSiblingRuns{fakeDispatcher: newFake(), dIn: make(chan struct{})}
+	e := newTestEngine(t, f, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-128f", "wf", spec(
+		step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d"),
+	), json.RawMessage(`{}`), StartOptions{})
+	if err == nil || !strings.Contains(err.Error(), "c rejected 422") {
+		t.Fatalf("Execute err = %v, want the run to fail with c's cause", err)
+	}
+	if rec.Phase != runFailed {
+		t.Fatalf("run phase = %s, want Failed", rec.Phase)
+	}
+	if !f.dCanceled {
+		t.Fatal("the in-flight sibling d must be cancelled when c fails")
+	}
+	if got := map[string]v1.StepPhase{"c": phaseOf(rec, "c"), "d": phaseOf(rec, "d")}; got["c"] != v1.StepFailed || got["d"] != v1.StepPending {
+		t.Fatalf("step phases = %v, want c Failed and the cancelled sibling d Pending", got)
+	}
+	if f.calls["e"] != 0 {
+		t.Fatal("e must not run after c fails (fail-fast)")
 	}
 }
 
@@ -259,25 +363,36 @@ func TestCrashRecoveryResumesRun(t *testing.T) {
 }
 
 // crashAt keeps run's record as the store held it when step at was dispatched on attempt n: what a
-// crash during that dispatch leaves for recovery. The call itself goes to the embedded dispatcher.
+// crash during that dispatch leaves for recovery. Step hold, a concurrent sibling, is in flight then.
+// The call itself goes to the embedded dispatcher.
 type crashAt struct {
 	*capturingDispatcher
-	runs runstate.Store
-	run  v1.ObjectName
-	at   v1.ObjectName
-	n    int
-	left *runstate.Record
+	runs     runstate.Store
+	run      v1.ObjectName
+	at, hold v1.ObjectName
+	n        int
+	left     *runstate.Record
+	holdIn   chan struct{}
+	captured chan struct{}
 }
 
 func (c *crashAt) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
-	if req.Step == c.at && req.Attempt == c.n {
+	switch {
+	case req.Step == c.at && req.Attempt == c.n:
+		if c.hold != "" {
+			<-c.holdIn
+		}
 		c.left, _ = c.runs.Get(ctx, req.Namespace, c.run)
+		close(c.captured)
+	case req.Step == c.hold:
+		close(c.holdIn)
+		<-c.captured
 	}
 	return c.capturingDispatcher.Dispatch(ctx, req)
 }
 
 // Issue #124: a write-ahead intent precedes every dispatch (ADR-0094) and every step's start. Recovery
-// from a crash re-runs only the in-flight step, with a fresh attempt ID and the rest of its retry budget.
+// from a crash re-runs only the in-flight steps, with a fresh attempt ID and the rest of their retry budget.
 func TestIssue124_RecoveryRedispatchesOnlyTheInFlightStep(t *testing.T) {
 	ctx := context.Background()
 	retried := step("b", "", "a")
@@ -286,22 +401,22 @@ func TestIssue124_RecoveryRedispatchesOnlyTheInFlightStep(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		spec     v1.WorkflowSpec
-		at       v1.ObjectName
+		at, hold v1.ObjectName
 		n        int
 		failing  bool
 		attempts map[v1.ObjectName][]int
 	}{
-		{name: "fan-out", spec: spec(step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d")), at: "d", n: 1,
-			attempts: map[v1.ObjectName][]int{"d": {2}, "e": {1}}},
+		{name: "fan-out", spec: spec(step("b", ""), step("c", "", "b"), step("d", "", "b"), step("e", "", "c", "d")), at: "d", hold: "c", n: 1,
+			attempts: map[v1.ObjectName][]int{"c": {2}, "d": {2}, "e": {1}}},
 		{name: "retry", spec: spec(step("a", ""), retried), at: "b", n: 2, failing: true,
 			attempts: map[v1.ObjectName][]int{"b": {3}}},
-		{name: "sub-workflow sibling", spec: spec(step("b", ""), step("c", "", "b"), subwfStep("sub", "child", "b"), step("e", "", "c", "sub")), at: "x", n: 1,
-			attempts: map[v1.ObjectName][]int{"x": {1}, "e": {1}}},
+		{name: "sub-workflow sibling", spec: spec(step("b", ""), step("c", "", "b"), subwfStep("sub", "child", "b"), step("e", "", "c", "sub")), at: "x", hold: "c", n: 1,
+			attempts: map[v1.ObjectName][]int{"c": {2}, "x": {1}, "e": {1}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			first, _ := badger.New(badger.Config{InMemory: true})
 			t.Cleanup(func() { _ = first.Close() })
-			crash := &crashAt{capturingDispatcher: &capturingDispatcher{}, runs: first, run: "run-124", at: tc.at, n: tc.n}
+			crash := &crashAt{capturingDispatcher: &capturingDispatcher{}, runs: first, run: "run-124", at: tc.at, hold: tc.hold, n: tc.n, holdIn: make(chan struct{}), captured: make(chan struct{})}
 			if tc.failing {
 				crash.failN = map[v1.ObjectName]int{tc.at: tc.n}
 			}
