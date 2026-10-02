@@ -310,3 +310,39 @@ func TestIssue25_ReconcilesAfterWatchDrop(t *testing.T) {
 		})
 	}
 }
+
+// Watches: a change of a watched kind that has no Reconciler of its own enqueues the Requests its MapFunc
+// returns for another kind.
+func TestWatchesEnqueuesMappedRequests(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	c, err := controller.New(controller.Deps{Store: st})
+	require.NoError(t, err)
+	var mu sync.Mutex
+	got := map[controller.Request]bool{}
+	c.Register(v1.KindSecret.GVK(), &fakeReconciler{hook: func(_ context.Context, req controller.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		got[req] = true
+	}})
+	c.Watches(v1.KindConfigMap.GVK(), func(_ context.Context, obj v1.Object) []controller.Request {
+		meta := obj.GetObjectMeta()
+		return []controller.Request{{GVK: v1.KindSecret.GVK(), Namespace: meta.Namespace, Name: meta.Name + "-dependent"}}
+	})
+	createObject(t, st, v1.KindConfigMap, "cm")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	defer func() {
+		cancel()
+		require.NoError(t, <-done)
+	}()
+
+	want := controller.Request{GVK: v1.KindSecret.GVK(), Namespace: "default", Name: "cm-dependent"}
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return got[want]
+	}, 3*time.Second, 10*time.Millisecond, "the ConfigMap change reconciles the mapped Secret request")
+}

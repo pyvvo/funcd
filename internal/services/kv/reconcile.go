@@ -154,6 +154,24 @@ func (r *Reconciler) countBindings(ctx context.Context, ns v1.NamespaceName, sto
 	return n, nil
 }
 
+// MapFunction is the controller.MapFunc that re-runs the reconcile of every KVStore in a changed
+// Function's namespace: the count is of Function.spec.kv entries, and an unbind or a delete no longer
+// names the store it referenced.
+func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controller.Request {
+	ns := obj.GetObjectMeta().Namespace
+	list, err := r.store.List(ctx, v1.KindKVStore.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		r.logger.WarnContext(ctx, "list kvstores to recount bindings", "namespace", string(ns), "error", err)
+		return nil
+	}
+	reqs := make([]controller.Request, 0, len(list.Items))
+	for _, o := range list.Items {
+		meta := o.GetObjectMeta()
+		reqs = append(reqs, controller.Request{GVK: v1.KindKVStore.GVK(), Namespace: meta.Namespace, Name: meta.Name})
+	}
+	return reqs
+}
+
 // storePrefix is "<ns>/<store>/" (ADR-0072/0073).
 func storePrefix(ns v1.NamespaceName, store v1.ObjectName) string {
 	return string(ns) + "/" + string(store) + "/"
