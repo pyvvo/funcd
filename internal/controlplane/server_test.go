@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -272,4 +273,93 @@ func TestIssue166_WireShapeMatchesSpec(t *testing.T) {
 	require.Equal(t, "application/problem+json", miss.Header().Get("Content-Type"))
 	rec = do(t, srv, http.MethodGet, fnBase+"/missing", devToken, nil)
 	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+}
+
+// TestIssue166_ErrorsShareOneProblemShape: the router's 404 and 405 and huma's 422 are problem+json with
+// the same members as a handler's fault, and the 405 names every method of the path in one Allow header.
+func TestIssue166_ErrorsShareOneProblemShape(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+
+	invalid, err := json.Marshal(map[string]interface{}{
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Function",
+		"metadata":   map[string]interface{}{"name": "echo", "namespace": "team-a", "resourceGroup": "rg1"},
+	})
+	require.NoError(t, err)
+	for _, c := range []struct {
+		what, method, path string
+		body               []byte
+		status             int
+		detail             string
+	}{
+		{"handler fault", http.MethodGet, fnBase + "/missing", nil, http.StatusNotFound, "missing"},
+		{"unknown route", http.MethodGet, "/apis/funcd.io/v1alpha1/namespaces/team-a/nosuchkinds/x", nil, http.StatusNotFound, "nosuchkinds"},
+		{"method not allowed", http.MethodPatch, fnBase + "/echo", nil, http.StatusMethodNotAllowed, "PATCH"},
+		{"schema-invalid body", http.MethodPost, fnBase, invalid, http.StatusUnprocessableEntity, "spec"},
+	} {
+		rec := do(t, srv, c.method, c.path, devToken, c.body)
+		require.Equal(t, c.status, rec.Code, "%s: %s", c.what, rec.Body.String())
+		require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"), c.what)
+		var p map[string]interface{}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p), c.what)
+		require.ElementsMatch(t, []string{"type", "title", "status", "detail"}, keysOf(p), "%s: %s", c.what, rec.Body.String())
+		require.NotEmpty(t, p["type"], c.what)
+		require.InDelta(t, c.status, p["status"], 0, c.what)
+		require.Contains(t, p["detail"], c.detail, c.what)
+	}
+
+	rec := do(t, srv, http.MethodPatch, fnBase+"/echo", devToken, nil)
+	require.Equal(t, []string{"GET, PUT, DELETE"}, rec.Header().Values("Allow"))
+}
+
+// TestIssue166_SpecHasNoDeadOrDanglingSchemas: a type only ever embedded `,inline` leaves no component
+// behind, and every $ref in the served spec still resolves.
+func TestIssue166_SpecHasNoDeadOrDanglingSchemas(t *testing.T) {
+	t.Parallel()
+	rec := do(t, newServer(t), http.MethodGet, "/openapi.json", "", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var spec struct {
+		Components struct {
+			Schemas map[string]json.RawMessage `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &spec))
+	require.NotContains(t, spec.Components.Schemas, "TypeMeta")
+	require.Contains(t, spec.Components.Schemas, "ObjectRef", "still referenced by its own fields")
+
+	var doc interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &doc))
+	for _, ref := range refsOf(doc) {
+		name, ok := strings.CutPrefix(ref, "#/components/schemas/")
+		require.True(t, ok, ref)
+		require.Contains(t, spec.Components.Schemas, name, "dangling $ref %s", ref)
+	}
+}
+
+func keysOf(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func refsOf(v interface{}) []string {
+	var refs []string
+	switch n := v.(type) {
+	case map[string]interface{}:
+		for k, c := range n {
+			if s, ok := c.(string); ok && k == "$ref" {
+				refs = append(refs, s)
+				continue
+			}
+			refs = append(refs, refsOf(c)...)
+		}
+	case []interface{}:
+		for _, c := range n {
+			refs = append(refs, refsOf(c)...)
+		}
+	}
+	return refs
 }

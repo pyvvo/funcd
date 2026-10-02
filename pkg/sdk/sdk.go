@@ -335,8 +335,7 @@ func quoteKeys(n *yamlv3.Node) {
 }
 
 // problemToFault maps a non-2xx response to a typed fault.Error. It keys on the JSON
-// `status` field (handler faults arrive as application/json, huma's own 422/401 as
-// application/problem+json) — never on the Content-Type.
+// `status` field of the problem+json body — never on the Content-Type.
 func problemToFault(httpStatus int, body []byte) error {
 	var p fault.Problem
 	_ = json.Unmarshal(body, &p) // best-effort; falls back to httpStatus

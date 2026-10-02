@@ -1,7 +1,9 @@
 package controlplane
 
 import (
+	"bytes"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,11 +18,16 @@ const schemaPrefix = "#/components/schemas/"
 // became a nested, required property that the server never emits and a flat body could not satisfy.
 type inlineRegistry struct {
 	huma.Registry
-	done map[string]bool
+	done    map[string]bool
+	inlined map[string]bool
 }
 
 func newInlineRegistry() *inlineRegistry {
-	return &inlineRegistry{Registry: huma.NewMapRegistry(schemaPrefix, huma.DefaultSchemaNamer), done: map[string]bool{}}
+	return &inlineRegistry{
+		Registry: huma.NewMapRegistry(schemaPrefix, huma.DefaultSchemaNamer),
+		done:     map[string]bool{},
+		inlined:  map[string]bool{},
+	}
 }
 
 // Schema registers t (and every type it reaches) through the wrapped registry, then flattens the new schemas.
@@ -32,8 +39,21 @@ func (r *inlineRegistry) Schema(t reflect.Type, allowRef bool, hint string) *hum
 	return s
 }
 
-// MarshalJSON serializes the components the way huma's own registry does.
-func (r *inlineRegistry) MarshalJSON() ([]byte, error) { return json.Marshal(r.Map()) }
+// MarshalJSON serializes the components the way huma's own registry does, minus a schema that is only
+// ever embedded `,inline`: its properties live in each parent, so a client would get a dead type.
+func (r *inlineRegistry) MarshalJSON() ([]byte, error) {
+	all, err := json.Marshal(r.Map())
+	if err != nil {
+		return nil, err
+	}
+	out := maps.Clone(r.Map())
+	for name := range r.inlined {
+		if !bytes.Contains(all, []byte(`"`+schemaPrefix+name+`"`)) {
+			delete(out, name)
+		}
+	}
+	return json.Marshal(out)
+}
 
 // flatten replaces each `json:",inline"` property of the named struct schema with the embedded schema's
 // properties and required names, as encoding/json promotes them (an outer field of the same name wins).
@@ -58,7 +78,9 @@ func (r *inlineRegistry) flatten(name string) {
 			continue
 		}
 		if embedded.Ref != "" {
-			r.flatten(strings.TrimPrefix(embedded.Ref, schemaPrefix))
+			ref := strings.TrimPrefix(embedded.Ref, schemaPrefix)
+			r.flatten(ref)
+			r.inlined[ref] = true
 			if embedded = r.SchemaFromRef(embedded.Ref); embedded == nil {
 				continue
 			}

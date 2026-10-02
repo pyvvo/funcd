@@ -469,58 +469,6 @@ components:
             - array
             - "null"
       type: object
-    ErrorDetail:
-      additionalProperties: false
-      properties:
-        location:
-          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
-          type: string
-        message:
-          description: Error message text
-          type: string
-        value:
-          description: The value at the given location
-      type: object
-    ErrorModel:
-      additionalProperties: false
-      properties:
-        detail:
-          description: A human-readable explanation specific to this occurrence of the problem.
-          examples:
-            - Property foo is required but is missing.
-          type: string
-        errors:
-          description: Optional list of individual error details
-          items:
-            $ref: "#/components/schemas/ErrorDetail"
-          type:
-            - array
-            - "null"
-        instance:
-          description: A URI reference that identifies the specific occurrence of the problem.
-          examples:
-            - https://example.com/error-log/abc123
-          format: uri
-          type: string
-        status:
-          description: HTTP status code
-          examples:
-            - 400
-          format: int64
-          type: integer
-        title:
-          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
-          examples:
-            - Bad Request
-          type: string
-        type:
-          default: about:blank
-          description: A URI reference to human-readable documentation for the error.
-          examples:
-            - https://example.com/errors/example
-          format: uri
-          type: string
-      type: object
     EventSource:
       additionalProperties: false
       properties:
@@ -570,6 +518,26 @@ components:
             - Failed
             - Terminating
           type: string
+      type: object
+    FaultError:
+      additionalProperties: false
+      properties:
+        detail:
+          type: string
+        instance:
+          type: string
+        status:
+          format: int64
+          type: integer
+        title:
+          type: string
+        type:
+          type: string
+      required:
+        - type
+        - title
+        - status
+        - detail
       type: object
     Function:
       additionalProperties: false
@@ -2071,29 +2039,6 @@ components:
       required:
         - bucket
       type: object
-    Status:
-      additionalProperties: false
-      properties:
-        conditions:
-          items:
-            $ref: "#/components/schemas/Condition"
-          type:
-            - array
-            - "null"
-        observedGeneration:
-          format: int64
-          type: integer
-        phase:
-          enum:
-            - Pending
-            - Deploying
-            - Ready
-            - Idle
-            - Degraded
-            - Failed
-            - Terminating
-          type: string
-      type: object
     StepRetry:
       additionalProperties: false
       properties:
@@ -2144,17 +2089,6 @@ components:
             - "null"
       required:
         - events
-      type: object
-    TypeMeta:
-      additionalProperties: false
-      properties:
-        apiVersion:
-          type: string
-        kind:
-          type: string
-      required:
-        - apiVersion
-        - kind
       type: object
     WorkerNode:
       additionalProperties: false
@@ -2499,7 +2433,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Gateway
@@ -2522,7 +2456,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Gateway
@@ -2545,7 +2479,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Gateway
@@ -2571,7 +2505,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Gateway
@@ -2603,7 +2537,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Gateway
@@ -2625,7 +2559,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Namespace
@@ -2648,7 +2582,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Namespace
@@ -2679,7 +2613,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Bucket
@@ -2711,7 +2645,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Bucket
@@ -2742,7 +2676,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Bucket
@@ -2776,7 +2710,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Bucket
@@ -2816,7 +2750,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Bucket
@@ -2847,7 +2781,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - CatalogService
@@ -2879,7 +2813,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - CatalogService
@@ -2910,7 +2844,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - CatalogService
@@ -2944,7 +2878,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - CatalogService
@@ -2984,7 +2918,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - CatalogService
@@ -3015,7 +2949,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ConfigMap
@@ -3047,7 +2981,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ConfigMap
@@ -3078,7 +3012,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ConfigMap
@@ -3112,7 +3046,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ConfigMap
@@ -3152,7 +3086,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ConfigMap
@@ -3179,7 +3113,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - DeadLetter
@@ -3207,7 +3141,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - DeadLetter
@@ -3238,7 +3172,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - DeadLetter
@@ -3266,7 +3200,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - DeadLetter
@@ -3297,7 +3231,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EgressPolicy
@@ -3329,7 +3263,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EgressPolicy
@@ -3360,7 +3294,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EgressPolicy
@@ -3394,7 +3328,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EgressPolicy
@@ -3434,7 +3368,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EgressPolicy
@@ -3465,7 +3399,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EventSource
@@ -3497,7 +3431,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EventSource
@@ -3528,7 +3462,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EventSource
@@ -3562,7 +3496,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EventSource
@@ -3602,7 +3536,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - EventSource
@@ -3633,7 +3567,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3665,7 +3599,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3696,7 +3630,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3730,7 +3664,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3770,7 +3704,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3827,7 +3761,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Function
@@ -3858,7 +3792,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Grant
@@ -3890,7 +3824,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Grant
@@ -3921,7 +3855,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Grant
@@ -3955,7 +3889,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Grant
@@ -3995,7 +3929,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Grant
@@ -4026,7 +3960,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Identity
@@ -4058,7 +3992,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Identity
@@ -4089,7 +4023,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Identity
@@ -4123,7 +4057,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Identity
@@ -4163,7 +4097,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Identity
@@ -4194,7 +4128,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Invocation
@@ -4226,7 +4160,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Invocation
@@ -4257,7 +4191,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Invocation
@@ -4291,7 +4225,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Invocation
@@ -4331,7 +4265,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Invocation
@@ -4362,7 +4296,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - KVStore
@@ -4394,7 +4328,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - KVStore
@@ -4425,7 +4359,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - KVStore
@@ -4459,7 +4393,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - KVStore
@@ -4499,7 +4433,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - KVStore
@@ -4530,7 +4464,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Policy
@@ -4562,7 +4496,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Policy
@@ -4593,7 +4527,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Policy
@@ -4627,7 +4561,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Policy
@@ -4667,7 +4601,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Policy
@@ -4698,7 +4632,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ResourceGroup
@@ -4730,7 +4664,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ResourceGroup
@@ -4761,7 +4695,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ResourceGroup
@@ -4795,7 +4729,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ResourceGroup
@@ -4835,7 +4769,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - ResourceGroup
@@ -4866,7 +4800,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Revision
@@ -4898,7 +4832,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Revision
@@ -4929,7 +4863,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Revision
@@ -4963,7 +4897,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Revision
@@ -5003,7 +4937,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Revision
@@ -5034,7 +4968,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Role
@@ -5066,7 +5000,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Role
@@ -5097,7 +5031,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Role
@@ -5131,7 +5065,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Role
@@ -5171,7 +5105,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Role
@@ -5202,7 +5136,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RolesAssignment
@@ -5234,7 +5168,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RolesAssignment
@@ -5265,7 +5199,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RolesAssignment
@@ -5299,7 +5233,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RolesAssignment
@@ -5339,7 +5273,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RolesAssignment
@@ -5370,7 +5304,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Route
@@ -5402,7 +5336,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Route
@@ -5433,7 +5367,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Route
@@ -5467,7 +5401,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Route
@@ -5507,7 +5441,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Route
@@ -5538,7 +5472,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Secret
@@ -5570,7 +5504,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Secret
@@ -5601,7 +5535,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Secret
@@ -5635,7 +5569,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Secret
@@ -5675,7 +5609,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Secret
@@ -5706,7 +5640,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Sensor
@@ -5738,7 +5672,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Sensor
@@ -5769,7 +5703,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Sensor
@@ -5803,7 +5737,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Sensor
@@ -5843,7 +5777,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Sensor
@@ -5874,7 +5808,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Service
@@ -5906,7 +5840,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Service
@@ -5937,7 +5871,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Service
@@ -5971,7 +5905,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Service
@@ -6011,7 +5945,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Service
@@ -6042,7 +5976,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Site
@@ -6074,7 +6008,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Site
@@ -6105,7 +6039,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Site
@@ -6139,7 +6073,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Site
@@ -6179,7 +6113,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Site
@@ -6210,7 +6144,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6242,7 +6176,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6273,7 +6207,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6307,7 +6241,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6347,7 +6281,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6411,7 +6345,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkflowRun
@@ -6442,7 +6376,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Workflow
@@ -6474,7 +6408,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Workflow
@@ -6505,7 +6439,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Workflow
@@ -6539,7 +6473,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Workflow
@@ -6579,7 +6513,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Workflow
@@ -6602,7 +6536,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Namespace
@@ -6628,7 +6562,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Namespace
@@ -6660,7 +6594,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - Namespace
@@ -6682,7 +6616,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RuntimeClass
@@ -6705,7 +6639,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RuntimeClass
@@ -6728,7 +6662,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RuntimeClass
@@ -6754,7 +6688,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RuntimeClass
@@ -6786,7 +6720,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - RuntimeClass
@@ -6808,7 +6742,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkerNode
@@ -6831,7 +6765,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkerNode
@@ -6854,7 +6788,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkerNode
@@ -6880,7 +6814,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkerNode
@@ -6912,7 +6846,7 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/FaultError"
           description: Error
       tags:
         - WorkerNode
