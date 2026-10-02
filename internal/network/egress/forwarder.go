@@ -75,11 +75,14 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
-		client := udpClient
-		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
-			client = tcpClient
+		client, limit := udpClient, dns.MinMsgSize
+		if opt := req.IsEdns0(); opt != nil {
+			limit = int(opt.UDPSize())
 		}
-		f.handle(client, w, req)
+		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
+			client, limit = tcpClient, dns.MaxMsgSize
+		}
+		f.handle(client, limit, w, req)
 	})
 	servers := []*dns.Server{
 		{Addr: f.listen.String(), Net: "udp", Handler: mux},
@@ -112,8 +115,10 @@ func (f *forwarder) Serve(ctx context.Context) error {
 }
 
 // handle forwards one query upstream over the transport it arrived on (so a TCP retry gets the whole
-// answer), records the resolved A/AAAA answers per (src, domain), and relays the response verbatim.
-func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Msg) {
+// answer), records the resolved A/AAAA answers per (src, domain), and relays the response fitted to the
+// client's limit: 512 bytes over UDP without EDNS0 (RFC 1035), else the OPT UDP size, 65535 over TCP.
+// The unpacked reply has Compress false, so Truncate re-compresses it and sets TC on what still overflows.
+func (f *forwarder) handle(client *dns.Client, limit int, w dns.ResponseWriter, req *dns.Msg) {
 	resp, _, err := client.Exchange(req, f.upstream.String())
 	if err != nil || resp == nil {
 		fail := new(dns.Msg)
@@ -124,6 +129,7 @@ func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Ms
 	if src, ok := addrFromNet(w.RemoteAddr()); ok {
 		f.record(src, resp)
 	}
+	resp.Truncate(limit)
 	_ = w.WriteMsg(resp)
 }
 
