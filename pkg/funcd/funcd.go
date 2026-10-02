@@ -1583,16 +1583,22 @@ func maxRevision(revs ...string) string {
 // one substrate bucket, many logical S3 buckets — so distinct namespaces and buckets
 // never collide. Existence-by-namespace here gives tenancy a second guard (a missing /
 // cross-namespace bucket is NoSuchBucket); the binding-as-grant Cedar PEP is the
-// authorization gate on every object op.
+// authorization gate on every object op. The view carries the Bucket's spec.maxObjectBytes,
+// so every write path through it (S3 frontend, context.blob, site) enforces that policy.
 func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 		if bucket == "" {
 			return nil, false
 		}
-		if _, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket)); err != nil {
+		obj, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket))
+		if err != nil {
 			return nil, false
 		}
-		return blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), true
+		var maxObjectBytes int64
+		if b, ok := obj.(*v1.Bucket); ok {
+			maxObjectBytes = b.Spec.MaxObjectBytes
+		}
+		return blob.Capped(blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), maxObjectBytes), true
 	}
 }
 
