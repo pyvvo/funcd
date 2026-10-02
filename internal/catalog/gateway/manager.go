@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -128,7 +129,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	}
 	handler := &retargetable{}
 	handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
-	srv := &http.Server{Handler: handler}
+	srv := newProxyServer(handler)
 	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp
 
@@ -169,6 +170,14 @@ func (m *Manager) closeProxy(key string, mp *managedProxy) {
 	_ = mp.server.Close()
 	delete(m.servers, key)
 	m.log.Debug("catalog proxy removed", "catalog", key)
+}
+
+// newProxyServer builds a proxy's http.Server. The read timeouts cut off a peer that stalls before the PEP has
+// read its token, as on the data plane (issue #312); net/http clears the read deadline once the body is read,
+// so a long query is not cut. IdleTimeout outlasts the 90 s client keep-alive of the data plane's edge reverse
+// proxy (ADR-0138), so that client closes an idle connection first.
+func newProxyServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 }
 
 // publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral

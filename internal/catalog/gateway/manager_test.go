@@ -145,3 +145,24 @@ func TestManager_PublishHostSplit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, port, "a real ephemeral port is published")
 }
+
+// TestIssue312_ProxyBoundsStalledAndIdleConns: a peer that connects to a catalog proxy and stalls before
+// the PEP reads its token, or holds a keep-alive connection idle, pins a daemon goroutine without limit
+// unless the proxy's http.Server bounds the header read, the body read and the idle wait. The idle bound
+// must outlast the edge reverse proxy's client keep-alive (http.DefaultTransport), so that client closes first.
+func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	mgr := NewManager("", "", NewCatalogKeys([]byte("i312-master"), st), buildPDP(t, st), nil)
+	t.Cleanup(mgr.Shutdown)
+	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
+	require.NoError(t, err)
+
+	mgr.mu.Lock()
+	srv := mgr.servers[managerKey("data", "lake")].server
+	mgr.mu.Unlock()
+	require.Positive(t, srv.ReadHeaderTimeout, "a peer that never finishes its headers must be cut off")
+	require.Positive(t, srv.ReadTimeout, "a peer that stalls its body before the token is read must be cut off")
+	clientIdle := http.DefaultTransport.(*http.Transport).IdleConnTimeout
+	require.Greater(t, srv.IdleTimeout, clientIdle, "an idle keep-alive connection must be closed, after the client's own idle timeout")
+}
