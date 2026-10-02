@@ -865,10 +865,10 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
 			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
 			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
-			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober is nil
-			// until the s3gateway data plane lands — binding-protection still applies (nil ⇒ skip the data check).
+			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
+			// the same substrate view the s3gateway writes (s3BucketFor).
 			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
-			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, nil),
+			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, blobProber{blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}}),
 			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1610,6 +1610,18 @@ func (l blobBucketLister) List(ctx context.Context, ns v1.NamespaceName, bucket 
 		return nil, fault.NotFoundf("funcd.blobBucketLister", "bucket %q not found in namespace %q", bucket, ns)
 	}
 	return b.List(ctx, prefix)
+}
+
+// blobProber adapts blobBucketLister to admission.BlobProber (ADR-0080 deletion-protection): HasAny reports
+// whether any object exists under "<prefix>/" of the Bucket's substrate view.
+type blobProber struct{ lister blobBucketLister }
+
+func (p blobProber) HasAny(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (bool, error) {
+	items, err := p.lister.List(ctx, ns, bucket, prefix+"/")
+	if err != nil {
+		return false, err
+	}
+	return len(items) > 0, nil
 }
 
 // kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):
