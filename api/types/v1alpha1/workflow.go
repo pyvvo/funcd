@@ -34,8 +34,8 @@ type WorkflowSpec struct {
 	Contract *WorkflowContract `json:"contract,omitempty"`
 	// Timeout is the wall-clock bound on a whole run (paused time excluded); 0 ⇒ none.
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"604800000000000"`
-	// OnFailure names a handler step (defined in Steps, excluded from the DAG) invoked
-	// once when the run ends Failed. Empty ⇒ no handler.
+	// OnFailure names a handler function step (defined in Steps, excluded from the DAG)
+	// invoked once when the run ends Failed. Empty ⇒ no handler.
 	OnFailure ObjectName `json:"onFailure,omitempty"`
 	// Pooling configures how the workflow's materialized step Functions are pooled and
 	// kept warm (ADR-0046 worker pooling + ADR-0016 scaling). Empty ⇒ the default: all
@@ -344,12 +344,30 @@ func (s *WorkflowStep) validateKind(op string) error {
 	return nil
 }
 
-// validateAcyclic rejects a dependsOn cycle via DFS (a cycle is unbuildable).
-func (w *Workflow) validateAcyclic(op string) error {
-	deps := make(map[ObjectName][]ObjectName, len(w.Spec.Steps))
-	for i := range w.Spec.Steps {
-		deps[w.Spec.Steps[i].Name] = w.Spec.Steps[i].DependsOn
+// EffectiveDependsOn returns each step's parents as the engine schedules them (ADR-0094 Control flow):
+// its dependsOn, else the previous step in list order. The onFailure handler is outside the DAG: it gets
+// no implicit parent and is never the previous step.
+func (s WorkflowSpec) EffectiveDependsOn() map[ObjectName][]ObjectName {
+	deps := make(map[ObjectName][]ObjectName, len(s.Steps))
+	var prev ObjectName
+	for i := range s.Steps {
+		st := &s.Steps[i]
+		deps[st.Name] = st.DependsOn
+		if st.Name == s.OnFailure {
+			continue
+		}
+		if len(st.DependsOn) == 0 && prev != "" {
+			deps[st.Name] = []ObjectName{prev}
+		}
+		prev = st.Name
 	}
+	return deps
+}
+
+// validateAcyclic rejects a cycle in the scheduled graph (EffectiveDependsOn) via DFS: a cycle is
+// unbuildable, including one that closes only through an implicit list-order edge.
+func (w *Workflow) validateAcyclic(op string) error {
+	deps := w.Spec.EffectiveDependsOn()
 	const (
 		white = 0
 		gray  = 1
@@ -362,7 +380,7 @@ func (w *Workflow) validateAcyclic(op string) error {
 		for _, d := range deps[n] {
 			switch color[d] {
 			case gray:
-				return fault.Invalidf(op, "dependsOn cycle through step %q", d)
+				return fault.Invalidf(op, "dependsOn cycle through step %q (a step without dependsOn follows the previous step in list order)", d)
 			case white:
 				if err := visit(d); err != nil {
 					return err
@@ -382,8 +400,8 @@ func (w *Workflow) validateAcyclic(op string) error {
 	return nil
 }
 
-// validateOnFailure checks the handler names a real step outside the DAG (no
-// dependsOn/when, and no step depends on it).
+// validateOnFailure checks the handler names a real function step (ADR-0096: the engine dispatches it)
+// outside the DAG (no dependsOn/when, and no step depends on it).
 func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error {
 	if w.Spec.OnFailure == "" {
 		return nil
@@ -394,6 +412,9 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 	for i := range w.Spec.Steps {
 		s := &w.Spec.Steps[i]
 		if s.Name == w.Spec.OnFailure {
+			if s.Function == nil {
+				return fault.Invalidf(op, "onFailure handler %q must be a function step (image or ref)", s.Name)
+			}
 			if len(s.DependsOn) != 0 || s.When != nil {
 				return fault.Invalidf(op, "onFailure handler %q must have no dependsOn and no when", s.Name)
 			}

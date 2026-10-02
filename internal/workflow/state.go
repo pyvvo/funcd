@@ -6,6 +6,8 @@
 package workflow
 
 import (
+	"sync"
+
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
@@ -45,6 +47,9 @@ type stepNode struct {
 // derived onFailure handler (excluded from the DAG). It is the pure state machine;
 // the engine persists a serialized form and mirrors phase into WorkflowRun.status.
 type runState struct {
+	// mu guards the step nodes, the run outputs and the record they persist into while steps run
+	// concurrently (drive).
+	mu        sync.Mutex
 	steps     map[v1.ObjectName]*stepNode
 	order     []v1.ObjectName // deterministic iteration order (spec order)
 	onFailure v1.ObjectName
@@ -52,8 +57,8 @@ type runState struct {
 }
 
 // newRunState builds the scheduling state from a Workflow spec. List order chains
-// implicitly: a step with no dependsOn (other than the onFailure handler) follows the
-// previous DAG step. The onFailure handler is excluded from the DAG.
+// implicitly (v1.WorkflowSpec.EffectiveDependsOn, the graph admission checks for cycles).
+// The onFailure handler is excluded from the DAG: the engine schedules it on run failure.
 func newRunState(spec v1.WorkflowSpec) *runState {
 	rs := &runState{
 		steps:     make(map[v1.ObjectName]*stepNode, len(spec.Steps)),
@@ -61,28 +66,17 @@ func newRunState(spec v1.WorkflowSpec) *runState {
 		onFailure: spec.OnFailure,
 		failFast:  true,
 	}
-	var prevDAG v1.ObjectName
+	deps := spec.EffectiveDependsOn()
 	for i := range spec.Steps {
 		s := &spec.Steps[i]
-		n := &stepNode{
+		rs.steps[s.Name] = &stepNode{
 			name:      s.Name,
-			dependsOn: append([]v1.ObjectName(nil), s.DependsOn...),
+			dependsOn: append([]v1.ObjectName(nil), deps[s.Name]...),
 			join:      s.Join,
 			hasWhen:   s.When != nil,
 			phase:     v1.StepPending,
 		}
-		if s.Name == spec.OnFailure {
-			// The handler is scheduled by the engine on run failure, not by the DAG.
-			rs.steps[s.Name] = n
-			rs.order = append(rs.order, s.Name)
-			continue
-		}
-		if len(n.dependsOn) == 0 && prevDAG != "" {
-			n.dependsOn = []v1.ObjectName{prevDAG}
-		}
-		rs.steps[s.Name] = n
 		rs.order = append(rs.order, s.Name)
-		prevDAG = s.Name
 	}
 	return rs
 }
@@ -231,6 +225,16 @@ func (rs *runState) runPhase() v1.Phase {
 	default:
 		return runRunning
 	}
+}
+
+// failedStep names the run's Failed DAG step (the first in spec order), "" when none failed.
+func (rs *runState) failedStep() v1.ObjectName {
+	for _, name := range rs.dagSteps() {
+		if rs.steps[name].phase == v1.StepFailed {
+			return name
+		}
+	}
+	return ""
 }
 
 // leaves returns the DAG steps that no other DAG step depends on — the run output

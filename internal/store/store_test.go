@@ -106,8 +106,8 @@ func TestScenario_InputNotMutated(t *testing.T) {
 		t.Fatalf("Create mutated the caller's input: uid=%q gen=%d rv=%q", cfg.UID, cfg.Generation, cfg.ResourceVersion)
 	}
 	cm := created.GetObjectMeta()
-	if cm.UID == "" || cm.ResourceVersion == "" || cm.Generation != 1 {
-		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d", cm.UID, cm.ResourceVersion, cm.Generation)
+	if cm.UID == "" || cm.ResourceVersion == "" || cm.Generation != 1 || cm.CreationTime.IsZero() {
+		t.Fatalf("returned object missing server fields: uid=%q rv=%q gen=%d creationTimestamp=%v", cm.UID, cm.ResourceVersion, cm.Generation, cm.CreationTime)
 	}
 
 	up, _ := v1.NewObject(v1.KindConfigMap)

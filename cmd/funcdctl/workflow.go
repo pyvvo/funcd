@@ -78,7 +78,7 @@ func (a *cli) workflowReplayCmd() *cobra.Command {
 			if verr := replay.Validate(); verr != nil {
 				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl workflow replay", "invalid replay")
 			}
-			if _, err := c.Apply(cmd.Context(), replay); err != nil {
+			if _, err := c.Create(cmd.Context(), replay); err != nil {
 				return err
 			}
 			return a.writef("replay %s created (of %s from %s)\n", newName, args[0], from)
@@ -161,11 +161,11 @@ func (a *cli) workflowRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			applied, err := c.Apply(cmd.Context(), run)
+			created, err := c.Create(cmd.Context(), run) // a run is started once: a taken name is a Conflict (ADR-0094)
 			if err != nil {
 				return err
 			}
-			return a.writef("started %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
+			return a.writef("started %s/%s\n", created.GroupVersionKind().Kind, created.GetName())
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
@@ -313,6 +313,21 @@ func (a *cli) workflowDescribeCmd() *cobra.Command {
 func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 	if err := a.writef("RUN %s   phase: %s\n", run.GetName(), string(run.Status.Phase)); err != nil {
 		return err
+	}
+	for _, c := range run.Status.Conditions { // a condition that is not True says why the run is not progressing
+		if c.Status == v1.ConditionTrue {
+			continue
+		}
+		line := "condition: " + string(c.Type) + "=" + string(c.Status)
+		if c.Reason != "" {
+			line += "   reason: " + c.Reason
+		}
+		if c.Message != "" {
+			line += "   message: " + c.Message
+		}
+		if err := a.writef("%s\n", line); err != nil {
+			return err
+		}
 	}
 	for _, s := range run.Status.Steps {
 		line := "  " + string(s.Name) + "   phase: " + string(s.Phase)

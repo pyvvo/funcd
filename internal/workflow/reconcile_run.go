@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -16,6 +17,10 @@ import (
 )
 
 const runOp = "workflow.reconcileRun"
+
+// waitRequeue re-checks a run that waits for its Workflow (ADR-0121's bounded requeue for a consumer
+// whose referent is not there or not Ready).
+const waitRequeue = 2 * time.Second
 
 // RunReconciler drives WorkflowRun resources: it runs the engine, mirrors the coarse
 // run state into WorkflowRun.status, and maintains the parent Workflow's status.runs
@@ -89,10 +94,10 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	}
 
 	wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, run.Spec.Workflow)
-	if err != nil {
+	if err != nil && fault.KindOf(err) != fault.NotFound {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), runOp, "get workflow %q", run.Spec.Workflow)
 	}
-	wf := wfObj.(*v1.Workflow)
+	wf, _ := wfObj.(*v1.Workflow) // nil when the Workflow is missing (not created yet, or deleted)
 
 	// Cancel request (declarative, ADR-0094): abandon in-flight work and terminate Cancelled.
 	// Checked before pause/drive — cancel wins over a concurrent pause. The controller workqueue
@@ -114,9 +119,26 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, nil
 	}
 
+	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
+	// Ready=False (a WorkflowCycle, a type mismatch): such a workflow never runs (ADR-0098/0099). A
+	// started run resumes its pinned spec.
+	_, gerr := r.engine.runs.Get(ctx, req.Namespace, req.Name)
+	started := gerr == nil
+	if !started {
+		if wf == nil {
+			return r.wait(ctx, run, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
+		}
+		if c, ok := wf.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+			return r.wait(ctx, run, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+		}
+	}
+	if c, ok := run.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue}) // the wait is over
+	}
+
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
-	rec, err := r.drive(ctx, run, wf)
+	rec, err := r.drive(ctx, run, wf, started)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -166,31 +188,57 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) erro
 	return nil
 }
 
-func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow) (*runstate.Record, error) {
+// wait holds a run that has not started Pending with a Ready=False condition saying why, and
+// re-checks it after waitRequeue.
+func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, reason, msg string) (controller.Result, error) {
+	run.Status.Phase = runPending
+	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capErr(msg)})
+	if err := r.updateRunStatus(ctx, run); err != nil {
+		return controller.Result{}, err
+	}
+	return controller.Result{RequeueAfter: waitRequeue}, nil
+}
+
+func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.Workflow, started bool) (*runstate.Record, error) {
 	ns, name := run.Namespace, run.Name
-	if _, err := r.engine.runs.Get(ctx, ns, name); err == nil {
+	if started {
 		// A durable record exists → resume from its PINNED spec + contract (the live wf.Spec/status is
 		// not passed; an in-flight run is immune to a mid-run edit or re-push). Covers replay recovery too.
 		return r.engine.Resume(ctx, ns, name)
 	}
 	images := stepImages(wf) // the ADR-0098 cache: step → resolved digest-pinned image (ADR-0107)
 	if run.Spec.Replay != nil {
-		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift.
-		return r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
+		// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
+		rec, err := r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		if fault.KindOf(err) == fault.NotFound {
+			err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", run.Spec.Replay.Run)
+		}
+		return rec, err
 	}
 	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
 }
 
-// replayReason extracts the leading reason token (SeedInvalid / DigestDrift) from a replay-seed
-// rejection's fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
+// replayReason extracts the reason token (SeedInvalid / DigestDrift) from a replay-seed rejection's
+// fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
 func replayReason(err error) string {
-	msg := err.Error()
-	for _, tok := range []string{"SeedInvalid", "DigestDrift"} {
-		if strings.Contains(msg, tok+":") {
+	return reasonToken(err.Error(), "ReplayRejected", "SeedInvalid", "DigestDrift")
+}
+
+// failureReason is the Ready=False reason of a Failed run: the ADR-0094/0099 run failure reason its
+// cause names, else StepFailed (every other run failure is a step's).
+func failureReason(cause string) string {
+	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded")
+}
+
+// reasonToken returns the first of tokens that msg names, else fallback.
+func reasonToken(msg, fallback string, tokens ...string) string {
+	for _, tok := range tokens {
+		if strings.Contains(msg, tok) {
 			return tok
 		}
 	}
-	return "ReplayRejected"
+	return fallback
 }
 
 // stepImages projects the workflow's cached resolved step images (ADR-0098 status.steps[].Image) into
@@ -215,6 +263,9 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	}
 	run.Status.Phase = rec.Phase
 	run.Status.TraceID = rec.TraceID // ADR-0100: mirror the run trace so describe + workflow logs (ADR-0106) find it
+	if rec.Phase == runFailed && rec.Error != "" {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(rec.Error), Message: rec.Error})
+	}
 	run.Status.Steps = run.Status.Steps[:0]
 	for _, s := range rec.Steps {
 		run.Status.Steps = append(run.Status.Steps, v1.RunStepStatus{
@@ -256,6 +307,9 @@ func (r *RunReconciler) linkRun(ctx context.Context, run *v1.WorkflowRun) {
 // active are read (bounded); one deleted or closed without this update is dropped from active.
 func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, run *v1.WorkflowRun) error {
 	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
+	if fault.KindOf(err) == fault.NotFound { // the Workflow is missing: there is no status.runs to keep
+		return nil
+	}
 	if err != nil {
 		return err
 	}

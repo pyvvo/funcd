@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -313,6 +314,41 @@ func TestScenarioSubworkflow(t *testing.T) {
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "sink"), "sink ran with the child's output (doubled=8) flowed across the boundary")
 }
 
+// Issue #28: a step is bounded by its own timeout (here 60s), not by a fixed 30s cap on the platform's
+// step-dispatch HTTP client. The handler answers after 32s, past the old cap and well within the step's.
+func TestIssue28_StepLongerThan30sHonorsStepTimeout(t *testing.T) {
+	c, _ := shimPlatformOCI(t)
+	src, layout := t.TempDir(), t.TempDir()
+	writeStep(t, src, "slow", `export const handle = async (ctx, e) => { await new Promise((r) => setTimeout(r, 32000)); return { done: true }; };`)
+	img := pushStepImage(t, layout, src, "slow")
+
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "long", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
+			Steps:   []v1.WorkflowStep{{Name: "slow", Function: &v1.FunctionStep{Image: img, Timeout: 60 * time.Second}}},
+		},
+	}
+	_, err := c.Apply(context.Background(), wf)
+	require.NoError(t, err)
+	waitMaterializedReady(t, c, "long-slow")
+
+	run := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "long-1", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "long", Input: json.RawMessage(`{}`)},
+	}
+	_, err = c.Apply(context.Background(), run)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		p := getRun(t, c, "long-1").Status.Phase
+		return p == "Succeeded" || p == "Failed"
+	}, 60*time.Second, 200*time.Millisecond, "the run reaches a terminal phase")
+	got := getRun(t, c, "long-1")
+	require.Equal(t, "Succeeded", string(got.Status.Phase), "the 32s step finishes within its 60s timeout; steps: %+v", got.Status.Steps)
+}
+
 // Issue 67: the retention sweep reclaims closed runs including their WorkflowRun objects (what
 // `workflow runs` lists), and the parent's status.runs keeps its lifetime counts across the sweep.
 func TestIssue67_RetentionSweepsWorkflowRuns(t *testing.T) {
@@ -369,4 +405,52 @@ func TestIssue67_RetentionSweepsWorkflowRuns(t *testing.T) {
 
 	runToSuccess("echo-3")
 	require.Eventually(t, func() bool { return succeeded() == 3 }, 5*time.Second, 20*time.Millisecond, "a run after the sweep adds to the lifetime count")
+}
+
+// Issue #125: re-applying a WorkflowRun under an existing name with another workflow or input is rejected
+// over the real control plane (ADR-0094 duplicate-run-name-rejected): the run keeps the spec it ran, and
+// pause still patches spec.paused.
+func TestIssue125_ApplyCannotReplaceRunSpec(t *testing.T) {
+	p, err := funcd.New(funcd.InMemory())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	require.NoError(t, err)
+
+	for _, name := range []v1.ObjectName{"dur", "other"} {
+		_, err = c.Apply(ctx, &v1.Workflow{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "echo", Builtin: &v1.BuiltinStep{Pass: `${{ input }}`}}}},
+		})
+		require.NoError(t, err)
+	}
+	newRun := func(workflow v1.ObjectName, input string) *v1.WorkflowRun {
+		return &v1.WorkflowRun{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+			ObjectMeta: v1.ObjectMeta{Name: "dur-4", Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       v1.WorkflowRunSpec{Workflow: workflow, Input: json.RawMessage(input)},
+		}
+	}
+	_, err = c.Apply(ctx, newRun("dur", `{"n":1}`))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return getRun(t, c, "dur-4").Status.Phase == "Succeeded"
+	}, 15*time.Second, 50*time.Millisecond, "the first run reaches Succeeded")
+
+	for _, again := range []*v1.WorkflowRun{newRun("dur", `{"n":42}`), newRun("other", `{"n":1}`)} {
+		_, err = c.Apply(ctx, again)
+		require.Equal(t, fault.Conflict, fault.KindOf(err), "a second run under the name dur-4 (workflow %s, input %s) is rejected: %v", again.Spec.Workflow, again.Spec.Input, err)
+	}
+	got := getRun(t, c, "dur-4")
+	require.Equal(t, v1.ObjectName("dur"), got.Spec.Workflow, "the run still names the workflow it ran")
+	require.JSONEq(t, `{"n":1}`, string(got.Spec.Input), "the run still records the input it ran")
+
+	_, err = c.Apply(ctx, newRun("dur", `{ "n": 1 }`))
+	require.NoError(t, err, "re-applying the same run spec is admitted")
+	setRunSpec(t, c, "dur-4", func(s *v1.WorkflowRunSpec) { s.Paused = true })
+	require.True(t, getRun(t, c, "dur-4").Spec.Paused, "pause still patches spec.paused")
 }

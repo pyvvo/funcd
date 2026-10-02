@@ -815,8 +815,10 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
 		Grant:     storeGranter{store: c.store},
-		Client:    &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second},
-		Logger:    p.logger,
+		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
+		// (ADR-0094), and a client-wide cap would cut a longer step short.
+		Client: &http.Client{Transport: calls.Wrap(nil)},
+		Logger: p.logger,
 	})
 	if derr != nil {
 		return fault.Wrapf(derr, fault.KindOf(derr), op, "build workflow dispatcher")
@@ -895,6 +897,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
+			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
+			admission.NewWorkflowRunSpecImmutableAdmission(),
 		},
 	})
 	if err != nil {

@@ -31,7 +31,8 @@ type Config struct {
 
 // store is the Badger-backed runstate.Store.
 type store struct {
-	db *badger.DB
+	db       *badger.DB
+	maxValue int64 // the largest record Badger accepts as one value on this backend
 }
 
 // New opens a run store on the configured backend and returns it as runstate.Store.
@@ -55,7 +56,11 @@ func New(cfg Config) (runstate.Store, error) {
 	if err != nil {
 		return nil, fault.Internalf(op, "opening run store (inMemory=%v): %v", cfg.InMemory, err)
 	}
-	return &store{db: db}, nil
+	maxValue := bopts.ValueLogFileSize
+	if cfg.InMemory && bopts.ValueThreshold < maxValue {
+		maxValue = bopts.ValueThreshold // in-memory Badger keeps every value inline, capped at the threshold
+	}
+	return &store{db: db, maxValue: maxValue}, nil
 }
 
 func recordKey(ns v1.NamespaceName, name v1.ObjectName) []byte {
@@ -87,6 +92,9 @@ func (s *store) Put(_ context.Context, rec *runstate.Record) error {
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "marshalling run %q", rec.Name)
+	}
+	if int64(len(b)) > s.maxValue {
+		return fault.PayloadTooLargef(op, "run %q record is %d bytes, over the run store's %d-byte value limit", rec.Name, len(b), s.maxValue)
 	}
 	if err := s.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(recordKey(rec.Namespace, rec.Name), b)
