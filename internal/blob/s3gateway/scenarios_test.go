@@ -336,6 +336,46 @@ func TestIssue30_MultipartTotalCappedAtUploadPart(t *testing.T) {
 	require.Len(t, mustGet(t, g, "default", "lakehouse", "bronze/capped.parquet"), maxUpload)
 }
 
+// TestIssue157_BucketOpsHonorBindings: HeadBucket succeeds only for a caller bound to the
+// Bucket, and ListBuckets returns exactly the Buckets the caller is bound to (ADR-0080).
+// An unbound caller gets the same 403 for an existing and a missing bucket.
+func TestIssue157_BucketOpsHonorBindings(t *testing.T) {
+	meta := lakehouseMeta()
+	meta.buckets["default/scratch"] = &v1.Bucket{
+		ObjectMeta: v1.ObjectMeta{Name: "scratch", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "tmp"}}},
+	}
+	g := newGateway(t, meta, fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	bound := g.client(t, "default", "analytics")
+	unbound := g.client(t, "default", "reporting")
+
+	_, err := bound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("lakehouse")})
+	require.NoError(t, err, "analytics is bound to lakehouse")
+
+	_, err = unbound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("lakehouse")})
+	require.Error(t, err, "reporting has no spec.blob binding to lakehouse")
+	require.Equal(t, 403, statusCode(err))
+
+	_, err = unbound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("nosuch")})
+	require.Equal(t, 403, statusCode(err), "a missing bucket answers like an unbound one")
+
+	_, err = bound.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: ptrS("scratch")})
+	require.Equal(t, 403, statusCode(err), "analytics is not bound to scratch")
+
+	out, err := bound.ListBuckets(ctx, &awss3.ListBucketsInput{})
+	require.NoError(t, err)
+	names := make([]string, 0, len(out.Buckets))
+	for _, b := range out.Buckets {
+		names = append(names, *b.Name)
+	}
+	require.Equal(t, []string{"lakehouse"}, names)
+
+	out, err = unbound.ListBuckets(ctx, &awss3.ListBucketsInput{})
+	require.NoError(t, err)
+	require.Empty(t, out.Buckets)
+}
+
 // mustGet reads a substrate key directly (bypassing the gateway) for assertions.
 func mustGet(t *testing.T, g *gw, ns, bucket, key string) []byte {
 	t.Helper()

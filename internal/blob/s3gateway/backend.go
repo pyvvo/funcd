@@ -34,6 +34,7 @@ const region = "us-east-1"
 type be struct {
 	backend.BackendUnsupported
 	bucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) // (ns, Bucket) → substrate bucket
+	buckets   func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
 	pdp       authz.Authorizer
 	external  ExternalKeys
 	maxUpload int64
@@ -60,14 +61,40 @@ func splitKey(key string) (prefix, object string) {
 // request for (action, bucket, prefix), and consults the PDP. It returns the resolved
 // (ns, bucket) substrate handle on Allow, or an S3 error on deny / missing bucket.
 func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix string) (blob.Bucket, principal, error) {
-	acct, ok := accountFromCtx(ctx)
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return nil, principal{}, err
+	}
+	ok, err := b.allowed(ctx, pr, action, bucket, prefix)
+	if err != nil {
+		return nil, principal{}, err
+	}
 	if !ok {
 		return nil, principal{}, accessDenied()
 	}
+	sub, ok := b.bucketFor(pr.namespace, bucket)
+	if !ok {
+		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
+	}
+	return sub, pr, nil
+}
+
+// caller resolves the request's principal; an unauthenticated or unknown caller is denied.
+func (b *be) caller(ctx context.Context) (principal, error) {
+	acct, ok := accountFromCtx(ctx)
+	if !ok {
+		return principal{}, accessDenied()
+	}
 	pr, err := principalFor(acct, b.external)
 	if err != nil {
-		return nil, principal{}, accessDenied()
+		return principal{}, accessDenied()
 	}
+	return pr, nil
+}
+
+// allowed asks the PDP whether pr may perform action on bucket/prefix. The error is
+// an S3 InternalError when the PDP itself fails.
+func (b *be) allowed(ctx context.Context, pr principal, action authz.Action, bucket, prefix string) (bool, error) {
 	req := authz.Request{
 		Identity: authz.Identity{Principal: &pr.ref},
 		Action:   action,
@@ -81,17 +108,12 @@ func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix 
 	dec, err := b.pdp.Authorize(ctx, req)
 	if err != nil {
 		b.log.Error("s3 PEP error", "action", action, "bucket", bucket, "prefix", prefix, "err", err)
-		return nil, principal{}, s3err.GetAPIError(s3err.ErrInternalError)
+		return false, s3err.GetAPIError(s3err.ErrInternalError)
 	}
 	if !dec.Allowed {
 		b.log.Debug("s3 PEP denied", "action", action, "bucket", bucket, "prefix", prefix)
-		return nil, principal{}, accessDenied()
 	}
-	sub, ok := b.bucketFor(pr.namespace, bucket)
-	if !ok {
-		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
-	}
-	return sub, pr, nil
+	return dec.Allowed, nil
 }
 
 // blobKey is the substrate key for an S3 (prefix, object) within a bucket: the prefix
@@ -347,32 +369,83 @@ func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s
 
 // --- Buckets ---------------------------------------------------------------------
 
-// HeadBucket succeeds iff the caller is bound to (read-authorized on) a real Bucket of
-// that name in its namespace (ADR-0080). We probe read on an empty prefix path; the
-// substrate handle must resolve.
-func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.HeadBucketOutput, error) {
-	acct, ok := accountFromCtx(ctx)
-	if !ok {
-		return nil, accessDenied()
-	}
-	pr, err := principalFor(acct, b.external)
+// namespaceBuckets lists the Bucket resources of the caller's namespace.
+func (b *be) namespaceBuckets(ctx context.Context, pr principal) ([]v1.Bucket, error) {
+	all, err := b.buckets(ctx, pr.namespace)
 	if err != nil {
-		return nil, accessDenied()
+		b.log.Error("s3 list buckets", "namespace", pr.namespace, "err", err)
+		return nil, s3err.GetAPIError(s3err.ErrInternalError)
 	}
-	if _, ok := b.bucketFor(pr.namespace, deref(in.Bucket)); !ok {
-		return nil, s3err.GetAPIError(s3err.ErrNoSuchBucket)
-	}
-	return &awss3.HeadBucketOutput{}, nil
+	return all, nil
 }
 
-// ListBuckets returns the buckets the caller can resolve (ADR-0080). The substrate
-// does not enumerate Bucket resources, so this returns an empty owner-scoped result
-// (DuckDB/httpfs addresses buckets by name, not by listing them).
-func (b *be) ListBuckets(ctx context.Context, _ s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
-	if _, ok := accountFromCtx(ctx); !ok {
-		return s3response.ListAllMyBucketsResult{}, accessDenied()
+// bound reports whether pr is bound to bkt (ADR-0080): the PDP lets it s3::read at
+// least one of the Bucket's prefixes.
+func (b *be) bound(ctx context.Context, pr principal, bkt v1.Bucket) (bool, error) {
+	for _, p := range bkt.Spec.Prefixes {
+		ok, err := b.allowed(ctx, pr, authz.ActionS3Read, string(bkt.Name), p.Name)
+		if err != nil || ok {
+			return ok, err
+		}
 	}
-	return s3response.ListAllMyBucketsResult{}, nil
+	return false, nil
+}
+
+// HeadBucket succeeds iff a Bucket of that name exists in the caller's namespace and
+// the caller is bound to it (ADR-0080). Like the object PEP, any other case is 403, so
+// an unbound caller cannot tell an existing bucket from a missing one.
+func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.HeadBucketOutput, error) {
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all, err := b.namespaceBuckets(ctx, pr)
+	if err != nil {
+		return nil, err
+	}
+	for _, bkt := range all {
+		if string(bkt.Name) != deref(in.Bucket) {
+			continue
+		}
+		ok, berr := b.bound(ctx, pr, bkt)
+		if berr != nil {
+			return nil, berr
+		}
+		if ok {
+			return &awss3.HeadBucketOutput{}, nil
+		}
+	}
+	return nil, accessDenied()
+}
+
+// ListBuckets returns the Buckets the caller is bound to (ADR-0080), filtered by the
+// request prefix.
+func (b *be) ListBuckets(ctx context.Context, in s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return s3response.ListAllMyBucketsResult{}, err
+	}
+	all, err := b.namespaceBuckets(ctx, pr)
+	if err != nil {
+		return s3response.ListAllMyBucketsResult{}, err
+	}
+	res := s3response.ListAllMyBucketsResult{Prefix: in.Prefix}
+	for _, bkt := range all {
+		if !strings.HasPrefix(string(bkt.Name), in.Prefix) {
+			continue
+		}
+		ok, berr := b.bound(ctx, pr, bkt)
+		if berr != nil {
+			return s3response.ListAllMyBucketsResult{}, berr
+		}
+		if ok {
+			res.Buckets.Bucket = append(res.Buckets.Bucket, s3response.ListAllMyBucketsEntry{
+				Name:         string(bkt.Name),
+				CreationDate: bkt.CreationTime,
+			})
+		}
+	}
+	return res, nil
 }
 
 // CreateBucket is Forbidden over S3 (ADR-0080): Buckets are managed via the control plane.
