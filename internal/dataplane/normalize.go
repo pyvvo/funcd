@@ -62,6 +62,16 @@ func normalizeInvokeBody(ns v1.NamespaceName, name v1.ObjectName, body []byte, n
 	return wrapEnvelope(ns, name, json.RawMessage(body), newID), true
 }
 
+// InvokeEnvelope returns body as the CloudEvents v1.0 envelope for an invoke of ns/name under the
+// ADR-0134 rule, or body unchanged when it is not valid JSON. The edge normalizes only external traffic,
+// so an internal producer (the fn-to-fn broker, ADR-0064) uses this to emit its envelope.
+func InvokeEnvelope(ns v1.NamespaceName, name v1.ObjectName, body []byte) []byte {
+	if env, ok := normalizeInvokeBody(ns, name, body, newInvokeID); ok {
+		return env
+	}
+	return body
+}
+
 // wrapEnvelope builds the v1.0 envelope around data. data must already be valid JSON.
 func wrapEnvelope(ns v1.NamespaceName, name v1.ObjectName, data json.RawMessage, newID func() string) []byte {
 	env := cloudEventEnvelope{
