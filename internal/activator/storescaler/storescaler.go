@@ -29,6 +29,7 @@ func New(st store.Store) activator.Scaler {
 
 // ScaleTo records the partitioned Phase intent for fn (Idle→Deploying on wake,
 // *→Idle on reclaim), retrying the read-modify-write on the store's RV conflict.
+// A wake of a Failed function is refused with fault.Unavailable naming its state.
 func (s *scaler) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas int) error {
 	const op = "storescaler.ScaleTo"
 	gvk := v1.KindFunction.GVK()
@@ -42,6 +43,11 @@ func (s *scaler) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas
 		f, ok := obj.(*v1.Function)
 		if !ok {
 			return fault.Internalf(op, "object %s/%s is not a Function", fn.Namespace, fn.Name)
+		}
+		if target == v1.PhaseDeploying && f.Status.Phase == v1.PhaseFailed {
+			// Only the reconciler leaves Failed (ADR-0016 C2, ADR-0142), so a held call could only time out (issue #142).
+			ready, _ := f.Status.Conditions.Get("Ready")
+			return fault.Unavailablef(op, "function %s/%s is Failed (%s)", fn.Namespace, fn.Name, ready.Reason)
 		}
 		next, change := transition(f.Status.Phase, target)
 		if !change {

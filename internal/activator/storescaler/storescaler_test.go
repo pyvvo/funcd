@@ -2,8 +2,11 @@ package storescaler_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -119,4 +122,43 @@ func TestScenarioScalerConflictRetry(t *testing.T) {
 	require.NoError(t, sc.ScaleTo(ctx, ref("racy"), 1), "conflict must be retried, not surfaced")
 	require.Equal(t, v1.PhaseDeploying, phaseOf(t, base, "racy"), "intent converged despite the race")
 	require.GreaterOrEqual(t, racing.getCount(), 2, "the conflict forced a re-read")
+}
+
+// coldEndpoints never reports a ready upstream, as for a Failed function whose worker is not restarted (ADR-0142).
+type coldEndpoints struct{}
+
+func (coldEndpoints) Upstream(context.Context, activator.FunctionRef) (string, bool, error) {
+	return "", false, nil
+}
+
+// Issue #142: a call to a Failed (ShapeInvalid) function is answered at once with the function's state, instead of
+// being held for the whole activation timeout and then told the function "did not become ready".
+func TestIssue142_FailedFunctionIsAnsweredWithItsState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	putFunction(t, st, "broken", v1.PhaseFailed)
+	obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", "broken")
+	require.NoError(t, err)
+	fn := obj.(*v1.Function)
+	fn.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
+	_, err = st.Update(ctx, fn)
+	require.NoError(t, err)
+
+	a, err := activator.New(activator.Deps{
+		Store:             st,
+		Endpoints:         coldEndpoints{},
+		Scaler:            storescaler.New(st),
+		ActivationTimeout: 200 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	req := activator.WithFunction(httptest.NewRequest(http.MethodPost, "/", nil), ref("broken"))
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), "function default/broken is Failed (ShapeInvalid)")
+	require.NotContains(t, rec.Body.String(), "did not become ready", "the call must not wait out the activation timeout")
+	require.Equal(t, v1.PhaseFailed, phaseOf(t, st, "broken"), "a wake does not move a Failed function")
 }
