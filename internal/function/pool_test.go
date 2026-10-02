@@ -1,6 +1,7 @@
 package function_test
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -9,13 +10,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/activator/storescaler"
 	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/sensor"
+	"github.com/pyvvo/funcd/internal/workflow"
 )
 
 func withNodePool(d *function.Deps) { d.PoolShimCommand = []string{"node", "/opt/funcd/pool.mjs"} }
@@ -85,4 +90,27 @@ func TestPooledFunctionIsServedThroughDataPlane(t *testing.T) {
 	code, body := h.invokeDataPlane(t, "agent")
 	require.Equal(t, http.StatusOK, code, "the data plane reaches the pool worker: %s", body)
 	require.JSONEq(t, `{"served":"agent"}`, body)
+}
+
+// A pooled Function's upstream is its pool worker, which serves a member only at /function/<name>, so a Workflow step
+// and a Sensor action reach it there, like the data plane.
+func TestIssue37_PooledFunctionReachableFromEveryInvoker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	h.create(t, "svc", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "services" })
+	h.rt.serveCalls(t, "", true)
+	h.reconcile(t, "svc")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "svc").Status.Phase)
+
+	d, err := workflow.NewHTTPDispatcher(workflow.DispatchDeps{Endpoints: h.r.Endpoints()})
+	require.NoError(t, err)
+	out, err := d.Dispatch(ctx, workflow.DispatchRequest{Namespace: "default", Run: "run-1", Step: "call", Target: "svc", Attempt: 1})
+	if assert.NoError(t, err, "the workflow step reaches the pooled function") {
+		assert.JSONEq(t, `{"served":"svc"}`, string(out))
+	}
+
+	inv := &sensor.HTTPInvoker{Endpoints: h.r.Endpoints()}
+	assert.NoError(t, inv.Invoke(ctx, "default", "svc", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1", Source: "funcd://default/eventsource/tick", Type: "tick"}),
+		"the Sensor action reaches the pooled function")
 }
