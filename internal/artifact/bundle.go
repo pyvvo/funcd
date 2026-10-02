@@ -85,8 +85,13 @@ func PackBundle(dir, entry string) (data []byte, err error) {
 // tar+gzip stream. A non-empty entry must be one of the regular files it packs — checked against the
 // walk itself, so a symlinked entry (or one under a symlinked dir), which the walk skips, is refused
 // rather than recorded and left out. A site bundle (ADR-0139) passes "": its index is a
-// reconcile-time spec.index. dir must already be a directory.
+// reconcile-time spec.index. dir must already be a directory; a symlinked root is resolved first,
+// because the walk does not descend into one and would pack nothing.
 func packDir(op, dir, entry string) (data []byte, err error) {
+	root, rerr := filepath.EvalSymlinks(dir)
+	if rerr != nil {
+		return nil, fault.Wrapf(rerr, fault.Internal, op, "resolve bundle %q", dir)
+	}
 	// Collect every regular file / directory, keyed by its slash-separated relative path, so the
 	// walk order (OS-dependent) never leaks into the bytes — we sort the paths ourselves.
 	type node struct {
@@ -94,11 +99,11 @@ func packDir(op, dir, entry string) (data []byte, err error) {
 		info fs.FileInfo
 	}
 	var nodes []node
-	walkErr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
+	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return werr
 		}
-		rel, rerr := filepath.Rel(dir, p)
+		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {
 			return rerr
 		}
@@ -151,7 +156,7 @@ func packDir(op, dir, entry string) (data []byte, err error) {
 			return nil, fault.Wrapf(werr, fault.Internal, op, "write tar header %q", n.rel)
 		}
 		if hdr.Typeflag == tar.TypeReg {
-			body, rerr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(n.rel))) //nolint:gosec // path is under the user-supplied bundle dir
+			body, rerr := os.ReadFile(filepath.Join(root, filepath.FromSlash(n.rel))) //nolint:gosec // path is under the user-supplied bundle dir
 			if rerr != nil {
 				return nil, fault.Wrapf(rerr, fault.Internal, op, "read %q", n.rel)
 			}
