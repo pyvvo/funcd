@@ -136,3 +136,33 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 	require.NoError(t, rt.Remove(ctx, runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)))
 	require.Empty(t, files(), "Remove deletes the last instance's files")
 }
+
+// A Create rejected because the instance is live (Created or Running) leaves no driver-created log file behind.
+func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	ctx := context.Background()
+	rt := process.New()
+	t.Cleanup(func() { _ = rt.Close() })
+	spec := runtime.WorkerSpec{Namespace: "default", Name: "live", Command: []string{"sleep", "30"}}
+	logs := func() []string {
+		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*.log"))
+		require.NoError(t, err)
+		return got
+	}
+
+	inst, err := rt.Create(ctx, spec)
+	require.NoError(t, err)
+	_, err = rt.Create(ctx, spec)
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.Len(t, logs(), 1, "a Create rejected on a Created instance makes no log file")
+
+	require.NoError(t, rt.Start(ctx, inst.ID))
+	_, err = rt.Create(ctx, spec)
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.Len(t, logs(), 1, "a Create rejected on a Running instance makes no log file")
+
+	require.NoError(t, rt.Stop(ctx, inst.ID))
+	require.NoError(t, rt.Remove(ctx, inst.ID))
+	require.Empty(t, logs())
+}
