@@ -2203,20 +2203,5 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-24-fix-claude-opus-5-5.md",
     "notes": "pass: test fails pre-fix (rv 7->10) and passes under -race; 3/3 mutants killed; real-engine probe ~13k reconciles/5s -> 0. Minor(model): unused HandOutSettle knob in the test. Minor(env): pre-existing PushSite created-timestamp flake in internal/artifact."
-  },
-  {
-    "date": "2026-10-02",
-    "issue": "32",
-    "phase": "fix",
-    "model": "claude-opus-5-5",
-    "verdict": "pass",
-    "blockers": 0,
-    "majors": 0,
-    "minors": 2,
-    "model_attributed": 2,
-    "dod_passed": 11,
-    "dod_total": 11,
-    "report": "docs/reviews/issue-32-fix-claude-opus-5-5.md",
-    "notes": "pass 0/0/2: Minor\u00b7model lineReader.next drops an unterminated last line of exactly k*64KiB at EOF (bufio.Scanner kept it; no production trigger since Route's NDJSON lines always end in a newline); Minor\u00b7model Route doc comment still says 'blocking Scan'. Revert fails all 3 subtests for the issue's reasons; 3/3 mutants killed; os.Pipe probe keeps 51/51 records; build/vet/lint (host+linux), race tests, e2e and hygiene green."
   }
 ]
