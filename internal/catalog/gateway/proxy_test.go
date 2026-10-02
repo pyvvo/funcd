@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -105,4 +108,114 @@ func TestCatalogProxy_AllowDeny(t *testing.T) {
 	_ = resp3.Body.Close()
 	require.Equal(t, http.StatusForbidden, resp3.StatusCode, "an unresolvable credential is 403'd")
 	require.False(t, stub3.hit, "the engine is never reached by an unresolved caller")
+}
+
+// countingReader counts the bytes its reader handed out.
+type countingReader struct {
+	r    io.Reader
+	read int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.read += int64(n)
+	return n, err
+}
+
+// gatedBody hands out first, then holds the body open until release is closed: a body still
+// being sent.
+type gatedBody struct {
+	first   []byte
+	release <-chan struct{}
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	if len(g.first) > 0 {
+		n := copy(p, g.first)
+		g.first = g.first[n:]
+		return n, nil
+	}
+	select {
+	case <-g.release:
+		return 0, io.EOF
+	case <-time.After(5 * time.Second):
+		return 0, errors.New("the engine never saw the body while it was being sent")
+	}
+}
+
+// TestIssue39_ProxyStreamsTheBody: the PEP needs only the handshake's token field, so the proxy
+// reads no more than that before it denies, and streams the rest of a body to the engine instead
+// of holding all of it in daemon memory.
+func TestIssue39_ProxyStreamsTheBody(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	pdp := buildPDP(t, st)
+	master := []byte("proxy-test-node-master")
+	keys := NewCatalogKeys(master, st)
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	proxyTo := func(engine http.Handler) http.Handler {
+		up := httptest.NewServer(engine)
+		t.Cleanup(up.Close)
+		return NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken})
+	}
+
+	t.Run("a denied handshake is rejected before its body is read", func(t *testing.T) {
+		stub := &engineStub{}
+		h := proxyTo(stub.handler())
+		body := &countingReader{r: io.MultiReader(
+			bytes.NewReader(makeHandshake("garbage-unresolvable-token")),
+			bytes.NewReader(make([]byte, 16<<20)),
+		)}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", body))
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.False(t, stub.hit, "the engine is never reached by an unresolved caller")
+		require.Less(t, body.read, int64(1<<20), "the proxy read %d bytes of an unauthenticated body", body.read)
+	})
+
+	t.Run("a forwarded body streams to the engine while it is still being sent", func(t *testing.T) {
+		started := make(chan struct{})
+		var received int64
+		front := httptest.NewServer(proxyTo(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var one [1]byte
+			n, _ := io.ReadFull(r.Body, one[:])
+			close(started)
+			rest, _ := io.Copy(io.Discard, r.Body)
+			received = int64(n) + rest
+			w.WriteHeader(http.StatusOK)
+		})))
+		t.Cleanup(front.Close)
+
+		const sent = 1 << 20
+		resp, err := http.Post(front.URL, "application/octet-stream", &gatedBody{first: make([]byte, sent), release: started})
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, int64(sent), received, "the engine receives the whole body")
+	})
+
+	t.Run("an allowed handshake larger than its token field keeps its tail and length", func(t *testing.T) {
+		var got []byte
+		var gotLen int64
+		front := httptest.NewServer(proxyTo(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotLen = r.ContentLength
+			got, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		})))
+		t.Cleanup(front.Close)
+
+		granted, err := DeriveCatalogToken(master, "data", "analytics")
+		require.NoError(t, err)
+		tail := bytes.Repeat([]byte("q"), 1<<20)
+		resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(append(makeHandshake(granted), tail...)))
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		_, forwarded, ok := swapHandshakeToken(got, "x")
+		require.True(t, ok)
+		require.Equal(t, engineToken, forwarded, "the engine sees the shared engine token")
+		require.True(t, bytes.HasSuffix(got, tail), "the body after the token field is forwarded intact")
+		require.Equal(t, int64(len(got)), gotLen, "the forwarded Content-Length matches the rewritten body")
+	})
 }
