@@ -180,6 +180,31 @@ func TestScenarioInvalidEnumRejected(t *testing.T) {
 	}
 }
 
+// A negative server.limits value is rejected from the file and from env; 0 (ADR-0112's "off") still loads.
+func TestIssue164_NegativeLimitsRejected(t *testing.T) {
+	for key, envName := range map[string]string{
+		"ratePerMin":   "FUNCD_LIMITS_RATE_PER_MIN",
+		"burst":        "FUNCD_LIMITS_BURST",
+		"maxBodyBytes": "FUNCD_LIMITS_MAX_BODY_BYTES",
+		"maxInFlight":  "FUNCD_LIMITS_MAX_IN_FLIGHT",
+	} {
+		t.Run(key+"/file", func(t *testing.T) {
+			_, err := config.Load(writeCfg(t, "server:\n  limits:\n    "+key+": -1\n"), config.Flags{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a negative %s is rejected", key)
+			require.ErrorContains(t, err, "server.limits."+key)
+		})
+		t.Run(key+"/env", func(t *testing.T) {
+			t.Setenv(envName, "-5")
+			_, err := config.Load("", config.Flags{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "a negative %s is rejected", envName)
+		})
+		t.Run(key+"/zero", func(t *testing.T) {
+			_, err := config.Load(writeCfg(t, "server:\n  limits:\n    "+key+": 0\n"), config.Flags{})
+			require.NoError(t, err, "0 is the documented off")
+		})
+	}
+}
+
 // scenario: unknown-key-rejected — a misspelled key ⇒ strict-decode fault.Invalid.
 func TestScenarioUnknownKeyRejected(t *testing.T) {
 	_, err := config.Load(writeCfg(t, "server:\n  listen: \"0.0.0.0:9000\"\n"), config.Flags{}) // typo: listen
