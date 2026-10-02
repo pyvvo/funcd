@@ -194,14 +194,15 @@ func (s *store) SweepExpired(_ context.Context, retention time.Duration, maxPerN
 	if len(toDelete) == 0 {
 		return 0, nil
 	}
-	if derr := s.db.Update(func(txn *badger.Txn) error {
-		for _, k := range toDelete {
-			if drr := txn.Delete(k); drr != nil {
-				return drr
-			}
+	// A WriteBatch, not one txn: it commits whenever Badger's txn limit is reached, so any backlog evicts.
+	wb := s.db.NewWriteBatch()
+	defer wb.Cancel()
+	for _, k := range toDelete {
+		if derr := wb.Delete(k); derr != nil {
+			return 0, fault.Wrapf(derr, fault.Internal, op, "evicting swept dead letters")
 		}
-		return nil
-	}); derr != nil {
+	}
+	if derr := wb.Flush(); derr != nil {
 		return 0, fault.Wrapf(derr, fault.Internal, op, "evicting swept dead letters")
 	}
 	return len(toDelete), nil
