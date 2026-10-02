@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/pyvvo/funcd/compare/v0.1.4...v0.2.0) (2026-10-02)
+
+
+### Features
+
+* bundle in the language toolchains and ship multi-arch function bundles (ADR-0144, ADR-0145) ([#22](https://github.com/pyvvo/funcd/issues/22)) ([171adac](https://github.com/pyvvo/funcd/commit/171adac2a3b0dc8f40268fe2835e1c08a5dc0da9))
+
 ## [0.1.4](https://github.com/pyvvo/funcd/compare/v0.1.3...v0.1.4) (2026-10-02)
 
 
