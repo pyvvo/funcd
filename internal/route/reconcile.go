@@ -22,9 +22,13 @@ const op = "route.Reconcile"
 
 const condReady = v1.ConditionType("Ready")
 
-// bucketRecheckInterval requeues a static Route so a Bucket created or deleted after it is reflected in its
-// status and the edge table: no Bucket event reaches this reconciler (ADR-0120: missing Bucket ⇒ NotReady).
-const bucketRecheckInterval = 15 * time.Second
+// No watch enqueues a Route when its backend Function or Bucket (or its Namespace) changes, so a live
+// Route is requeued: within backendRequeue while a backend is missing (ADR-0121's bounded requeue),
+// within resyncPeriod otherwise, so a deleted backend is noticed.
+const (
+	backendRequeue = 2 * time.Second
+	resyncPeriod   = 10 * time.Second
+)
 
 // routeEntrySource is this reconciler's edge-aggregator source key (ADR-0138): the user-Route set is
 // one partition of the shared edge table, alongside the CatalogService reconciler's catalog partition.
@@ -68,55 +72,48 @@ type routeKey struct {
 }
 
 type evalResult struct {
-	ready   bool
-	reason  string
-	message string
+	ready          bool
+	backendMissing bool
+	reason         string
+	message        string
 }
 
 // Reconcile evaluates the whole Route set (deterministic collision resolution), programs the
-// router with the winners, and writes the reconciled Route's status.
+// router with the winners, and writes the status of every Route whose evaluation changed it — one
+// Route's change can move another's readiness, and no event enqueues that other Route.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
-	results, entries, err := r.evaluate(ctx)
+	routes, results, entries, err := r.evaluate(ctx)
 	if err != nil {
 		return controller.Result{}, err
 	}
 	if err := r.routes.Set(ctx, routeEntrySource, entries); err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "program edge router")
 	}
-	obj, err := r.store.Get(ctx, v1.KindRoute.GVK(), req.Namespace, req.Name)
-	if err != nil {
-		if fault.KindOf(err) == fault.NotFound {
-			return controller.Result{}, nil // deleted; the table was already reprogrammed without it
+	for _, rt := range routes {
+		if !applyStatus(rt, results[routeKey{rt.Namespace, rt.Name}]) {
+			continue
 		}
-		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get route %s/%s", req.Namespace, req.Name)
-	}
-	rt := obj.(*v1.Route)
-	res := results[routeKey{req.Namespace, req.Name}]
-	applyStatus(rt, res)
-	if _, err := r.store.Update(ctx, rt); err != nil {
-		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "update route status %q", rt.Name)
-	}
-	if hasStaticBackend(rt) {
-		return controller.Result{RequeueAfter: bucketRecheckInterval}, nil
-	}
-	return controller.Result{}, nil
-}
-
-func hasStaticBackend(rt *v1.Route) bool {
-	for i := range rt.Spec.Rules {
-		if rt.Spec.Rules[i].Backend.Static != nil {
-			return true
+		if _, err := r.store.Update(ctx, rt); err != nil {
+			return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "update route status %s/%s", rt.Namespace, rt.Name)
 		}
 	}
-	return false
+	res, ok := results[routeKey{req.Namespace, req.Name}]
+	switch {
+	case !ok:
+		return controller.Result{}, nil // deleted; the table was already reprogrammed without it
+	case res.backendMissing:
+		return controller.Result{RequeueAfter: backendRequeue}, nil
+	default:
+		return controller.Result{RequeueAfter: resyncPeriod}, nil
+	}
 }
 
-// evaluate lists every Route, resolves them in (namespace, name) order, and returns each Route's
-// readiness plus the compiled entries for the Ready ones.
-func (r *Reconciler) evaluate(ctx context.Context) (map[routeKey]evalResult, []router.Entry, error) {
+// evaluate lists every Route, resolves them in (namespace, name) order, and returns the Routes,
+// each one's readiness, and the compiled entries for the Ready ones.
+func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]evalResult, []router.Entry, error) {
 	list, err := r.store.List(ctx, v1.KindRoute.GVK(), store.ListOptions{})
 	if err != nil {
-		return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "list routes")
+		return nil, nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "list routes")
 	}
 	routes := make([]*v1.Route, 0, len(list.Items))
 	for _, o := range list.Items {
@@ -139,9 +136,9 @@ func (r *Reconciler) evaluate(ctx context.Context) (map[routeKey]evalResult, []r
 	for _, rt := range routes {
 		key := routeKey{rt.Namespace, rt.Name}
 		if reason, message, err := r.firstBackendProblem(ctx, rt); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		} else if reason != "" {
-			results[key] = evalResult{reason: reason, message: message}
+			results[key] = evalResult{backendMissing: true, reason: reason, message: message}
 			continue
 		}
 		mode, ok := modes[rt.Namespace]
@@ -171,7 +168,7 @@ func (r *Reconciler) evaluate(ctx context.Context) (map[routeKey]evalResult, []r
 		results[key] = evalResult{ready: true}
 		entries = append(entries, compile(rt))
 	}
-	return results, entries, nil
+	return routes, results, entries, nil
 }
 
 // firstBackendProblem returns the NotReady reason+message for the first rule whose backend does not
@@ -215,14 +212,19 @@ func (r *Reconciler) modeOf(ctx context.Context, ns v1.NamespaceName) v1.Exposur
 	return v1.ExposureImplicit
 }
 
-func applyStatus(rt *v1.Route, res evalResult) {
+// applyStatus sets rt's Ready condition and phase from res and reports whether they changed.
+func applyStatus(rt *v1.Route, res evalResult) bool {
+	prev, had := rt.Status.Conditions.Get(condReady)
+	prevPhase := rt.Status.Phase
 	if res.ready {
 		rt.Status.Phase = v1.PhaseReady
 		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Programmed", ObservedGeneration: rt.Generation})
-		return
+	} else {
+		rt.Status.Phase = v1.PhasePending
+		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: res.reason, Message: res.message, ObservedGeneration: rt.Generation})
 	}
-	rt.Status.Phase = v1.PhasePending
-	rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: res.reason, Message: res.message, ObservedGeneration: rt.Generation})
+	cur, _ := rt.Status.Conditions.Get(condReady)
+	return !had || cur != prev || rt.Status.Phase != prevPhase
 }
 
 // claimsFor expands a Route into its (host, path, method) claim keys (methods empty ⇒ all).

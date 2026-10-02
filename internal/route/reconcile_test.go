@@ -206,6 +206,82 @@ func TestScenarioCrossNamespaceHostIsolation(t *testing.T) {
 	_ = ctx
 }
 
+func deleteObject(t *testing.T, st store.Store, gvk v1.GroupVersionKind, ns v1.NamespaceName, name string) {
+	t.Helper()
+	obj, err := st.Get(context.Background(), gvk, ns, v1.ObjectName(name))
+	require.NoError(t, err)
+	require.NoError(t, st.Delete(context.Background(), gvk, ns, v1.ObjectName(name), obj.GetObjectMeta().ResourceVersion))
+}
+
+// Issue 107: every reconcile writes the status of every Route it evaluated, and a live Route is
+// requeued, since no watch enqueues a Route when a sibling Route or a backend Function/Bucket changes.
+func TestIssue107_RouteStatusFollowsEvaluation(t *testing.T) {
+	ctx, st, rtr, rec := setup(t)
+	seedFunction(t, st, "default", "fa")
+	seedFunction(t, st, "default", "fb")
+	resolves := func(path string) (v1.ObjectName, bool) {
+		m, ok := rtr.Resolve("gq.test", path, "POST")
+		return m.Function, ok
+	}
+	reconcileResult := func(name string) controller.Result {
+		t.Helper()
+		res, err := rec.Reconcile(ctx, controller.Request{GVK: v1.KindRoute.GVK(), Namespace: "default", Name: v1.ObjectName(name)})
+		require.NoError(t, err)
+		return res
+	}
+
+	// (a) the RouteConflict loser takes over, and says so, once the winner is deleted.
+	seedRoute(t, st, "default", "r-a", "gq.test", "/x", "fa")
+	reconcile(t, rec, "default", "r-a")
+	seedRoute(t, st, "default", "r-b", "gq.test", "/x", "fb")
+	reconcile(t, rec, "default", "r-b")
+	_, reason := readyCond(t, st, "default", "r-b")
+	require.Equal(t, "RouteConflict", reason)
+	deleteObject(t, st, v1.KindRoute.GVK(), "default", "r-a")
+	reconcile(t, rec, "default", "r-a")
+	fn, ok := resolves("/x")
+	require.True(t, ok)
+	require.Equal(t, v1.ObjectName("fb"), fn)
+	status, reason := readyCond(t, st, "default", "r-b")
+	require.Equal(t, v1.ConditionTrue, status, "r-b serves /x, so it is Ready (reason %q)", reason)
+
+	// (b) a lexically earlier Route that takes the slot leaves the displaced Route NotReady.
+	seedRoute(t, st, "default", "r-z", "gq.test", "/y", "fb")
+	reconcile(t, rec, "default", "r-z")
+	seedRoute(t, st, "default", "r-0", "gq.test", "/y", "fa")
+	reconcile(t, rec, "default", "r-0")
+	fn, _ = resolves("/y")
+	require.Equal(t, v1.ObjectName("fa"), fn)
+	status, reason = readyCond(t, st, "default", "r-z")
+	require.Equal(t, v1.ConditionFalse, status, "r-z no longer serves /y")
+	require.Equal(t, "RouteConflict", reason)
+
+	// (c) a Route applied before its backend is requeued, so it converges once the Function exists.
+	seedRoute(t, st, "default", "r-late", "gq.test", "/late", "flate")
+	require.Positive(t, reconcileResult("r-late").RequeueAfter, "a Route waiting on its backend is requeued")
+	_, reason = readyCond(t, st, "default", "r-late")
+	require.Equal(t, "BackendNotFound", reason)
+	seedFunction(t, st, "default", "flate")
+	reconcile(t, rec, "default", "r-late")
+	status, _ = readyCond(t, st, "default", "r-late")
+	require.Equal(t, v1.ConditionTrue, status)
+	_, ok = resolves("/late")
+	require.True(t, ok)
+
+	// (d) a Ready Route is requeued, so it goes BackendNotFound once its Function is deleted.
+	require.Positive(t, reconcileResult("r-b").RequeueAfter, "a Ready Route is requeued")
+	deleteObject(t, st, v1.KindFunction.GVK(), "default", "fb")
+	reconcile(t, rec, "default", "r-b")
+	_, reason = readyCond(t, st, "default", "r-b")
+	require.Equal(t, "BackendNotFound", reason)
+	_, ok = resolves("/x")
+	require.False(t, ok, "a Route whose Function is gone is not programmed")
+
+	// The static arm waits on its Bucket the same way.
+	seedStaticRoute(t, st, "default", "r-static", "gq.test", "/static", "assets")
+	require.Positive(t, reconcileResult("r-static").RequeueAfter, "a Route waiting on its Bucket is requeued")
+}
+
 // Issue #102: no Bucket event reaches the Route reconciler, so a static Route must requeue to re-check its
 // Bucket; the requeued pass after the Bucket is deleted marks it NotReady and unprograms it.
 func TestIssue102_StaticRouteNotReadyAfterBucketDeleted(t *testing.T) {
