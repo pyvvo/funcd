@@ -251,6 +251,27 @@ func TestScenarioCLIInspectReadsContract(t *testing.T) {
 	require.Contains(t, out.String(), "2020-12", "inspect renders the JSON Schema dialect")
 }
 
+// Issue #325: inspect splits off only a trailing @<digest>; an '@' inside a layout path stays in the path.
+func TestIssue325_InspectKeepsAtSignInLayoutPath(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.js")
+	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
+	ref := "oci-layout://" + filepath.Join(dir, "a@b") + ":tag"
+	schema := writeSchemaFile(t, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
+		`"additionalProperties":false},"output":{"type":"null"}}`)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", schema))
+	digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
+
+	for _, arg := range []string{ref, ref + "@" + digest} {
+		out.Reset()
+		require.NoError(t, execCLI(&out, nil, "inspect", arg), arg)
+		require.Contains(t, out.String(), `"name"`, arg)
+	}
+	require.NoDirExists(t, filepath.Join(dir, "a"), "inspect creates no layout at the path's prefix")
+}
+
 // scenario: cli-push-site (ADR-0139) — `push --site <dir> <ref>` packs a prebuilt web app as a site
 // artifact (no --schema needed) and prints <ref>@<digest>; the digest resolves as a site; and --site is
 // mutually exclusive with the function flags.

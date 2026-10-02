@@ -460,7 +460,7 @@ func parseLocalRef(ref string) (dir, tag string, ok bool) {
 		return "", "", false
 	}
 	rest := strings.TrimPrefix(ref, ociLayoutScheme)
-	if i := strings.LastIndex(rest, "@"); i >= 0 && isDigest(rest[i+1:]) {
+	if i := strings.LastIndex(rest, "@"); i >= 0 && IsDigest(rest[i+1:]) {
 		dir, _, _ = parseLocalRef(ociLayoutScheme + rest[:i])
 		return dir, rest[i+1:], true
 	}
@@ -472,8 +472,8 @@ func parseLocalRef(ref string) (dir, tag string, ok bool) {
 	return rest, "", true
 }
 
-// isDigest reports whether a ref's reference part is a digest rather than a tag.
-func isDigest(reference string) bool {
+// IsDigest reports whether a ref's reference part is a digest rather than a tag.
+func IsDigest(reference string) bool {
 	return registry.Reference{Reference: reference}.ValidateReferenceAsDigest() == nil
 }
 

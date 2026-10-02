@@ -348,7 +348,7 @@ func (a *cli) inspectCmd() *cobra.Command {
 // splitRefDigest splits "<ref>@<digest>" into the ref and the (possibly empty) digest. A local layout
 // ref keeps its own "oci-layout://…" scheme; only a trailing "@sha256:…" is treated as the digest.
 func splitRefDigest(arg string) (ref, digest string) {
-	if i := strings.LastIndex(arg, "@"); i >= 0 {
+	if i := strings.LastIndex(arg, "@"); i >= 0 && artifact.IsDigest(arg[i+1:]) {
 		return arg[:i], arg[i+1:]
 	}
 	return arg, ""
