@@ -169,7 +169,7 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	if perr := b.mp.putPart(deref(in.UploadId), num, data, b.maxUpload); perr != nil {
 		return nil, perr
 	}
-	return &awss3.UploadPartOutput{ETag: ptr(quotedETag(data))}, nil
+	return &awss3.UploadPartOutput{ETag: ptr(etag(data))}, nil
 }
 
 // CompleteMultipartUpload assembles the buffered parts and Puts the object once
@@ -197,7 +197,7 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	return s3response.CompleteMultipartUploadResult{
 		Bucket: in.Bucket,
 		Key:    in.Key,
-		ETag:   ptr(quotedETag(data)),
+		ETag:   ptr(etag(data)),
 	}, "", nil
 }
 
@@ -225,13 +225,11 @@ func (b *be) ListParts(ctx context.Context, in *awss3.ListPartsInput) (s3respons
 	return s3response.ListPartsResult{Bucket: bucket, Key: deref(in.Key), UploadID: deref(in.UploadId), Parts: parts}, nil
 }
 
-// etag is the unquoted MD5 content fingerprint S3 uses for an ETag.
+// etag is the S3 ETag of data in its wire form: the MD5 hex in double quotes (an RFC 9110
+// entity-tag). Every response that carries an ETag uses it, so the gateway has one form.
 func etag(data []byte) string {
 	sum := md5.Sum(data) //nolint:gosec // content fingerprint, not security
-	return hex.EncodeToString(sum[:])
+	return `"` + hex.EncodeToString(sum[:]) + `"`
 }
-
-// quotedETag is the S3 wire form: the MD5 hex wrapped in double quotes.
-func quotedETag(data []byte) string { return `"` + etag(data) + `"` }
 
 var _ = io.EOF
