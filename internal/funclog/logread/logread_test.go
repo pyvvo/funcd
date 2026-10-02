@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 func baseTime() time.Time { return time.Date(2026, 6, 29, 10, 30, 0, 0, time.UTC) }
@@ -181,6 +183,46 @@ func TestScenarioEmptyWhenNone(t *testing.T) {
 	}
 	if len(lines) != 0 {
 		t.Fatalf("got %d lines, want 0", len(lines))
+	}
+}
+
+// getHookBucket runs hook once, before the first Get: after the reader's List, before it reads an object.
+type getHookBucket struct {
+	blob.Bucket
+	once sync.Once
+	hook func()
+}
+
+func (b *getHookBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	b.once.Do(b.hook)
+	return b.Bucket.Get(ctx, key)
+}
+
+// A compaction pass that folds the listed raw tail into Parquet between the reader's List and its Gets
+// must not fail the read or lose the window: its lines are in the new Parquet.
+func TestIssue151_ReadDuringCompactionReturnsCompactedLines(t *testing.T) {
+	b := memBucket(t)
+	base := baseTime().UnixNano()
+	for i := int64(0); i < 3; i++ {
+		seedRaw(t, b, "default", "fn", "0", base+i, []compact.Row{row(base+i, "INFO", 9, fmt.Sprintf("m%d", i))})
+	}
+	c, err := compact.New(compact.Deps{Bucket: b, Clock: clock.Fake(baseTime().Add(2 * compact.DefaultWindow))})
+	if err != nil {
+		t.Fatalf("compact.New: %v", err)
+	}
+	hooked := &getHookBucket{Bucket: b, hook: func() {
+		st, cerr := c.CompactOnce(context.Background())
+		if cerr != nil || st.RawDeleted != 3 {
+			t.Errorf("CompactOnce = %+v, %v; want 3 raw deleted", st, cerr)
+		}
+	}}
+
+	lines, err := logread.NewBlobReader(hooked).Read(context.Background(), logread.Query{Namespace: "default", Function: "fn"})
+	if err != nil {
+		t.Fatalf("Read during compaction: %v", err)
+	}
+	if got := bodies(lines); len(got) != 3 || got[0] != "m0" || got[2] != "m2" {
+		t.Fatalf("got %v, want [m0 m1 m2] from the new Parquet", got)
 	}
 }
 
