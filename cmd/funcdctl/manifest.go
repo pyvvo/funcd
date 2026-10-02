@@ -66,15 +66,9 @@ func resolveManifest(path string) (*sdk.Manifest, string, error) {
 // contract and pushes — recording the runtime annotation, with no language toolchain invoked.
 func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entryFlag string, platform v1.OCIPlatform) error {
 	const op = "funcdctl push"
-	input, output, err := m.ContractSides()
+	input, output, err := gateManifestContract(op, m)
 	if err != nil {
 		return err
-	}
-	if cerr := contract.Check(input); cerr != nil {
-		return fault.Wrapf(cerr, fault.KindOf(cerr), op, "funcdctl.yaml contract input side is outside the funcd profile")
-	}
-	if cerr := contract.Check(output); cerr != nil {
-		return fault.Wrapf(cerr, fault.KindOf(cerr), op, "funcdctl.yaml contract output side is outside the funcd profile")
 	}
 	runtime := string(m.Runtime)
 
@@ -101,6 +95,22 @@ func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Man
 		return perr
 	}
 	return a.writef("%s@%s\n", ref, digest)
+}
+
+// gateManifestContract returns the manifest's two contract sides after gating each against the funcd
+// profile (ADR-0058, contract.Check). push and types share it, so both reject the same contracts.
+func gateManifestContract(op string, m *sdk.Manifest) (input, output []byte, err error) {
+	input, output, err = m.ContractSides()
+	if err != nil {
+		return nil, nil, err
+	}
+	if cerr := contract.Check(input); cerr != nil {
+		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "funcdctl.yaml contract input side is outside the funcd profile")
+	}
+	if cerr := contract.Check(output); cerr != nil {
+		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "funcdctl.yaml contract output side is outside the funcd profile")
+	}
+	return input, output, nil
 }
 
 // writeBundleContract materializes the manifest's gated {input, output} sides into the bundle dir's
@@ -133,6 +143,9 @@ func (a *cli) typesCmd() *cobra.Command {
 			m, err := sdk.LoadManifest(file)
 			if err != nil {
 				return err
+			}
+			if _, _, cerr := gateManifestContract("funcdctl types", m); cerr != nil {
+				return cerr
 			}
 			files, gerr := sdk.GenerateTypes(m)
 			if gerr != nil {
