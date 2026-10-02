@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	goruntime "runtime"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,6 +76,9 @@ func (a *cli) getCmd() *cobra.Command {
 		Short: "List a kind, or get one object (table; -o json for the object)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput("funcdctl get", output, "json"); err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
@@ -466,6 +470,15 @@ func (a *cli) renderList(objs []v1.Object, asJSON bool) error {
 		}
 	}
 	return nil
+}
+
+// checkOutput rejects an -o value outside the verb's formats ("" is always its default view), so a
+// typo never falls back to the table with exit 0 (issue #193).
+func checkOutput(op, output string, formats ...string) error {
+	if output == "" || slices.Contains(formats, output) {
+		return nil
+	}
+	return fault.Invalidf(op, "unknown output %q (want: %s)", output, strings.Join(formats, " or "))
 }
 
 // writef is a checked fmt.Fprintf to the cli's writer (errcheck-clean); the ...any variadic is
