@@ -3,14 +3,19 @@
 package funcd_test
 
 import (
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/pkg/funcd"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario: over-rate-429-no-wake (e2e, F75/ADR-0112) — the ingress limiter runs on the real
@@ -49,4 +54,35 @@ func TestScenarioE2ELimitsBodySize(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+// TestIssue90_SilentBodyReleasesInFlightSlot — a client that sends its headers and then stops sending
+// the body must not hold an ADR-0112 in-flight slot for as long as it keeps the connection open: the
+// data-plane server's read deadline cuts the request, so the slot frees for other callers.
+func TestIssue90_SilentBodyReleasesInFlightSlot(t *testing.T) {
+	p := bringUp(t, funcd.WithLimits(limit.Config{MaxInFlight: 1}))
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	require.NoError(t, err)
+	applyFn(t, c, "silent", v1.Scaling{}, 0, writeArtifact(t))
+
+	conn, err := net.Dial("tcp", p.DataPlaneAddr())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = io.WriteString(conn, "POST /function/silent HTTP/1.1\r\nHost: funcd\r\nContent-Length: 100\r\n\r\nhello")
+	require.NoError(t, err)
+
+	other := "http://" + p.DataPlaneAddr() + "/function/nope"
+	require.Eventually(t, func() bool { return postStatus(other) == http.StatusServiceUnavailable },
+		5*time.Second, 20*time.Millisecond, "the silent request holds the only in-flight slot")
+	require.Eventually(t, func() bool { return postStatus(other) == http.StatusNotFound },
+		20*time.Second, 100*time.Millisecond, "the read deadline must cut the silent request and free its slot")
+}
+
+func postStatus(url string) int {
+	resp, err := http.Post(url, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }
