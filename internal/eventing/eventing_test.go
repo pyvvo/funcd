@@ -189,3 +189,35 @@ func TestScenarioDeregisterOnDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, src.ActiveTimers())
 }
+
+// Issue #102: no Bucket event reaches the EventSource reconciler, so a Ready blob source must requeue to
+// re-check its Bucket; the requeued pass after the Bucket is deleted marks it NotReady and deregisters it.
+func TestIssue102_BlobSourceNotReadyAfterBucketDeleted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newStore()
+	createBucket(t, st, "raw")
+	createBlobSource(t, st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+	watcher, err := eventing.NewBlobWatcher(stubLister{}, &capturePublisher{}, eventing.NewMemWatermark(), time.Second, nil)
+	require.NoError(t, err)
+	src, err := eventing.NewSource(eventing.Deps{Store: st, Publisher: &capturePublisher{}, Blob: watcher})
+	require.NoError(t, err)
+
+	res, err := src.Reconcile(ctx, reqOf("drops"))
+	require.NoError(t, err)
+	require.Equal(t, 1, watcher.ActiveWatches())
+	require.Positive(t, res.RequeueAfter, "a Ready blob source requeues, else it stays Ready after its Bucket is deleted")
+
+	b, err := st.Get(ctx, v1.KindBucket.GVK(), "team-a", "raw")
+	require.NoError(t, err)
+	require.NoError(t, st.Delete(ctx, v1.KindBucket.GVK(), "team-a", "raw", b.GetObjectMeta().ResourceVersion))
+	_, err = src.Reconcile(ctx, reqOf("drops"))
+	require.NoError(t, err)
+	require.Equal(t, 0, watcher.ActiveWatches(), "a source whose Bucket is gone stops polling it")
+	es, err := st.Get(ctx, v1.KindEventSource.GVK(), "team-a", "drops")
+	require.NoError(t, err)
+	cond, ok := es.(*v1.EventSource).Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "BucketNotFound", cond.Reason)
+}
