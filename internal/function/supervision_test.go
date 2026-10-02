@@ -3,13 +3,17 @@ package function_test
 import (
 	"context"
 	"net/http"
+	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -163,6 +167,45 @@ func TestIssue76_NeverReadyHandlerFailsAfterBootTimeout(t *testing.T) {
 	require.Empty(t, h.routes(t))
 }
 
+// Issue #309: a serving Function whose replacement runs but never becomes ready is not re-probed every 200 ms for good.
+// Once the replacement has run for the boot timeout with no replica ready, it is stopped and replaced after the
+// backoff, as a crash under repair is (ADR-0142, ADR-0030 §4b).
+func TestIssue309_NeverReadyReplacementIsReplacedAfterBackoff(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.deployReady(t, "stall")
+	id := runtime.NewInstanceID("default", "stall", "stall-1", 0)
+	h.rt.exit("stall", runtime.StateFailed, time.Minute)
+	h.rt.hold(id, true)
+	h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the replacement boots")
+
+	h.rt.exitRevision("stall", "stall-1", 0, runtime.StateRunning, time.Hour)
+	res := h.reconcile(t, "stall")
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a replica is kept while the Function has been Degraded for less than the boot timeout")
+
+	fn := h.getFn(t, "stall")
+	for i := range fn.Status.Conditions {
+		if fn.Status.Conditions[i].Type == "Ready" {
+			fn.Status.Conditions[i].LastTransitionTime = time.Now().Add(-time.Hour)
+		}
+	}
+	_, err := h.st.Update(context.Background(), fn)
+	require.NoError(t, err)
+	creates, _ := h.rt.counts()
+	res = h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
+	require.Equal(t, testPeriod, res.RequeueAfter, "the pass waits out the backoff instead of re-probing the hung replica")
+	require.Contains(t, h.condition(t, "stall", "Ready").Message, "did not become ready")
+	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "stall"), "a hung replacement of a serving Function is not a shape failure")
+
+	h.rt.hold(id, false)
+	h.reconcile(t, "stall")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates+1, after, "the hung replacement is replaced")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+}
+
 // scenario: fixed-spec-recovers-failed-function (ADR-0142) — applying a fixed spec to a Failed (ShapeInvalid)
 // function deploys the new spec, and the function becomes Ready.
 func TestScenarioFixedSpecRecoversFailedFunction(t *testing.T) {
@@ -286,4 +329,121 @@ func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	require.EqualValues(t, 2, rt.creates.Load(), "the instances that failed to start are started again, not replaced")
 	require.Equal(t, rv, h.getFn(t, "calm").ResourceVersion, "a repeated start failure writes nothing")
 	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
+// readinessListFailer fails List when the reconciler's readiness judgment calls it, so the pass's earlier Lists succeed.
+type readinessListFailer struct {
+	runtime.Runtime
+	failing atomic.Bool
+}
+
+func (l *readinessListFailer) List(ctx context.Context, ns v1.NamespaceName) ([]runtime.Instance, error) {
+	if l.failing.Load() && calledFrom(".readyReplicas") {
+		return nil, fault.Unavailablef("test.List", "the runtime could not list its workers")
+	}
+	return l.Runtime.List(ctx, ns)
+}
+
+// calledFrom reports whether a function whose name ends in suffix is on the caller's stack.
+func calledFrom(suffix string) bool {
+	pcs := make([]uintptr, 64)
+	frames := goruntime.CallersFrames(pcs[:goruntime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, suffix) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
+// Issue #353: a List error while the pass judges readiness fails the pass, so it is retried, and writes no status;
+// before, it counted zero ready replicas and wrote a serving Function Degraded.
+func TestIssue353_ReadinessListErrorWritesNoStatus(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(t *testing.T, h *shimHarness){
+		"serving": func(t *testing.T, h *shimHarness) {
+			h.rt.exitRevision("flaky", "flaky-1", 1, runtime.StateFailed, time.Minute)
+		},
+		"switch": func(t *testing.T, h *shimHarness) {
+			h.apply(t, "flaky", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lf := &readinessListFailer{}
+			h := newShimHarness(t, http.StatusOK, false, withSwitch, func(d *function.Deps) { lf.Runtime, d.Runtime = d.Runtime, lf })
+			h.create(t, "flaky", func(fn *v1.Function) { fn.Spec.Replicas = 2 })
+			h.reconcile(t, "flaky")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "flaky").Status.Phase)
+			change(t, h)
+			rv := h.getFn(t, "flaky").ResourceVersion
+
+			lf.failing.Store(true)
+			_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "flaky"})
+			fn := h.getFn(t, "flaky")
+			require.Equal(t, v1.PhaseReady, fn.Status.Phase, "a failed read does not mark a serving Function Degraded")
+			require.Equal(t, rv, fn.ResourceVersion, "no status is written from a failed read")
+			require.Error(t, err, "the pass fails, so it is retried")
+
+			lf.failing.Store(false)
+			h.reconcile(t, "flaky")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "flaky").Status.Phase)
+		})
+	}
+}
+
+// brokenSockets is a local API socket provider whose SocketFor fails while broken is set.
+type brokenSockets struct{ broken atomic.Bool }
+
+func (b *brokenSockets) SocketFor(_ v1.NamespaceName, name v1.ObjectName) (string, error) {
+	if b.broken.Load() {
+		return "", fault.Unavailablef("test.SocketFor", "create socket dir: permission denied")
+	}
+	return "/run/test/" + string(name) + ".sock", nil
+}
+
+func (*brokenSockets) Remove(v1.NamespaceName, v1.ObjectName) {}
+
+// Issue #358: a local API socket that cannot be provisioned keeps the Function from going Ready, with a reason naming
+// the error, and starts no worker without it; the pass retries, and the Function is Ready once the socket is provisioned.
+func TestIssue358_SocketFailureBlocksReady(t *testing.T) {
+	t.Parallel()
+	for name, mode := range map[string]func(*function.Deps){
+		"process": func(*function.Deps) {},
+		"container": func(d *function.Deps) {
+			d.EndpointMode = function.EndpointNetnsFixedPort
+			d.ImageFor = func(rt string) string { return "funcd/runtime-" + rt + ":latest" }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sockets := &brokenSockets{}
+			sockets.broken.Store(true)
+			h := newShimHarness(t, http.StatusOK, false, withPeriod, mode, func(d *function.Deps) { d.InvokeSockets = sockets })
+			h.createFn(t, "lonely")
+
+			res := h.reconcile(t, "lonely")
+			fn := h.getFn(t, "lonely")
+			require.Equal(t, v1.PhaseFailed, fn.Status.Phase)
+			ready, ok := fn.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, v1.ConditionFalse, ready.Status)
+			require.Equal(t, "StartFailed", ready.Reason)
+			require.Contains(t, ready.Message, "permission denied")
+			creates, _ := h.rt.counts()
+			require.Zero(t, creates, "no worker starts without its local API socket")
+			require.Equal(t, testPeriod, res.RequeueAfter, "the pass retries")
+
+			sockets.broken.Store(false)
+			h.reconcile(t, "lonely")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "lonely").Status.Phase)
+			spec, ok := h.rt.specFor("lonely")
+			require.True(t, ok)
+			require.NotEmpty(t, spec.Env["FUNCD_INVOKE_SOCKET"])
+		})
+	}
 }

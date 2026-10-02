@@ -70,7 +70,7 @@ func PushSite(ctx context.Context, ref, dir string) (digest string, err error) {
 // A function artifact ⇒ fault.Invalid; an absent ref ⇒ fault.NotFound.
 func ResolveSite(ctx context.Context, ref string) (digest string, err error) {
 	const op = "artifact.ResolveSite"
-	target, reference, terr := resolveTarget(ctx, ref)
+	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -95,7 +95,7 @@ func PullSite(ctx context.Context, ref, digest, dir string) error {
 	if digest == "" {
 		return fault.Invalidf(op, "site digest is required (the digest is the authority)")
 	}
-	target, _, terr := resolveTarget(ctx, ref)
+	target, _, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}

@@ -45,7 +45,7 @@ func pythonFn() *v1.Function {
 func TestScenarioBundleEnvProcessMode(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil, nil)
+	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", nil, nil)
 
 	require.Equal(t, "/art/bundle", spec.Env["FUNCD_BUNDLE_DIR"], "the bundle root is Dir(artifactPath)")
 	require.Equal(t, "/art/bundle", spec.Env["PYTHONPATH"], "python family imports vendored deps via PYTHONPATH")
@@ -56,7 +56,7 @@ func TestScenarioBundleEnvProcessMode(t *testing.T) {
 func TestScenarioBundleEnvContainerMode(t *testing.T) {
 	t.Parallel()
 	r := newContainerReconciler(t)
-	spec := r.workerSpec(pythonFn(), 0, "/art/bundle/handler.py", nil, nil)
+	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", nil, nil)
 
 	require.Equal(t, containerArtifactDir, spec.Env["FUNCD_BUNDLE_DIR"], "container bundle root == the bind-mount target")
 	require.Equal(t, containerArtifactDir, spec.Env["PYTHONPATH"])
@@ -66,7 +66,7 @@ func TestScenarioBundleEnvContainerMode(t *testing.T) {
 func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil) // sampleFn is nodejs22
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, nil) // sampleFn is nodejs22
 
 	require.Equal(t, "/art", spec.Env["FUNCD_BUNDLE_DIR"], "FUNCD_BUNDLE_DIR is generic (any runtime)")
 	_, hasPy := spec.Env["PYTHONPATH"]
@@ -78,7 +78,7 @@ func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 func TestScenarioSingleFileBundleEnvHarmless(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, nil)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "FUNCD_ARTIFACT unchanged for a single file")
 	require.Equal(t, "app.handler", spec.Env["FUNCD_HANDLER"])
@@ -94,7 +94,7 @@ func TestScenarioContractEnvProcessMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".funcd-contract.json"), []byte(`{"input":{},"output":{}}`), 0o600))
 	art := filepath.Join(root, "app.mjs")
 
-	spec := r.workerSpec(sampleFn(), 0, art, nil, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), art, nil, nil)
 	require.Equal(t, filepath.Join(root, ".funcd-contract.json"), spec.Env["FUNCD_CONTRACT_PATH"],
 		"process mode points FUNCD_CONTRACT_PATH at the delivered host sidecar")
 }
@@ -107,7 +107,7 @@ func TestScenarioContractEnvContainerMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "__funcd_contract.json"), []byte(`{"input":{},"output":{}}`), 0o600))
 	art := filepath.Join(root, "handler.py")
 
-	spec := r.workerSpec(pythonFn(), 0, art, nil, nil)
+	spec := mustWorkerSpec(t, r, pythonFn(), art, nil, nil)
 	require.Equal(t, filepath.Join(containerArtifactDir, "__funcd_contract.json"), spec.Env["FUNCD_CONTRACT_PATH"],
 		"container mode roots FUNCD_CONTRACT_PATH at the bind-mount target")
 }
@@ -117,7 +117,7 @@ func TestScenarioContractEnvContainerMode(t *testing.T) {
 func TestScenarioNoContractNoEnv(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := r.workerSpec(sampleFn(), 0, filepath.Join(t.TempDir(), "app.mjs"), nil, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), filepath.Join(t.TempDir(), "app.mjs"), nil, nil)
 	_, has := spec.Env["FUNCD_CONTRACT_PATH"]
 	require.False(t, has, "no delivered contract → FUNCD_CONTRACT_PATH unset")
 }

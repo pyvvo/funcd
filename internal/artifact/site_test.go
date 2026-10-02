@@ -132,3 +132,45 @@ func TestScenarioPackBundleStillGatesEntry(t *testing.T) {
 	_, err := artifact.PackBundle(siteDir(t), "handler.py")
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "a function bundle without its entry is Invalid")
 }
+
+// Issue 362: the packer's walk does not descend into a symlinked root, so a site pushed from a symlink
+// to its directory shipped an empty layer and a bundle was refused with a misleading entry error. The
+// root link is followed: both pack the directory it points to, byte-identical to packing it directly.
+func TestIssue362_SymlinkedRootPacksTarget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("site", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		real := siteDir(t)
+		link := filepath.Join(t.TempDir(), "dist")
+		require.NoError(t, os.Symlink(real, link))
+
+		ref := layoutRef(t, "site")
+		digest, err := artifact.PushSite(ctx, ref, link)
+		require.NoError(t, err)
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, artifact.PullSite(ctx, ref, digest, out))
+		index, err := os.ReadFile(filepath.Join(out, "index.html"))
+		require.NoError(t, err, "the pulled site holds the files the link points to")
+		require.Equal(t, "<!doctype html><title>bi</title>", string(index))
+		require.FileExists(t, filepath.Join(out, "img", "logo.png"))
+
+		direct, err := artifact.PushSite(ctx, layoutRef(t, "direct"), real)
+		require.NoError(t, err)
+		require.Equal(t, direct, digest, "a symlinked root packs the same tree as its target")
+	})
+
+	t.Run("bundle", func(t *testing.T) {
+		t.Parallel()
+		real, entry := goodBundle(t)
+		link := filepath.Join(t.TempDir(), "bundle")
+		require.NoError(t, os.Symlink(real, link))
+
+		viaLink, err := artifact.PackBundle(link, entry)
+		require.NoError(t, err)
+		direct, err := artifact.PackBundle(real, entry)
+		require.NoError(t, err)
+		require.Equal(t, direct, viaLink, "a symlinked bundle root packs the same tree as its target")
+	})
+}

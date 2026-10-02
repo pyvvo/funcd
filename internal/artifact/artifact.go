@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -180,7 +181,7 @@ func Pull(ctx context.Context, ref, digest, dir string, node v1.OCIPlatform) (pa
 	if digest == "" {
 		return "", fault.Invalidf(op, "artifact digest is required (the digest is the authority)")
 	}
-	target, _, terr := resolveTarget(ctx, ref)
+	target, _, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -269,7 +270,7 @@ func deliverContract(ctx context.Context, op string, target oras.ReadOnlyTarget,
 // its current manifest. fault.NotFound when the artifact carries no contract.
 func Inspect(ctx context.Context, ref, digest string) (contract []byte, err error) {
 	const op = "artifact.Inspect"
-	target, reference, terr := resolveTarget(ctx, ref)
+	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -290,7 +291,7 @@ func Inspect(ctx context.Context, ref, digest string) (contract []byte, err erro
 // — the bundle bytes are never fetched.
 func InspectContract(ctx context.Context, ref, digest string) (contract []byte, resolvedDigest string, err error) {
 	const op = "artifact.InspectContract"
-	target, reference, terr := resolveTarget(ctx, ref)
+	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return nil, "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -311,7 +312,7 @@ func InspectContract(ctx context.Context, ref, digest string) (contract []byte, 
 // fault.NotFound when the artifact asserts no runtime.
 func InspectRuntime(ctx context.Context, ref, digest string) (runtime string, err error) {
 	const op = "artifact.InspectRuntime"
-	target, reference, terr := resolveTarget(ctx, ref)
+	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -389,7 +390,7 @@ func Logout(ctx context.Context, registry string) error {
 }
 
 // resolveTarget maps a ref to an oras Target + the tag/digest reference to use for
-// tag/fetch ops. oci-layout://<dir>[:<tag>] → a local OCI layout; otherwise a registry.
+// tag/fetch ops. oci-layout://<dir>[:<tag>] → a local OCI layout, created when missing; otherwise a registry.
 func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	const op = "artifact.resolveTarget"
 	if ref == "" {
@@ -435,21 +436,54 @@ func (l *layoutTarget) Tag(ctx context.Context, desc ocispec.Descriptor, referen
 	return withLayout(l.dir, func(s *oci.Store) error { return s.Tag(ctx, desc, reference) })
 }
 
-// withLayout opens the OCI store at dir and runs fn while it holds an exclusive lock on the layout directory, so no
-// other process rewrites index.json between the store reading it and fn writing it. O_RDONLY without O_CREATE locks
-// the directory itself, so no lock file lands in the layout.
+// resolveReadTarget is resolveTarget for a read: it writes nothing, so a ref to a directory that holds no layout is
+// fault.NotFound instead of an empty layout created there (issue #361). oci.New writes a missing oci-layout and
+// index.json; the read-only store does not.
+func resolveReadTarget(ctx context.Context, ref string) (oras.ReadOnlyTarget, string, error) {
+	const op = "artifact.resolveReadTarget"
+	dir, tag, ok := parseLocalRef(ref)
+	if !ok || dir == "" {
+		return resolveTarget(ctx, ref)
+	}
+	unlock, err := lockLayout(dir)
+	if err == nil {
+		defer unlock()
+		var store *oci.ReadOnlyStore
+		if store, err = oci.NewFromFS(ctx, os.DirFS(dir)); err == nil {
+			return store, tag, nil
+		}
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", fault.NotFoundf(op, "no OCI layout at %q", dir)
+	}
+	return nil, "", fault.Wrapf(err, fault.Internal, op, "open OCI layout %q", dir)
+}
+
+// withLayout opens the OCI store at dir and runs fn while it holds the layout lock, so no other process rewrites
+// index.json between the store reading it and fn writing it.
 func withLayout(dir string, fn func(*oci.Store) error) error {
 	const op = "artifact.withLayout"
-	lock := flock.New(dir, flock.SetFlag(os.O_RDONLY))
-	if err := lock.Lock(); err != nil {
+	unlock, err := lockLayout(dir)
+	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "lock OCI layout %q", dir)
 	}
-	defer func() { _ = lock.Unlock() }()
+	defer unlock()
 	store, err := oci.New(dir)
 	if err != nil {
 		return err
 	}
 	return fn(store)
+}
+
+// lockLayout takes an exclusive lock on the layout directory: oras-go rewrites index.json in place, so a reader must
+// not open it mid-write either. O_RDONLY without O_CREATE locks the directory itself, so no lock file lands in the
+// layout, and a missing directory fails with fs.ErrNotExist.
+func lockLayout(dir string) (unlock func(), err error) {
+	lock := flock.New(dir, flock.SetFlag(os.O_RDONLY))
+	if err := lock.Lock(); err != nil {
+		return nil, err
+	}
+	return func() { _ = lock.Unlock() }, nil
 }
 
 // parseLocalRef splits oci-layout://<dir>[:<tag>][@<digest>] into its directory + optional reference. A
@@ -566,7 +600,7 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 // ArtifactResolver seam the Function reconciler calls at Revision-stamp time.
 func (m *OrasMaterializer) Resolve(ctx context.Context, uri string) (string, error) {
 	const op = "artifact.OrasMaterializer.Resolve"
-	target, ref, terr := resolveTarget(ctx, uri)
+	target, ref, terr := resolveReadTarget(ctx, uri)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}

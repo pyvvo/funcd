@@ -10,7 +10,9 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/envresolve"
+	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
 	storemem "github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -142,4 +144,40 @@ func TestResolveEnv_secret_failure_is_ErrSecret(t *testing.T) {
 	require.True(t, errors.Is(err, envresolve.ErrSecret), "a secret-resolution failure is attributed to the secret side")
 	require.False(t, errors.Is(err, envresolve.ErrConfig))
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "the underlying PDP Forbidden kind is preserved through the join")
+}
+
+// Env delivery cannot carry a NUL byte (exec rejects it), so a NUL in a bound ConfigMap or Secret
+// value fails resolution closed on its own side, naming the object and the key, never the value.
+func TestIssue356_NULValueRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const ns v1.NamespaceName = "team-a"
+	st := store.New(storemem.New())
+	createConfigMap(t, st, ns, "nul-cfg", map[string]string{"CFG_NUL": "a\x00b"})
+	obj, ok := v1.NewObject(v1.KindSecret)
+	require.True(t, ok)
+	sec := obj.(*v1.Secret)
+	sec.Name, sec.Namespace, sec.ResourceGroup = "nul-sec", ns, "rg1"
+	sec.Spec.Data = map[string][]byte{"SEC_NUL": []byte("a\x00b")}
+	_, err := st.Create(ctx, sec)
+	require.NoError(t, err)
+	sr, err := secrets.NewResolver(secrets.Deps{Store: st, Authorizer: rbac.New()})
+	require.NoError(t, err)
+	deps := envresolve.Deps{Secrets: sr, Store: st, Identity: devIdentity}
+
+	env, err := envresolve.ResolveEnv(ctx, deps, ns, []v1.ObjectName{"nul-cfg"}, nil)
+	require.Error(t, err, "a NUL ConfigMap value must be rejected, got env %q", env)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorIs(t, err, envresolve.ErrConfig)
+	require.Contains(t, err.Error(), `"nul-cfg"`)
+	require.Contains(t, err.Error(), `"CFG_NUL"`)
+	require.NotContains(t, err.Error(), "a\x00b")
+
+	env, err = envresolve.ResolveEnv(ctx, deps, ns, nil, []v1.ObjectName{"nul-sec"})
+	require.Error(t, err, "a NUL Secret value must be rejected, got env %q", env)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorIs(t, err, envresolve.ErrSecret)
+	require.Contains(t, err.Error(), `"nul-sec"`)
+	require.Contains(t, err.Error(), `"SEC_NUL"`)
+	require.NotContains(t, err.Error(), "a\x00b")
 }

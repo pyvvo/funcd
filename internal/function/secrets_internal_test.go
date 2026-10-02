@@ -10,6 +10,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/store"
@@ -56,11 +57,19 @@ func sampleFn() *v1.Function {
 	return fn
 }
 
+// mustWorkerSpec is replica 0's workerSpec, for a test whose spec builds.
+func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
+	t.Helper()
+	spec, err := r.workerSpec(fn, 0, artifactPath, secretEnv, catalogEnv)
+	require.NoError(t, err)
+	return spec
+}
+
 // scenario: handler-reads-injected-secret — the resolved secret reaches WorkerSpec.Env.
 func TestScenarioHandlerReadsInjectedSecret(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"}, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"}, nil)
 
 	require.Equal(t, "s3kr3t", spec.Env["API_KEY"], "the secret value is injected into the worker env")
 	require.Equal(t, "postgres://x", spec.Env["DB_URL"])
@@ -71,7 +80,7 @@ func TestScenarioHandlerReadsInjectedSecret(t *testing.T) {
 func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs",
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs",
 		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"}, nil)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value; the secret cannot override it")

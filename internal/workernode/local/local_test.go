@@ -6,14 +6,18 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -279,4 +283,48 @@ func TestIssue337_LinkTimeoutMidBodyIs503(t *testing.T) {
 	require.NoError(t, err, "the caller's connection must not be dropped")
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+// TestIssue357_ServeServesTheLocalAPIUntilCancelled: Serve (the ADR-0064 seam) binds over a stale socket
+// file, serves h, and returns nil once ctx is done; a path it cannot bind is Unavailable.
+func TestIssue357_ServeServesTheLocalAPIUntilCancelled(t *testing.T) {
+	dir, err := os.MkdirTemp("", "i357") // not t.TempDir(): a unix socket path is capped near 104 bytes
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "api.sock")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() {
+		served <- local.Serve(ctx, path, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}))
+	}()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", path)
+	}}}
+	t.Cleanup(client.CloseIdleConnections)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		resp, err := client.Get("http://local/")
+		if !assert.NoError(c, err) {
+			return
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		assert.NoError(c, err)
+		assert.Equal(c, "ok", string(body))
+	}, 5*time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-served:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after its context was done")
+	}
+
+	err = local.Serve(context.Background(), filepath.Join(dir, "missing", "api.sock"), http.NotFoundHandler())
+	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 }
