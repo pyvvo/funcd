@@ -2326,6 +2326,15 @@ paths:
         - Bucket
     post:
       operationId: createBucket
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -2485,6 +2494,15 @@ paths:
         - CatalogService
     post:
       operationId: createCatalogService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -2644,6 +2662,15 @@ paths:
         - ConfigMap
     post:
       operationId: createConfigMap
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -2917,6 +2944,15 @@ paths:
         - EgressPolicy
     post:
       operationId: createEgressPolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3076,6 +3112,15 @@ paths:
         - EventSource
     post:
       operationId: createEventSource
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3235,6 +3280,15 @@ paths:
         - Function
     post:
       operationId: createFunction
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3451,6 +3505,15 @@ paths:
         - Grant
     post:
       operationId: createGrant
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3610,6 +3673,15 @@ paths:
         - Identity
     post:
       operationId: createIdentity
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3769,6 +3841,15 @@ paths:
         - Invocation
     post:
       operationId: createInvocation
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -3928,6 +4009,15 @@ paths:
         - KVStore
     post:
       operationId: createKVStore
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4087,6 +4177,15 @@ paths:
         - Policy
     post:
       operationId: createPolicy
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4246,6 +4345,15 @@ paths:
         - ResourceGroup
     post:
       operationId: createResourceGroup
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4405,6 +4513,15 @@ paths:
         - Revision
     post:
       operationId: createRevision
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4564,6 +4681,15 @@ paths:
         - Role
     post:
       operationId: createRole
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4723,6 +4849,15 @@ paths:
         - RolesAssignment
     post:
       operationId: createRolesAssignment
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -4882,6 +5017,15 @@ paths:
         - Route
     post:
       operationId: createRoute
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5041,6 +5185,15 @@ paths:
         - Secret
     post:
       operationId: createSecret
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5200,6 +5353,15 @@ paths:
         - Sensor
     post:
       operationId: createSensor
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5359,6 +5521,15 @@ paths:
         - Service
     post:
       operationId: createService
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5518,6 +5689,15 @@ paths:
         - Site
     post:
       operationId: createSite
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5677,6 +5857,15 @@ paths:
         - WorkflowRun
     post:
       operationId: createWorkflowRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:
@@ -5900,6 +6089,15 @@ paths:
         - Workflow
     post:
       operationId: createWorkflow
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
       requestBody:
         content:
           application/json:

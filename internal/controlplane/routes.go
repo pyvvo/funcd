@@ -141,7 +141,8 @@ func registerNamespace(api huma.API, h Handlers) {
 // ===== ResourceGroup (namespaced) =====
 
 type createResourceGroupInput struct {
-	Body v1.ResourceGroup
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.ResourceGroup
 }
 type resourceGroupOutput struct {
 	Body v1.ResourceGroup
@@ -168,6 +169,9 @@ func registerResourceGroup(api huma.API, h Handlers) {
 		OperationID: "createResourceGroup", Method: http.MethodPost, Path: base,
 		Tags: []string{"ResourceGroup"},
 	}, func(ctx context.Context, in *createResourceGroupInput) (*resourceGroupOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		rg, err := h.CreateResourceGroup(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -212,7 +216,8 @@ func registerResourceGroup(api huma.API, h Handlers) {
 // ===== Function (namespaced) =====
 
 type createFunctionInput struct {
-	Body v1.Function
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Function
 }
 type functionOutput struct {
 	Body v1.Function
@@ -239,6 +244,9 @@ func registerFunction(api huma.API, h Handlers) {
 		OperationID: "createFunction", Method: http.MethodPost, Path: base,
 		Tags: []string{"Function"},
 	}, func(ctx context.Context, in *createFunctionInput) (*functionOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		fn, err := h.CreateFunction(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -283,7 +291,8 @@ func registerFunction(api huma.API, h Handlers) {
 // ===== Revision (namespaced) =====
 
 type createRevisionInput struct {
-	Body v1.Revision
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Revision
 }
 type revisionOutput struct {
 	Body v1.Revision
@@ -310,6 +319,9 @@ func registerRevision(api huma.API, h Handlers) {
 		OperationID: "createRevision", Method: http.MethodPost, Path: base,
 		Tags: []string{"Revision"},
 	}, func(ctx context.Context, in *createRevisionInput) (*revisionOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		rev, err := h.CreateRevision(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -354,7 +366,8 @@ func registerRevision(api huma.API, h Handlers) {
 // ===== Route (namespaced) =====
 
 type createRouteInput struct {
-	Body v1.Route
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.Route
 }
 type routeOutput struct {
 	Body v1.Route
@@ -381,6 +394,9 @@ func registerRoute(api huma.API, h Handlers) {
 		OperationID: "createRoute", Method: http.MethodPost, Path: base,
 		Tags: []string{"Route"},
 	}, func(ctx context.Context, in *createRouteInput) (*routeOutput, error) {
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		rt, err := h.CreateRoute(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)

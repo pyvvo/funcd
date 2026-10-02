@@ -155,8 +155,8 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 		return nil, err
 	}
 	meta := obj.GetObjectMeta()
-	if meta.Namespace != ns {
-		return nil, fault.Invalidf("controlplane.admit", "body namespace %q does not match path %q", meta.Namespace, ns)
+	if err := matchPathNamespace(ns, meta); err != nil {
+		return nil, err
 	}
 	if meta.Name != name {
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
@@ -178,6 +178,16 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	}
 	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
 	return h.store.Update(ctx, admitted)
+}
+
+// matchPathNamespace is ADR-0018 §4's path/body namespace consistency check: the body's
+// metadata.namespace must equal the path namespace (→ 400). The create routes run it before
+// CreateX, whose ADR-0005 signature carries no path namespace.
+func matchPathNamespace(path v1.NamespaceName, meta *v1.ObjectMeta) error {
+	if meta.Namespace != path {
+		return fault.Invalidf("controlplane.admit", "body namespace %q does not match path %q", meta.Namespace, path)
+	}
+	return nil
 }
 
 // withStatus returns obj with from's status, or with none when from is nil. Status is server-owned: controllers

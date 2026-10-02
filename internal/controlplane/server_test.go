@@ -117,6 +117,51 @@ func TestScenarioAdmissionRejectsInvalid(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "does not match", "admission detail names the namespace mismatch")
 }
 
+// Issue 61: a create honours the path namespace (ADR-0018 §4 step 2) — a body namespace that differs
+// from it, or is missing, is a 400 with nothing stored, and the path namespace is validated as on GET.
+func TestIssue61_CreateRejectsPathBodyNamespaceMismatch(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	const nsBase = "/apis/funcd.io/v1alpha1/namespaces/"
+
+	noNamespace := map[string]map[string]interface{}{}
+	require.NoError(t, json.Unmarshal(functionBody(t, "team-a", "echo", "rg1"), &noNamespace))
+	delete(noNamespace["metadata"], "namespace")
+	noNamespaceBody, err := json.Marshal(noNamespace)
+	require.NoError(t, err)
+
+	configMapBody, err := json.Marshal(map[string]interface{}{
+		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "ConfigMap"},
+		"metadata": map[string]interface{}{"name": "cfg", "namespace": "team-a", "resourceGroup": "rg1"},
+		"spec":     map[string]interface{}{},
+	})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, path string
+		body       []byte
+		code       int
+		detail     string
+	}{
+		{"function body namespace differs", nsBase + "team-b/functions", functionBody(t, "team-a", "echo", "rg1"), http.StatusBadRequest, "does not match"},
+		{"configmap body namespace differs", nsBase + "team-b/configmaps", configMapBody, http.StatusBadRequest, "does not match"},
+		{"body namespace missing", fnBase, noNamespaceBody, http.StatusBadRequest, "does not match"},
+		{"path namespace invalid", nsBase + "NOT_A_LABEL/functions", functionBody(t, "team-a", "echo", "rg1"), http.StatusUnprocessableEntity, "path.namespace"},
+	} {
+		rec := do(t, srv, http.MethodPost, tc.path, devToken, tc.body)
+		require.Equal(t, tc.code, rec.Code, "%s: %s", tc.name, rec.Body.String())
+		require.Contains(t, rec.Body.String(), tc.detail, tc.name)
+	}
+
+	for _, kind := range []string{"functions", "configmaps"} {
+		rec := do(t, srv, http.MethodGet, nsBase+"team-a/"+kind, devToken, nil)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var items []json.RawMessage
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &items))
+		require.Empty(t, items, "nothing persisted in team-a %s", kind)
+	}
+}
+
 // scenario: crud-roundtrips-through-store — create → get → list → delete round-trips real state.
 func TestScenarioCrudRoundtripsThroughStore(t *testing.T) {
 	t.Parallel()
