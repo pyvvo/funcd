@@ -252,6 +252,12 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
 	if pinned != nil && len(pinned.Input) > 0 {
 		if diffs := v1.CheckInput(input, pinned.Input); len(diffs) > 0 {
+			// Record the Failed run before fail() fires onFailure: a run that cannot be stored stays
+			// unrecorded, and its requeue must not fire the handler again.
+			rec.Phase = runFailed
+			if err := e.persist(ctx, rec, rs, outputs); err != nil {
+				return nil, err
+			}
 			return e.fail(ctx, rec, rs, outputs, spec, input, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs)))
 		}
 	}

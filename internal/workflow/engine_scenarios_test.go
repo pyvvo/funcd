@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -116,6 +117,25 @@ func TestIssue118_OnFailureFiresOnRunTimeoutAndInputMismatch(t *testing.T) {
 	}
 	if f.calls["notify"] != 1 || f.calls["a"] != 0 {
 		t.Errorf("InputSchemaMismatch: dispatches notify=%d a=%d, want the handler once and no step", f.calls["notify"], f.calls["a"])
+	}
+}
+
+// Issue #118 follow-up: the input gate fires onFailure only once the Failed run is recorded. A run
+// whose record cannot be stored is not recorded at all, so a requeue must not re-fire the handler.
+func TestIssue118_InputMismatchHandlerNotRefiredWhenRecordTooLarge(t *testing.T) {
+	f := newFake()
+	e := newTestEngine(t, f, Config{})
+	spc := spec(step("a", ""), step("notify", ""))
+	spc.OnFailure = "notify"
+	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
+	in := json.RawMessage(`{"pad":"` + strings.Repeat("x", 1<<20) + `"}`)
+	for range 3 {
+		if _, err := e.Execute(context.Background(), "default", "run-big", "wf", spc, in, StartOptions{Contract: contract}); fault.KindOf(err) != fault.PayloadTooLarge {
+			t.Fatalf("want PayloadTooLarge for an unstorable run, got %v", err)
+		}
+	}
+	if f.calls["notify"] != 0 {
+		t.Fatalf("onFailure handler dispatched %d times for a run that was never recorded, want 0", f.calls["notify"])
 	}
 }
 
