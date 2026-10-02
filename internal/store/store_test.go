@@ -370,3 +370,44 @@ func TestIssue60_CreateStampsCreationTimestamp(t *testing.T) {
 		}
 	}
 }
+
+// Issue #302: a Deleted event carries the revision of the delete, not the deleted object's last write, so a
+// watcher that resumes after the resourceVersion it last saw resumes after the delete.
+func TestIssue302_DeletedEventCarriesTheDeleteRevision(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	gvk := v1.KindConfigMap.GVK()
+	for _, name := range []v1.ObjectName{"doomed", "a", "b", "c", "d", "e"} {
+		obj, _ := v1.NewObject(v1.KindConfigMap)
+		cfg, _ := obj.(*v1.ConfigMap)
+		cfg.Name, cfg.Namespace, cfg.ResourceGroup = name, "default", "rg1"
+		if _, err := s.Create(ctx, cfg); err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+	}
+	before, err := s.List(ctx, gvk, store.ListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	w, err := s.Watch(ctx, gvk, store.WatchOptions{SinceResourceVersion: before.ResourceVersion})
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Stop()
+
+	if err := s.Delete(ctx, gvk, "default", "doomed", ""); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	after, err := s.List(ctx, gvk, store.ListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	select {
+	case ev := <-w.ResultChan():
+		if rv := ev.Object.GetObjectMeta().ResourceVersion; ev.Type != store.Deleted || rv != after.ResourceVersion {
+			t.Fatalf("got %s at resourceVersion %s, want Deleted at the delete's revision %s", ev.Type, rv, after.ResourceVersion)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Deleted event")
+	}
+}

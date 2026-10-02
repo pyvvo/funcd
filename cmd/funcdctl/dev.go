@@ -103,6 +103,8 @@ const (
 	devPersistDir = ".funcd-dev"
 	// devReloadPoll is how often `funcdctl dev` checks each handler source for an edit (hot-reload).
 	devReloadPoll = 300 * time.Millisecond
+	// devApplyAttempts bounds the re-apply of one resource that loses its update with a Conflict.
+	devApplyAttempts = 5
 )
 
 // envRef matches a ${ENV_VAR} reference in a dev.secrets value (ADR-0125 Decision 4): secret values are
@@ -709,7 +711,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// against what is already applied.
 	for _, group := range [][]v1.Object{resObjs, fnObjs, extraObjs} {
 		for _, obj := range group {
-			if _, aerr := client.Apply(ctx, obj); aerr != nil {
+			if aerr := applyDesired(ctx, client, obj); aerr != nil {
 				return nil, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName())
 			}
 		}
@@ -717,6 +719,20 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	inst.watchDone = make(chan struct{})
 	go watchHandlers(ctx, op, client, handlers, stateDirs, inst.watchDone)
 	return inst, nil
+}
+
+// applyDesired applies obj, re-applying it on a Conflict. A PUT is an optimistic update against the
+// resourceVersion the control plane reads (ADR-0018), and the running controllers write status meanwhile
+// (on a --persist restart every resource already exists), so the update can lose that race; obj is the
+// whole desired state, so applying it again is safe.
+func applyDesired(ctx context.Context, c *sdk.Client, obj v1.Object) error {
+	var err error
+	for range devApplyAttempts {
+		if _, err = c.Apply(ctx, obj); fault.KindOf(err) != fault.Conflict {
+			return err
+		}
+	}
+	return err
 }
 
 // devHandler is one from-source function's hot-reload state (ADR-0125 boot sequence, "watch files, re-apply on

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -111,6 +112,29 @@ func TestIssue41_RejectsInvokeSocketDirOverUnixLimit(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), "Unix socket limit")
+}
+
+// Issue #330: the temp invoke socket dir New creates when no WithInvokeSocketDir is set is removed by
+// Shutdown, and by a New that fails after creating it.
+func TestIssue330_TempInvokeSocketDirRemoved(t *testing.T) {
+	t.Run("shutdown", func(t *testing.T) {
+		p, err := New(InMemory())
+		require.NoError(t, err)
+		sock, err := p.invokeMgr.SocketFor("default", "fn")
+		require.NoError(t, err)
+		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoDirExists(t, filepath.Dir(sock))
+	})
+	t.Run("failed New", func(t *testing.T) {
+		tmp := filepath.Join(t.TempDir(), strings.Repeat("d", 100))
+		require.NoError(t, os.Mkdir(tmp, 0o700))
+		t.Setenv("TMPDIR", tmp)
+		_, err := New(InMemory())
+		require.ErrorContains(t, err, "Unix socket limit")
+		left, err := filepath.Glob(filepath.Join(tmp, "funcd-invoke*"))
+		require.NoError(t, err)
+		require.Empty(t, left)
+	})
 }
 
 // scenario: run-shutdown-lifecycle — Run returns nil on ctx cancel; concurrent

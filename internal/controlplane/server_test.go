@@ -2,6 +2,7 @@ package controlplane_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -239,7 +240,8 @@ func TestIssue165_ExplicitNameWithGenerateNameConflicts(t *testing.T) {
 // and a handler error is served as application/problem+json.
 func TestIssue166_WireShapeMatchesSpec(t *testing.T) {
 	t.Parallel()
-	srv := newServer(t)
+	st := store.New(memory.New())
+	srv := newServerOn(t, st)
 
 	fn := v1.Function{
 		TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindFunction},
@@ -256,6 +258,12 @@ func TestIssue166_WireShapeMatchesSpec(t *testing.T) {
 	require.NoError(t, err)
 	rec := do(t, srv, http.MethodPost, fnBase, devToken, body)
 	require.Less(t, rec.Code, 300, "create with the flat stdlib body: %s", rec.Body.String())
+
+	// The create ignores the client's owner references (#328); a reconciler sets them through the store.
+	stored := storedEcho(t, st)
+	stored.OwnerReferences = fn.OwnerReferences
+	_, err = st.Update(context.Background(), stored)
+	require.NoError(t, err)
 
 	rec = do(t, srv, http.MethodGet, fnBase+"/echo", devToken, nil)
 	require.Equal(t, http.StatusOK, rec.Code)

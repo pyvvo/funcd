@@ -2,6 +2,8 @@ package gocloud_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,6 +38,38 @@ func TestScenario_DriverConformanceParity(t *testing.T) {
 			return b
 		})
 	})
+}
+
+// issue 331: FileURL keeps URL syntax in a directory name ('#', '?', '%') in the path, so an object written through
+// the bucket lands in exactly that directory: not in the sibling a "%41" escape decodes to, not in the working directory.
+func TestIssue331_FileURLBucketWritesIntoExactlyThatDirectory(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			t.Chdir(base)
+			dir, decoy := filepath.Join(base, name), filepath.Join(base, "pAq")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+			require.NoError(t, os.Mkdir(decoy, 0o700))
+			b, err := gocloud.Open(ctx, gocloud.FileURL(dir))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			require.NoError(t, b.Put(ctx, "k", []byte("v")))
+			got, err := os.ReadFile(filepath.Join(dir, "k"))
+			require.NoError(t, err)
+			require.Equal(t, "v", string(got))
+			inDecoy, err := os.ReadDir(decoy)
+			require.NoError(t, err)
+			require.Empty(t, inDecoy)
+			inBase, err := os.ReadDir(base)
+			require.NoError(t, err)
+			names := make([]string, 0, len(inBase))
+			for _, e := range inBase {
+				names = append(names, e.Name())
+			}
+			require.ElementsMatch(t, []string{name, "pAq"}, names)
+		})
+	}
 }
 
 // TestIssue160_UnstorableKeysAreInvalidAndNeverAlias: keys are opaque on every backend

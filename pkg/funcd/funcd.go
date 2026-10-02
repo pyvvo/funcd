@@ -299,6 +299,7 @@ type Platform struct {
 	dataPlaneAddr     string
 
 	invokeMgr         *local.Manager          // per-function worker-node local API broker (ADR-0064)
+	invokeTmpDir      string                  // the temp socket dir New created (no WithInvokeSocketDir); removed by Shutdown
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
 	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
@@ -443,7 +444,7 @@ func (p *Platform) buildControlPlane() error {
 		if terr != nil {
 			return fault.Wrapf(terr, fault.Internal, op, "create invoke socket dir")
 		}
-		invokeSockDir = tmp
+		invokeSockDir, p.invokeTmpDir = tmp, tmp
 	}
 	if err := local.CheckDir(invokeSockDir); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
@@ -737,6 +738,7 @@ func (p *Platform) buildControlPlane() error {
 	// SAME per-namespace Bucket view the S3 frontend and the static handler use (s3BucketFor), then owns
 	// the Bucket + Route it declares inline; its status is derived from the owned Route.
 	ctrl.Register(v1.KindSite.GVK(), site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger}))
+	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute) // status is derived from the same-named owned Route
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
@@ -916,7 +918,9 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
 	}
-	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	// ReadTimeout bounds the request read, as on the data plane (issue #90); with no IdleTimeout set,
+	// net/http also uses it as the keep-alive idle bound, so a silent client cannot hold a connection (#300).
+	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
 
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
@@ -1258,6 +1262,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.deadLetters != nil { // ADR-0118: close the dedicated DLQ Badger instance
 			errs = append(errs, p.deadLetters.Close())
+		}
+		if p.invokeTmpDir != "" { // after the runtime stopped the workers that dial its sockets (issue #330)
+			errs = append(errs, os.RemoveAll(p.invokeTmpDir))
 		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))

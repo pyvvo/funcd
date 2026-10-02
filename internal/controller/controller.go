@@ -152,25 +152,40 @@ func (c *Controller) Run(ctx context.Context) error {
 // Modified / Deleted, uniformly). The store closes the stream of a watcher that
 // falls behind (ADR-0006), so a close before ctx ends re-watches: it resumes after
 // the highest resourceVersion seen, or re-lists when the store no longer retains it.
+// A re-list reports only the objects that still exist, so it also enqueues the
+// Requests each object seen before it last drove: a delete lost in the gap still
+// reaches its reconcile as NotFound.
 func (c *Controller) watch(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch) {
 	var seen uint64
+	known := map[Request][]Request{}
 	for {
-		seen = c.forward(ctx, gvk, w, seen)
+		seen = c.forward(ctx, gvk, w, seen, known)
 		w.Stop()
 		if ctx.Err() != nil {
 			return
 		}
 		c.logger.WarnContext(ctx, "store closed the watch, re-watching",
 			"kind", gvk.Kind, "resourceVersion", seen)
-		if w = c.rewatch(ctx, gvk, seen); w == nil {
+		var relisted bool
+		if w, relisted = c.rewatch(ctx, gvk, seen); w == nil {
 			return
+		}
+		if relisted {
+			for _, reqs := range known {
+				for _, req := range reqs {
+					c.queue.Add(req)
+				}
+			}
+			clear(known)
 		}
 	}
 }
 
-// forward enqueues every event of w until its stream closes or ctx ends, and
-// returns the highest object resourceVersion seen.
-func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch, seen uint64) uint64 {
+// forward enqueues the Requests of every event of w until its stream closes or ctx
+// ends, records in known the Requests each existing object drove, and returns the
+// highest object resourceVersion seen.
+func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch, seen uint64, known map[Request][]Request) uint64 {
+	_, reconciled := c.reconcilers[gvk]
 	for {
 		select {
 		case <-ctx.Done():
@@ -183,13 +198,21 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 			if rv, err := strconv.ParseUint(meta.ResourceVersion, 10, 64); err == nil && rv > seen {
 				seen = rv
 			}
-			if _, ok := c.reconcilers[gvk]; ok {
-				c.queue.Add(Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name})
+			key := Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name}
+			var reqs []Request
+			if reconciled {
+				reqs = append(reqs, key)
 			}
 			for _, mapFn := range c.mappers[gvk] {
-				for _, req := range mapFn(ctx, ev.Object) {
-					c.queue.Add(req)
-				}
+				reqs = append(reqs, mapFn(ctx, ev.Object)...)
+			}
+			for _, req := range reqs {
+				c.queue.Add(req)
+			}
+			if ev.Type == store.Deleted {
+				delete(known, key)
+			} else {
+				known[key] = reqs
 			}
 		}
 	}
@@ -197,25 +220,26 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 
 // rewatch opens a Watch that replays the changes after resourceVersion seen,
 // falling back to a full re-list when that revision is too old (fault.Unavailable),
-// and retries other failures with backoff. It returns nil once ctx ends.
-func (c *Controller) rewatch(ctx context.Context, gvk v1.GroupVersionKind, seen uint64) store.Watch {
+// and retries other failures with backoff. It reports whether the Watch is a
+// re-list, and returns a nil Watch once ctx ends.
+func (c *Controller) rewatch(ctx context.Context, gvk v1.GroupVersionKind, seen uint64) (store.Watch, bool) {
 	opts := store.WatchOptions{SinceResourceVersion: strconv.FormatUint(seen, 10)}
 	for failures := 1; ; failures++ {
 		w, err := c.store.Watch(ctx, gvk, opts)
 		if err == nil {
-			return w
+			return w, opts.SinceResourceVersion == ""
 		}
 		if opts.SinceResourceVersion != "" && fault.KindOf(err) == fault.Unavailable {
 			opts.SinceResourceVersion = ""
 			continue
 		}
 		if ctx.Err() != nil {
-			return nil
+			return nil, false
 		}
 		c.logger.WarnContext(ctx, "re-watch failed, retrying", "kind", gvk.Kind, "error", err)
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, false
 		case <-time.After(c.queue.backoff(failures)):
 		}
 	}

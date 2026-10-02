@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	neturl "net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -43,6 +45,12 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
 	}
 	return &bucket{b: b, file: strings.HasPrefix(url, fileblob.Scheme+"://")}, nil
+}
+
+// FileURL is the file:// bucket URL for the absolute directory dir, path-escaped so URL syntax in a
+// directory name ('#', '?', '%') stays part of the path (issue #331).
+func FileURL(dir string) string {
+	return (&neturl.URL{Scheme: fileblob.Scheme, Path: filepath.ToSlash(dir)}).String()
 }
 
 type bucket struct {
