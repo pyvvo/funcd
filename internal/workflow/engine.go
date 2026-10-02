@@ -206,6 +206,7 @@ func New(d Deps) (*Engine, error) {
 type StartOptions struct {
 	Contract   *v1.WorkflowContract     // pinned derived contract; nil ⇒ no run-start input check
 	StepImages map[v1.ObjectName]string // step name → resolved digest-pinned image; stamps stepNode.revision (function steps)
+	RunUID     v1.UID                   // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
 }
 
 // Execute runs a workflow synchronously to a terminal phase and returns the final
@@ -240,7 +241,7 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 		rootParentID = inheritRootParent // nest the child run span under the parent run span
 	}
 	rec := &runstate.Record{
-		Namespace: ns, Name: runName, Workflow: workflow, Phase: runRunning, Input: input,
+		Namespace: ns, Name: runName, RunUID: opts.RunUID, Workflow: workflow, Phase: runRunning, Input: input,
 		Spec:         spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
 		Contract:     pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
 		Depth:        depth,  // sub-workflow nesting depth (ADR-0099)
@@ -318,6 +319,12 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 // Faults: NotFound (source absent); Invalid whose message leads with reason token SeedInvalid or
 // DigestDrift (naming the offending step). The source record is never mutated.
 func (e *Engine) Replay(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
+	return e.replay(ctx, ns, runName, "", workflow, seed, current)
+}
+
+// replay is Replay stamping the starting WorkflowRun's uid on the new record, as StartOptions.RunUID does
+// for Execute.
+func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, runUID v1.UID, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
 	src, err := e.runs.Get(ctx, ns, seed.Run)
 	if err != nil {
 		return nil, err // NotFound (source absent) propagates
@@ -365,7 +372,7 @@ func (e *Engine) Replay(ctx context.Context, ns v1.NamespaceName, runName, workf
 	// Build the new record: fresh trace, copy the source's pinned spec/contract/input, provenance.
 	traceID, rootSpanID := mintTraceContext()
 	rec := &runstate.Record{
-		Namespace: ns, Name: runName, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
+		Namespace: ns, Name: runName, RunUID: runUID, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
 		Spec: spec, Contract: src.Contract, Depth: 0,
 		TraceID: traceID, RootSpanID: rootSpanID, RootParentID: "",
 		SourceRun: seed.Run, SourceFrom: seed.From,

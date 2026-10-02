@@ -92,6 +92,10 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	if isRunTerminal(run.Status.Phase) {
 		return controller.Result{}, nil
 	}
+	started, err := r.started(ctx, run)
+	if err != nil {
+		return controller.Result{}, err
+	}
 
 	wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, run.Spec.Workflow)
 	if err != nil && fault.KindOf(err) != fault.NotFound {
@@ -122,8 +126,6 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
 	// Ready=False (a WorkflowCycle, a type mismatch): such a workflow never runs (ADR-0098/0099). A
 	// started run resumes its pinned spec.
-	_, gerr := r.engine.runs.Get(ctx, req.Namespace, req.Name)
-	started := gerr == nil
 	if !started {
 		if wf == nil {
 			return r.wait(ctx, run, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
@@ -219,13 +221,38 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 	if run.Spec.Replay != nil {
 		// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
 		// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
-		rec, err := r.engine.Replay(ctx, ns, name, wf.Name, *run.Spec.Replay, images)
+		rec, err := r.engine.replay(ctx, ns, name, run.UID, wf.Name, *run.Spec.Replay, images)
 		if fault.KindOf(err) == fault.NotFound {
 			err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", run.Spec.Replay.Run)
 		}
 		return rec, err
 	}
-	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
+	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, RunUID: run.UID})
+}
+
+// started reports whether run has an engine record of its own. The record that an earlier WorkflowRun of
+// the same name, since deleted, left behind is deleted instead, so run starts fresh on its own spec and
+// input rather than resuming or reporting that run.
+func (r *RunReconciler) started(ctx context.Context, run *v1.WorkflowRun) (bool, error) {
+	rec, err := r.engine.runs.Get(ctx, run.Namespace, run.Name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return false, nil
+	case err != nil:
+		return false, fault.Wrapf(err, fault.KindOf(err), runOp, "get run record %q", run.Name)
+	case foreignRecord(rec, run.UID):
+		if err := r.engine.runs.Delete(ctx, run.Namespace, run.Name); err != nil {
+			return false, fault.Wrapf(err, fault.KindOf(err), runOp, "delete the record of an earlier run %q", run.Name)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+// foreignRecord reports whether rec belongs to a WorkflowRun other than the one with uid: an earlier one
+// of the same name. A record without a uid predates the stamp and is matched by name.
+func foreignRecord(rec *runstate.Record, uid v1.UID) bool {
+	return rec.RunUID != "" && rec.RunUID != uid
 }
 
 // replayReason extracts the reason token (SeedInvalid / DigestDrift) from a replay-seed rejection's
@@ -393,10 +420,21 @@ func (r *RunReconciler) SweepExpired(ctx context.Context, retention time.Duratio
 	return r.engine.SweepExpired(ctx, retention, r.deleteRun)
 }
 
-// deleteRun deletes the WorkflowRun object of an expired run record; an inline sub-workflow child run
-// has none.
+// deleteRun deletes the WorkflowRun object of an expired run record. An inline sub-workflow child run
+// has none, and a WorkflowRun re-created under the record's name is not the record's, so it is kept.
 func (r *RunReconciler) deleteRun(ctx context.Context, rec *runstate.Record) error {
-	err := r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, "")
+	obj, err := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := obj.GetObjectMeta()
+	if foreignRecord(rec, meta.UID) {
+		return nil
+	}
+	err = r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, meta.ResourceVersion)
 	if fault.KindOf(err) == fault.NotFound {
 		return nil
 	}

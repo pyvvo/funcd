@@ -740,3 +740,76 @@ func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {
 		t.Fatalf("status.runs = %+v, want Active %v (the paused runs, newest first)", links, want)
 	}
 }
+
+// Issue #307: a WorkflowRun deleted and re-created under the same name is a new run. It executes its own
+// input instead of adopting the engine record, and the outcome, that the deleted run left behind.
+func TestIssue307_RecreatedRunExecutesItsOwnInput(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
+
+	seedRun(t, s, "re-1", "wf", `{"try":1}`)
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	f.failing["a"] = true
+	seedRun(t, s, "re-1", "wf", `{"try":2}`)
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the re-created run: %v", err)
+	}
+
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1")
+	if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runFailed || f.calls["a"] != 2 || string(f.inputs["a"]) != `{"try":2}` {
+		t.Fatalf("re-created run: phase %s, step a dispatched %d times, last input %s; want Failed after a second dispatch with its own input", phase, f.calls["a"], f.inputs["a"])
+	}
+}
+
+// Issue #307: the retention sweep reclaims the expired record a deleted run left behind but keeps the
+// WorkflowRun re-created under its name, which then runs fresh.
+func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: f, Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
+
+	seedRun(t, s, "re-1", "wf", `{"try":1}`)
+	if _, err := at(base).Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	seedRun(t, s, "re-1", "wf", `{"try":2}`)
+
+	later := at(base.Add(48 * time.Hour))
+	if n, err := later.SweepExpired(ctx, 24*time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1"); err != nil {
+		t.Fatalf("the sweep must keep the re-created WorkflowRun: %v", err)
+	}
+	if _, err := later.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the re-created run: %v", err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1")
+	if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runSucceeded || f.calls["a"] != 2 {
+		t.Fatalf("re-created run: phase %s, step a dispatched %d times; want Succeeded after a second dispatch", phase, f.calls["a"])
+	}
+}
