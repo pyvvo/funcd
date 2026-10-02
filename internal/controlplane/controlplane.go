@@ -212,6 +212,7 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 				Description: "funcd control-plane API — code-first via huma. " +
 					"Generated from typed Go operations; not hand-authored.",
 			},
+			Components: &huma.Components{Schemas: newInlineRegistry()},
 		},
 		DocsPath:    "/docs",
 		OpenAPIPath: "/openapi",
@@ -248,7 +249,6 @@ func jsonUnmarshal(data []byte, v interface{}) error {
 
 // faultError adapts a stdlib-only fault.Error to huma's StatusError so huma reads the right status.
 // It embeds fault.Problem (RFC 9457 JSON tags) so huma can serialize it as flat application/problem+json.
-// It also implements huma.ContentTypeFilter to tell huma to use application/json for marshaling.
 type faultError struct {
 	fault.Problem
 }
@@ -256,10 +256,12 @@ type faultError struct {
 func (e *faultError) Error() string  { return e.Detail }
 func (e *faultError) GetStatus() int { return e.Status }
 
-// ContentType tells huma to use application/json for marshaling this error body.
-// huma v2 only has json/yaml marshalers; the body is still RFC 9457 problem+json shape.
+// ContentType serves the body as application/problem+json (ADR-0005), as huma's own ErrorModel does.
 func (e *faultError) ContentType(ct string) string {
-	return "application/json"
+	if ct == "application/json" {
+		return "application/problem+json"
+	}
+	return ct
 }
 
 // wrapFaultError wraps a fault.Error as a huma StatusError. Exported for testing.

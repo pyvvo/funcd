@@ -212,11 +212,8 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 	return respBody, nil
 }
 
-// toWireBody marshals obj into the shape huma's request schema requires: a NESTED
-// "TypeMeta" object (huma ignores the `,inline` tag; the schema is
-// additionalProperties:false + requires TypeMeta), with apiVersion/kind taken
-// authoritatively from the object's GVK. (The server re-stamps TypeMeta; responses
-// come back flat and decode via decodeObject.)
+// toWireBody marshals obj with apiVersion/kind taken authoritatively from the object's GVK.
+// Status is server-owned, so a write never sends it. (The server re-stamps TypeMeta.)
 func toWireBody(obj v1.Object) ([]byte, error) {
 	flat, err := json.Marshal(obj)
 	if err != nil {
@@ -226,17 +223,14 @@ func toWireBody(obj v1.Object) ([]byte, error) {
 	if err := json.Unmarshal(flat, &m); err != nil {
 		return nil, fault.Internalf("sdk", "normalize body: %v", err)
 	}
-	delete(m, "apiVersion")
-	delete(m, "kind")
-	// status is server-owned and its embedded Status doesn't round-trip through huma's
-	// nested-schema (like TypeMeta); never send it on a write.
 	delete(m, "status")
 	gvk := obj.GroupVersionKind()
-	tm, err := json.Marshal(v1.TypeMeta{APIVersion: gvk.APIVersion(), Kind: gvk.Kind})
-	if err != nil {
-		return nil, fault.Internalf("sdk", "marshal typemeta: %v", err)
+	if m["apiVersion"], err = json.Marshal(gvk.APIVersion()); err != nil {
+		return nil, fault.Internalf("sdk", "marshal apiVersion: %v", err)
 	}
-	m["TypeMeta"] = tm
+	if m["kind"], err = json.Marshal(gvk.Kind); err != nil {
+		return nil, fault.Internalf("sdk", "marshal kind: %v", err)
+	}
 	return json.Marshal(m)
 }
 

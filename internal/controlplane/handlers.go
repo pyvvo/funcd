@@ -93,8 +93,7 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 }
 
 // stampTypeMeta sets the object's apiVersion/kind from the route's kind. The control-plane
-// endpoint determines the kind, not the request body — and the ",inline" TypeMeta does not
-// round-trip through huma's generated request schema (ADR-0005), so the server normalizes it.
+// endpoint determines the kind, not the request body, so the server normalizes it.
 func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 	tm := v1.TypeMeta{APIVersion: kind.GVK().APIVersion(), Kind: kind}
 	switch o := obj.(type) {

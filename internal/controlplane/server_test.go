@@ -40,14 +40,13 @@ func newServer(t *testing.T) http.Handler {
 	return h
 }
 
-// functionBody builds a Function request body in the shape huma's generated request
-// schema expects: a nested "TypeMeta" object (huma does not honor the ",inline" tag) +
-// metadata. The server stamps TypeMeta from the route kind regardless.
+// functionBody builds a Function request body. The server stamps TypeMeta from the route kind regardless.
 func functionBody(t *testing.T, ns, name, rg string) []byte {
 	t.Helper()
 	m := map[string]interface{}{
-		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "Function"},
-		"metadata": map[string]interface{}{"name": name, "namespace": ns, "resourceGroup": rg},
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Function",
+		"metadata":   map[string]interface{}{"name": name, "namespace": ns, "resourceGroup": rg},
 		"spec": map[string]interface{}{
 			"runtime": "nodejs22",
 			"handler": "app.handler",
@@ -109,8 +108,6 @@ func TestScenarioAdmissionRejectsInvalid(t *testing.T) {
 	t.Parallel()
 	srv := newServer(t)
 	// Replace at path team-a with a body declaring namespace team-b → admission 400.
-	// (huma renders handler errors as a problem-shaped application/json body — ADR-0005;
-	// the application/problem+json content-type is asserted on the middleware 401 path.)
 	body := functionBody(t, "team-b", "echo", "rg1")
 	rec := do(t, srv, http.MethodPut, fnBase+"/echo", devToken, body)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -232,4 +229,47 @@ func TestIssue165_ExplicitNameWithGenerateNameConflicts(t *testing.T) {
 	var list []v1.Function
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
 	require.Len(t, list, 2, "only dup and the generated name")
+}
+
+// TestIssue166_WireShapeMatchesSpec: the request schema accepts the flat shape the server writes
+// (TypeMeta, Status and OwnerReference's ObjectRef are `,inline`), so a GET body PUTs back unchanged,
+// and a handler error is served as application/problem+json.
+func TestIssue166_WireShapeMatchesSpec(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+
+	fn := v1.Function{
+		TypeMeta: v1.TypeMeta{APIVersion: "funcd.io/v1alpha1", Kind: v1.KindFunction},
+		ObjectMeta: v1.ObjectMeta{
+			Name: "echo", Namespace: "team-a", ResourceGroup: "rg1",
+			OwnerReferences: []v1.OwnerReference{{
+				ObjectRef: v1.ObjectRef{Kind: v1.KindFunction, Name: "parent"},
+				UID:       "u-1",
+			}},
+		},
+		Spec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "app.handler", Image: "oci://example/app:v1"},
+	}
+	body, err := json.Marshal(fn)
+	require.NoError(t, err)
+	rec := do(t, srv, http.MethodPost, fnBase, devToken, body)
+	require.Less(t, rec.Code, 300, "create with the flat stdlib body: %s", rec.Body.String())
+
+	rec = do(t, srv, http.MethodGet, fnBase+"/echo", devToken, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got v1.Function
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, fn.OwnerReferences[0].ObjectRef, got.OwnerReferences[0].ObjectRef, "owner kind/name survive")
+
+	rec = do(t, srv, http.MethodPut, fnBase+"/echo", devToken, rec.Body.Bytes())
+	require.Less(t, rec.Code, 300, "PUT of the exact GET body: %s", rec.Body.String())
+
+	r := httptest.NewRequest(http.MethodGet, fnBase+"/missing", nil)
+	r.Header.Set("Authorization", "Bearer "+devToken)
+	r.Header.Set("Accept", "application/problem+json")
+	miss := httptest.NewRecorder()
+	srv.ServeHTTP(miss, r)
+	require.Equal(t, http.StatusNotFound, miss.Code)
+	require.Equal(t, "application/problem+json", miss.Header().Get("Content-Type"))
+	rec = do(t, srv, http.MethodGet, fnBase+"/missing", devToken, nil)
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
 }

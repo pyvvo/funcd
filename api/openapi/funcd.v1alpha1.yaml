@@ -92,14 +92,17 @@ components:
     Bucket:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/BucketSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -169,8 +172,10 @@ components:
     CatalogService:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -178,7 +183,8 @@ components:
         status:
           $ref: "#/components/schemas/CatalogServiceStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -222,8 +228,12 @@ components:
     CatalogServiceStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
         endpoint:
           type: string
         function:
@@ -231,8 +241,19 @@ components:
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
-      required:
-        - Status
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Condition:
       additionalProperties: false
@@ -258,14 +279,17 @@ components:
     ConfigMap:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/ConfigMapSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -379,14 +403,17 @@ components:
     EgressPolicy:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/EgressPolicySpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -497,8 +524,10 @@ components:
     EventSource:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -506,7 +535,8 @@ components:
         status:
           $ref: "#/components/schemas/EventSourceStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -521,16 +551,33 @@ components:
     EventSourceStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Function:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -538,7 +585,8 @@ components:
         status:
           $ref: "#/components/schemas/FunctionStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -686,8 +734,12 @@ components:
     FunctionStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
         currentRevision:
           type: string
         drainingRevision:
@@ -695,13 +747,24 @@ components:
         drainingSince:
           format: date-time
           type: string
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         replicas:
           format: int64
           type: integer
         servingRevision:
           type: string
-      required:
-        - Status
       type: object
     FunctionStep:
       additionalProperties: false
@@ -762,35 +825,56 @@ components:
     Gateway:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         status:
           $ref: "#/components/schemas/GatewayStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
       type: object
     GatewayStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Grant:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/GrantSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -800,8 +884,10 @@ components:
     Identity:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -809,7 +895,8 @@ components:
         status:
           $ref: "#/components/schemas/IdentityStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -834,44 +921,77 @@ components:
     IdentityStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
         accessKeyId:
           type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
         observedRotate:
           format: int64
           type: integer
-      required:
-        - Status
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Invocation:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         status:
           $ref: "#/components/schemas/InvocationStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
       type: object
     InvocationStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
         endTime:
           format: date-time
           type: string
         error:
           type: string
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         startTime:
           format: date-time
           type: string
-      required:
-        - Status
       type: object
     KVServiceSpec:
       additionalProperties: false
@@ -885,8 +1005,10 @@ components:
     KVStore:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -894,7 +1016,8 @@ components:
         status:
           $ref: "#/components/schemas/KVStoreStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -919,16 +1042,31 @@ components:
     KVStoreStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
         bindings:
           format: int64
           type: integer
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         tables:
           format: int64
           type: integer
-      required:
-        - Status
       type: object
     KVTable:
       additionalProperties: false
@@ -997,8 +1135,10 @@ components:
     Namespace:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1006,7 +1146,8 @@ components:
         status:
           $ref: "#/components/schemas/NamespaceStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
       type: object
     NamespaceSpec:
@@ -1024,10 +1165,25 @@ components:
     NamespaceStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     ObjectMeta:
       additionalProperties: false
@@ -1102,29 +1258,43 @@ components:
     OwnerReference:
       additionalProperties: false
       properties:
-        ObjectRef:
-          $ref: "#/components/schemas/ObjectRef"
         blockOwnerDeletion:
           type: boolean
         controller:
           type: boolean
+        kind:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        namespace:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         uid:
           type: string
       required:
-        - ObjectRef
+        - kind
+        - name
         - uid
       type: object
     Policy:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/PolicySpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1181,8 +1351,10 @@ components:
     ResourceGroup:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1190,7 +1362,8 @@ components:
         status:
           $ref: "#/components/schemas/ResourceGroupStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1203,10 +1376,25 @@ components:
     ResourceGroupStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     ResourceSpec:
       additionalProperties: false
@@ -1219,8 +1407,10 @@ components:
     Revision:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1228,7 +1418,8 @@ components:
         status:
           $ref: "#/components/schemas/RevisionStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1261,22 +1452,40 @@ components:
     RevisionStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Role:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/RoleSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1309,14 +1518,17 @@ components:
     RolesAssignment:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/RolesAssignmentSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1339,8 +1551,10 @@ components:
     Route:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1348,7 +1562,8 @@ components:
         status:
           $ref: "#/components/schemas/RouteStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1423,10 +1638,25 @@ components:
     RouteStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     RunStepStatus:
       additionalProperties: false
@@ -1464,8 +1694,10 @@ components:
     RuntimeClass:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1473,7 +1705,8 @@ components:
         status:
           $ref: "#/components/schemas/RuntimeClassStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1487,10 +1720,25 @@ components:
     RuntimeClassStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Scaling:
       additionalProperties: false
@@ -1529,14 +1777,17 @@ components:
     Secret:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/SecretSpec"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1556,8 +1807,10 @@ components:
     Sensor:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1565,7 +1818,8 @@ components:
         status:
           $ref: "#/components/schemas/SensorStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1591,16 +1845,33 @@ components:
     SensorStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Service:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1608,7 +1879,8 @@ components:
         status:
           $ref: "#/components/schemas/ServiceStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1628,16 +1900,33 @@ components:
     ServiceStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Site:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1645,7 +1934,8 @@ components:
         status:
           $ref: "#/components/schemas/SiteStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1731,21 +2021,36 @@ components:
     SiteStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
         bytes:
           format: int64
           type: integer
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
         digest:
           pattern: ^sha256:[a-f0-9]{64}$
           type: string
         objects:
           format: int64
           type: integer
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         servingPrefix:
           type: string
-      required:
-        - Status
       type: object
     StaticBackend:
       additionalProperties: false
@@ -1854,29 +2159,49 @@ components:
     WorkerNode:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         status:
           $ref: "#/components/schemas/WorkerNodeStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
       type: object
     WorkerNodeStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
-      required:
-        - Status
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     Workflow:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1884,7 +2209,8 @@ components:
         status:
           $ref: "#/components/schemas/WorkflowStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -1948,8 +2274,10 @@ components:
     WorkflowRun:
       additionalProperties: false
       properties:
-        TypeMeta:
-          $ref: "#/components/schemas/TypeMeta"
+        apiVersion:
+          type: string
+        kind:
+          type: string
         metadata:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
@@ -1957,7 +2285,8 @@ components:
         status:
           $ref: "#/components/schemas/WorkflowRunStatus"
       required:
-        - TypeMeta
+        - apiVersion
+        - kind
         - metadata
         - spec
       type: object
@@ -2004,8 +2333,25 @@ components:
     WorkflowRunStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         steps:
           items:
             $ref: "#/components/schemas/RunStepStatus"
@@ -2014,8 +2360,6 @@ components:
             - "null"
         traceId:
           type: string
-      required:
-        - Status
       type: object
     WorkflowSpec:
       additionalProperties: false
@@ -2052,10 +2396,27 @@ components:
     WorkflowStatus:
       additionalProperties: false
       properties:
-        Status:
-          $ref: "#/components/schemas/Status"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
         contract:
           $ref: "#/components/schemas/WorkflowContract"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
         runs:
           $ref: "#/components/schemas/WorkflowRunLinks"
         steps:
@@ -2064,8 +2425,6 @@ components:
           type:
             - array
             - "null"
-      required:
-        - Status
       type: object
     WorkflowStep:
       additionalProperties: false
