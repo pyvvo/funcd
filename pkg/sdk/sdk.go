@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
 
@@ -342,15 +343,31 @@ func quoteKeys(n *yamlv3.Node) {
 
 // problemToFault maps a non-2xx response to a typed fault.Error. It keys on the JSON
 // `status` field (handler faults arrive as application/json, huma's own 422/401 as
-// application/problem+json) — never on the Content-Type.
+// application/problem+json) — never on the Content-Type. huma's errors[] (field, reason,
+// value) is appended to the message: on a 422 it is the only place that names the bad field.
 func problemToFault(httpStatus int, body []byte) error {
-	var p fault.Problem
+	var p struct {
+		fault.Problem
+		Errors []huma.ErrorDetail `json:"errors"`
+	}
 	_ = json.Unmarshal(body, &p) // best-effort; falls back to httpStatus
 	status := p.Status
 	if status == 0 {
 		status = httpStatus
 	}
 	msg := p.Detail
+	if len(p.Errors) > 0 {
+		details := make([]string, 0, len(p.Errors))
+		for i := range p.Errors {
+			details = append(details, p.Errors[i].Error())
+		}
+		joined := strings.Join(details, "; ")
+		if msg == "" {
+			msg = joined
+		} else {
+			msg += ": " + joined
+		}
+	}
 	if msg == "" {
 		msg = strings.TrimSpace(string(body))
 	}
