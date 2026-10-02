@@ -25,6 +25,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.30.2
+	github.com/gofrs/flock v0.13.0
 	github.com/google/nftables v0.3.0
 	github.com/miekg/dns v1.1.72
 	github.com/nats-io/nats-server/v2 v2.14.2
@@ -200,7 +201,6 @@ require (
 	github.com/gofiber/fiber/v3 v3.3.0 // indirect
 	github.com/gofiber/schema v1.8.0 // indirect
 	github.com/gofiber/utils/v2 v2.1.0 // indirect
-	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
