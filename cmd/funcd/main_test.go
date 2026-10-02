@@ -427,7 +427,7 @@ func TestIssue153_FunclogConfigBlockLoadsAndMaps(t *testing.T) {
 		{"bad-segment-max-age", "  segmentMaxAge: bogus\n", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := shortDataDir(t)
 			path := filepath.Join(dir, "funcdconfig.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(
 				"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
