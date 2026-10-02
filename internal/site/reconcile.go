@@ -27,8 +27,8 @@ import (
 const (
 	op        = "site.Reconcile"
 	condReady = v1.ConditionType("Ready")
-	// routeRequeue is the poll interval while the owned Route is pending (the ADR-0091 precedent): the
-	// controller has no owner-watch, so the Site re-reads the Route's condition until it is current.
+	// routeRequeue is the poll interval while the owned Route is pending (the ADR-0091 precedent); a
+	// later change to the Route re-runs the Site through MapRoute.
 	routeRequeue = 2 * time.Second
 )
 
@@ -167,6 +167,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		out.cond = v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Materialized"}
 	}
 	return r.publish(ctx, s, out)
+}
+
+// MapRoute is the controller.MapFunc that re-runs the reconcile of the Site named after a changed Route:
+// the Site's status is derived from that Route (routeOf), and no Site event follows a Route write.
+func MapRoute(_ context.Context, obj v1.Object) []controller.Request {
+	meta := obj.GetObjectMeta()
+	return []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: meta.Namespace, Name: meta.Name}}
 }
 
 // routeOf reads the Site's same-named Route; nil when absent.
