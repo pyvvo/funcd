@@ -632,10 +632,11 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 }
 
 // requeueFor is how soon a pass comes back (ADR-0142; ADR-0143 Decision 4.7). While the current revision comes up
-// beside the serving one, it polls a booting replica and otherwise checks back after the supervision period.
+// beside the serving one, it polls a booting replica and otherwise — a failed current revision included, as one whose
+// replica timed out booting (issue #354) — checks back after the supervision period.
 func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 	if v.switching {
-		if v.booting {
+		if v.booting && !v.currentFailed {
 			return readinessPoll
 		}
 		if !v.retryAt.IsZero() {

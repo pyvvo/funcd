@@ -211,6 +211,26 @@ func TestScenarioFailedRevisionKeepsOldServing(t *testing.T) {
 	require.Equal(t, creates, after, "the failed revision is not retried")
 }
 
+// A new revision whose handler never becomes ready is judged ShapeInvalid after the boot timeout while revision 1
+// keeps serving; from then on it is checked every supervision period, not polled (issue #354).
+func TestIssue354_TimedOutRevisionIsNotPolled(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch)
+	h.deployReady(t, "echo")
+	h.rt.hold(runtime.NewInstanceID("default", "echo", "echo-2", 0), true)
+	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "hang" })
+	res := h.reconcile(t, "echo")
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a revision that just started is polled while it boots")
+
+	h.rt.exitRevision("echo", "echo-2", 0, runtime.StateRunning, time.Hour)
+	for range 2 {
+		res = h.reconcile(t, "echo")
+		require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+		require.Equal(t, "ShapeInvalid", h.condition(t, "echo", "RevisionReady").Reason)
+		require.Equal(t, testPeriod, res.RequeueAfter, "a timed-out revision is checked every supervision period, not polled")
+	}
+}
+
 type resolverFailing struct{ bad string }
 
 func (r resolverFailing) Resolve(_ context.Context, uri string) (string, error) {
