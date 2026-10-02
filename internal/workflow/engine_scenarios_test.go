@@ -73,6 +73,60 @@ func TestOnFailureHandlerRuns(t *testing.T) {
 	}
 }
 
+// Issue #178: the onFailure handler receives the ADR-0094 FailureContext (workflow, run, failedStep,
+// reason, and the run's input verbatim), and its outcome is recorded without changing the run phase. An
+// InputSchemaMismatch fast-fail sends an empty failedStep.
+func TestIssue178_OnFailureGetsFailureContextAndRecordsOutcome(t *testing.T) {
+	ctx := context.Background()
+	failureContext := func(t *testing.T, f *fakeDispatcher) map[string]json.RawMessage {
+		t.Helper()
+		var fc map[string]json.RawMessage
+		if err := json.Unmarshal(f.inputs["notify"], &fc); err != nil {
+			t.Fatalf("handler input %s is not a FailureContext object: %v", f.inputs["notify"], err)
+		}
+		return fc
+	}
+	for _, handlerFails := range []bool{false, true} {
+		f := newFake()
+		f.permanent["boom"] = true
+		f.permanent["notify"] = handlerFails
+		e := newTestEngine(t, f, Config{})
+		spc := spec(step("boom", ""), step("notify", ""))
+		spc.OnFailure = "notify"
+		if _, err := e.Execute(ctx, "default", "of-1", "wf", spc, json.RawMessage(`{"day":"mon"}`), StartOptions{}); err == nil {
+			t.Fatal("run should have failed")
+		}
+		fc := failureContext(t, f)
+		if string(fc["workflow"]) != `"wf"` || string(fc["run"]) != `"of-1"` || string(fc["failedStep"]) != `"boom"` ||
+			string(fc["input"]) != `{"day":"mon"}` || !strings.Contains(string(fc["reason"]), "permanent 4xx") {
+			t.Fatalf("FailureContext = %s, want workflow, run, failedStep boom, reason and the run input", f.inputs["notify"])
+		}
+		want := v1.StepSucceeded
+		if handlerFails {
+			want = v1.StepFailed
+		}
+		durable, err := e.runs.Get(ctx, "default", "of-1")
+		if err != nil {
+			t.Fatalf("get run: %v", err)
+		}
+		if durable.Phase != runFailed || phaseOf(durable, "notify") != want {
+			t.Fatalf("handler failing=%v: recorded run=%s notify=%s, want run Failed and notify %s", handlerFails, durable.Phase, phaseOf(durable, "notify"), want)
+		}
+	}
+
+	f := newFake()
+	e := newTestEngine(t, f, Config{})
+	spc := spec(step("a", ""), step("notify", ""))
+	spc.OnFailure = "notify"
+	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
+	if _, err := e.Execute(ctx, "default", "of-2", "wf", spc, json.RawMessage(`{"n":1}`), StartOptions{Contract: contract}); err == nil {
+		t.Fatal("run should have failed the input gate")
+	}
+	if fc := failureContext(t, f); string(fc["failedStep"]) != `""` || string(fc["input"]) != `{"n":1}` {
+		t.Fatalf("InputSchemaMismatch FailureContext = %s, want an empty failedStep and the run input", f.inputs["notify"])
+	}
+}
+
 // liveCtxDispatcher blocks step block until its context ends and, like the HTTP dispatcher, sends
 // nothing once the context has ended; the rest goes to the embedded fake, which counts it.
 type liveCtxDispatcher struct {

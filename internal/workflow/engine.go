@@ -854,13 +854,23 @@ func mergeParams(base, params json.RawMessage) json.RawMessage {
 	return out
 }
 
+// failureContext is the onFailure handler's input (ADR-0094 FailureContext): failedStep is empty when
+// no step failed (the run-start input gate), and input is the run's original input, verbatim.
+type failureContext struct {
+	Workflow   v1.ObjectName   `json:"workflow"`
+	Run        v1.ObjectName   `json:"run"`
+	FailedStep v1.ObjectName   `json:"failedStep"`
+	Reason     string          `json:"reason"`
+	Input      json.RawMessage `json:"input"`
+}
+
 // fail finalizes a Failed run, invoking the onFailure handler once if present.
 func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, cause error) (*runstate.Record, error) {
 	rec.Phase, rec.Error = runFailed, capErr(cause.Error())
 	if spec.OnFailure != "" {
-		fc, _ := json.Marshal(map[string]string{
-			"workflow": string(rec.Workflow), "run": string(rec.Name),
-			"reason": cause.Error(),
+		fc, _ := json.Marshal(failureContext{
+			Workflow: rec.Workflow, Run: rec.Name, FailedStep: rs.failedStep(),
+			Reason: cause.Error(), Input: input,
 		})
 		hctx := ctx
 		if d := e.stepTimeout(functionOf(specStep(spec, spec.OnFailure))); d > 0 {
@@ -868,12 +878,24 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			hctx, cancel = context.WithTimeout(ctx, d)
 			defer cancel()
 		}
-		_, _ = e.dispatch.Dispatch(hctx, DispatchRequest{
+		h := rs.steps[spec.OnFailure]
+		if h != nil {
+			e.setRunning(h)
+			h.attempts = 1
+		}
+		_, herr := e.dispatch.Dispatch(hctx, DispatchRequest{
 			Namespace: rec.Namespace, Run: rec.Name, Step: spec.OnFailure,
 			Target:  stepTarget(rec.Workflow, spec, spec.OnFailure),
 			Attempt: 1, Input: fc,
 			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
-		}) // handler outcome never changes the run phase (ADR-0094)
+		})
+		if h != nil { // the handler's outcome is recorded but never changes the run phase (ADR-0094)
+			if herr != nil {
+				e.markFailed(h, herr)
+			} else {
+				e.markSucceeded(h)
+			}
+		}
 	}
 	err := e.persist(ctx, rec, rs, outputs)
 	if fault.KindOf(err) == fault.PayloadTooLarge {

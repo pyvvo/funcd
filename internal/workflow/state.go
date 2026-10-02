@@ -227,6 +227,16 @@ func (rs *runState) runPhase() v1.Phase {
 	}
 }
 
+// failedStep names the run's Failed DAG step (the first in spec order), "" when none failed.
+func (rs *runState) failedStep() v1.ObjectName {
+	for _, name := range rs.dagSteps() {
+		if rs.steps[name].phase == v1.StepFailed {
+			return name
+		}
+	}
+	return ""
+}
+
 // leaves returns the DAG steps that no other DAG step depends on — the run output
 // composite is keyed by their names.
 func (rs *runState) leaves() []v1.ObjectName {
