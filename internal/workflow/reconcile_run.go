@@ -114,7 +114,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
-	rec, err := r.drive(ctx, run, wf)
+	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf)
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
@@ -137,7 +137,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, uerr
 	}
 	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: one run-root span at the terminal transition (no-op if non-terminal)
-	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
+	if lerr := r.updateWorkflowLinks(ctx, wf.Namespace, wf.Name); lerr != nil {
 		r.log.Warn("status.runs update failed", "workflow", wf.Name, "error", lerr)
 	}
 	return controller.Result{}, nil
@@ -161,7 +161,7 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun, wf *
 		return uerr
 	}
 	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
-	if lerr := r.updateWorkflowLinks(ctx, wf); lerr != nil {
+	if lerr := r.updateWorkflowLinks(ctx, wf.Namespace, wf.Name); lerr != nil {
 		r.log.Warn("status.runs update failed after cancel", "workflow", wf.Name, "error", lerr)
 	}
 	return nil
@@ -225,18 +225,48 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	}
 }
 
+// mirrorTransition returns the engine's write observer for run: each non-terminal write of run's own
+// record is mirrored into WorkflowRun.status and the parent's status.runs as it happens (ADR-0094 "per
+// transition"). An inline sub-workflow child's record is not run's; the terminal write is mirrored after
+// drive returns, with the run-root span. Best-effort: a failed write is logged, never failing the run.
+func (r *RunReconciler) mirrorTransition(run *v1.WorkflowRun) func(context.Context, *runstate.Record) {
+	return func(ctx context.Context, rec *runstate.Record) {
+		if rec.Namespace != run.Namespace || rec.Name != run.Name || rec.Terminal() {
+			return
+		}
+		mirror(run, rec)
+		if err := r.updateRunStatus(ctx, run); err != nil {
+			r.log.Warn("run status update failed", "run", run.Name, "error", err)
+			return
+		}
+		if err := r.updateWorkflowLinks(ctx, run.Namespace, run.Spec.Workflow); err != nil {
+			r.log.Warn("status.runs update failed", "workflow", run.Spec.Workflow, "error", err)
+		}
+	}
+}
+
+// updateRunStatus writes run and adopts the new resourceVersion, so a later write in the same
+// reconcile (the next transition) is not rejected as stale.
 func (r *RunReconciler) updateRunStatus(ctx context.Context, run *v1.WorkflowRun) error {
-	if _, err := r.store.Update(ctx, run); err != nil {
+	out, err := r.store.Update(ctx, run)
+	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), runOp, "update run status %q", run.Name)
 	}
+	run.ResourceVersion = out.GetObjectMeta().ResourceVersion
 	return nil
 }
 
 // updateWorkflowLinks recomputes the parent Workflow's status.runs from the metastore:
 // active (non-terminal) run names + lifetime terminal-phase counts (bounded — only
-// active runs are enumerated).
-func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, wf *v1.Workflow) error {
-	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{Namespace: wf.Namespace})
+// active runs are enumerated). It re-reads the Workflow, because each run transition
+// rewrites it.
+func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, name)
+	if err != nil {
+		return err
+	}
+	wf := obj.(*v1.Workflow)
+	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{Namespace: ns})
 	if err != nil {
 		return err
 	}
