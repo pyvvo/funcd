@@ -468,3 +468,95 @@ func TestScenarioWakeColdScalesAndReturns(t *testing.T) {
 	require.Equal(t, 1, sc.count(), "cold wake scales to 1 exactly once")
 	require.Equal(t, []int{1}, sc.targetList())
 }
+
+// Issue #47: idle reclaim spares a function while a call to it is in flight, and a call that arrives while a reclaim
+// writes its scale-to-zero finds the function cold instead of the worker about to stop.
+func TestIssue47_ReclaimSparesInFlightCall(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	const idle = time.Hour
+	fn := activator.FunctionRef{Namespace: "default", Name: "inflight"}
+
+	t.Run("call-in-flight", func(t *testing.T) {
+		t.Parallel()
+		gate := make(chan struct{})
+		release := sync.OnceFunc(func() { close(gate) })
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			<-gate
+			_, _ = io.WriteString(w, "done")
+		}))
+		t.Cleanup(backend.Close)
+		t.Cleanup(release)
+		st := store.New(memory.New())
+		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		clk := &stepClock{t: base}
+		sc := &fakeScaler{}
+		calls := activator.NewCallTracker(clk)
+		a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true}, Scaler: sc, Clock: clk, Calls: calls})
+
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- serve(a, fn) }()
+		require.Eventually(t, func() bool { return !calls.Idle(backend.URL, 0) }, 2*time.Second, time.Millisecond)
+
+		clk.advance(2 * idle)
+		require.NoError(t, a.ReclaimIdle(ctx))
+		require.Equal(t, 0, sc.count(), "a call in flight is traffic: no reclaim")
+
+		release()
+		require.Equal(t, "done", (<-done).Body.String())
+		require.NoError(t, a.ReclaimIdle(ctx))
+		require.Equal(t, 0, sc.count(), "the idle window starts again after the call")
+
+		clk.advance(2 * idle)
+		require.NoError(t, a.ReclaimIdle(ctx))
+		require.Equal(t, []int{0}, sc.targetList(), "idle past IdleTimeout after the call: reclaimed")
+	})
+
+	t.Run("call-during-reclaim", func(t *testing.T) {
+		t.Parallel()
+		hit := make(chan struct{}, 1)
+		gate := make(chan struct{})
+		reclaimed := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			hit <- struct{}{}
+			<-gate
+		}))
+		t.Cleanup(reclaimed.Close)
+		t.Cleanup(func() { close(gate) })
+		woken := echoUpstream("woken")
+		t.Cleanup(woken.Close)
+		st := store.New(memory.New())
+		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		clk := &stepClock{t: base}
+		ep := &fakeEndpoints{upstream: reclaimed.URL, ready: true}
+		got := make(chan *httptest.ResponseRecorder, 1)
+		var a *activator.Activator
+		sc := &fakeScaler{hook: func(ref activator.FunctionRef, replicas int) {
+			if replicas == 1 {
+				ep.setReady(woken.URL)
+				return
+			}
+			go func() { got <- serve(a, ref) }()
+			// The call must not reach the worker before the scale-to-zero is written; the bound only ends the wait for
+			// a hit that the fix rules out.
+			select {
+			case <-hit:
+			case <-time.After(500 * time.Millisecond):
+			}
+			ep.mu.Lock()
+			ep.ready = false
+			ep.mu.Unlock()
+			reclaimed.CloseClientConnections()
+		}}
+		a = newActivator(t, activator.Deps{Store: st, Endpoints: ep, Scaler: sc, Clock: clk, Calls: activator.NewCallTracker(clk), PollInterval: time.Millisecond})
+
+		require.NoError(t, a.ReclaimIdle(ctx))
+		clk.advance(2 * idle)
+		require.NoError(t, a.ReclaimIdle(ctx))
+
+		rec := <-got
+		require.Equal(t, http.StatusOK, rec.Code, "the call wakes the function instead of reaching the stopped worker")
+		require.Equal(t, "woken", rec.Body.String())
+		require.Equal(t, []int{0, 1}, sc.targetList())
+	})
+}
