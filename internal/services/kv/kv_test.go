@@ -2,6 +2,8 @@ package kv_test
 
 import (
 	"context"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,6 +11,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/services/kv"
 )
@@ -210,4 +213,40 @@ func TestScenarioValueOverCapRejected(t *testing.T) {
 	require.NoError(t, f.Put(ctx, "default", "fn", "small", "ok", []byte("abcd")), "at the cap is allowed")
 	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "ok", []byte("abcde"))), "over value cap ⇒ Invalid")
 	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "abcd", []byte("x"))), "over key cap ⇒ Invalid")
+}
+
+// TestIssue377_DeclaredKeyCapIsStorable — a maxKeyBytes a KVStore passes Validate with is a cap the durable
+// engine stores: a key of exactly that size, under the longest <ns>/<store>/<table>/ prefix, goes through the
+// facade into Badger, and one byte more is Invalid before it reaches the driver.
+func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	label := strings.Repeat("a", 63)
+	ns, store, table := v1.NamespaceName(label), v1.ObjectName(label), label
+	db, err := kvbadger.Open(t.TempDir(), kvbadger.WithSyncWrites(false), kvbadger.WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.(io.Closer).Close() })
+
+	stored := 0
+	for _, capBytes := range []int{64000, 65000, 100000} {
+		ks := &v1.KVStore{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
+			ObjectMeta: v1.ObjectMeta{Name: store, Namespace: ns, ResourceGroup: "rg1"},
+			Spec:       v1.KVStoreSpec{MaxKeyBytes: capBytes, Tables: []v1.KVTable{{Name: table, Owner: "fn"}}},
+		}
+		if ks.Validate() != nil {
+			continue
+		}
+		b := fakeResolver{m: map[string]kv.Binding{
+			bkey("fn", "b"): {Store: store, Table: table, Owner: "fn", MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(), MaxKeyBytes: ks.Spec.EffectiveMaxKeyBytes()},
+		}}
+		f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: b, Authorizer: allowAll{}})
+		require.NoError(t, err)
+		require.NoErrorf(t, f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes), []byte("v")),
+			"store cap %d bytes passed Validate, so a key of that size must be stored", capBytes)
+		require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes+1), []byte("v"))),
+			"a key over the store cap is Invalid")
+		stored++
+	}
+	require.Positive(t, stored, "at least one cap must be accepted and stored")
 }

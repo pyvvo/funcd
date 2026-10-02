@@ -13,6 +13,10 @@ const (
 	MaxValueBytesLimit int64 = 1 << 20
 	// DefaultMaxKeyBytes is the default per-key cap (1 KiB) when KVStoreSpec.MaxKeyBytes is 0.
 	DefaultMaxKeyBytes int = 1024
+	// MaxKeyBytesLimit is the largest spec.maxKeyBytes a store may declare: the durable KV engine (Badger)
+	// stores keys of at most 65000 bytes, and the stored key <ns>/<store>/<table>/<key> adds at most 192
+	// bytes (three DNS labels and their slashes), so every key within this cap can be stored.
+	MaxKeyBytesLimit int = 64000
 )
 
 // KVStore is a namespaced, owned KV resource (ADR-0072, reshaped by ADR-0073): a named domain with
@@ -33,8 +37,8 @@ type KVStore struct {
 type KVStoreSpec struct {
 	// MaxValueBytes caps a single value's size; 0 ⇒ DefaultMaxValueBytes (1 MiB); at most MaxValueBytesLimit.
 	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0" maximum:"1048576"`
-	// MaxKeyBytes caps a single key's size; 0 ⇒ DefaultMaxKeyBytes (1 KiB).
-	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0"`
+	// MaxKeyBytes caps a single key's size; 0 ⇒ DefaultMaxKeyBytes (1 KiB); at most MaxKeyBytesLimit.
+	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0" maximum:"64000"`
 	// Tables are the store's sub-domains (ADR-0073): each is a key space <ns>/<store>/<table>/ with a
 	// single-writer Owner. Table names are unique within the store (so a table has exactly one owner by
 	// construction). Empty ⇒ a store with no writable sub-domains.
@@ -83,8 +87,8 @@ func (s KVStoreSpec) EffectiveMaxKeyBytes() int {
 func (s *KVStore) GroupVersionKind() GroupVersionKind { return KindKVStore.GVK() }
 
 // Validate performs envelope validation via the shared validateMeta helper, then the KVStoreSpec rules
-// JSON Schema can't express: the caps are non-negative (0 ⇒ default) and maxValueBytes is at most
-// MaxValueBytesLimit; and within the store, table names are unique (⇒ a table has exactly one owner) and
+// JSON Schema can't express: the caps are non-negative (0 ⇒ default), maxValueBytes is at most
+// MaxValueBytesLimit and maxKeyBytes at most MaxKeyBytesLimit; and within the store, table names are unique (⇒ a table has exactly one owner) and
 // each is a DNS-1123 label. Cross-resource rules (the owner exists) are an admission (ADR-0073), not
 // structural Validate.
 func (s *KVStore) Validate() error {
@@ -100,6 +104,9 @@ func (s *KVStore) Validate() error {
 	}
 	if s.Spec.MaxKeyBytes < 0 {
 		return fault.Invalidf(op, "spec.maxKeyBytes (%d) must not be negative", s.Spec.MaxKeyBytes)
+	}
+	if s.Spec.MaxKeyBytes > MaxKeyBytesLimit {
+		return fault.Invalidf(op, "spec.maxKeyBytes (%d) exceeds the largest storable key (%d bytes)", s.Spec.MaxKeyBytes, MaxKeyBytesLimit)
 	}
 	seen := make(map[string]bool, len(s.Spec.Tables))
 	for _, tb := range s.Spec.Tables {
