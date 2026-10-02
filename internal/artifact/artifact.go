@@ -435,23 +435,32 @@ func NewOrasMaterializer(artifactDir string, node v1.OCIPlatform) *OrasMateriali
 }
 
 // Platforms implements function.PlatformResolver (ADR-0145): the platforms the artifact at digest provides,
-// cached per digest.
+// cached per digest in memory and in the artifact cache dir, so a restarted daemon starts a cached artifact without
+// its source.
 func (m *OrasMaterializer) Platforms(ctx context.Context, uri, digest string) ([]v1.OCIPlatform, error) {
+	if digest == "" {
+		return Platforms(ctx, uri, digest)
+	}
 	m.mu.Lock()
 	cached, ok := m.platforms[digest]
 	m.mu.Unlock()
-	if ok && digest != "" {
+	if ok {
 		return cached, nil
 	}
-	ps, err := Platforms(ctx, uri, digest)
-	if err != nil {
-		return nil, err
+	file := filepath.Join(m.artifactDir, sanitizeDigest(digest)+".platforms.json")
+	var ps []v1.OCIPlatform
+	data, err := os.ReadFile(file) //nolint:gosec // file is in the daemon-owned artifact cache
+	if err != nil || json.Unmarshal(data, &ps) != nil {
+		if ps, err = Platforms(ctx, uri, digest); err != nil {
+			return nil, err
+		}
+		if data, err = json.Marshal(ps); err == nil && os.MkdirAll(m.artifactDir, 0o755) == nil {
+			_ = os.WriteFile(file, data, 0o600) // best-effort: a miss asks the source again
+		}
 	}
-	if digest != "" {
-		m.mu.Lock()
-		m.platforms[digest] = ps
-		m.mu.Unlock()
-	}
+	m.mu.Lock()
+	m.platforms[digest] = ps
+	m.mu.Unlock()
 	return ps, nil
 }
 
