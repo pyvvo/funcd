@@ -304,6 +304,7 @@ func (m *Materializer) ensureKVStore(ctx context.Context, st *v1.KVStore) error 
 	owners := st.OwnerReferences
 	st.ObjectMeta = cur.ObjectMeta // preserve UID/RV
 	st.OwnerReferences = owners    // re-derived from the current deletion policy (ADR-0094)
+	st.Status = cur.Status         // the KVStore reconciler owns the status (ADR-0073)
 	if _, err := m.store.Update(ctx, st); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "update kvstore %q", st.Name)
 	}

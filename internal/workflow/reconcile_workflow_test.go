@@ -227,6 +227,46 @@ func TestMaterializeKeepsFunctionStatus(t *testing.T) {
 	}
 }
 
+// Issue 19: a re-materialize keeps the status the KVStore reconciler wrote.
+func TestIssue19_RematerializeKeepsKVStoreStatus(t *testing.T) {
+	s := newStore(t)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	ctx := context.Background()
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "orders", Namespace: "default", ResourceGroup: "rg1", UID: "wf-uid"},
+		Spec: v1.WorkflowSpec{
+			KV: []v1.WorkflowKVStore{{Name: "counters-kv", Tables: []v1.KVTable{{Name: "t", Owner: "ingest"}}}},
+			Steps: []v1.WorkflowStep{
+				{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest-v1", KV: []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}}}},
+			},
+		},
+	}
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("first materialize: %v", err)
+	}
+	obj, err := s.Get(ctx, v1.KindKVStore.GVK(), "default", "counters-kv")
+	if err != nil {
+		t.Fatalf("owned kvstore not created: %v", err)
+	}
+	kv := obj.(*v1.KVStore)
+	kv.Status.Phase, kv.Status.Tables, kv.Status.Bindings = v1.PhaseReady, 1, 1
+	if _, err := s.Update(ctx, kv); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("second materialize: %v", err)
+	}
+	obj, err = s.Get(ctx, v1.KindKVStore.GVK(), "default", "counters-kv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := obj.(*v1.KVStore).Status; got.Phase != v1.PhaseReady || got.Tables != 1 || got.Bindings != 1 {
+		t.Fatalf("a re-materialize wiped the kvstore status: phase=%q tables=%d bindings=%d", got.Phase, got.Tables, got.Bindings)
+	}
+}
+
 // Issue 50: a minReplicas-0 step Function, shared or isolated, is reclaimed once idle — ADR-0094's
 // materialized Functions scale to zero.
 func TestIssue50_IdleStepFunctionScalesToZero(t *testing.T) {
