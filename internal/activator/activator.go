@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,7 +34,8 @@ type FunctionRef struct {
 // Endpoints resolves a function's currently-ready upstream. P-M/scheduler provide the
 // production driver (from the provisioned replica set); tests inject a fake.
 type Endpoints interface {
-	// Upstream returns the ready upstream base URL for fn and whether one exists.
+	// Upstream returns the ready upstream URL for fn and whether one exists. The URL's path, if
+	// any, is where fn's worker serves it (a pool worker's /function/<name>, ADR-0046).
 	Upstream(ctx context.Context, fn FunctionRef) (upstream string, ready bool, err error)
 }
 
@@ -313,10 +315,30 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 		fault.WriteProblem(w, fault.Internalf("activator.forward", "invalid upstream %q", upstream))
 		return
 	}
+	if target.Path != "" {
+		r = rebase(r, target.Path)
+		target = &url.URL{Scheme: target.Scheme, Host: target.Host}
+	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
 	rp.ServeHTTP(w, r)
+}
+
+// rebase addresses r under base, the path an upstream serves its function at: r's root is base
+// itself, since a pool worker serves a member at /function/<name> and not at /function/<name>/
+// (ADR-0046), and any other path of r is appended to base.
+func rebase(r *http.Request, base string) *http.Request {
+	out := r.WithContext(r.Context())
+	u := *r.URL
+	if u.Path == "" || u.Path == "/" {
+		u.Path = base
+	} else {
+		u.Path = strings.TrimSuffix(base, "/") + u.Path
+	}
+	u.RawPath = ""
+	out.URL = &u
+	return out
 }
 
 // ReclaimIdle scales to zero every minReplicas==0 function whose last activity is older

@@ -54,9 +54,9 @@ func TestPoolKeyForGatesOnPoolHost(t *testing.T) {
 		t.Error("python312 must run SOLO when no python pool host is configured")
 	}
 
-	// Python-ONLY pool host — the production config (cmd/funcd registers WithPoolShimFor("python",…)
-	// and never WithPoolShim, so poolShimCommand is empty). python must still pool (and so route to
-	// the pool worker, not solo — the upstreamForFn bug the review caught); node is solo (no node host).
+	// Python-ONLY pool host — an embedder that registers WithPoolShimFor("python",…) and no
+	// WithPoolShim, so poolShimCommand is empty. python must still pool (and so route to the pool
+	// worker, not solo — the upstreamForFn bug the review caught); node is solo (no node host).
 	pyOnly := &Reconciler{
 		poolShimsByFamily: map[string][]string{"python": pyHost},
 		shimByFamily:      map[string][]string{"python": {"python3", "/opt/funcd/shim.py"}},
