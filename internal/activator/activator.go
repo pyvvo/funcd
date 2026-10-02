@@ -77,6 +77,13 @@ type Activator struct {
 	mu         sync.Mutex
 	inflight   map[FunctionRef]*activation // singleflight: one activation per cold fn
 	lastActive map[FunctionRef]time.Time   // last-activity tracker feeding idle reclaim
+	stopped    bool                        // Run has returned: no new activation starts
+
+	// life bounds every activation and is cancelled when Run returns: the platform that would start a woken worker
+	// stops with it, so a held request could never be served. drives counts the running activations.
+	life   context.Context
+	cancel context.CancelFunc
+	drives sync.WaitGroup
 }
 
 // newPooledTransport returns the data-plane's shared upstream transport: it reuses keep-alive
@@ -135,6 +142,7 @@ func New(d Deps) (*Activator, error) {
 	if d.Calls != nil {
 		transport = d.Calls.Wrap(transport)
 	}
+	life, cancel := context.WithCancel(context.Background())
 	return &Activator{
 		store:             d.Store,
 		endpoints:         d.Endpoints,
@@ -147,6 +155,8 @@ func New(d Deps) (*Activator, error) {
 		transport:         transport,
 		inflight:          map[FunctionRef]*activation{},
 		lastActive:        map[FunctionRef]time.Time{},
+		life:              life,
+		cancel:            cancel,
 	}, nil
 }
 
@@ -217,13 +227,21 @@ func (a *Activator) activate(ctx context.Context, fn FunctionRef) (string, error
 	a.mu.Lock()
 	act, existed := a.inflight[fn]
 	if !existed {
+		if a.stopped {
+			a.mu.Unlock()
+			return "", errStopped(fn)
+		}
 		act = &activation{done: make(chan struct{})}
 		a.inflight[fn] = act
+		a.drives.Add(1)
 	}
 	a.mu.Unlock()
 
 	if !existed {
-		go a.drive(fn, act)
+		go func() {
+			defer a.drives.Done()
+			a.drive(fn, act)
+		}()
 	}
 
 	select {
@@ -236,10 +254,10 @@ func (a *Activator) activate(ctx context.Context, fn FunctionRef) (string, error
 }
 
 // drive runs one shared activation: trigger the wake once, then poll Endpoints until a
-// ready upstream appears or ActivationTimeout elapses, and resolve all waiters. It uses
-// its own bounded context (not a request's) so the shared wake is not tied to one caller.
+// ready upstream appears, ActivationTimeout elapses or Run returns, and resolve all waiters. It
+// uses its own bounded context (not a request's) so the shared wake is not tied to one caller.
 func (a *Activator) drive(fn FunctionRef, act *activation) {
-	ctx, cancel := context.WithTimeout(context.Background(), a.activationTimeout)
+	ctx, cancel := context.WithTimeout(a.life, a.activationTimeout)
 	defer cancel()
 
 	if err := a.scaler.ScaleTo(ctx, fn, 1); err != nil {
@@ -262,8 +280,12 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 		}
 		select {
 		case <-ctx.Done():
-			a.resolve(fn, act, "", fault.Unavailablef("activator.activate",
-				"function %s/%s did not become ready within %s", fn.Namespace, fn.Name, a.activationTimeout))
+			var err error = fault.Unavailablef("activator.activate",
+				"function %s/%s did not become ready within %s", fn.Namespace, fn.Name, a.activationTimeout)
+			if a.life.Err() != nil {
+				err = errStopped(fn)
+			}
+			a.resolve(fn, act, "", err)
 			return
 		case <-ticker.C:
 		}
@@ -347,8 +369,10 @@ func (a *Activator) seenAt(fn FunctionRef, now time.Time) (time.Time, bool) {
 	return last, true
 }
 
-// Run calls ReclaimIdle every ReclaimInterval until ctx is cancelled.
+// Run calls ReclaimIdle every ReclaimInterval until ctx is cancelled. On return it ends every
+// in-flight activation (its waiters get Unavailable) and waits for them.
 func (a *Activator) Run(ctx context.Context) error {
+	defer a.halt()
 	ticker := time.NewTicker(a.reclaimInterval)
 	defer ticker.Stop()
 	for {
@@ -361,4 +385,18 @@ func (a *Activator) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// errStopped is what a waiter gets once Run has returned.
+func errStopped(fn FunctionRef) error {
+	return fault.Unavailablef("activator.activate", "activator stopped before %s/%s became ready", fn.Namespace, fn.Name)
+}
+
+// halt stops new activations, cancels the running ones and waits for them to resolve their waiters.
+func (a *Activator) halt() {
+	a.mu.Lock()
+	a.stopped = true
+	a.mu.Unlock()
+	a.cancel()
+	a.drives.Wait()
 }
