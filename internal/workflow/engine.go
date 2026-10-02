@@ -776,7 +776,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 			break
 		}
 		if backoff > 0 {
-			timer := time.NewTimer(backoff)
+			timer := time.NewTimer(retryBackoff(backoff, attempt))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -791,6 +791,20 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 	n.errMsg = capErr(lastErr.Error())
 	rs.mu.Unlock()
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
+}
+
+// maxRetryBackoff caps one retry gap at the largest backoff StepRetry admits, so the doubling never overflows.
+const maxRetryBackoff = time.Hour
+
+// retryBackoff is the gap after a step's attempt-th failed dispatch: backoff·2^(attempt-1), capped at
+// maxRetryBackoff (ADR-0094: exponential backoff). A recovered step continues the schedule from its
+// persisted attempt count.
+func retryBackoff(backoff time.Duration, attempt int) time.Duration {
+	d := backoff
+	for i := 1; i < attempt && d < maxRetryBackoff; i++ {
+		d *= 2
+	}
+	return min(d, maxRetryBackoff)
 }
 
 // stepTimeout is a function step's per-invocation bound: its own timeout, else the engine default

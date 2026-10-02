@@ -297,6 +297,45 @@ func TestPermanentFailureNoRetry(t *testing.T) {
 	}
 }
 
+// attemptClock fails every dispatch (retryable) and records when each attempt arrived.
+type attemptClock struct {
+	mu sync.Mutex
+	at []time.Time
+}
+
+func (a *attemptClock) Dispatch(context.Context, DispatchRequest) (json.RawMessage, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.at = append(a.at, time.Now())
+	return nil, errors.New("retryable 5xx")
+}
+
+// Issue #180: the retry backoff grows exponentially (ADR-0094): the gap after the k-th failed attempt is
+// at least backoff·2^(k-1), not the same backoff every time. A timer never fires early, so the lower
+// bounds hold on any machine.
+func TestIssue180_RetryBackoffIsExponential(t *testing.T) {
+	const backoff = 5 * time.Millisecond
+	d := &attemptClock{}
+	e := newTestEngine(t, d, Config{})
+	st := retryStep("a", 5)
+	st.Function.Retry.Backoff = backoff
+	if _, err := e.Execute(context.Background(), "default", "run-bo", "wf", spec(st), json.RawMessage(`{}`), StartOptions{}); err == nil {
+		t.Fatal("run should have failed after its retries")
+	}
+	if len(d.at) != 5 {
+		t.Fatalf("attempts = %d, want 5", len(d.at))
+	}
+	gaps := make([]time.Duration, 0, len(d.at)-1)
+	for i := 1; i < len(d.at); i++ {
+		gaps = append(gaps, d.at[i].Sub(d.at[i-1]))
+	}
+	for i, g := range gaps {
+		if want := backoff << i; g < want {
+			t.Fatalf("gaps = %v: gap %d is %v, want at least %v (exponential backoff)", gaps, i+1, g, want)
+		}
+	}
+}
+
 func retryStep(name string, maxAttempts int, deps ...string) v1.WorkflowStep {
 	s := step(name, "", deps...)
 	s.Function.Retry = &v1.StepRetry{MaxAttempts: maxAttempts}
