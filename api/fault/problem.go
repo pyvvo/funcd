@@ -50,12 +50,6 @@ func ToProblem(err error) Problem {
 		Detail: err.Error(),
 	}
 
-	// Surface detail from a ferr.Error if present.
-	var ferr *Error
-	// errors.As is imported via fault.go but we only use stdlib here.
-	// Just use the KindOf result — the detail is already in err.Error().
-	_ = ferr // keep the var for potential future use
-
 	return p
 }
 
