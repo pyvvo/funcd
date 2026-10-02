@@ -54,6 +54,9 @@ type Record struct {
 	UpdatedAt  int64         `json:"updatedAt,omitempty"`
 	// PausedNanos accumulates time spent paused, excluded from the run-timeout clock.
 	PausedNanos int64 `json:"pausedNanos,omitempty"`
+	// Error is the run's failure cause, capped like a step's (ADR-0100): set when the run ends Failed,
+	// including a failure no step carries (the run-start InputSchemaMismatch gate, RunTimedOut).
+	Error string `json:"error,omitempty"`
 }
 
 // StepState is one step's persisted execution state.

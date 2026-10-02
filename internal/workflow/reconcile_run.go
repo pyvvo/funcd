@@ -182,16 +182,26 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images})
 }
 
-// replayReason extracts the leading reason token (SeedInvalid / DigestDrift) from a replay-seed
-// rejection's fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
+// replayReason extracts the reason token (SeedInvalid / DigestDrift) from a replay-seed rejection's
+// fault message for the ReplaySeeded condition; "ReplayRejected" if none matches.
 func replayReason(err error) string {
-	msg := err.Error()
-	for _, tok := range []string{"SeedInvalid", "DigestDrift"} {
-		if strings.Contains(msg, tok+":") {
+	return reasonToken(err.Error(), "ReplayRejected", "SeedInvalid", "DigestDrift")
+}
+
+// failureReason is the Ready=False reason of a Failed run: the ADR-0094/0099 run failure reason its
+// cause names, else StepFailed (every other run failure is a step's).
+func failureReason(cause string) string {
+	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded")
+}
+
+// reasonToken returns the first of tokens that msg names, else fallback.
+func reasonToken(msg, fallback string, tokens ...string) string {
+	for _, tok := range tokens {
+		if strings.Contains(msg, tok) {
 			return tok
 		}
 	}
-	return "ReplayRejected"
+	return fallback
 }
 
 // stepImages projects the workflow's cached resolved step images (ADR-0098 status.steps[].Image) into
@@ -216,6 +226,9 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	}
 	run.Status.Phase = rec.Phase
 	run.Status.TraceID = rec.TraceID // ADR-0100: mirror the run trace so describe + workflow logs (ADR-0106) find it
+	if rec.Phase == runFailed && rec.Error != "" {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(rec.Error), Message: rec.Error})
+	}
 	run.Status.Steps = run.Status.Steps[:0]
 	for _, s := range rec.Steps {
 		run.Status.Steps = append(run.Status.Steps, v1.RunStepStatus{

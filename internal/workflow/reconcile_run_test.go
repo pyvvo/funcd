@@ -235,3 +235,50 @@ func TestIssue116_OversizeRecordFailsRunOnce(t *testing.T) {
 		t.Fatalf("oversize Put = %v, want a one-line PayloadTooLarge (no value dump)", err)
 	}
 }
+
+// Issue #120: a run that fails outside a step — the run-start InputSchemaMismatch gate, or a when
+// condition that cannot be evaluated — records why in WorkflowRun.status, not only the Failed phase.
+func TestIssue120_RunFailureReasonInStatus(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "typed", step("a", ""))
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "typed")
+	wf := wfObj.(*v1.Workflow)
+	wf.Status.Contract = &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
+	if _, err := s.Update(ctx, wf); err != nil {
+		t.Fatalf("cache contract: %v", err)
+	}
+	seedRun(t, s, "typed-1", "typed", `{}`)
+	seedWorkflow(t, s, "gated", whenStep("w", "${{ input.n > 1 }}"))
+	seedRun(t, s, "gated-1", "gated", `{"n":"not-a-number"}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	status := func(t *testing.T, name v1.ObjectName) v1.WorkflowRunStatus {
+		t.Helper()
+		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return obj.(*v1.WorkflowRun).Status
+	}
+
+	t.Run("InputSchemaMismatch", func(t *testing.T) {
+		st := status(t, "typed-1")
+		c, ok := st.Conditions.Get(condReady)
+		if st.Phase != runFailed || !ok || c.Status != v1.ConditionFalse || c.Reason != "InputSchemaMismatch" || !strings.Contains(c.Message, `"day"`) {
+			t.Fatalf("phase=%q Ready=%+v, want Failed with Ready=False/InputSchemaMismatch naming \"day\"", st.Phase, c)
+		}
+	})
+	t.Run("WhenError", func(t *testing.T) {
+		st := status(t, "gated-1")
+		if st.Phase != runFailed || len(st.Steps) != 1 || st.Steps[0].Phase != v1.StepFailed || !strings.Contains(st.Steps[0].Error, "when condition") {
+			t.Fatalf("phase=%q steps=%+v, want Failed with step w Failed naming its when condition", st.Phase, st.Steps)
+		}
+		if c, ok := st.Conditions.Get(condReady); !ok || c.Status != v1.ConditionFalse || !strings.Contains(c.Message, "when condition") {
+			t.Fatalf("Ready=%+v, want False naming the when condition", c)
+		}
+	})
+}

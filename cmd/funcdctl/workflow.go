@@ -310,6 +310,21 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 	if err := a.writef("RUN %s   phase: %s\n", run.GetName(), string(run.Status.Phase)); err != nil {
 		return err
 	}
+	for _, c := range run.Status.Conditions { // a condition that is not True says why the run is not progressing
+		if c.Status == v1.ConditionTrue {
+			continue
+		}
+		line := "condition: " + string(c.Type) + "=" + string(c.Status)
+		if c.Reason != "" {
+			line += "   reason: " + c.Reason
+		}
+		if c.Message != "" {
+			line += "   message: " + c.Message
+		}
+		if err := a.writef("%s\n", line); err != nil {
+			return err
+		}
+	}
 	for _, s := range run.Status.Steps {
 		line := "  " + string(s.Name) + "   phase: " + string(s.Phase)
 		if s.Attempts > 0 {

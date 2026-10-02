@@ -254,11 +254,12 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 		if diffs := v1.CheckInput(input, pinned.Input); len(diffs) > 0 {
 			// Record the Failed run before fail() fires onFailure: a run that cannot be stored stays
 			// unrecorded, and its requeue must not fire the handler again.
-			rec.Phase = runFailed
+			cause := fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs))
+			rec.Phase, rec.Error = runFailed, capErr(cause.Error())
 			if err := e.persist(ctx, rec, rs, outputs); err != nil {
 				return nil, err
 			}
-			return e.fail(ctx, rec, rs, outputs, spec, input, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs)))
+			return e.fail(ctx, rec, rs, outputs, spec, input, cause)
 		}
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
@@ -584,6 +585,7 @@ func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, input json.R
 		}
 		ok, err := e.evalWhen(st.When.Condition, n, input, outputs)
 		if err != nil {
+			e.markFailed(n, err) // the step whose condition cannot be evaluated carries the cause (ADR-0100)
 			return nil, nil, err
 		}
 		if ok {
@@ -747,7 +749,7 @@ func mergeParams(base, params json.RawMessage) json.RawMessage {
 
 // fail finalizes a Failed run, invoking the onFailure handler once if present.
 func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, cause error) (*runstate.Record, error) {
-	rec.Phase = runFailed
+	rec.Phase, rec.Error = runFailed, capErr(cause.Error())
 	if spec.OnFailure != "" {
 		fc, _ := json.Marshal(map[string]string{
 			"workflow": string(rec.Workflow), "run": string(rec.Name),
