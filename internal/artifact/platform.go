@@ -134,7 +134,7 @@ func platformList(ps []v1.OCIPlatform) string {
 // whose manifests names a platform runs nowhere: an error matching scheduler.ErrNoMatchingPlatform.
 func Platforms(ctx context.Context, ref, digest string) ([]v1.OCIPlatform, error) {
 	const op = "artifact.Platforms"
-	target, reference, terr := resolveTarget(ctx, ref)
+	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return nil, fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}

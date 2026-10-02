@@ -363,3 +363,64 @@ func TestScenarioSchemaDeliveredBundle(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, string(advertised), string(delivered), "bundle delivers the advertised blob")
 }
+
+// TestIssue361_ReadOfMissingLayoutWritesNothing: a read of an oci-layout:// path that holds no layout reports a missing
+// layout and writes nothing there, whether the directory is absent or empty. Only a push creates a layout.
+func TestIssue361_ReadOfMissingLayoutWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	reads := map[string]func(t *testing.T, ref string) error{
+		"Inspect": func(_ *testing.T, ref string) error {
+			_, err := artifact.Inspect(ctx, ref, "")
+			return err
+		},
+		"InspectContract": func(_ *testing.T, ref string) error {
+			_, _, err := artifact.InspectContract(ctx, ref, "")
+			return err
+		},
+		"InspectRuntime": func(_ *testing.T, ref string) error {
+			_, err := artifact.InspectRuntime(ctx, ref, "")
+			return err
+		},
+		"Platforms": func(_ *testing.T, ref string) error {
+			_, err := artifact.Platforms(ctx, ref, "")
+			return err
+		},
+		"Pull": func(t *testing.T, ref string) error {
+			_, err := artifact.Pull(ctx, ref, digest, filepath.Join(t.TempDir(), "out"), "")
+			return err
+		},
+		"Resolve": func(t *testing.T, ref string) error {
+			_, err := artifact.NewOrasMaterializer(t.TempDir(), "").Resolve(ctx, ref)
+			return err
+		},
+		"ResolveSite": func(_ *testing.T, ref string) error {
+			_, err := artifact.ResolveSite(ctx, ref)
+			return err
+		},
+		"PullSite": func(t *testing.T, ref string) error {
+			return artifact.PullSite(ctx, ref, digest, filepath.Join(t.TempDir(), "out"))
+		},
+	}
+	for name, read := range reads {
+		t.Run(name+"/absent", func(t *testing.T) {
+			t.Parallel()
+			dir := filepath.Join(t.TempDir(), "no-such-layout")
+			err := read(t, "oci-layout://"+dir+":v1")
+			require.NoDirExists(t, dir, "a read created a layout at the missing path")
+			require.Equal(t, fault.NotFound, fault.KindOf(err), "a missing layout is fault.NotFound: %v", err)
+			require.ErrorContains(t, err, "no OCI layout")
+		})
+		t.Run(name+"/empty", func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			err := read(t, "oci-layout://"+dir+":v1")
+			entries, rerr := os.ReadDir(dir)
+			require.NoError(t, rerr)
+			require.Empty(t, entries, "a read wrote into the empty directory")
+			require.Equal(t, fault.NotFound, fault.KindOf(err), "an empty directory is no layout: %v", err)
+			require.ErrorContains(t, err, "no OCI layout")
+		})
+	}
+}
