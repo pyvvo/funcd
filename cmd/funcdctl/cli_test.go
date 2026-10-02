@@ -392,3 +392,24 @@ func TestIssue62_ApplyMultiDocumentAppliesEveryDocument(t *testing.T) {
 	_, err = c.Get(context.Background(), v1.KindConfigMap, "team-a", "md-valid")
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "no document is applied when one fails the pre-flight")
 }
+
+// Issue #316: a server rejection during a multi-document apply names the document (counted as the
+// decode errors count it) and the object; apply's help says it stops there and keeps what it applied.
+func TestIssue316_ApplyRejectionNamesTheDocument(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+
+	otherNS := strings.Replace(configMapDoc("md-rejected"), "namespace: team-a", "namespace: team-b", 1)
+	multi := configMapDoc("md-kept") + "---\n# a comment-only document still counts\n---\n" + otherNS
+	var out bytes.Buffer
+	err := execCLI(&out, c, "apply", "-f", writeManifest(t, multi))
+	require.Equal(t, fault.Forbidden, fault.KindOf(err), "%v", err)
+	require.Contains(t, err.Error(), `document 3 (ConfigMap "md-rejected")`)
+	require.Contains(t, out.String(), "applied ConfigMap/md-kept")
+	_, err = c.Get(context.Background(), v1.KindConfigMap, "team-a", "md-kept")
+	require.NoError(t, err, "a document before the rejected one stays applied")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, nil, "apply", "--help"))
+	require.Contains(t, out.String(), "stops at the first error")
+}

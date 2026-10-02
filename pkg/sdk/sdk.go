@@ -294,9 +294,30 @@ func DecodeManifest(data []byte) (v1.Object, error) {
 // one v1.Object per document, in order. Empty and comment-only documents are skipped; a manifest
 // with no document is a fault.Invalid.
 func DecodeManifests(data []byte) ([]v1.Object, error) {
+	docs, err := DecodeManifestDocuments(data)
+	if err != nil {
+		return nil, err
+	}
+	objs := make([]v1.Object, len(docs))
+	for i, doc := range docs {
+		objs[i] = doc.Object
+	}
+	return objs, nil
+}
+
+// ManifestDocument is one decoded manifest document and its 1-based position in the manifest,
+// counted as the decode errors count it (skipped empty and comment-only documents included).
+type ManifestDocument struct {
+	Number int
+	Object v1.Object
+}
+
+// DecodeManifestDocuments is DecodeManifests that also returns each object's document number, so a
+// caller can name the document a later error belongs to (issue #316).
+func DecodeManifestDocuments(data []byte) ([]ManifestDocument, error) {
 	const op = "sdk.DecodeManifests"
 	dec := yamlv3.NewDecoder(bytes.NewReader(data))
-	var objs []v1.Object
+	var docs []ManifestDocument
 	for n := 1; ; n++ {
 		var doc yamlv3.Node
 		if err := dec.Decode(&doc); errors.Is(err, io.EOF) {
@@ -316,12 +337,12 @@ func DecodeManifests(data []byte) ([]v1.Object, error) {
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "manifest document %d", n)
 		}
-		objs = append(objs, obj)
+		docs = append(docs, ManifestDocument{Number: n, Object: obj})
 	}
-	if len(objs) == 0 {
+	if len(docs) == 0 {
 		return nil, fault.Invalidf(op, "manifest holds no document")
 	}
-	return objs, nil
+	return docs, nil
 }
 
 // decodeDocument decodes one manifest document into its concrete v1.Object.
