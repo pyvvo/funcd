@@ -553,6 +553,7 @@ func (p *Platform) buildControlPlane() error {
 		bucketFor := s3BucketFor(c.blob, c.store)
 		srv, gerr := s3gateway.New(s3gateway.Deps{
 			BucketFor:      bucketFor,
+			Buckets:        s3Buckets(c.store),
 			PDP:            cedarPDP,
 			Master:         master,
 			Listen:         c.s3gwListenAddr,
@@ -1620,6 +1621,24 @@ func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, b
 			maxObjectBytes = b.Spec.MaxObjectBytes
 		}
 		return blob.Capped(blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), maxObjectBytes), true
+	}
+}
+
+// s3Buckets lists a namespace's Bucket resources for the S3 gateway's HeadBucket and
+// ListBuckets (ADR-0080).
+func s3Buckets(st store.Store) func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+	return func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+		l, err := st.List(ctx, v1.KindBucket.GVK(), store.ListOptions{Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]v1.Bucket, 0, len(l.Items))
+		for _, o := range l.Items {
+			if b, ok := o.(*v1.Bucket); ok {
+				out = append(out, *b)
+			}
+		}
+		return out, nil
 	}
 }
 

@@ -102,8 +102,19 @@ func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3
 		return b, ok
 	}
 
+	listBuckets := func(_ context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
+		var out []v1.Bucket
+		for _, b := range meta.buckets {
+			if b.Namespace == ns {
+				out = append(out, *b)
+			}
+		}
+		return out, nil
+	}
+
 	deps := s3gateway.Deps{
 		BucketFor: bucketFor,
+		Buckets:   listBuckets,
 		PDP:       pdp,
 		Master:    testMaster,
 		External:  external,
