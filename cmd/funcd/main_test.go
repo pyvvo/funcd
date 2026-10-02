@@ -118,6 +118,33 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	require.DirExists(t, filepath.Join(cwd, "data", "blob"))
 }
 
+// issue 331: URL syntax in an absolute storage.dataDir ('#', '?', '%') must not change the file blob store's
+// path: the daemon opens exactly <dataDir>/blob and writes nothing beside the dataDir.
+func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			base := shortDataDir(t)
+			dataDir := filepath.Join(base, name)
+			opts, label, _, err := substrateOptions(context.Background(), false, dataDir)
+			require.NoError(t, err)
+			require.Equal(t, "file", label)
+			all := append([]funcd.Option{
+				funcd.Production(),
+				funcd.WithStore(store.New(memory.New())),
+				funcd.WithRuntime(process.New()),
+				funcd.WithDevAuth("t", "default"),
+			}, opts...)
+			p, err := funcd.New(all...)
+			require.NoError(t, err)
+			require.NoError(t, p.Shutdown(context.Background()))
+			require.DirExists(t, filepath.Join(dataDir, "blob"))
+			entries, err := os.ReadDir(base)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "nothing lands outside the dataDir")
+		})
+	}
+}
+
 // scenario: daemon-version-and-serve (ADR-0042) — `funcd version` prints the stamped build
 // identity via the cobra root (the root's RunE serves; the version subcommand prints to out).
 func TestDaemonVersion(t *testing.T) {

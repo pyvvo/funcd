@@ -606,7 +606,7 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 	if err := os.MkdirAll(natsDir, 0o700); err != nil {
 		return nil, "", nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
 	}
-	bucket, err := gocloud.Open(ctx, "file://"+blobDir)
+	bucket, err := gocloud.Open(ctx, gocloud.FileURL(blobDir))
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("open file blob: %w", err)
 	}
