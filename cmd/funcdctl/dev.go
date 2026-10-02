@@ -36,6 +36,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -49,6 +50,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -95,6 +97,8 @@ const (
 	// devPersistDir is the default `--persist-to` directory (gitignored). Per-service subdirs
 	// (metastore/kv/blob) live under it (Decision 7).
 	devPersistDir = ".funcd-dev"
+	// devReloadPoll is how often `funcdctl dev` checks each handler source for an edit (hot-reload).
+	devReloadPoll = 300 * time.Millisecond
 )
 
 // envRef matches a ${ENV_VAR} reference in a dev.secrets value (ADR-0125 Decision 4): secret values are
@@ -318,10 +322,11 @@ type devInstance struct {
 	s3Region    string
 	// Durable drivers (ADR-0125 Decision 7): non-nil only under --persist / a file:// backend. Exposed
 	// so a restart test can write + read state directly; the platform owns + Closes them on Shutdown.
-	kv      kvstore.KV
-	blob    blob.Bucket
-	runErr  chan error
-	cleanup []func()
+	kv        kvstore.KV
+	blob      blob.Bucket
+	runErr    chan error
+	watchDone chan struct{} // closed when the hot-reload watcher has returned
+	cleanup   []func()
 }
 
 // stop cancels nothing itself (the caller owns the ctx passed to startDev); it waits for the platform's
@@ -330,6 +335,9 @@ func (d *devInstance) stop() error {
 	var runErr error
 	if d.runErr != nil {
 		runErr = <-d.runErr
+	}
+	if d.watchDone != nil {
+		<-d.watchDone
 	}
 	for i := len(d.cleanup) - 1; i >= 0; i-- {
 		d.cleanup[i]()
@@ -520,17 +528,21 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// restored). A stem/workflow function is isolated in a private temp bundle so per-function contracts
 	// never collide when several single-file functions share a dir (ADR-0124).
 	var fnObjs []v1.Object
+	handlers := make([]*devHandler, 0, len(pfs))
 	for _, pf := range pfs {
 		contractBlob, cerr := artifact.ContractBlob(pf.m.Contract.Input, pf.m.Contract.Output)
 		if cerr != nil {
 			return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", pf.name)
 		}
-		imagePath, cleanup, berr := prepareBundle(op, pf, contractBlob)
+		imagePath, digest, cleanup, berr := prepareBundle(op, pf, contractBlob)
 		if berr != nil {
 			return nil, berr
 		}
 		inst.cleanup = append(inst.cleanup, cleanup)
-		fnObjs = append(fnObjs, synthesizeFunction(pf, imagePath))
+		fn := synthesizeFunction(pf, imagePath)
+		fn.Spec.ImageDigest = digest
+		fnObjs = append(fnObjs, fn)
+		handlers = append(handlers, &devHandler{src: filepath.Join(pf.srcDir, pf.entry), bundle: imagePath, isolate: pf.isolate, fn: fn})
 	}
 	// Admission enforces link-target existence, so apply a link's target BEFORE the caller that binds it
 	// (a topological order over the fn-to-fn link graph within this function set).
@@ -684,7 +696,65 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 			}
 		}
 	}
+	inst.watchDone = make(chan struct{})
+	go watchHandlers(ctx, client, handlers, inst.watchDone)
 	return inst, nil
+}
+
+// devHandler is one from-source function's hot-reload state (ADR-0125 Decision 2): the handler file the
+// author edits, the bundle file its worker runs (src itself in place, a private copy when isolated), and
+// the Function as last applied.
+type devHandler struct {
+	src, bundle string
+	isolate     bool
+	fn          *v1.Function
+}
+
+// sourceDigest is a handler's content digest. The dev Function carries it as spec.imageDigest, so an edit
+// changes the spec and the reconciler rolls out a new revision whose worker loads the edited code, then
+// drains the old one (ADR-0143) — a long-lived worker never re-imports its module.
+func sourceDigest(data []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
+
+// watchHandlers polls every handler for an edit until ctx is done (ADR-0125 Decision 2, hot-reload on change).
+func watchHandlers(ctx context.Context, c *sdk.Client, hs []*devHandler, done chan<- struct{}) {
+	defer close(done)
+	t := time.NewTicker(devReloadPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			for _, h := range hs {
+				if err := h.reload(ctx, c); err != nil && ctx.Err() == nil {
+					slog.Default().Warn("hot-reload failed", "function", h.fn.Name, "err", err)
+				}
+			}
+		}
+	}
+}
+
+// reload re-delivers an edited handler and re-applies its Function with the new source digest. An
+// unreadable source (an editor's save swaps the file) counts as unchanged and is retried on the next poll.
+func (h *devHandler) reload(ctx context.Context, c *sdk.Client) error {
+	data, rerr := os.ReadFile(h.src)
+	if rerr != nil || sourceDigest(data) == h.fn.Spec.ImageDigest {
+		return nil
+	}
+	if h.isolate {
+		if err := os.WriteFile(h.bundle, data, 0o600); err != nil {
+			return err
+		}
+	}
+	next := *h.fn
+	next.Spec.ImageDigest = sourceDigest(data)
+	if _, err := c.Apply(ctx, &next); err != nil {
+		return err
+	}
+	h.fn = &next
+	return nil
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,
@@ -1236,46 +1306,44 @@ func synthesizeFunction(pf plannedFunc, imagePath string) *v1.Function {
 // (removed on stop unless the user already committed one — never clobbered). Isolated, the single handler
 // file is copied into a private temp bundle with its own contract (so several single-file functions in one
 // dir never collide on the shared dotfile) and a best-effort node_modules symlink lets its imports resolve.
-func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath string, cleanup func(), err error) {
+// digest is the sourceDigest of the handler as read here, before any worker loads it.
+func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath, digest string, cleanup func(), err error) {
 	src := filepath.Join(pf.srcDir, pf.entry)
-	if _, serr := os.Stat(src); serr != nil {
-		return "", nil, fault.NotFoundf(op, "handler entry %q not found in %q (set --entry): %v", pf.entry, pf.srcDir, serr)
+	data, rerr := os.ReadFile(src) //nolint:gosec // src is the resolved handler entry in the manifest dir
+	if rerr != nil {
+		return "", "", nil, fault.NotFoundf(op, "handler entry %q not found in %q (set --entry): %v", pf.entry, pf.srcDir, rerr)
 	}
+	digest = sourceDigest(data)
 	if !pf.isolate {
 		contractPath := filepath.Join(pf.srcDir, devContractFile)
 		_, existed := os.Stat(contractPath)
 		if werr := os.WriteFile(contractPath, contractBlob, 0o600); werr != nil {
-			return "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
+			return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
 		}
 		cleanup = func() {}
 		if existed != nil {
 			cleanup = func() { _ = os.Remove(contractPath) }
 		}
-		return src, cleanup, nil
+		return src, digest, cleanup, nil
 	}
 
 	tmp, terr := os.MkdirTemp("", "funcdctl-dev-fn-")
 	if terr != nil {
-		return "", nil, fault.Wrapf(terr, fault.Internal, op, "create bundle temp dir")
+		return "", "", nil, fault.Wrapf(terr, fault.Internal, op, "create bundle temp dir")
 	}
 	cleanup = func() { _ = os.RemoveAll(tmp) }
-	data, rerr := os.ReadFile(src) //nolint:gosec // src is the resolved handler entry in the manifest dir
-	if rerr != nil {
-		cleanup()
-		return "", nil, fault.Wrapf(rerr, fault.Internal, op, "read handler %q", src)
-	}
 	if werr := os.WriteFile(filepath.Join(tmp, pf.entry), data, 0o600); werr != nil {
 		cleanup()
-		return "", nil, fault.Wrapf(werr, fault.Internal, op, "copy handler into bundle")
+		return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "copy handler into bundle")
 	}
 	if nm := filepath.Join(pf.srcDir, "node_modules"); dirExists(nm) {
 		_ = os.Symlink(nm, filepath.Join(tmp, "node_modules")) // best-effort: let a single-file function's imports resolve
 	}
 	if werr := os.WriteFile(filepath.Join(tmp, devContractFile), contractBlob, 0o600); werr != nil {
 		cleanup()
-		return "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract into bundle")
+		return "", "", nil, fault.Wrapf(werr, fault.Internal, op, "deliver contract into bundle")
 	}
-	return filepath.Join(tmp, pf.entry), cleanup, nil
+	return filepath.Join(tmp, pf.entry), digest, cleanup, nil
 }
 
 // devWorkflowContracts is the `funcdctl dev` workflow ContractResolver (ADR-0125): from-source steps have
