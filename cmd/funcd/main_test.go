@@ -275,7 +275,7 @@ func TestDaemonExecutesFunction(t *testing.T) {
 // ephemeral ports, and returns a client and the data-plane URL.
 func startDaemonPlatform(t *testing.T, extra ...funcd.Option) (*sdk.Client, string) {
 	t.Helper()
-	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
+	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 	opts := append(append([]funcd.Option{funcd.InMemory()}, extra...), execOpts...)
