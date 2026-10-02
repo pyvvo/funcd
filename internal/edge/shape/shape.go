@@ -124,7 +124,7 @@ func (h *headerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hi
 func gzipMW() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			if !acceptsGzip(r.Header.Values("Accept-Encoding")) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -133,6 +133,34 @@ func gzipMW() func(http.Handler) http.Handler {
 			next.ServeHTTP(gw, r)
 		})
 	}
+}
+
+// acceptsGzip reports whether Accept-Encoding names gzip (or its alias x-gzip) with a q-value above zero:
+// q=0 means "not acceptable" (RFC 9110 §12.5.3). A malformed q-value counts as zero, since identity is
+// always safe.
+func acceptsGzip(values []string) bool {
+	accept := false
+	for _, v := range values {
+		for member := range strings.SplitSeq(v, ",") {
+			coding, params, _ := strings.Cut(member, ";")
+			if c := strings.ToLower(strings.TrimSpace(coding)); c != "gzip" && c != "x-gzip" {
+				continue
+			}
+			q := 1.0
+			for p := range strings.SplitSeq(params, ";") {
+				k, val, ok := strings.Cut(p, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+					continue
+				}
+				var err error
+				if q, err = strconv.ParseFloat(strings.TrimSpace(val), 64); err != nil {
+					q = 0
+				}
+			}
+			accept = q > 0
+		}
+	}
+	return accept
 }
 
 // gzipWriter gzips the response, but only for non-streaming, non-upgrade responses; it decides at the

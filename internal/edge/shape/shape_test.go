@@ -236,3 +236,34 @@ func TestShapingForwardsFlusherAndHijacker(t *testing.T) {
 	require.True(t, flushed, "the shaping wrapper forwards http.Flusher")
 	require.True(t, hijackable, "the shaping wrapper forwards http.Hijacker")
 }
+
+// RFC 9110 §12.5.3: a coding with q=0 is not acceptable, so the client gets the identity body.
+func TestIssue335_CompressionHonorsQZero(t *testing.T) {
+	payload := strings.Repeat("compress me ", 500)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, payload)
+	})
+	for ae, gzipped := range map[string]bool{
+		"gzip;q=0, identity":       false,
+		"GZIP; Q=0.000":            false,
+		"x-gzip;q=0, *;q=0.1":      false,
+		"identity;q=1, gzip;q=0.5": true,
+		"deflate, x-gzip":          true,
+	} {
+		req := httptest.NewRequest("GET", "http://x/y", nil)
+		req.Header.Set("Accept-Encoding", ae)
+		rec := serve(shape.Chain(shape.Config{Compression: true}), next, req)
+		if !gzipped {
+			require.Empty(t, rec.Header().Get("Content-Encoding"), "Accept-Encoding %q refuses gzip", ae)
+			require.Equal(t, payload, rec.Body.String(), "Accept-Encoding %q gets the identity body", ae)
+			continue
+		}
+		require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"), "Accept-Encoding %q accepts gzip", ae)
+		gz, err := gzip.NewReader(rec.Body)
+		require.NoError(t, err)
+		got, err := io.ReadAll(gz)
+		require.NoError(t, err)
+		require.Equal(t, payload, string(got))
+	}
+}
