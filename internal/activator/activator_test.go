@@ -1,9 +1,12 @@
 package activator_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -171,6 +174,37 @@ func TestProxiedCallIsCountedWhileInFlight(t *testing.T) {
 	release()
 	require.Equal(t, "done", (<-done).Body.String())
 	require.True(t, calls.Idle(backend.URL, 0), "the call ends with its answer")
+}
+
+// A worker that dies mid-call is answered with problem+json, not a bare 502, and the failure is
+// logged through slog, not the stdlib log package (ADR-0002). Not parallel: it captures log's output.
+func TestIssue141_WorkerFailureIsProblemJSONViaSlog(t *testing.T) {
+	var stdlog bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&stdlog)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(backend.Close)
+
+	var logs bytes.Buffer
+	a := newActivator(t, activator.Deps{
+		Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true},
+		Scaler:    &fakeScaler{},
+		Logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	rec := serve(a, activator.FunctionRef{Namespace: "default", Name: "crashing"})
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), "urn:funcd:problem:unavailable")
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+	require.Contains(t, logs.String(), "level=WARN", "the failure is logged through slog")
 }
 
 // scenario: cold-start-buffer-and-forward — a cold request triggers ScaleTo(1) once,

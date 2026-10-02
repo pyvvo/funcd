@@ -352,11 +352,14 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 }
 
 // forward reverse-proxies r to upstream, streaming each write immediately
-// (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity).
+// (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity). A failed
+// upstream call is an Unavailable problem+json logged through slog (ADR-0002), not the
+// ReverseProxy default (a bare 502 logged through the stdlib log package).
 func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream string) {
+	const op = "activator.forward"
 	target, err := url.Parse(upstream)
 	if err != nil || target.Scheme == "" || target.Host == "" {
-		fault.WriteProblem(w, fault.Internalf("activator.forward", "invalid upstream %q", upstream))
+		fault.WriteProblem(w, fault.Internalf(op, "invalid upstream %q", upstream))
 		return
 	}
 	if target.Path != "" {
@@ -366,6 +369,10 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		a.logger.WarnContext(r.Context(), "upstream call failed", "upstream", upstream, "error", perr)
+		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
+	}
 	rp.ServeHTTP(w, r)
 }
 
