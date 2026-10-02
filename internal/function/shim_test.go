@@ -492,6 +492,28 @@ func TestScenarioShimNotReadyRequeues(t *testing.T) {
 	require.Empty(t, h.routes(t), "no route until the shim is ready")
 }
 
+// A booting replica that accepts connections but never answers its readiness probe must not hold the pass — and with
+// it the engine's shared worker — for longer than the 200 ms poll it is repeated at.
+func TestIssue75_HungBootingReplicaDoesNotHoldThePass(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false)
+	hung, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = hung.Close() })
+	h.rt.mu.Lock()
+	h.rt.revPort["hung-1"] = hung.Addr().(*net.TCPAddr).Port
+	h.rt.mu.Unlock()
+	h.createFn(t, "hung")
+
+	start := time.Now()
+	res := h.reconcile(t, "hung")
+	elapsed := time.Since(start)
+
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hung").Status.Phase)
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a booting replica is polled")
+	require.Less(t, elapsed, res.RequeueAfter, "the pass waited %s on a replica that does not answer", elapsed)
+}
+
 // scenario: shim-shape-failure-blocks-ready.
 func TestScenarioShimShapeFailureBlocksReady(t *testing.T) {
 	t.Parallel()

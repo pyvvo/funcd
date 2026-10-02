@@ -310,7 +310,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          &http.Client{Timeout: 2 * time.Second},
+		httpClient:          &http.Client{Timeout: probeTimeout},
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,
@@ -659,6 +659,10 @@ const readinessPoll = 200 * time.Millisecond
 // (ADR-0030 §4b's timeout), as when its handler blocks while it loads. It exceeds the activator's 30 s activation hold,
 // so it never cuts short a boot that a cold call still waits for.
 const bootTimeout = time.Minute
+
+// probeTimeout bounds one readiness probe. The probe runs inside the pass, on the engine's shared worker, so a replica
+// that never answers must cost less than the poll it is repeated at (issue #75); a local shim answers in microseconds.
+const probeTimeout = readinessPoll / 2
 
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
