@@ -44,10 +44,10 @@ func (s *scaler) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas
 		if !ok {
 			return fault.Internalf(op, "object %s/%s is not a Function", fn.Namespace, fn.Name)
 		}
-		if target == v1.PhaseDeploying && f.Status.Phase == v1.PhaseFailed {
-			// Only the reconciler leaves Failed (ADR-0016 C2, ADR-0142), so a held call could only time out (issue #142).
-			ready, _ := f.Status.Conditions.Get("Ready")
-			return fault.Unavailablef(op, "function %s/%s is Failed (%s)", fn.Namespace, fn.Name, ready.Reason)
+		if target == v1.PhaseDeploying {
+			if ferr := activator.FailedFault(op, f); ferr != nil {
+				return ferr
+			}
 		}
 		next, change := transition(f.Status.Phase, target)
 		if !change {
