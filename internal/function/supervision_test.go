@@ -3,13 +3,17 @@ package function_test
 import (
 	"context"
 	"net/http"
+	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -325,4 +329,69 @@ func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	require.EqualValues(t, 2, rt.creates.Load(), "the instances that failed to start are started again, not replaced")
 	require.Equal(t, rv, h.getFn(t, "calm").ResourceVersion, "a repeated start failure writes nothing")
 	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
+// readinessListFailer fails List when the reconciler's readiness judgment calls it, so the pass's earlier Lists succeed.
+type readinessListFailer struct {
+	runtime.Runtime
+	failing atomic.Bool
+}
+
+func (l *readinessListFailer) List(ctx context.Context, ns v1.NamespaceName) ([]runtime.Instance, error) {
+	if l.failing.Load() && calledFrom(".readyReplicas") {
+		return nil, fault.Unavailablef("test.List", "the runtime could not list its workers")
+	}
+	return l.Runtime.List(ctx, ns)
+}
+
+// calledFrom reports whether a function whose name ends in suffix is on the caller's stack.
+func calledFrom(suffix string) bool {
+	pcs := make([]uintptr, 64)
+	frames := goruntime.CallersFrames(pcs[:goruntime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, suffix) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
+// Issue #353: a List error while the pass judges readiness fails the pass, so it is retried, and writes no status;
+// before, it counted zero ready replicas and wrote a serving Function Degraded.
+func TestIssue353_ReadinessListErrorWritesNoStatus(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(t *testing.T, h *shimHarness){
+		"serving": func(t *testing.T, h *shimHarness) {
+			h.rt.exitRevision("flaky", "flaky-1", 1, runtime.StateFailed, time.Minute)
+		},
+		"switch": func(t *testing.T, h *shimHarness) {
+			h.apply(t, "flaky", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lf := &readinessListFailer{}
+			h := newShimHarness(t, http.StatusOK, false, withSwitch, func(d *function.Deps) { lf.Runtime, d.Runtime = d.Runtime, lf })
+			h.create(t, "flaky", func(fn *v1.Function) { fn.Spec.Replicas = 2 })
+			h.reconcile(t, "flaky")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "flaky").Status.Phase)
+			change(t, h)
+			rv := h.getFn(t, "flaky").ResourceVersion
+
+			lf.failing.Store(true)
+			_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "flaky"})
+			fn := h.getFn(t, "flaky")
+			require.Equal(t, v1.PhaseReady, fn.Status.Phase, "a failed read does not mark a serving Function Degraded")
+			require.Equal(t, rv, fn.ResourceVersion, "no status is written from a failed read")
+			require.Error(t, err, "the pass fails, so it is retried")
+
+			lf.failing.Store(false)
+			h.reconcile(t, "flaky")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "flaky").Status.Phase)
+		})
+	}
 }

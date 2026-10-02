@@ -763,7 +763,10 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	ready, failed, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	if err != nil {
+		return verdict{}, err
+	}
 	var repairErr string
 	if serving {
 		// ADR-0142: in a pass that started serving, a Failed replica is a crash under repair, and so is one that never
@@ -829,13 +832,19 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath, bootTimeout)
+	readyC, failedC, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath, bootTimeout)
+	if err != nil {
+		return verdict{}, err
+	}
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := time.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
-	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath, bootTimeout)
+	readyS, _, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath, bootTimeout)
+	if err != nil {
+		return verdict{}, err
+	}
 	retryAt := retryS
 	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
 		retryAt = retryC
@@ -1380,13 +1389,14 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 // each running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
 // handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
 // bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID) {
+// A List error is returned, so the pass writes no status from a failed read (issue #353).
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID, err error) {
 	if r.materializer == nil {
-		return running, ""
+		return running, "", nil
 	}
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
-		return 0, ""
+		return 0, "", err
 	}
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
@@ -1404,7 +1414,7 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 			}
 		}
 	}
-	return ready, failed
+	return ready, failed, nil
 }
 
 // lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not
