@@ -1288,7 +1288,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	// verdict (Status.Phase==Ready, set only after /health/readiness passes), not merely on
 	// a running process. Otherwise the activator forwards before the shim binds (502). The
 	// upstream is still returned so a caller can see the address while it boots. For a pooled
-	// function the upstream is its pool worker's address, resolved by the pool key (ADR-0046).
+	// function the upstream is its pool worker's address, resolved by the pool key, plus the
+	// /function/<name> path the pool routes the member by (ADR-0046 Decision 5): every caller (the
+	// data plane, a workflow step, a Sensor action) gets it from here, where pooling is decided.
 	obj, err := e.r.store.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
 	if err != nil {
 		return "", false, nil
@@ -1298,6 +1300,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 		return "", false, nil
 	}
 	up := e.r.upstreamForFn(ctx, f)
+	if _, pooled := e.r.poolKeyFor(f); pooled && up != "" {
+		up += "/function/" + string(f.Name)
+	}
 	ready := f.Status.Phase == v1.PhaseReady && up != ""
 	if ready && e.r.calls != nil {
 		e.r.calls.HandedOut(up) // the drain waits out a call that resolved this upstream (ADR-0143)

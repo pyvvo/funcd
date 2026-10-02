@@ -1,0 +1,88 @@
+package function_test
+
+import (
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/activator/storescaler"
+	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/function"
+)
+
+func withNodePool(d *function.Deps) { d.PoolShimCommand = []string{"node", "/opt/funcd/pool.mjs"} }
+
+// serveCalls gives revision rev's workers an endpoint that answers a call only where the real host serves it: at
+// POST /function/<name> on a pool host (pooled, the pool worker has no revision), at POST / on a solo shim. Anything
+// else is a 404, as on the shims.
+func (f *fakeRuntime) serveCalls(t *testing.T, rev v1.ObjectName, pooled bool) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, routed := strings.CutPrefix(r.URL.Path, "/function/")
+		switch {
+		case r.URL.Path == "/health/readiness":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && pooled && routed && name != "" && !strings.Contains(name, "/"):
+			_, _ = io.WriteString(w, `{"served":"`+name+`"}`)
+		case r.Method == http.MethodPost && !pooled && r.URL.Path == "/":
+			_, _ = io.WriteString(w, `{"served":"solo"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	f.mu.Lock()
+	f.revPort[rev] = port
+	f.mu.Unlock()
+}
+
+// invokeDataPlane POSTs a call to name through the data plane, the activator and the reconciler's Endpoints.
+func (h *shimHarness) invokeDataPlane(t *testing.T, name string) (int, string) {
+	t.Helper()
+	act, err := activator.New(activator.Deps{Store: h.st, Endpoints: h.r.Endpoints(), Scaler: storescaler.New(h.st)})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	dataplane.Handler(h.st, act, nil, nil, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/function/"+name, strings.NewReader(`{"x":1}`)))
+	return rec.Code, rec.Body.String()
+}
+
+// A Function that sets spec.pooling.worker on a platform with no pool host for its runtime runs solo, so its calls
+// must reach its shim at /, not at the pool's /function/<name>.
+func TestIssue36_SoloRunPoolingOptInIsServed(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false)
+	h.create(t, "agent", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents" })
+	h.rt.serveCalls(t, "agent-1", false)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "agent").Status.Phase)
+
+	code, body := h.invokeDataPlane(t, "agent")
+	require.Equal(t, http.StatusOK, code, "the data plane reaches the solo shim: %s", body)
+	require.JSONEq(t, `{"served":"solo"}`, body)
+}
+
+// A pooled Function's calls reach its pool worker at /function/<name> through the data plane (ADR-0046 Decision 5).
+func TestPooledFunctionIsServedThroughDataPlane(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	h.create(t, "agent", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents" })
+	h.rt.serveCalls(t, "", true)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "agent").Status.Phase)
+
+	code, body := h.invokeDataPlane(t, "agent")
+	require.Equal(t, http.StatusOK, code, "the data plane reaches the pool worker: %s", body)
+	require.JSONEq(t, `{"served":"agent"}`, body)
+}

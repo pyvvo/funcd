@@ -131,6 +131,24 @@ func TestScenarioWarmPassthrough(t *testing.T) {
 	require.Equal(t, 0, sc.count(), "warm path must not call ScaleTo")
 }
 
+// An upstream with a path (a pool worker's /function/<name>, ADR-0046) serves the function's root at that path itself,
+// and a sub-path below it.
+func TestForwardUnderUpstreamPath(t *testing.T) {
+	t.Parallel()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.URL.Path)
+	}))
+	t.Cleanup(backend.Close)
+	a := newActivator(t, activator.Deps{Endpoints: &fakeEndpoints{upstream: backend.URL + "/function/svc", ready: true}, Scaler: &fakeScaler{}})
+	fn := activator.FunctionRef{Namespace: "default", Name: "svc"}
+
+	for path, want := range map[string]string{"/": "/function/svc", "/a/b": "/function/svc/a/b"} {
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, activator.WithFunction(httptest.NewRequest(http.MethodPost, path, nil), fn))
+		require.Equal(t, want, rec.Body.String(), "request path %s", path)
+	}
+}
+
 // ADR-0143: with Calls set, a proxied call counts against its upstream until its answer ends.
 func TestProxiedCallIsCountedWhileInFlight(t *testing.T) {
 	t.Parallel()

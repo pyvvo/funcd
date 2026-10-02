@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	shimpython "github.com/pyvvo/funcd-python/shim"
@@ -207,35 +209,16 @@ func TestDaemonExecutesFunction(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not on PATH")
 	}
-	// Build the platform like cmd/funcd does, but InMemory for ephemeral ports.
-	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir())) // extracts the embedded shim + WithRuntimeShim
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = closeExec() })
-	opts := append([]funcd.Option{funcd.InMemory(), funcd.WithArtifactStore(t.TempDir())}, execOpts...)
-	p, err := funcd.New(opts...)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- p.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Error("Run did not return")
-		}
-	})
+	ctx := context.Background()
+	c, dataPlane := startDaemonPlatform(t, funcd.WithArtifactStore(t.TempDir()))
 
 	// push an OCI artifact + apply a Function with NO digest (the platform pins it, ADR-0035).
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle(_, e) { return { echoed: e }; }\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	_, err = artifact.Push(ctx, ref, bundle, nil, "", "")
+	_, err := artifact.Push(ctx, ref, bundle, nil, "", "")
 	require.NoError(t, err)
 
-	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
-	require.NoError(t, err)
 	obj, _ := v1.NewObject(v1.KindFunction)
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "echo", "default", "rg1"
@@ -250,12 +233,85 @@ func TestDaemonExecutesFunction(t *testing.T) {
 		return gerr == nil && got.(*v1.Function).Status.Phase == v1.PhaseReady
 	}, 15*time.Second, 50*time.Millisecond, "the daemon-wired platform runs the embedded shim to Ready")
 
-	resp, err := http.Post("http://"+p.DataPlaneAddr()+"/function/echo", "application/json", strings.NewReader(`{"hi":1}`))
+	resp, err := http.Post(dataPlane+"/function/echo", "application/json", strings.NewReader(`{"hi":1}`))
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "invoked over HTTP: %s", body)
 	require.Contains(t, string(body), "echoed")
+}
+
+// startDaemonPlatform runs a platform assembled the way cmd/funcd assembles it (executionOptions), InMemory for
+// ephemeral ports, and returns a client and the data-plane URL.
+func startDaemonPlatform(t *testing.T, extra ...funcd.Option) (*sdk.Client, string) {
+	t.Helper()
+	execOpts, closeExec, err := executionOptions(context.Background(), cfgProcess(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeExec() })
+	opts := append(append([]funcd.Option{funcd.InMemory()}, extra...), execOpts...)
+	p, err := funcd.New(opts...)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not return")
+		}
+	})
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	require.NoError(t, err)
+	return c, "http://" + p.DataPlaneAddr()
+}
+
+// The daemon's process mode wires the embedded node pool host (ADR-0046), so two node Functions naming one worker id
+// run as handlers of one pool process, and each answers its calls.
+func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not on PATH")
+	}
+	ctx := context.Background()
+	c, dataPlane := startDaemonPlatform(t)
+	dir := t.TempDir()
+	names := []string{"node-a", "node-b"}
+	for _, name := range names {
+		handler := filepath.Join(dir, name+".mjs")
+		require.NoError(t, os.WriteFile(handler, []byte("export function handle() { return { pid: process.pid }; }\n"), 0o600))
+		obj, _ := v1.NewObject(v1.KindFunction)
+		fn := obj.(*v1.Function)
+		fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+		fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file://"+handler
+		fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
+		fn.Spec.Pooling.Worker = "agents"
+		_, err := c.Apply(ctx, fn)
+		require.NoError(t, err)
+	}
+
+	pids := map[string]int{}
+	for _, name := range names {
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			resp, err := http.Post(dataPlane+"/function/"+name, "application/json", strings.NewReader(`{}`))
+			if !assert.NoError(c, err) {
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, _ := io.ReadAll(resp.Body)
+			if !assert.Equal(c, http.StatusOK, resp.StatusCode, "%s answers its calls: %s", name, body) {
+				return
+			}
+			var out struct {
+				PID int `json:"pid"`
+			}
+			if assert.NoError(c, json.Unmarshal(body, &out)) && assert.NotZero(c, out.PID) {
+				pids[name] = out.PID
+			}
+		}, 20*time.Second, 100*time.Millisecond)
+	}
+	require.Equal(t, pids["node-a"], pids["node-b"], "both handlers run in one pool process")
 }
 
 // scenario: file-sets-addresses — a funcdconfig.yaml sets the (previously code-only) control-plane
