@@ -813,3 +813,33 @@ func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
 		t.Fatalf("re-created run: phase %s, step a dispatched %d times; want Succeeded after a second dispatch", phase, f.calls["a"])
 	}
 }
+
+// Issue #344: a run held Pending because its Workflow is not Ready is listed in the Workflow's
+// status.runs.active (ADR-0094), once, across the wait's re-checks.
+func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWF(t, s, "loop", nil, fnStep("work", "oci:work"), subwfStep("again", "loop", "work"))
+	if wf, _ := reconcileByName(t, s, fakeContracts{}, "loop"); mismatchReason(wf) != "WorkflowCycle" {
+		t.Fatalf("setup: loop reason = %q, want WorkflowCycle", mismatchReason(wf))
+	}
+	seedRun(t, s, "loop-1", "loop", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	for i := range 2 {
+		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "loop-1"})
+		if err != nil {
+			t.Fatalf("Reconcile %d: %v", i, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "loop-1")
+		if phase := obj.(*v1.WorkflowRun).Status.Phase; phase != runPending || res.RequeueAfter <= 0 {
+			t.Fatalf("setup: reconcile %d: phase=%q requeueAfter=%v, want a Pending wait", i, phase, res.RequeueAfter)
+		}
+		wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "loop")
+		if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || !slices.Equal(links.Active, []v1.ObjectName{"loop-1"}) {
+			t.Fatalf("reconcile %d: status.runs = %+v, want Active [loop-1]", i, links)
+		}
+	}
+}

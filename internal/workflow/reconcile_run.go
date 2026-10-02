@@ -199,14 +199,15 @@ func (r *RunReconciler) failUnrecorded(ctx context.Context, run *v1.WorkflowRun,
 	return controller.Result{}, nil
 }
 
-// wait holds a run that has not started Pending with a Ready=False condition saying why, and
-// re-checks it after waitRequeue.
+// wait holds a run that has not started Pending with a Ready=False condition saying why, lists it in
+// its Workflow's status.runs.active, and re-checks it after waitRequeue.
 func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, reason, msg string) (controller.Result, error) {
 	run.Status.Phase = runPending
 	run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capErr(msg)})
 	if err := r.updateRunStatus(ctx, run); err != nil {
 		return controller.Result{}, err
 	}
+	r.linkRun(ctx, run)
 	return controller.Result{RequeueAfter: waitRequeue}, nil
 }
 
