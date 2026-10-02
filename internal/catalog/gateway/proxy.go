@@ -47,15 +47,18 @@ type catalogProxy struct {
 }
 
 // NewCatalogProxy builds the catalog PEP proxy handler fronting one CatalogService engine (ADR-0137).
+// It logs through slog.Default; the Manager builds its proxies over its own logger (ADR-0002 §6).
 func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget) http.Handler {
-	p := &catalogProxy{
-		keys:   keys,
-		pdp:    pdp,
-		engine: engine,
-		log:    slog.Default().With("component", "catalog.gateway"),
-	}
+	return newCatalogProxy(keys, pdp, engine, slog.Default().With("component", "catalog.gateway"))
+}
+
+// newCatalogProxy builds the proxy over log. A failed engine call is a 502 logged through log, not the
+// ReverseProxy default (logged through the stdlib log package).
+func newCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget, log *slog.Logger) *catalogProxy {
+	p := &catalogProxy{keys: keys, pdp: pdp, engine: engine, log: log}
 	if u, err := url.Parse(engine.Upstream); err == nil && u.Host != "" {
 		p.rp = httputil.NewSingleHostReverseProxy(u)
+		p.rp.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 		p.rp.ErrorHandler = p.engineFailed
 	}
 	return p

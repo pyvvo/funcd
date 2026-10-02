@@ -20,9 +20,10 @@ import (
 // One listener endpoint per catalog fixes the PEP's target catalog by the endpoint (the proxy takes
 // the namespace from the resolved principal — see NewCatalogProxy).
 type Manager struct {
-	keys CatalogKeys
-	pdp  auth.Authorizer
-	log  *slog.Logger
+	keys     CatalogKeys
+	pdp      auth.Authorizer
+	log      *slog.Logger
+	proxyLog *slog.Logger // the proxies' logger (component catalog.gateway)
 
 	// bindHost is the interface each proxy listens on; publishHost is the host injected into functions as
 	// FUNCD_CATALOG_<ALIAS>_URL. They differ under containerd (ADR-0137, mirroring the s3gateway
@@ -88,6 +89,7 @@ func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authori
 		keys:        keys,
 		pdp:         pdp,
 		log:         log.With("component", "catalog.gateway.manager"),
+		proxyLog:    log.With("component", "catalog.gateway"),
 		bindHost:    bindHost,
 		publishHost: publishHost,
 		servers:     make(map[string]*managedProxy),
@@ -117,7 +119,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		if existing.upstream != upstream || existing.engineToken != engineToken {
 			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
 			// consumers already hold keeps working.
-			existing.handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
+			existing.handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
 			existing.upstream, existing.engineToken = upstream, engineToken
 			m.log.Debug("catalog proxy retargeted", "catalog", key, "upstream", upstream)
 		}
@@ -129,7 +131,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
 	handler := &retargetable{}
-	handler.set(NewCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}))
+	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
 	srv := newProxyServer(handler)
 	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp

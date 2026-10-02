@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"bytes"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -165,4 +168,45 @@ func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
 	require.Positive(t, srv.ReadTimeout, "a peer that stalls its body before the token is read must be cut off")
 	clientIdle := http.DefaultTransport.(*http.Transport).IdleConnTimeout
 	require.Greater(t, srv.IdleTimeout, clientIdle, "an idle keep-alive connection must be closed, after the client's own idle timeout")
+}
+
+// TestIssue379_ProxyLogsThroughManagerLogger: the catalog PEP proxy logs through the logger the
+// Manager was given (ADR-0002 §6), and an unreachable engine is logged there, not through the
+// stdlib log package. Not parallel: it captures log's output.
+func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
+	var stdlog bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&stdlog)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	pdp := buildPDP(t, st)
+	master := []byte("issue-379-master")
+	keys := NewCatalogKeys(master, st)
+
+	dead := httptest.NewServer((&engineStub{}).handler())
+	dead.Close()
+
+	var logs bytes.Buffer
+	mgr := NewManager("", "", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(mgr.Shutdown)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, dead.URL, engineToken)
+	require.NoError(t, err)
+	post := func(token string) int {
+		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
+		require.NoError(t, perr)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	require.Equal(t, http.StatusForbidden, post("garbage-unresolvable-token"))
+	require.Contains(t, logs.String(), `"msg":"catalog PEP: unresolved credential"`, "the debug line reaches the injected logger")
+	require.Contains(t, logs.String(), `"component":"catalog.gateway"`)
+
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, post(granted))
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+	require.Contains(t, logs.String(), `"level":"WARN"`, "the engine failure is logged through the injected logger")
 }
