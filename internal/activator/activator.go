@@ -54,7 +54,7 @@ type Deps struct {
 	ActivationTimeout time.Duration // cold-start hold bound; default 30s
 	PollInterval      time.Duration // ready-poll cadence; default 25ms
 	ReclaimInterval   time.Duration // idle-reclaim cadence for Run; default 30s
-	Calls             *CallTracker  // counts the calls forwarded to each worker (ADR-0143); nil ⇒ uncounted
+	Calls             *CallTracker  // counts the calls to each worker (ADR-0143), which idle reclaim also reads; nil ⇒ uncounted
 }
 
 const (
@@ -75,17 +75,27 @@ type Activator struct {
 	reclaimInterval   time.Duration
 
 	transport http.RoundTripper // shared, pooled upstream transport (ADR-0041), counted when Calls is set (ADR-0143)
+	calls     *CallTracker
 
 	mu         sync.Mutex
-	inflight   map[FunctionRef]*activation // singleflight: one activation per cold fn
-	lastActive map[FunctionRef]time.Time   // last-activity tracker feeding idle reclaim
-	stopped    bool                        // Run has returned: no new activation starts
+	inflight   map[FunctionRef]*activation     // singleflight: one activation per cold fn
+	lastActive map[FunctionRef]activity        // last-activity tracker feeding idle reclaim
+	upstreams  map[FunctionRef]map[string]bool // upstreams Wake handed out, whose calls in flight idle reclaim spares
+	reclaiming map[FunctionRef]chan struct{}   // a reclaim writing fn's scale-to-zero; closed when it is written
+	stopped    bool                            // Run has returned: no new activation starts
 
 	// life bounds every activation and is cancelled when Run returns: the platform that would start a woken worker
 	// stops with it, so a held request could never be served. drives counts the running activations.
 	life   context.Context
 	cancel context.CancelFunc
 	drives sync.WaitGroup
+}
+
+// activity is a function's last-activity time and the UID of the Function a reclaim pass attributed it
+// to ("" until one has), so a deleted-and-re-created name never inherits its predecessor's activity.
+type activity struct {
+	at  time.Time
+	uid v1.UID
 }
 
 // newPooledTransport returns the data-plane's shared upstream transport: it reuses keep-alive
@@ -155,10 +165,13 @@ func New(d Deps) (*Activator, error) {
 		pollInterval:      pollInterval,
 		reclaimInterval:   reclaimInterval,
 		transport:         transport,
+		calls:             d.Calls,
 		inflight:          map[FunctionRef]*activation{},
-		lastActive:        map[FunctionRef]time.Time{},
+		lastActive:        map[FunctionRef]activity{},
 		life:              life,
 		cancel:            cancel,
+		upstreams:         map[FunctionRef]map[string]bool{},
+		reclaiming:        map[FunctionRef]chan struct{}{},
 	}, nil
 }
 
@@ -207,17 +220,41 @@ func (a *Activator) Wake(ctx context.Context, fn FunctionRef) (string, error) {
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "resolve upstream for %s/%s", fn.Namespace, fn.Name)
 	}
-	if ready {
-		return upstream, nil
+	if !ready {
+		if upstream, err = a.activate(ctx, fn); err != nil {
+			return "", err
+		}
 	}
-	return a.activate(ctx, fn)
+	a.handedOut(fn, upstream)
+	return upstream, nil
 }
 
-// touch records last-activity for fn (also seeds first observation).
+// touch records last-activity for fn (also seeds first observation). It first waits out a reclaim writing fn's
+// scale-to-zero, so the caller then finds fn cold instead of a worker about to stop.
 func (a *Activator) touch(fn FunctionRef) {
 	a.mu.Lock()
-	a.lastActive[fn] = a.clock.Now()
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	for done := a.reclaiming[fn]; done != nil; done = a.reclaiming[fn] {
+		a.mu.Unlock()
+		<-done
+		a.mu.Lock()
+	}
+	e := a.lastActive[fn]
+	e.at = a.clock.Now()
+	a.lastActive[fn] = e
+}
+
+// handedOut records that Wake returned upstream for fn, so idle reclaim can ask Calls about it.
+func (a *Activator) handedOut(fn FunctionRef, upstream string) {
+	if a.calls == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.upstreams[fn] == nil {
+		a.upstreams[fn] = map[string]bool{}
+	}
+	a.upstreams[fn][upstream] = true
 }
 
 // activate single-flights a cold-start wake for fn: the first caller (leader) drives
@@ -295,11 +332,18 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 }
 
 // resolve records the activation result, removes it from the in-flight map (so a later
-// cold request starts a fresh activation — no stuck state), and releases all waiters.
+// cold request starts a fresh activation — no stuck state), and releases all waiters. A
+// successful wake restarts fn's idle window, so a boot longer than IdleTimeout is not
+// reclaimed before its held requests are forwarded.
 func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, err error) {
 	a.mu.Lock()
 	if a.inflight[fn] == act {
 		delete(a.inflight, fn)
+	}
+	if err == nil {
+		e := a.lastActive[fn]
+		e.at = a.clock.Now()
+		a.lastActive[fn] = e
 	}
 	a.mu.Unlock()
 	act.upstream = upstream
@@ -342,9 +386,10 @@ func rebase(r *http.Request, base string) *http.Request {
 }
 
 // ReclaimIdle scales to zero every minReplicas==0 function whose last activity is older
-// than its IdleTimeout. Functions with recent activity, MinReplicas != 0, or a zero
-// IdleTimeout (reclaim disabled) are skipped. A function not yet seen is seeded at the
-// current time (a full grace window) and reclaimed only on a later pass.
+// than its IdleTimeout, that has no call in flight and no wake in progress. Functions with recent
+// activity, MinReplicas != 0, or a zero IdleTimeout (reclaim disabled) are skipped. A function not
+// yet seen, or with a call in flight, is given a full grace window from the current time.
+// Entries for functions that no longer exist are dropped.
 func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	const op = "activator.ReclaimIdle"
 	list, err := a.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
@@ -352,43 +397,79 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "list functions")
 	}
 	now := a.clock.Now()
+	live := make(map[FunctionRef]struct{}, len(list.Items))
 	for _, obj := range list.Items {
 		fn, ok := obj.(*v1.Function)
 		if !ok {
 			continue
 		}
+		ref := FunctionRef{Namespace: fn.Namespace, Name: fn.Name}
+		live[ref] = struct{}{}
 		sc := fn.Spec.Scaling
 		if sc.MinReplicas != 0 || sc.IdleTimeout <= 0 {
 			continue // scale-to-zero / reclaim not enabled for this function
 		}
-		ref := FunctionRef{Namespace: fn.Namespace, Name: fn.Name}
-		last, seen := a.seenAt(ref, now)
-		if !seen {
-			continue // freshly seeded — give it a full grace window
-		}
-		if now.Sub(last) <= sc.IdleTimeout {
-			continue // recent activity
-		}
-		if err := a.scaler.ScaleTo(ctx, ref, 0); err != nil {
-			a.logger.WarnContext(ctx, "idle reclaim scale-to-zero failed",
-				"namespace", string(ref.Namespace), "name", string(ref.Name), "error", err)
+		done, idle := a.claimIdle(ref, fn.UID, now, sc.IdleTimeout)
+		if !idle {
 			continue
 		}
+		err := a.scaler.ScaleTo(ctx, ref, 0)
+		a.mu.Lock()
+		delete(a.reclaiming, ref)
+		a.mu.Unlock()
+		close(done)
+		if err != nil {
+			a.logger.WarnContext(ctx, "idle reclaim scale-to-zero failed",
+				"namespace", string(ref.Namespace), "name", string(ref.Name), "error", err)
+		}
 	}
+	a.forgetAllBut(live)
 	return nil
 }
 
-// seenAt returns the last-activity time for fn. A never-seen fn is seeded at now and
-// reported unseen, so the first reclaim pass grants a full idle grace window.
-func (a *Activator) seenAt(fn FunctionRef, now time.Time) (time.Time, bool) {
+// claimIdle reports whether fn has seen no activity for idleTimeout and has no call in flight to an upstream Wake
+// handed out, and no wake in progress (its held requests are traffic, ADR-0016 C3); it then marks fn reclaiming, and
+// the caller closes done once the scale-to-zero is written. A fn not yet seen under this uid, or one with a call in
+// flight, is given a full grace window from now.
+func (a *Activator) claimIdle(fn FunctionRef, uid v1.UID, now time.Time, idleTimeout time.Duration) (done chan struct{}, idle bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	last, ok := a.lastActive[fn]
-	if !ok {
-		a.lastActive[fn] = now
-		return now, false
+	if _, waking := a.inflight[fn]; waking {
+		a.lastActive[fn] = activity{at: now, uid: uid}
+		return nil, false
 	}
-	return last, true
+	e, ok := a.lastActive[fn]
+	seen := ok && e.uid == uid
+	if seen && now.Sub(e.at) <= idleTimeout {
+		return nil, false
+	}
+	busy := false
+	for up := range a.upstreams[fn] {
+		if a.calls.Idle(up, 0) {
+			delete(a.upstreams[fn], up)
+		} else {
+			busy = true
+		}
+	}
+	if !seen || busy {
+		a.lastActive[fn] = activity{at: now, uid: uid}
+		return nil, false
+	}
+	done = make(chan struct{})
+	a.reclaiming[fn] = done
+	return done, true
+}
+
+// forgetAllBut drops the tracker entries of every function not in live.
+func (a *Activator) forgetAllBut(live map[FunctionRef]struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for fn := range a.lastActive {
+		if _, ok := live[fn]; !ok {
+			delete(a.lastActive, fn)
+			delete(a.upstreams, fn)
+		}
+	}
 }
 
 // Run calls ReclaimIdle every ReclaimInterval until ctx is cancelled. On return it ends every
