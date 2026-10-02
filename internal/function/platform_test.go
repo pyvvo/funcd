@@ -1,15 +1,23 @@
 package function_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
+	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/content/oci"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/scheduler"
@@ -167,5 +175,67 @@ func TestSoloScheduleCallsCarryPlatforms(t *testing.T) {
 	require.GreaterOrEqual(t, len(rec.reqs), 3, "the gate plus one call per replica")
 	for _, req := range rec.reqs {
 		require.Equal(t, []v1.OCIPlatform{"plan9/mips", v1.HostPlatform()}, req.Platforms, "replica %d", req.Replica)
+	}
+}
+
+// indexOverUnannotated writes by hand, not with `funcdctl index`, an image index over two unannotated function
+// manifests whose descriptors carry platform (nil: none); it returns the index ref and digest.
+func indexOverUnannotated(t *testing.T, platform *ocispec.Platform) (ref, digest string) {
+	t.Helper()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "layout")
+	tags := []string{"amd64", "arm64"}
+	for _, tag := range tags {
+		file := filepath.Join(t.TempDir(), "handler.mjs")
+		require.NoError(t, os.WriteFile(file, []byte("// "+tag+"\nexport function handle() {}\n"), 0o600))
+		_, err := artifact.Push(ctx, "oci-layout://"+dir+":"+tag, file, nil, "nodejs22", "")
+		require.NoError(t, err)
+	}
+	layout, err := oci.New(dir)
+	require.NoError(t, err)
+	index := ocispec.Index{MediaType: ocispec.MediaTypeImageIndex}
+	index.SchemaVersion = 2
+	for _, tag := range tags {
+		d, rerr := layout.Resolve(ctx, tag)
+		require.NoError(t, rerr)
+		index.Manifests = append(index.Manifests, ocispec.Descriptor{MediaType: d.MediaType, Digest: d.Digest, Size: d.Size, Platform: platform})
+	}
+	data, err := json.Marshal(index)
+	require.NoError(t, err)
+	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageIndex, data)
+	require.NoError(t, layout.Push(ctx, desc, bytes.NewReader(data)))
+	require.NoError(t, layout.Tag(ctx, desc, "fn"))
+	return "oci-layout://" + dir + ":fn", desc.Digest.String()
+}
+
+// Issue #96: an index none of whose descriptors names a platform provides no platform, not "any platform", so the
+// step-2b gate fails the Function with NoMatchingPlatform before any pull instead of retrying the pull forever.
+func TestIssue96_IndexWithoutPlatformsIsNoMatchingPlatform(t *testing.T) {
+	t.Parallel()
+	for name, platform := range map[string]*ocispec.Platform{
+		"no platform":     nil,
+		"unknown/unknown": {OS: "unknown", Architecture: "unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ref, digest := indexOverUnannotated(t, platform)
+			oras := artifact.NewOrasMaterializer(t.TempDir(), "")
+			h := newShimHarness(t, http.StatusOK, false, withSwitch, func(d *function.Deps) {
+				d.Materializer = oras
+				d.Platforms = oras
+			})
+			h.create(t, "reader", func(fn *v1.Function) {
+				fn.Spec.Image = ref
+				fn.Spec.ImageDigest = digest
+			})
+			h.reconcile(t, "reader")
+
+			require.Equal(t, v1.PhaseFailed, h.getFn(t, "reader").Status.Phase)
+			ready := h.condition(t, "reader", "Ready")
+			require.Equal(t, "NoMatchingPlatform", ready.Reason)
+			require.Equal(t, "artifact "+digest+" provides no platform: no manifest in its index names one", ready.Message)
+			creates, _ := h.rt.counts()
+			require.Zero(t, creates, "no worker is created")
+		})
 	}
 }

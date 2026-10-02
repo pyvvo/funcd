@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -20,6 +21,10 @@ import (
 const op = "route.Reconcile"
 
 const condReady = v1.ConditionType("Ready")
+
+// bucketRecheckInterval requeues a static Route so a Bucket created or deleted after it is reflected in its
+// status and the edge table: no Bucket event reaches this reconciler (ADR-0120: missing Bucket ⇒ NotReady).
+const bucketRecheckInterval = 15 * time.Second
 
 // routeEntrySource is this reconciler's edge-aggregator source key (ADR-0138): the user-Route set is
 // one partition of the shared edge table, alongside the CatalogService reconciler's catalog partition.
@@ -91,7 +96,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if _, err := r.store.Update(ctx, rt); err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "update route status %q", rt.Name)
 	}
+	if hasStaticBackend(rt) {
+		return controller.Result{RequeueAfter: bucketRecheckInterval}, nil
+	}
 	return controller.Result{}, nil
+}
+
+func hasStaticBackend(rt *v1.Route) bool {
+	for i := range rt.Spec.Rules {
+		if rt.Spec.Rules[i].Backend.Static != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // evaluate lists every Route, resolves them in (namespace, name) order, and returns each Route's

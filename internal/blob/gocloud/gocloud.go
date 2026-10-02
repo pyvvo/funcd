@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -17,12 +19,16 @@ import (
 	"gocloud.dev/gcerrors"
 
 	// Register the URL schemes the port supports.
-	_ "gocloud.dev/blob/fileblob" // file://
-	_ "gocloud.dev/blob/memblob"  // mem://
-	_ "gocloud.dev/blob/s3blob"   // s3://
+	"gocloud.dev/blob/fileblob"  // file://
+	_ "gocloud.dev/blob/memblob" // mem://
+	_ "gocloud.dev/blob/s3blob"  // s3://
 )
 
-const defaultExpiry = 15 * time.Minute
+const (
+	defaultExpiry = 15 * time.Minute
+	// fileAttrsSuffix is the sidecar suffix fileblob reserves for its own attribute files.
+	fileAttrsSuffix = ".attrs"
+)
 
 // Open adapts a gocloud bucket to blob.Bucket.
 //
@@ -34,14 +40,37 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
 	}
-	return &bucket{b: b}, nil
+	return &bucket{b: b, file: strings.HasPrefix(url, fileblob.Scheme+"://")}, nil
 }
 
 type bucket struct {
-	b *gcblob.Bucket
+	b    *gcblob.Bucket
+	file bool
+}
+
+// checkKey rejects a key the file backend cannot keep as its own object: fileblob
+// reserves the ".attrs" suffix, and its filepath.Join cleans a "." segment, a trailing
+// ".." and a leading "/", which would land the key on another key's file.
+func (k *bucket) checkKey(op, key string) error {
+	if !k.file {
+		return nil
+	}
+	if strings.HasSuffix(key, fileAttrsSuffix) {
+		return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, fileAttrsSuffix)
+	}
+	segs := strings.Split(key, "/")
+	for i, s := range segs {
+		if s == "." || (s == ".." && i == len(segs)-1) || (s == "" && i == 0 && len(segs) > 1) {
+			return fault.Invalidf(op, "%q would alias another key on the file backend", key)
+		}
+	}
+	return nil
 }
 
 func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
+	if err := k.checkKey("blob.Get", key); err != nil {
+		return nil, err
+	}
 	data, err := k.b.ReadAll(ctx, key)
 	if err != nil {
 		return nil, mapErr("blob.Get", key, err)
@@ -50,6 +79,9 @@ func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (k *bucket) Put(ctx context.Context, key string, data []byte) error {
+	if err := k.checkKey("blob.Put", key); err != nil {
+		return err
+	}
 	if err := k.b.WriteAll(ctx, key, data, nil); err != nil {
 		return mapErr("blob.Put", key, err)
 	}
@@ -57,6 +89,9 @@ func (k *bucket) Put(ctx context.Context, key string, data []byte) error {
 }
 
 func (k *bucket) Delete(ctx context.Context, key string) error {
+	if err := k.checkKey("blob.Delete", key); err != nil {
+		return err
+	}
 	if err := k.b.Delete(ctx, key); err != nil {
 		return mapErr("blob.Delete", key, err)
 	}
@@ -64,6 +99,9 @@ func (k *bucket) Delete(ctx context.Context, key string) error {
 }
 
 func (k *bucket) Exists(ctx context.Context, key string) (bool, error) {
+	if err := k.checkKey("blob.Exists", key); err != nil {
+		return false, err
+	}
 	ok, err := k.b.Exists(ctx, key)
 	if err != nil {
 		return false, mapErr("blob.Exists", key, err)
@@ -130,6 +168,9 @@ func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64)
 	if offset < 0 {
 		return nil, fault.Invalidf(op, "negative offset %d for %q", offset, key)
 	}
+	if err := k.checkKey(op, key); err != nil {
+		return nil, err
+	}
 	r, err := k.b.NewRangeReader(ctx, key, offset, length, nil)
 	if err != nil {
 		return nil, mapErr(op, key, err)
@@ -157,7 +198,13 @@ func mapErr(op, key string, err error) error {
 		return fault.Wrapf(err, fault.NotFound, op, "%q not found", key)
 	case gcerrors.Unimplemented:
 		return fault.Wrapf(err, fault.Unavailable, op, "operation not supported by this backend")
-	default:
-		return fault.Wrapf(err, fault.Internal, op, "%s failed for %q", op, key)
 	}
+	// fileblob reports a key its OS path cannot hold as Unknown: a name past the OS limit, or
+	// an object and a "key/" prefix needing one path (a rename onto a directory is EISDIR on
+	// Linux, EEXIST on macOS). The key is at fault, not the backend.
+	if errors.Is(err, syscall.ENAMETOOLONG) || errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.EEXIST) {
+		return fault.Wrapf(err, fault.Invalid, op, "%q cannot be stored by this backend", key)
+	}
+	return fault.Wrapf(err, fault.Internal, op, "%s failed for %q", op, key)
 }

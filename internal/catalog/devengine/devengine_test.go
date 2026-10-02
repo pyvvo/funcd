@@ -4,9 +4,11 @@ package devengine
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,48 @@ import (
 	"github.com/pyvvo/funcd/internal/catalog/embedengine"
 	"github.com/pyvvo/funcd/internal/provider"
 )
+
+// fakeEngineEnv makes the test binary act as the duckdb engine (TestMain): it serves the address its
+// -init script passes to quack_serve until stdin closes, as the real REPL does.
+const fakeEngineEnv = "DEVENGINE_TEST_FAKE_ENGINE"
+
+var quackServeAddr = regexp.MustCompile(`quack_serve\('quack:([^']+)'`)
+
+func TestMain(m *testing.M) {
+	if os.Getenv(fakeEngineEnv) == "1" {
+		os.Exit(runFakeEngine(os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+func runFakeEngine(args []string) int {
+	if len(args) < 2 || args[0] != "-init" {
+		return 2
+	}
+	sql, err := os.ReadFile(args[1])
+	if err != nil {
+		return 2
+	}
+	addr := quackServeAddr.FindSubmatch(sql)
+	if addr == nil {
+		return 2
+	}
+	l, err := net.Listen("tcp", string(addr[1]))
+	if err != nil {
+		return 2
+	}
+	go func() {
+		for {
+			c, aerr := l.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	return 0
+}
 
 func testSpec() provider.ProviderSpec {
 	return provider.ProviderSpec{
@@ -85,6 +129,55 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 	if c, e := net.DialTimeout("tcp", st.Address, 500*time.Millisecond); e == nil {
 		_ = c.Close()
 		t.Fatalf("engine still reachable at %s after Teardown", st.Address)
+	}
+}
+
+// Issue 105: an engine that dies on its own (crash, OOM kill, SIGKILL) is relaunched by the next
+// Converge instead of being reported Ready at its dead address. The engine is this test binary
+// (TestMain), so the lifecycle runs where only the placeholder engine is embedded.
+func TestIssue105_ConvergeRelaunchesCrashedEngine(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test binary path: %v", err)
+	}
+	t.Setenv(fakeEngineEnv, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := New(nil)
+	r.bundled = func() bool { return true }
+	r.extract = func(dir string) (embedengine.Paths, error) {
+		return embedengine.Paths{DuckDB: exe, ExtensionDir: dir}, nil
+	}
+	t.Cleanup(r.StopAll)
+	spec := testSpec()
+
+	if _, err := r.Converge(ctx, spec); err != nil {
+		t.Fatalf("Converge: %v", err)
+	}
+	crashed := r.procs[spec.Ref]
+	if err := crashed.cmd.Process.Kill(); err != nil {
+		t.Fatalf("SIGKILL engine: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st, err := r.Converge(ctx, spec)
+		if err != nil {
+			t.Fatalf("Converge after crash: %v", err)
+		}
+		if r.procs[spec.Ref] != crashed {
+			conn, derr := net.DialTimeout("tcp", st.Address, 2*time.Second)
+			if !st.Ready || derr != nil {
+				t.Fatalf("relaunched engine: Ready=%v, dial %s: %v", st.Ready, st.Address, derr)
+			}
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Converge still reports Ready=%v at the crashed engine (pid %d, %s): never relaunched",
+				st.Ready, crashed.cmd.Process.Pid, st.Address)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

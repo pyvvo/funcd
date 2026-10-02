@@ -60,6 +60,9 @@ func (a *cli) dlqListCmd() *cobra.Command {
 		Short: "List dead-lettered Sensor actions (newest first)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkOutput("funcdctl eventing dlq list", output, "json"); err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err

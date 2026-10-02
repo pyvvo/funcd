@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	goruntime "runtime"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,6 +76,9 @@ func (a *cli) getCmd() *cobra.Command {
 		Short: "List a kind, or get one object (table; -o json for the object)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkOutput("funcdctl get", output, "json"); err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
@@ -128,7 +132,7 @@ func (a *cli) applyCmd() *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply a manifest (YAML or JSON; - for stdin)",
+		Short: "Apply a manifest of one or more YAML documents, or JSON (- for stdin)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
@@ -138,23 +142,31 @@ func (a *cli) applyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			obj, err := sdk.DecodeManifest(data)
+			objs, err := sdk.DecodeManifests(data)
 			if err != nil {
 				return err
 			}
-			// Pre-flight: the shared api/types validator, offline, before any network call.
-			if verr := obj.Validate(); verr != nil {
-				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid")
+			// Pre-flight: the shared api/types validator, offline, on every document before any network call.
+			for _, obj := range objs {
+				if verr := obj.Validate(); verr != nil {
+					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
+						obj.GroupVersionKind().Kind, obj.GetName())
+				}
 			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
-			applied, err := c.Apply(cmd.Context(), obj)
-			if err != nil {
-				return err
+			for _, obj := range objs {
+				applied, err := c.Apply(cmd.Context(), obj)
+				if err != nil {
+					return err
+				}
+				if err := a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName()); err != nil {
+					return err
+				}
 			}
-			return a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
+			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON); - for stdin")
@@ -466,6 +478,15 @@ func (a *cli) renderList(objs []v1.Object, asJSON bool) error {
 		}
 	}
 	return nil
+}
+
+// checkOutput rejects an -o value outside the verb's formats ("" is always its default view), so a
+// typo never falls back to the table with exit 0 (issue #193).
+func checkOutput(op, output string, formats ...string) error {
+	if output == "" || slices.Contains(formats, output) {
+		return nil
+	}
+	return fault.Invalidf(op, "unknown output %q (want: %s)", output, strings.Join(formats, " or "))
 }
 
 // writef is a checked fmt.Fprintf to the cli's writer (errcheck-clean); the ...any variadic is
