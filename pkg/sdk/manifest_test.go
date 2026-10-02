@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -142,4 +143,49 @@ spec:
 	o2, err := sdk.DecodeManifest(jsonManifest)
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("g"), o2.GetName())
+}
+
+// Issue #62: every document of a multi-document manifest is decoded, in order; DecodeManifest refuses
+// a multi-document manifest instead of silently keeping only the first.
+func TestIssue62_DecodeManifestsDecodesEveryDocument(t *testing.T) {
+	multi := []byte(`---
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: first
+spec:
+  data:
+    script: |
+      ---
+      not a separator
+---
+# comment-only document
+---
+{"apiVersion":"funcd.io/v1alpha1","kind":"Function","metadata":{"name":"second"}}
+---
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: third
+...
+`)
+	objs, err := sdk.DecodeManifests(multi)
+	require.NoError(t, err)
+	require.Len(t, objs, 3)
+	require.Equal(t, v1.ObjectName("first"), objs[0].GetName())
+	require.Equal(t, "---\nnot a separator\n", objs[0].(*v1.ConfigMap).Spec.Data["script"])
+	require.Equal(t, v1.KindFunction, objs[1].GroupVersionKind().Kind)
+	require.Equal(t, v1.ObjectName("second"), objs[1].GetName())
+	require.Equal(t, v1.ObjectName("third"), objs[2].GetName())
+
+	_, err = sdk.DecodeManifest(multi)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "3 documents")
+
+	_, err = sdk.DecodeManifests([]byte("---\n# nothing\n"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+
+	_, err = sdk.DecodeManifests([]byte("apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\n---\nkind: Frobnicate\n"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "document 2")
 }
