@@ -408,13 +408,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
 	// joins a shared pool worker by (namespace, runtime, worker-id). A REJECTED (over-cap)
-	// member is held NotReady with a PoolFull condition and gets no worker and no route.
+	// member is held NotReady with a PoolFull condition and gets no worker and no route; it
+	// comes back on the supervision period, since a slot frees without a write to its object.
 	assign, err := r.assign(ctx, fn)
 	if err != nil {
 		return controller.Result{}, err
 	}
 	if assign.Rejected {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, zeroReplicas: true}, drainAfter)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, zeroReplicas: true, requeue: r.supervisionPeriod}, drainAfter)
 	}
 	// Clear a stale PoolFull from a prior reconcile (e.g. the pool shrank and this member was
 	// admitted): the condition reflects current placement, never a leftover.

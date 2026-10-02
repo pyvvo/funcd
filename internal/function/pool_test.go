@@ -258,3 +258,31 @@ func TestIssue69_GatedMemberNotLoadedIntoPool(t *testing.T) {
 	require.NotContains(t, string(manifest), "b-secret", "the member gated on its Secret gets no worker")
 	require.NotContains(t, string(manifest), "c-config", "the member gated on its ConfigMap gets no worker")
 }
+
+// A member held PoolFull comes back on the supervision period, so it is admitted, Ready and routed once a slot frees
+// (ADR-0046 Decision 3): no write to its own object is needed.
+func TestIssue71_PoolFullMemberReadmittedWhenSlotFrees(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.PoolLimit = 2 })
+	for _, name := range []string{"p1", "p2", "p3"} {
+		h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "full" })
+	}
+	h.reconcile(t, "p1")
+	h.reconcile(t, "p2")
+	res := h.reconcile(t, "p3")
+	require.Equal(t, "PoolFull", h.condition(t, "p3", "Ready").Reason)
+	require.Equal(t, testPeriod, res.RequeueAfter, "the rejected member comes back on the supervision period")
+	rv := h.getFn(t, "p3").ResourceVersion
+	h.reconcile(t, "p3")
+	require.Equal(t, rv, h.getFn(t, "p3").ResourceVersion, "a pass that finds the pool still full writes nothing")
+
+	require.NoError(t, h.st.Delete(ctx, v1.KindFunction.GVK(), "default", "p1", ""))
+	h.reconcile(t, "p1")
+	h.reconcile(t, "p2")
+	h.reconcile(t, "p3")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "p3").Status.Phase, "the freed slot admits p3")
+	require.Equal(t, "Admitted", h.condition(t, "p3", "PoolFull").Reason)
+	_, ready := h.upstream(t, "p3")
+	require.True(t, ready, "p3 is reachable")
+}
