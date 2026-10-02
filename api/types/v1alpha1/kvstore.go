@@ -8,6 +8,9 @@ import (
 const (
 	// DefaultMaxValueBytes is the default per-value cap (1 MiB) when KVStoreSpec.MaxValueBytes is 0.
 	DefaultMaxValueBytes int64 = 1 << 20
+	// MaxValueBytesLimit is the largest spec.maxValueBytes a store may declare: the worker-node local API
+	// buffers a KV put body up to this size, so a larger cap could never be served.
+	MaxValueBytesLimit int64 = 1 << 20
 	// DefaultMaxKeyBytes is the default per-key cap (1 KiB) when KVStoreSpec.MaxKeyBytes is 0.
 	DefaultMaxKeyBytes int = 1024
 )
@@ -28,8 +31,8 @@ type KVStore struct {
 // before a write reaches the driver, and the store's sub-domains (tables). A 0 cap means "use the
 // default" (read at enforcement time).
 type KVStoreSpec struct {
-	// MaxValueBytes caps a single value's size; 0 ⇒ DefaultMaxValueBytes (1 MiB).
-	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0"`
+	// MaxValueBytes caps a single value's size; 0 ⇒ DefaultMaxValueBytes (1 MiB); at most MaxValueBytesLimit.
+	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0" maximum:"1048576"`
 	// MaxKeyBytes caps a single key's size; 0 ⇒ DefaultMaxKeyBytes (1 KiB).
 	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0"`
 	// Tables are the store's sub-domains (ADR-0073): each is a key space <ns>/<store>/<table>/ with a
@@ -80,9 +83,10 @@ func (s KVStoreSpec) EffectiveMaxKeyBytes() int {
 func (s *KVStore) GroupVersionKind() GroupVersionKind { return KindKVStore.GVK() }
 
 // Validate performs envelope validation via the shared validateMeta helper, then the KVStoreSpec rules
-// JSON Schema can't express: the caps are non-negative (0 ⇒ default); and within the store, table names
-// are unique (⇒ a table has exactly one owner) and each is a DNS-1123 label. Cross-resource rules (the
-// owner exists) are an admission (ADR-0073), not structural Validate.
+// JSON Schema can't express: the caps are non-negative (0 ⇒ default) and maxValueBytes is at most
+// MaxValueBytesLimit; and within the store, table names are unique (⇒ a table has exactly one owner) and
+// each is a DNS-1123 label. Cross-resource rules (the owner exists) are an admission (ADR-0073), not
+// structural Validate.
 func (s *KVStore) Validate() error {
 	const op = "KVStore.Validate"
 	if err := validateMeta(s.TypeMeta, &s.ObjectMeta, KindKVStore); err != nil {
@@ -90,6 +94,9 @@ func (s *KVStore) Validate() error {
 	}
 	if s.Spec.MaxValueBytes < 0 {
 		return fault.Invalidf(op, "spec.maxValueBytes (%d) must not be negative", s.Spec.MaxValueBytes)
+	}
+	if s.Spec.MaxValueBytes > MaxValueBytesLimit {
+		return fault.Invalidf(op, "spec.maxValueBytes (%d) exceeds the largest servable value (%d bytes)", s.Spec.MaxValueBytes, MaxValueBytesLimit)
 	}
 	if s.Spec.MaxKeyBytes < 0 {
 		return fault.Invalidf(op, "spec.maxKeyBytes (%d) must not be negative", s.Spec.MaxKeyBytes)

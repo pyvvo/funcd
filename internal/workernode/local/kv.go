@@ -11,8 +11,9 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// maxKVBytes caps a KV value (a DoS guard on the local API, matching the invoke cap).
-const maxKVBytes = 1 << 20 // 1 MiB
+// maxKVBytes caps a KV put body (a DoS guard on the local API). It is the KVStore value-cap ceiling, so
+// every cap a store can declare is servable.
+const maxKVBytes = v1.MaxValueBytesLimit
 
 // KV is the function-facing KV port the worker-node local API routes to — the services/kv.Facade
 // satisfies it. The caller's namespace + function are supplied by the handler (connection-scoped from
@@ -52,7 +53,7 @@ func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 		const op = "workernode.local.kv.put"
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxKVBytes))
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read value: %v", err))
+			fault.WriteProblem(w, fault.Invalidf(op, "read value (max %d bytes): %v", maxKVBytes, err))
 			return
 		}
 		if err := kv.Put(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key"), body); err != nil {

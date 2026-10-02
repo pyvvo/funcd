@@ -72,9 +72,12 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	stampTypeMeta(obj, kind) // the route's kind owns TypeMeta (k8s-style)
 	// Server-side name generation (ObjectMeta.GenerateName): fill Name before admission + the store
 	// validate the object, so a client can create without inventing a unique name. store.Create retries
-	// on the rare collision.
+	// on the rare collision. An explicit Name ignores GenerateName: dropping it keeps the store from
+	// renaming a duplicate, which must stay a Conflict.
 	if m := obj.GetObjectMeta(); m.Name == "" && m.GenerateName != "" {
 		m.Name = v1.GenerateObjectName(m.GenerateName)
+	} else {
+		m.GenerateName = ""
 	}
 	id, _ := middleware.IdentityFrom(ctx)
 	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
@@ -90,8 +93,7 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 }
 
 // stampTypeMeta sets the object's apiVersion/kind from the route's kind. The control-plane
-// endpoint determines the kind, not the request body — and the ",inline" TypeMeta does not
-// round-trip through huma's generated request schema (ADR-0005), so the server normalizes it.
+// endpoint determines the kind, not the request body, so the server normalizes it.
 func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 	tm := v1.TypeMeta{APIVersion: kind.GVK().APIVersion(), Kind: kind}
 	switch o := obj.(type) {
@@ -155,8 +157,8 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 		return nil, err
 	}
 	meta := obj.GetObjectMeta()
-	if meta.Namespace != ns {
-		return nil, fault.Invalidf("controlplane.admit", "body namespace %q does not match path %q", meta.Namespace, ns)
+	if err := matchPathNamespace(ns, meta); err != nil {
+		return nil, err
 	}
 	if meta.Name != name {
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
@@ -178,6 +180,16 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	}
 	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
 	return h.store.Update(ctx, admitted)
+}
+
+// matchPathNamespace is ADR-0018 §4's path/body namespace consistency check: the body's
+// metadata.namespace must equal the path namespace (→ 400). The create routes run it before
+// CreateX, whose ADR-0005 signature carries no path namespace.
+func matchPathNamespace(path v1.NamespaceName, meta *v1.ObjectMeta) error {
+	if meta.Namespace != path {
+		return fault.Invalidf("controlplane.admit", "body namespace %q does not match path %q", meta.Namespace, path)
+	}
+	return nil
 }
 
 // withStatus returns obj with from's status, or with none when from is nil. Status is server-owned: controllers

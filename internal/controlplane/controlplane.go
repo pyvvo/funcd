@@ -7,7 +7,11 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -203,6 +207,7 @@ type Handlers interface {
 
 // NewAPI builds the huma API on a chi router and registers all operations against h.
 func NewAPI(r chi.Router, h Handlers) huma.API {
+	installFaultErrors()
 	cfg := huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",
@@ -212,6 +217,7 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 				Description: "funcd control-plane API — code-first via huma. " +
 					"Generated from typed Go operations; not hand-authored.",
 			},
+			Components: &huma.Components{Schemas: newInlineRegistry()},
 		},
 		DocsPath:    "/docs",
 		OpenAPIPath: "/openapi",
@@ -231,9 +237,43 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 		DefaultFormat: "application/json",
 	}
 	api := humachi.New(r, cfg)
+	installRouterErrors(r, api)
 
 	RegisterRoutes(api, h)
 	return api
+}
+
+// installRouterErrors renders the router's own 404 and 405 through huma, as problem+json.
+func installRouterErrors(r chi.Router, api huma.API) {
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		_ = huma.WriteErr(api, humachi.NewContext(nil, req, w), http.StatusNotFound,
+			"no route for "+req.Method+" "+req.URL.EscapedPath())
+	})
+	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Allow", strings.Join(allowedMethods(r, req), ", "))
+		_ = huma.WriteErr(api, humachi.NewContext(nil, req, w), http.StatusMethodNotAllowed,
+			"method "+req.Method+" is not allowed")
+	})
+}
+
+// allowedMethods lists the methods r serves on the request's path. chi's own 405 writes one Allow line
+// per method, so a client that reads one header value sees a single, random method (RFC 9110 §10.2.1).
+func allowedMethods(r chi.Routes, req *http.Request) []string {
+	path := req.URL.RawPath
+	if path == "" {
+		path = req.URL.Path
+	}
+	if rctx := chi.RouteContext(req.Context()); rctx != nil && rctx.RoutePath != "" {
+		path = rctx.RoutePath
+	}
+	var allowed []string
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions} {
+		if r.Match(chi.NewRouteContext(), m, path) {
+			allowed = append(allowed, m)
+		}
+	}
+	return allowed
 }
 
 // jsonMarshal is the standard JSON marshaler used by huma.
@@ -248,7 +288,6 @@ func jsonUnmarshal(data []byte, v interface{}) error {
 
 // faultError adapts a stdlib-only fault.Error to huma's StatusError so huma reads the right status.
 // It embeds fault.Problem (RFC 9457 JSON tags) so huma can serialize it as flat application/problem+json.
-// It also implements huma.ContentTypeFilter to tell huma to use application/json for marshaling.
 type faultError struct {
 	fault.Problem
 }
@@ -256,10 +295,50 @@ type faultError struct {
 func (e *faultError) Error() string  { return e.Detail }
 func (e *faultError) GetStatus() int { return e.Status }
 
-// ContentType tells huma to use application/json for marshaling this error body.
-// huma v2 only has json/yaml marshalers; the body is still RFC 9457 problem+json shape.
+// ContentType serves the body as application/problem+json (ADR-0005).
 func (e *faultError) ContentType(ct string) string {
-	return "application/json"
+	if ct == "application/json" {
+		return "application/problem+json"
+	}
+	return ct
+}
+
+//nolint:gochecknoglobals // huma.NewError is process-global, so it is replaced once
+var faultErrorsOnce sync.Once
+
+// installFaultErrors overrides huma.NewError (ADR-0005 §4), so the errors huma raises itself (validation,
+// parsing, the router's 404/405) render the same fault.Problem body as a handler's fault.Error.
+func installFaultErrors() {
+	faultErrorsOnce.Do(func() { huma.NewError = newFaultError })
+}
+
+// newFaultError builds huma's own errors. No fault Kind decided them, so the type is RFC 9457's
+// about:blank, and each validation detail joins the detail that clients show.
+func newFaultError(status int, msg string, errs ...error) huma.StatusError {
+	var details []string
+	for _, err := range errs {
+		var d huma.ErrorDetailer
+		switch {
+		case err == nil:
+			continue
+		case !errors.As(err, &d):
+			details = append(details, err.Error())
+		case d.ErrorDetail().Location == "":
+			details = append(details, d.ErrorDetail().Message)
+		default:
+			details = append(details, d.ErrorDetail().Message+" ("+d.ErrorDetail().Location+")")
+		}
+	}
+	detail := msg
+	if len(details) > 0 {
+		detail += ": " + strings.Join(details, "; ")
+	}
+	return &faultError{Problem: fault.Problem{
+		Type:   "about:blank",
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: detail,
+	}}
 }
 
 // wrapFaultError wraps a fault.Error as a huma StatusError. Exported for testing.

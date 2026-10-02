@@ -30,13 +30,9 @@ func TestSpecConsumableByClient(t *testing.T) {
 	defer srv.Close()
 
 	// Create a Function via the REST API.
-	// Uses map[string]interface{} for the request body because huma's schema
-	// expects TypeMeta as a nested $ref, but Go's json:",inline" flattens it.
 	fn := map[string]interface{}{
-		"TypeMeta": map[string]interface{}{
-			"apiVersion": "funcd.io/v1alpha1",
-			"kind":       "Function",
-		},
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "Function",
 		"metadata": map[string]interface{}{
 			"name":      "client-fn",
 			"namespace": "client-ns",
