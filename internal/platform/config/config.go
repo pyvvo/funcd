@@ -118,7 +118,8 @@ type Config struct {
 		// 0 ⇒ the default (100); a negative value disables the quota.
 		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
 		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
-		// Enabled without a Target ⇒ fault.Invalid at startup. Interval/Rebaseline are Go durations ("30s").
+		// Enabled without a Target, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when
+		// Storage.Mode is memory. Interval/Rebaseline are Go durations ("30s").
 		Backup struct {
 			Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
 			Target     string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
@@ -127,7 +128,8 @@ type Config struct {
 			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES"`
 		} `json:"backup,omitempty"`
 		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
-		// without a Sink ⇒ fault.Invalid at startup. Retention is a Go duration ("24h").
+		// without a Sink, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when Storage.Mode
+		// is memory. Retention is a Go duration ("24h").
 		Cdc struct {
 			Enabled   bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_CDC_ENABLED"`
 			Sink      string `json:"sink,omitempty" env:"FUNCD_KVSTORE_CDC_SINK"`
