@@ -554,6 +554,9 @@ func (e *Engine) drive(ctx context.Context, rec *runstate.Record, rs *runState, 
 			outputs[n.name] = out
 		}
 		if err := e.persist(ctx, rec, rs, outputs); err != nil {
+			if fault.KindOf(err) == fault.PayloadTooLarge { // a run outcome, not a retryable store error
+				return e.fail(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "record the step outputs"))
+			}
 			return nil, err
 		}
 	}
@@ -747,10 +750,37 @@ func (e *Engine) fail(ctx context.Context, rec *runstate.Record, rs *runState, o
 			TraceID: rec.TraceID, ParentSpanID: rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
 		}) // handler outcome never changes the run phase (ADR-0094)
 	}
-	if err := e.persist(ctx, rec, rs, outputs); err != nil {
+	err := e.persist(ctx, rec, rs, outputs)
+	if fault.KindOf(err) == fault.PayloadTooLarge {
+		if err = e.dropUnrecordedOutputs(ctx, rec, rs, outputs, err); err == nil {
+			err = e.persist(ctx, rec, rs, outputs)
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return rec, fault.Wrapf(cause, fault.KindOf(cause), engineOp, "run %q failed", rec.Name)
+}
+
+// dropUnrecordedOutputs fails each step whose output the durable record does not hold yet, with the
+// store's cause: those outputs are what overflow the run store's value limit (the record is size-bounded
+// by the engine, runstate.Record). The run then ends Failed instead of re-running the step on every requeue.
+func (e *Engine) dropUnrecordedOutputs(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, cause error) error {
+	durable, err := e.runs.Get(ctx, rec.Namespace, rec.Name)
+	if err != nil {
+		return err
+	}
+	recorded := make(map[v1.ObjectName]bool, len(durable.Steps))
+	for _, st := range durable.Steps {
+		recorded[st.Name] = len(st.Output) > 0
+	}
+	for name, out := range outputs {
+		if len(out) > 0 && !recorded[name] {
+			delete(outputs, name)
+			e.markFailed(rs.steps[name], cause)
+		}
+	}
+	return nil
 }
 
 // stampRevisions sets each function step's revision to its resolved digest-pinned image (ADR-0107):

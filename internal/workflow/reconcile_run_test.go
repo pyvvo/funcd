@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -190,5 +191,47 @@ func TestRunReconcilerPause(t *testing.T) {
 	}
 	if f.calls["a"] != 0 {
 		t.Fatal("paused run must not dispatch")
+	}
+}
+
+// Issue #116: two outputs under the payload limit overflow the in-memory run store's 1 MiB value
+// limit together. The run must end Failed on the step whose output no longer fits, not re-dispatch
+// that step on every requeue.
+func TestIssue116_OversizeRecordFailsRunOnce(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "fat", step("f1", ""), step("f2", ""), step("f3", ""))
+	seedRun(t, s, "fat-1", "fat", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	pad := json.RawMessage(`{"pad":"` + strings.Repeat("x", 600_000) + `"}`)
+	for _, n := range []v1.ObjectName{"f1", "f2", "f3"} {
+		f.outputs[n] = pad
+	}
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: 1 << 20}})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	for range 3 {
+		_, _ = rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "fat-1"})
+	}
+
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "fat-1")
+	run := obj.(*v1.WorkflowRun)
+	if run.Status.Phase != runFailed || f.calls["f2"] != 1 || f.calls["f3"] != 0 {
+		t.Fatalf("status.phase=%q dispatches f2=%d f3=%d, want Failed with f2 dispatched once and f3 never", run.Status.Phase, f.calls["f2"], f.calls["f3"])
+	}
+	for _, st := range run.Status.Steps {
+		if st.Name == "f2" && (st.Phase != v1.StepFailed || !strings.Contains(st.Error, "limit")) {
+			t.Fatalf("step f2 = %s %q, want Failed naming the run store's limit", st.Phase, st.Error)
+		}
+	}
+	rec, err := rstate.Get(ctx, "default", "fat-1")
+	if err != nil || rec.Phase != runFailed {
+		t.Fatalf("durable record phase = %v (err %v), want Failed", rec, err)
+	}
+	rec.Steps[1].Output = pad
+	if err := rstate.Put(ctx, rec); fault.KindOf(err) != fault.PayloadTooLarge || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("oversize Put = %v, want a one-line PayloadTooLarge (no value dump)", err)
 	}
 }
