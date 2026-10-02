@@ -6,9 +6,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,9 +18,11 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/activator/storescaler"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/dataplane"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/workflow"
 )
@@ -113,4 +117,45 @@ func TestIssue37_PooledFunctionReachableFromEveryInvoker(t *testing.T) {
 	inv := &sensor.HTTPInvoker{Endpoints: h.r.Endpoints()}
 	assert.NoError(t, inv.Invoke(ctx, "default", "svc", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1", Source: "funcd://default/eventsource/tick", Type: "tick"}),
 		"the Sensor action reaches the pooled function")
+}
+
+// A pool member whose artifact cannot be materialized fails alone: its own reconcile returns the error, and its
+// siblings' reconciles still supervise the pool, so a dead pool is restarted for them.
+func TestIssue38_UnmaterializableMemberFailsAlone(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "a", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w" })
+	h.reconcile(t, "a")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase)
+
+	h.create(t, "c", func(fn *v1.Function) {
+		fn.Spec.Pooling.Worker = "w"
+		fn.Spec.Image = "file://" + filepath.Join(t.TempDir(), "missing.mjs")
+	})
+	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "c"})
+	require.Error(t, err, "the broken member's own reconcile fails")
+
+	h.rt.exit("__pool__nodejs22__w", runtime.StateFailed, time.Hour)
+	h.reconcile(t, "a")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "a's reconcile restarts the dead pool")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase)
+}
+
+// A pool member whose artifact's platforms cannot be listed (a registry outage) fails alone: its own reconcile
+// returns the error, and a sibling's reconcile still converges the pool.
+func TestIssue38_PlatformOutageMemberFailsAlone(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, withPlatforms(&fakePlatforms{}))
+	h.create(t, "b-here", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w"; fn.Spec.ImageDigest = digestHere })
+	h.reconcile(t, "b-here")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b-here").Status.Phase)
+
+	h.create(t, "a-outage", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w"; fn.Spec.ImageDigest = digestOutage })
+	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "a-outage"})
+	require.Error(t, err, "the member with the outage retries")
+
+	h.rt.exit("__pool__nodejs22__w", runtime.StateFailed, time.Hour)
+	h.reconcile(t, "b-here")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "b-here's reconcile restarts the dead pool")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b-here").Status.Phase)
 }

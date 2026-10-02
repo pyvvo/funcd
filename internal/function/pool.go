@@ -104,12 +104,13 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 		}
 		if k, isPooled := r.poolKeyFor(fn); isPooled && k == key {
 			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
-			// own reconcile reports NoMatchingPlatform, and the pool serves its peers.
+			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. Nor is one whose platforms
+			// cannot be listed now (a registry outage): its own reconcile retries, and its peers keep their pool.
 			if perr := r.placeable(ctx, fn, fn.Spec.Image, fn.Spec.ImageDigest); perr != nil {
-				if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
-					continue
+				if !errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
+					r.logger.Warn("pool member left out: its platforms cannot be listed", "function", fn.Name, "err", perr)
 				}
-				return nil, perr
+				continue
 			}
 			out = append(out, fn)
 		}
@@ -123,7 +124,7 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 // per-function catalog token, so neither env reaches the pool (a catalog-consuming function runs solo, ADR-0086). The
 // serving revision follows the current one once the pool worker is ready (ADR-0143 Decision 8).
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment) (verdict, error) {
-	running, err := r.ensurePool(ctx, a.Key)
+	running, err := r.ensurePool(ctx, a.Key, fn)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -142,13 +143,14 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 // 4 & 6): it builds the manifest from the key's admitted members, computes the pool's desired
 // replica as the max over those members' effective desired, and ensures exactly one pool
 // worker — created/restarted only when the desired manifest differs from the running one
-// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey) (int, error) {
+// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count. self is
+// the member being reconciled.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (int, error) {
 	members, err := r.admittedMembers(ctx, key)
 	if err != nil {
 		return 0, err
 	}
-	manifest, desired, err := r.poolManifest(ctx, members)
+	manifest, desired, err := r.poolManifest(ctx, members, self)
 	if err != nil {
 		return 0, err
 	}
@@ -220,20 +222,24 @@ func (r *Reconciler) admittedMembers(ctx context.Context, key pooling.PoolKey) (
 // poolManifest materializes each admitted member's artifact and builds the pool manifest plus
 // the pool's desired replica = max over members' effective desired (ADR-0046 Decision 6), so a
 // warm/woken member keeps the pool up for idle siblings and reclaim fires only when all are idle.
-func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function) ([]poolManifestEntry, int, error) {
+// A member whose artifact cannot be materialized fails alone (ADR-0046 bounded blast radius): it
+// is left out of the manifest, and only self's own failure is returned.
+func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function) ([]poolManifestEntry, int, error) {
 	const op = "function.poolManifest"
 	manifest := make([]poolManifestEntry, 0, len(members))
 	desired := 0
 	for _, m := range members {
-		if d := r.desiredReplicas(m); d > desired {
-			desired = d
-		}
 		path := ""
 		contractPath := ""
 		if r.materializer != nil {
 			p, err := r.materializer.Materialize(ctx, m)
 			if err != nil {
-				return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
+				err = fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", m.Namespace, m.Name)
+				if m.Name == self.Name {
+					return nil, 0, err
+				}
+				r.logger.Warn("pool member left out: its artifact cannot be materialized", "function", m.Name, "err", err)
+				continue
 			}
 			path = p
 			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
@@ -241,6 +247,9 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function) (
 			if name, ok := contractFileIn(filepath.Dir(p)); ok {
 				contractPath = filepath.Join(filepath.Dir(p), name)
 			}
+		}
+		if d := r.desiredReplicas(m); d > desired {
+			desired = d
 		}
 		manifest = append(manifest, poolManifestEntry{
 			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Contract: contractPath,
