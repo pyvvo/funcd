@@ -349,3 +349,76 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 		t.Fatalf("typed-1 started but still reports Ready=%+v", c)
 	}
 }
+
+// Issue #123: a run whose Workflow is missing (never created, or deleted) is not a reconcile error
+// retried every second forever. A run that has not started waits Pending with
+// Ready=False/WorkflowNotFound on a backoff and starts once the Workflow exists; cancel still
+// terminates it, including a Paused run whose Workflow was deleted.
+func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedRun(t, s, "ghost-1", "nope", `{}`)
+	seedRun(t, s, "ghost-2", "later", `{}`)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "paused-1", "wf", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	reconcile := func(name v1.ObjectName) (controller.Result, *v1.WorkflowRun) {
+		t.Helper()
+		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name})
+		if err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+		return res, obj.(*v1.WorkflowRun)
+	}
+	setSpec := func(run *v1.WorkflowRun, mut func(*v1.WorkflowRunSpec)) {
+		t.Helper()
+		mut(&run.Spec)
+		if _, err := s.Update(ctx, run); err != nil {
+			t.Fatalf("update run %s: %v", run.Name, err)
+		}
+	}
+
+	for range 3 {
+		res, run := reconcile("ghost-1")
+		c, _ := run.Status.Conditions.Get(condReady)
+		if run.Status.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotFound" || !strings.Contains(c.Message, `"nope"`) || res.RequeueAfter <= 0 {
+			t.Fatalf("orphan run: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotFound naming \"nope\", and a requeue", run.Status.Phase, c, res.RequeueAfter)
+		}
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "ghost-1")
+	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Cancel = true })
+	if _, run := reconcile("ghost-1"); run.Status.Phase != runCancelled {
+		t.Fatalf("cancel of an orphan run: phase=%q, want Cancelled", run.Status.Phase)
+	}
+
+	reconcile("ghost-2")
+	seedWorkflow(t, s, "later", step("b", ""))
+	if _, run := reconcile("ghost-2"); run.Status.Phase != runSucceeded {
+		t.Fatalf("run after its Workflow was created: phase=%q, want Succeeded", run.Status.Phase)
+	} else if c, _ := run.Status.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
+		t.Fatalf("started run still reports Ready=%+v", c)
+	}
+
+	obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "paused-1")
+	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Paused = true })
+	if _, run := reconcile("paused-1"); run.Status.Phase != runPaused {
+		t.Fatalf("setup: phase=%q, want Paused", run.Status.Phase)
+	}
+	if err := s.Delete(ctx, v1.KindWorkflow.GVK(), "default", "wf", ""); err != nil {
+		t.Fatalf("delete workflow: %v", err)
+	}
+	obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "paused-1")
+	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Cancel = true })
+	if _, run := reconcile("paused-1"); run.Status.Phase != runCancelled {
+		t.Fatalf("cancel of a Paused run whose Workflow was deleted: phase=%q, want Cancelled", run.Status.Phase)
+	}
+	if f.calls["a"] != 0 {
+		t.Fatalf("the paused run dispatched a %d times, want 0", f.calls["a"])
+	}
+}

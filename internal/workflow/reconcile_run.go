@@ -93,10 +93,10 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	}
 
 	wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), req.Namespace, run.Spec.Workflow)
-	if err != nil {
+	if err != nil && fault.KindOf(err) != fault.NotFound {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), runOp, "get workflow %q", run.Spec.Workflow)
 	}
-	wf := wfObj.(*v1.Workflow)
+	wf, _ := wfObj.(*v1.Workflow) // nil when the Workflow is missing (not created yet, or deleted)
 
 	// Cancel request (declarative, ADR-0094): abandon in-flight work and terminate Cancelled.
 	// Checked before pause/drive — cancel wins over a concurrent pause. The controller workqueue
@@ -117,12 +117,18 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, nil
 	}
 
-	// A run that has not started waits while the F65 gate holds its Workflow Ready=False (a WorkflowCycle,
-	// a type mismatch): such a workflow never runs (ADR-0098/0099). A started run resumes its pinned spec.
+	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
+	// Ready=False (a WorkflowCycle, a type mismatch): such a workflow never runs (ADR-0098/0099). A
+	// started run resumes its pinned spec.
 	_, gerr := r.engine.runs.Get(ctx, req.Namespace, req.Name)
 	started := gerr == nil
-	if c, ok := wf.Status.Conditions.Get(condReady); !started && ok && c.Status == v1.ConditionFalse {
-		return r.wait(ctx, run, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+	if !started {
+		if wf == nil {
+			return r.wait(ctx, run, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
+		}
+		if c, ok := wf.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+			return r.wait(ctx, run, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+		}
 	}
 	if c, ok := run.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
 		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue}) // the wait is over
@@ -276,6 +282,9 @@ func (r *RunReconciler) updateRunStatus(ctx context.Context, run *v1.WorkflowRun
 // active (non-terminal) run names + lifetime terminal-phase counts (bounded — only
 // active runs are enumerated).
 func (r *RunReconciler) updateWorkflowLinks(ctx context.Context, wf *v1.Workflow) error {
+	if wf == nil { // the Workflow is missing: there is no status.runs to keep
+		return nil
+	}
 	list, err := r.store.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{Namespace: wf.Namespace})
 	if err != nil {
 		return err
