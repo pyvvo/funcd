@@ -128,7 +128,7 @@ func (a *cli) applyCmd() *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply a manifest (YAML or JSON; - for stdin)",
+		Short: "Apply a manifest of one or more YAML documents, or JSON (- for stdin)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
@@ -138,23 +138,31 @@ func (a *cli) applyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			obj, err := sdk.DecodeManifest(data)
+			objs, err := sdk.DecodeManifests(data)
 			if err != nil {
 				return err
 			}
-			// Pre-flight: the shared api/types validator, offline, before any network call.
-			if verr := obj.Validate(); verr != nil {
-				return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid")
+			// Pre-flight: the shared api/types validator, offline, on every document before any network call.
+			for _, obj := range objs {
+				if verr := obj.Validate(); verr != nil {
+					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
+						obj.GroupVersionKind().Kind, obj.GetName())
+				}
 			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
-			applied, err := c.Apply(cmd.Context(), obj)
-			if err != nil {
-				return err
+			for _, obj := range objs {
+				applied, err := c.Apply(cmd.Context(), obj)
+				if err != nil {
+					return err
+				}
+				if err := a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName()); err != nil {
+					return err
+				}
 			}
-			return a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
+			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON); - for stdin")

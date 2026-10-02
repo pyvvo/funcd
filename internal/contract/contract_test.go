@@ -90,6 +90,32 @@ func TestCheckRejectsRecursiveViaRef(t *testing.T) {
 	}
 }
 
+// Issue #65: an unquoted YAML `type: null` becomes the JSON null type value, which is not JSON Schema
+// (no runtime validator compiles it); it must not pass as the `Json` (any) form. The void side is the
+// string "null" (ADR-0090), which stays accepted.
+func TestIssue65_CheckRejectsNullTypeValue(t *testing.T) {
+	t.Parallel()
+	for name, js := range map[string]string{
+		"root type null":          `{"type":null}`,
+		"null entry in type list": `{"type":["string",null]}`,
+		"nested field type null":  `{"type":"object","properties":{"x":{"type":null}},"additionalProperties":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := contract.Check([]byte(js))
+			if err == nil {
+				t.Fatalf("contract %s must be rejected, got nil", js)
+			}
+			if fault.KindOf(err) != fault.Invalid {
+				t.Fatalf("expected fault.Invalid, got kind %v (%v)", fault.KindOf(err), err)
+			}
+		})
+	}
+	if err := contract.Check([]byte(`{"type":"null"}`)); err != nil {
+		t.Fatalf(`void side {"type":"null"} must stay in profile, got %v`, err)
+	}
+}
+
 func TestCheckRejectsMalformedJSON(t *testing.T) {
 	t.Parallel()
 	if err := contract.Check([]byte(`{not json`)); err == nil || fault.KindOf(err) != fault.Invalid {

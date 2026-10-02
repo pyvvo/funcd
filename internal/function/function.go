@@ -436,7 +436,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
 		}
-		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
+		var requeue time.Duration
+		if fault.KindOf(serr) == fault.NotFound {
+			requeue = 2 * time.Second
+		}
+		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true, requeue: requeue}, drainAfter)
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -1570,12 +1575,16 @@ func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest
 	return err
 }
 
-// placementMessage is the scheduler's own message for a refused placement ("artifact provides [...]; node ... runs
-// ..."), without the operation prefix.
+// placementMessage is the innermost message of a refused placement, without the operation prefixes: the
+// scheduler's ("artifact provides [...]; node ... runs ...") or the resolver's (an index that names no platform).
 func placementMessage(err error) string {
+	msg := err.Error()
 	var fe *fault.Error
-	if errors.As(err, &fe) && fe.Msg != "" {
-		return fe.Msg
+	for errors.As(err, &fe) {
+		if fe.Msg != "" {
+			msg = fe.Msg
+		}
+		err = fe.Err
 	}
-	return err.Error()
+	return msg
 }

@@ -99,3 +99,21 @@ func TestScenarioResolverAuthorizes(t *testing.T) {
 	_, err = r.ResolveEnv(ctx, dev("team-a"), "team-b", []string{"creds"})
 	require.Equal(t, fault.Forbidden, fault.KindOf(err))
 }
+
+// A value env delivery cannot carry (not valid UTF-8) fails resolution closed instead of reaching
+// the worker as U+FFFD replacement characters; the error names the key, never the value.
+func TestIssue168_NonUTF8ValueRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	createSecret(t, st, "bin", "BIN", "\xff\xfeA\x80\xc3")
+
+	r, err := secrets.NewResolver(secrets.Deps{Store: st, Authorizer: rbac.New()})
+	require.NoError(t, err)
+
+	env, err := r.ResolveEnv(ctx, dev("team-a"), "team-a", []string{"bin"})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "non-UTF-8 value must be rejected, got env %q", env)
+	require.Nil(t, env)
+	require.Contains(t, err.Error(), `"BIN"`)
+	require.NotContains(t, err.Error(), "\xff\xfeA\x80\xc3")
+}

@@ -41,7 +41,7 @@ func PushSite(ctx context.Context, ref, dir string) (digest string, err error) {
 	if len(entries) == 0 {
 		return "", fault.Invalidf(op, "site dir %q is empty", dir)
 	}
-	data, perr := packDir(op, dir)
+	data, perr := packDir(op, dir, "")
 	if perr != nil {
 		return "", perr
 	}

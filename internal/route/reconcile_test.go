@@ -281,3 +281,29 @@ func TestIssue107_RouteStatusFollowsEvaluation(t *testing.T) {
 	seedStaticRoute(t, st, "default", "r-static", "gq.test", "/static", "assets")
 	require.Positive(t, reconcileResult("r-static").RequeueAfter, "a Route waiting on its Bucket is requeued")
 }
+
+// Issue #102: no Bucket event reaches the Route reconciler, so a static Route must requeue to re-check its
+// Bucket; the requeued pass after the Bucket is deleted marks it NotReady and unprograms it.
+func TestIssue102_StaticRouteNotReadyAfterBucketDeleted(t *testing.T) {
+	ctx, st, rtr, rec := setup(t)
+	seedBucket(t, st, "default", "reports")
+	seedStaticRoute(t, st, "default", "bi", "", "/", "reports")
+	req := controller.Request{GVK: v1.KindRoute.GVK(), Namespace: "default", Name: "bi"}
+
+	res, err := rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	status, _ := readyCond(t, st, "default", "bi")
+	require.Equal(t, v1.ConditionTrue, status)
+	require.Positive(t, res.RequeueAfter, "a static Route requeues, else it stays Ready after its Bucket is deleted")
+
+	b, err := st.Get(ctx, v1.KindBucket.GVK(), "default", "reports")
+	require.NoError(t, err)
+	require.NoError(t, st.Delete(ctx, v1.KindBucket.GVK(), "default", "reports", b.GetObjectMeta().ResourceVersion))
+	_, err = rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	status, reason := readyCond(t, st, "default", "bi")
+	require.Equal(t, v1.ConditionFalse, status)
+	require.Equal(t, "BucketNotFound", reason)
+	_, ok := rtr.Resolve("any", "/", "GET")
+	require.False(t, ok, "a static Route whose Bucket is gone is not programmed")
+}
