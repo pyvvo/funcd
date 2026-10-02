@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
@@ -16,10 +19,12 @@ import (
 
 // fakeBus is an in-memory bus.Bus recording published change records, able to simulate a consumer outage
 // (failAfter): the first failAfter publishes succeed, the rest error — enough to prove zero-loss resume.
+// failFirst simulates a transient fault instead: the first failFirst publishes error, the rest succeed.
 type fakeBus struct {
 	mu        sync.Mutex
 	pubs      []changeRecord
 	failAfter int // 0 ⇒ never fail
+	failFirst int
 }
 
 func (b *fakeBus) Publish(_ context.Context, _ bus.Subject, data []byte) error {
@@ -27,6 +32,10 @@ func (b *fakeBus) Publish(_ context.Context, _ bus.Subject, data []byte) error {
 	defer b.mu.Unlock()
 	if b.failAfter > 0 && len(b.pubs) >= b.failAfter {
 		return fault.Unavailablef("fakeBus", "consumer down")
+	}
+	if b.failFirst > 0 {
+		b.failFirst--
+		return fault.Unavailablef("fakeBus", "transient publish error")
 	}
 	var rec changeRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
@@ -228,4 +237,42 @@ func TestIssue98_DropPrefixRecordsDeletions(t *testing.T) {
 		require.Equal(t, 0, countPrefix(t, dst, "default/s/t/"), "a restore does not resurrect dropped keys")
 		require.Equal(t, 1, countPrefix(t, dst, "default/s/u/"), "a key outside the prefix is restored")
 	})
+}
+
+// Issue #99: one transient sink publish error must not stop the tailer for the life of the daemon —
+// RunCDC keeps tailing and resumes from the durable cursor, delivering every change once.
+func TestIssue99_TailerResumesAfterTransientPublishError(t *testing.T) {
+	fb := &fakeBus{failFirst: 1}
+	kv, seams, err := OpenWithSeamsFor(t.TempDir(), nil, BackupConfig{}, fb, CDCConfig{Subject: "kv.changes"})
+	require.NoError(t, err)
+	defer func() { _ = kv.(*driver).Close() }()
+
+	const total = 5
+	putN(t, kv, total)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		RunCDC(ctx, seams.CDC, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return len(fb.seqs()) == total
+		}
+	}, 10*time.Second, 10*time.Millisecond)
+	select {
+	case <-done:
+		t.Fatalf("RunCDC returned after one transient publish error; delivered %d of %d", len(fb.seqs()), total)
+	default:
+	}
+	require.Equal(t, []uint64{1, 2, 3, 4, 5}, fb.seqs(), "every change delivered once, in order, after the retry")
 }
