@@ -33,9 +33,9 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	_, failed := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1, readinessPath, bootTimeout)
-	require.False(t, failed, "replica 1 is at the bound, so it is not judged")
+	require.Empty(t, failed, "replica 1 is at the bound, so it is not judged")
 	_, failed = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2, readinessPath, bootTimeout)
-	require.True(t, failed, "inside the bound, a Failed replica is a shape failure")
+	require.Equal(t, inst.ID, failed, "inside the bound, a Failed replica is a shape failure")
 }
 
 // Repeated readiness probes to one worker reuse a keep-alive connection, so a busy probe loop does not churn

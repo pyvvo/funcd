@@ -158,6 +158,7 @@ func TestIssue76_NeverReadyHandlerFailsAfterBootTimeout(t *testing.T) {
 	res := h.reconcile(t, "hang")
 	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
 	require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "hang"))
+	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready", "a hung handler has no load error to carry")
 	require.Zero(t, res.RequeueAfter, "a Failed function is not polled again")
 	require.Empty(t, h.routes(t))
 }

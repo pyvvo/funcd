@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -112,6 +113,35 @@ func TestScenarioSDKMapsErrorToFault(t *testing.T) {
 	_, err := c.Get(ctx, v1.KindFunction, "team-a", "missing")
 	require.Error(t, err)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "problem+json mapped back to fault kind")
+}
+
+// A huma 422 names the bad field in errors[]; the SDK error must carry it, not only "validation failed".
+func TestIssue139_ValidationErrorNamesField(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := newClient(t)
+	cases := map[string]struct {
+		mutate   func(*v1.Function)
+		location string
+	}{
+		"replicas": {
+			mutate:   func(fn *v1.Function) { fn.Spec.Replicas = -1 },
+			location: "body.spec.replicas",
+		},
+		"minReplicas": {
+			mutate:   func(fn *v1.Function) { fn.Spec.Scaling.MinReplicas = -1 },
+			location: "body.spec.scaling.minReplicas",
+		},
+	}
+	for name, tc := range cases {
+		fn := newFunction("bad-"+strings.ToLower(name), "h")
+		tc.mutate(fn)
+		_, err := c.Apply(ctx, fn)
+		require.Error(t, err, name)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.Contains(t, err.Error(), tc.location, name)
+		require.Contains(t, err.Error(), "expected number >= 0", name)
+	}
 }
 
 // A 301/302/303 makes Go resend a PUT/DELETE as a body-less GET; the SDK must surface that as an

@@ -1,6 +1,7 @@
 package gateway_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,6 +59,29 @@ func TestRecoverMiddleware(t *testing.T) {
 	gateway.Recover(panicker).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Header().Get("Content-Type"), "application/problem+json")
+}
+
+// Issue #91: a mid-stream abort (httputil.ReverseProxy panics http.ErrAbortHandler when the
+// upstream dies after the response committed) must reach the client as a truncation, not be
+// rewritten into a clean 200 with a problem blob appended.
+func TestIssue91_RecoverRepanicsErrAbortHandler(t *testing.T) {
+	t.Parallel()
+	streamer := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"rows":[1,2,3,`))
+		_ = http.NewResponseController(w).Flush()
+		panic(http.ErrAbortHandler)
+	})
+	srv := httptest.NewServer(gateway.Recover(streamer))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	body, err := io.ReadAll(resp.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "an aborted stream must surface as a truncated body")
+	require.NotContains(t, string(body), "urn:funcd:problem", "no problem may be written into a committed stream")
 }
 
 // RequestID mints/echoes an X-Request-Id and exposes it via the context.

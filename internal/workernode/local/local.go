@@ -88,9 +88,9 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		const op = "workernode.local.invoke"
 		start := time.Now()
 		alias := r.PathValue("alias")
-		input, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxInvokeBytes))
+		input, err := readBody(w, r, op, maxInvokeBytes)
 		if err != nil {
-			fault.WriteProblem(w, fault.Invalidf(op, "read request body: %v", err))
+			fault.WriteProblem(w, err)
 			return
 		}
 		target, timeout, err := res.Resolve(r.Context(), caller, alias)
@@ -172,6 +172,20 @@ func opaqueKeys(mux http.Handler) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// readBody reads r's body capped at limit bytes (a DoS guard). An over-cap body is PayloadTooLarge
+// (413, as on the data plane, ADR-0134); any other read failure is Invalid.
+func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err == nil {
+		return body, nil
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return nil, fault.PayloadTooLargef(op, "request body exceeds %d bytes", limit)
+	}
+	return nil, fault.Invalidf(op, "read request body: %v", err)
 }
 
 // newServer builds the local API's http.Server. IdleTimeout closes a keep-alive connection left idle

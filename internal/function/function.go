@@ -8,6 +8,7 @@
 package function
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -549,6 +550,7 @@ type verdict struct {
 	booting        bool      // a replica of the current revision runs but is not ready yet
 	switching      bool      // the serving revision serves while the current one, which differs, comes up
 	currentFailed  bool      // while switching: the current revision cannot load its handler
+	loadErr        string    // the shim's load error, when shapeFailed or currentFailed
 	switched       bool      // this pass moved the calls to the current revision
 	startErr       error     // the first Start error of a current-revision replica (nil if every Start succeeded)
 }
@@ -562,7 +564,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	// ShapeValid is set once, from its final value: setting it True and then False in one pass would move its
 	// LastTransitionTime on every pass, a write that retriggers the pass through the watch (issue #24).
 	if v.shapeFailed || (v.switching && v.currentFailed) {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: v.loadErr})
 	} else {
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 	}
@@ -751,14 +753,17 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	ready, failed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
 	if serving {
-		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+		failed = "" // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
 	if ready >= 1 && s == "" {
 		fn.Status.ServingRevision = string(c)
 	}
-	return verdict{running: running, ready: ready, shapeFailed: shapeFailed, serving: serving, retryAt: retryAt, booting: running > ready, startErr: startErr}, nil
+	return verdict{
+		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
+		serving: serving, retryAt: retryAt, booting: running > ready, startErr: startErr,
+	}, nil
 }
 
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
@@ -798,7 +803,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	}
 	return verdict{
 		running: runningS, ready: readyS, serving: true, retryAt: retryAt,
-		booting: runningC > readyC, switching: true, currentFailed: failedC, startErr: startC,
+		booting: runningC > readyC, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: startC,
 	}, nil
 }
 
@@ -1331,18 +1336,18 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 	return "http://" + host + ":" + port
 }
 
-// readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
-// In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
-// running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
+// readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
+// ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
+// each running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
 // handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
 // bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, shapeFailed bool) {
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID) {
 	if r.materializer == nil {
-		return running, false
+		return running, ""
 	}
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
-		return 0, false
+		return 0, ""
 	}
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
@@ -1350,17 +1355,51 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		}
 		switch in.State {
 		case runtime.StateFailed:
-			shapeFailed = true
+			failed = lowerID(failed, in.ID)
 		case runtime.StateRunning:
 			switch {
 			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
 			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
-				shapeFailed = true
+				failed = lowerID(failed, in.ID)
 			}
 		}
 	}
-	return ready, shapeFailed
+	return ready, failed
+}
+
+// lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not
+// vary with List's order.
+func lowerID(a, b runtime.InstanceID) runtime.InstanceID {
+	if a == "" || b < a {
+		return b
+	}
+	return a
+}
+
+// loadError is the error failed instance id's shim wrote before it exited — the last line of its captured output —
+// which ShapeValid carries (ADR-0030 §4b); "" for no instance, and a generic message when the output is unreadable.
+// An instance still running was failed for never becoming ready (readyReplicas' boot limit), so it has no load error.
+func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) string {
+	if id == "" {
+		return ""
+	}
+	if in, err := r.runtime.Status(ctx, id); err == nil && in.State == runtime.StateRunning {
+		return "the handler did not become ready within " + bootTimeout.String()
+	}
+	last := "the runtime shim could not load the handler"
+	rc, err := r.runtime.Logs(ctx, id)
+	if err != nil {
+		return last
+	}
+	defer func() { _ = rc.Close() }()
+	sc := bufio.NewScanner(rc)
+	for sc.Scan() {
+		if line := strings.TrimSpace(sc.Text()); line != "" {
+			last = line
+		}
+	}
+	return last
 }
 
 // The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).
