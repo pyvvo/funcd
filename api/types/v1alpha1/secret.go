@@ -1,10 +1,6 @@
 package v1alpha1
 
-import (
-	huma "github.com/danielgtaylor/huma/v2"
-
-	"github.com/pyvvo/funcd/api/fault"
-)
+import huma "github.com/danielgtaylor/huma/v2"
 
 // Secret is a namespaced, pure-data resource for sensitive configuration.
 // Secret does NOT have status — it implements Object, not StatusObject.
@@ -37,15 +33,10 @@ func (SecretType) Schema(huma.Registry) *huma.Schema { return enumSchema(string(
 func (s *Secret) GroupVersionKind() GroupVersionKind { return KindSecret.GVK() }
 
 // Validate performs envelope validation, then the data-key rule JSON Schema can't express
-// (ADR-0048): every data key is non-empty. The `type` enum is schema-enforced at the edge.
+// (ADR-0048): every data key is an env-var name. The `type` enum is schema-enforced at the edge.
 func (s *Secret) Validate() error {
 	if err := validateMeta(s.TypeMeta, &s.ObjectMeta, KindSecret); err != nil {
 		return err
 	}
-	for k := range s.Spec.Data {
-		if k == "" {
-			return fault.Invalidf("Secret.Validate", "spec.data keys must not be empty")
-		}
-	}
-	return nil
+	return validateEnvKeys("Secret.Validate", s.Spec.Data)
 }

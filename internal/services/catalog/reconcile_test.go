@@ -10,9 +10,11 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/secrets"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 	storemem "github.com/pyvvo/funcd/internal/store/memory"
@@ -413,6 +415,47 @@ func TestReconcile_waits_for_bucket(t *testing.T) {
 	seedCatalogBucket(t, st)
 	reconcileOnce(t, r, "lake")
 	require.NotEmpty(t, prov.converged, "once the Bucket exists the engine converges")
+}
+
+// A CatalogService applied before the ConfigMap or Secret it binds is held not-Ready and requeued, so its engine
+// converges once the binding exists: no ConfigMap or Secret event reconciles the CatalogService again (issue #77).
+func TestIssue77_MissingBindingRecoversWhenApplied(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []v1.Kind{v1.KindConfigMap, v1.KindSecret} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			seedCatalogBucket(t, st)
+			prov := &fakeProvider{}
+			sr, err := secrets.NewResolver(secrets.Deps{Store: st, Authorizer: rbac.New()})
+			require.NoError(t, err)
+			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Secrets = sr })
+			cs := mkCatalogService("lake")
+			if kind == v1.KindConfigMap {
+				cs.Spec.Config = []v1.ObjectName{"late"}
+			} else {
+				cs.Spec.Secrets = []v1.ObjectName{"late"}
+			}
+			_, err = st.Create(ctx, cs)
+			require.NoError(t, err)
+
+			res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"})
+			require.NoError(t, err)
+			require.Empty(t, prov.converged, "no engine converges while a bound %s is absent", kind)
+			require.Positive(t, res.RequeueAfter, "a missing binding requeues the CatalogService")
+
+			binding, ok := v1.NewObject(kind)
+			require.True(t, ok)
+			meta := binding.GetObjectMeta()
+			meta.Name, meta.Namespace, meta.ResourceGroup = "late", "default", "rg1"
+			_, err = st.Create(ctx, binding)
+			require.NoError(t, err)
+
+			reconcileOnce(t, r, "lake")
+			require.NotEmpty(t, prov.converged, "the engine converges once its binding exists")
+		})
+	}
 }
 
 // DEFERRED node-gated scenarios (ADR-0086/0087): the live-DuckDB scenarios need the native DuckDB

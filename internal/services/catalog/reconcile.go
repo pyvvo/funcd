@@ -90,6 +90,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 			return controller.Result{}, retryOnConflict(uerr, op)
 		}
+		// No ConfigMap or Secret event reconciles a CatalogService, so a binding applied later is found only by a requeue.
+		if fault.KindOf(berr) == fault.NotFound {
+			return controller.Result{RequeueAfter: 2 * time.Second}, nil
+		}
 		return controller.Result{}, nil
 	}
 
