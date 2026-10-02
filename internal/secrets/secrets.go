@@ -1,8 +1,10 @@
 // Package secrets is the secrets delivery resolver (ADR-0022): it reads a function's
 // bound Secret resources (auto-decrypted by the store's at-rest encryptor) and returns
 // their data as an env-var map for worker injection — PDP-authorized (the secrets PEP).
-// The actual env/tmpfs injection into the running worker is a P-M-successor's job; this
-// is the delivery contract. The at-rest encryptor lives in internal/secrets/aesgcm.
+// The injection is the function reconciler's secret gate (ADR-0057, internal/function): it
+// resolves the bound Secrets through this resolver before any worker is provisioned and
+// merges them into the worker's env (V1 delivers env only; tmpfs is V2). The at-rest
+// encryptor lives in internal/secrets/aesgcm.
 package secrets
 
 import (

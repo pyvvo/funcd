@@ -2,6 +2,8 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -101,6 +103,16 @@ func TestKVStoreValidate(t *testing.T) {
 	}
 	if err := kvStore("neg2", 0, -1).Validate(); fault.KindOf(err) != fault.Invalid {
 		t.Errorf("negative maxKeyBytes: want Invalid, got %v", err)
+	}
+	if err := kvStore("key-at-limit", 0, MaxKeyBytesLimit).Validate(); err != nil {
+		t.Errorf("maxKeyBytes at the limit rejected: %v", err)
+	}
+	if err := kvStore("key-over-limit", 0, MaxKeyBytesLimit+1).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("maxKeyBytes over the limit: want Invalid, got %v", err)
+	}
+	f, _ := reflect.TypeOf(KVStoreSpec{}).FieldByName("MaxKeyBytes")
+	if got := f.Tag.Get("maximum"); got != strconv.Itoa(MaxKeyBytesLimit) {
+		t.Errorf("maxKeyBytes schema maximum = %q, want MaxKeyBytesLimit (%d)", got, MaxKeyBytesLimit)
 	}
 	if err := kvStore("dup", 0, 0, KVTable{Name: "t"}, KVTable{Name: "t"}).Validate(); fault.KindOf(err) != fault.Invalid {
 		t.Errorf("duplicate table name: want Invalid, got %v", err)

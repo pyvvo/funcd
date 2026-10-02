@@ -294,9 +294,30 @@ func DecodeManifest(data []byte) (v1.Object, error) {
 // one v1.Object per document, in order. Empty and comment-only documents are skipped; a manifest
 // with no document is a fault.Invalid.
 func DecodeManifests(data []byte) ([]v1.Object, error) {
+	docs, err := DecodeManifestDocuments(data)
+	if err != nil {
+		return nil, err
+	}
+	objs := make([]v1.Object, len(docs))
+	for i, doc := range docs {
+		objs[i] = doc.Object
+	}
+	return objs, nil
+}
+
+// ManifestDocument is one decoded manifest document and its 1-based position in the manifest,
+// counted as the decode errors count it (skipped empty and comment-only documents included).
+type ManifestDocument struct {
+	Number int
+	Object v1.Object
+}
+
+// DecodeManifestDocuments is DecodeManifests that also returns each object's document number, so a
+// caller can name the document a later error belongs to (issue #316).
+func DecodeManifestDocuments(data []byte) ([]ManifestDocument, error) {
 	const op = "sdk.DecodeManifests"
 	dec := yamlv3.NewDecoder(bytes.NewReader(data))
-	var objs []v1.Object
+	var docs []ManifestDocument
 	for n := 1; ; n++ {
 		var doc yamlv3.Node
 		if err := dec.Decode(&doc); errors.Is(err, io.EOF) {
@@ -307,7 +328,7 @@ func DecodeManifests(data []byte) ([]v1.Object, error) {
 		if len(doc.Content) == 0 || doc.Content[0].ShortTag() == "!!null" {
 			continue
 		}
-		quoteKeys(&doc)
+		quoteStrings(&doc)
 		raw, err := yamlv3.Marshal(&doc)
 		if err != nil {
 			return nil, fault.Invalidf(op, "re-encode manifest document %d: %v", n, err)
@@ -316,12 +337,12 @@ func DecodeManifests(data []byte) ([]v1.Object, error) {
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "manifest document %d", n)
 		}
-		objs = append(objs, obj)
+		docs = append(docs, ManifestDocument{Number: n, Object: obj})
 	}
-	if len(objs) == 0 {
+	if len(docs) == 0 {
 		return nil, fault.Invalidf(op, "manifest holds no document")
 	}
-	return objs, nil
+	return docs, nil
 }
 
 // decodeDocument decodes one manifest document into its concrete v1.Object.
@@ -347,19 +368,16 @@ func decodeDocument(data []byte) (v1.Object, error) {
 	return obj, nil
 }
 
-// quoteKeys double-quotes every plain mapping key that YAML 1.2 reads as a string. sigs.k8s.io/yaml
-// decodes YAML 1.1, which turns a bare on/off/yes/no/y/n key into a boolean (the JSON key "true"/"false")
-// that the typed decode then drops (issue #63); values keep the YAML 1.1 decode.
-func quoteKeys(n *yamlv3.Node) {
-	if n.Kind == yamlv3.MappingNode {
-		for i := 0; i < len(n.Content); i += 2 {
-			if k := n.Content[i]; k.Kind == yamlv3.ScalarNode && k.Style == 0 && k.ShortTag() == "!!str" {
-				k.Style = yamlv3.DoubleQuotedStyle
-			}
-		}
+// quoteStrings double-quotes every plain scalar, key or value, that YAML 1.2 reads as a string.
+// sigs.k8s.io/yaml decodes YAML 1.1, which turns a bare on/off/yes/no/y/n into a boolean: a key becomes
+// "true"/"false" that the typed decode drops (issue #63), a string value is rewritten to "true"/"false"
+// and a json.RawMessage value becomes a JSON boolean (issue #299).
+func quoteStrings(n *yamlv3.Node) {
+	if n.Kind == yamlv3.ScalarNode && n.Style == 0 && n.ShortTag() == "!!str" {
+		n.Style = yamlv3.DoubleQuotedStyle
 	}
 	for _, c := range n.Content {
-		quoteKeys(c)
+		quoteStrings(c)
 	}
 }
 
@@ -408,6 +426,10 @@ func problemToFault(httpStatus int, body []byte) error {
 		return fault.Forbiddenf("sdk", "%s", msg)
 	case http.StatusServiceUnavailable:
 		return fault.Unavailablef("sdk", "%s", msg)
+	case http.StatusTooManyRequests:
+		return fault.ResourceExhaustedf("sdk", "%s", msg)
+	case http.StatusRequestEntityTooLarge:
+		return fault.PayloadTooLargef("sdk", "%s", msg)
 	default:
 		return fault.Internalf("sdk", "%s", msg)
 	}

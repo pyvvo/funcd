@@ -501,11 +501,15 @@ func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectN
 }
 
 // Cancel abandons a run: pending/running steps are marked Cancelled and the run ends
-// Cancelled immediately (the in-flight invocation is abandoned; idempotency covers it).
+// Cancelled immediately (the in-flight invocation is abandoned; idempotency covers it). A run that
+// is already terminal is left unchanged (WorkflowRunSpec.Cancel).
 func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
+	}
+	if rec.Terminal() {
+		return nil
 	}
 	for i := range rec.Steps {
 		if rec.Steps[i].Phase == v1.StepPending || rec.Steps[i].Phase == v1.StepRunning {

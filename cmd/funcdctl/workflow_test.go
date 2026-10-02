@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,4 +48,24 @@ func TestIssue125_RerunNameIsRejected(t *testing.T) {
 	obj, err = c.Get(ctx, v1.KindWorkflowRun, "team-a", "dur-4")
 	require.NoError(t, err)
 	require.True(t, obj.(*v1.WorkflowRun).Spec.Paused, "pause still patches spec.paused")
+}
+
+//go:embed workflow.go
+var workflowSource string
+
+// Issue #324: cancel is declarative (ADR-0094: it patches spec.cancel), so the workflowCmd doc comment must
+// count it among the CRUD-sugar verbs, not describe an imperative cancel endpoint.
+func TestIssue324_WorkflowDocSaysCancelIsDeclarative(t *testing.T) {
+	t.Parallel()
+	f, err := parser.ParseFile(token.NewFileSet(), "workflow.go", workflowSource, parser.ParseComments)
+	require.NoError(t, err)
+	var doc string
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "workflowCmd" {
+			doc = fn.Doc.Text()
+		}
+	}
+	require.NotEmpty(t, doc, "workflowCmd has a doc comment")
+	require.NotContains(t, doc, "imperative")
+	require.Contains(t, doc, "pause/resume/cancel/describe are sugar over the WorkflowRun CRUD surface")
 }

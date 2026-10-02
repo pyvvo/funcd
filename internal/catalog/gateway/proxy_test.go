@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,4 +221,119 @@ func TestIssue39_ProxyStreamsTheBody(t *testing.T) {
 		require.True(t, bytes.HasSuffix(got, tail), "the body after the token field is forwarded intact")
 		require.Equal(t, int64(len(got)), gotLen, "the forwarded Content-Length matches the rewritten body")
 	})
+}
+
+// pdpFailure is a PDP that cannot decide.
+type pdpFailure struct{}
+
+func (pdpFailure) Authorize(context.Context, auth.Request) (auth.Decision, error) {
+	return auth.Decision{}, errors.New("policy store unavailable")
+}
+
+// failingBody fails on its first read.
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("client went away") }
+
+// TestIssue378_ProxyErrorsAreProblemJSONViaSlog: a failed engine call is a problem+json 503 logged once
+// through slog, not the ReverseProxy default (a bare 502 logged through the stdlib log package), and the
+// proxy's own rejections are problem+json too (ADR-0002). Not parallel: it swaps the global loggers.
+func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
+	var stdlog, logs bytes.Buffer
+	prevSlog, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	log.SetOutput(&stdlog) // after SetDefault, which points the stdlib logger at the slog handler
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	pdp := buildPDP(t, st)
+	master := []byte("proxy-test-node-master")
+	keys := NewCatalogKeys(master, st)
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+
+	stopped := httptest.NewServer(http.NotFoundHandler())
+	stopped.Close()
+	crashing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, herr := w.(http.Hijacker).Hijack(); herr == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(crashing.Close)
+
+	cases := []struct {
+		name     string
+		pdp      auth.Authorizer
+		upstream string
+		body     func() io.Reader
+		status   int
+		problem  string
+	}{
+		{
+			name:     "an unreachable engine",
+			pdp:      pdp,
+			upstream: stopped.URL,
+			body:     func() io.Reader { return bytes.NewReader(makeHandshake(granted)) },
+			status:   http.StatusServiceUnavailable,
+			problem:  "urn:funcd:problem:unavailable",
+		},
+		{
+			name:     "an engine that fails mid-request",
+			pdp:      pdp,
+			upstream: crashing.URL,
+			body:     func() io.Reader { return bytes.NewReader(makeHandshake(granted)) },
+			status:   http.StatusServiceUnavailable,
+			problem:  "urn:funcd:problem:unavailable",
+		},
+		{
+			name:     "a denied caller",
+			pdp:      pdp,
+			upstream: crashing.URL,
+			body:     func() io.Reader { return bytes.NewReader(makeHandshake("garbage-unresolvable-token")) },
+			status:   http.StatusForbidden,
+			problem:  "urn:funcd:problem:forbidden",
+		},
+		{
+			name:     "an unreadable body",
+			pdp:      pdp,
+			upstream: crashing.URL,
+			body:     func() io.Reader { return failingBody{} },
+			status:   http.StatusBadRequest,
+			problem:  "urn:funcd:problem:invalid",
+		},
+		{
+			name:     "a PDP failure",
+			pdp:      pdpFailure{},
+			upstream: crashing.URL,
+			body:     func() io.Reader { return bytes.NewReader(makeHandshake(granted)) },
+			status:   http.StatusInternalServerError,
+			problem:  "urn:funcd:problem:internal",
+		},
+		{
+			name:     "a malformed upstream",
+			pdp:      pdp,
+			upstream: "::bad",
+			body:     func() io.Reader { return bytes.NewReader(makeHandshake(granted)) },
+			status:   http.StatusInternalServerError,
+			problem:  "urn:funcd:problem:internal",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewCatalogProxy(keys, tc.pdp, EngineTarget{Catalog: target, Upstream: tc.upstream, EngineToken: engineToken})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", tc.body()))
+			require.Equal(t, tc.status, rec.Code)
+			require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			require.Contains(t, rec.Body.String(), tc.problem)
+		})
+	}
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+	require.Equal(t, 2, strings.Count(logs.String(), "level=WARN"), "each engine failure is logged once through slog")
 }

@@ -122,3 +122,39 @@ func TestCheckRejectsMalformedJSON(t *testing.T) {
 		t.Fatalf("malformed JSON should be a fault.Invalid, got %v", err)
 	}
 }
+
+// Issue #319: a `type` list is in profile only in the nullable form, one type plus "null" (ADR-0058). Every
+// entry is checked, not only the first non-"null" one: an untagged union or an unknown name is rejected.
+func TestIssue319_CheckRejectsTypeListOutsideNullableForm(t *testing.T) {
+	t.Parallel()
+	for name, js := range map[string]string{
+		"unknown name after a valid one": `{"type":["string","foo"]}`,
+		"untagged union":                 `{"type":["string","integer"]}`,
+		"union plus null":                `{"type":["string","integer","null"]}`,
+		"duplicate type":                 `{"type":["string","string"]}`,
+		"unknown name beside an enum":    `{"type":["foo","null"],"enum":["a"]}`,
+		"nested field union":             `{"type":"object","properties":{"x":{"type":["integer","boolean"]}},"additionalProperties":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := contract.Check([]byte(js))
+			if err == nil {
+				t.Fatalf("contract %s must be rejected, got nil", js)
+			}
+			if fault.KindOf(err) != fault.Invalid {
+				t.Fatalf("expected fault.Invalid, got kind %v (%v)", fault.KindOf(err), err)
+			}
+		})
+	}
+	for _, js := range []string{
+		`{"type":["string","null"]}`,
+		`{"type":["null","integer"]}`,
+		`{"type":["string"]}`,
+		`{"type":["null"]}`,
+		`{"type":["object","null"],"properties":{"id":{"type":"string"}},"additionalProperties":false}`,
+	} {
+		if err := contract.Check([]byte(js)); err != nil {
+			t.Fatalf("nullable or single-type list %s must stay in profile, got %v", js, err)
+		}
+	}
+}

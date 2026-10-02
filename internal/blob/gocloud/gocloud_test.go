@@ -103,3 +103,39 @@ func TestIssue160_UnstorableKeysAreInvalidAndNeverAlias(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue375_EscapeSequenceKeysNeverAlias: fileblob hex-escapes some runes of a key as
+// "__0x<hex>__" and decodes every such sequence when it lists, so a raw key holding one must
+// fail fault.Invalid rather than read another key's object or list under another name.
+func TestIssue375_EscapeSequenceKeysNeverAlias(t *testing.T) {
+	ctx := context.Background()
+	for name, scheme := range map[string]string{"memory": "mem://", "file": "file://"} {
+		t.Run(name, func(t *testing.T) {
+			url := scheme
+			if name == "file" {
+				url += t.TempDir()
+			}
+			b, err := gocloud.Open(ctx, url)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+
+			require.NoError(t, b.Put(ctx, "a//b", []byte("v:a//b")))
+			got, err := b.Get(ctx, "a/__0x2f__b")
+			require.Error(t, err, "Get(a/__0x2f__b) read the object of a//b: %q", got)
+			require.Contains(t, []fault.Kind{fault.NotFound, fault.Invalid}, fault.KindOf(err), "Get: %v", err)
+
+			key := "c/__0x41__"
+			if err := b.Put(ctx, key, []byte("v:"+key)); err != nil {
+				require.Equal(t, fault.Invalid, fault.KindOf(err), "Put: %v", err)
+				return
+			}
+			items, err := b.List(ctx, "c/")
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			require.Equal(t, key, items[0].Key)
+			data, err := b.Get(ctx, items[0].Key)
+			require.NoError(t, err)
+			require.Equal(t, []byte("v:"+key), data)
+		})
+	}
+}

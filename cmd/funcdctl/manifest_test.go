@@ -176,3 +176,46 @@ func TestScenario_types_command(t *testing.T) {
 	require.Contains(t, string(body), "class FuncInput(TypedDict)")
 	require.Contains(t, string(body), "class FuncOutput(TypedDict)")
 }
+
+// Issue #318: `funcdctl types` runs the same profile gate as `funcdctl push`, so an out-of-profile side
+// fails fault.Invalid and no types file is written.
+func TestIssue318_TypesRejectsOutOfProfileContract(t *testing.T) {
+	cases := map[string]string{
+		"anyOf input": `
+runtime: nodejs22
+handler: handle
+contract:
+  input:
+    anyOf:
+      - type: string
+      - type: integer
+  output:
+    type: "null"
+`,
+		"unquoted null output": `
+runtime: nodejs22
+handler: handle
+contract:
+  input:
+    type: "null"
+  output:
+    type: null
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFuncdctl(t, dir, body)
+			outDir := t.TempDir()
+
+			var out bytes.Buffer
+			err := execCLI(&out, nil, "types", "-f", filepath.Join(dir, "funcdctl.yaml"), "-o", outDir)
+			require.Error(t, err, "an out-of-profile contract side is rejected by types")
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.Contains(t, err.Error(), "outside the funcd profile")
+			entries, rerr := os.ReadDir(outDir)
+			require.NoError(t, rerr)
+			require.Empty(t, entries, "no types file is written for a rejected contract")
+		})
+	}
+}

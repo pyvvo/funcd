@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 
+	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -130,10 +131,23 @@ func LoadManifest(path string) (*Manifest, error) {
 
 // parseManifest decodes funcdctl.yaml bytes into a Manifest and structurally validates it. sigs.k8s.io/yaml
 // accepts YAML and JSON (JSON is valid YAML) and round-trips through the json tags, so json.RawMessage
-// contract sides receive their compact JSON bytes.
+// contract sides receive their compact JSON bytes. Like DecodeManifests, keys and values keep their YAML 1.2 text
+// (quoteStrings, #63) and an unknown key is rejected, not dropped (#64).
 func parseManifest(op, path string, data []byte) (*Manifest, error) {
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return nil, fault.Invalidf(op, "parse manifest %q: %v", path, err)
+	}
+	if len(doc.Content) > 0 {
+		quoteStrings(&doc)
+		raw, err := yamlv3.Marshal(&doc)
+		if err != nil {
+			return nil, fault.Invalidf(op, "re-encode manifest %q: %v", path, err)
+		}
+		data = raw
+	}
 	var m Manifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
+	if err := yaml.UnmarshalStrict(data, &m); err != nil {
 		return nil, fault.Invalidf(op, "parse manifest %q: %v", path, err)
 	}
 	if err := m.structuralValidate(op, path); err != nil {
