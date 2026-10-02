@@ -289,6 +289,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	}
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
+		containerd.WithSnapshotter(d.snapshotter()),
 		containerd.WithNewSnapshot(ctrID+"-snap", image),
 		containerd.WithRuntime(runcShim, &runcoptions.Options{BinaryName: ociRuntimeBinary}),
 		containerd.WithContainerLabels(labels),
@@ -349,7 +350,7 @@ func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID,
 	case !errdefs.IsNotFound(err):
 		return mapErr(err, op, "load leftover container %q", ctrID)
 	}
-	if err := d.client.SnapshotService("").Remove(nctx, ctrID+"-snap"); err != nil && !errdefs.IsNotFound(err) {
+	if err := d.client.SnapshotService(d.snapshotter()).Remove(nctx, ctrID+"-snap"); err != nil && !errdefs.IsNotFound(err) {
 		return mapErr(err, op, "remove leftover snapshot %q", ctrID+"-snap")
 	}
 	return nil
