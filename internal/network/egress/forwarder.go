@@ -63,30 +63,47 @@ type forwarder struct {
 	upstream netip.AddrPort
 	corr     *correlator
 
-	mu     sync.Mutex
-	server *dns.Server
+	mu      sync.Mutex
+	servers []*dns.Server
 }
 
-// Serve runs the UDP forwarder until ctx is cancelled. Each answered query records (src, domain)→IPs.
+// Serve runs the forwarder on UDP and TCP until ctx is cancelled: F80 redirects worker :53 on both, and a
+// truncated UDP answer is retried over TCP (RFC 7766). Each answered query records (src, domain)→IPs.
 func (f *forwarder) Serve(ctx context.Context) error {
 	const op = "egress.forwarder.Serve"
-	client := &dns.Client{Timeout: 5 * time.Second}
+	udpClient := &dns.Client{Net: "udp", Timeout: 5 * time.Second}
+	tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
+		client := udpClient
+		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
+			client = tcpClient
+		}
 		f.handle(client, w, req)
 	})
-	srv := &dns.Server{Addr: f.listen.String(), Net: "udp", Handler: mux}
+	servers := []*dns.Server{
+		{Addr: f.listen.String(), Net: "udp", Handler: mux},
+		{Addr: f.listen.String(), Net: "tcp", Handler: mux},
+	}
 	f.mu.Lock()
-	f.server = srv
+	f.servers = servers
 	f.mu.Unlock()
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	errCh := make(chan error, len(servers))
+	for _, srv := range servers {
+		go func() { errCh <- srv.ListenAndServe() }()
+	}
+	shutdown := func() {
+		for _, srv := range servers {
+			_ = srv.ShutdownContext(context.Background())
+		}
+	}
 	select {
 	case <-ctx.Done():
-		_ = srv.ShutdownContext(context.Background())
+		shutdown()
 		return ctx.Err()
 	case err := <-errCh:
+		shutdown()
 		if err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "dns forwarder listen %s", f.listen)
 		}
@@ -94,8 +111,8 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	}
 }
 
-// handle forwards one query upstream, records the resolved A/AAAA answers per (src, domain), and relays
-// the response verbatim.
+// handle forwards one query upstream over the transport it arrived on (so a TCP retry gets the whole
+// answer), records the resolved A/AAAA answers per (src, domain), and relays the response verbatim.
 func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Msg) {
 	resp, _, err := client.Exchange(req, f.upstream.String())
 	if err != nil || resp == nil {
