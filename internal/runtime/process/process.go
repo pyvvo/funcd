@@ -119,6 +119,8 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	cmd := exec.Command(inst.spec.Command[0], inst.spec.Command[1:]...) //nolint:gosec // command is platform-internal, from the controller-built spec
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Its own process group, so Stop, Close and the worker's exit reach everything it starts.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// FUNCD_PORTFILE is the driver↔shim port handshake (ADR-0030): the shim binds
 	// 127.0.0.1:0 and writes its OS-assigned port here, which Status reads back.
 	cmd.Env = append(envSlice(inst.spec.Env), "FUNCD_PORTFILE="+inst.portFile)
@@ -165,6 +167,8 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 // cmd.Wait (Stop never calls Wait — it waits on inst.done instead).
 func (d *driver) wait(inst *instance, logFile *os.File) {
 	err := inst.cmd.Wait()
+	// The worker's exit reclaims what it started, as a container's exit tears down its PID namespace (ADR-0011 C4).
+	_ = syscall.Kill(-inst.pid, syscall.SIGKILL)
 	_ = logFile.Close()
 
 	d.mu.Lock()
@@ -198,17 +202,11 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 		return nil
 	}
 	inst.stopping = true
-	proc := inst.cmd.Process
+	pid := inst.pid
 	done := inst.done
 	d.mu.Unlock()
 
-	_ = proc.Signal(syscall.SIGTERM)
-	select {
-	case <-done:
-	case <-time.After(stopGrace):
-		_ = proc.Kill()
-		<-done
-	}
+	terminate(pid, done)
 	d.mu.Lock()
 	inst.released = true
 	d.mu.Unlock()
@@ -313,6 +311,18 @@ func (d *driver) Close() error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// terminate sends the worker's process group SIGTERM, then SIGKILL after stopGrace, and returns once the worker
+// has exited (done closed).
+func terminate(pid int, done <-chan struct{}) {
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	select {
+	case <-done:
+	case <-time.After(stopGrace):
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		<-done
+	}
 }
 
 // snapshotLocked builds an Instance from internal state; caller holds d.mu.
