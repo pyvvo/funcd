@@ -92,6 +92,12 @@ const (
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
 	defaultBucketsPerNamespace = 100
+	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
+	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
+	defaultWorkflowStepTimeout  = 300 * time.Second
+	defaultWorkflowRetention    = 720 * time.Hour
+	defaultWorkflowRetry        = 1
+	defaultWorkflowPayloadLimit = 1 << 20
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -321,7 +327,12 @@ type Platform struct {
 // fault (and a nil *Platform) on a missing dep or a build/bind failure — never a
 // partial platform, never a panic.
 func New(opts ...Option) (_ *Platform, err error) {
-	cfg := &config{}
+	cfg := &config{
+		workflowStepTimeout:  defaultWorkflowStepTimeout,
+		workflowRetention:    defaultWorkflowRetention,
+		workflowDefaultRetry: defaultWorkflowRetry,
+		workflowPayloadLimit: defaultWorkflowPayloadLimit,
+	}
 	p := &Platform{cfg: cfg}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {

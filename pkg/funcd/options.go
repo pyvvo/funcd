@@ -132,13 +132,14 @@ func WithCatalogProxyHost(host string) Option {
 	}
 }
 
-// WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; this option
-// sets its persistence + tunables: dataDir is the Badger run-state directory (empty ⇒ in-memory,
-// the default / InMemory-preset path), defaultStepTimeout bounds a single step invocation
-// (0 ⇒ none), retention is how long terminal runs survive before the periodic sweep reclaims them
-// (0 ⇒ never), defaultRetry is the per-step attempt cap when a step declares no retry (< 1 ⇒ 1),
-// and payloadLimit caps a run's input (at admission) and a step's output in bytes (0 ⇒ unbounded).
-// cmd/funcd derives dataDir as <dataDir>/workflow from config.
+// WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; without this option it
+// runs in memory with the daemon config's defaults (300s step timeout, 720h retention, one attempt, 1 MiB
+// payload cap). This option sets its persistence + tunables: dataDir is the Badger run-state directory
+// (empty ⇒ in-memory), defaultStepTimeout bounds a single step invocation (0 ⇒ none), retention is how
+// long terminal runs survive before the periodic sweep reclaims them (0 ⇒ never), defaultRetry is the
+// per-step attempt cap when a step declares no retry (< 1 ⇒ 1), and payloadLimit caps a run's input (at
+// admission) and a step's output in bytes (0 ⇒ unbounded). cmd/funcd derives dataDir as
+// <dataDir>/workflow from config.
 func WithWorkflow(dataDir string, defaultStepTimeout, retention time.Duration, defaultRetry int, payloadLimit int64) Option {
 	return func(c *config) error {
 		c.workflowDataDir = dataDir
