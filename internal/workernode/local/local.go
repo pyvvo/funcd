@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -140,7 +142,36 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
 	})
-	return mux
+	return opaqueKeys(mux)
+}
+
+// opaqueKeys keeps http.ServeMux from cleaning a KV or blob key: the shims send a key's "/" separators
+// raw, and ServeMux redirects a path with an empty or dot segment ("/kv/b/a//b", "/kv/b/..") before any
+// handler runs (issue #100). Keys are opaque strings, so the key part of the path is escaped into one
+// canonical segment, which the {key...} wildcard unescapes back verbatim.
+func opaqueKeys(mux http.Handler) http.Handler {
+	keyEscaper := strings.NewReplacer("/", "%2F", ".", "%2E")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, route := range []string{"/kv/", "/blob/"} {
+			rest, ok := strings.CutPrefix(r.URL.EscapedPath(), route)
+			if !ok {
+				continue
+			}
+			if binding, key, ok := strings.Cut(rest, "/"); ok {
+				rawPath := route + binding + "/" + keyEscaper.Replace(key)
+				if path, err := url.PathUnescape(rawPath); err == nil {
+					r2 := new(http.Request)
+					*r2 = *r
+					r2.URL = new(url.URL)
+					*r2.URL = *r.URL
+					r2.URL.Path, r2.URL.RawPath = path, rawPath
+					r = r2
+				}
+			}
+			break
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // Serve runs h on a Unix domain socket at path (bind-mounted into the sandbox) until ctx is done.

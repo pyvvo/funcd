@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,4 +112,33 @@ func TestScenarioKVListPrefix(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/"+k, "v").Code)
 	}
 	require.JSONEq(t, `["user/1","user/2"]`, do(t, h, http.MethodGet, "/kv/b?prefix=user/", "").Body.String())
+}
+
+// TestIssue100_PathLikeKeysRoundTrip: a key with an empty or dot segment is stored verbatim. The shims
+// keep a key's "/" separators raw, so these keys arrive as non-canonical paths ("/kv/b/a//b").
+func TestIssue100_PathLikeKeysRoundTrip(t *testing.T) {
+	keys := []string{"/lead", "a//b", "a/./b", "a/../b", ".", "..", "a/b", "trail/"}
+	for _, tc := range []struct {
+		name, route string
+		h           http.Handler
+	}{
+		{"kv", "/kv/b", kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})},
+		{"blob", "/blob/b", blobHandler(t, "default", s3TestPDP{readOK: true, writeOK: true}, newBlobMapBucket())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range keys {
+				require.Equal(t, http.StatusNoContent, do(t, tc.h, http.MethodPut, tc.route+"/"+k, "v:"+k).Code, "put %q", k)
+				rec := do(t, tc.h, http.MethodGet, tc.route+"/"+k, "")
+				require.Equal(t, http.StatusOK, rec.Code, "get %q: %s", k, rec.Body.String())
+				require.Equal(t, "v:"+k, rec.Body.String(), "get %q", k)
+			}
+			var listed []string
+			require.NoError(t, json.Unmarshal(do(t, tc.h, http.MethodGet, tc.route, "").Body.Bytes(), &listed))
+			require.ElementsMatch(t, keys, listed)
+			for _, k := range keys {
+				require.Equal(t, http.StatusNoContent, do(t, tc.h, http.MethodDelete, tc.route+"/"+k, "").Code, "delete %q", k)
+				require.Equal(t, http.StatusNotFound, do(t, tc.h, http.MethodGet, tc.route+"/"+k, "").Code, "get %q after delete", k)
+			}
+		})
+	}
 }
