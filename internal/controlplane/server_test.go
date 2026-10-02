@@ -122,16 +122,17 @@ func TestIssue61_CreateRejectsPathBodyNamespaceMismatch(t *testing.T) {
 	srv := newServer(t)
 	const nsBase = "/apis/funcd.io/v1alpha1/namespaces/"
 
-	noNamespace := map[string]map[string]interface{}{}
+	noNamespace := map[string]interface{}{}
 	require.NoError(t, json.Unmarshal(functionBody(t, "team-a", "echo", "rg1"), &noNamespace))
-	delete(noNamespace["metadata"], "namespace")
+	delete(noNamespace["metadata"].(map[string]interface{}), "namespace")
 	noNamespaceBody, err := json.Marshal(noNamespace)
 	require.NoError(t, err)
 
 	configMapBody, err := json.Marshal(map[string]interface{}{
-		"TypeMeta": map[string]interface{}{"apiVersion": "funcd.io/v1alpha1", "kind": "ConfigMap"},
-		"metadata": map[string]interface{}{"name": "cfg", "namespace": "team-a", "resourceGroup": "rg1"},
-		"spec":     map[string]interface{}{},
+		"apiVersion": "funcd.io/v1alpha1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "cfg", "namespace": "team-a", "resourceGroup": "rg1"},
+		"spec":       map[string]interface{}{},
 	})
 	require.NoError(t, err)
 
@@ -200,9 +201,10 @@ func TestIssue165_ExplicitNameWithGenerateNameConflicts(t *testing.T) {
 	srv := newServer(t)
 	withGenerateName := func(name string) []byte {
 		var body struct {
-			TypeMeta map[string]interface{} `json:"TypeMeta"`
-			Metadata map[string]interface{} `json:"metadata"`
-			Spec     map[string]interface{} `json:"spec"`
+			APIVersion string                 `json:"apiVersion"`
+			Kind       string                 `json:"kind"`
+			Metadata   map[string]interface{} `json:"metadata"`
+			Spec       map[string]interface{} `json:"spec"`
 		}
 		require.NoError(t, json.Unmarshal(functionBody(t, "team-a", name, "rg1"), &body))
 		body.Metadata["generateName"] = "dup-"
