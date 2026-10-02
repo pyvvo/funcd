@@ -70,38 +70,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, rberr
 	}
 	if refRequeue {
-		// Not Ready (ADR-0138): retract any external edge entry, as the post-Converge not-Ready branch does.
-		if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
-			return controller.Result{}, rerr
-		}
-		cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
-		cs.Status.Phase = v1.PhasePending
-		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "BucketNotFound", Message: refMsg})
-		if _, uerr := r.store.Update(ctx, cs); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+		return r.holdNotReady(ctx, cs, "BucketNotFound", refMsg, 2*time.Second)
 	}
 
 	// Resolve the engine env (the bindings ADR-0087 injects) BEFORE converging. A secret/config
-	// resolution failure holds the service not-Ready (BindingResolveFailed), no engine started —
+	// resolution failure holds the service not-Ready (BindingResolveFailed), no engine running —
 	// the same fail-closed posture the Function secret gate uses (ADR-0057).
 	env, berr := r.engineEnv(ctx, cs)
 	if berr != nil {
-		if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
-			return controller.Result{}, rerr
-		}
-		cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
-		cs.Status.Phase = v1.PhasePending
-		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "BindingResolveFailed", Message: berr.Error()})
-		if _, uerr := r.store.Update(ctx, cs); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
 		// No ConfigMap or Secret event reconciles a CatalogService, so a binding applied later is found only by a requeue.
+		var requeue time.Duration
 		if fault.KindOf(berr) == fault.NotFound {
-			return controller.Result{RequeueAfter: 2 * time.Second}, nil
+			requeue = 2 * time.Second
 		}
-		return controller.Result{}, nil
+		return r.holdNotReady(ctx, cs, "BindingResolveFailed", berr.Error(), requeue)
 	}
 
 	spec := provider.ProviderSpec{
@@ -196,6 +178,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	// ADR-0142: come back after the supervision period, so Converge recreates an engine that died with no write.
 	return controller.Result{RequeueAfter: r.period}, nil
+}
+
+// holdNotReady fails a gated CatalogService closed, as the Function gate stops its worker (ADR-0057): it retracts the
+// external edge entry (ADR-0138), suspends the proxy consumers were injected with (its URL kept for the recovery),
+// writes Pending with no endpoint, and stops the engine (issue #372).
+func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.CatalogService, reason, message string, requeue time.Duration) (controller.Result, error) {
+	const op = "services.catalog.holdNotReady"
+	if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
+		return controller.Result{}, rerr
+	}
+	if r.proxy != nil {
+		r.proxy.Suspend(cs.Namespace, cs.Name)
+	}
+	cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
+	cs.Status.Endpoint = ""
+	cs.Status.Phase = v1.PhasePending
+	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message})
+	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
+		return controller.Result{}, retryOnConflict(uerr, op)
+	}
+	if terr := r.prov.Teardown(ctx, provider.ProviderRef{Namespace: cs.Namespace, Name: cs.Name}); terr != nil {
+		return controller.Result{}, fault.Wrapf(terr, fault.KindOf(terr), op, "stop provider engine %s/%s", cs.Namespace, cs.Name)
+	}
+	return controller.Result{RequeueAfter: requeue}, nil
 }
 
 // syncIngressRoute reconciles this catalog's OPT-IN external edge entry (ADR-0138). When spec.ingress

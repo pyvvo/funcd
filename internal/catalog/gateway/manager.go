@@ -15,7 +15,8 @@ import (
 // Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private
 // http.Server per catalog, each fronting that catalog's engine. The CatalogService reconciler calls
 // Ensure on its Ready branch to (re)bind a node-private listener for the catalog and learn the proxy
-// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), and Remove on teardown.
+// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), Suspend while it is not Ready,
+// and Remove on teardown.
 // One listener endpoint per catalog fixes the PEP's target catalog by the endpoint (the proxy takes
 // the namespace from the resolved principal — see NewCatalogProxy).
 type Manager struct {
@@ -153,6 +154,22 @@ func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	if mp, ok := m.servers[key]; ok {
 		m.closeProxy(key, mp)
 	}
+}
+
+// Suspend keeps a catalog's listener, so the URL consumers were injected with stays valid (#59), but answers every
+// request 503 and drops the engine target and token until Ensure retargets it: a not-Ready catalog serves no caller
+// (#372). Suspending an unknown catalog is a no-op.
+func (m *Manager) Suspend(ns v1.NamespaceName, name v1.ObjectName) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mp, ok := m.servers[managerKey(ns, name)]; ok {
+		mp.handler.set(http.HandlerFunc(catalogNotReady))
+		mp.upstream, mp.engineToken = "", ""
+	}
+}
+
+func catalogNotReady(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "catalog not ready", http.StatusServiceUnavailable)
 }
 
 // Shutdown stops every running proxy (daemon shutdown). Thread-safe and idempotent.
