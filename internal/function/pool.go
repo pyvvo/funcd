@@ -368,11 +368,48 @@ func (r *Reconciler) stopPool(ctx context.Context, insts []runtime.Instance) err
 	return nil
 }
 
+// reclaimOrphanPools stops and removes each pool worker in ns whose key no Function declares any more: its last member
+// was deleted or moved off the key. Only a member's own reconcile drives its pool (ensurePool), so nothing else would
+// reclaim it (ADR-0046 Decision 6). The workers are listed before the Functions, so a pool created in between has its
+// member listed.
+func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName) error {
+	const op = "function.reclaimOrphanPools"
+	insts, err := r.runtime.List(ctx, ns)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list workers")
+	}
+	list, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list functions")
+	}
+	declared := map[v1.ObjectName]bool{}
+	for _, obj := range list.Items {
+		if fn, ok := obj.(*v1.Function); ok {
+			if key, pooled := r.poolKeyFor(fn); pooled {
+				declared[poolInstanceName(key)] = true
+			}
+		}
+	}
+	for _, in := range insts {
+		if declared[in.Name] || !strings.HasPrefix(string(in.Name), poolInstancePrefix) {
+			continue
+		}
+		if err := r.retire(ctx, in); err != nil {
+			return err
+		}
+		r.forgetPoolSigOf(ns, in.Name)
+	}
+	return nil
+}
+
+// poolInstancePrefix starts every pool worker's name (poolInstanceName).
+const poolInstancePrefix = "__pool__"
+
 // poolInstanceName is the synthetic worker name for a pool key. It encodes runtime + worker
 // id so distinct keys never collide, and is prefixed so it can never equal a real function
 // name (a DNS-1123 label cannot contain "__"), keeping a member's solo lookups separate.
 func poolInstanceName(key pooling.PoolKey) v1.ObjectName {
-	return v1.ObjectName("__pool__" + key.Runtime + "__" + key.Worker)
+	return v1.ObjectName(poolInstancePrefix + key.Runtime + "__" + key.Worker)
 }
 
 // manifestSignature is a stable digest of the pool manifest used for idempotent restarts:
@@ -420,4 +457,15 @@ func (r *Reconciler) forgetPoolSig(key pooling.PoolKey) {
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
 	delete(r.poolSigs, key)
+}
+
+// forgetPoolSigOf forgets the signature of the pool worker named name in ns.
+func (r *Reconciler) forgetPoolSigOf(ns v1.NamespaceName, name v1.ObjectName) {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	for key := range r.poolSigs {
+		if key.Namespace == ns && poolInstanceName(key) == name {
+			delete(r.poolSigs, key)
+		}
+	}
 }

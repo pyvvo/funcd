@@ -199,3 +199,38 @@ func TestIssue43_TagOnlyPooledFunctionDeploys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(manifest), "a-elsewhere", "the member built for no node platform is left out of the pool")
 }
+
+// A pool worker is reclaimed once no Function declares its key: after its last member is deleted, and after its last
+// member leaves the key by clearing spec.pooling.worker (ADR-0046 Decision 6).
+func TestIssue68_PoolReclaimedWithItsLastMember(t *testing.T) {
+	t.Parallel()
+	t.Run("deleted", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+		h.create(t, "m1", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "pair" })
+		h.create(t, "m2", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "pair" })
+		h.reconcile(t, "m1")
+		h.reconcile(t, "m2")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "m2").Status.Phase)
+
+		require.NoError(t, h.st.Delete(ctx, v1.KindFunction.GVK(), "default", "m1", ""))
+		h.reconcile(t, "m1")
+		require.NotEmpty(t, h.rt.revisionStates("__pool__nodejs22__pair"), "m2 still needs its pool")
+		require.NoError(t, h.st.Delete(ctx, v1.KindFunction.GVK(), "default", "m2", ""))
+		h.reconcile(t, "m2")
+		require.Empty(t, h.rt.revisionStates("__pool__nodejs22__pair"), "the pool is removed with its last member")
+	})
+	t.Run("left the key", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+		h.create(t, "lonely", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "lonely" })
+		h.reconcile(t, "lonely")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "lonely").Status.Phase)
+
+		h.apply(t, "lonely", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "" })
+		h.reconcile(t, "lonely")
+		require.Empty(t, h.rt.revisionStates("__pool__nodejs22__lonely"), "the pool is removed when its last member runs solo")
+		require.Equal(t, runtime.StateRunning, h.rt.revisionStates("lonely")["lonely-2"][0], "the former member runs solo")
+	})
+}

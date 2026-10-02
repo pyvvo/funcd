@@ -338,6 +338,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
+			if derr := r.reclaimOrphanPools(ctx, req.Namespace); derr != nil {
+				return controller.Result{}, derr
+			}
 			return controller.Result{}, r.programAllRoutes(ctx)
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get function")
@@ -345,6 +348,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	fn, ok := obj.(*v1.Function)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a Function", req.Namespace, req.Name)
+	}
+	// A spec change can move fn off its pool key (spec.pooling.worker or spec.runtime), leaving that pool without a member.
+	if fn.Status.ObservedGeneration < fn.Generation {
+		if err := r.reclaimOrphanPools(ctx, fn.Namespace); err != nil {
+			return controller.Result{}, err
+		}
 	}
 	// ADR-0142: a Ready solo Function whose spec is already processed only needs its replicas checked; if they
 	// all run, the pass writes nothing and comes back after the supervision period.
