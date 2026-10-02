@@ -17,11 +17,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/observability"
@@ -70,11 +72,17 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 		reqCounter, _ = m.Int64Counter("funcd.edge.requests")
 		durHist, _ = m.Float64Histogram("funcd.edge.duration_ms")
 	}
+	tp := trace.TracerProvider(tracenoop.NewTracerProvider())
+	if cfg.Trace && telemetry != nil {
+		tp = telemetry.TracerProvider()
+	}
+	tracer := tp.Tracer("funcd.edge")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			var span trace.Span
 			if cfg.Trace {
-				injectTraceparent(r)
+				span = startEdgeSpan(r, tracer)
 			}
 			ctx, tgt := WithTarget(r.Context())
 			rec := &recorder{ResponseWriter: w, status: http.StatusOK}
@@ -86,14 +94,19 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 				fn = "-"
 			}
 			statusClass := string(rune('0'+rec.status/100)) + "xx"
+			attrs := []attribute.KeyValue{
+				attribute.String("function", fn),
+				attribute.String("namespace", ns),
+				attribute.String("status_class", statusClass),
+			}
 			if reqCounter != nil {
-				attrs := metric.WithAttributes(
-					attribute.String("function", fn),
-					attribute.String("namespace", ns),
-					attribute.String("status_class", statusClass),
-				)
-				reqCounter.Add(r.Context(), 1, attrs)
-				durHist.Record(r.Context(), float64(dur.Milliseconds()), attrs)
+				opt := metric.WithAttributes(attrs...)
+				reqCounter.Add(r.Context(), 1, opt)
+				durHist.Record(r.Context(), float64(dur.Milliseconds()), opt)
+			}
+			if span != nil {
+				span.SetAttributes(attrs...)
+				span.End()
 			}
 			if cfg.AccessLog {
 				logger.Info("edge request",
@@ -105,22 +118,24 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 	}
 }
 
-// injectTraceparent mints or adopts a W3C trace context and injects it, so the downstream invocation
-// span (the shim) parents under the edge span (shared trace-id → one-run-one-trace). The ids are
-// minted with crypto/rand — NOT derived from the OTel tracer — so the header is valid even under the
-// default no-op telemetry (an all-zero OTel span context would be rejected by the shim).
-func injectTraceparent(r *http.Request) {
-	traceID := ""
-	if tp := r.Header.Get("traceparent"); tp != "" {
-		if p := strings.Split(tp, "-"); len(p) >= 3 && len(p[1]) == 32 && p[1] != strings.Repeat("0", 32) {
-			traceID = p[1] // adopt the inbound trace-id (continue the trace)
-		}
-	}
-	if traceID == "" {
+// startEdgeSpan starts the edge SERVER span under the inbound W3C traceparent (adopted only when
+// valid) and injects the edge span's own traceparent, so the downstream invocation span (the shim)
+// parents under it (shared trace-id → one-run-one-trace). When the tracer records, the injected ids
+// ARE the emitted span's ids. Otherwise (the default no-op telemetry) the missing ids are minted with
+// crypto/rand, so the header is still valid (an all-zero span context would be rejected by the shim).
+func startEdgeSpan(r *http.Request, tracer trace.Tracer) trace.Span {
+	parent := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	_, span := tracer.Start(parent, "edge "+r.Method, trace.WithSpanKind(trace.SpanKindServer))
+	sc := span.SpanContext()
+	traceID, spanID := sc.TraceID().String(), sc.SpanID().String()
+	if !sc.TraceID().IsValid() {
 		traceID = randHex(16)
 	}
-	edgeSpan := randHex(8)
-	r.Header.Set("traceparent", "00-"+traceID+"-"+edgeSpan+"-01")
+	if !span.IsRecording() {
+		spanID = randHex(8)
+	}
+	r.Header.Set("traceparent", "00-"+traceID+"-"+spanID+"-01")
+	return span
 }
 
 func randHex(n int) string {

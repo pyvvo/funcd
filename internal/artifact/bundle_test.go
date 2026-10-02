@@ -328,3 +328,34 @@ func TestScenarioPullLargeBundleExceedsFetchAllCap(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, big, got, "the large vendored file round-trips byte-for-byte")
 }
+
+// Issue 155: the packer skips symlinks, so a symlinked entry (or one under a symlinked dir) would be
+// validated, recorded in the entry annotation, and then left out of the layer. It must be refused.
+func TestIssue155_SymlinkedEntryRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("entry is a symlink", func(t *testing.T) {
+		t.Parallel()
+		dir, entry := goodBundle(t)
+		real := filepath.Join(t.TempDir(), "real.py")
+		require.NoError(t, os.Rename(filepath.Join(dir, entry), real))
+		require.NoError(t, os.Symlink(real, filepath.Join(dir, entry)))
+
+		_, err := artifact.PackBundle(dir, entry)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a symlinked entry is not packed, so it is refused")
+		_, err = artifact.PushBundle(context.Background(), layoutRef(t, "v1"), dir, entry, "", "")
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "push fails instead of shipping a bundle without its handler")
+	})
+
+	t.Run("entry is under a symlinked dir", func(t *testing.T) {
+		t.Parallel()
+		dir, _ := goodBundle(t)
+		src := filepath.Join(t.TempDir(), "src")
+		require.NoError(t, os.MkdirAll(src, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(src, "handler.py"), []byte("def handle(context, event):\n    return {}\n"), 0o600))
+		require.NoError(t, os.Symlink(src, filepath.Join(dir, "src")))
+
+		_, err := artifact.PackBundle(dir, "src/handler.py")
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "an entry reached through a symlinked dir is not packed, so it is refused")
+	})
+}

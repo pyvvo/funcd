@@ -6,12 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 type fakeEndpoints struct {
@@ -34,6 +37,45 @@ func (f *fakeWaker) Wake(context.Context, activator.FunctionRef) (string, error)
 }
 
 type fakeGrant struct{ allow bool }
+
+// manualClock is an advancing clock.Clock for driving the activator's idle reclaim.
+type manualClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// zeroScaler records the functions the activator scales to zero.
+type zeroScaler struct {
+	mu   sync.Mutex
+	zero []activator.FunctionRef
+}
+
+func (z *zeroScaler) ScaleTo(_ context.Context, fn activator.FunctionRef, replicas int) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if replicas == 0 {
+		z.zero = append(z.zero, fn)
+	}
+	return nil
+}
+
+func (z *zeroScaler) reclaimed() []activator.FunctionRef {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	return append([]activator.FunctionRef(nil), z.zero...)
+}
 
 func (f fakeGrant) Allow(v1.NamespaceName, v1.ObjectName) bool { return f.allow }
 
@@ -221,4 +263,49 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 			t.Fatalf("read %d bytes of a 5xx answer that is thrown away", body.read)
 		}
 	})
+}
+
+// Issue #48: a step dispatched to a warm function counts as its activity, so idle reclaim never fires
+// while steps keep arriving.
+func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
+	ctx := context.Background()
+	srv := echoServer(t, 200, `{"ok":true}`)
+	st := store.New(memory.New())
+	obj, ok := v1.NewObject(v1.KindFunction)
+	if !ok {
+		t.Fatal("no Function kind")
+	}
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "busy", "default", "rg1"
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: time.Minute}
+	if _, err := st.Create(ctx, fn); err != nil {
+		t.Fatal(err)
+	}
+	ep := fakeEndpoints{upstream: srv.URL, ready: true}
+	clk := &manualClock{t: time.Unix(1000, 0)}
+	sc := &zeroScaler{}
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: ep, Scaler: sc, Clock: clk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewHTTPDispatcher(DispatchDeps{Endpoints: ep, Waker: act, Grant: fakeGrant{allow: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := act.ReclaimIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		clk.advance(40 * time.Second)
+		if _, err := d.Dispatch(ctx, dispatchReq("busy")); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if err := act.ReclaimIdle(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sc.reclaimed()) != 0 {
+		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.reclaimed())
+	}
 }

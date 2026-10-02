@@ -436,7 +436,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
 		}
-		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
+		var requeue time.Duration
+		if fault.KindOf(serr) == fault.NotFound {
+			requeue = 2 * time.Second
+		}
+		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true, requeue: requeue}, drainAfter)
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -649,6 +654,11 @@ func earliest(a, b time.Duration) time.Duration {
 // readinessPoll is how soon a pass re-checks a booting shim.
 const readinessPoll = 200 * time.Millisecond
 
+// bootTimeout bounds how long a solo replica may run without becoming ready before readiness judges it a shape failure
+// (ADR-0030 §4b's timeout), as when its handler blocks while it loads. It exceeds the activator's 30 s activation hold,
+// so it never cuts short a boot that a cold call still waits for.
+const bootTimeout = time.Minute
+
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
 
@@ -722,7 +732,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	if err != nil {
 		return verdict{}, err
 	}
-	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath)
+	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
 	if serving {
 		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
 	}
@@ -752,13 +762,13 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath)
+	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired, readinessPath, bootTimeout)
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := time.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
-	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath)
+	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1, readinessPath, bootTimeout)
 	retryAt := retryS
 	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
 		retryAt = retryC
@@ -1246,8 +1256,9 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 // readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
 // In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
 // running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
-// handler) as a shape failure. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string) (ready int, shapeFailed bool) {
+// handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
+// bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, shapeFailed bool) {
 	if r.materializer == nil {
 		return running, false
 	}
@@ -1263,8 +1274,11 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		case runtime.StateFailed:
 			shapeFailed = true
 		case runtime.StateRunning:
-			if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path) {
+			switch {
+			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
+			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
+				shapeFailed = true
 			}
 		}
 	}
@@ -1570,12 +1584,16 @@ func (r *Reconciler) placeable(ctx context.Context, fn *v1.Function, uri, digest
 	return err
 }
 
-// placementMessage is the scheduler's own message for a refused placement ("artifact provides [...]; node ... runs
-// ..."), without the operation prefix.
+// placementMessage is the innermost message of a refused placement, without the operation prefixes: the
+// scheduler's ("artifact provides [...]; node ... runs ...") or the resolver's (an index that names no platform).
 func placementMessage(err error) string {
+	msg := err.Error()
 	var fe *fault.Error
-	if errors.As(err, &fe) && fe.Msg != "" {
-		return fe.Msg
+	for errors.As(err, &fe) {
+		if fe.Msg != "" {
+			msg = fe.Msg
+		}
+		err = fe.Err
 	}
-	return err.Error()
+	return msg
 }

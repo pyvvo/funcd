@@ -3,6 +3,7 @@
 package funcd_test
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -49,4 +50,46 @@ func TestScenarioE2ELimitsBodySize(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+// Issue #87: the ingress limiter guards the data-plane listener (ADR-0112), not internal fn-to-fn
+// invokes (ADR-0064). front's nested invoke of greeter must neither take the external call's
+// in-flight slot nor draw on greeter's rate bucket.
+func TestIssue87_FnToFnInvokeBypassesIngressLimits(t *testing.T) {
+	deploy := func(t *testing.T, cfg limit.Config) string {
+		c, dpURL := shimPlatformOCI(t, funcd.WithLimits(cfg))
+		exDir := tsExample(t, "fn-to-fn")
+		layout := t.TempDir()
+		gRef, gDig := pushExampleFn(t, layout, exDir, "greeter")
+		fRef, fDig := pushExampleFn(t, layout, exDir, "front")
+		applyFnObj(t, c, loadFn(t, "greeter.yaml", gRef, gDig))
+		applyFnObj(t, c, loadFn(t, "front.yaml", fRef, fDig))
+		waitReady(t, c, "greeter", "front")
+		return dpURL
+	}
+	post := func(t *testing.T, url string) (int, string) {
+		resp, err := http.Post(url, "application/json", strings.NewReader(`{"data":{"name":"funcd"}}`))
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	t.Run("maxInFlight", func(t *testing.T) {
+		dpURL := deploy(t, limit.Config{MaxInFlight: 1})
+		for i := 0; i < 3; i++ {
+			code, body := post(t, dpURL+"/function/front")
+			require.Equal(t, http.StatusOK, code, "call %d: the nested invoke does not count against maxInFlight: %s", i, body)
+			require.Contains(t, body, "Hello, funcd!")
+		}
+	})
+
+	t.Run("rate", func(t *testing.T) {
+		dpURL := deploy(t, limit.Config{RatePerMin: 1, Burst: 1, Key: limit.KeyFunction})
+		code, body := post(t, dpURL+"/function/greeter")
+		require.Equal(t, http.StatusOK, code, "the external call takes greeter's only token: %s", body)
+		code, body = post(t, dpURL+"/function/front")
+		require.Equal(t, http.StatusOK, code, "the nested invoke of greeter is not rate-limited: %s", body)
+		require.Contains(t, body, "Hello, funcd!")
+	})
 }
