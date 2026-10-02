@@ -286,24 +286,27 @@ func TestIssue148_StatusMatchesCurrentSpec(t *testing.T) {
 		require.Equal(t, es.Generation, cond.ObservedGeneration, "the Ready condition observes the edited spec")
 	})
 
-	t.Run("timer source drops the blob condition", func(t *testing.T) {
-		t.Parallel()
-		st := newStore()
-		createBlobSource(t, st, "drops", "missing", v1.BlobEvent{Name: "arrived"})
-		src := newBlobSource(t, st)
-		_, err := src.Reconcile(ctx, reqOf("drops"))
-		require.NoError(t, err)
+	for _, bucket := range []string{"missing", "raw"} {
+		t.Run("timer source drops the blob condition/bucket "+bucket, func(t *testing.T) {
+			t.Parallel()
+			st := newStore()
+			createBucket(t, st, "raw")
+			createBlobSource(t, st, "drops", bucket, v1.BlobEvent{Name: "arrived"})
+			src := newBlobSource(t, st)
+			_, err := src.Reconcile(ctx, reqOf("drops"))
+			require.NoError(t, err)
 
-		es := getSource(t, st, "drops")
-		es.Spec.Blob, es.Spec.Timer = nil, &v1.TimerSource{Events: []v1.TimerEvent{timerEvent("tick", time.Minute)}}
-		_, err = st.Update(ctx, es)
-		require.NoError(t, err)
-		_, err = src.Reconcile(ctx, reqOf("drops"))
-		require.NoError(t, err)
-		require.Equal(t, 1, src.ActiveTimers())
-		es = getSource(t, st, "drops")
-		require.Equal(t, v1.PhaseReady, es.Status.Phase)
-		cond, ok := es.Status.Conditions.Get("Ready")
-		require.False(t, ok, "a timer source keeps no blob Ready condition, got %+v", cond)
-	})
+			es := getSource(t, st, "drops")
+			es.Spec.Blob, es.Spec.Timer = nil, &v1.TimerSource{Events: []v1.TimerEvent{timerEvent("tick", time.Minute)}}
+			_, err = st.Update(ctx, es)
+			require.NoError(t, err)
+			_, err = src.Reconcile(ctx, reqOf("drops"))
+			require.NoError(t, err)
+			require.Equal(t, 1, src.ActiveTimers())
+			es = getSource(t, st, "drops")
+			require.Equal(t, v1.PhaseReady, es.Status.Phase)
+			cond, ok := es.Status.Conditions.Get("Ready")
+			require.False(t, ok, "a timer source keeps no blob Ready condition, got %+v", cond)
+		})
+	}
 }
