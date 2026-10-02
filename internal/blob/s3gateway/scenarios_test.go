@@ -385,3 +385,51 @@ func mustGet(t *testing.T, g *gw, ns, bucket, key string) []byte {
 	require.NoError(t, err)
 	return data
 }
+
+// Issue 158: Complete assembles exactly the listed parts, in order, and rejects a listed
+// part whose ETag does not match or that was never uploaded (S3 InvalidPart); a rejected
+// Complete leaves the upload in place.
+func TestIssue158_CompleteHonorsPartList(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/mpu.bin")
+
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	etags := map[int32]*string{}
+	for i, body := range []string{"AAA", "BBB", "CCC"} {
+		num := int32(i + 1)
+		uo, perr := owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: bucket, Key: key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte(body)),
+		})
+		require.NoError(t, perr)
+		etags[num] = uo.ETag
+	}
+	complete := func(parts ...awstypes.CompletedPart) error {
+		_, cerr := owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: bucket, Key: key, UploadId: create.UploadId,
+			MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: parts},
+		})
+		return cerr
+	}
+	part := func(num int32, etag *string) awstypes.CompletedPart {
+		return awstypes.CompletedPart{PartNumber: &num, ETag: etag}
+	}
+
+	err = complete(part(1, ptrS(`"bogus"`)), part(2, etags[2]))
+	require.ErrorContains(t, err, "InvalidPart", "a listed ETag that does not match the stored part")
+	require.Equal(t, 400, statusCode(err))
+
+	err = complete(part(1, etags[1]), part(9, etags[2]))
+	require.ErrorContains(t, err, "InvalidPart", "a listed part that was never uploaded")
+	require.Equal(t, 400, statusCode(err))
+
+	err = complete(part(2, etags[2]), part(1, etags[1]))
+	require.ErrorContains(t, err, "InvalidPartOrder", "parts listed out of ascending order")
+	require.Equal(t, 400, statusCode(err))
+
+	require.NoError(t, complete(part(1, etags[1]), part(2, etags[2])))
+	require.Equal(t, "AAABBB", string(mustGet(t, g, "default", "lakehouse", "bronze/mpu.bin")),
+		"the object is exactly the listed parts; the unlisted part 3 is dropped")
+}
