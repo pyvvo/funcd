@@ -40,7 +40,7 @@ func TestScenarioConfigInjectsEnv(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "4", env["DUCKDB_THREADS"], "the ConfigMap value is injected as env")
 
-	spec := r.workerSpec(configFn("tuning"), 0, "/art/app.mjs", env, nil)
+	spec := mustWorkerSpec(t, r, configFn("tuning"), "/art/app.mjs", env, nil)
 	require.Equal(t, "4", spec.Env["DUCKDB_THREADS"], "and it reaches WorkerSpec.Env")
 }
 

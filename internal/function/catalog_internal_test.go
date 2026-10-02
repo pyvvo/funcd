@@ -89,7 +89,7 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 
 	// End-to-end through workerSpec: the DIRECT write means the FUNCD_-prefixed keys reach Env even
 	// though mergeSecretEnv would have dropped them.
-	spec := r.workerSpec(fn, 0, "/art/app.mjs", nil, env)
+	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", nil, env)
 	require.Equal(t, proxyURL, spec.Env["FUNCD_CATALOG_LAKE_URL"], "the URL reaches the worker env DIRECTLY")
 	require.Equal(t, injected, spec.Env["FUNCD_CATALOG_LAKE_TOKEN"], "the token reaches the worker env DIRECTLY")
 }
@@ -158,16 +158,16 @@ func TestScenarioDevCatalogExtensionDirToConsumer(t *testing.T) {
 	consumer := catalogConsumerFn("lake", "lake")
 	env, _, err := r.resolveCatalogEnv(context.Background(), consumer)
 	require.NoError(t, err)
-	spec := r.workerSpec(consumer, 0, "/art/app.mjs", nil, env)
+	spec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", nil, env)
 	require.Equal(t, "/dev/ext", spec.Env["DUCKDB_EXTENSION_DIRECTORY"], "a catalog consumer gets the extension dir")
 
 	// non-consumer: no injection.
-	nonSpec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, nil)
+	nonSpec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, nil)
 	require.NotContains(t, nonSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "a non-consumer gets no extension dir")
 
 	// empty dir (prod default): no injection even for a consumer.
 	r.catalogExtensionDir = ""
-	prodSpec := r.workerSpec(consumer, 0, "/art/app.mjs", nil, env)
+	prodSpec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", nil, env)
 	require.NotContains(t, prodSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "empty dir (prod) injects nothing")
 }
 
@@ -184,7 +184,7 @@ func TestScenarioTokenOnlyToDeclaredConsumer(t *testing.T) {
 	require.Nil(t, env, "a non-declaring function resolves to no catalog env")
 
 	// And through workerSpec: no FUNCD_CATALOG_* keys appear.
-	spec := r.workerSpec(sampleFn(), 0, "/art/app.mjs", nil, env)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, env)
 	for k := range spec.Env {
 		require.NotContains(t, k, "FUNCD_CATALOG_", "a non-declaring function gets no FUNCD_CATALOG_* env")
 	}

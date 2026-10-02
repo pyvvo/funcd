@@ -554,7 +554,7 @@ type verdict struct {
 	currentFailed  bool      // while switching: the current revision cannot load its handler
 	loadErr        string    // the shim's load error, when shapeFailed or currentFailed
 	switched       bool      // this pass moved the calls to the current revision
-	startErr       error     // the first Start error of a current-revision replica (nil if every Start succeeded)
+	startErr       error     // the first error starting a current-revision replica (nil if every replica started)
 	repairErr      string    // a serving pass: why it stopped a replica that never became ready (issue #309)
 }
 
@@ -912,8 +912,9 @@ func maxIndex(idx []int) int {
 // after the backoff for a Stopped replica or a crash in a serving revision — while a Failed replica of a tried
 // generation that does not serve is kept, so readiness reports the shape failure. With scaleDown it stops rev's
 // replicas outside indexes. tmpl is fn as rev runs it. It returns rev's running count among indexes, the earliest
-// time a replica waiting out its backoff may be replaced (zero if none), and the first Start error, which the pass
-// writes to the status instead of failing before it (issue #73).
+// time a replica waiting out its backoff may be replaced (zero if none), and the first error starting a replica — a
+// Start error or a local API socket that could not be provisioned — which the pass writes to the status instead of
+// failing before it (issues #73, #358).
 func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, serving, untried, scaleDown bool, secretEnv, catalogEnv map[string]string) (int, time.Time, error, error) {
 	const op = "function.converge"
 	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
@@ -990,11 +991,19 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	if err != nil {
 		return 0, time.Time{}, nil, err
 	}
+	var startErr error
 	for _, i := range launch {
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return 0, time.Time{}, nil, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
+		spec, serr := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
+		if serr != nil {
+			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
+			if startErr == nil {
+				startErr = serr
+			}
+			continue
+		}
 		spec.Revision = rev
 		inst, cerr := r.runtime.Create(ctx, spec)
 		if cerr != nil {
@@ -1002,7 +1011,6 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 		start = append(start, inst.ID)
 	}
-	var startErr error
 	for _, id := range start {
 		if serr := r.runtime.Start(ctx, id); serr != nil {
 			r.logger.Warn("could not start worker", "instance", id, "err", serr)
@@ -1542,17 +1550,26 @@ func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
 // addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial the per-sandbox worker-node
 // local API — context.invoke (ADR-0064) AND context.kv (ADR-0069). EVERY function gets the socket (KV is
 // available to all; the link-as-grant check for invoke stays at RESOLVE time, so a linkless function's
-// invoke still fails closed). No-op when the local API is off entirely (r.invokeSockets nil).
-func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) {
+// invoke still fails closed). No-op when the local API is off entirely (r.invokeSockets nil); a socket that cannot be
+// provisioned is an error, so no worker starts without its local API (issue #358).
+func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) error {
+	sock, err := r.invokeSocket(fn)
+	if sock != "" {
+		env["FUNCD_INVOKE_SOCKET"] = sock
+	}
+	return err
+}
+
+// invokeSocket provisions fn's local API socket and returns its host path; "" when the local API is off.
+func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
 	if r.invokeSockets == nil {
-		return
+		return "", nil
 	}
 	sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name)
 	if err != nil {
-		r.logger.Warn("could not provision invoke socket", "function", fn.Name, "err", err)
-		return
+		return "", fault.Wrapf(err, fault.KindOf(err), "function.invokeSocket", "provision the local API socket")
 	}
-	env["FUNCD_INVOKE_SOCKET"] = sock
+	return sock, nil
 }
 
 // addS3Env injects the per-function S3 SigV4 keypair + endpoint (ADR-0085) when the s3gateway
@@ -1630,7 +1647,7 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
-func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
+func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
@@ -1653,13 +1670,13 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		}}
 		// Bind-mount the per-function local API socket into the sandbox so the shim can dial
 		// context.invoke (ADR-0064) + context.kv (ADR-0069) at the in-container path. Every function gets one.
-		if r.invokeSockets != nil {
-			if sock, err := r.invokeSockets.SocketFor(fn.Namespace, fn.Name); err == nil {
-				env["FUNCD_INVOKE_SOCKET"] = containerInvokeSocket
-				mounts = append(mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
-			} else {
-				r.logger.Warn("could not provision invoke socket", "function", fn.Name, "err", err)
-			}
+		sock, err := r.invokeSocket(fn)
+		if err != nil {
+			return runtime.WorkerSpec{}, err
+		}
+		if sock != "" {
+			env["FUNCD_INVOKE_SOCKET"] = containerInvokeSocket
+			mounts = append(mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
 		}
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
@@ -1668,7 +1685,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			Image:     r.imageFor(string(fn.Spec.Runtime)),
 			Mounts:    mounts,
 			Env:       env,
-		}
+		}, nil
 	}
 	if r.materializer != nil {
 		// Process mode (ADR-0030): ShimCommand launches the shim; loopback + portfile.
@@ -1680,7 +1697,10 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
 		// reads directly in process mode, so host root == worker root.
 		addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath))
-		r.addInvokeSocket(env, fn)        // FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		// FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
+		if err := r.addInvokeSocket(env, fn); err != nil {
+			return runtime.WorkerSpec{}, err
+		}
 		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
 		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
 		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
@@ -1692,7 +1712,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			Image:     string(fn.Spec.Runtime),
 			Command:   r.shimFor(fn.Spec.Runtime), // node by default; python* → the python shim (ADR-0049)
 			Env:       env,
-		}
+		}, nil
 	}
 	return runtime.WorkerSpec{
 		Namespace: fn.Namespace,
@@ -1702,7 +1722,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// Legacy placeholder (no Materializer): a long-lived process stands in for the
 		// worker; real execution is the shim path (ADR-0030).
 		Command: []string{"sleep", "86400"},
-	}
+	}, nil
 }
 
 func retryOnConflict(err error, op string) error {

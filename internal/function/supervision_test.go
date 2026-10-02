@@ -395,3 +395,55 @@ func TestIssue353_ReadinessListErrorWritesNoStatus(t *testing.T) {
 		})
 	}
 }
+
+// brokenSockets is a local API socket provider whose SocketFor fails while broken is set.
+type brokenSockets struct{ broken atomic.Bool }
+
+func (b *brokenSockets) SocketFor(_ v1.NamespaceName, name v1.ObjectName) (string, error) {
+	if b.broken.Load() {
+		return "", fault.Unavailablef("test.SocketFor", "create socket dir: permission denied")
+	}
+	return "/run/test/" + string(name) + ".sock", nil
+}
+
+func (*brokenSockets) Remove(v1.NamespaceName, v1.ObjectName) {}
+
+// Issue #358: a local API socket that cannot be provisioned keeps the Function from going Ready, with a reason naming
+// the error, and starts no worker without it; the pass retries, and the Function is Ready once the socket is provisioned.
+func TestIssue358_SocketFailureBlocksReady(t *testing.T) {
+	t.Parallel()
+	for name, mode := range map[string]func(*function.Deps){
+		"process": func(*function.Deps) {},
+		"container": func(d *function.Deps) {
+			d.EndpointMode = function.EndpointNetnsFixedPort
+			d.ImageFor = func(rt string) string { return "funcd/runtime-" + rt + ":latest" }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sockets := &brokenSockets{}
+			sockets.broken.Store(true)
+			h := newShimHarness(t, http.StatusOK, false, withPeriod, mode, func(d *function.Deps) { d.InvokeSockets = sockets })
+			h.createFn(t, "lonely")
+
+			res := h.reconcile(t, "lonely")
+			fn := h.getFn(t, "lonely")
+			require.Equal(t, v1.PhaseFailed, fn.Status.Phase)
+			ready, ok := fn.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, v1.ConditionFalse, ready.Status)
+			require.Equal(t, "StartFailed", ready.Reason)
+			require.Contains(t, ready.Message, "permission denied")
+			creates, _ := h.rt.counts()
+			require.Zero(t, creates, "no worker starts without its local API socket")
+			require.Equal(t, testPeriod, res.RequeueAfter, "the pass retries")
+
+			sockets.broken.Store(false)
+			h.reconcile(t, "lonely")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "lonely").Status.Phase)
+			spec, ok := h.rt.specFor("lonely")
+			require.True(t, ok)
+			require.NotEmpty(t, spec.Env["FUNCD_INVOKE_SOCKET"])
+		})
+	}
+}
