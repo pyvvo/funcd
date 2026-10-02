@@ -2203,35 +2203,5 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-24-fix-claude-opus-5-5.md",
     "notes": "pass: test fails pre-fix (rv 7->10) and passes under -race; 3/3 mutants killed; real-engine probe ~13k reconciles/5s -> 0. Minor(model): unused HandOutSettle knob in the test. Minor(env): pre-existing PushSite created-timestamp flake in internal/artifact."
-  },
-  {
-    "date": "2026-10-02",
-    "issue": "40",
-    "phase": "fix",
-    "model": "claude-opus-5-5",
-    "verdict": "pass",
-    "blockers": 0,
-    "majors": 0,
-    "minors": 2,
-    "model_attributed": 2,
-    "dod_passed": 8,
-    "dod_total": 11,
-    "report": "docs/reviews/issue-40-fix-claude-opus-5-5.md",
-    "notes": "Pass, conditional on the lane stage. Checklist items 2 to 4 (fails before the fix, passes with it under -race, mutants) were not run here, attribution env: TestIssue40 is a Linux, FUNCD_IT=1 integration test, the host is macOS, Lima lanes are forbidden in this stage, and no runner sets FUNCD_IT. The env-echo lane case daemon-restart-recovers must confirm them. Minor 1 (model): the snapshot-only Remove branch of reclaim has no test. Minor 2 (model): leftovers that are never re-created still leak, and the false pkg/funcd Shutdown comment that the issue names is unchanged."
-  },
-  {
-    "date": "2026-10-02",
-    "issue": "95",
-    "phase": "fix",
-    "model": "claude-opus-5-5",
-    "verdict": "pass",
-    "blockers": 0,
-    "majors": 0,
-    "minors": 2,
-    "model_attributed": 0,
-    "dod_passed": 11,
-    "dod_total": 11,
-    "report": "docs/reviews/issue-95-fix-claude-opus-5-5.md",
-    "notes": "pass, 0/0/2, 0 model-attributed. Minor [issue]: the expected-behavior clause about the stale Ready/replicas=1 status is left for a follow-up, because a reconcile that hits a resolver error still returns before it writes any status. Minor [env]: the e2e suite fails under -race in TestScenarioE2ETLSSelfSignedServesHTTPS (both servers share one tls.Config, pkg/funcd/funcd.go:1137/1141); this reproduces without the fix, and the canonical just test-e2e recipe is green. Revert check: the revert applied cleanly and the test failed with the issue's own 'artifact.Platforms: fetch artifact ...: not found' error. All 3 mutants were killed. A real-daemon probe on ports 30950-30951 got a 503 and 51 gate errors before the fix, and served the function with 0 errors after it (2/2 runs). One cmd/funcd -race failure was not captured and did not recur in 8 later runs; it is unconfirmed and not scored."
   }
 ]
