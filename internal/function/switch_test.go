@@ -765,3 +765,40 @@ func TestIssue24_BrokenRedeployPassWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// Issue 55: a delete and a re-create reach the reconciler as one pass, so teardown never runs and the re-created
+// Function's first revision has the deleted one's name. The pass replaces the deleted Function's worker with one of the
+// new spec on every replica, and the next passes keep it.
+func TestIssue55_DeleteRecreateInOnePassReplacesTheWorker(t *testing.T) {
+	t.Parallel()
+	for _, replicas := range []int{1, 2} {
+		t.Run(strconv.Itoa(replicas)+"-replicas", func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withSwitch)
+			h.deployReady(t, "echo")
+			require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "echo", ""))
+			h.create(t, "echo", func(fn *v1.Function) {
+				fn.Spec.Handler = "handleNEW"
+				fn.Spec.Replicas = replicas
+			})
+			h.reconcile(t, "echo")
+
+			require.True(t, h.rt.wasRemoved(runtime.NewInstanceID("default", "echo", "echo-1", 0)), "the deleted Function's worker left the runtime")
+			for i := range replicas {
+				spec := h.rt.specOf(runtime.NewInstanceID("default", "echo", "echo-1", i))
+				require.Equal(t, "handleNEW", spec.Env["FUNCD_HANDLER"], "replica %d runs the re-created spec", i)
+			}
+			obj, err := h.st.Get(context.Background(), v1.KindRevision.GVK(), "default", "echo-1")
+			require.NoError(t, err)
+			require.Equal(t, "handleNEW", obj.(*v1.Revision).Spec.Handler, "revision 1 is the re-created Function's")
+
+			creates, _ := h.rt.counts()
+			for range 3 {
+				h.reconcile(t, "echo")
+			}
+			after, _ := h.rt.counts()
+			require.Equal(t, creates, after, "the next passes keep the new workers")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "echo").Status.Phase)
+		})
+	}
+}

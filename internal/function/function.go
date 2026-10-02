@@ -1090,19 +1090,26 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // It returns the Revision's authoritative artifact digest (ADR-0035): on the create path the
 // digest is the explicit spec digest, else the resolved-and-pinned one; on the early-return
 // path it is the EXISTING Revision's digest — a stamped Revision is NEVER re-resolved, so a
-// moved tag cannot drift it (the immutability guarantee).
+// moved tag cannot drift it (the immutability guarantee). A Revision of the name that a since-deleted Function stamped
+// is dropped with its workers, and the generation is stamped afresh.
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
 	revName := revisionName(fn)
 	existing, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName))
-	if err == nil {
-		fn.Status.CurrentRevision = revName
-		if rev, ok := existing.(*v1.Revision); ok {
-			return rev.Spec.ImageDigest, nil // never re-resolved
+	switch {
+	case err == nil:
+		rev, ok := existing.(*v1.Revision)
+		if !ok || !ownedByAnother(rev, fn) {
+			fn.Status.CurrentRevision = revName
+			if ok {
+				return rev.Spec.ImageDigest, nil // never re-resolved
+			}
+			return fn.Spec.ImageDigest, nil
 		}
-		return fn.Spec.ImageDigest, nil
-	}
-	if fault.KindOf(err) != fault.NotFound {
+		if derr := r.dropRevision(ctx, fn, rev); derr != nil {
+			return "", derr
+		}
+	case fault.KindOf(err) != fault.NotFound:
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
@@ -1119,8 +1126,10 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	rev.Name = v1.ObjectName(revName)
 	rev.Namespace = fn.Namespace
 	rev.ResourceGroup = fn.ResourceGroup
+	fnRef := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
+	rev.OwnerReferences = []v1.OwnerReference{{ObjectRef: fnRef, UID: fn.UID, Controller: true}}
 	rev.Spec = v1.RevisionSpec{
-		Function: v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name},
+		Function: fnRef,
 		Number:   fn.Generation,
 		Runtime:  fn.Spec.Runtime,
 		Handler:  fn.Spec.Handler,
@@ -1143,6 +1152,38 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 
 // revisionName is the Revision a Function's generation stamps (ADR-0020): <name>-<generation>.
 func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name, fn.Generation) }
+
+// ownedByAnother reports whether rev was stamped for another Function of fn's name, one since deleted. A Revision that
+// names no owner is taken as fn's.
+func ownedByAnother(rev *v1.Revision, fn *v1.Function) bool {
+	for _, o := range rev.OwnerReferences {
+		if o.Kind == v1.KindFunction && o.Controller {
+			return o.UID != fn.UID
+		}
+	}
+	return false
+}
+
+// dropRevision retires the workers of rev, a deleted Function's Revision, and deletes it: when the delete and the
+// re-create reach one pass, teardown never ran, and the re-created Function's revision of that name must not adopt them
+// (issue #55).
+func (r *Reconciler) dropRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.Revision == rev.Name {
+			if err := r.retire(ctx, in); err != nil {
+				return err
+			}
+		}
+	}
+	if err := r.store.Delete(ctx, v1.KindRevision.GVK(), rev.Namespace, rev.Name, rev.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
+		return fault.Wrapf(err, fault.KindOf(err), "function.dropRevision", "delete revision %q", rev.Name)
+	}
+	return nil
+}
 
 // pinDigest resolves an OCI artifact ref → digest at Revision stamp (ADR-0035). With no
 // resolver configured (file:// dev / legacy mode) there is no digest to pin — the
