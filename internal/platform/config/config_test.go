@@ -346,3 +346,11 @@ func TestLocate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", got, "no file found ⇒ zero-config")
 }
+
+// An explicit empty storage.dataDir is rejected at Load, naming the key, instead of deriving relative
+// store paths ("store", "kv", …) that fail later at startup with a message that does not name it.
+func TestIssue332_EmptyDataDirRejected(t *testing.T) {
+	_, err := config.Load(writeCfg(t, "storage:\n  dataDir: \"\"\n"), config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an empty storage.dataDir is rejected")
+	require.ErrorContains(t, err, "storage.dataDir")
+}

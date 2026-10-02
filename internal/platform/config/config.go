@@ -101,7 +101,7 @@ type Config struct {
 	} `json:"server,omitempty"`
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
-		DataDir string `json:"dataDir,omitempty" env:"FUNCD_DATA_DIR"`
+		DataDir string `json:"dataDir,omitempty" env:"FUNCD_DATA_DIR" validate:"required"`
 		// MetastoreDir is the control-plane metastore's dedicated Badger directory (ADR-0065). Empty ⇒
 		// derived as <DataDir>/store in Load(); ignored (in-memory engine) when Mode is memory. Its own
 		// instance, never shared — see the store-per-service rule (restore class + service ownership).
