@@ -422,6 +422,60 @@ func TestScenarioIdleReclaim(t *testing.T) {
 	})
 }
 
+// Issue #49: a boot that outlasts idleTimeout must not be reclaimed while its wake is in flight, and the idle
+// window restarts when the wake ends, so the woken function is not reclaimed before it serves the call.
+func TestIssue49_ReclaimSkipsWakeInProgress(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const idle = time.Hour
+	st := store.New(memory.New())
+	createFunction(t, st, "slowboot", v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+	clk := &stepClock{t: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)}
+	ep := &fakeEndpoints{}
+	woke := make(chan struct{})
+	sc := &fakeScaler{hook: func(_ activator.FunctionRef, replicas int) {
+		if replicas == 1 {
+			close(woke)
+		}
+	}}
+	a := newActivator(t, activator.Deps{
+		Store:             st,
+		Endpoints:         ep,
+		Scaler:            sc,
+		Clock:             clk,
+		ActivationTimeout: 10 * time.Second,
+		PollInterval:      time.Millisecond,
+	})
+
+	fn := activator.FunctionRef{Namespace: "default", Name: "slowboot"}
+	type result struct {
+		upstream string
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		up, err := a.Wake(ctx, fn)
+		done <- result{up, err}
+	}()
+	<-woke
+
+	clk.advance(2 * idle)
+	require.NoError(t, a.ReclaimIdle(ctx))
+	require.Equal(t, []int{1}, sc.targetList(), "a wake in progress is not reclaimed")
+
+	ep.setReady("http://10.0.0.7:8080")
+	res := <-done
+	require.NoError(t, res.err)
+	require.Equal(t, "http://10.0.0.7:8080", res.upstream)
+
+	require.NoError(t, a.ReclaimIdle(ctx))
+	require.Equal(t, []int{1}, sc.targetList(), "the idle window starts when the wake ends")
+
+	clk.advance(2 * idle)
+	require.NoError(t, a.ReclaimIdle(ctx))
+	require.Equal(t, []int{1, 0}, sc.targetList(), "idle past IdleTimeout after the wake → reclaimed")
+}
+
 // createFunction stores a minimal Function with the given scaling spec.
 func createFunction(t *testing.T, st store.Store, name string, scaling v1.Scaling) {
 	t.Helper()

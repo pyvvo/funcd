@@ -323,11 +323,16 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 }
 
 // resolve records the activation result, removes it from the in-flight map (so a later
-// cold request starts a fresh activation — no stuck state), and releases all waiters.
+// cold request starts a fresh activation — no stuck state), and releases all waiters. A
+// successful wake restarts fn's idle window, so a boot longer than IdleTimeout is not
+// reclaimed before its held requests are forwarded.
 func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, err error) {
 	a.mu.Lock()
 	if a.inflight[fn] == act {
 		delete(a.inflight, fn)
+	}
+	if err == nil {
+		a.lastActive[fn] = a.clock.Now()
 	}
 	a.mu.Unlock()
 	act.upstream = upstream
@@ -370,8 +375,8 @@ func rebase(r *http.Request, base string) *http.Request {
 }
 
 // ReclaimIdle scales to zero every minReplicas==0 function whose last activity is older
-// than its IdleTimeout and that has no call in flight. Functions with recent activity,
-// MinReplicas != 0, or a zero IdleTimeout (reclaim disabled) are skipped. A function not
+// than its IdleTimeout, that has no call in flight and no wake in progress. Functions with recent
+// activity, MinReplicas != 0, or a zero IdleTimeout (reclaim disabled) are skipped. A function not
 // yet seen, or with a call in flight, is given a full grace window from the current time.
 func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	const op = "activator.ReclaimIdle"
@@ -408,11 +413,15 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 }
 
 // claimIdle reports whether fn has seen no activity for idleTimeout and has no call in flight to an upstream Wake
-// handed out; it then marks fn reclaiming, and the caller closes done once the scale-to-zero is written. A never-seen
+// handed out, and no wake in progress (its held requests are traffic, ADR-0016 C3); it then marks fn reclaiming, and the caller closes done once the scale-to-zero is written. A never-seen
 // fn, or one with a call in flight, is given a full grace window from now.
 func (a *Activator) claimIdle(fn FunctionRef, now time.Time, idleTimeout time.Duration) (done chan struct{}, idle bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if _, waking := a.inflight[fn]; waking {
+		a.lastActive[fn] = now
+		return nil, false
+	}
 	last, seen := a.lastActive[fn]
 	if seen && now.Sub(last) <= idleTimeout {
 		return nil, false
