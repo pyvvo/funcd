@@ -172,6 +172,9 @@ func addrFromNet(a net.Addr) (netip.Addr, bool) {
 // corrKey is a (worker source IP, resolved destination IP) pair — the reverse index the gateway queries.
 type corrKey struct{ src, dst netip.Addr }
 
+// minSweep is the record count below which the correlator never sweeps, so a small map is not rescanned.
+const minSweep = 1024
+
 // correlator records (src, domain)→resolved-IP with a TTL and exposes the reverse DomainsFor(src, dst).
 // It is the trust anchor's data structure: only domains funcd's OWN forwarder resolved for a worker are
 // ever returned. wildcardsFor supplies the namespace's EgressPolicy wildcard patterns so a matched FQDN
@@ -182,10 +185,12 @@ type correlator struct {
 
 	mu      sync.Mutex
 	entries map[corrKey]map[string]time.Time // domain → expiry
+	records int                              // (key, domain) pairs held in entries
+	sweepAt int                              // records count that triggers the next sweep
 }
 
 func newCorrelator(now func() time.Time, wildcardsFor func(netip.Addr) []string) *correlator {
-	return &correlator{now: now, wildcardsFor: wildcardsFor, entries: map[corrKey]map[string]time.Time{}}
+	return &correlator{now: now, wildcardsFor: wildcardsFor, entries: map[corrKey]map[string]time.Time{}, sweepAt: minSweep}
 }
 
 // record binds (src, domain) to each resolved ip until now+ttl (a zero/negative ttl is clamped to a
@@ -194,7 +199,8 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 	if ttl < time.Second {
 		ttl = time.Second
 	}
-	exp := c.now().Add(ttl)
+	now := c.now()
+	exp := now.Add(ttl)
 	domain = strings.TrimSuffix(strings.ToLower(domain), ".")
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -205,8 +211,32 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 			m = map[string]time.Time{}
 			c.entries[k] = m
 		}
+		if _, ok := m[domain]; !ok {
+			c.records++
+		}
 		m[domain] = exp
 	}
+	if c.records >= c.sweepAt {
+		c.sweep(now)
+	}
+}
+
+// sweep drops every expired (key, domain) pair and every emptied key, then schedules the next sweep at
+// twice the live count. The forwarder lives as long as the daemon, so the TTL must bound retention and not
+// only visibility: memory stays within twice the live records at amortized O(1) per record. Caller holds mu.
+func (c *correlator) sweep(now time.Time) {
+	for k, m := range c.entries {
+		for d, exp := range m {
+			if !now.Before(exp) {
+				delete(m, d)
+				c.records--
+			}
+		}
+		if len(m) == 0 {
+			delete(c.entries, k)
+		}
+	}
+	c.sweepAt = max(2*c.records, minSweep)
 }
 
 // DomainsFor returns the non-expired domains this worker resolved to dst, plus any matched namespace

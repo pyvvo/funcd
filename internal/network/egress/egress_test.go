@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/netip"
 	"testing"
@@ -188,4 +189,43 @@ func TestScenarioDisabledPassthrough(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, g.Serve(ctx), context.Canceled)
+}
+
+// The correlator lives as long as the daemon, so expired records must be freed, not only hidden: both a
+// stream of distinct resolved IPs and many names resolving to one IP stay bounded by the live set.
+func TestIssue138_CorrelatorEvictsExpiredRecords(t *testing.T) {
+	t.Parallel()
+	worker := netip.MustParseAddr("10.63.0.5")
+
+	t.Run("distinct-ips", func(t *testing.T) {
+		t.Parallel()
+		now := time.Unix(1000, 0)
+		c := newCorrelator(func() time.Time { return now }, nil)
+		const perRound = 2000
+		var last netip.Addr
+		for round := range 5 {
+			if round > 0 {
+				now = now.Add(31 * time.Second)
+			}
+			for i := range perRound {
+				last = netip.AddrFrom4([4]byte{100, byte(round), byte(i >> 8), byte(i)})
+				c.record(worker, "svc.example.com", []netip.Addr{last}, 30*time.Second)
+			}
+		}
+		require.LessOrEqual(t, len(c.entries), 2*perRound, "expired keys from past rounds are evicted")
+		require.Equal(t, []string{"svc.example.com"}, c.DomainsFor(worker, last), "a live record survives eviction")
+	})
+
+	t.Run("one-ip-many-names", func(t *testing.T) {
+		t.Parallel()
+		now := time.Unix(1000, 0)
+		c := newCorrelator(func() time.Time { return now }, nil)
+		dst := netip.MustParseAddr("93.184.216.34")
+		for i := range 50000 {
+			now = now.Add(time.Second)
+			c.record(worker, fmt.Sprintf("n%d.example.com", i), []netip.Addr{dst}, time.Second)
+		}
+		require.LessOrEqual(t, len(c.entries[corrKey{src: worker, dst: dst}]), 2000, "expired domains under one key are evicted")
+		require.Equal(t, []string{"n49999.example.com"}, c.DomainsFor(worker, dst), "only the live name is attested")
+	})
 }
