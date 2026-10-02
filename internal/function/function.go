@@ -1509,9 +1509,6 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	return up, ready, nil
 }
 
-// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
-// configured, ADR-0030) it launches the runtime shim with the materialized artifact +
-// handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
 // shimFor selects the shim launch prefix for a function's runtime (ADR-0049): the longest
 // registered family prefix that matches fn.Spec.Runtime (e.g. "python" → the python shim), else
 // the default ShimCommand (node). One daemon can thus run several curated languages; the rest of
@@ -1619,6 +1616,9 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 	}
 }
 
+// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
+// configured, ADR-0030) it launches the runtime shim with the materialized artifact +
+// handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
