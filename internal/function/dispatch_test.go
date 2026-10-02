@@ -2,6 +2,7 @@ package function_test
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,4 +71,30 @@ func TestScenarioRuntimeSelectsShim(t *testing.T) {
 	require.True(t, ok, "python worker provisioned")
 	require.True(t, slices.Equal(pySpec.Command, pyCmd),
 		"py-fn must launch with the python shim, got %v", pySpec.Command)
+}
+
+// Issue #371: with no python shim registered, a python Function is not launched under the node shim, solo or pooled:
+// it is Failed with RuntimeUnavailable, which names the runtime, and no worker is created.
+func TestIssue371_PythonFunctionWithoutPythonShimIsRuntimeUnavailable(t *testing.T) {
+	t.Parallel()
+	for name, worker := range map[string]string{"solo": "", "pooled": "w1"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) {
+				d.PoolShimCommand = []string{"node", "/opt/funcd/pool.mjs"}
+			})
+			h.create(t, "py-fn", func(fn *v1.Function) {
+				fn.Spec.Runtime = "python314"
+				fn.Spec.Pooling.Worker = worker
+			})
+			h.reconcile(t, "py-fn")
+
+			require.Equal(t, v1.PhaseFailed, h.getFn(t, "py-fn").Status.Phase)
+			ready := h.condition(t, "py-fn", "Ready")
+			require.Equal(t, "RuntimeUnavailable", ready.Reason)
+			require.Equal(t, `runtime "python314" is not available on this node: no python shim is registered`, ready.Message)
+			creates, _ := h.rt.counts()
+			require.Zero(t, creates, "no worker is created under another language's shim")
+		})
+	}
 }

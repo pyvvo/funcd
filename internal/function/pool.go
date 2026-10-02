@@ -36,10 +36,10 @@ type poolManifestEntry struct {
 
 // poolHostFor selects the pool-host launch prefix for a runtime (ADR-0050): the longest registered
 // pool-family prefix that matches rt (e.g. "python" → pool.py). Failing that, the default
-// poolShimCommand (the Node pool.mjs) applies — but ONLY to a node-family runtime, i.e. one not
-// served by a registered non-default *runtime* shim (shimByFamily). That guard keeps a python*
-// runtime (which has a python runtime shim) out of the Node pool host when it has no pool host of
-// its own — it stays solo rather than running a Python artifact in a Node host. nil ⇒ no host ⇒ solo.
+// poolShimCommand (the Node pool.mjs) applies — but ONLY to a node-family runtime, i.e. one neither
+// python-family nor served by a registered non-default *runtime* shim (shimByFamily). That guard keeps
+// a python* runtime out of the Node pool host when it has no pool host of its own — it stays solo
+// rather than running a Python artifact in a Node host (issue #371). nil ⇒ no host ⇒ solo.
 func (r *Reconciler) poolHostFor(rt v1.RuntimeName) []string {
 	best, cmd := "", []string(nil)
 	for family, c := range r.poolShimsByFamily {
@@ -49,6 +49,9 @@ func (r *Reconciler) poolHostFor(rt v1.RuntimeName) []string {
 	}
 	if cmd != nil {
 		return cmd
+	}
+	if isPythonFamily(rt) {
+		return nil
 	}
 	for family := range r.shimByFamily {
 		if strings.HasPrefix(string(rt), family) {
