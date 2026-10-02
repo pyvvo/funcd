@@ -291,10 +291,10 @@ type Platform struct {
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager   // per-function worker-node local API broker (ADR-0064)
-	workflowRuns      runstate.Store   // durable workflow run state (ADR-0094); closed on shutdown
-	workflowEngine    *workflow.Engine // the run engine (ADR-0094); drives the retention sweep
-	workflowRetention time.Duration    // terminal-run retention horizon (0 ⇒ no sweep)
+	invokeMgr         *local.Manager          // per-function worker-node local API broker (ADR-0064)
+	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
+	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
+	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
 	deadLetters          deadletter.Store          // eventing DLQ (ADR-0118); closed on shutdown
 	sensorReconciler     *sensor.Reconciler        // owns the retry workers (drained on shutdown) + the DLQ replay seam
@@ -822,7 +822,6 @@ func (p *Platform) buildControlPlane() error {
 	if eerr != nil {
 		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
 	}
-	p.workflowEngine = wfEngine
 	p.workflowRetention = c.workflowRetention
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
 	wfContracts := workflow.ContractResolver(contractResolver{})
@@ -830,7 +829,8 @@ func (p *Platform) buildControlPlane() error {
 		wfContracts = c.workflowContracts
 	}
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger))
-	ctrl.Register(v1.KindWorkflowRun.GVK(), workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger))
+	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger)
+	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	p.controller = ctrl
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -1050,7 +1050,7 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	if p.workflowEngine != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
+	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1296,8 +1296,8 @@ func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
 	return err == nil
 }
 
-// runWorkflowRetention periodically reclaims terminal WorkflowRun records older than the retention
-// horizon (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
+// runWorkflowRetention periodically reclaims terminal workflow runs older than the retention horizon,
+// engine records and WorkflowRun objects alike (ADR-0094). It sweeps at most hourly (sooner when the horizon is short), and stops on ctx
 // cancel. A sweep failure is logged, not fatal — the next tick retries.
 func (p *Platform) runWorkflowRetention(ctx context.Context) {
 	interval := p.workflowRetention
@@ -1311,7 +1311,7 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := p.workflowEngine.SweepExpired(ctx, p.workflowRetention)
+			n, err := p.workflowSweeper.SweepExpired(ctx, p.workflowRetention)
 			if err != nil {
 				p.logger.WarnContext(ctx, "workflow retention sweep failed", "error", err)
 				continue
