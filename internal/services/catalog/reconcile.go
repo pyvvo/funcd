@@ -70,6 +70,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, rberr
 	}
 	if refRequeue {
+		// Not Ready (ADR-0138): retract any external edge entry, as the post-Converge not-Ready branch does.
+		if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
+			return controller.Result{}, rerr
+		}
 		cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
 		cs.Status.Phase = v1.PhasePending
 		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "BucketNotFound", Message: refMsg})
@@ -84,6 +88,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// the same fail-closed posture the Function secret gate uses (ADR-0057).
 	env, berr := r.engineEnv(ctx, cs)
 	if berr != nil {
+		if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
+			return controller.Result{}, rerr
+		}
 		cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
 		cs.Status.Phase = v1.PhasePending
 		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "BindingResolveFailed", Message: berr.Error()})
