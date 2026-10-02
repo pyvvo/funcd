@@ -3,6 +3,7 @@ package local
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -26,6 +27,7 @@ type proxyInvoker struct{ dataPlane http.Handler }
 func NewInvoker(dataPlane http.Handler) Invoker { return proxyInvoker{dataPlane: dataPlane} }
 
 func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, timeout time.Duration) ([]byte, error) {
+	const op = "workernode.local.invoke"
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -38,9 +40,15 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	req.Header.Set(namespaceHeader, string(target.Namespace))
 
 	rec := &cappedRecorder{ResponseRecorder: httptest.NewRecorder()}
-	p.dataPlane.ServeHTTP(rec, req)
+	if aborted := serve(p.dataPlane, rec, req); aborted {
+		cause := "the upstream failed"
+		if err := cctx.Err(); err != nil {
+			cause = err.Error()
+		}
+		return nil, fault.Unavailablef(op, "the response of %s was cut off: %s", target, cause)
+	}
 	if rec.over {
-		return nil, fault.PayloadTooLargef("workernode.local.invoke", "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
+		return nil, fault.PayloadTooLargef(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
 	}
 	res := rec.Result()
 	body := rec.Body.Bytes()
@@ -50,6 +58,23 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	}
 	// Propagate the target's failure (e.g. the shim's 422/500, or the activator's 503) verbatim.
 	return nil, &UpstreamError{Status: res.StatusCode, Body: body}
+}
+
+// serve runs the data-plane handler and reports whether it aborted. httputil.ReverseProxy panics
+// http.ErrAbortHandler when the upstream fails mid-body (the link timeout included), the signal a
+// server answers by dropping the connection. The response is only recorded here and nothing has
+// reached the caller yet, so the invoke fails instead (issue #337).
+func serve(h http.Handler, w http.ResponseWriter, r *http.Request) (aborted bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			if err, ok := rec.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
+				panic(rec)
+			}
+			aborted = true
+		}
+	}()
+	h.ServeHTTP(w, r)
+	return false
 }
 
 // cappedRecorder captures the target's response holding at most maxInvokeBytes of its body, the
