@@ -6,6 +6,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -80,6 +81,9 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,
 	})
 	if err != nil {
+		return nil, err
+	}
+	if admitted, err = withStatus(admitted, nil); err != nil {
 		return nil, err
 	}
 	return h.store.Create(ctx, admitted)
@@ -169,8 +173,58 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	if err != nil {
 		return nil, err
 	}
+	if admitted, err = withStatus(admitted, cur); err != nil {
+		return nil, err
+	}
 	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
 	return h.store.Update(ctx, admitted)
+}
+
+// withStatus returns obj with from's status, or with none when from is nil. Status is server-owned: controllers
+// write it through the store, never through the API, so a create or a replace never takes it from the client
+// (ADR-0048 ignores the server-set metadata on input the same way).
+func withStatus(obj, from v1.Object) (v1.Object, error) {
+	const op = "controlplane.withStatus"
+	fields, err := jsonFields(obj)
+	if err != nil {
+		return nil, err
+	}
+	delete(fields, "status")
+	if from != nil {
+		src, serr := jsonFields(from)
+		if serr != nil {
+			return nil, serr
+		}
+		if st, ok := src["status"]; ok {
+			fields["status"] = st
+		}
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fault.Internalf(op, "marshal: %v", err)
+	}
+	kind := obj.GroupVersionKind().Kind
+	fresh, ok := v1.NewObject(kind)
+	if !ok {
+		return nil, fault.Internalf(op, "unknown kind %q", kind)
+	}
+	if err := json.Unmarshal(raw, fresh); err != nil {
+		return nil, fault.Internalf(op, "unmarshal: %v", err)
+	}
+	return fresh, nil
+}
+
+// jsonFields returns obj's top-level JSON fields.
+func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fault.Internalf("controlplane.jsonFields", "marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fault.Internalf("controlplane.jsonFields", "unmarshal: %v", err)
+	}
+	return m, nil
 }
 
 func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
