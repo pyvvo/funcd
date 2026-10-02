@@ -331,7 +331,9 @@ So we could use the same approach for the other resources, and define their desi
 | 7    | Expose                 | Routes and triggers are programmed in the gateway and the eventing system                       |
 | n    | Monitor & reconcile    | The controller monitors the function/service and takes corrective actions to maintain desired state |
 
-> Additional steps may occur between 7 and n (e.g., warm-up, canary rollout).
+> Additional steps may occur between 7 and n (e.g., warm-up, canary rollout). A redeploy of a Function switches
+> revisions (ADR-0143): the new revision's workers boot beside the old ones, the calls move once every new replica is
+> ready, and the old workers stop after they drain; a new revision that fails leaves the old one serving.
 
 The same lifecycle as a sequence diagram:
 
@@ -672,7 +674,7 @@ stateDiagram-v2
 A few important things intentionally left open at this stage:
 
 - **Build pipeline**: largely resolved by the curated-runtime decision — functions arrive as source artifacts (JS bundle, Python wheel) layered onto platform-owned runtime images. **Dependency resolution is resolved (ADR-0089): deps are bundled *in* the artifact, not resolved at deploy** — a function artifact may be a **deployment-package bundle** (a directory: handler + vendored non-stdlib deps + the mandatory I/O contract) pushed as a tar+gzip OCI layer, so a native dependency (e.g. a `duckdb` wheel) runs on the stock curated runtime (`PYTHONPATH`/`FUNCD_BUNDLE_DIR`; hermetic in-image build); a single-file artifact stays the common case. Still open: an optional in-platform builder later.
-- **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation; the rollout mechanics on top are not yet specified.
+- **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation, and a redeploy already switches all calls to the new revision once it is ready (ADR-0143, the Container Apps single-revision model); splitting traffic between revisions is not yet specified.
 - **Multi-node path**: worker nodes registering to the control plane over NATS, node heartbeats, and scheduler placement across nodes.
 - **Quotas & limits**: per-namespace resource quotas and admission-time enforcement (per-account JetStream limits already cover the bus dimension — see [Internal IAM](#internal-iam)).
 - **Backup & disaster recovery**: metastore snapshot/restore and JetStream stream backups; declarative resources keep namespaces re-applyable from manifests (GitOps-style) as a coarse-grained fallback.

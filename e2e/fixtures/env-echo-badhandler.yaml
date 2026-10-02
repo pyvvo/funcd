@@ -1,0 +1,18 @@
+# ADR-0143: env-echo with a handler its bundle does not export — the revision cannot load, so the serving one stays.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: env-echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: nope
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  config:
+    - app-config-v2
+  secrets:
+    - app-secret

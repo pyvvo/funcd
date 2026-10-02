@@ -34,10 +34,11 @@ import (
 )
 
 const (
-	condReady      v1.ConditionType = "Ready"
-	condShapeValid v1.ConditionType = "ShapeValid"
-	condPoolFull   v1.ConditionType = "PoolFull" // ADR-0046: over-cap pooled member held NotReady
-	upstreamPort                    = "8080"
+	condReady         v1.ConditionType = "Ready"
+	condShapeValid    v1.ConditionType = "ShapeValid"
+	condPoolFull      v1.ConditionType = "PoolFull"      // ADR-0046: over-cap pooled member held NotReady
+	condRevisionReady v1.ConditionType = "RevisionReady" // ADR-0143: whether the latest generation serves
+	upstreamPort                       = "8080"
 )
 
 // errArtifactUnresolved marks a Function whose artifact ref could not be resolved to a
@@ -138,6 +139,14 @@ type Deps struct {
 
 	// SupervisionPeriod is the requeue of a Ready function (ADR-0142); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
+
+	// Calls counts the calls made to each worker (ADR-0143): the resolver records each hand-out and the drain asks
+	// whether a demoted revision's worker is idle. nil ⇒ every worker is idle.
+	Calls *activator.CallTracker
+	// DrainGrace bounds how long a demoted revision's workers drain; 0 ⇒ 30 s (ADR-0143).
+	DrainGrace time.Duration
+	// HandOutSettle is how long after a hand-out, or after the switch, a worker may still receive a call; 0 ⇒ 2 s.
+	HandOutSettle time.Duration
 }
 
 // S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
@@ -229,7 +238,17 @@ type Reconciler struct {
 
 	// supervisionPeriod is the steady-state requeue and the replacement backoff (ADR-0142).
 	supervisionPeriod time.Duration
+
+	// calls, drainGrace and handOutSettle drive the drain of a demoted revision (ADR-0143).
+	calls         *activator.CallTracker
+	drainGrace    time.Duration
+	handOutSettle time.Duration
 }
+
+const (
+	defaultDrainGrace    = 30 * time.Second
+	defaultHandOutSettle = 2 * time.Second
+)
 
 // defaultPoolLimit is the per-pool handler cap when Deps.PoolLimit is unset (ADR-0046 Decision 3).
 const defaultPoolLimit = 16
@@ -274,6 +293,14 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if period <= 0 {
 		period = controller.SupervisionPeriod
 	}
+	drainGrace := d.DrainGrace
+	if drainGrace <= 0 {
+		drainGrace = defaultDrainGrace
+	}
+	settle := d.HandOutSettle
+	if settle <= 0 {
+		settle = defaultHandOutSettle
+	}
 	return &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
@@ -292,6 +319,9 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolLimit:           limit,
 		poolSigs:            map[pooling.PoolKey]string{},
 		supervisionPeriod:   period,
+		calls:               d.Calls,
+		drainGrace:          drainGrace,
+		handOutSettle:       settle,
 	}, nil
 }
 
@@ -319,31 +349,38 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
 	}
 
+	// ADR-0143 Decision 4.1: drain a demoted revision and retire revisions that never served, before the gates, so a
+	// failing gate never strands an old revision's workers. A status with no current revision tells no worker apart.
+	var drainAfter time.Duration
+	if fn.Status.CurrentRevision != "" {
+		if drainAfter, err = r.drain(ctx, fn); err != nil {
+			return controller.Result{}, err
+		}
+	}
+
 	// 2. stamp an immutable Revision (ADR-0020) + resolve-and-pin the artifact digest if the
 	// spec left it unset (ADR-0035). pinned is the Revision's authoritative digest, used to
 	// materialize; an unresolvable ref → Failed (never a silent/wrong deploy).
+	prevRevision := fn.Status.CurrentRevision
 	pinned, err := r.ensureRevision(ctx, fn)
 	if err != nil {
 		if errors.Is(err, errArtifactUnresolved) {
-			fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ArtifactUnresolved", Message: err.Error()})
-			fn.Status.Phase = v1.PhaseFailed
-			if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-				return controller.Result{}, retryOnConflict(uerr, op)
-			}
-			return controller.Result{}, r.programAllRoutes(ctx)
+			return r.gateFailed(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed}, drainAfter)
 		}
 		return controller.Result{}, err
+	}
+	if fn.Status.CurrentRevision != prevRevision {
+		// a newer apply supersedes the revision that was coming up, so retire it now (ADR-0143 Decision 4.1)
+		again, derr := r.drain(ctx, fn)
+		if derr != nil {
+			return controller.Result{}, derr
+		}
+		drainAfter = earliest(drainAfter, again)
 	}
 
 	// 3. shape gate (materialization): a failure blocks Ready + programs no route.
 	if verr := r.validator.Validate(ctx, fn); verr != nil {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: verr.Error()})
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
-		fn.Status.Phase = v1.PhaseFailed
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		return controller.Result{}, r.programAllRoutes(ctx)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter)
 	}
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
@@ -354,15 +391,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, err
 	}
 	if assign.Rejected {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
-		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionTrue, Reason: "PoolFull", Message: assign.Reason})
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "PoolFull", Message: assign.Reason})
-		fn.Status.Phase = v1.PhasePending
-		fn.Status.Replicas = 0
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		return controller.Result{}, r.programAllRoutes(ctx)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, zeroReplicas: true}, drainAfter)
 	}
 	// Clear a stale PoolFull from a prior reconcile (e.g. the pool shrank and this member was
 	// admitted): the condition reflects current placement, never a leftover.
@@ -383,13 +412,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
 		}
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: serr.Error()})
-		fn.Status.Phase = v1.PhaseFailed
-		fn.Status.Replicas = 0
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		return controller.Result{}, r.programAllRoutes(ctx)
+		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -402,16 +425,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, rferr
 	}
 	if refRequeue {
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: refReason, Message: refMsg})
-		fn.Status.Phase = v1.PhasePending
-		fn.Status.Replicas = 0
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		if perr := r.programAllRoutes(ctx); perr != nil {
-			return controller.Result{}, perr
-		}
-		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+		return r.gateFailed(ctx, fn, gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, zeroReplicas: true, requeue: 2 * time.Second}, drainAfter)
 	}
 
 	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
@@ -421,63 +435,113 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// empty URL/token (mirrors the ADR-0088 catalog-wait). A hard resolution error fails it closed.
 	catalogEnv, requeue, cerr := r.resolveCatalogEnv(ctx, fn)
 	if cerr != nil {
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "CatalogResolveFailed", Message: cerr.Error()})
-		fn.Status.Phase = v1.PhaseFailed
-		fn.Status.Replicas = 0
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		return controller.Result{}, r.programAllRoutes(ctx)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
 	}
 	if requeue {
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "CatalogNotReady", Message: "a bound CatalogService is not Ready yet (no endpoint or token); waiting"})
-		fn.Status.Phase = v1.PhasePending
-		fn.Status.Replicas = 0
-		if _, uerr := r.store.Update(ctx, fn); uerr != nil {
-			return controller.Result{}, retryOnConflict(uerr, op)
-		}
-		if perr := r.programAllRoutes(ctx); perr != nil {
-			return controller.Result{}, perr
-		}
-		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+		const msg = "a bound CatalogService is not Ready yet (no endpoint or token); waiting"
+		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, zeroReplicas: true, requeue: 2 * time.Second}, drainAfter)
 	}
 
-	// 4. converge workeres to the EFFECTIVE desired count (honors the activator's wake Phase).
-	// Solo: per-function workers (secretEnv merged into each, ADR-0057). Pooled: the one shared
-	// pool worker for the key, driven to the max desired over the key's admitted members (ADR-0046
-	// Decision 6) — pooled functions can't declare secrets (gated above), so secretEnv is nil there.
-	running, retryAt, err := r.convergeFor(ctx, fn, assign, pinned, secretEnv, catalogEnv)
+	// 4. converge to the EFFECTIVE desired count (honors the activator's wake Phase). Pooled: the one shared pool
+	// worker for the key, driven to the max desired over the key's admitted members (ADR-0046 Decision 6). Solo: per
+	// revision, moving the calls from the serving revision to the current one once it is ready (ADR-0143).
+	var v verdict
+	if assign.Pooled {
+		v, err = r.convergePooled(ctx, fn, assign)
+	} else {
+		v, err = r.convergeSolo(ctx, fn, pinned, secretEnv, catalogEnv)
+	}
 	if err != nil {
 		return controller.Result{}, err
 	}
+	return r.finish(ctx, fn, v, drainAfter)
+}
 
-	// 5. readiness: in shim mode (ADR-0030) a replica is Ready only when its shim reports
-	// GET /health/readiness; a shim that exits (could not load the handler) is a shape
-	// failure. In legacy mode ready == running (ADR-0020 behavior, unchanged). A pooled
-	// member's readiness is its pool worker's readiness (ADR-0046 Decision 5).
-	ready, shapeFailed := r.readyFor(ctx, fn, assign, running)
-	// ADR-0142: in a pass that started serving, a Failed replica is a crash under repair, not a shape failure.
-	serving := servingPhase(fn.Status.Phase)
-	if serving {
-		shapeFailed = false
+// gateFailure is a gate that stopped the latest generation before converge (ADR-0143 Decision 4.6).
+type gateFailure struct {
+	reason, message string        // RevisionReady's reason and message
+	readyMessage    string        // the message the gate writes on Ready when nothing serves
+	phase           v1.Phase      // the phase the gate writes when nothing serves
+	shapeInvalid    bool          // the shape gate: ShapeValid turns False too
+	poolFull        bool          // the pool gate: PoolFull is set, ShapeValid stays True
+	zeroReplicas    bool          // the gate writes status.replicas 0 when nothing serves
+	requeue         time.Duration // the gate's requeue when nothing serves (0 = none)
+}
+
+// gateFailed records a gate failure. While a worker of the serving revision runs, it keeps serving: phase, Ready,
+// replicas, servingRevision and the route stay, and the current revision's workers stop if it is not the serving one
+// (ADR-0143 Decision 4.6). Otherwise the gate's own writes apply, as before ADR-0143.
+func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration) (controller.Result, error) {
+	const op = "function.Reconcile"
+	fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.message})
+	switch {
+	case g.shapeInvalid:
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: g.message})
+	case g.poolFull:
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
+		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionTrue, Reason: "PoolFull", Message: g.message})
 	}
-	fn.Status.Replicas = running
+	requeue := g.requeue
+	serves, err := r.servingWorkerRuns(ctx, fn)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if serves {
+		if c := fn.Status.CurrentRevision; c != fn.Status.ServingRevision {
+			if err := r.stopRevision(ctx, fn, v1.ObjectName(c)); err != nil {
+				return controller.Result{}, err
+			}
+		}
+		requeue = r.supervisionPeriod
+	} else {
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.readyMessage})
+		fn.Status.Phase = g.phase
+		if g.zeroReplicas {
+			fn.Status.Replicas = 0
+		}
+	}
+	if _, uerr := r.store.Update(ctx, fn); uerr != nil {
+		return controller.Result{}, retryOnConflict(uerr, op)
+	}
+	if perr := r.programAllRoutes(ctx); perr != nil {
+		return controller.Result{}, perr
+	}
+	return controller.Result{RequeueAfter: earliest(requeue, drainAfter)}, nil
+}
+
+// verdict is a pass's outcome: what serves (ADR-0142's phase rules) and how the current revision fares (ADR-0143).
+type verdict struct {
+	running, ready int       // the serving side's running and ready replicas
+	shapeFailed    bool      // nothing serves and the revision being brought up cannot load its handler
+	serving        bool      // the replicas judged have served since the last deploy
+	retryAt        time.Time // the earliest backoff deadline (zero if none)
+	booting        bool      // a replica of the current revision runs but is not ready yet
+	switching      bool      // the serving revision serves while the current one, which differs, comes up
+	currentFailed  bool      // while switching: the current revision cannot load its handler
+	switched       bool      // this pass moved the calls to the current revision
+}
+
+// finish writes the pass's status from v and returns its requeue. Ready and the phase describe the serving side;
+// ShapeValid and RevisionReady, the current revision (ADR-0143 Decision 5).
+func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, drainAfter time.Duration) (controller.Result, error) {
+	const op = "function.Reconcile"
+	fn.Status.Replicas = v.running
 	fn.Status.ObservedGeneration = fn.Generation
 	switch {
-	case shapeFailed:
+	case v.shapeFailed:
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
 		fn.Status.Phase = v1.PhaseFailed
-	case ready >= 1:
+	case v.ready >= 1:
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseReady
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
-	case serving:
+	case v.serving:
 		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
 		fn.Status.Phase = v1.PhaseDegraded
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"})
-	case running >= 1 || !retryAt.IsZero():
+	case v.running >= 1 || !v.retryAt.IsZero():
 		// replicas started but the shim is not serving yet, or a replica waits out its backoff (ADR-0142) — keep
 		// polling.
 		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
@@ -488,30 +552,73 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		fn.Status.Phase = v1.PhaseIdle
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "NoReplicas"})
 	}
+	switch {
+	case v.switching && v.currentFailed:
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the runtime shim could not load the handler"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls"})
+	case v.switching:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one"})
+	case v.shapeFailed:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
+	case fn.Status.Phase == v1.PhaseDeploying:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing"})
+	default:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionTrue})
+	}
 	if _, uerr := r.store.Update(ctx, fn); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
 	}
 	if perr := r.programAllRoutes(ctx); perr != nil {
 		return controller.Result{}, perr
 	}
-	switch fn.Status.Phase {
-	case v1.PhaseDeploying: // shim booting — re-poll readiness soon; a replica in its backoff — at its deadline
-		if running == 0 && !retryAt.IsZero() {
-			return controller.Result{RequeueAfter: max(time.Until(retryAt), time.Millisecond)}, nil
-		}
-		return controller.Result{RequeueAfter: readinessPoll}, nil
-	case v1.PhaseReady: // ADR-0142: come back to check the replicas
-		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
-	case v1.PhaseDegraded: // ADR-0142: poll a booting replacement, else wait out the backoff
-		if running > ready {
-			return controller.Result{RequeueAfter: readinessPoll}, nil
-		}
-		if !retryAt.IsZero() { // at least 1ms: a zero RequeueAfter would mean no requeue
-			return controller.Result{RequeueAfter: max(time.Until(retryAt), time.Millisecond)}, nil
-		}
-		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
+	requeue := r.requeueFor(fn.Status.Phase, v)
+	if v.switched {
+		requeue = earliest(requeue, r.handOutSettle) // come back for the drain
 	}
-	return controller.Result{}, nil
+	return controller.Result{RequeueAfter: earliest(requeue, drainAfter)}, nil
+}
+
+// requeueFor is how soon a pass comes back (ADR-0142; ADR-0143 Decision 4.7). While the current revision comes up
+// beside the serving one, it polls a booting replica and otherwise checks back after the supervision period.
+func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
+	if v.switching {
+		if v.booting {
+			return readinessPoll
+		}
+		if !v.retryAt.IsZero() {
+			return min(r.supervisionPeriod, max(time.Until(v.retryAt), time.Millisecond))
+		}
+		return r.supervisionPeriod
+	}
+	switch phase {
+	case v1.PhaseDeploying: // shim booting — re-poll readiness soon; a replica in its backoff — at its deadline
+		if v.running == 0 && !v.retryAt.IsZero() {
+			return max(time.Until(v.retryAt), time.Millisecond)
+		}
+		return readinessPoll
+	case v1.PhaseReady: // ADR-0142: come back to check the replicas
+		return r.supervisionPeriod
+	case v1.PhaseDegraded: // ADR-0142: poll a booting replacement, else wait out the backoff
+		if v.running > v.ready {
+			return readinessPoll
+		}
+		if !v.retryAt.IsZero() { // at least 1ms: a zero RequeueAfter would mean no requeue
+			return max(time.Until(v.retryAt), time.Millisecond)
+		}
+		return r.supervisionPeriod
+	}
+	return 0
+}
+
+// earliest is the sooner of two requeues, where 0 means none.
+func earliest(a, b time.Duration) time.Duration {
+	switch {
+	case a == 0:
+		return b
+	case b == 0:
+		return a
+	}
+	return min(a, b)
 }
 
 // readinessPoll is how soon a pass re-checks a booting shim.
@@ -520,8 +627,9 @@ const readinessPoll = 200 * time.Millisecond
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
 
-// steadyState reports whether fn is a solo Function at desired state: Ready, its generation processed, and every
-// replica's instance running. It calls only runtime.Status, once per replica (ADR-0142).
+// steadyState reports whether fn is a solo Function at desired state: Ready, its generation processed, its current
+// revision serving with nothing draining (ADR-0143), and every replica's instance running. It calls only
+// runtime.Status, once per replica (ADR-0142).
 func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
 		return false
@@ -529,8 +637,15 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if _, pooled := r.poolKeyFor(fn); pooled {
 		return false
 	}
+	c := fn.Status.CurrentRevision
+	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" {
+		return false
+	}
+	if rr, ok := fn.Status.Conditions.Get(condRevisionReady); !ok || rr.Status != v1.ConditionTrue {
+		return false
+	}
 	for i := range r.desiredReplicas(fn) {
-		in, err := r.runtime.Status(ctx, runtime.NewInstanceID(fn.Namespace, fn.Name, i))
+		in, err := r.runtime.Status(ctx, runtime.NewInstanceID(fn.Namespace, fn.Name, v1.ObjectName(c), i))
 		if err != nil || in.State != runtime.StateRunning {
 			return false
 		}
@@ -559,38 +674,165 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 	return maxInt(fn.Spec.Replicas, sc.MinReplicas)
 }
 
-// converge drives each replica of a solo function toward running (ADR-0142 per-replica table): it creates a missing
-// replica, starts a Created one, and replaces a terminal one — at once for an untried generation, after the backoff
-// for a Stopped replica or a crash in a Function that was serving — while a Failed replica of a tried generation that
-// never served is kept so readiness reports the shape failure. It stops replicas at or above desired. It returns the
-// running count and the earliest time a replica waiting out its backoff may be replaced (zero if none).
-func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int, pinnedDigest string, secretEnv, catalogEnv map[string]string) (int, time.Time, error) {
-	const op = "function.converge"
+// convergeSolo converges a solo Function's revisions and judges them (ADR-0143 Decision 4). With nothing serving, or
+// the current revision serving, it is ADR-0142's per-replica converge of the current revision; otherwise the current
+// revision comes up beside the serving one (switchSolo).
+func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, secretEnv, catalogEnv map[string]string) (verdict, error) {
+	c := v1.ObjectName(fn.Status.CurrentRevision)
+	s := v1.ObjectName(fn.Status.ServingRevision)
+	desired := r.desiredReplicas(fn)
+	untried := fn.Status.ObservedGeneration < fn.Generation
+	if desired == 0 {
+		if err := r.stopAll(ctx, fn, c); err != nil {
+			return verdict{}, err
+		}
+		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = "", "", nil
+		s = ""
+	}
+	if s != "" && s != c {
+		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, secretEnv, catalogEnv)
+	}
+	serving := servingPhase(fn.Status.Phase)
+	running, retryAt, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), serving, untried, true, secretEnv, catalogEnv)
+	if err != nil {
+		return verdict{}, err
+	}
+	ready, shapeFailed := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired)
+	if serving {
+		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+	}
+	if ready >= 1 && s == "" {
+		fn.Status.ServingRevision = string(c)
+	}
+	return verdict{running: running, ready: ready, shapeFailed: shapeFailed, serving: serving, retryAt: retryAt, booting: running > ready}, nil
+}
+
+// switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
+// replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
+// worker is replaced from s's Revision.
+func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, secretEnv, catalogEnv map[string]string) (verdict, error) {
+	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
+	if err != nil {
+		return verdict{}, err
+	}
+	sIdx, err := r.servingIndexes(ctx, fn, s)
+	if err != nil {
+		return verdict{}, err
+	}
+	runningS, retryS, err := r.convergeRevision(ctx, sfn, s, spinned, sIdx, true, false, false, secretEnv, catalogEnv)
+	if err != nil {
+		return verdict{}, err
+	}
+	runningC, retryC, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), false, untried, true, secretEnv, catalogEnv)
+	if err != nil {
+		return verdict{}, err
+	}
+	readyC, failedC := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, runningC, desired)
+	if readyC == desired && fn.Status.DrainingRevision == "" {
+		now := time.Now()
+		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
+		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
+	}
+	readyS, _ := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, runningS, maxIndex(sIdx)+1)
+	retryAt := retryS
+	if retryAt.IsZero() || (!retryC.IsZero() && retryC.Before(retryAt)) {
+		retryAt = retryC
+	}
+	return verdict{
+		running: runningS, ready: readyS, serving: true, retryAt: retryAt,
+		booting: runningC > readyC, switching: true, currentFailed: failedC,
+	}, nil
+}
+
+// revisionTemplate is fn as revision rev runs it — the runtime, handler and image of rev's snapshot (ADR-0020) with the
+// Function's current bindings — and rev's pinned digest.
+func (r *Reconciler) revisionTemplate(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (*v1.Function, string, error) {
+	obj, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, rev)
+	if err != nil {
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), "function.revisionTemplate", "get revision %q", rev)
+	}
+	snap, ok := obj.(*v1.Revision)
+	if !ok {
+		return nil, "", fault.Internalf("function.revisionTemplate", "object %q is not a Revision", rev)
+	}
+	tmpl := *fn
+	tmpl.Spec.Runtime, tmpl.Spec.Handler, tmpl.Spec.Image = snap.Spec.Runtime, snap.Spec.Handler, snap.Spec.Image
+	return &tmpl, snap.Spec.ImageDigest, nil
+}
+
+// servingIndexes are the replica indexes the serving revision s keeps during a switch: those the runtime lists, or
+// 0 … status.replicas−1 when it lists none, as after a daemon restart (ADR-0143 Decision 4.3).
+func (r *Reconciler) servingIndexes(ctx context.Context, fn *v1.Function, s v1.ObjectName) ([]int, error) {
 	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return nil, err
+	}
+	var idx []int
+	for _, in := range insts {
+		if in.Revision == s {
+			idx = append(idx, in.Replica)
+		}
+	}
+	if len(idx) == 0 {
+		return replicaRange(fn.Status.Replicas), nil
+	}
+	return idx, nil
+}
+
+func replicaRange(n int) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	return idx
+}
+
+func maxIndex(idx []int) int {
+	m := -1
+	for _, i := range idx {
+		m = max(m, i)
+	}
+	return m
+}
+
+// convergeRevision drives replicas `indexes` of revision rev toward running with ADR-0142's per-replica table: it
+// creates a missing replica, starts a Created one, and replaces a terminal one — at once for an untried generation,
+// after the backoff for a Stopped replica or a crash in a serving revision — while a Failed replica of a tried
+// generation that does not serve is kept, so readiness reports the shape failure. With scaleDown it stops rev's
+// replicas outside indexes. tmpl is fn as rev runs it. It returns rev's running count among indexes and the earliest
+// time a replica waiting out its backoff may be replaced (zero if none).
+func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, serving, untried, scaleDown bool, secretEnv, catalogEnv map[string]string) (int, time.Time, error) {
+	const op = "function.converge"
+	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
-	byReplica := make(map[int]runtime.Instance, len(insts))
+	want := make(map[int]bool, len(indexes))
+	for _, i := range indexes {
+		want[i] = true
+	}
+	byReplica := make(map[int]runtime.Instance, len(indexes))
 	for _, in := range insts {
-		if in.Replica < desired {
+		if in.Revision != rev {
+			continue
+		}
+		if want[in.Replica] {
 			byReplica[in.Replica] = in
 			continue
 		}
-		if in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
+		if scaleDown && in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
 			if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
 				return 0, time.Time{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
 			}
 		}
 	}
 
-	serving := servingPhase(fn.Status.Phase)
-	untried := fn.Status.ObservedGeneration < fn.Generation
 	now := time.Now()
 	var retryAt time.Time
 	var launch []int // replicas to create (missing) or replace (terminal)
 	var replace []runtime.Instance
 	var start []runtime.InstanceID
-	for i := range desired {
+	for _, i := range indexes {
 		in, ok := byReplica[i]
 		switch {
 		case !ok:
@@ -610,7 +852,7 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 			}
 			replace, launch = append(replace, in), append(launch, i)
 		default:
-			// Failed, generation tried, never served: keep, so readiness marks the shape failure
+			// Failed, generation tried, not serving: keep, so readiness marks the shape failure
 		}
 	}
 
@@ -619,7 +861,7 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 	// Function spec (store.Update persists only Status), so the spec keeps the user's input.
 	artifactPath := ""
 	if r.materializer != nil && len(launch) > 0 {
-		mfn := *fn
+		mfn := *tmpl
 		mfn.Spec.ImageDigest = pinnedDigest
 		artifactPath, err = r.materializer.Materialize(ctx, &mfn)
 		if err != nil {
@@ -632,10 +874,12 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 		}
 	}
 	for _, i := range launch {
-		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: fn.Namespace, Name: fn.Name, Replica: i}); perr != nil {
+		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i}); perr != nil {
 			return 0, time.Time{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		inst, cerr := r.runtime.Create(ctx, r.workerSpec(fn, i, artifactPath, secretEnv, catalogEnv))
+		spec := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
+		spec.Revision = rev
+		inst, cerr := r.runtime.Create(ctx, spec)
 		if cerr != nil {
 			return 0, time.Time{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create worker")
 		}
@@ -647,17 +891,133 @@ func (r *Reconciler) converge(ctx context.Context, fn *v1.Function, desired int,
 		}
 	}
 
-	insts, err = r.namedInstances(ctx, fn.Namespace, fn.Name)
+	insts, err = r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
 	running := 0
 	for _, in := range insts {
-		if in.Replica < desired && in.State == runtime.StateRunning {
+		if in.Revision == rev && want[in.Replica] && in.State == runtime.StateRunning {
 			running++
 		}
 	}
 	return running, retryAt, nil
+}
+
+// drain stops and removes the workers of revisions that no longer serve (ADR-0143 Decision 4.1): those of the drained
+// revision once idle — none before HandOutSettle after drainingSince, all once DrainGrace has passed — and those of any
+// revision other than the serving, current and drained ones at once, since they never served. It clears
+// drainingRevision when none of its workers remain, and returns how soon the pass must come back (0 if nothing drains).
+func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration, error) {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return 0, err
+	}
+	s, c, d := fn.Status.ServingRevision, fn.Status.CurrentRevision, fn.Status.DrainingRevision
+	var elapsed time.Duration
+	if fn.Status.DrainingSince != nil {
+		elapsed = time.Since(*fn.Status.DrainingSince)
+	}
+	draining := 0
+	for _, in := range insts {
+		rev := string(in.Revision)
+		if rev == s || rev == c {
+			continue
+		}
+		if d != "" && rev == d && in.State == runtime.StateRunning &&
+			(elapsed < r.handOutSettle || (elapsed < r.drainGrace && !r.idle(fn, in))) {
+			draining++
+			continue
+		}
+		if err := r.retire(ctx, in); err != nil {
+			return 0, err
+		}
+	}
+	if draining == 0 {
+		if d != "" {
+			fn.Status.DrainingRevision, fn.Status.DrainingSince = "", nil
+		}
+		return 0, nil
+	}
+	wait := r.drainGrace - elapsed
+	if elapsed < r.handOutSettle {
+		wait = r.handOutSettle - elapsed
+	}
+	return min(time.Second, max(wait, time.Millisecond)), nil
+}
+
+// idle reports whether no call to worker in is in flight and the resolver has not handed it out recently (ADR-0143).
+func (r *Reconciler) idle(fn *v1.Function, in runtime.Instance) bool {
+	return r.calls == nil || r.calls.Idle(instanceURL(fn.Namespace, fn.Name, in), r.handOutSettle)
+}
+
+// retire stops a worker and forgets it (ADR-0143).
+func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
+	const op = "function.retire"
+	if err := r.runtime.Stop(ctx, in.ID); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "stop worker")
+	}
+	if err := r.runtime.Remove(ctx, in.ID); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "remove worker")
+	}
+	return nil
+}
+
+// stopAll stops every worker of a Function scaled to zero and retires those of revisions other than c; c's stopped
+// replicas stay listed for ADR-0142's wake backoff (ADR-0143 Decision 5).
+func (r *Reconciler) stopAll(ctx context.Context, fn *v1.Function, c v1.ObjectName) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.Revision != c {
+			if err := r.retire(ctx, in); err != nil {
+				return err
+			}
+			continue
+		}
+		if in.State != runtime.StateStopped {
+			if err := r.runtime.Stop(ctx, in.ID); err != nil {
+				return fault.Wrapf(err, fault.KindOf(err), "function.stopAll", "stop worker")
+			}
+		}
+	}
+	return nil
+}
+
+// stopRevision stops every worker of revision rev.
+func (r *Reconciler) stopRevision(ctx context.Context, fn *v1.Function, rev v1.ObjectName) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.Revision == rev && in.State != runtime.StateStopped {
+			if err := r.runtime.Stop(ctx, in.ID); err != nil {
+				return fault.Wrapf(err, fault.KindOf(err), "function.stopRevision", "stop worker")
+			}
+		}
+	}
+	return nil
+}
+
+// servingWorkerRuns reports whether a worker of the serving revision is running (ADR-0143 Decision 4.6).
+func (r *Reconciler) servingWorkerRuns(ctx context.Context, fn *v1.Function) (bool, error) {
+	s := v1.ObjectName(fn.Status.ServingRevision)
+	if s == "" {
+		return false, nil
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return false, err
+	}
+	for _, in := range insts {
+		if in.Revision == s && in.State == runtime.StateRunning {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // namedInstances returns the runtime instances whose Name matches `name` in ns. For a solo
@@ -678,15 +1038,15 @@ func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, na
 	return out, nil
 }
 
-// teardown stops every worker of a (deleted) function.
+// teardown stops and removes every worker of a (deleted) function.
 func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
 		return err
 	}
 	for _, in := range insts {
-		if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
-			return fault.Wrapf(serr, fault.KindOf(serr), "function.teardown", "stop worker")
+		if err := r.retire(ctx, in); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), "function.teardown", "retire worker")
 		}
 	}
 	if r.invokeSockets != nil {
@@ -803,48 +1163,59 @@ func (r *Reconciler) programAllRoutes(ctx context.Context) error {
 
 // upstreamForFn returns a function's upstream URL: the pool worker's address for a pooled
 // function (resolved by its pool key, not by Instance.Name, since the worker is shared —
-// ADR-0046 Decision 5), or its own solo worker's address. "" if no running worker.
+// ADR-0046 Decision 5), or a running worker of its serving revision (ADR-0143). "" if none runs.
 func (r *Reconciler) upstreamForFn(ctx context.Context, fn *v1.Function) string {
 	// poolKeyFor already gates on a pool host existing for the runtime family (ADR-0050), so route
 	// to the shared pool worker whenever it returns a key — NOT only for the node poolShimCommand
 	// (a python* pool has only a python host configured, so a node-host check would mis-route it solo).
 	if key, ok := r.poolKeyFor(fn); ok {
-		return r.upstreamOf(ctx, fn.Namespace, poolInstanceName(key))
+		return r.upstreamOf(ctx, fn.Namespace, poolInstanceName(key), "")
 	}
-	return r.upstreamOf(ctx, fn.Namespace, fn.Name)
+	return r.upstreamOf(ctx, fn.Namespace, fn.Name, servingRevision(fn))
 }
 
-// upstreamOf returns the upstream URL of the running worker named `name` in ns, or "".
-// In shim mode (ADR-0030) the worker reports its resolved IP:Port (the shim's listening
-// address); legacy mode falls back to a synthetic per-function host + the default port.
-func (r *Reconciler) upstreamOf(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) string {
+// servingRevision is the Revision whose workers receive a solo Function's calls: servingRevision, or the current
+// revision while nothing serves yet (ADR-0143).
+func servingRevision(fn *v1.Function) v1.ObjectName {
+	if fn.Status.ServingRevision != "" {
+		return v1.ObjectName(fn.Status.ServingRevision)
+	}
+	return v1.ObjectName(fn.Status.CurrentRevision)
+}
+
+// upstreamOf returns the upstream URL of a running worker of revision rev named `name` in ns, or "".
+func (r *Reconciler) upstreamOf(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName) string {
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
 		return ""
 	}
 	for _, in := range insts {
-		if in.State != runtime.StateRunning {
-			continue
+		if in.Revision == rev && in.State == runtime.StateRunning {
+			return instanceURL(ns, name, in)
 		}
-		host := in.IP
-		if host == "" {
-			host = string(name) + "." + string(ns)
-		}
-		port := upstreamPort
-		if in.Port > 0 {
-			port = strconv.Itoa(in.Port)
-		}
-		return "http://" + host + ":" + port
 	}
 	return ""
 }
 
-// readyReplicas reports how many replicas are serving and whether the shim reported a shape
-// failure. In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim
-// mode (ADR-0030) it polls each running replica's /health/readiness and treats a failed
-// instance (the shim exited because it could not load the handler) as a shape failure.
-// Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, running, below int) (ready int, shapeFailed bool) {
+// instanceURL is a worker's upstream URL. In shim mode (ADR-0030) the worker reports its resolved IP:Port (the shim's
+// listening address); legacy mode falls back to a synthetic per-function host + the default port.
+func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) string {
+	host := in.IP
+	if host == "" {
+		host = string(name) + "." + string(ns)
+	}
+	port := upstreamPort
+	if in.Port > 0 {
+		port = strconv.Itoa(in.Port)
+	}
+	return "http://" + host + ":" + port
+}
+
+// readyReplicas reports how many replicas of revision rev are serving and whether the shim reported a shape failure.
+// In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls each
+// running replica's /health/readiness and treats a failed instance (the shim exited because it could not load the
+// handler) as a shape failure. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int) (ready int, shapeFailed bool) {
 	if r.materializer == nil {
 		return running, false
 	}
@@ -853,7 +1224,7 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		return 0, false
 	}
 	for _, in := range insts {
-		if in.Replica >= below {
+		if in.Revision != rev || in.Replica >= below {
 			continue
 		}
 		switch in.State {
@@ -909,6 +1280,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	}
 	up := e.r.upstreamForFn(ctx, f)
 	ready := f.Status.Phase == v1.PhaseReady && up != ""
+	if ready && e.r.calls != nil {
+		e.r.calls.HandedOut(up) // the drain waits out a call that resolved this upstream (ADR-0143)
+	}
 	return up, ready, nil
 }
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -109,29 +108,25 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey) 
 	return out, nil
 }
 
-// convergeFor provisions a function's worker(s). Solo: the per-function path (unchanged).
-// Pooled (admitted): the one shared pool worker for the key, driven to the max desired over
-// the key's admitted members (ADR-0046 Decision 6). Returns the running count attributable to
-// this function (its replicas, or 1/0 for a pooled member depending on the pool worker).
-func (r *Reconciler) convergeFor(ctx context.Context, fn *v1.Function, a pooling.Assignment, pinnedDigest string, secretEnv, catalogEnv map[string]string) (int, time.Time, error) {
-	if !a.Pooled {
-		return r.converge(ctx, fn, r.desiredReplicas(fn), pinnedDigest, secretEnv, catalogEnv)
-	}
-	// Pooled members can't declare secrets (gated in Reconcile), so secretEnv is nil here; a pooled
-	// function's shared worker env likewise can't isolate a per-function catalog token, so catalogEnv
-	// is not injected into the pool (a catalog-consuming function runs solo — min-replica=1, ADR-0086).
+// convergePooled provisions a pooled member's shared pool worker, driven to the max desired over the key's admitted
+// members (ADR-0046 Decision 6), and judges it: the member is ready iff the pool worker serves (Decision 5). Pooled
+// members can't declare secrets (gated in Reconcile), and a pooled function's shared worker can't isolate a
+// per-function catalog token, so neither env reaches the pool (a catalog-consuming function runs solo, ADR-0086). The
+// serving revision follows the current one once the pool worker is ready (ADR-0143 Decision 8).
+func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment) (verdict, error) {
 	running, err := r.ensurePool(ctx, a.Key)
-	return running, time.Time{}, err
-}
-
-// readyFor reports a function's readiness. Solo: its own replicas (ADR-0030). Pooled: its
-// pool worker's readiness — the member is ready iff the shared pool worker is serving
-// (ADR-0046 Decision 5).
-func (r *Reconciler) readyFor(ctx context.Context, fn *v1.Function, a pooling.Assignment, running int) (ready int, shapeFailed bool) {
-	if !a.Pooled {
-		return r.readyReplicas(ctx, fn.Namespace, fn.Name, running, r.desiredReplicas(fn))
+	if err != nil {
+		return verdict{}, err
 	}
-	return r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), running, 1)
+	ready, shapeFailed := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1)
+	serving := servingPhase(fn.Status.Phase)
+	if serving {
+		shapeFailed = false // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+	}
+	if ready >= 1 {
+		fn.Status.ServingRevision = fn.Status.CurrentRevision
+	}
+	return verdict{running: running, ready: ready, shapeFailed: shapeFailed, serving: serving}, nil
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions

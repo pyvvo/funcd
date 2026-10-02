@@ -6,6 +6,8 @@
 #      resolution reconcile-side.
 #   2. the injected values reach the RUNNING handler — config=prod (ConfigMap), secret=s3cr3t (Secret),
 #      and shared=from-secret (the key present in both: the Secret wins, config-then-secrets order).
+# It also proves ADR-0143's redeploy on containerd: a spec change switches revisions with no failed call, and a
+# revision that cannot run leaves the serving one answering.
 # The http step hits the VM's forwarded 127.0.0.1 data plane; the exec step reads phase in-VM via limactl.
 name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
 
@@ -203,12 +205,14 @@ testcases:
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"env-echo-r0\"{print \$2}" > /tmp/env-echo-pid-before
-            sudo ctr --address $sock -n funcd-default task kill -s KILL env-echo-r0
-            echo "PID_BEFORE=$(cat /tmp/env-echo-pid-before)"'
+            sudo ctr --address $sock -n funcd-default task ls | awk "\$1 ~ /^env-echo-[0-9]+[.]r0\$/ {print \$1, \$2}" > /tmp/env-echo-before
+            read -r task pid < /tmp/env-echo-before
+            sudo ctr --address $sock -n funcd-default task kill -s KILL "$task"
+            echo "TASK_BEFORE=$task PID_BEFORE=$pid"'
         info: "killed the worker, no write → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "TASK_BEFORE=env-echo-[0-9]+[.]r0"
           - result.systemout ShouldMatchRegex "PID_BEFORE=[0-9]+"
       # The activator holds a call up to its 30 s activation timeout while the replacement boots, so a few
       # attempts bound this step to about two minutes.
@@ -229,12 +233,137 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            now=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"env-echo-r0\" && \$3==\"RUNNING\"{print \$2}")
+            read -r task pid < /tmp/env-echo-before
+            now=$(sudo ctr --address $sock -n funcd-default task ls | awk -v t="$task" "\$1==t && \$3==\"RUNNING\"{print \$2}")
             phase=$(funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
-            [ -n "$now" ] && [ "$now" != "$(cat /tmp/env-echo-pid-before)" ] && replaced=yes || replaced=no
-            echo "REPLACED=$replaced PHASE=$phase ($(cat /tmp/env-echo-pid-before) -> $now)"'
+            [ -n "$now" ] && [ "$now" != "$pid" ] && replaced=yes || replaced=no
+            echo "REPLACED=$replaced PHASE=$phase ($task: $pid -> $now)"'
         info: "after the restart → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "REPLACED=yes"
           - result.systemout ShouldContainSubstring "PHASE=Ready"
+
+
+  # ADR-0143: a redeploy reaches the running worker with no failed call. env-echo-v2 binds a second ConfigMap
+  # (APP_MODE staging): the new revision boots beside the old one and takes the calls once ready, then the old worker
+  # drains and leaves containerd.
+  - name: redeploy-switches-to-new-revision — a spec change serves the new revision, and no call fails during the switch
+    steps:
+      # One apply, then a call loop co-located with the daemon until 25 calls got the new revision's answer. It counts
+      # each status code with the revision that answered; "back" is an old answer after a new one.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl apply -f /opt/lane/env-echo-config-v2.yaml >/dev/null
+            funcdctl apply -f /opt/lane/env-echo-v2.yaml >/dev/null
+            seen=0
+            for i in $(seq 1 150); do
+              out=$(curl -s -w "\n%{http_code}" -X POST -H "content-type: application/json" -d "{\"data\":null}" \
+                http://127.0.0.1:8081/function/env-echo)
+              code=$(echo "$out" | tail -1)
+              case "$out" in
+                *staging*) seen=$((seen+1)); echo "$code-staging" ;;
+                *prod*) [ $seen -gt 0 ] && echo "$code-back" || echo "$code-prod" ;;
+                *) echo "$code-other" ;;
+              esac
+              [ $seen -ge 25 ] && break
+              sleep 0.2
+            done | sort | uniq -c | awk "{print \$2 \":\" \$1}" | paste -sd, -'
+        info: "answers through the switch → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex ^200-prod:[0-9]+,200-staging:25$
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "after the redeploy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual staging
+      # The old worker drains (no call in flight, so 2 s after the switch) and leaves containerd; the status names
+      # the serving revision and nothing drains.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            tasks=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1 ~ /^env-echo-/ {print \$1}" | sort | paste -sd, -)
+            ctrs=$(sudo ctr --address $sock -n funcd-default containers ls -q | grep "^env-echo-" | sort | paste -sd, -)
+            status=$(funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s.get(\"servingRevision\",\"\")+\"/\"+s.get(\"drainingRevision\",\"\"))")
+            echo "TASKS=$tasks,CONTAINERS=$ctrs,STATUS=$status"'
+        retry: 20
+        delay: 2
+        info: "workers and status after the drain → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual TASKS=env-echo-2.r0,CONTAINERS=env-echo-2.r0,STATUS=env-echo-2/
+
+  # ADR-0143: a revision that cannot run leaves the serving one answering. env-echo-badtag names a tag never pushed.
+  - name: failed-revision-keeps-old-serving — an unresolvable tag leaves the serving revision answering
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl apply -f /opt/lane/env-echo-badtag.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"RevisionReady\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",SERVING=\"+s.get(\"servingRevision\",\"\")+\",REVISION=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\"))"'
+        retry: 15
+        delay: 2
+        info: "status after the failed redeploy → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual PHASE=Ready,SERVING=env-echo-2,REVISION=False/ArtifactUnresolved
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        info: "the serving revision still answers → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual staging
+
+  - name: failed-revision-keeps-old-serving — a handler that cannot load leaves the serving revision answering
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl apply -f /opt/lane/env-echo-badhandler.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"RevisionReady\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",SERVING=\"+s.get(\"servingRevision\",\"\")+\",REVISION=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\"))"'
+        retry: 30
+        delay: 2
+        info: "status after the unloadable redeploy → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual PHASE=Ready,SERVING=env-echo-2,REVISION=False/ShapeInvalid
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/env-echo"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        info: "the serving revision still answers → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.config ShouldEqual staging

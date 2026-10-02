@@ -277,6 +277,7 @@ func (m *Materializer) ensureFunction(ctx context.Context, fn *v1.Function) erro
 	cur := existing.(*v1.Function)
 	fn.ObjectMeta = cur.ObjectMeta // preserve UID/RV; keep our owner + spec
 	fn.Spec.KV = cur.Spec.KV       // kv is applied in the patch phase
+	fn.Status = cur.Status         // the Function reconciler owns the status, which tracks a redeploy (ADR-0143)
 	if _, err := m.store.Update(ctx, fn); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "update function %q", fn.Name)
 	}

@@ -1,0 +1,11 @@
+# ADR-0143: the ConfigMap env-echo-v2.yaml binds, so the redeployed revision answers APP_MODE staging.
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: app-config-v2
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    APP_MODE: staging
+    SHARED: from-config

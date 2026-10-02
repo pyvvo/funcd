@@ -578,8 +578,12 @@ func (p *Platform) buildControlPlane() error {
 	catalogMgr := cataloggw.NewManager(catBindHost, catPublishHost, catalogKeys, cedarPDP, p.logger)
 	p.catalogProxy = catalogMgr
 
+	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow
+	// dispatcher send through it — so the reconciler can tell when a demoted revision's worker is drained.
+	calls := activator.NewCallTracker(clock.System())
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
+		Calls:                calls,
 		InvokeSockets:        p.invokeMgr,
 		Runtime:              c.runtime,
 		Scheduler:            sched,
@@ -613,6 +617,7 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Scaler:    storescaler.New(c.store),
 		Logger:    p.logger,
+		Calls:     calls,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build activator")
@@ -676,7 +681,7 @@ func (p *Platform) buildControlPlane() error {
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
 		Store:            c.store,
 		Subscriber:       fanout,
-		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Timeout: 30 * time.Second}},
+		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second}},
 		DeadLetters:      dlq,
 		DeliveryAttempts: c.deliveryAttempts,
 		Logger:           p.logger,
@@ -787,7 +792,7 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
 		Grant:     storeGranter{store: c.store},
-		Client:    &http.Client{Timeout: 30 * time.Second},
+		Client:    &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second},
 		Logger:    p.logger,
 	})
 	if derr != nil {

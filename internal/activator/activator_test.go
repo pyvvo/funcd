@@ -131,6 +131,29 @@ func TestScenarioWarmPassthrough(t *testing.T) {
 	require.Equal(t, 0, sc.count(), "warm path must not call ScaleTo")
 }
 
+// ADR-0143: with Calls set, a proxied call counts against its upstream until its answer ends.
+func TestProxiedCallIsCountedWhileInFlight(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-gate
+		_, _ = io.WriteString(w, "done")
+	}))
+	t.Cleanup(backend.Close)
+	t.Cleanup(release)
+
+	calls := activator.NewCallTracker(nil)
+	a := newActivator(t, activator.Deps{Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true}, Scaler: &fakeScaler{}, Calls: calls})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- serve(a, activator.FunctionRef{Namespace: "default", Name: "slow"}) }()
+	require.Eventually(t, func() bool { return !calls.Idle(backend.URL, 0) }, 2*time.Second, time.Millisecond, "the call counts in flight")
+
+	release()
+	require.Equal(t, "done", (<-done).Body.String())
+	require.True(t, calls.Idle(backend.URL, 0), "the call ends with its answer")
+}
+
 // scenario: cold-start-buffer-and-forward — a cold request triggers ScaleTo(1) once,
 // is held until a ready upstream appears, then forwarded.
 func TestScenarioColdStartBufferAndForward(t *testing.T) {

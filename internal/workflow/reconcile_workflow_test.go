@@ -138,3 +138,39 @@ func TestMaterializeIdempotent(t *testing.T) {
 		t.Fatalf("second materialize (idempotent) failed: %v", err)
 	}
 }
+
+// A re-materialize keeps the status the Function reconciler wrote, which tracks a redeploy (ADR-0143).
+func TestMaterializeKeepsFunctionStatus(t *testing.T) {
+	s := newStore(t)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	ctx := context.Background()
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1", UID: "u"},
+		Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "a", Function: &v1.FunctionStep{Image: "oci:a"}}}},
+	}
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("first materialize: %v", err)
+	}
+	obj, err := s.Get(ctx, v1.KindFunction.GVK(), "default", "wf-a")
+	if err != nil {
+		t.Fatalf("owned function not created: %v", err)
+	}
+	fn := obj.(*v1.Function)
+	fn.Status.Phase = v1.PhaseReady
+	fn.Status.CurrentRevision, fn.Status.ServingRevision = "wf-a-1", "wf-a-1"
+	if _, err := s.Update(ctx, fn); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("second materialize: %v", err)
+	}
+	obj, err = s.Get(ctx, v1.KindFunction.GVK(), "default", "wf-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := obj.(*v1.Function).Status; got.Phase != v1.PhaseReady || got.ServingRevision != "wf-a-1" {
+		t.Fatalf("a re-materialize wiped the status: %+v", got)
+	}
+}

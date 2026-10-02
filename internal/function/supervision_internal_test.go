@@ -18,7 +18,7 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 	r := newShimReconciler(t, fakeResolver{})
 	ctx := context.Background()
 	inst, err := r.runtime.Create(ctx, runtime.WorkerSpec{
-		Namespace: "default", Name: "gone", Replica: 1,
+		Namespace: "default", Name: "gone", Revision: "gone-1", Replica: 1,
 		Command: []string{"sh", "-c", "exit 3"}, LogPath: filepath.Join(t.TempDir(), "w.log"),
 	})
 	require.NoError(t, err)
@@ -28,8 +28,8 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 		return serr == nil && in.State == runtime.StateFailed
 	}, 5*time.Second, 10*time.Millisecond)
 
-	_, failed := r.readyReplicas(ctx, "default", "gone", 0, 1)
+	_, failed := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1)
 	require.False(t, failed, "replica 1 is at the bound, so it is not judged")
-	_, failed = r.readyReplicas(ctx, "default", "gone", 0, 2)
+	_, failed = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2)
 	require.True(t, failed, "inside the bound, a Failed replica is a shape failure")
 }

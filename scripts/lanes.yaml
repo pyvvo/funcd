@@ -33,6 +33,15 @@ env-echo:
     - route.yaml
     - secure-route.yaml
     - funcdconfig.yaml
+    # ADR-0143: the redeploy fixtures the Venom suite applies mid-suite
+    - from: e2e/fixtures/env-echo-config-v2.yaml
+      to: env-echo-config-v2.yaml
+    - from: e2e/fixtures/env-echo-v2.yaml
+      to: env-echo-v2.yaml
+    - from: e2e/fixtures/env-echo-badtag.yaml
+      to: env-echo-badtag.yaml
+    - from: e2e/fixtures/env-echo-badhandler.yaml
+      to: env-echo-badhandler.yaml
   push:
     - artifact: env-echo.mjs
       ref: env-echo

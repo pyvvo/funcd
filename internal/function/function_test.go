@@ -3,6 +3,7 @@ package function_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +27,7 @@ type harness struct {
 	gw gateway.Gateway
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, opts ...func(*function.Deps)) *harness {
 	t.Helper()
 	st := store.New(memory.New())
 	rt := process.New()
@@ -34,9 +35,13 @@ func newHarness(t *testing.T) *harness {
 	sch, err := singlenode.New("local")
 	require.NoError(t, err)
 	gw := embedded.New()
-	r, err := function.NewReconciler(function.Deps{
+	deps := function.Deps{
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
 	return &harness{r: r, st: st, rt: rt, gw: gw}
 }
@@ -161,9 +166,11 @@ func TestScenarioEndpointsResolvesReadyUpstream(t *testing.T) {
 }
 
 // scenario: scale-changes-replicas.
+// A replica change stamps a Revision, so it switches (ADR-0143 Decision 9): the count converges once the old revision
+// has drained.
 func TestScenarioScaleChangesReplicas(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
+	h := newHarness(t, func(d *function.Deps) { d.HandOutSettle = time.Millisecond })
 	h.createFn(t, "echo", 1, true)
 	h.reconcile(t, "echo")
 	require.Equal(t, 1, h.running(t, "echo"))
@@ -172,15 +179,24 @@ func TestScenarioScaleChangesReplicas(t *testing.T) {
 	fn.Spec.Replicas = 3
 	_, err := h.st.Update(context.Background(), fn)
 	require.NoError(t, err)
-	h.reconcile(t, "echo")
+	h.reconcileDrained(t, "echo")
 	require.Equal(t, 3, h.running(t, "echo"), "converged up to 3")
 
 	fn = h.getFn(t, "echo")
 	fn.Spec.Replicas = 1
 	_, err = h.st.Update(context.Background(), fn)
 	require.NoError(t, err)
-	h.reconcile(t, "echo")
+	h.reconcileDrained(t, "echo")
 	require.Equal(t, 1, h.running(t, "echo"), "converged back down to 1")
+}
+
+// reconcileDrained reconciles name until no revision drains (ADR-0143).
+func (h *harness) reconcileDrained(t *testing.T, name string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		h.reconcile(t, name)
+		return h.getFn(t, name).Status.DrainingRevision == ""
+	}, 5*time.Second, 5*time.Millisecond, "the old revision drains")
 }
 
 // scenario: delete-reclaims.
