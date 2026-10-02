@@ -907,6 +907,7 @@ components:
           type: integer
         maxValueBytes:
           format: int64
+          maximum: 1048576
           minimum: 0
           type: integer
         tables:
