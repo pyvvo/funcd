@@ -178,7 +178,9 @@ func (b *be) getRange(ctx context.Context, sub blob.Bucket, key string, offset, 
 	return full[offset : offset+length], nil
 }
 
-// HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe.
+// HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe answered from the object's
+// attributes, never its body. It reports no ETag, like the listing: the MD5 needs the whole body, and a HEAD
+// ETag that differs from a ranged GET's fails DuckDB's per-read ETag check.
 func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.HeadObjectOutput, error) {
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
@@ -186,14 +188,16 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	if err != nil {
 		return nil, err
 	}
-	data, gerr := sub.Get(ctx, blobKey(prefix, object))
-	if gerr != nil {
-		return nil, mapBlobErr(gerr)
+	attrs, found, serr := blob.Stat(ctx, sub, blobKey(prefix, object))
+	if serr != nil {
+		return nil, mapBlobErr(serr)
+	}
+	if !found {
+		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
 	}
 	return &awss3.HeadObjectOutput{
-		ContentLength: ptr(int64(len(data))),
-		LastModified:  ptr(time.Now().UTC()),
-		ETag:          ptr(etag(data)),
+		ContentLength: ptr(attrs.Size),
+		LastModified:  ptr(attrs.ModTime.UTC()),
 	}, nil
 }
 

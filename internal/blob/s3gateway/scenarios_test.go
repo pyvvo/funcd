@@ -4,14 +4,20 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
@@ -162,6 +168,48 @@ func TestScenarioRangeReaderFallback(t *testing.T) {
 	defer func() { _ = out.Body.Close() }()
 	body, _ := io.ReadAll(out.Body)
 	require.Equal(t, "2345", string(body))
+}
+
+// getCountingBucket counts the whole-object Gets made on a blob.Bucket.
+type getCountingBucket struct {
+	blob.Bucket
+	gets atomic.Int32
+}
+
+func (c *getCountingBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	c.gets.Add(1)
+	return c.Bucket.Get(ctx, key)
+}
+
+// TestIssue110_HeadObjectDoesNotReadObject: a HEAD answers from the object's metadata (size and
+// modification time) on a file substrate, without reading the object; a missing key is still a 404.
+func TestIssue110_HeadObjectDoesNotReadObject(t *testing.T) {
+	dir := t.TempDir()
+	var sub *getCountingBucket
+	makeFile := func(t *testing.T) blob.Bucket {
+		t.Helper()
+		b, err := gocloud.Open(context.Background(), "file://"+dir)
+		require.NoError(t, err)
+		sub = &getCountingBucket{Bucket: b}
+		return sub
+	}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeFile)
+	data := bytes.Repeat([]byte("x"), 1<<20)
+	g.seed(t, "default", "lakehouse", "gold/q.parquet", data)
+	modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, os.Chtimes(filepath.Join(dir, "gold", "q.parquet"), modTime, modTime))
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+
+	out, err := c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet")})
+	require.NoError(t, err)
+	require.Zero(t, sub.gets.Load(), "HEAD must not read the whole object")
+	require.Equal(t, int64(len(data)), aws.ToInt64(out.ContentLength))
+	require.Equal(t, modTime, aws.ToTime(out.LastModified).UTC())
+
+	_, err = c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/missing.parquet")})
+	require.Error(t, err)
+	require.Equal(t, 404, statusCode(err))
 }
 
 // scenario: owner multipart write (ADR-0080) — the owner drives an explicit multipart
