@@ -305,6 +305,60 @@ func TestIssue116_OversizeRecordFailsRunOnce(t *testing.T) {
 	}
 }
 
+// Issue #306: a run whose first record overflows the run store's value limit ends Failed once, naming
+// the limit, instead of being requeued forever. A record its input overflows is kept without the input,
+// so onFailure fires once; a pinned spec that overflows it leaves the run unrecorded.
+func TestIssue306_OversizeFirstRecordFailsRunOnce(t *testing.T) {
+	ctx := context.Background()
+	pad := `{"pad":"` + strings.Repeat("x", 1<<20-60) + `"}`
+	for _, tc := range []struct {
+		name, input string
+		params      json.RawMessage
+		notify      int
+	}{
+		{name: "input", input: pad, notify: 1},
+		{name: "spec", input: `{}`, params: json.RawMessage(pad)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			a := step("a", "")
+			a.Params = tc.params
+			seedWorkflow(t, s, "big", a, step("notify", ""))
+			wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
+			wf := wfObj.(*v1.Workflow)
+			wf.Spec.OnFailure = "notify"
+			if _, err := s.Update(ctx, wf); err != nil {
+				t.Fatalf("set onFailure: %v", err)
+			}
+			seedRun(t, s, "big-1", "big", tc.input)
+
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: 1 << 20}})
+			rr := NewRunReconciler(s, eng, nil, nil)
+			for range 3 {
+				if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
+					t.Fatalf("Reconcile = %v, want the run ended Failed, not requeued", err)
+				}
+			}
+
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "big-1")
+			st := obj.(*v1.WorkflowRun).Status
+			if c, ok := st.Conditions.Get(condReady); st.Phase != runFailed || !ok || c.Status != v1.ConditionFalse || !strings.Contains(c.Message, "value limit") {
+				t.Fatalf("phase=%q Ready=%+v, want Failed with Ready=False naming the run store's value limit", st.Phase, c)
+			}
+			if f.calls["a"] != 0 || f.calls["notify"] != tc.notify {
+				t.Fatalf("dispatches a=%d notify=%d, want a never and notify %d", f.calls["a"], f.calls["notify"], tc.notify)
+			}
+			wfObj, _ = s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
+			if l := wfObj.(*v1.Workflow).Status.Runs; l == nil || l.Failed != 1 || len(l.Active) != 0 {
+				t.Fatalf("workflow status.runs=%+v, want Failed=1 active=[]", l)
+			}
+		})
+	}
+}
+
 // Issue #120: a run that fails outside a step — the run-start InputSchemaMismatch gate, or a when
 // condition that cannot be evaluated — records why in WorkflowRun.status, not only the Failed phase.
 func TestIssue120_RunFailureReasonInStatus(t *testing.T) {

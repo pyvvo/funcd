@@ -139,22 +139,20 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	// Drive: resume if a durable record exists (recovery / unpause), else start fresh — a plain run
 	// (pinning the ADR-0098 contract for the run-start input gate) or a replay seeded from a source run.
 	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
+	// A first record over the run store's value limit even without its input is refused on every requeue.
+	if rec == nil && !started && fault.KindOf(err) == fault.PayloadTooLarge {
+		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(err.Error()), Message: capErr(err.Error())})
+	}
 	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
 	// a ReplaySeeded=False condition so it terminates (never silently re-reconciles).
 	if rec == nil && run.Spec.Replay != nil && fault.KindOf(err) == fault.Invalid {
-		run.Status.Phase = runFailed
-		run.Status.Conditions.Set(v1.Condition{
+		return r.failUnrecorded(ctx, run, v1.Condition{
 			Type: "ReplaySeeded", Status: v1.ConditionFalse,
 			Reason: replayReason(err), Message: capErr(err.Error()),
 		})
-		if uerr := r.updateRunStatus(ctx, run); uerr != nil {
-			return controller.Result{}, uerr
-		}
-		r.linkRun(ctx, run)
-		return controller.Result{}, nil
 	}
 	// A run failure is a terminal outcome, not a reconcile error.
 	mirror(run, rec)
@@ -186,6 +184,17 @@ func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) erro
 	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
 	r.linkRun(ctx, run)
 	return nil
+}
+
+// failUnrecorded ends a run that has no run record, and never gets one, Failed with c saying why.
+func (r *RunReconciler) failUnrecorded(ctx context.Context, run *v1.WorkflowRun, c v1.Condition) (controller.Result, error) {
+	run.Status.Phase = runFailed
+	run.Status.Conditions.Set(c)
+	if err := r.updateRunStatus(ctx, run); err != nil {
+		return controller.Result{}, err
+	}
+	r.linkRun(ctx, run)
+	return controller.Result{}, nil
 }
 
 // wait holds a run that has not started Pending with a Ready=False condition saying why, and

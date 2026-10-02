@@ -183,6 +183,7 @@ func TestIssue118_InputMismatchHandlerNotRefiredWhenRecordTooLarge(t *testing.T)
 	spc.OnFailure = "notify"
 	contract := &v1.WorkflowContract{Input: obj(map[string]string{"day": "string"}, "day")}
 	in := json.RawMessage(`{"pad":"` + strings.Repeat("x", 1<<20) + `"}`)
+	spc.Steps[0].Params = in // the pinned spec overflows the record too, so it cannot be stored even without its input
 	for range 3 {
 		if _, err := e.Execute(context.Background(), "default", "run-big", "wf", spc, in, StartOptions{Contract: contract}); fault.KindOf(err) != fault.PayloadTooLarge {
 			t.Fatalf("want PayloadTooLarge for an unstorable run, got %v", err)

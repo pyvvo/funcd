@@ -263,16 +263,25 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 		}
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
-		return nil, err
+		if fault.KindOf(err) != fault.PayloadTooLarge {
+			return nil, err
+		}
+		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded", runName))
 	}
 	return e.drive(ctx, rec, rs, outputs, spec, input)
 }
 
 // failAtStart fails a run at the run-start gate. It records the Failed run before fail() fires onFailure:
-// a run that cannot be stored stays unrecorded, and its requeue must not fire the handler again.
+// a run that cannot be stored stays unrecorded, and its requeue must not fire the handler again. A record
+// over the run store's value limit is recorded without its input, like an over-cap input.
 func (e *Engine) failAtStart(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, cause error) (*runstate.Record, error) {
 	rec.Phase, rec.Error = runFailed, capErr(cause.Error())
-	if err := e.persist(ctx, rec, rs, outputs); err != nil {
+	err := e.persist(ctx, rec, rs, outputs)
+	if fault.KindOf(err) == fault.PayloadTooLarge && len(rec.Input) > 0 {
+		rec.Input = nil
+		err = e.persist(ctx, rec, rs, outputs)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return e.fail(ctx, rec, rs, outputs, spec, input, cause)
