@@ -143,7 +143,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 			_ = logRead.Close()
 			_ = cmd.ExtraFiles[0].Close()
 		}
-		inst.state = runtime.StateFailed
+		// no process ran, so the instance keeps its state (Created for a new one) and is started again (ADR-0142)
 		return fault.Wrapf(err, fault.Internal, op, "start process")
 	}
 
