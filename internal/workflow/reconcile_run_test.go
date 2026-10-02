@@ -469,3 +469,51 @@ func TestIssue176_ReplayOfSweptSourceFails(t *testing.T) {
 		}
 	}
 }
+
+// Issue #181: a run created on the internal store (a Sensor workflow: action, ADR-0109) skips the admission
+// payload cap, so the run-start gate enforces it: an over-cap input fails the run before any step runs, on
+// both run-store drivers, and reaches neither the run record nor the onFailure handler's FailureContext.
+func TestIssue181_RunStartGateCapsInput(t *testing.T) {
+	const limit = 256 << 10
+	big := `{"pad":"` + strings.Repeat("x", 5<<18) + `"}` // over the cap and over the in-memory store's 1 MiB value limit
+	for name, cfg := range map[string]wbadger.Config{"in-memory": {InMemory: true}, "disk": {Dir: t.TempDir()}} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newStore(t)
+			wf := &v1.Workflow{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+				ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1"},
+				Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{step("a", ""), step("notify", "")}, OnFailure: "notify"},
+			}
+			if _, err := s.Create(ctx, wf); err != nil {
+				t.Fatalf("seed workflow: %v", err)
+			}
+			seedRun(t, s, "big-1", "wf", big)
+			rstate, err := wbadger.New(cfg)
+			if err != nil {
+				t.Fatalf("run store: %v", err)
+			}
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: limit}})
+			rr := NewRunReconciler(s, eng, nil, nil)
+			for range 2 {
+				if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
+					t.Fatalf("Reconcile returned %v (a requeue), want the run to fail", err)
+				}
+			}
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "big-1")
+			run := obj.(*v1.WorkflowRun)
+			c, _ := run.Status.Conditions.Get(condReady)
+			if run.Status.Phase != runFailed || !strings.Contains(c.Message, "payload limit") || f.calls["a"] != 0 {
+				t.Fatalf("phase=%q Ready=%+v step a dispatched %d times, want Failed naming the payload limit and no step run", run.Status.Phase, c, f.calls["a"])
+			}
+			if f.calls["notify"] != 1 || len(f.inputs["notify"]) >= limit {
+				t.Fatalf("onFailure dispatched %d times with %d input bytes, want once without the over-cap input", f.calls["notify"], len(f.inputs["notify"]))
+			}
+			if rec, err := rstate.Get(ctx, "default", "big-1"); err != nil || rec.Phase != runFailed || len(rec.Input) != 0 {
+				t.Fatalf("run record = %v (err %v), want Failed without the over-cap input", rec, err)
+			}
+		})
+	}
+}

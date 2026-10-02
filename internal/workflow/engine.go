@@ -144,7 +144,7 @@ func isPermanent(err error) bool {
 type Config struct {
 	DefaultMaxAttempts  int           // per-step, when a step sets no retry (default 1 = no retry)
 	DefaultStepTimeout  time.Duration // per-step invocation bound (0 = none)
-	PayloadLimit        int64         // max bytes for a step output (and run input, at admission); 0 = unbounded
+	PayloadLimit        int64         // max bytes for a run input (at admission and run start) and a step output; 0 = unbounded
 	MaxSubworkflowDepth int           // ADR-0099: max sub-workflow nesting (default 8); a deeper chain fails cleanly
 }
 
@@ -246,24 +246,33 @@ func (e *Engine) execute(ctx context.Context, ns v1.NamespaceName, runName, work
 		RootParentID: rootParentID, // ADR-0104: "" for top-level, the parent run's RootSpanID for a child
 		StartedAt:    e.clock.Now().UnixNano(),
 	}
+	// Run-start payload cap (ADR-0094): a run created on the internal store (a Sensor action, ADR-0109)
+	// skipped the admission cap. The over-cap input stays out of the run record and the FailureContext.
+	if e.cfg.PayloadLimit > 0 && int64(len(input)) > e.cfg.PayloadLimit {
+		rec.Input = nil
+		return e.failAtStart(ctx, rec, rs, outputs, spec, nil, fault.Invalidf(engineOp, "run %q input %d bytes exceeds the payload limit %d — pass large data by reference on the blob substrate", runName, len(input), e.cfg.PayloadLimit))
+	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
 	if pinned != nil && len(pinned.Input) > 0 {
 		if diffs := v1.CheckInput(input, pinned.Input); len(diffs) > 0 {
-			// Record the Failed run before fail() fires onFailure: a run that cannot be stored stays
-			// unrecorded, and its requeue must not fire the handler again.
-			cause := fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs))
-			rec.Phase, rec.Error = runFailed, capErr(cause.Error())
-			if err := e.persist(ctx, rec, rs, outputs); err != nil {
-				return nil, err
-			}
-			return e.fail(ctx, rec, rs, outputs, spec, input, cause)
+			return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Invalidf(engineOp, "run %q input violates the workflow contract (InputSchemaMismatch): %s", runName, v1.FieldDiffs(diffs)))
 		}
 	}
 	if err := e.persist(ctx, rec, rs, outputs); err != nil {
 		return nil, err
 	}
 	return e.drive(ctx, rec, rs, outputs, spec, input)
+}
+
+// failAtStart fails a run at the run-start gate. It records the Failed run before fail() fires onFailure:
+// a run that cannot be stored stays unrecorded, and its requeue must not fire the handler again.
+func (e *Engine) failAtStart(ctx context.Context, rec *runstate.Record, rs *runState, outputs map[v1.ObjectName]json.RawMessage, spec v1.WorkflowSpec, input json.RawMessage, cause error) (*runstate.Record, error) {
+	rec.Phase, rec.Error = runFailed, capErr(cause.Error())
+	if err := e.persist(ctx, rec, rs, outputs); err != nil {
+		return nil, err
+	}
+	return e.fail(ctx, rec, rs, outputs, spec, input, cause)
 }
 
 // Resume continues a persisted run after a crash, pause, or cancel-race (ADR-0094): it rebuilds
