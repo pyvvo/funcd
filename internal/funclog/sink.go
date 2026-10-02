@@ -148,9 +148,10 @@ func (s *BlobSink) Append(ctx context.Context, res Resource, e Entry) error {
 		seg = &segment{opened: s.clock.Now()}
 		s.segments[res] = seg
 	}
+	// Lock seg before releasing the map, so a concurrent Flush cannot detach it before this append lands.
+	seg.mu.Lock()
 	s.mu.Unlock()
 
-	seg.mu.Lock()
 	seg.entries = append(seg.entries, e)
 	seg.bytes += estimateBytes(e)
 	full := seg.bytes >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge

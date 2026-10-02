@@ -132,9 +132,10 @@ func (s *BlobTraceSink) AppendSpan(ctx context.Context, res Resource, sp Span) e
 		seg = &traceSegment{opened: s.clock.Now()}
 		s.segments[res] = seg
 	}
+	// Lock seg before releasing the map, so a concurrent Flush cannot detach it before this append lands.
+	seg.mu.Lock()
 	s.mu.Unlock()
 
-	seg.mu.Lock()
 	seg.spans = append(seg.spans, sp)
 	seg.bytes += estimateSpanBytes(sp)
 	full := seg.bytes >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge
