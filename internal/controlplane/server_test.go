@@ -195,3 +195,41 @@ func TestScenarioCrudRoundtripsThroughStore(t *testing.T) {
 	rec = do(t, srv, http.MethodGet, fnBase+"/echo", devToken, nil)
 	require.Equal(t, http.StatusNotFound, rec.Code, "deleted object is gone")
 }
+
+// An explicit name wins over generateName (ADR-0133): a duplicate name is a 409, never a renamed second object.
+func TestIssue165_ExplicitNameWithGenerateNameConflicts(t *testing.T) {
+	t.Parallel()
+	srv := newServer(t)
+	withGenerateName := func(name string) []byte {
+		var body struct {
+			TypeMeta map[string]interface{} `json:"TypeMeta"`
+			Metadata map[string]interface{} `json:"metadata"`
+			Spec     map[string]interface{} `json:"spec"`
+		}
+		require.NoError(t, json.Unmarshal(functionBody(t, "team-a", name, "rg1"), &body))
+		body.Metadata["generateName"] = "dup-"
+		if name == "" {
+			delete(body.Metadata, "name")
+		}
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		return b
+	}
+
+	rec := do(t, srv, http.MethodPost, fnBase, devToken, functionBody(t, "team-a", "dup", "rg1"))
+	require.Less(t, rec.Code, 300, "first create: %s", rec.Body.String())
+
+	rec = do(t, srv, http.MethodPost, fnBase, devToken, withGenerateName("dup"))
+	require.Equal(t, http.StatusConflict, rec.Code, "explicit name + generateName: %s", rec.Body.String())
+
+	rec = do(t, srv, http.MethodPost, fnBase, devToken, withGenerateName(""))
+	require.Less(t, rec.Code, 300, "name-less generateName create: %s", rec.Body.String())
+	var generated v1.Function
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &generated))
+	require.Regexp(t, `^dup-[0-9a-f]{8}$`, string(generated.Name))
+
+	rec = do(t, srv, http.MethodGet, fnBase, devToken, nil)
+	var list []v1.Function
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
+	require.Len(t, list, 2, "only dup and the generated name")
+}
