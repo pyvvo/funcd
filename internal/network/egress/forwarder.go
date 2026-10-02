@@ -93,12 +93,26 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	f.mu.Unlock()
 
 	errCh := make(chan error, len(servers))
-	for _, srv := range servers {
-		go func() { errCh <- srv.ListenAndServe() }()
+	started := make([]chan struct{}, len(servers))
+	exited := make([]chan struct{}, len(servers))
+	for i, srv := range servers {
+		started[i], exited[i] = make(chan struct{}), make(chan struct{})
+		srv.NotifyStartedFunc = func() { close(started[i]) }
+		go func() {
+			defer close(exited[i])
+			errCh <- srv.ListenAndServe()
+		}()
 	}
+	// ShutdownContext is a no-op on a server ListenAndServe has not marked started, so each server is shut
+	// down only once it has started (or has already failed), and Serve returns after its goroutine has.
 	shutdown := func() {
-		for _, srv := range servers {
-			_ = srv.ShutdownContext(context.Background())
+		for i, srv := range servers {
+			select {
+			case <-started[i]:
+				_ = srv.ShutdownContext(context.Background())
+			case <-exited[i]:
+			}
+			<-exited[i]
 		}
 	}
 	select {

@@ -1,9 +1,11 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"testing"
 	"time"
 
@@ -125,4 +127,36 @@ func TestIssue367_ForwarderFitsReplyToClientUDPSize(t *testing.T) {
 	resp := exchangeUntilServed(t, "udp", listen, new(dns.Msg).SetQuestion(name, dns.TypeA))
 	require.False(t, resp.Truncated, "the answer fits 512 bytes once compressed")
 	require.Len(t, resp.Answer, len(ips))
+}
+
+// serveGoroutineAlive reports whether any goroutine is still running inside (or was started by) Serve.
+func serveGoroutineAlive() bool {
+	buf := make([]byte, 1<<20)
+	return bytes.Contains(buf[:runtime.Stack(buf, true)], []byte("egress.(*forwarder).Serve"))
+}
+
+// Issue 368: a Serve cancelled before its servers bind must still shut them down. GOMAXPROCS(1) holds the
+// server goroutines until Serve yields, so a Serve that does not wait for them returns before they bind.
+func TestIssue368_ServeCancelledEarlyReleasesListeners(t *testing.T) {
+	pc, ln := bindUDPTCP(t)
+	listen := netip.MustParseAddrPort(ln.Addr().String())
+	require.NoError(t, pc.Close())
+	require.NoError(t, ln.Close())
+
+	fwd := NewForwarder(listen, netip.MustParseAddrPort("127.0.0.1:53"), nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	prev := runtime.GOMAXPROCS(1)
+	err := fwd.Serve(ctx)
+	runtime.GOMAXPROCS(prev)
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.Eventually(t, func() bool { return !serveGoroutineAlive() }, 2*time.Second, 10*time.Millisecond,
+		"a DNS server goroutine outlived Serve")
+	pc, err = net.ListenPacket("udp", listen.String())
+	require.NoError(t, err, "the UDP port is released when Serve returns")
+	ln, err = net.Listen("tcp", listen.String())
+	require.NoError(t, err, "the TCP port is released when Serve returns")
+	require.NoError(t, pc.Close())
+	require.NoError(t, ln.Close())
 }
