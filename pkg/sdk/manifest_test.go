@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -122,8 +123,7 @@ metadata:
 spec:
   runtime: nodejs22
   handler: handle
-  artifact:
-    uri: oci-layout:///mnt/funcd-deps/registry:front
+  image: oci-layout:///mnt/funcd-deps/registry:front
   links:
     - alias: greeter
       target: greeter
@@ -142,4 +142,185 @@ spec:
 	o2, err := sdk.DecodeManifest(jsonManifest)
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("g"), o2.GetName())
+}
+
+// Issue #62: every document of a multi-document manifest is decoded, in order; DecodeManifest refuses
+// a multi-document manifest instead of silently keeping only the first.
+func TestIssue62_DecodeManifestsDecodesEveryDocument(t *testing.T) {
+	multi := []byte(`---
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: first
+spec:
+  data:
+    script: |
+      ---
+      not a separator
+---
+# comment-only document
+---
+{"apiVersion":"funcd.io/v1alpha1","kind":"Function","metadata":{"name":"second"}}
+---
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: third
+...
+`)
+	objs, err := sdk.DecodeManifests(multi)
+	require.NoError(t, err)
+	require.Len(t, objs, 3)
+	require.Equal(t, v1.ObjectName("first"), objs[0].GetName())
+	require.Equal(t, "---\nnot a separator\n", objs[0].(*v1.ConfigMap).Spec.Data["script"])
+	require.Equal(t, v1.KindFunction, objs[1].GroupVersionKind().Kind)
+	require.Equal(t, v1.ObjectName("second"), objs[1].GetName())
+	require.Equal(t, v1.ObjectName("third"), objs[2].GetName())
+
+	_, err = sdk.DecodeManifest(multi)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "3 documents")
+
+	_, err = sdk.DecodeManifests([]byte("---\n# nothing\n"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+
+	_, err = sdk.DecodeManifests([]byte("apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\n---\nkind: Frobnicate\n"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "document 2")
+}
+
+// A bare `on:` key (the documented Sensor and blob EventSource shape) decodes as the string key "on",
+// never as YAML 1.1's boolean true — which the typed decode would drop without a word.
+func TestIssue63_BareOnKeyDecodesAsString(t *testing.T) {
+	sensor, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: Sensor
+metadata:
+  name: orders-pipelines
+  namespace: default
+  resourceGroup: rg1
+spec:
+  on:
+    - name: hook
+      source: team-hooks
+      event: new-orders
+  do:
+    - name: on-demand
+      on: hook
+      workflow: orders-report
+`))
+	require.NoError(t, err)
+	s, ok := sensor.(*v1.Sensor)
+	require.True(t, ok)
+	require.Len(t, s.Spec.On, 1)
+	require.Equal(t, v1.ObjectName("hook"), s.Spec.On[0].Name)
+	require.Len(t, s.Spec.Do, 1)
+	require.Equal(t, v1.ObjectName("hook"), s.Spec.Do[0].On)
+	require.NoError(t, s.Validate())
+
+	source, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: removals
+  namespace: default
+  resourceGroup: rg1
+spec:
+  blob:
+    bucket: raw
+    events:
+      - name: gone
+        prefix: drop/
+        on:
+          - Removed
+`))
+	require.NoError(t, err)
+	es, ok := source.(*v1.EventSource)
+	require.True(t, ok)
+	require.Equal(t, []v1.BlobEventType{"Removed"}, es.Spec.Blob.Events[0].On)
+	require.ErrorContains(t, es.Validate(), `"Removed" is unsupported`)
+}
+
+// A manifest key the typed object does not know is rejected at decode, not silently dropped before the
+// request is built: the server's additionalProperties:false edge (ADR-0108 no-binding-field-schema) never
+// sees a key the client discarded, so `funcdctl apply` would report a manifest applied that was not.
+func TestIssue64_DecodeManifestRejectsUnknownKeys(t *testing.T) {
+	valid := []byte(`
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+`)
+	obj, err := sdk.DecodeManifest(valid)
+	require.NoError(t, err)
+	es, ok := obj.(*v1.EventSource)
+	require.True(t, ok)
+	require.NotNil(t, es.Spec.Timer)
+	require.Len(t, es.Spec.Timer.Events, 1)
+
+	cases := map[string]struct {
+		manifest string
+		key      string
+	}{
+		"removed v1 eventsource keys": {
+			key: "function",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  function: echo
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+`,
+		},
+		"nested unknown timer key": {
+			key: "cron",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  timer:
+    events:
+      - name: tick
+        interval: 5000000000
+        cron: "*/5 * * * *"
+`,
+		},
+		"unknown function spec key": {
+			key: "imagePullPolicy",
+			manifest: `
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: front
+  namespace: default
+spec:
+  runtime: nodejs22
+  handler: handle
+  imagePullPolicy: Always
+`,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := sdk.DecodeManifest([]byte(tc.manifest))
+			require.Error(t, err, "an unknown manifest key must not be dropped silently")
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.Contains(t, err.Error(), tc.key)
+		})
+	}
 }

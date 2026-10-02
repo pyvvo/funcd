@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -107,4 +108,55 @@ func TestScenarioDaemonCDCEnabledBoots(t *testing.T) {
 	if c, ok := kv.(io.Closer); ok {
 		require.NoError(t, c.Close())
 	}
+}
+
+// A malformed or non-positive kvstore.backup/cdc duration fails startup with fault.Invalid naming the key,
+// never a silent fall back to the default (issue #190).
+func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
+	cases := []struct {
+		key string
+		set func(*config.Config, string)
+	}{
+		{"kvstore.backup.interval", func(c *config.Config, v string) { c.Kvstore.Backup.Interval = v }},
+		{"kvstore.backup.rebaseline", func(c *config.Config, v string) { c.Kvstore.Backup.Rebaseline = v }},
+		{"kvstore.cdc.retention", func(c *config.Config, v string) { c.Kvstore.Cdc.Retention = v }},
+	}
+	for _, tc := range cases {
+		for _, bad := range []string{"5 minutes", "forever", "-3h", "0s"} {
+			t.Run(tc.key+"="+bad, func(t *testing.T) {
+				cfg := kvBadgerCfg(t)
+				cfg.Kvstore.Backup.Enabled = true
+				cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+				cfg.Kvstore.Cdc.Enabled = true
+				cfg.Kvstore.Cdc.Sink = "kv.changes"
+				tc.set(&cfg, bad)
+				kv, _, err := buildKVStore(context.Background(), cfg, newMemBus(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+				if c, ok := kv.(io.Closer); ok {
+					_ = c.Close()
+				}
+				require.Error(t, err)
+				require.Equal(t, fault.Invalid, fault.KindOf(err))
+				require.ErrorContains(t, err, tc.key)
+			})
+		}
+	}
+}
+
+// --memory overrides kvstore.engine: badger, as it does the metastore, workflow and DLQ stores: the KV
+// stays in memory and nothing is written under <dataDir>/kv (ADR-0043: --memory is fully ephemeral).
+func TestIssue191_MemoryFlagKeepsKVOffDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  dataDir: \""+dir+"\"\nkvstore:\n  engine: badger\n"), 0o600))
+	memoryOnly := true
+	cfg, err := config.Load(path, config.Flags{MemoryOnly: &memoryOnly})
+	require.NoError(t, err)
+
+	kv, _, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	if c, ok := kv.(io.Closer); ok {
+		t.Cleanup(func() { _ = c.Close() })
+	}
+	require.NoError(t, kv.Put(context.Background(), "a/b/c", []byte("v")))
+	require.NoDirExists(t, cfg.Kvstore.DataDir, "--memory must not open a durable Badger KV")
 }

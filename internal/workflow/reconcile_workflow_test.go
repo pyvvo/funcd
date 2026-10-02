@@ -2,9 +2,12 @@ package workflow
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -221,5 +224,49 @@ func TestMaterializeKeepsFunctionStatus(t *testing.T) {
 	}
 	if got := obj.(*v1.Function).Status; got.Phase != v1.PhaseReady || got.ServingRevision != "wf-a-1" {
 		t.Fatalf("a re-materialize wiped the status: %+v", got)
+	}
+}
+
+// Issue 50: a minReplicas-0 step Function, shared or isolated, is reclaimed once idle — ADR-0094's
+// materialized Functions scale to zero.
+func TestIssue50_IdleStepFunctionScalesToZero(t *testing.T) {
+	for _, mode := range []v1.PoolingMode{v1.PoolingShared, v1.PoolingIsolated} {
+		t.Run(string(mode), func(t *testing.T) {
+			s := newStore(t)
+			ctx := context.Background()
+			wf := &v1.Workflow{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+				ObjectMeta: v1.ObjectMeta{Name: "wfz", Namespace: "default", ResourceGroup: "rg1", UID: "u"},
+				Spec: v1.WorkflowSpec{
+					Pooling: v1.WorkflowPooling{Mode: mode},
+					Steps:   []v1.WorkflowStep{{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest"}}},
+				},
+			}
+			if err := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil).Materialize(ctx, wf); err != nil {
+				t.Fatalf("Materialize: %v", err)
+			}
+			obj, err := s.Get(ctx, v1.KindFunction.GVK(), "default", "wfz-ingest")
+			if err != nil {
+				t.Fatalf("owned function not created: %v", err)
+			}
+			scaling := obj.(*v1.Function).Spec.Scaling
+			clk := &manualClock{t: time.Unix(1000, 0)}
+			sc := &zeroScaler{}
+			act, err := activator.New(activator.Deps{Store: s, Endpoints: fakeEndpoints{}, Scaler: sc, Clock: clk})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := act.ReclaimIdle(ctx); err != nil { // seeds the grace window
+				t.Fatalf("ReclaimIdle: %v", err)
+			}
+			clk.advance(scaling.IdleTimeout + time.Second)
+			if err := act.ReclaimIdle(ctx); err != nil {
+				t.Fatalf("ReclaimIdle: %v", err)
+			}
+			want := []activator.FunctionRef{{Namespace: "default", Name: "wfz-ingest"}}
+			if got := sc.reclaimed(); !slices.Equal(got, want) {
+				t.Fatalf("reclaimed %v, want %v: an idle minReplicas-0 step function must scale to zero (scaling %+v)", got, want, scaling)
+			}
+		})
 	}
 }

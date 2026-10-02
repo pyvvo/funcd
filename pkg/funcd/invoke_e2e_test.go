@@ -27,14 +27,15 @@ import (
 // shimPlatformOCI is the process-shim platform + the oras artifact materializer (ADR-0031), so
 // functions are PULLED from an OCI layout by digest — the real `funcdctl push` → `apply` deploy path.
 // Returns an SDK client + the data-plane base URL. Node-gated.
-func shimPlatformOCI(t *testing.T) (*sdk.Client, string) {
+func shimPlatformOCI(t *testing.T, opts ...funcd.Option) (*sdk.Client, string) {
 	t.Helper()
 	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not on PATH; skipping the OCI deploy lane")
 	}
-	p, err := funcd.New(funcd.InMemory(), funcd.WithRuntimeShim(node, shim), funcd.WithArtifactStore(t.TempDir()))
+	base := []funcd.Option{funcd.InMemory(), funcd.WithRuntimeShim(node, shim), funcd.WithArtifactStore(t.TempDir())}
+	p, err := funcd.New(append(base, opts...)...)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

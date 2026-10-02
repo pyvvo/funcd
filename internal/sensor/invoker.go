@@ -37,18 +37,24 @@ type HTTPInvoker struct {
 // Invocation (never silently dropped).
 func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, ev eventing.CloudEvent) error {
 	ref := activator.FunctionRef{Namespace: ns, Name: fn}
-	upstream, ready, err := i.Endpoints.Upstream(ctx, ref)
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", ns, fn)
-	}
-	if !ready || upstream == "" {
-		if i.Waker == nil {
-			return fault.Unavailablef(op, "function %s/%s has no ready upstream", ns, fn)
-		}
-		upstream, err = i.Waker.Wake(ctx, ref)
+	var upstream string
+	if i.Waker != nil {
+		// Wake a warm target too: Wake records the call as activity, so idle reclaim never fires while
+		// actions keep arriving (issue #48); a ready target returns its upstream at once.
+		up, err := i.Waker.Wake(ctx, ref)
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "wake %s/%s", ns, fn)
 		}
+		upstream = up
+	} else {
+		up, ready, err := i.Endpoints.Upstream(ctx, ref)
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "resolve upstream for %s/%s", ns, fn)
+		}
+		if !ready || up == "" {
+			return fault.Unavailablef(op, "function %s/%s has no ready upstream", ns, fn)
+		}
+		upstream = up
 	}
 	body, err := json.Marshal(ev)
 	if err != nil {
