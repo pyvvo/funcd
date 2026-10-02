@@ -281,6 +281,10 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	}
 	spec := rec.Spec // the pinned spec — mid-run edits to the live Workflow do not reach here
 	rs, outputs := rebuildState(spec, rec)
+	if rec.PausedAt > 0 { // the paused interval is excluded from the run timeout (ADR-0094)
+		rec.PausedNanos += e.clock.Now().UnixNano() - rec.PausedAt
+		rec.PausedAt = 0
+	}
 	rec.Paused = false // resume clears the pause
 	rec.Phase = runRunning
 	return e.drive(ctx, rec, rs, outputs, spec, rec.Input)
@@ -448,6 +452,9 @@ func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectN
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
+	}
+	if !rec.Paused { // a repeated pause keeps the interval's start
+		rec.PausedAt = e.clock.Now().UnixNano()
 	}
 	rec.Paused = true
 	rec.Phase = runPaused

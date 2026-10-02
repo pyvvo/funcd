@@ -500,3 +500,56 @@ func TestPauseAndResume(t *testing.T) {
 		t.Fatalf("resume should complete b; phase=%s calls=%d", rec.Phase, f.calls["b"])
 	}
 }
+
+// manualClock is a clock the test moves forward.
+type manualClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// Issue #177: time spent Paused is excluded from the run timeout (ADR-0094 pause-and-resume-run). A run
+// with a 10s timeout that ran 1s and then stayed paused for 60s (re-paused by a later reconcile) resumes
+// and runs its pending step instead of failing with RunTimedOut.
+func TestIssue177_PausedTimeExcludedFromRunTimeout(t *testing.T) {
+	f := newFake()
+	runs, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = runs.Close() })
+	ctx := context.Background()
+	clk := &manualClock{t: time.Now()}
+	sp := spec(step("a", ""), step("b", "", "a"))
+	sp.Timeout = 10 * time.Second
+	_ = runs.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "p-1", Phase: runRunning, Spec: sp, StartedAt: clk.Now().UnixNano(),
+		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)}, {Name: "b", Phase: v1.StepPending}},
+	})
+	e, _ := New(Deps{Runs: runs, Dispatch: f, Clock: clk})
+	clk.advance(time.Second)
+	for range 2 {
+		if err := e.Pause(ctx, "default", "p-1"); err != nil {
+			t.Fatalf("Pause: %v", err)
+		}
+		clk.advance(30 * time.Second)
+	}
+	rec, err := e.Resume(ctx, "default", "p-1")
+	if err != nil {
+		t.Fatalf("Resume after 1s running + 60s paused (timeout 10s): %v", err)
+	}
+	if rec.Phase != runSucceeded || f.calls["b"] != 1 {
+		t.Fatalf("resumed run: phase=%s b dispatches=%d, want Succeeded with b dispatched once", rec.Phase, f.calls["b"])
+	}
+	if rec.PausedNanos != int64(60*time.Second) {
+		t.Fatalf("PausedNanos = %v, want the 60s paused", time.Duration(rec.PausedNanos))
+	}
+}
