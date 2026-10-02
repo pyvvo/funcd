@@ -15,6 +15,7 @@ import (
 	"github.com/versity/versitygw/s3response"
 
 	authz "github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 // multipartIdleExpiry is how long an upload may go without a part before it counts as
@@ -29,7 +30,7 @@ type multipartStore struct {
 	mu      sync.Mutex
 	uploads map[string]*upload // uploadID → buffered parts
 	next    uint64
-	now     func() time.Time
+	clock   clock.Clock
 }
 
 type upload struct {
@@ -40,7 +41,7 @@ type upload struct {
 }
 
 func newMultipartStore() *multipartStore {
-	return &multipartStore{uploads: map[string]*upload{}, now: time.Now}
+	return &multipartStore{uploads: map[string]*upload{}, clock: clock.System()}
 }
 
 // create starts an upload and drops the abandoned ones: a new upload is the only way the
@@ -48,7 +49,7 @@ func newMultipartStore() *multipartStore {
 func (m *multipartStore) create(bucket, key string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := m.now()
+	now := m.clock.Now()
 	for id, u := range m.uploads {
 		if now.Sub(u.touched) > multipartIdleExpiry {
 			delete(m.uploads, id)
@@ -76,7 +77,7 @@ func (m *multipartStore) putPart(id string, num int32, data []byte, maxUpload in
 	}
 	u.parts[num] = data
 	u.size = size
-	u.touched = m.now()
+	u.touched = m.clock.Now()
 	return nil
 }
 
