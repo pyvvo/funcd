@@ -27,6 +27,8 @@ const (
 type typ struct {
 	k     kind
 	items kind
+	// absent marks an existence probe whose path is missing from the checked document.
+	absent bool
 }
 
 // checkCtx carries the resolver and the active guard paths (references made exempt
@@ -126,10 +128,11 @@ func checkBinary(b *ast.BinaryExpression, ctx checkCtx) (typ, error) {
 	case token.STRICT_EQUAL, token.STRICT_NOT_EQUAL:
 		// Existence check: `ref === undefined` / `ref !== undefined`.
 		if ref, ok := undefinedOperand(b); ok {
-			if _, err := resolveRefExpr(ref, ctx, true); err != nil {
+			rt, err := resolveRefExpr(ref, ctx, true)
+			if err != nil {
 				return typ{}, err
 			}
-			return typ{k: kindBoolean}, nil
+			return typ{k: kindBoolean, absent: rt.absent}, nil
 		}
 		lt, err := check(b.Left, ctx)
 		if err != nil {
@@ -159,6 +162,9 @@ func checkBinary(b *ast.BinaryExpression, ctx checkCtx) (typ, error) {
 		rctx := ctx
 		if b.Operator == token.LOGICAL_AND {
 			if gp, ok := guardPath(b.Left); ok {
+				if lt.absent {
+					return typ{k: kindBoolean}, nil // the guarded path is absent: && short-circuits, the right operand is never read
+				}
 				rctx = ctx.withGuard(gp)
 			}
 		}
@@ -413,12 +419,22 @@ func resolveRefExpr(node ast.Expression, ctx checkCtx, existenceProbe bool) (typ
 	for ; idx < len(segs) && !segs[idx].isIndex; idx++ {
 		path = append(path, segs[idx].ident)
 	}
+	unknown := func() (typ, error) {
+		return typ{}, fault.Invalidf(checkOp, "unknown field %q under %q (position %d)", strings.Join(path, "."), root, pos(node))
+	}
 	field, err := ctx.r.Resolve(root, path)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return typ{}, fault.Invalidf(checkOp, "unknown field %q under %q (position %d)", strings.Join(path, "."), root, pos(node))
+			return unknown()
 		}
 		return typ{}, fault.Wrapf(err, fault.Invalid, checkOp, "resolving %q", root)
+	}
+	if field.absent() {
+		if !existenceProbe || idx < len(segs) {
+			return unknown()
+		}
+		addRoot(ctx.e, root)
+		return typ{absent: true}, nil
 	}
 	k, err := fieldKind(field.Type, pos(node))
 	if err != nil {

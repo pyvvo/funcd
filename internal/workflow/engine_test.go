@@ -259,6 +259,43 @@ func TestWhenRunsStep(t *testing.T) {
 	}
 }
 
+// scenario: guard-allows-optional (ADR-0095) on the runtime path — a `!== undefined` guard on a field
+// the parent's output lacks is false without error in a when, a pass and a dynamic wait.
+func TestIssue308_GuardOnAbsentFieldIsFalse(t *testing.T) {
+	const guard = "step.a.output.x !== undefined && step.a.output.x > 1"
+	f := newFake()
+	f.outputs["a"] = json.RawMessage(`{"y":1}`)
+	e := newTestEngine(t, f, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-308", "wf", spec(
+		step("a", ""),
+		whenStep("b", "${{ "+guard+" }}", "a"),
+		passStep("p", "${{ {big: "+guard+"} }}", "a"),
+		waitStep("w", "${{ "+guard+" ? 1 : 0 }}", "a"),
+	), json.RawMessage(`{}`), StartOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rec.Phase != runSucceeded {
+		t.Fatalf("run phase = %s, want Succeeded", rec.Phase)
+	}
+	if phaseOf(rec, "b") != v1.StepSkipped || f.calls["b"] != 0 {
+		t.Fatalf("b phase = %s (calls %d), want Skipped", phaseOf(rec, "b"), f.calls["b"])
+	}
+	if got := string(outputOf(rec, "p")); got != `{"big":false}` {
+		t.Fatalf("pass output = %s, want {\"big\":false}", got)
+	}
+	if phaseOf(rec, "w") != v1.StepSucceeded {
+		t.Fatalf("w phase = %s, want Succeeded", phaseOf(rec, "w"))
+	}
+
+	if _, err := e.Execute(context.Background(), "default", "run-308-unguarded", "wf", spec(
+		step("a", ""),
+		whenStep("b", "${{ step.a.output.x > 1 }}", "a"),
+	), json.RawMessage(`{}`), StartOptions{}); err == nil {
+		t.Fatal("an unguarded read of the absent field must still fail the run")
+	}
+}
+
 // scenario: retry-then-permanent-failure — retries exhaust, then fail-fast.
 func TestRetryThenFailFast(t *testing.T) {
 	f := newFake()

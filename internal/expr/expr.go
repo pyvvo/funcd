@@ -38,7 +38,9 @@ const (
 // element type for arrays, whether the field is required, and its declared default.
 type Field struct {
 	// Type is the JSON-Schema type: "string", "number", "integer", "boolean",
-	// "array" or "object".
+	// "array" or "object". A Resolver typing paths from the actual documents leaves
+	// it empty (with Required false) for a field missing from its document: only an
+	// `X !== undefined` probe may read it, and that guard's && operand goes unread.
 	Type string
 	// Items is the element type when Type == "array"; empty otherwise.
 	Items string
@@ -73,6 +75,9 @@ type Expr struct {
 	roots    []string
 	defs     []defaultBinding // defaulted references collected at Check
 }
+
+// absent reports a field a document-backed Resolver found missing (see Field.Type).
+func (f Field) absent() bool { return f.Type == "" && !f.Required && !f.HasDefault }
 
 // defaultBinding records a referenced optional field that carries a schema default,
 // so Eval can substitute it when the field is absent.

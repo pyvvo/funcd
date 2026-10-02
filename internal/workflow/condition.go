@@ -201,7 +201,8 @@ func (e *Engine) evalSelect(src string, n *stepNode, input json.RawMessage, outp
 
 // docResolver is an expr.Resolver that infers field types from actual JSON documents
 // (the runtime resolver): each key is an exposed root, and a path's type comes from
-// the value found there. Present ⇒ Required (no default); absent ⇒ NotFound.
+// the value found there. Present ⇒ Required (no default); a missing last segment ⇒ the absent
+// expr.Field, which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound.
 type docResolver struct {
 	docs map[string]json.RawMessage
 }
@@ -220,13 +221,16 @@ func (r docResolver) Resolve(root string, path []string) (expr.Field, error) {
 		return expr.Field{}, fault.NotFoundf("workflow.resolve", "root %q not in scope", root)
 	}
 	cur := raw
-	for _, seg := range path {
+	for i, seg := range path {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(cur, &obj); err != nil {
 			return expr.Field{}, fault.NotFoundf("workflow.resolve", "%q is not an object", seg)
 		}
 		next, ok := obj[seg]
 		if !ok {
+			if i == len(path)-1 {
+				return expr.Field{}, nil
+			}
 			return expr.Field{}, fault.NotFoundf("workflow.resolve", "field %q not found", seg)
 		}
 		cur = next
