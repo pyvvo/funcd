@@ -25,6 +25,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The queue checks the squash message with scripts/commit-msg-lint.sh, which is stricter than
+      # the action, so the title is checked with it here too: a title the queue would refuse then
+      # fails on the PR. The checkout is the default branch (what pull_request_target checks out
+      # with no ref), never the PR's code, and the title arrives as data in an env var.
+      - if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - if: github.event_name == 'pull_request_target'
+        name: Check the title with the merge queue's commit-message lint
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$TITLE" > "$RUNNER_TEMP/commit-msg"
+          scripts/commit-msg-lint.sh "$RUNNER_TEMP/commit-msg"
+
       - if: github.event_name == 'merge_group'
         uses: actions/checkout@v7
         with:
