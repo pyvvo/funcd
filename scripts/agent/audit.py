@@ -589,8 +589,8 @@ def flake_run(tree, dirs, parallel):
             count += len(listed)
             out += sh(["go", "test", "-count=3", "-json", f"-p={parallel}", "-timeout=20m", *listed],
                       cwd=cwd, env=env, check=False)[1]
-    outcomes, pkg_fail = collections.defaultdict(set), set()
-    output = collections.defaultdict(lambda: collections.deque(maxlen=15))
+    outcomes, pkg_fail, failed = collections.defaultdict(set), set(), collections.defaultdict(list)
+    run = collections.defaultdict(lambda: collections.deque(maxlen=15))
     for line in out.splitlines():
         try:
             ev = json.loads(line)
@@ -598,8 +598,11 @@ def flake_run(tree, dirs, parallel):
             continue
         key = f"{ev.get('Package', '?')} {ev['Test'].split('/')[0] if ev.get('Test') else '(package)'}"
         if ev.get("Action") == "output":
-            output[key].append(ev.get("Output", "").rstrip())
+            run[key].append(ev.get("Output", "").rstrip())
         elif ev.get("Action") in ("pass", "fail") and "/" not in ev.get("Test", ""):
+            lines = run.pop(key, ())
+            if ev["Action"] == "fail":
+                failed[key] += lines
             if ev.get("Test"):
                 outcomes[key].add(ev["Action"])
             elif ev["Action"] == "fail":
@@ -609,7 +612,7 @@ def flake_run(tree, dirs, parallel):
     named = {k.split()[0] for k in flaky + failing}
     failing += sorted(k for k in pkg_fail if k.split()[0] not in named)
     return {"packages": count, "flaky": flaky, "failing": failing,
-            "output": {k: list(output[k]) for k in flaky + failing}}
+            "output": {k: failed[k] for k in flaky + failing}}
 
 
 def flake_checkout(root, head, tmp):
