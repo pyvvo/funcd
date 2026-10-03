@@ -3,12 +3,15 @@ package local
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,6 +57,48 @@ func TestIssue454_LocalAPIServerErrorsUseTheManagerLogger(t *testing.T) {
 	require.NotNil(t, srv.ErrorLog, "the local API's net/http errors must go through the Manager's logger")
 	srv.ErrorLog.Print("issue-454 probe")
 	require.Contains(t, logs.String(), `"level":"WARN","msg":"issue-454 probe","component":"workernode.local"`)
+}
+
+// TestIssue546_ServeFailureIsLoggedAndRebinds: a listener whose Serve failed for a reason other than
+// Close or Remove was dropped silently and stayed in active, so SocketFor kept handing out its dead path.
+func TestIssue546_ServeFailureIsLoggedAndRebinds(t *testing.T) {
+	dir, err := os.MkdirTemp("", "i546") // short: a unix socket path is capped near 104 bytes
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	var logs bytes.Buffer
+	m := NewManager(dir, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(m.Close)
+	const key = "team-a/a"
+	path := filepath.Join(dir, sockName(key))
+	dead := &serving{path: path, cancel: func() {}, done: make(chan struct{})}
+	m.mu.Lock()
+	m.active[key] = dead
+	m.mu.Unlock()
+	m.serves.Add(1)
+	m.serve(key, dead, func() error { return errors.New("issue-546 accept failure") })
+
+	require.Contains(t, logs.String(), `"level":"WARN"`)
+	require.Contains(t, logs.String(), `"function":"team-a/a","socket":"`+path+`"`)
+	require.Contains(t, logs.String(), "issue-546 accept failure")
+
+	got, err := m.SocketFor("team-a", "a")
+	require.NoError(t, err)
+	require.Equal(t, path, got)
+	m.mu.Lock()
+	live := m.active[key]
+	m.mu.Unlock()
+	require.NotSame(t, dead, live, "SocketFor must bind a new listener, not hand out the dead one")
+	conn, err := net.Dial("unix", got)
+	require.NoError(t, err)
+	_ = conn.Close()
+
+	logs.Reset()
+	m.Remove("team-a", "a")
+	_, err = m.SocketFor("team-a", "b")
+	require.NoError(t, err)
+	m.Close()
+	require.NotContains(t, logs.String(), "stopped serving", "Remove and Close must not log")
 }
 
 // packageSources is the package's compiled source, so a go test -overlay of a file is what the test reads.
