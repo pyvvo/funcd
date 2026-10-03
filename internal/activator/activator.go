@@ -12,6 +12,7 @@ package activator
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -408,10 +409,18 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 		r = rebase(r, target.Path)
 		target = &url.URL{Scheme: target.Scheme, Host: target.Host}
 	}
+	// The proxy clears the whole header map after it relays an upstream 1xx, so the headers the edge
+	// set before proxying (X-Request-Id, CORS) are put back before the final response (#417).
+	edge := w.Header().Clone()
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
+	rp.ModifyResponse = func(*http.Response) error {
+		maps.Copy(w.Header(), edge)
+		return nil
+	}
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		maps.Copy(w.Header(), edge)
 		a.logger.WarnContext(r.Context(), "upstream call failed", "upstream", upstream, "error", perr)
 		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
 	}
