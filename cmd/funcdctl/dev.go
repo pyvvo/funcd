@@ -823,7 +823,7 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 // re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
 // across functions), then re-delivers each edited bundle and contract and re-applies its Function. A failed
 // reload is reported once and retried on the next edit; an apply that lost a race with a concurrent status
-// write (Conflict) is retried on the next poll.
+// write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
 func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string) error {
 	var changed []*devHandler
 	var errs []error
@@ -856,7 +856,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		return errors.Join(append(errs, serr)...)
 	}
 	for _, obj := range resObjs {
-		if _, aerr := c.Apply(ctx, obj); aerr != nil {
+		if aerr := applyDesired(ctx, c, obj); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
 			if fault.KindOf(aerr) == fault.Conflict {
 				for _, h := range changed {
@@ -878,7 +878,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		}
 		fn := synthesizeFunction(h.pf, h.bundle)
 		fn.Spec.ImageDigest = h.seen
-		if _, aerr := c.Apply(ctx, fn); aerr != nil {
+		if aerr := applyDesired(ctx, c, fn); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Function %q", fn.Name))
 			if fault.KindOf(aerr) == fault.Conflict {
 				h.seen = ""

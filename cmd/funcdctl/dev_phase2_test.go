@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -256,6 +257,46 @@ func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
 	inst, err := a.startDev(ctx, dir, "", cfg)
 	require.NoError(t, err, "the failed boot released the control port and the durable drivers")
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
+}
+
+// A hot-reload re-apply that loses its update to a controller's status write (Conflict) is re-applied in
+// place, as the boot apply is (#398), so the poll reports no failure for a reload that took.
+func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nbindings:\n  config:\n    - app-config\n" + permissiveContract +
+			"dev:\n  config:\n    app-config:\n      APP_MODE: one\n",
+		"handler.mjs": "export function handle() { return { ok: true }; }\n",
+	})
+	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	puts := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		puts[r.Method+" "+r.URL.Path]++
+		first := puts[r.Method+" "+r.URL.Path] == 1
+		mu.Unlock()
+		if first {
+			fault.WriteProblem(w, fault.Conflictf("store.Update", "%s resourceVersion mismatch", r.URL.Path))
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL)
+	require.NoError(t, err)
+
+	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
+	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, nil),
+		"a Conflict on a hot-reload apply is re-applied in place, not reported")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/functions/"+string(pfs[0].name))
+	for path, n := range puts {
+		require.Equal(t, 2, n, "%s met one Conflict and was re-applied once", path)
+	}
 }
 
 // scenario: dev-persist-survives-restart (secrets facet) — secrets are NEVER served from the durable
