@@ -18,7 +18,8 @@ export const meta = {
 //   repo: a funcd checkout to add the worktrees from (its own branch is never touched),
 //   wave: a label for the wave's ledger branch,
 //   units: [{ key, group, tracker (0 for none), all (the unit holds every open sub-issue of its tracker),
-//             issues: [{ n, p (priority), t (title) }] }],
+//             issues: [{ n, p (priority), t (title), k ('bug', 'flake' or 'task'; default 'bug'),
+//                        note (a decision the person already made for it, optional) }] }],
 //   model, trailer: the producing model's id and commit trailer, ledger: false to skip the ledger PR }
 // Returns per group the PR, the fixed and parked issues, the gate, wave and lane results and the new defects noted.
 
@@ -113,16 +114,27 @@ const reportOf = (n, round) => `${SP}/reports/issue-${n}-fix-${MODEL}${round > 1
 const gbranch = (u) => u.tracker ? `fix/${u.tracker}-${u.key}` : `fix/${u.issues[0].n}-${u.key}`
 const multi = (u) => u.tracker || u.issues.length > 1
 
-const fixPrompt = (it) => `Fix GitHub issue #${it.n} of pyvvo/funcd (${it.p}): "${it.t}", test-first, following ${iwt(it.n)}/.claude/skills/fix/SKILL.md Steps 2-6 (a later stage reviews it and opens the PR).
+const isTask = (it) => it.k === 'task'
 
-Setup, one call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b fix/i${it.n} ${iwt(it.n)} origin/main\`. Then read the issue (\`cd ${iwt(it.n)} && python3 .claude/skills/issue-management/driver.py show ${it.n} --body\`); it names the likely cause (file:line): start there, and read the code it points at in the same turn.
-
-1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
+const FIX_STEPS = (it) => `1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
 2. Make the smallest root-cause fix. Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
 3. Revert check: write \`git show origin/main:<file>\` of each non-test file you changed to a scratch file outside the worktree and run the test with \`go test -overlay\` mapping the file to it: it must fail.
 4. Checks on the touched packages only: the regression test with -race, the packages' tests, \`go build ./...\`, and \`go vet\` and \`go tool golangci-lint run\` on the touched packages.
 5. One commit: subject \`fix(<scope>): <what is fixed>\`, a body with the cause, the fix and the test name, a line \`Fixes #${it.n}\`, then the line \`${TRAILER}\`.
-PARK instead (no commit; give the reason) if the issue does not reproduce as written, or the only sound fix needs a design decision or changes an Accepted ADR's decision.
+PARK instead (no commit; give the reason) if the issue does not reproduce as written, or the only sound fix needs a design decision or changes an Accepted ADR's decision.`
+
+const TASK_STEPS = (it) => `This is a task (kind/task), not a bug: the issue's "Done when" section is the target.
+1. Make the smallest change that meets the "Done when". Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
+2. Where the change alters behavior, write TestIssue${it.n}_<Behavior> beside the package's tests so that it fails without the change, and prove it with the revert check: \`git show origin/main:<file>\` of each changed non-test file into a scratch file outside the worktree, then \`go test -overlay\` (it must fail). Where it does not (a refactor, a moved file, a comment, a test-only cleanup), the touched packages' existing tests must pass unchanged; say in revert_check how the "Done when" is verified.
+3. Checks on the touched packages only: their tests with -race, \`go build ./...\`, and \`go vet\` and \`go tool golangci-lint run\` on them. A change to the flake, CI or a script also runs, once, the command that change enables or affects (not the gate: a later stage runs it).
+4. One commit: a Conventional Commit subject whose type fits the change (\`fix\` when it changes behavior; \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise) with a scope, a body with what changed, why, and how the "Done when" is met, a line \`Fixes #${it.n}\`, then the line \`${TRAILER}\`.
+PARK instead (no commit; give the reason) if the "Done when" cannot be met without a design decision, or it changes an Accepted ADR's decision.`
+
+const fixPrompt = (it) => `${isTask(it) ? 'Do the GitHub task' : 'Fix GitHub issue'} #${it.n} of pyvvo/funcd (${it.p}): "${it.t}", following ${iwt(it.n)}/.claude/skills/fix/SKILL.md Steps 2-6 for scope, checks and commits${isTask(it) ? '' : ', test-first'} (a later stage reviews it and opens the PR).
+${it.note ? `\nThe person already decided, for this issue: ${it.note}\n` : ''}
+Setup, one call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b fix/i${it.n} ${iwt(it.n)} origin/main\`. Then read the issue (\`cd ${iwt(it.n)} && python3 .claude/skills/issue-management/driver.py show ${it.n} --body\`); it names the likely cause or the place to change (file:line): start there, and read the code it points at in the same turn.
+
+${isTask(it) ? TASK_STEPS(it) : FIX_STEPS(it)}
 needs_lane = true if your commit touches ${LANE_PATHS}.
 List in new_defects only another defect you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang), one line each with evidence; leave out wording, logging, docs, test-only and unlikely-edge issues. Do not fix it.
 
@@ -132,7 +144,9 @@ ${RULES(iwt(it.n))}`
 
 const reviewPrompt = (it, commits, round) => `You are the independent review gate for the fix of pyvvo/funcd issue #${it.n} ("${it.t}"). Read ${iwt(it.n)}/.claude/skills/fix-review/SKILL.md and apply it, with these adaptations:
 - The change: branch fix/i${it.n} in the worktree ${iwt(it.n)}; its commits: ${commits.join(', ')} (\`git diff origin/main...HEAD\`). Read the issue with \`python3 .claude/skills/issue-management/driver.py show ${it.n} --body\`.
-- Revert check as Step 2.1 says: an overlay of the \`origin/main\` version of each changed non-test file (\`git show origin/main:<file>\` into a scratch file, \`go test -overlay\`), so the regression test stays and must FAIL for the issue's reason; then it must PASS with -race without the overlay. Never revert the commit (that removes the test too) and leave the worktree clean.
+- Revert check as Step 2.1 says: an overlay of the \`origin/main\` version of each changed non-test file (\`git show origin/main:<file>\` into a scratch file, \`go test -overlay\`), so the regression test stays and must FAIL for the issue's reason; then it must PASS with -race without the overlay. Never revert the commit (that removes the test too) and leave the worktree clean.${isTask(it) ? `
+- This is a task (kind/task): its "Done when" section is the target. When the commit adds a TestIssue${it.n} test, run the revert check above on it. Otherwise verify the "Done when" directly (read the change, run what it enables) and check that the touched packages' tests pass unchanged and that a refactor changes no behavior.` : ''}${it.note ? `
+- The person already decided, for this issue: ${it.note}. Judge the change against that decision, not against the alternatives.` : ''}
 - 1-3 targeted mutants on the fix's key lines (edit, run only the relevant tests with -run, restore); each must fail a test.
 - Apply Step 2.7 (reuse: search for existing code the change duplicates or reinvents) and Step 2.8 (conventions).
 - Checks: the touched packages only (tests with -race, vet, lint). No e2e suite, no repo-wide tests, no Linux lint, no lanes: the group gate runs them.
@@ -157,7 +171,7 @@ const integratePrompt = (u, passed, parkedEarly) => `Integrate the reviewed fixe
 3. Copy these review reports into docs/reviews/ (keep the file names): ${passed.flatMap(p => p.reports.map(r => `${SP}/reports/${r}`)).join(', ')}. Commit them: \`docs(reviews): fix reviews for ${u.tracker ? `the ${u.group} group (#${u.tracker})` : passed.map(p => `#${p.issue}`).join(', ')}\`, then the line \`${TRAILER}\`. Do NOT touch docs/reviews/model-ledger.json or model-scorecard.md: one ledger PR records the whole wave.
 4. Run the gate, one call (about 5 minutes): \`cd ${gwt(u)} && scripts/agent/gate.sh\`. It prints PASS/FAIL per step (logs in .cache/gate/). On GATE FAIL, find the issue whose commit broke it (the failing package or test points at it), \`git revert --no-edit\` that issue's commits, run the gate once more, and report that issue parked. An \`audit\` FAIL names a hard flag with its file:line (a new production copy, a production time.Sleep, an unexplained //nolint or a new direct dependency): remove it with a follow-up commit when that is mechanical (reuse the existing helper, explain the nolint, wait on a hook instead of a sleep); otherwise revert that issue's commits and park it. Never write an \`audit-allow:\` waiver yourself. A \`host\` FAIL means the machine's ports are exhausted: wait a few minutes and rerun, never park for it.
 5. Push (\`git push -q -u origin ${gbranch(u)}\`) and open the PR: \`gh pr create --repo pyvvo/funcd --base main --head ${gbranch(u)}\`, with
-   - the title ${u.tracker ? `\`fix(<scope>): <what the group fixes, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`fix(<scope>): <what the group fixes, ≤ 72 chars>`' : "of the fix commit's subject"} (a Conventional Commit: it becomes the squash commit and the release note);
+   - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject"}, where the type is \`fix\` when the group changes behavior and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise (a Conventional Commit: it becomes the squash commit and the release note);
    - a body: a summary; a table (issue, cause, fix, regression test, review verdict with a link to its docs/reviews report); the parked issues with reasons; the gate result with the audit's size, clone and complexity lines; one \`Fixes #N\` line per fixed issue${u.tracker ? (u.all ? `, plus \`Fixes #${u.tracker}\` if every listed issue is fixed (this unit holds every open issue of the tracker)` : `; do NOT add \`Fixes #${u.tracker}\`: the tracker keeps issues that need an ADR`) : ''}; a "Lima lane pending" note when a fix touches ${LANE_PATHS}; and the final line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
 Do not merge or queue. Issues parked before review (list them in the body): ${JSON.stringify(parkedEarly)}.
 

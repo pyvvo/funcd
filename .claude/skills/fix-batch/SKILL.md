@@ -16,7 +16,10 @@ The pipeline is committed (issue #566): `.claude/workflows/fix-batch.js` for fun
 `.claude/workflows/shim-fix.js` for issues whose root cause is in pyvvo/funcd-typescript or pyvvo/funcd-python.
 After Step 0, run it with the Workflow tool (`name: "fix-batch"`; each file's header lists its args); it carries
 Steps 1–3, the wave check and the lanes, and returns per group the PR, the fixed and parked issues and the new
-defects noted. Around it:
+defects noted. Each issue carries its kind: a bug or flake is fixed test-first; a task (a cleanup from an audit)
+is done to its "Done when", with a failing-first test only where it changes behavior. An issue can also carry a
+`note`, a decision the person already made for it, which the fixer follows and the reviewer judges against.
+Around it:
 
 - `scripts/agent/triage.sh <pr>`: the one-screen view before queueing (checks, size, the gate and audit lines, the
   masking-pattern counts of the added lines);
