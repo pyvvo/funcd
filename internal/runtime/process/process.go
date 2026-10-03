@@ -65,6 +65,15 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// An exited instance is replaced (ADR-0142), as containerd allows once Stop has deleted the container,
+	// so a replica can be re-created after it stopped or crashed. The replaced instance's files go with it.
+	old, replace := d.instances[id]
+	if replace && !old.state.Terminal() {
+		return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
+	}
+
 	logPath := spec.LogPath
 	if logPath == "" {
 		f, err := os.CreateTemp("", "funcd-worker-*.log")
@@ -74,15 +83,7 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 		logPath = f.Name()
 		_ = f.Close()
 	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	// An exited instance is replaced (ADR-0142), as containerd allows once Stop has deleted the container,
-	// so a replica can be re-created after it stopped or crashed. The replaced instance's files go with it.
-	if old, ok := d.instances[id]; ok {
-		if !old.state.Terminal() {
-			return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
-		}
+	if replace {
 		removeFiles(old)
 	}
 	inst := &instance{
@@ -303,7 +304,8 @@ func removeFiles(inst *instance) {
 	}
 }
 
-// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM.
+// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM, then deletes
+// every instance's driver-owned files, which no later driver knows to remove.
 func (d *driver) Close() error {
 	d.mu.Lock()
 	var running []runtime.InstanceID
@@ -318,6 +320,11 @@ func (d *driver) Close() error {
 		wg.Go(func() { _ = d.Stop(context.Background(), id) })
 	}
 	wg.Wait()
+	d.mu.Lock()
+	for _, inst := range d.instances {
+		removeFiles(inst)
+	}
+	d.mu.Unlock()
 	return nil
 }
 

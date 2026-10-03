@@ -1,9 +1,11 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"testing"
 	"time"
 
@@ -28,11 +30,10 @@ func bindUDPTCP(t *testing.T) (net.PacketConn, net.Listener) {
 }
 
 // exchangeUntilServed retries q until the forwarder answers on network, so the test waits for Serve's
-// listeners instead of sleeping. The receive buffer is large because the forwarder relays a truncated
-// answer re-packed without compression, which can exceed 512 bytes.
+// listeners instead of sleeping. The client sends no EDNS0 OPT, so it reads at most 512 bytes over UDP.
 func exchangeUntilServed(t *testing.T, network string, addr netip.AddrPort, q *dns.Msg) *dns.Msg {
 	t.Helper()
-	client := &dns.Client{Net: network, Timeout: time.Second, UDPSize: dns.DefaultMsgSize}
+	client := &dns.Client{Net: network, Timeout: time.Second}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		resp, _, err := client.Exchange(q, addr.String())
@@ -46,15 +47,10 @@ func exchangeUntilServed(t *testing.T, network string, addr netip.AddrPort, q *d
 	}
 }
 
-// Issue 137: nftables redirects worker TCP :53 into the forwarder (dnsForwarderProtos), so a stub's
-// RFC 7766 TCP retry of a truncated UDP answer must be served, and the full answer attested.
-func TestIssue137_ForwarderServesDNSOverTCP(t *testing.T) {
-	const name = "big.example.com."
-	ips := make([]net.IP, 40)
-	for i := range ips {
-		ips[i] = net.IPv4(203, 0, 113, byte(i+1))
-	}
-
+// startForwarder serves name → ips from a loopback upstream that, over UDP, truncates the answer to 512
+// bytes (compressed, as a real resolver does), and runs a forwarder in front of it.
+func startForwarder(t *testing.T, name string, ips []net.IP) (Forwarder, netip.AddrPort) {
+	t.Helper()
 	upPC, upLn := bindUDPTCP(t)
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
@@ -87,6 +83,24 @@ func TestIssue137_ForwarderServesDNSOverTCP(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- fwd.Serve(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
+	return fwd, listen
+}
+
+// testIPs returns n distinct documentation-range IPv4 addresses.
+func testIPs(n int) []net.IP {
+	ips := make([]net.IP, n)
+	for i := range ips {
+		ips[i] = net.IPv4(203, 0, 113, byte(i+1))
+	}
+	return ips
+}
+
+// Issue 137: nftables redirects worker TCP :53 into the forwarder (dnsForwarderProtos), so a stub's
+// RFC 7766 TCP retry of a truncated UDP answer must be served, and the full answer attested.
+func TestIssue137_ForwarderServesDNSOverTCP(t *testing.T) {
+	const name = "big.example.com."
+	ips := testIPs(40)
+	fwd, listen := startForwarder(t, name, ips)
 
 	q := new(dns.Msg).SetQuestion(name, dns.TypeA)
 	udpResp := exchangeUntilServed(t, "udp", listen, q)
@@ -100,4 +114,49 @@ func TestIssue137_ForwarderServesDNSOverTCP(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []string{"big.example.com"}, fwd.DomainsFor(netip.MustParseAddr("127.0.0.1"), last),
 		"an IP only the TCP answer carries is attested")
+}
+
+// Issue 367: miekg/dns unpacks the upstream reply with Compress false, so relaying it as is re-packs it
+// uncompressed. 25 A records fit 512 bytes compressed (433) but not uncompressed (808), so a client
+// without EDNS0 must still get the whole answer over UDP.
+func TestIssue367_ForwarderFitsReplyToClientUDPSize(t *testing.T) {
+	const name = "big.example.com."
+	ips := testIPs(25)
+	_, listen := startForwarder(t, name, ips)
+
+	resp := exchangeUntilServed(t, "udp", listen, new(dns.Msg).SetQuestion(name, dns.TypeA))
+	require.False(t, resp.Truncated, "the answer fits 512 bytes once compressed")
+	require.Len(t, resp.Answer, len(ips))
+}
+
+// serveGoroutineAlive reports whether any goroutine is still running inside (or was started by) Serve.
+func serveGoroutineAlive() bool {
+	buf := make([]byte, 1<<20)
+	return bytes.Contains(buf[:runtime.Stack(buf, true)], []byte("egress.(*forwarder).Serve"))
+}
+
+// Issue 368: a Serve cancelled before its servers bind must still shut them down. GOMAXPROCS(1) holds the
+// server goroutines until Serve yields, so a Serve that does not wait for them returns before they bind.
+func TestIssue368_ServeCancelledEarlyReleasesListeners(t *testing.T) {
+	pc, ln := bindUDPTCP(t)
+	listen := netip.MustParseAddrPort(ln.Addr().String())
+	require.NoError(t, pc.Close())
+	require.NoError(t, ln.Close())
+
+	fwd := NewForwarder(listen, netip.MustParseAddrPort("127.0.0.1:53"), nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	prev := runtime.GOMAXPROCS(1)
+	err := fwd.Serve(ctx)
+	runtime.GOMAXPROCS(prev)
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.Eventually(t, func() bool { return !serveGoroutineAlive() }, 2*time.Second, 10*time.Millisecond,
+		"a DNS server goroutine outlived Serve")
+	pc, err = net.ListenPacket("udp", listen.String())
+	require.NoError(t, err, "the UDP port is released when Serve returns")
+	ln, err = net.Listen("tcp", listen.String())
+	require.NoError(t, err, "the TCP port is released when Serve returns")
+	require.NoError(t, pc.Close())
+	require.NoError(t, ln.Close())
 }

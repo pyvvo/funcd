@@ -233,3 +233,36 @@ func TestIssue138_CorrelatorEvictsExpiredRecords(t *testing.T) {
 		require.Equal(t, []string{"n49999.example.com", "pinned.example.com"}, c.DomainsFor(worker, dst), "only the live names are attested")
 	})
 }
+
+// A worker controls which names it resolves and, through a zone it owns, their TTLs, so the live pairs one
+// source can pin in the daemon must be capped: the cap sheds that worker's earliest-expiring pair, never its
+// newest record and never another worker's.
+func TestIssue369_CorrelatorCapsLivePairsPerSource(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1000, 0)
+	c := newCorrelator(func() time.Time { return now }, nil)
+	flooder := netip.MustParseAddr("10.63.0.5")
+	other := netip.MustParseAddr("10.63.0.6")
+	pinned := netip.MustParseAddr("198.51.100.7")
+	c.record(flooder, "pinned.example.com", []netip.Addr{pinned}, 48*time.Hour)
+	c.record(other, "api.example.com", []netip.Addr{pinned}, time.Hour)
+
+	var last netip.Addr
+	for i := range 20000 {
+		last = netip.AddrFrom4([4]byte{100, 64, byte(i >> 8), byte(i)})
+		c.record(flooder, fmt.Sprintf("r%d.wild.example", i), []netip.Addr{last}, 24*time.Hour)
+	}
+
+	held, total := 0, 0
+	for k, m := range c.entries {
+		total += len(m)
+		if k.src == flooder {
+			held += len(m)
+		}
+	}
+	require.LessOrEqual(t, held, 1024, "one worker's live pairs are capped, however long their TTLs")
+	require.Equal(t, total, c.records, "the pair count matches the map")
+	require.Equal(t, []string{"r19999.wild.example"}, c.DomainsFor(flooder, last), "the newest record is attested")
+	require.Equal(t, []string{"pinned.example.com"}, c.DomainsFor(flooder, pinned), "the cap sheds the earliest-expiring pair first")
+	require.Equal(t, []string{"api.example.com"}, c.DomainsFor(other, pinned), "a flood never displaces another worker's records")
+}

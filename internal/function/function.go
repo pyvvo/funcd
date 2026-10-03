@@ -411,6 +411,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return r.gateFailed(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter)
 	}
 
+	// 3a. runtime gate (issue #371): in process mode a python-family Function that no registered python shim would run
+	// fails here, before pooling's assign, rather than under the node shim, which cannot load its handler.
+	if msg, missing := r.runtimeUnavailable(fn); missing {
+		return r.gateFailed(ctx, fn, gateFailure{reason: "RuntimeUnavailable", message: msg, readyMessage: msg, phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+	}
+
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
 	// joins a shared pool worker by (namespace, runtime, worker-id). A REJECTED (over-cap)
 	// member is held NotReady with a PoolFull condition and gets no worker and no route; it
@@ -1533,16 +1539,34 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 // the default ShimCommand (node). One daemon can thus run several curated languages; the rest of
 // the worker spec (env, portfile, readiness) is identical regardless of which shim is chosen.
 func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
+	if cmd := r.familyShim(rt); cmd != nil {
+		return cmd
+	}
+	return r.shimCommand
+}
+
+// familyShim is the shim of the longest registered family prefix that matches rt; nil when none does.
+func (r *Reconciler) familyShim(rt v1.RuntimeName) []string {
 	best, cmd := "", []string(nil)
 	for family, c := range r.shimByFamily {
 		if len(family) > len(best) && strings.HasPrefix(string(rt), family) {
 			best, cmd = family, c
 		}
 	}
-	if cmd != nil {
-		return cmd
+	return cmd
+}
+
+// runtimeUnavailable reports a process-mode python-family Function that neither a registered python runtime shim nor,
+// for a pooling member, a python pool host would run (issue #371): shimFor would launch it with the node default.
+func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
+	rt := fn.Spec.Runtime
+	if r.materializer == nil || r.endpointMode != EndpointLoopback || !isPythonFamily(rt) || r.familyShim(rt) != nil {
+		return "", false
 	}
-	return r.shimCommand
+	if _, pooled := r.poolKeyFor(fn); pooled {
+		return "", false
+	}
+	return fmt.Sprintf("runtime %q is not available on this node: no python shim is registered", rt), true
 }
 
 // workerSpec builds one replica's runtime spec. It is pure: secretEnv is the already-resolved

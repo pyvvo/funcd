@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -75,11 +76,14 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
-		client := udpClient
-		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
-			client = tcpClient
+		client, limit := udpClient, dns.MinMsgSize
+		if opt := req.IsEdns0(); opt != nil {
+			limit = int(opt.UDPSize())
 		}
-		f.handle(client, w, req)
+		if _, overTCP := w.RemoteAddr().(*net.TCPAddr); overTCP {
+			client, limit = tcpClient, dns.MaxMsgSize
+		}
+		f.handle(client, limit, w, req)
 	})
 	servers := []*dns.Server{
 		{Addr: f.listen.String(), Net: "udp", Handler: mux},
@@ -90,12 +94,26 @@ func (f *forwarder) Serve(ctx context.Context) error {
 	f.mu.Unlock()
 
 	errCh := make(chan error, len(servers))
-	for _, srv := range servers {
-		go func() { errCh <- srv.ListenAndServe() }()
+	started := make([]chan struct{}, len(servers))
+	exited := make([]chan struct{}, len(servers))
+	for i, srv := range servers {
+		started[i], exited[i] = make(chan struct{}), make(chan struct{})
+		srv.NotifyStartedFunc = func() { close(started[i]) }
+		go func() {
+			defer close(exited[i])
+			errCh <- srv.ListenAndServe()
+		}()
 	}
+	// ShutdownContext is a no-op on a server ListenAndServe has not marked started, so each server is shut
+	// down only once it has started (or has already failed), and Serve returns after its goroutine has.
 	shutdown := func() {
-		for _, srv := range servers {
-			_ = srv.ShutdownContext(context.Background())
+		for i, srv := range servers {
+			select {
+			case <-started[i]:
+				_ = srv.ShutdownContext(context.Background())
+			case <-exited[i]:
+			}
+			<-exited[i]
 		}
 	}
 	select {
@@ -112,8 +130,10 @@ func (f *forwarder) Serve(ctx context.Context) error {
 }
 
 // handle forwards one query upstream over the transport it arrived on (so a TCP retry gets the whole
-// answer), records the resolved A/AAAA answers per (src, domain), and relays the response verbatim.
-func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Msg) {
+// answer), records the resolved A/AAAA answers per (src, domain), and relays the response fitted to the
+// client's limit: 512 bytes over UDP without EDNS0 (RFC 1035), else the OPT UDP size, 65535 over TCP.
+// The unpacked reply has Compress false, so Truncate re-compresses it and sets TC on what still overflows.
+func (f *forwarder) handle(client *dns.Client, limit int, w dns.ResponseWriter, req *dns.Msg) {
 	resp, _, err := client.Exchange(req, f.upstream.String())
 	if err != nil || resp == nil {
 		fail := new(dns.Msg)
@@ -124,6 +144,7 @@ func (f *forwarder) handle(client *dns.Client, w dns.ResponseWriter, req *dns.Ms
 	if src, ok := addrFromNet(w.RemoteAddr()); ok {
 		f.record(src, resp)
 	}
+	resp.Truncate(limit)
 	_ = w.WriteMsg(resp)
 }
 
@@ -175,6 +196,11 @@ type corrKey struct{ src, dst netip.Addr }
 // minSweep is the record count below which the correlator never sweeps, so a small map is not rescanned.
 const minSweep = 1024
 
+// maxPairsPerSource caps the live (dst, domain) pairs one worker source holds. The worker picks the names
+// it resolves and, through a zone it controls, their TTLs, so only a cap bounds the correlator's memory
+// (to maxPairsPerSource per worker on the subnet, ADR-0117 §4a); a pair shed at the cap fails closed.
+const maxPairsPerSource = 1024
+
 // correlator records (src, domain)→resolved-IP with a TTL and exposes the reverse DomainsFor(src, dst).
 // It is the trust anchor's data structure: only domains funcd's OWN forwarder resolved for a worker are
 // ever returned. wildcardsFor supplies the namespace's EgressPolicy wildcard patterns so a matched FQDN
@@ -185,12 +211,25 @@ type correlator struct {
 
 	mu      sync.Mutex
 	entries map[corrKey]map[string]time.Time // domain → expiry
+	bySrc   map[netip.Addr]*srcPairs         // per-source view of entries, for the per-source cap
 	records int                              // (key, domain) pairs held in entries
 	sweepAt int                              // records count that triggers the next sweep
 }
 
+// srcPairs is one source's dst keys in entries and its (key, domain) pair count.
+type srcPairs struct {
+	dsts  map[netip.Addr]struct{}
+	pairs int
+}
+
 func newCorrelator(now func() time.Time, wildcardsFor func(netip.Addr) []string) *correlator {
-	return &correlator{now: now, wildcardsFor: wildcardsFor, entries: map[corrKey]map[string]time.Time{}, sweepAt: minSweep}
+	return &correlator{
+		now:          now,
+		wildcardsFor: wildcardsFor,
+		entries:      map[corrKey]map[string]time.Time{},
+		bySrc:        map[netip.Addr]*srcPairs{},
+		sweepAt:      minSweep,
+	}
 }
 
 // record binds (src, domain) to each resolved ip until now+ttl (a zero/negative ttl is clamped to a
@@ -206,13 +245,23 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 	defer c.mu.Unlock()
 	for _, ip := range ips {
 		k := corrKey{src: src, dst: ip}
+		if _, ok := c.entries[k][domain]; !ok {
+			sp := c.bySrc[src]
+			if sp == nil {
+				sp = &srcPairs{dsts: map[netip.Addr]struct{}{}}
+				c.bySrc[src] = sp
+			}
+			if sp.pairs >= maxPairsPerSource {
+				c.shed(src, now)
+			}
+			sp.dsts[ip] = struct{}{}
+			sp.pairs++
+			c.records++
+		}
 		m := c.entries[k]
 		if m == nil {
 			m = map[string]time.Time{}
 			c.entries[k] = m
-		}
-		if _, ok := m[domain]; !ok {
-			c.records++
 		}
 		m[domain] = exp
 	}
@@ -221,20 +270,66 @@ func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl
 	}
 }
 
-// sweep drops every expired (key, domain) pair and every emptied key, then schedules the next sweep at
-// twice the live count. The forwarder lives as long as the daemon, so the TTL must bound retention and not
-// only visibility: memory stays within twice the live count at the last sweep (floor minSweep), at
-// amortized O(1) per record. Caller holds mu.
+// shed makes room under src's cap before a new pair is added: it drops src's expired pairs and then, while
+// more than three quarters of the cap are live, its earliest-expiring ones. Shedding a batch keeps a flood
+// at amortized O(log cap) per record, and a flood displaces only the flooding worker's own records. Caller
+// holds mu.
+func (c *correlator) shed(src netip.Addr, now time.Time) {
+	type pair struct {
+		k   corrKey
+		d   string
+		exp time.Time
+	}
+	var live []pair
+	for dst := range c.bySrc[src].dsts {
+		k := corrKey{src: src, dst: dst}
+		for d, exp := range c.entries[k] {
+			if now.Before(exp) {
+				live = append(live, pair{k: k, d: d, exp: exp})
+			} else {
+				c.drop(k, d)
+			}
+		}
+	}
+	keep := maxPairsPerSource - maxPairsPerSource/4
+	if len(live) <= keep {
+		return
+	}
+	slices.SortFunc(live, func(a, b pair) int { return a.exp.Compare(b.exp) })
+	for _, p := range live[:len(live)-keep] {
+		c.drop(p.k, p.d)
+	}
+}
+
+// drop removes one (key, domain) pair and any key it empties; a source's view stays while the caller may
+// still add to it. Caller holds mu.
+func (c *correlator) drop(k corrKey, domain string) {
+	m := c.entries[k]
+	delete(m, domain)
+	c.records--
+	sp := c.bySrc[k.src]
+	sp.pairs--
+	if len(m) == 0 {
+		delete(c.entries, k)
+		delete(sp.dsts, k.dst)
+	}
+}
+
+// sweep drops every expired (key, domain) pair, every emptied key and every emptied source, then schedules
+// the next sweep at twice the live count. The forwarder lives as long as the daemon, so the TTL must bound
+// retention and not only visibility: memory stays within twice the live count at the last sweep (floor
+// minSweep), at amortized O(1) per record. Caller holds mu.
 func (c *correlator) sweep(now time.Time) {
 	for k, m := range c.entries {
 		for d, exp := range m {
 			if !now.Before(exp) {
-				delete(m, d)
-				c.records--
+				c.drop(k, d)
 			}
 		}
-		if len(m) == 0 {
-			delete(c.entries, k)
+	}
+	for src, sp := range c.bySrc {
+		if sp.pairs == 0 {
+			delete(c.bySrc, src)
 		}
 	}
 	c.sweepAt = max(2*c.records, minSweep)
