@@ -37,10 +37,12 @@ func Histogram(xs []int, width int) map[int]int {
 `
 
 // The bloat audit (scripts/agent/audit.py) on a throwaway repository: a clean change, whose comment only names
-// time.Sleep and //nolint, passes; a production time.Sleep or bare <-time.After, a //nolint with no reason, a new
-// direct dependency, and a function copied within its package (golangci-lint's dupl, in the root module and in a
-// nested one) fail it; a copy into another package and a promoted indirect dependency are reported; audit-allow
-// lines waive the flags.
+// time.Sleep and //nolint, passes; a production time.Sleep or bare <-time.After, a //nolint with no reason (also in
+// a file the Linux lint run skips), a new direct dependency, and a function copied within its package (golangci-lint's
+// dupl, in the root module and in a nested one) fail it; a copy into another package and a promoted indirect
+// dependency are reported; audit-allow lines waive the flags, each only in its own commit. An edit inside a clone
+// that existed at the base, a sleep in a shared test suite, a time.Sleep in a block comment or a raw string, and a
+// rewrapped doc comment pass.
 func TestBloatAudit(t *testing.T) {
 	t.Parallel()
 	linter, err := exec.Command("go", "tool", "-n", "golangci-lint").Output()
@@ -65,9 +67,11 @@ func TestBloatAudit(t *testing.T) {
 		out, code := run("git", args...)
 		require.Zero(t, code, out)
 	}
+	current := "main"
 	commit := func(branch, msg string, files map[string]string) {
-		if branch != "main" {
+		if branch != current {
 			git("checkout", "-q", "-b", branch, "main")
+			current = branch
 		}
 		for path, body := range files {
 			require.NoError(t, os.MkdirAll(filepath.Join(repo, filepath.Dir(path)), 0o750))
@@ -78,7 +82,16 @@ func TestBloatAudit(t *testing.T) {
 	}
 	git("init", "-q", "-b", "main")
 	gomod := "module example.com/audit\n\ngo 1.26\n\nreplace example.com/dep => ./dep\n\nreplace example.com/ind => ./ind\n\n"
+	spread := strings.Replace(histogram, "Histogram", "Spread", 1)
+	doc := func(perLine int) string {
+		words, out := strings.Fields(strings.Repeat("the doc comment of Histogram says why, once. ", 6)), ""
+		for i := 0; i < len(words); i += perLine {
+			out += "// " + strings.Join(words[i:min(i+perLine, len(words))], " ") + "\n"
+		}
+		return out
+	}
 	commit("main", "base", map[string]string{
+		"c/c.go":       "package c\n\n" + doc(8) + histogram[1:] + spread,
 		"go.mod":       gomod + "require example.com/ind v0.0.0 // indirect\n",
 		"dep/go.mod":   "module example.com/dep\n\ngo 1.26\n",
 		"ind/go.mod":   "module example.com/ind\n\ngo 1.26\n",
@@ -92,13 +105,25 @@ func TestBloatAudit(t *testing.T) {
 		"go.mod": gomod + "require (\n\texample.com/dep v0.0.0\n\texample.com/ind v0.0.0\n)\n",
 		"b/b.go": "package b\n\nimport \"time\"\n\nfunc Wait() { time.Sleep(time.Second) }\n\n" +
 			"func Pause(d time.Duration) {\n\t<-time.After(d)\n}\n\nvar Limit = 3 //nolint\n" + histogram,
-		"a/copy.go": "package a\n" + strings.Replace(histogram, "Histogram", "Spread", 1),
+		"b/other.go": "//go:build !linux\n\npackage b\n\nvar Other = 4 //nolint\n",
+		"a/copy.go":  "package a\n" + spread,
 	}
 	commit("bad", "fix: copy and sleep", bad)
 	commit("waived", "fix: copy and sleep\n\naudit-allow: dupl a fixture\naudit-allow: sleep:b/b.go a fixture\n"+
-		"audit-allow: nolint:b/b.go a fixture\naudit-allow: dep:example.com/dep a fixture", bad)
-	commit("nested", "fix: copy in a nested module", map[string]string{
-		"tools/copy.go": "package tools\n" + strings.Replace(histogram, "Histogram", "Spread", 1),
+		"audit-allow: nolint:b/b.go a fixture\naudit-allow: nolint:b/other.go a fixture\n"+
+		"audit-allow: dep:example.com/dep a fixture", bad)
+	commit("nested", "fix: copy in a nested module", map[string]string{"tools/copy.go": "package tools\n" + spread})
+	commit("existing", "fix: rename in a clone, sleep in a suite", map[string]string{
+		"c/c.go": "package c\n\n" + doc(7) + histogram[1:] +
+			strings.NewReplacer("xs", "vals", "width", "size", "out", "res", "bucket", "slot").Replace(spread),
+		"c/suite.go": "package c\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\n" +
+			"func Settle(t *testing.T) {\n\tt.Helper()\n\ttime.Sleep(time.Millisecond)\n}\n",
+		"c/notes.go": "package c\n\n/*\nSettle used to call\ntime.Sleep(d)\n*/\n" +
+			"const script = `#!/bin/sh\ntime.Sleep(d)\n`\n",
+	})
+	commit("scoped", "fix: one\n\naudit-allow: sleep:b/b.go a fixture", map[string]string{"b/b.go": "package b\n"})
+	commit("scoped", "fix: two", map[string]string{
+		"b/b.go": "package b\n\nimport \"time\"\n\nfunc Wait() { time.Sleep(time.Second) }\n",
 	})
 	audit := func(head string) (string, int) {
 		return run("python3", script, "--base", "main", "--head", head, "--golangci-lint", strings.TrimSpace(string(linter)))
@@ -114,6 +139,8 @@ func TestBloatAudit(t *testing.T) {
 	require.Contains(t, out, "`sleep:b/b.go` `b/b.go:5`")
 	require.Contains(t, out, "`sleep:b/b.go` `b/b.go:8`")
 	require.Contains(t, out, "`nolint:b/b.go` `b/b.go:11`")
+	require.Contains(t, out, "`nolint:b/other.go` `b/other.go:5`")
+	require.Contains(t, out, "- nolintlint: `b/b.go:11`\n")
 	require.Contains(t, out, "`dep:example.com/dep` `go.mod:")
 	require.Contains(t, out, "- promoted from indirect: `example.com/ind` `go.mod:")
 	require.NotContains(t, out, "`dep:example.com/ind`")
@@ -127,4 +154,15 @@ func TestBloatAudit(t *testing.T) {
 	out, code = audit("nested")
 	require.Equal(t, 1, code, out)
 	require.Regexp(t, "`dupl:tools/copy.go` `tools/copy.go:\\d+-\\d+` duplicates tools/a.go:", out)
+
+	out, code = audit("existing")
+	require.Zero(t, code, out)
+	require.Contains(t, out, "**PASS**: 0 hard flags")
+	require.Contains(t, out, "- sleep-test (1): `c/suite.go:10`\n")
+	require.NotContains(t, out, "sleep-prod")
+	require.NotContains(t, out, "blocks of 6+")
+
+	out, code = audit("scoped")
+	require.Equal(t, 1, code, out)
+	require.Contains(t, out, "`sleep:b/b.go` `b/b.go:5` time.Sleep or a bare <-time.After in production code [FAIL]")
 }

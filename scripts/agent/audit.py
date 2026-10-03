@@ -5,8 +5,9 @@
   scripts/agent/audit.py --base <rev> --head <rev> --full       full mode: a whole fix campaign, plus a flake run
 
 Prints a markdown report; --json <path> also writes the data. Exits 1 on a hard flag that no
-`audit-allow: <flag-id> <reason>` line waives (in a commit message of the range, or the --pr-body file),
-unless --report-only; 2 on a usage or tool error. How to read it: .claude/skills/bloat-audit/SKILL.md.
+`audit-allow: <flag-id> <reason>` line waives (in the message of a commit that added the flagged lines, or in
+the --pr-body file), unless --report-only; 2 on a usage or tool error. How to read it:
+.claude/skills/bloat-audit/SKILL.md.
 """
 import argparse
 import collections
@@ -31,7 +32,7 @@ OUTLIER_MIN = 300
 OUTLIER_FACTOR = 3
 SHOW = 8
 
-HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 SLEEP = re.compile(r"\btime\.Sleep\b|(?:^|[{;])\s*<-\s*time\.After\(")
 SKIP = re.compile(r"\.Skip(?:f|Now)?\(")
 DISCARD = re.compile(r"^\s*_(?:\s*,\s*_)*\s*=\s*\S.*\(")
@@ -39,7 +40,7 @@ DISCARD_IDIOM = re.compile(r"^\s*_\s*=\s*[\w.]+\.Close\(\)\s*$|\bio\.Copy\(io\.D
 NOLINT = re.compile(r"//nolint\b")
 NOLINT_EXPLAINED = re.compile(r"//nolint(?::[\w,-]+)?\s+//\s*\S")
 NOLINT_UNEXPLAINED = "should provide explanation"
-LEXEME = re.compile(r'"(?:\\.|[^"\\])*"?|\'(?:\\.|[^\'\\])*\'?|`[^`]*`?|//.*|/\*.*')
+LEXEME = re.compile(r'//[^\n]*|/\*.*?(?:\*/|\Z)|"(?:\\.|[^"\\\n])*"?|\'(?:\\.|[^\'\\\n])*\'?|`[^`]*`?', re.S)
 FUNC_DECL = re.compile(r"^func\s*(?:\(\s*(?:\w+\s+)?\*?\s*(\w+)[^)]*\)\s*)?(\w+)", re.M)
 LINT_FUNC = re.compile(r"^(?:\(\*?(\w+)\)\.)?(\w+)$")
 LIMIT_TEXT = re.compile(r">\s*(\d+)\)")
@@ -51,6 +52,9 @@ NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
 UNIT_MS = {"Nanosecond": 1e-6, "Microsecond": 1e-3, "Millisecond": 1, "Second": 1e3, "Minute": 6e4, "Hour": 3.6e6,
            "ns": 1e-6, "us": 1e-3, "ms": 1, "s": 1e3, "m": 6e4, "h": 3.6e6}
 GENERATED = re.compile(r"^// Code generated .* DO NOT EDIT\.$", re.M)
+IMPORTS = re.compile(r"^import\s*(?:\([^)]*\)|.+)", re.M)
+TESTING_IMPORT = re.compile(r'^\s*(?:[\w.]+\s+){0,2}"testing"', re.M)
+BLAME = re.compile(r"^([0-9a-f]{40,64}) \d+ \d+", re.M)
 WAIVER = re.compile(r"^\s*audit-allow:\s*(\S+)\s+(\S.*?)\s*$", re.M)
 NO_GO_FILES = re.compile(r"package (\S+): no go files to analyze")
 DUPL_TEXT = re.compile(r"(\d+)-(\d+) lines are duplicate of `(.+):(\d+)-(\d+)`")
@@ -81,16 +85,25 @@ def git(*args):
     return sh(["git", *args])
 
 
-def kind_of(path, generated):
+def kind_of(path, special):
     if path.endswith(".md") or path.startswith("docs/"):
         return "docs"
     if not path.endswith(".go"):
         return "other"
-    if path in generated:
-        return "generated"
+    if special.get(path):
+        return special[path]
     if path.endswith("_test.go") or "/testdata/" in "/" + path or path.startswith(TEST_DIRS):
         return "test"
     return "prod"
+
+
+def go_kind(text):
+    """The kind a .go file's content sets: generated, or test when it imports testing (the shared contract suites)."""
+    if GENERATED.search(text[:2000]):
+        return "generated"
+    if any(TESTING_IMPORT.search(m.group(0)) for m in IMPORTS.finditer(text)):
+        return "test"
+    return None
 
 
 def numstat(base, head):
@@ -122,8 +135,8 @@ def parse_diff(text):
             cur = None if new == "/dev/null" else files.setdefault(new[2:], {"old": old, "added": {}, "hunks": []})
         elif line.startswith("@@"):
             header = False
-            m = HUNK.match(line)
-            n, hunk = int(m.group(1)), {"removed": [], "added": []}
+            o, oc, n, nc = (int(g) if g else 1 for g in HUNK.match(line).groups())
+            hunk = {"old": (o, oc), "new": (n, nc), "removed": [], "added": []}
             if cur is not None:
                 cur["hunks"].append(hunk)
         elif cur is None or header:
@@ -137,7 +150,7 @@ def parse_diff(text):
     return files
 
 
-def commit_stats(base, head, generated):
+def commit_stats(base, head, special):
     out = git("log", "--reverse", "--no-merges", "-M", "--numstat", "--format=%x00%H%x1f%s", f"{base}..{head}")
     commits = []
     for chunk in out.split("\0")[1:]:
@@ -149,7 +162,7 @@ def commit_stats(base, head, generated):
             if len(parts) != 3:
                 continue
             path = re.sub(r"\{[^{}]* => ([^{}]*)\}", r"\1", parts[2]).split(" => ")[-1].replace("//", "/")
-            kind = kind_of(path, generated)
+            kind = kind_of(path, special)
             sizes[kind + "+"] += int(parts[0]) if parts[0] != "-" else 0
             sizes[kind + "-"] += int(parts[1]) if parts[1] != "-" else 0
         commits.append({"sha": sha[:10], "subject": subject, "size": dict(sizes)})
@@ -177,30 +190,38 @@ def read(tree, path):
         return ""
 
 
-def comment_kind(line):
-    s = line.strip()
-    if not s:
-        return "blank"
-    if s.startswith("//go:") or s.startswith("//nolint"):
-        return "code"
-    if s.startswith("//") or s.startswith("/*"):
-        return "comment"
-    return "code"
+def lex_lines(text):
+    """Each line of a Go file as [code with its string and rune literals emptied, comment text]: a block comment or
+    a raw string that spans lines is not read as code."""
+    rows, pos = [["", ""]], 0
 
+    def put(chunk, col, quote=""):
+        for i, piece in enumerate(chunk.split("\n")):
+            if i:
+                rows.append(["", ""])
+            rows[-1][col] += quote * 2 if quote else piece
 
-def split_comment(line):
-    """The line's code with its string and rune literals emptied, and its trailing comment."""
-    code, pos = [], 0
-    for m in LEXEME.finditer(line):
-        code.append(line[pos:m.start()])
-        if m.group(0).startswith("/"):
-            return "".join(code), m.group(0)
-        code.append(m.group(0)[0] * 2)
+    for m in LEXEME.finditer(text):
+        put(text[pos:m.start()], 0)
+        token = m.group(0)
+        if token.startswith("/"):
+            put(token, 1)
+        else:
+            put(token, 0, token[0])
         pos = m.end()
-    return "".join(code) + line[pos:], ""
+    put(text[pos:], 0)
+    return rows
 
 
-def scan_lines(diff, kinds, unlinted):
+def line_kind(code, note):
+    if code.strip():
+        return "code"
+    if not note.strip():
+        return "blank"
+    return "code" if note.startswith(("//go:", "//nolint")) else "comment"
+
+
+def scan_lines(diff, kinds, head_tree):
     masking = collections.defaultdict(list)
     comments = {k: collections.Counter() for k in ("prod", "test")}
     blocks = []
@@ -210,38 +231,40 @@ def scan_lines(diff, kinds, unlinted):
             masking["raised-timeout"] += raised_timeouts(path, hunk)
         if kind not in ("prod", "test"):
             continue
-        run = []
-        for n in sorted(f["added"]):
-            text, loc = f["added"][n], f"{path}:{n}"
-            ck = comment_kind(text)
-            comments[kind][ck] += 1
-            code, note = split_comment(text)
-            if SLEEP.search(code):
-                masking["sleep-" + kind].append(loc)
-            if kind == "test" and SKIP.search(code):
-                masking["skip"].append(loc)
-            if DISCARD.search(code) and not DISCARD_IDIOM.search(code):
-                masking["discard-" + kind].append(loc)
-            if NOLINT.match(note):
-                masking["nolint"].append(loc)
-                if unlinted and not NOLINT_EXPLAINED.match(note):
-                    masking["nolint-unexplained"].append(loc)
-            if RETRY.search(code):
-                masking["retry-loop"].append(loc)
-            if ck == "comment" and run and run[-1] == n - 1:
-                run.append(n)
-                continue
-            blocks += comment_block(path, f, kind, run)
-            run = [n] if ck == "comment" else []
-        blocks += comment_block(path, f, kind, run)
+        lexed = lex_lines(read(head_tree, path))
+        for hunk in f["hunks"]:
+            runs, run = [], []
+            for n, text in hunk["added"]:
+                code, note = lexed[n - 1] if n <= len(lexed) else (text, "")
+                loc, ck = f"{path}:{n}", line_kind(code, note)
+                comments[kind][ck] += 1
+                if SLEEP.search(code):
+                    masking["sleep-" + kind].append(loc)
+                if kind == "test" and SKIP.search(code):
+                    masking["skip"].append(loc)
+                if DISCARD.search(code) and not DISCARD_IDIOM.search(code):
+                    masking["discard-" + kind].append(loc)
+                if NOLINT.match(note):
+                    masking["nolint"].append(loc)
+                    if not NOLINT_EXPLAINED.match(note):
+                        masking["nolint-unexplained"].append(loc)
+                if RETRY.search(code):
+                    masking["retry-loop"].append(loc)
+                if ck == "comment":
+                    run.append(n)
+                elif run:
+                    runs, run = runs + [run], []
+            runs += [run] if run else []
+            # A rewrapped or reworded comment is not new narration: the hunk's removed comment lines net out.
+            gone = sum(line_kind(*row) == "comment" for row in lex_lines("\n".join(hunk["removed"])))
+            comments[kind]["comment"] -= min(gone, sum(map(len, runs)))
+            for run in runs:
+                if len(run) - gone >= COMMENT_BLOCK:
+                    where = "inline" if f["added"][run[0]].startswith(("\t", " ")) else "doc"
+                    blocks.append({"loc": f"{path}:{run[0]}-{run[-1]}", "lines": len(run), "kind": kind,
+                                   "where": where})
+                gone = max(0, gone - len(run))
     return {k: v for k, v in masking.items() if v}, comments, blocks
-
-
-def comment_block(path, f, kind, run):
-    if len(run) < COMMENT_BLOCK:
-        return []
-    where = "inline" if f["added"][run[0]].startswith(("\t", " ")) else "doc"
-    return [{"loc": f"{path}:{run[0]}-{run[-1]}", "lines": len(run), "kind": kind, "where": where}]
 
 
 def durations(line):
@@ -345,9 +368,27 @@ def by_module(tree, dirs):
     return mods
 
 
+def lint_env(tree):
+    return dict(os.environ, GOOS="linux", GOWORK="off", GOFLAGS="-mod=readonly",
+                GOLANGCI_LINT_CACHE=tree + ".lintcache")
+
+
+def constrained_out(tree, paths):
+    """The paths that the lint run never analyzes: their build constraints exclude them under GOOS=linux and
+    LINT_TAGS (a //go:build !linux file, a _darwin.go)."""
+    template = "{{.Dir}}{{range .IgnoredGoFiles}}\t{{.}}{{end}}"
+    root, out = os.path.realpath(tree), set()
+    for mod, pkgs in sorted(by_module(tree, {os.path.dirname(p) or "." for p in paths}).items()):
+        listed = sh(["go", "list", "-e", "-tags", LINT_TAGS, "-f", template, *pkgs], cwd=os.path.join(tree, mod),
+                    env=lint_env(tree))
+        for line in listed.splitlines():
+            d, *names = line.split("\t")
+            out.update(os.path.normpath(os.path.join(os.path.relpath(os.path.realpath(d), root), n)) for n in names)
+    return out & set(paths)
+
+
 def lint(linter, tree, dirs):
-    env = dict(os.environ, GOOS="linux", GOWORK="off", GOFLAGS="-mod=readonly",
-               GOLANGCI_LINT_CACHE=tree + ".lintcache")
+    env = lint_env(tree)
     cmd = [linter, "run", "--config", LINT_CONFIG, "--build-tags", LINT_TAGS, "--allow-parallel-runners",
            "--issues-exit-code=0", "--show-stats=false", "--output.json.path=stdout", "--output.text.path=stderr"]
     issues = []
@@ -374,8 +415,22 @@ def lint_module(cmd, cwd, pkgs, env):
     return []
 
 
-def share_added(added, start, end):
-    return sum(1 for n in range(start, end + 1) if n in added) / max(1, end - start + 1)
+def to_head(hunks, line, last):
+    """A base line's number at head, through the file's -U0 hunks; a changed line maps to the first (or, with
+    last, the final) head line of its hunk."""
+    shift = 0
+    for h in hunks:
+        (o, oc), (n, nc) = h["old"], h["new"]
+        if line < o + (oc == 0):
+            break
+        if line < o + oc:
+            return (n + nc - 1 if last else n) if nc else n + (not last)
+        shift += nc - oc
+    return line + shift
+
+
+def overlaps(x, y):
+    return x[0] == y[0] and max(x[1], y[1]) <= min(x[2], y[2])
 
 
 def lint_deltas(linter, base_tree, head_tree, diff, numstats, kinds):
@@ -386,7 +441,27 @@ def lint_deltas(linter, base_tree, head_tree, diff, numstats, kinds):
     renamed = {f["old"]: f["path"] for f in numstats}
     old_of = {f["path"]: f["old"] for f in numstats}
     added = {p: f["added"] for p, f in diff.items()}
-    base_funcs = {}
+    base_funcs, base_clones = {}, collections.defaultdict(list)
+
+    def at_head(side):
+        path = renamed.get(side[0], side[0])
+        hunks = diff.get(path, {}).get("hunks", [])
+        return path, to_head(hunks, side[1], False), to_head(hunks, side[2], True)
+
+    for i in base:
+        if "Dupl" in i:
+            x, y = map(at_head, i["Dupl"])
+            base_clones[frozenset((x[0], y[0]))].append((x, y))
+
+    def new_share(side, other):
+        """The share of side's lines that are added, outside a clone of other that already existed at the base."""
+        old = set()
+        for pair in base_clones.get(frozenset((side[0], other[0])), []):
+            for x, y in (pair, pair[::-1]):
+                if overlaps(x, side) and overlaps(y, other):
+                    old.update(range(x[1], x[2] + 1))
+        lines, span = added.get(side[0], {}), range(side[1], side[2] + 1)
+        return sum(1 for n in span if n in lines and n not in old) / max(1, len(span))
 
     def metrics(issues, rename):
         out = {}
@@ -434,8 +509,7 @@ def lint_deltas(linter, base_tree, head_tree, diff, numstats, kinds):
             if pair in seen:
                 continue
             seen.add(pair)
-            new_a = share_added(added.get(a[0], {}), a[1], a[2]) >= NEW_SHARE
-            new_b = share_added(added.get(b[0], {}), b[1], b[2]) >= NEW_SHARE
+            new_a, new_b = new_share(a, b) >= NEW_SHARE, new_share(b, a) >= NEW_SHARE
             if new_a or new_b:
                 new, other = (a, b) if new_a else (b, a)
                 result["dupl"].append({"loc": f"{new[0]}:{new[1]}-{new[2]}", "of": f"{other[0]}:{other[1]}-{other[2]}",
@@ -475,9 +549,12 @@ def cross_package_clones(head_tree, diff, kinds):
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "node_modules"]
         for name in names:
             path = os.path.relpath(os.path.join(root, name), head_tree)
-            if not name.endswith(".go") or kind_of(path, ()) != "prod" or kinds.get(path, "prod") != "prod":
+            if not name.endswith(".go") or kind_of(path, {}) != "prod":
                 continue
-            rows = rows_of[path] = norm_rows(read(head_tree, path))
+            text = read(head_tree, path)
+            if (kinds[path] if path in kinds else go_kind(text) or "prod") != "prod":
+                continue
+            rows = rows_of[path] = norm_rows(text)
             for i in range(len(rows) - XDUP_WINDOW + 1):
                 index[tuple(r[0] for r in rows[i:i + XDUP_WINDOW])].append((path, i))
     spans = {}
@@ -544,30 +621,43 @@ def flake_checkout(root, head, tmp):
 
 
 def waivers(base, head, pr_body):
-    text = git("log", "--format=%B", f"{base}..{head}")
+    """The audit-allow lines of each commit of the range, and the PR body's under None."""
+    out = {}
+    for chunk in git("log", "--format=%x00%H%n%B", f"{base}..{head}").split("\0")[1:]:
+        sha, _, body = chunk.partition("\n")
+        out[sha] = dict(m.groups() for m in WAIVER.finditer(body))
     if pr_body:
         with open(pr_body, encoding="utf-8") as f:
-            text += "\n" + f.read()
-    return {m.group(1): m.group(2) for m in WAIVER.finditer(text)}
+            out[None] = dict(m.groups() for m in WAIVER.finditer(f.read()))
+    return out
 
 
-def hard_flags(data, allowed):
+def added_by(base, head, loc):
+    """The commits of the range that wrote the lines at loc (path:line or path:first-last); None if unknown."""
+    path, _, span = loc.rpartition(":")
+    first, _, last = span.partition("-")
+    code, out, _ = sh(["git", "blame", "--porcelain", "-L", f"{first},{last or first}", f"{base}..{head}", "--",
+                       path], check=False)
+    return None if code else set(BLAME.findall(out))
+
+
+def hard_flags(data, by_commit):
     flags = []
     for d in data["lint"].get("dupl", []):
         if d["kind"] == "prod":
             flags.append(("dupl", d["loc"].split(":")[0], d["loc"], f"duplicates {d['of']}"))
     for loc in data["masking"].get("sleep-prod", []):
         flags.append(("sleep", loc.split(":")[0], loc, "time.Sleep or a bare <-time.After in production code"))
-    unexplained = ([x["loc"] for x in data["lint"]["nolintlint"] if NOLINT_UNEXPLAINED in x["text"]] if data["linted"]
-                   else data["masking"].get("nolint-unexplained", []))
-    for loc in dict.fromkeys(unexplained):
+    unexplained = [x["loc"] for x in data["lint"].get("nolintlint", []) if NOLINT_UNEXPLAINED in x["text"]]
+    for loc in dict.fromkeys(unexplained + data["masking"].get("nolint-unexplained", [])):
         flags.append(("nolint", loc.split(":")[0], loc, "//nolint with no `// reason`"))
     for d in data["deps"]["new"]:
         flags.append(("dep", d["module"], d["loc"], f"new dependency {d['module']}"))
     out = []
     for kind, subject, loc, text in flags:
-        fid = f"{kind}:{subject}"
-        reason = allowed.get(fid) or allowed.get(kind)
+        fid, shas = f"{kind}:{subject}", added_by(data["base"], data["head"], loc)
+        scopes = [w for sha, w in by_commit.items() if sha is None or shas is None or sha in shas]
+        reason = next((w[k] for w in scopes for k in (fid, kind) if k in w), None)
         out.append({"id": fid, "loc": loc, "text": text, "waived": reason})
     return out
 
@@ -582,9 +672,8 @@ def audit(args):
         head_tree, base_tree = os.path.join(tmp, "head"), os.path.join(tmp, "base")
         extract(head, head_tree)
         numstats = numstat(base, head)
-        generated = {f["path"] for f in numstats
-                     if f["path"].endswith(".go") and GENERATED.search(read(head_tree, f["path"])[:2000])}
-        kinds = {f["path"]: kind_of(f["path"], generated) for f in numstats}
+        special = {f["path"]: go_kind(read(head_tree, f["path"])) for f in numstats if f["path"].endswith(".go")}
+        kinds = {f["path"]: kind_of(f["path"], special) for f in numstats}
         diff = parse_diff(git("diff", "-U0", "-M", "--no-color", "--no-ext-diff", base, head))
         size = collections.defaultdict(collections.Counter)
         for f in numstats:
@@ -592,8 +681,8 @@ def audit(args):
             for key in ("total", os.path.dirname(f["path"]) or "."):
                 size[key][k + "+"] += f["added"]
                 size[key][k + "-"] += f["removed"]
-        commits, outlier_limit = commit_stats(base, head, generated)
-        masking, comments, blocks = scan_lines(diff, kinds, args.no_lint)
+        commits, outlier_limit = commit_stats(base, head, special)
+        masking, comments, blocks = scan_lines(diff, kinds, head_tree)
         deps = dependencies(base, numstats, head_tree)
         timings["diff"] = time.time() - t0
         lint_result = {}
@@ -601,6 +690,10 @@ def audit(args):
             t = time.time()
             extract(base, base_tree)
             lint_result = lint_deltas(find_linter(args.golangci_lint), base_tree, head_tree, diff, numstats, kinds)
+            pending = masking.pop("nolint-unexplained", [])
+            skipped = constrained_out(head_tree, {loc.split(":")[0] for loc in pending}) if pending else set()
+            if any(loc.split(":")[0] in skipped for loc in pending):
+                masking["nolint-unexplained"] = [loc for loc in pending if loc.split(":")[0] in skipped]
             timings["lint"] = time.time() - t
         t = time.time()
         xdup = cross_package_clones(head_tree, diff, kinds)
@@ -672,7 +765,7 @@ def render(d):
             out.append(f"- … +{len(lr['complexity']) - SHOW * 2} more complexity deltas in the JSON")
         for kind in ("godox", "nolintlint"):
             if lr[kind]:
-                out.append(f"- {kind}: {locs(lr[kind], 'loc')}")
+                out.append(f"- {kind}: {locs(list(dict.fromkeys(x['loc'] for x in lr[kind])))}")
         if not any(lr.values()):
             out.append("none")
     out.append("\n### Cross-package clones (production)")
