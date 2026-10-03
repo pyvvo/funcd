@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# gate.sh — every repo-wide check, once, for a branch that is ready to PR: the bloat audit of the branch's diff
+# gate.sh — every repo-wide check, once, for a branch that is ready to PR: a host check that stops early when the
+# ephemeral ports are nearly used up (scripts/agent/host-check.sh), the bloat audit of the branch's diff
 # against origin/main (scripts/agent/audit.py, report in .cache/gate/audit.log), `just ci-full` (the canonical CI
 # set, e2e included), the Linux build/vet/lint, and that the run changed no file (tidy/generate/fmt had nothing to
 # do). One PASS/FAIL line per step; full logs in .cache/gate/. Run it once per PR, not per change.
@@ -31,6 +32,7 @@ linux() {
     GOOS=linux "$d" "$lint" run ./internal/...
 }
 tree() { git status --porcelain && git diff; }
+"$root/scripts/agent/host-check.sh" || { echo "GATE FAIL"; exit 1; }
 before=$(tree)
 unchanged() { [ "$(tree)" = "$before" ] || { git status --short; return 1; }; }
 step audit "$d" python3 scripts/agent/audit.py --base origin/main --json "$logs/audit.json"

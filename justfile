@@ -176,7 +176,12 @@ lima_deps := env('HOME') / ".cache/funcd-lima" # mounted read-only at /mnt/funcd
 # build the real curated images + the funcd binary into the mounted deps dir, then boot the
 # self-provisioning Lima VM (crun/CNI/conflist/ip_forward come up via the yaml's provision blocks).
 [group('runtime')]
-lima-up: build-runtime-images
+lima-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scripts/lane-lock.sh $$
+    export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
+    just ARCH={{ARCH}} build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd ./cmd/funcd
     limactl start --name {{lima_name}} --tty=false scripts/lima.yaml
@@ -209,9 +214,12 @@ lima-down:
 # to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ uv for the duckdb lane's `build`).
 # Examples: `just lima-example env-echo` · `just lima-example duckdb`.
 [group('example')]
-lima-example name: build-runtime-images
+lima-example name:
     #!/usr/bin/env bash
     set -euo pipefail
+    scripts/lane-lock.sh $$
+    export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
+    just ARCH={{ARCH}} build-runtime-images
     name='{{name}}'; deps='{{lima_deps}}'; vm='{{lima_name}}-{{name}}'
     mkdir -p "$deps"
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
@@ -246,6 +254,8 @@ lima-cache-image from="":
 lima-example-all:
     #!/usr/bin/env bash
     set -uo pipefail
+    scripts/lane-lock.sh $$ || exit 1
+    export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
     lanes=$(python3 -c "import yaml; d=yaml.safe_load(open('scripts/lanes.yaml')); print(' '.join(k for k,v in d.items() if isinstance(v,dict) and v.get('venom')))")
     echo "venom lanes: $lanes metastore"
     passed=""; failed=""
@@ -267,9 +277,12 @@ lima-example-all:
 # the smoke runs inside it (scripts/lima-metastore-smoke.sh). Needs docker (embedded-image build).
 lima_meta_vm := lima_name + "-meta"
 [group('example')]
-lima-example-metastore: build-runtime-images
+lima-example-metastore:
     #!/usr/bin/env bash
     set -euo pipefail
+    scripts/lane-lock.sh $$
+    export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
+    just ARCH={{ARCH}} build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl
