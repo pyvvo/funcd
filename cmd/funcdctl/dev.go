@@ -544,165 +544,16 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 		}
 	}()
 
-	// Per-function bundle + ADR-0123 contract delivery, then the Function object (run from source, links
-	// restored). A stem/workflow function is isolated in a private temp bundle so per-function contracts
-	// never collide when several single-file functions share a dir (ADR-0124).
-	var fnObjs []v1.Object
-	handlers := make([]*devHandler, 0, len(pfs))
-	for _, pf := range pfs {
-		contractBlob, cerr := artifact.ContractBlob(pf.m.Contract.Input, pf.m.Contract.Output)
-		if cerr != nil {
-			return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", pf.name)
-		}
-		// Fingerprint before the bundle is read, so an edit racing the boot still triggers a reload.
-		h := &devHandler{pf: pf}
-		fp, ferr := h.fingerprint(stateDirs)
-		imagePath, cleanup, berr := prepareBundle(op, pf, contractBlob)
-		if berr != nil {
-			return nil, berr
-		}
-		inst.cleanup = append(inst.cleanup, cleanup)
-		if ferr != nil {
-			return nil, fault.Wrapf(ferr, fault.Internal, op, "fingerprint the sources of %s", pf.name)
-		}
-		h.bundle, h.seen = imagePath, fp
-		fn := synthesizeFunction(pf, imagePath)
-		fn.Spec.ImageDigest = fp
-		fnObjs = append(fnObjs, fn)
-		handlers = append(handlers, h)
+	fnObjs, handlers, herr := prepareHandlers(op, pfs, stateDirs, inst)
+	if herr != nil {
+		return nil, herr
 	}
-	// Admission enforces link-target existence, so apply a link's target BEFORE the caller that binds it
-	// (a topological order over the fn-to-fn link graph within this function set).
-	fnObjs = orderFunctionsByLinks(fnObjs)
-
-	// The interpreter config (dev.python/dev.node) is GLOBAL per run; the first function's block is
-	// representative (like dev.backends). Its relative path resolves against that manifest's dir.
-	var devBlock sdk.Dev
-	var baseDir string
-	if len(pfs) > 0 {
-		devBlock, baseDir = pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
+	opts, oerr := a.devPlatformOptions(ctx, op, pfs, plan, cfg, inst)
+	if oerr != nil {
+		return nil, oerr
 	}
-	isPython := func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") }
-	needPython := slices.ContainsFunc(pfs, isPython)
-	needNode := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return !isPython(pf) })
-	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython, needNode)
-	if sherr != nil {
-		return nil, sherr
-	}
-	inst.cleanup = append(inst.cleanup, shimCleanup)
-
-	opts := []funcd.Option{
-		funcd.InMemory(),
-		funcd.WithMaterializer(function.NewFileMaterializer()),
-		// From-source workflow steps carry no OCI artifact, so the production F65 resolver can never
-		// inspect their file:// bundles. Inject an untyped resolver so the typed-edge gate is a no-op and
-		// the Workflow reaches Ready (each step still enforces its OWN contract at the shim, ADR-0123).
-		// Harmless for a single-function run (no Workflow is applied).
-		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
-		// Dev blob writes run the REAL prod single-writer authz (ADR-0128 as amended 2026-07-14): rather than
-		// dropping the forbid, synthesizeResources auto-provisions a Blob Data Writer RolesAssignment (ADR-0136)
-		// per dev function, so the dev principal is a legit writer. Seeding a no-owner `landing` and a producer
-		// writing a binding-inferred prefix both pass the forbid; an unassigned principal is still denied.
-	}
-
-	// Catalog dev (Decision 5): if any function binds a catalog, wire the process-mode DuckDB+Quack
-	// engine driver (internal/catalog/devengine) as the CatalogService add-on-provider runtime — it
-	// runs the go:embed'd engine as a host subprocess (no container, no cgo). A dev binary built
-	// WITHOUT the engine (the committed placeholder) reports catalog-unavailable at reconcile time,
-	// not here — so `funcdctl dev` still boots.
-	if aliases := catalogAliases(pfs); len(aliases) > 0 {
-		inst.catalogs = aliases
-		// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
-		// metastore) so a dev restart reopens it; ephemeral otherwise. resolvePersistPlan is pure, so the
-		// second call in buildPersistDrivers is harmless.
-		var catOpts []devengine.Option
-		if plan.catalogDir != "" {
-			catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
-		}
-		catEngine := devengine.New(slog.Default(), catOpts...)
-		opts = append(opts, funcd.WithCatalogProviderRuntime(catEngine))
-		inst.cleanup = append(inst.cleanup, catEngine.StopAll)
-
-		// A catalog CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
-		// quack/ducklake extensions — in prod those ride the bundle's duckdb-ext (ADR-0089), absent when
-		// running from source. Extract the embedded engine's extensions once and point consumers at them
-		// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-catalog-query). A placeholder build (no engine)
-		// skips it — the same not-bundled path the provider engine reports at reconcile time.
-		if embedengine.Bundled() {
-			if extRoot, xerr := os.MkdirTemp("", "funcd-dev-duckdb-ext-*"); xerr == nil {
-				if paths, perr := embedengine.Extract(extRoot); perr == nil {
-					opts = append(opts, funcd.WithCatalogExtensionDir(paths.ExtensionDir))
-					inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(extRoot) })
-				} else {
-					_ = os.RemoveAll(extRoot)
-					slog.Default().Warn("could not extract catalog extensions for consumers", "err", perr)
-				}
-			}
-		}
-	}
-
-	// Stream function logs to the terminal in real time (Decision 6, dev UX): tee every captured log
-	// line to the printer. A mutex keeps concurrent functions' lines from interleaving.
-	logStyler := newDevLogStyler(a.out)
-	var logMu sync.Mutex
-	opts = append(opts, funcd.WithLogObserver(func(l funcd.LogLine) {
-		logMu.Lock()
-		defer logMu.Unlock()
-		_ = a.writef("%s\n", logStyler.format(l))
-	}))
-
-	// Fixed listen ports for reproducible URLs (--gport / --s3port / --cport); 0 keeps the ephemeral free
-	// port. These override InMemory()'s 127.0.0.1:0 (control plane + data plane); the S3 port is applied in
-	// devS3Options. Any two fixed ports must differ (deterministic order so the error is stable).
-	fixedPorts := []struct {
-		name string
-		port int
-	}{{"--gport", cfg.gport}, {"--s3port", cfg.s3port}, {"--cport", cfg.cport}}
-	seenPort := map[int]string{}
-	for _, fp := range fixedPorts {
-		if fp.port == 0 {
-			continue
-		}
-		if other, dup := seenPort[fp.port]; dup {
-			return nil, fault.Invalidf(op, "%s and %s must be different ports (both %d)", other, fp.name, fp.port)
-		}
-		seenPort[fp.port] = fp.name
-	}
-	if cfg.gport != 0 {
-		opts = append(opts, funcd.WithDataPlaneAddr(fmt.Sprintf("127.0.0.1:%d", cfg.gport)))
-	}
-	if cfg.cport != 0 {
-		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))
-	}
-
-	// Durable-local drivers (ADR-0125 Decision 7): under --persist (or a `dev.backends` file:// override)
-	// the memory store/KV/blob are swapped for Badger + fileblob under per-service subdirs. dev.backends is
-	// GLOBAL per kind, so the first function's block is representative. The platform takes ownership +
-	// Closes them on Shutdown; the scoped closer only fires if boot fails BEFORE funcd.New takes ownership.
-	persistOpts, kv, bkt, closeDurable, derr := buildPersistDrivers(op, cfg, pfs[0].m)
-	if derr != nil {
-		return nil, derr
-	}
-	defer func() {
-		if err != nil && closeDurable != nil {
-			closeDurable()
-		}
-	}()
-	opts = append(opts, persistOpts...)
-	inst.kv, inst.blob = kv, bkt
-
-	// S3 frontend (ADR-0080/0085, Decision 6): expose the blob substrate over the S3 protocol on a free
-	// node-private port. The printed creds are the FIRST function's derived keypair (representative).
-	s3Cleanup, s3err := devS3Options(op, &opts, string(pfs[0].name), cfg.s3port, inst)
-	if s3err != nil {
-		return nil, s3err
-	}
-	inst.cleanup = append(inst.cleanup, s3Cleanup)
-
-	opts = append(opts, shimOpts...)
 	p, nerr := funcd.New(opts...)
 	// New owns the durable drivers from here: a failed New has closed them, a platform closes them on Shutdown.
-	closeDurable = nil
 	if nerr != nil {
 		return nil, nerr
 	}
@@ -729,11 +580,195 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 		return nil, cerr
 	}
 	inst.client = client
+	applied, aerr := applyBoot(ctx, op, client, resObjs, fnObjs, wf, plan)
+	if aerr != nil {
+		return nil, aerr
+	}
+	inst.watchDone = make(chan struct{})
+	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
+	return inst, nil
+}
 
-	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → the KVStores and
-	// Buckets that drop a table or prefix (stageResources) → extras (the Workflow references its step Functions).
-	// ADR-0121's reconcile-time existence gate resolves against what is already applied.
-	firstRes, lastRes, serr := stageResources(ctx, op, client, resObjs)
+// prepareHandlers delivers each function's bundle + ADR-0123 contract and synthesizes its Function (run from
+// source, links restored), registering each bundle's cleanup on inst. A stem/workflow function is isolated in a
+// private temp bundle so per-function contracts never collide when several single-file functions share a dir
+// (ADR-0124). Admission enforces link-target existence, so the Functions come back in link order: a link's target
+// before the caller that binds it.
+func prepareHandlers(op string, pfs []plannedFunc, stateDirs []string, inst *devInstance) ([]v1.Object, []*devHandler, error) {
+	var fnObjs []v1.Object
+	handlers := make([]*devHandler, 0, len(pfs))
+	for _, pf := range pfs {
+		contractBlob, cerr := artifact.ContractBlob(pf.m.Contract.Input, pf.m.Contract.Output)
+		if cerr != nil {
+			return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", pf.name)
+		}
+		// Fingerprint before the bundle is read, so an edit racing the boot still triggers a reload.
+		h := &devHandler{pf: pf}
+		fp, ferr := h.fingerprint(stateDirs)
+		imagePath, cleanup, berr := prepareBundle(op, pf, contractBlob)
+		if berr != nil {
+			return nil, nil, berr
+		}
+		inst.cleanup = append(inst.cleanup, cleanup)
+		if ferr != nil {
+			return nil, nil, fault.Wrapf(ferr, fault.Internal, op, "fingerprint the sources of %s", pf.name)
+		}
+		h.bundle, h.seen = imagePath, fp
+		fn := synthesizeFunction(pf, imagePath)
+		fn.Spec.ImageDigest = fp
+		fnObjs = append(fnObjs, fn)
+		handlers = append(handlers, h)
+	}
+	return orderFunctionsByLinks(fnObjs), handlers, nil
+}
+
+// devPlatformOptions builds the embedded platform's options: the extracted shims, the catalog dev engine, the
+// function log stream, the fixed listen ports, the durable/ephemeral drivers and the S3 frontend. It registers
+// each cleanup on inst and closes the durable drivers itself when it fails after opening them; funcd.New owns them
+// once it is called.
+func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFunc, plan persistPlan, cfg devConfig, inst *devInstance) ([]funcd.Option, error) {
+	// The interpreter config (dev.python/dev.node) is GLOBAL per run; the first function's block is
+	// representative (like dev.backends). Its relative path resolves against that manifest's dir.
+	devBlock, baseDir := pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
+	isPython := func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") }
+	needPython := slices.ContainsFunc(pfs, isPython)
+	needNode := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return !isPython(pf) })
+	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython, needNode)
+	if sherr != nil {
+		return nil, sherr
+	}
+	inst.cleanup = append(inst.cleanup, shimCleanup)
+
+	opts := []funcd.Option{
+		funcd.InMemory(),
+		funcd.WithMaterializer(function.NewFileMaterializer()),
+		// From-source workflow steps carry no OCI artifact, so the production F65 resolver can never
+		// inspect their file:// bundles. Inject an untyped resolver so the typed-edge gate is a no-op and
+		// the Workflow reaches Ready (each step still enforces its OWN contract at the shim, ADR-0123).
+		// Harmless for a single-function run (no Workflow is applied).
+		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
+		// Dev blob writes run the REAL prod single-writer authz (ADR-0128 as amended 2026-07-14): rather than
+		// dropping the forbid, synthesizeResources auto-provisions a Blob Data Writer RolesAssignment (ADR-0136)
+		// per dev function, so the dev principal is a legit writer. Seeding a no-owner `landing` and a producer
+		// writing a binding-inferred prefix both pass the forbid; an unassigned principal is still denied.
+	}
+	opts = append(opts, devCatalogOptions(plan, pfs, inst)...)
+
+	// Stream function logs to the terminal in real time (Decision 6, dev UX): tee every captured log
+	// line to the printer. A mutex keeps concurrent functions' lines from interleaving.
+	logStyler := newDevLogStyler(a.out)
+	var logMu sync.Mutex
+	opts = append(opts, funcd.WithLogObserver(func(l funcd.LogLine) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		_ = a.writef("%s\n", logStyler.format(l))
+	}))
+
+	// Fixed listen ports for reproducible URLs (--gport / --s3port / --cport); 0 keeps the ephemeral free
+	// port. These override InMemory()'s 127.0.0.1:0 (control plane + data plane); the S3 port is applied in
+	// devS3Options.
+	if perr := checkFixedPorts(op, cfg); perr != nil {
+		return nil, perr
+	}
+	if cfg.gport != 0 {
+		opts = append(opts, funcd.WithDataPlaneAddr(fmt.Sprintf("127.0.0.1:%d", cfg.gport)))
+	}
+	if cfg.cport != 0 {
+		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))
+	}
+
+	// Durable-local drivers (ADR-0125 Decision 7): under --persist (or a `dev.backends` file:// override)
+	// the memory store/KV/blob are swapped for Badger + fileblob under per-service subdirs. dev.backends is
+	// GLOBAL per kind, so the first function's block is representative. The platform takes ownership +
+	// Closes them on Shutdown; they are closed here only if the options fail BEFORE funcd.New takes ownership.
+	persistOpts, kv, bkt, closeDurable, derr := buildPersistDrivers(op, cfg, pfs[0].m)
+	if derr != nil {
+		return nil, derr
+	}
+	opts = append(opts, persistOpts...)
+	inst.kv, inst.blob = kv, bkt
+
+	// S3 frontend (ADR-0080/0085, Decision 6): expose the blob substrate over the S3 protocol on a free
+	// node-private port. The printed creds are the FIRST function's derived keypair (representative).
+	s3Cleanup, s3err := devS3Options(op, &opts, string(pfs[0].name), cfg.s3port, inst)
+	if s3err != nil {
+		if closeDurable != nil {
+			closeDurable()
+		}
+		return nil, s3err
+	}
+	inst.cleanup = append(inst.cleanup, s3Cleanup)
+	return append(opts, shimOpts...), nil
+}
+
+// devCatalogOptions wires the catalog dev engine (Decision 5) when any function binds a catalog: the process-mode
+// DuckDB+Quack engine driver (internal/catalog/devengine) becomes the CatalogService add-on-provider runtime — it
+// runs the go:embed'd engine as a host subprocess (no container, no cgo). A dev binary built WITHOUT the engine
+// (the committed placeholder) reports catalog-unavailable at reconcile time, not here — so `funcdctl dev` still
+// boots. It records the served catalogs and registers each cleanup on inst; no catalog binding ⇒ no options.
+func devCatalogOptions(plan persistPlan, pfs []plannedFunc, inst *devInstance) []funcd.Option {
+	aliases := catalogAliases(pfs)
+	if len(aliases) == 0 {
+		return nil
+	}
+	inst.catalogs = aliases
+	// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
+	// metastore) so a dev restart reopens it; ephemeral otherwise. resolvePersistPlan is pure, so the
+	// second call in buildPersistDrivers is harmless.
+	var catOpts []devengine.Option
+	if plan.catalogDir != "" {
+		catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
+	}
+	catEngine := devengine.New(slog.Default(), catOpts...)
+	opts := []funcd.Option{funcd.WithCatalogProviderRuntime(catEngine)}
+	inst.cleanup = append(inst.cleanup, catEngine.StopAll)
+
+	// A catalog CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
+	// quack/ducklake extensions — in prod those ride the bundle's duckdb-ext (ADR-0089), absent when
+	// running from source. Extract the embedded engine's extensions once and point consumers at them
+	// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-catalog-query). A placeholder build (no engine)
+	// skips it — the same not-bundled path the provider engine reports at reconcile time.
+	if embedengine.Bundled() {
+		if extRoot, xerr := os.MkdirTemp("", "funcd-dev-duckdb-ext-*"); xerr == nil {
+			if paths, perr := embedengine.Extract(extRoot); perr == nil {
+				opts = append(opts, funcd.WithCatalogExtensionDir(paths.ExtensionDir))
+				inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(extRoot) })
+			} else {
+				_ = os.RemoveAll(extRoot)
+				slog.Default().Warn("could not extract catalog extensions for consumers", "err", perr)
+			}
+		}
+	}
+	return opts
+}
+
+// checkFixedPorts refuses two equal fixed listen ports (--gport / --s3port / --cport; 0 is the ephemeral free
+// port). The ports are checked in a fixed order so the error is stable.
+func checkFixedPorts(op string, cfg devConfig) error {
+	fixedPorts := []struct {
+		name string
+		port int
+	}{{"--gport", cfg.gport}, {"--s3port", cfg.s3port}, {"--cport", cfg.cport}}
+	seenPort := map[int]string{}
+	for _, fp := range fixedPorts {
+		if fp.port == 0 {
+			continue
+		}
+		if other, dup := seenPort[fp.port]; dup {
+			return fault.Invalidf(op, "%s and %s must be different ports (both %d)", other, fp.name, fp.port)
+		}
+		seenPort[fp.port] = fp.name
+	}
+	return nil
+}
+
+// applyBoot applies the boot's desired state in order: the backing resources (KVStore/Bucket/ConfigMap/Secret) →
+// the Functions (bind them) → the KVStores and Buckets that drop a table or prefix (stageResources) → the Workflow
+// of a workflow run (wf, nil otherwise; it references its step Functions). ADR-0121's reconcile-time existence gate
+// resolves against what is already applied. Over a durable metastore it then prunes what an earlier session
+// synthesized that the manifests no longer name. It returns the resources the hot-reload watcher starts from.
+func applyBoot(ctx context.Context, op string, c *sdk.Client, resObjs, fnObjs []v1.Object, wf *devWorkflow, plan persistPlan) ([]v1.Object, error) {
+	firstRes, lastRes, serr := stageResources(ctx, op, c, resObjs)
 	if serr != nil {
 		return nil, serr
 	}
@@ -744,22 +779,19 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	}
 	for _, group := range [][]v1.Object{firstRes, fnObjs, lastRes, extraObjs} {
 		for _, obj := range group {
-			if aerr := applyDesired(ctx, client, obj); aerr != nil {
+			if aerr := applyDesired(ctx, c, obj); aerr != nil {
 				return nil, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName())
 			}
 		}
 	}
-	applied := resObjs
-	if plan.storeDir != "" {
-		stale, lerr := pruneStale(ctx, client, slices.Concat(resObjs, fnObjs, extraObjs))
-		if lerr != nil {
-			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
-		}
-		applied = slices.Concat(resObjs, stale)
+	if plan.storeDir == "" {
+		return resObjs, nil
 	}
-	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
-	return inst, nil
+	stale, lerr := pruneStale(ctx, c, slices.Concat(resObjs, fnObjs, extraObjs))
+	if lerr != nil {
+		return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
+	}
+	return slices.Concat(resObjs, stale), nil
 }
 
 // pruneStale deletes each object an earlier --persist session synthesized that desired no longer holds, as a
@@ -1536,6 +1568,22 @@ func resolveInterpreter(p, baseDir string) string {
 	return filepath.Join(baseDir, p)
 }
 
+// devInterpreter resolves a runtime interpreter by precedence: the envKey override > the manifest's
+// dev.node/dev.python (a project pins its toolchain in the committable funcdctl.yaml) > pathName on PATH.
+// "" ⇒ none found.
+func devInterpreter(envKey, manifestValue, baseDir, pathName string) string {
+	if v := envOr(envKey, ""); v != "" {
+		return v
+	}
+	if v := resolveInterpreter(manifestValue, baseDir); v != "" {
+		return v
+	}
+	if p, err := exec.LookPath(pathName); err == nil {
+		return p
+	}
+	return ""
+}
+
 // devShimOptions extracts the embedded Node + Python runtime shims to a temp dir and returns the
 // funcd options that launch them on the process runtime (mirroring cmd/funcd's process-mode wiring).
 // A default shim (node when present, else python) is always registered so the reconciler's
@@ -1558,17 +1606,7 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 	var opts []funcd.Option
 	haveDefault := false
 
-	// Interpreter precedence: env override > the manifest's dev.node/dev.python (a project pins its
-	// toolchain in the committable funcdctl.yaml) > the bare name on PATH.
-	node := envOr("FUNCD_NODE", "")
-	if node == "" {
-		node = resolveInterpreter(dev.Node, baseDir)
-	}
-	if node == "" {
-		if p, lerr := exec.LookPath("node"); lerr == nil {
-			node = p
-		}
-	}
+	node := devInterpreter("FUNCD_NODE", dev.Node, baseDir, "node")
 	if node == "" && needNode {
 		return nil, nil, fault.NotFoundf(op, "no node interpreter found for the node handler (need node on PATH; set FUNCD_NODE or dev.node)")
 	}
@@ -1581,15 +1619,7 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		haveDefault = true
 	}
 
-	python := envOr("FUNCD_PYTHON", "")
-	if python == "" {
-		python = resolveInterpreter(dev.Python, baseDir)
-	}
-	if python == "" {
-		if p, lerr := exec.LookPath("python3"); lerr == nil {
-			python = p
-		}
-	}
+	python := devInterpreter("FUNCD_PYTHON", dev.Python, baseDir, "python3")
 	if python == "" && needPython {
 		return nil, nil, fault.NotFoundf(op, "no python interpreter found for the python handler (need python3 on PATH; set FUNCD_PYTHON or dev.python)")
 	}
