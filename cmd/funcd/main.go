@@ -229,6 +229,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 			return nil, noopClose, nil, "", fmt.Errorf("build telemetry: %w", terr)
 		}
 		opts = append(opts, funcd.WithTelemetry(tel))
+		opened = append(opened, telemetryCloser{tel})
 	}
 
 	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. The daemon keeps TLS state in
@@ -629,6 +630,19 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 
 // noopClose is the execution closer for the process lane (nothing to tear down).
 func noopClose() error { return nil }
+
+// telemetryCloseTimeout bounds the telemetry shutdown of a failed buildOptions: nothing was recorded yet, so an
+// unreachable collector must not delay the error (issue #507).
+const telemetryCloseTimeout = time.Second
+
+// telemetryCloser adapts the Telemetry's context-bounded Shutdown to buildOptions' io.Closer cleanup.
+type telemetryCloser struct{ tel *observability.Telemetry }
+
+func (c telemetryCloser) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), telemetryCloseTimeout)
+	defer cancel()
+	return c.tel.Shutdown(ctx)
+}
 
 // executionOptions selects the runtime driver + function-execution wiring from the resolved
 // runtime.mode (ADR-0036/0061): "containerd" → the containerd/crun worker running curated images

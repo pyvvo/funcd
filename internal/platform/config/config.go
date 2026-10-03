@@ -21,6 +21,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/go-playground/validator/v10"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"sigs.k8s.io/yaml"
@@ -79,7 +80,7 @@ type Config struct {
 			} `json:"cors,omitempty"`
 			Headers struct {
 				// The env form splits pairs on ",", so a header value that contains a comma needs the file.
-				Set    map[string]string `json:"set,omitempty" env:"FUNCD_SHAPING_HEADERS_SET" envSeparator:"," envKeyValSeparator:"="`
+				Set    map[string]string `json:"set,omitempty" env:"FUNCD_SHAPING_HEADERS_SET" envSeparator:"," envKeyValSeparator:"=" validate:"dive,keys,header_name,endkeys"`
 				Remove []string          `json:"remove,omitempty" env:"FUNCD_SHAPING_HEADERS_REMOVE" envSeparator:","`
 			} `json:"headers,omitempty"`
 			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION"`
@@ -385,6 +386,12 @@ func Load(path string, flags Flags) (Config, error) {
 func (c Config) Validate() error {
 	const op = "config.Config.Validate"
 	v := validator.New()
+	// net/http silently drops a header whose name is not a token when it writes the response (#509).
+	if err := v.RegisterValidation("header_name", func(fl validator.FieldLevel) bool {
+		return httpguts.ValidHeaderFieldName(fl.Field().String())
+	}); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "register header_name validation")
+	}
 	// Report yaml keys ("storage.mode") in errors, not Go field names (the json tag is the yaml key).
 	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
 		name, _, _ := strings.Cut(fld.Tag.Get("json"), ",")
