@@ -287,3 +287,48 @@ func TestIssue335_CompressionHonorsQZero(t *testing.T) {
 		require.Equal(t, payload, string(got))
 	}
 }
+
+// RFC 9110 §8.8: the gzip and identity variants must not share a strong ETag, or an If-Range resume of a
+// gzip download matches the upstream and gets identity bytes spliced into the partial gzip body.
+func TestIssue439_GzipVariantWeakensStrongETag(t *testing.T) {
+	content := strings.Repeat("0123456789", 100)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", r.URL.Query().Get("etag"))
+		http.ServeContent(w, r, "a.txt", time.Time{}, strings.NewReader(content))
+	})
+	get := func(etag string, hdr map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "http://x/a?etag="+url.QueryEscape(etag), nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		return serve(shape.Chain(shape.Config{Compression: true}), next, req)
+	}
+	gunzip := func(rec *httptest.ResponseRecorder) string {
+		gz, err := gzip.NewReader(rec.Body)
+		require.NoError(t, err)
+		got, err := io.ReadAll(gz)
+		require.NoError(t, err)
+		return string(got)
+	}
+
+	rec := get(`"v1"`, map[string]string{"Accept-Encoding": "gzip"})
+	require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
+	gzipETag := rec.Header().Get("ETag")
+	require.Equal(t, `W/"v1"`, gzipETag, "the gzip variant does not reuse the identity's strong ETag")
+
+	rec = get(`"v1"`, map[string]string{"Accept-Encoding": "gzip", "Range": "bytes=20-", "If-Range": gzipETag})
+	require.Equal(t, http.StatusOK, rec.Code, "an If-Range resume of the gzip variant never gets identity bytes")
+	require.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
+	require.Equal(t, content, gunzip(rec), "the full representation is resent")
+
+	rec = get(`"v1"`, map[string]string{"Accept-Encoding": "gzip", "If-None-Match": gzipETag})
+	require.Equal(t, http.StatusNotModified, rec.Code, "the gzip variant still revalidates")
+
+	rec = get(`"v1"`, nil)
+	require.Equal(t, `"v1"`, rec.Header().Get("ETag"), "the identity variant keeps its strong ETag")
+	require.Equal(t, content, rec.Body.String())
+
+	rec = get(`W/"v1"`, map[string]string{"Accept-Encoding": "gzip"})
+	require.Equal(t, `W/"v1"`, rec.Header().Get("ETag"), "an already weak ETag is kept")
+	require.Equal(t, content, gunzip(rec))
+}

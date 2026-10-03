@@ -193,6 +193,11 @@ func (g *gzipWriter) decide(code int) {
 	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown
+	// RFC 9110 §8.8.3: a strong ETag names the identity bytes, so an If-Range on the gzip variant must
+	// not match it; a weak one still revalidates via If-None-Match.
+	if et := h.Get("ETag"); et != "" && !strings.HasPrefix(et, "W/") {
+		h.Set("ETag", "W/"+et)
+	}
 	g.gz = gzip.NewWriter(g.ResponseWriter)
 }
 
