@@ -158,3 +158,45 @@ func TestIssue319_CheckRejectsTypeListOutsideNullableForm(t *testing.T) {
 		}
 	}
 }
+
+// Issue #129: the profile (ADR-0058) allows only date-time, uuid, email and uri on a string and int32,
+// int64 on an integer. Any other format must fail the push gate, not the Python worker's compile.
+func TestIssue129_CheckRejectsOutOfProfileFormat(t *testing.T) {
+	t.Parallel()
+	for name, js := range map[string]string{
+		"string duration":           `{"type":"string","format":"duration"}`,
+		"string date":               `{"type":"string","format":"date"}`,
+		"string int64":              `{"type":"string","format":"int64"}`,
+		"integer uuid":              `{"type":"integer","format":"uuid"}`,
+		"number double":             `{"type":"number","format":"double"}`,
+		"format without a type":     `{"format":"duration"}`,
+		"nested field":              `{"type":"object","properties":{"d":{"type":"string","format":"duration"}},"additionalProperties":false}`,
+		"array item":                `{"type":"array","items":{"type":"string","format":"ipv4"}}`,
+		"nullable string":           `{"type":["string","null"],"format":"binary"}`,
+		"string enum with a format": `{"type":"string","enum":["a"],"format":"hostname"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := contract.Check([]byte(js))
+			if err == nil {
+				t.Fatalf("contract %s must be rejected, got nil", js)
+			}
+			if fault.KindOf(err) != fault.Invalid {
+				t.Fatalf("expected fault.Invalid, got kind %v (%v)", fault.KindOf(err), err)
+			}
+		})
+	}
+	for _, js := range []string{
+		`{"type":"string","format":"date-time"}`,
+		`{"type":"string","format":"uuid"}`,
+		`{"type":"string","format":"email"}`,
+		`{"type":"string","format":"uri"}`,
+		`{"type":["string","null"],"format":"uuid"}`,
+		`{"type":"integer","format":"int32"}`,
+		`{"type":"integer","format":"int64"}`,
+	} {
+		if err := contract.Check([]byte(js)); err != nil {
+			t.Fatalf("in-profile contract %s must be accepted, got %v", js, err)
+		}
+	}
+}
