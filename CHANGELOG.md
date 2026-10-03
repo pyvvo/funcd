@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.3](https://github.com/pyvvo/funcd/compare/v0.2.2...v0.2.3) (2026-10-03)
+
+
+### Bug Fixes
+
+* **control-plane:** close races, leaks and config gaps from wave 3 ([#471](https://github.com/pyvvo/funcd/issues/471)) ([#481](https://github.com/pyvvo/funcd/issues/481)) ([86f4b87](https://github.com/pyvvo/funcd/commit/86f4b871a291e37f0e8d5bcfdef0536c3c16f579))
+* **dataplane:** edge headers, panic log, gzip ETag, slog upstream errors ([#466](https://github.com/pyvvo/funcd/issues/466)) ([#484](https://github.com/pyvvo/funcd/issues/484)) ([611c9f4](https://github.com/pyvvo/funcd/commit/611c9f4dc57680f439a392a44317c4f77e54758a))
+* **deps:** pin funcd-typescript v0.4.2 and funcd-python v0.3.3 ([#483](https://github.com/pyvvo/funcd/issues/483)) ([4dc2935](https://github.com/pyvvo/funcd/commit/4dc2935c1e74ac509e45303482e35e6c77924272))
+* **docs:** TLS dir hint and revert-check guidance ([#472](https://github.com/pyvvo/funcd/issues/472)) ([#478](https://github.com/pyvvo/funcd/issues/478)) ([912c5cd](https://github.com/pyvvo/funcd/commit/912c5cdbbbfa960830e880b9582554a15441e53b))
+* **funcdctl:** harden dev hot-reload, boot and S3 startup ([#465](https://github.com/pyvvo/funcd/issues/465)) ([#480](https://github.com/pyvvo/funcd/issues/480)) ([42c2247](https://github.com/pyvvo/funcd/commit/42c2247566f371fa34cccde3c6dce7b5ea5245c3))
+* **funcd:** drain logs on shutdown, route http server errors to slog ([#473](https://github.com/pyvvo/funcd/issues/473)) ([#482](https://github.com/pyvvo/funcd/issues/482)) ([21460ca](https://github.com/pyvvo/funcd/commit/21460ca88df8682d85538bbbb5d186b5a4c86757))
+* **function:** pool worker replacement, error wording, key order, index path ([#468](https://github.com/pyvvo/funcd/issues/468)) ([#476](https://github.com/pyvvo/funcd/issues/476)) ([6d99f6d](https://github.com/pyvvo/funcd/commit/6d99f6dce70aed3b8f3e41ce90244efbc382f352))
+* **lint:** let golangci-lint runs from parallel checkouts on one host succeed ([#475](https://github.com/pyvvo/funcd/issues/475)) ([8910bad](https://github.com/pyvvo/funcd/commit/8910bad02b0197ddcd9b1033e4cbda89a3443a88))
+* **runtime:** clean replaced worker logs, unpack present images ([#469](https://github.com/pyvvo/funcd/issues/469)) ([#477](https://github.com/pyvvo/funcd/issues/477)) ([93508d8](https://github.com/pyvvo/funcd/commit/93508d8c30988e4035fb71a3c9414d7a0beb6b18))
+* **services:** s3gateway, blob, kv and probe fixes from wave 3 ([#470](https://github.com/pyvvo/funcd/issues/470)) ([#485](https://github.com/pyvvo/funcd/issues/485)) ([8257711](https://github.com/pyvvo/funcd/commit/825771131da1d57f0b1537389e96dbe6463afe13))
+* **workflow:** seven eventing and workflow wave-3 findings ([#467](https://github.com/pyvvo/funcd/issues/467)) ([#486](https://github.com/pyvvo/funcd/issues/486)) ([45a130c](https://github.com/pyvvo/funcd/commit/45a130ce6d5467df64583325fb26ce1e9c2f6e07))
+
 ## [0.2.2](https://github.com/pyvvo/funcd/compare/v0.2.1...v0.2.2) (2026-10-03)
 
 
