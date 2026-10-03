@@ -3,6 +3,7 @@ package observability
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -134,4 +136,55 @@ func TestScenarioFanoutDispatch(t *testing.T) {
 
 	require.Contains(t, bufA.String(), "fanned")
 	require.Contains(t, bufB.String(), "fanned", "both sinks receive the record")
+}
+
+// spanExporterSpy and metricExporterSpy record Shutdown; nothing else is called on them.
+type spanExporterSpy struct {
+	sdktrace.SpanExporter
+	shutdown bool
+}
+
+func (s *spanExporterSpy) Shutdown(context.Context) error { s.shutdown = true; return nil }
+
+type metricExporterSpy struct {
+	sdkmetric.Exporter
+	shutdown bool
+}
+
+func (s *metricExporterSpy) Shutdown(context.Context) error { s.shutdown = true; return nil }
+
+// When the metric or the log exporter fails to build, the exporters built before it (each holds a gRPC
+// connection) are shut down and the error is returned.
+func TestIssue508_FailedExporterShutsDownEarlierOnes(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("boom")
+	build := func(failMetric bool) (exporters, *spanExporterSpy, *metricExporterSpy) {
+		traceExp, metricExp := &spanExporterSpy{}, &metricExporterSpy{}
+		return exporters{
+			trace: func(context.Context) (sdktrace.SpanExporter, error) { return traceExp, nil },
+			metric: func(context.Context) (sdkmetric.Exporter, error) {
+				if failMetric {
+					return nil, boom
+				}
+				return metricExp, nil
+			},
+			log: func(context.Context) (sdklog.Exporter, error) { return nil, boom },
+		}, traceExp, metricExp
+	}
+
+	t.Run("metric exporter fails", func(t *testing.T) {
+		t.Parallel()
+		exp, traceExp, _ := build(true)
+		_, err := newTelemetry(context.Background(), "", exp)
+		require.ErrorIs(t, err, boom)
+		require.True(t, traceExp.shutdown, "the trace exporter is left open")
+	})
+	t.Run("log exporter fails", func(t *testing.T) {
+		t.Parallel()
+		exp, traceExp, metricExp := build(false)
+		_, err := newTelemetry(context.Background(), "", exp)
+		require.ErrorIs(t, err, boom)
+		require.True(t, traceExp.shutdown, "the trace exporter is left open")
+		require.True(t, metricExp.shutdown, "the metric exporter is left open")
+	})
 }
