@@ -32,11 +32,17 @@ OUTLIER_FACTOR = 3
 SHOW = 8
 
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-SLEEP = re.compile(r"\btime\.Sleep\(")
+SLEEP = re.compile(r"\btime\.Sleep\b|(?:^|[{;])\s*<-\s*time\.After\(")
 SKIP = re.compile(r"\.Skip(?:f|Now)?\(")
 DISCARD = re.compile(r"^\s*_(?:\s*,\s*_)*\s*=\s*\S.*\(")
+DISCARD_IDIOM = re.compile(r"^\s*_\s*=\s*[\w.]+\.Close\(\)\s*$|\bio\.Copy\(io\.Discard\b")
 NOLINT = re.compile(r"//nolint\b")
 NOLINT_EXPLAINED = re.compile(r"//nolint(?::[\w,-]+)?\s+//\s*\S")
+NOLINT_UNEXPLAINED = "should provide explanation"
+LEXEME = re.compile(r'"(?:\\.|[^"\\])*"?|\'(?:\\.|[^\'\\])*\'?|`[^`]*`?|//.*|/\*.*')
+FUNC_DECL = re.compile(r"^func\s*(?:\(\s*(?:\w+\s+)?\*?\s*(\w+)[^)]*\)\s*)?(\w+)", re.M)
+LINT_FUNC = re.compile(r"^(?:\(\*?(\w+)\)\.)?(\w+)$")
+LIMIT_TEXT = re.compile(r">\s*(\d+)\)")
 RETRY = re.compile(r"^\s*for\b.*\b(?:attempts?|retries|retry|tries)\b", re.I)
 TIMEOUTISH = re.compile(r"timeout|deadline|wait|eventually|ttl|time\.", re.I)
 GO_DUR = re.compile(r"(?:(\d+(?:\.\d+)?)\s*\*\s*)?time\.(Nanosecond|Microsecond|Millisecond|Second|Minute|Hour)\b")
@@ -182,7 +188,19 @@ def comment_kind(line):
     return "code"
 
 
-def scan_lines(diff, kinds):
+def split_comment(line):
+    """The line's code with its string and rune literals emptied, and its trailing comment."""
+    code, pos = [], 0
+    for m in LEXEME.finditer(line):
+        code.append(line[pos:m.start()])
+        if m.group(0).startswith("/"):
+            return "".join(code), m.group(0)
+        code.append(m.group(0)[0] * 2)
+        pos = m.end()
+    return "".join(code) + line[pos:], ""
+
+
+def scan_lines(diff, kinds, unlinted):
     masking = collections.defaultdict(list)
     comments = {k: collections.Counter() for k in ("prod", "test")}
     blocks = []
@@ -197,17 +215,18 @@ def scan_lines(diff, kinds):
             text, loc = f["added"][n], f"{path}:{n}"
             ck = comment_kind(text)
             comments[kind][ck] += 1
-            if SLEEP.search(text):
+            code, note = split_comment(text)
+            if SLEEP.search(code):
                 masking["sleep-" + kind].append(loc)
-            if kind == "test" and SKIP.search(text):
+            if kind == "test" and SKIP.search(code):
                 masking["skip"].append(loc)
-            if DISCARD.search(text):
+            if DISCARD.search(code) and not DISCARD_IDIOM.search(code):
                 masking["discard-" + kind].append(loc)
-            if NOLINT.search(text):
+            if NOLINT.match(note):
                 masking["nolint"].append(loc)
-                if not NOLINT_EXPLAINED.search(text):
+                if unlinted and not NOLINT_EXPLAINED.match(note):
                     masking["nolint-unexplained"].append(loc)
-            if RETRY.search(text):
+            if RETRY.search(code):
                 masking["retry-loop"].append(loc)
             if ck == "comment" and run and run[-1] == n - 1:
                 run.append(n)
@@ -285,7 +304,7 @@ def requires(text):
 
 
 def dependencies(base, numstats, head_tree):
-    deps = {"new": [], "new-indirect": [], "bumped": []}
+    deps = {"new": [], "new-indirect": [], "promoted": [], "bumped": []}
     for f in numstats:
         if os.path.basename(f["path"]) != "go.mod":
             continue
@@ -295,6 +314,8 @@ def dependencies(base, numstats, head_tree):
             loc = f"{f['path']}:{info['line']}"
             if mod not in old:
                 deps["new-indirect" if info["indirect"] else "new"].append({"module": mod, "loc": loc})
+            elif old[mod]["indirect"] and not info["indirect"]:
+                deps["promoted"].append({"module": mod, "loc": loc})
             elif old[mod]["version"] != info["version"]:
                 deps["bumped"].append({"module": mod, "loc": loc, "from": old[mod]["version"], "to": info["version"]})
     return deps
@@ -309,14 +330,41 @@ def find_linter(explicit):
     return out.strip()
 
 
+def by_module(tree, dirs):
+    """Groups repo-relative dirs by the dir of their nearest go.mod (bench/badger is its own module)."""
+    mods = collections.defaultdict(list)
+    for d in sorted(dirs):
+        if not os.path.isdir(os.path.join(tree, d)):
+            continue
+        mod = d
+        while mod != "." and not os.path.exists(os.path.join(tree, mod, "go.mod")):
+            mod = os.path.dirname(mod) or "."
+        if os.path.exists(os.path.join(tree, mod, "go.mod")):
+            rel = os.path.relpath(d, mod)
+            mods[mod].append("." if rel == "." else "./" + rel)
+    return mods
+
+
 def lint(linter, tree, dirs):
-    pkgs = sorted("./" + d if d != "." else "." for d in dirs if os.path.isdir(os.path.join(tree, d)))
     env = dict(os.environ, GOOS="linux", GOWORK="off", GOFLAGS="-mod=readonly",
                GOLANGCI_LINT_CACHE=tree + ".lintcache")
     cmd = [linter, "run", "--config", LINT_CONFIG, "--build-tags", LINT_TAGS, "--allow-parallel-runners",
            "--issues-exit-code=0", "--show-stats=false", "--output.json.path=stdout", "--output.text.path=stderr"]
+    issues = []
+    for mod, pkgs in sorted(by_module(tree, dirs).items()):
+        for i in lint_module(cmd, os.path.join(tree, mod), pkgs, env):
+            i["Pos"]["Filename"] = os.path.normpath(os.path.join(mod, i["Pos"]["Filename"]))
+            m = DUPL_TEXT.search(i["Text"]) if i["FromLinter"] == "dupl" else None
+            if m:
+                i["Dupl"] = ((i["Pos"]["Filename"], int(m.group(1)), int(m.group(2))),
+                             (os.path.normpath(os.path.join(mod, m.group(3))), int(m.group(4)), int(m.group(5))))
+            issues.append(i)
+    return issues
+
+
+def lint_module(cmd, cwd, pkgs, env):
     while pkgs:
-        code, out, err = sh(cmd + pkgs, cwd=tree, env=env, check=False)
+        code, out, err = sh(cmd + pkgs, cwd=cwd, env=env, check=False)
         if not code:
             return json.loads(out).get("Issues") or []
         empty = set(NO_GO_FILES.findall(err)) & set(pkgs)
@@ -336,7 +384,9 @@ def lint_deltas(linter, base_tree, head_tree, diff, numstats, kinds):
     head = lint(linter, head_tree, dirs)
     base = lint(linter, base_tree, {os.path.dirname(f["old"]) or "." for f in go_files})
     renamed = {f["old"]: f["path"] for f in numstats}
+    old_of = {f["path"]: f["old"] for f in numstats}
     added = {p: f["added"] for p, f in diff.items()}
+    base_funcs = {}
 
     def metrics(issues, rename):
         out = {}
@@ -351,25 +401,35 @@ def lint_deltas(linter, base_tree, head_tree, diff, numstats, kinds):
                 key, value = (linter, path, m.group(1)), int(m.group(3))
             else:
                 key, value = (i["FromLinter"], path, m.group(2)), int(m.group(1))
-            out[key] = (value, i["Pos"]["Line"])
+            limit = LIMIT_TEXT.search(i["Text"])
+            out[key] = (value, i["Pos"]["Line"], int(limit.group(1)) if limit else None)
         return out
+
+    def at_base(linter, path, func):
+        d = os.path.dirname(old_of.get(path, path)) or "."
+        if d not in base_funcs:
+            full = os.path.join(base_tree, d)
+            names = os.listdir(full) if os.path.isdir(full) else []
+            base_funcs[d] = {m.groups() for n in names if n.endswith(".go") for m in FUNC_DECL.finditer(read(full, n))}
+        m = LINT_FUNC.match(func)
+        recv, name = m.groups() if m else (None, func)
+        if linter.startswith("funlen"):
+            return any(n == name for _, n in base_funcs[d])
+        return (recv, name) in base_funcs[d]
 
     result = {"dupl": [], "complexity": [], "godox": [], "nolintlint": []}
     before, after = metrics(base, renamed), metrics(head, {})
-    for key, (value, line) in sorted(after.items()):
+    for key, (value, line, limit) in sorted(after.items()):
         old = before.get(key, (None,))[0]
         if old is None or value > old:
             result["complexity"].append({"linter": key[0], "func": key[2], "loc": f"{key[1]}:{line}", "value": value,
-                                         "before": old, "kind": kinds.get(key[1], "prod")})
+                                         "before": old, "limit": limit, "crossed": old is None and at_base(*key),
+                                         "kind": kinds.get(key[1], "prod")})
     seen = set()
     for i in head:
         path, line = i["Pos"]["Filename"], i["Pos"]["Line"]
-        if i["FromLinter"] == "dupl":
-            m = DUPL_TEXT.search(i["Text"])
-            if not m:
-                continue
-            a = (path, int(m.group(1)), int(m.group(2)))
-            b = (m.group(3), int(m.group(4)), int(m.group(5)))
+        if "Dupl" in i:
+            a, b = i["Dupl"]
             pair = frozenset((a, b))
             if pair in seen:
                 continue
@@ -443,14 +503,15 @@ def cross_package_clones(head_tree, diff, kinds):
 
 
 def flake_run(tree, dirs, parallel):
-    pkgs = sorted("./" + d if d != "." else "." for d in dirs if os.path.isdir(os.path.join(tree, d)))
     template = "{{if not .Error}}{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}{{end}}"
-    listed = sh(["go", "list", "-e", "-f", template, *pkgs], cwd=tree) if pkgs else ""
-    pkgs = [p for p in listed.split() if p]
-    if not pkgs:
-        return {"packages": 0, "flaky": [], "failing": [], "output": {}}
-    _, out, _ = sh(["go", "test", "-count=3", "-json", f"-p={parallel}", "-timeout=20m", *pkgs],
-                   cwd=tree, env=dict(os.environ, GOWORK="off"), check=False)
+    env, count, out = dict(os.environ, GOWORK="off"), 0, ""
+    for mod, pkgs in sorted(by_module(tree, dirs).items()):
+        cwd = os.path.join(tree, mod)
+        listed = sh(["go", "list", "-e", "-f", template, *pkgs], cwd=cwd, env=env).split()
+        if listed:
+            count += len(listed)
+            out += sh(["go", "test", "-count=3", "-json", f"-p={parallel}", "-timeout=20m", *listed],
+                      cwd=cwd, env=env, check=False)[1]
     outcomes, pkg_fail = collections.defaultdict(set), set()
     output = collections.defaultdict(lambda: collections.deque(maxlen=15))
     for line in out.splitlines():
@@ -470,7 +531,7 @@ def flake_run(tree, dirs, parallel):
     failing = sorted(k for k, o in outcomes.items() if o == {"fail"})
     named = {k.split()[0] for k in flaky + failing}
     failing += sorted(k for k in pkg_fail if k.split()[0] not in named)
-    return {"packages": len(pkgs), "flaky": flaky, "failing": failing,
+    return {"packages": count, "flaky": flaky, "failing": failing,
             "output": {k: list(output[k]) for k in flaky + failing}}
 
 
@@ -496,8 +557,10 @@ def hard_flags(data, allowed):
         if d["kind"] == "prod":
             flags.append(("dupl", d["loc"].split(":")[0], d["loc"], f"duplicates {d['of']}"))
     for loc in data["masking"].get("sleep-prod", []):
-        flags.append(("sleep", loc.split(":")[0], loc, "time.Sleep in production code"))
-    for loc in data["masking"].get("nolint-unexplained", []):
+        flags.append(("sleep", loc.split(":")[0], loc, "time.Sleep or a bare <-time.After in production code"))
+    unexplained = ([x["loc"] for x in data["lint"]["nolintlint"] if NOLINT_UNEXPLAINED in x["text"]] if data["linted"]
+                   else data["masking"].get("nolint-unexplained", []))
+    for loc in dict.fromkeys(unexplained):
         flags.append(("nolint", loc.split(":")[0], loc, "//nolint with no `// reason`"))
     for d in data["deps"]["new"]:
         flags.append(("dep", d["module"], d["loc"], f"new dependency {d['module']}"))
@@ -530,7 +593,7 @@ def audit(args):
                 size[key][k + "+"] += f["added"]
                 size[key][k + "-"] += f["removed"]
         commits, outlier_limit = commit_stats(base, head, generated)
-        masking, comments, blocks = scan_lines(diff, kinds)
+        masking, comments, blocks = scan_lines(diff, kinds, args.no_lint)
         deps = dependencies(base, numstats, head_tree)
         timings["diff"] = time.time() - t0
         lint_result = {}
@@ -603,7 +666,7 @@ def render(d):
             if dl:
                 out.append(f"- dupl, {kind}: " + "; ".join(f"`{x['loc']}` ≈ `{x['of']}`" for x in dl[:SHOW]))
         for c in lr["complexity"][:SHOW * 2]:
-            was = "new" if c["before"] is None else f"was {c['before']}"
+            was = f"crossed {c['limit']}" if c["crossed"] else "new" if c["before"] is None else f"was {c['before']}"
             out.append(f"- {c['linter']} {c['value']} ({was}) `{c['func']}` `{c['loc']}` [{c['kind']}]")
         if len(lr["complexity"]) > SHOW * 2:
             out.append(f"- … +{len(lr['complexity']) - SHOW * 2} more complexity deltas in the JSON")
@@ -629,6 +692,7 @@ def render(d):
     out.append("\n### Dependencies")
     out += [f"- new: `{x['module']}` `{x['loc']}`" for x in deps["new"]]
     out += [f"- new indirect: `{x['module']}`" for x in deps["new-indirect"]]
+    out += [f"- promoted from indirect: `{x['module']}` `{x['loc']}`" for x in deps["promoted"]]
     out += [f"- bumped: `{x['module']}` {x['from']} → {x['to']}" for x in deps["bumped"]]
     if not any(deps.values()):
         out.append("none")

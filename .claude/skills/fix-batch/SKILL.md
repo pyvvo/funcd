@@ -45,9 +45,10 @@ When all of a group's jobs are done:
 2. Copy the group's review reports into `docs/reviews/` and commit them. Do **not** touch
    `docs/reviews/model-ledger.json` or `model-scorecard.md`: parallel PRs appending to them conflict.
 3. Run `scripts/agent/gate.sh` once: the [bloat audit](../bloat-audit/SKILL.md) of the group's diff, `just ci-full`,
-   the Linux checks and a clean tree. On a failure, revert the commits of the issue that caused it and rerun. A hard
-   audit flag goes back to that issue's fixer as a rework round (a fix, or a justified `audit-allow:` line in its
-   commit message); the integrator never writes a waiver.
+   the Linux checks and a clean tree. When `just ci-full`, the Linux checks or the tree check fail, revert the
+   commits of the issue that caused it and rerun. A hard audit flag is not reverted: it goes back to that issue's
+   fixer as a rework round (a fix, or a justified `audit-allow:` line in its commit message), whose commit is
+   cherry-picked before the rerun; the integrator never writes a waiver.
 4. Push and open the PR: a Conventional-Commit title naming the group (it becomes the squash commit and the
    release note); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
    `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; a
