@@ -678,7 +678,7 @@ def audit(args):
         special = {f["path"]: go_kind(read(head_tree, f["path"])) for f in numstats if f["path"].endswith(".go")}
         kinds = {f["path"]: kind_of(f["path"], special) for f in numstats}
         diff = parse_diff(git("diff", "-U0", "-M", "--no-color", "--no-ext-diff", base, head))
-        size = collections.defaultdict(collections.Counter)
+        size = collections.defaultdict(collections.Counter, total=collections.Counter())  # an empty diff has one too
         for f in numstats:
             k = kinds[f["path"]]
             for key in ("total", os.path.dirname(f["path"]) or "."):

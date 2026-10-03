@@ -204,3 +204,17 @@ func TestIssue547_FlakyOutputKeepsFailingRun(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &data))
 	require.Contains(t, strings.Join(data.Flakes.Output["example.com/audit/f TestFlip"], "\n"), "first run fails")
 }
+
+// An audit of an empty diff (a branch audited against itself, as a regression gate on main is) reports a zero size
+// instead of failing on the missing total.
+func TestBloatAuditOfAnEmptyDiffReportsZeroSize(t *testing.T) {
+	t.Parallel()
+	script, err := filepath.Abs(filepath.Join("agent", "audit.py"))
+	require.NoError(t, err)
+	run, commit := fixtureRepo(t)
+	commit("main", "base", map[string]string{"go.mod": "module example.com/audit\n\ngo 1.26\n"})
+	out, code := run("python3", script, "--base", "main", "--head", "main", "--no-lint")
+	require.Zero(t, code, out)
+	require.Contains(t, out, "**PASS**: 0 hard flags")
+	require.Contains(t, out, "| **total** | +0 −0 | +0 −0 | +0 −0 | +0 −0 |")
+}
