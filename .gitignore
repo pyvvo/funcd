@@ -73,3 +73,6 @@ data/
 
 # S3-gateway node master secret — generated at runtime by LoadOrCreateMaster (ADR-0085), never committed
 **/s3gateway/master.key
+
+# lane checkouts (scripts/agent/lanes.sh) and agent worktrees
+/.claude/worktrees/

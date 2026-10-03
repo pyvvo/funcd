@@ -10,6 +10,20 @@ issue still gets the full test-first fix and its own independent [`/fix-review`]
 `CLAUDE.md` → *Running subagents and workflows efficiently* first: the shape below follows from it (measured:
 3.0 agent-minutes per fix and 1.5 per review, against 6.3 and 7.1 with per-group chunks and repeated checks).
 
+## Running it
+
+The pipeline is committed (issue #566): `.claude/workflows/fix-batch.js` for funcd issues and
+`.claude/workflows/shim-fix.js` for issues whose root cause is in pyvvo/funcd-typescript or pyvvo/funcd-python.
+After Step 0, run it with the Workflow tool (`name: "fix-batch"`; each file's header lists its args); it carries
+Steps 1–3, the wave check and the lanes, and returns per group the PR, the fixed and parked issues and the new
+defects noted. Around it:
+
+- `scripts/agent/triage.sh <pr>`: the one-screen view before queueing (checks, size, the gate and audit lines, the
+  masking-pattern counts of the added lines);
+- `scripts/agent/queue.sh <state-dir> <pr>...`: enqueue green PRs, or hold the ones that need a lane;
+- `scripts/agent/lanes.sh <branch>:<lane|all>...`: the lanes of a held PR, one after the other;
+- `scripts/agent/watch-prs.py <state-dir>/handled.json`: wait in the background for the next PR event.
+
 ## Step 0 — Resolve and order
 
 1. **Collect the issues**:
