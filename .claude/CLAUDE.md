@@ -328,8 +328,8 @@ rules that did it:
   and `go test -overlay`). Lima lanes need a checkout under `$HOME` (colima) and one VM at a time: two VMs share
   the forwarded 8080/8081 ports, so the second lane's suite talks to the first VM. They run in a single serial stage.
   Both rules are enforced: a `PreToolUse` hook (`.claude/settings.json` → `scripts/agent/no-stash.py`) refuses a
-  `git stash` that changes the stash, and every Lima recipe takes a host lock first (`scripts/lane-lock.sh`), so a
-  second lane waits and none boots beside a running funcd VM.
+  `git stash` that changes the stash, and every recipe that boots a Lima VM takes a host lock first
+  (`scripts/lane-lock.sh`), so a second lane waits and none boots beside a running funcd VM.
 - **Append-only shared files conflict.** Parallel PRs that each append to `docs/reviews/model-ledger.json` and
   regenerate `model-scorecard.md` conflict one after another; record a batch's ledger rows in one ledger PR.
 - **Model per role.** Fixers and reviewers on the strongest model (reviews at medium effort held their depth);
@@ -341,7 +341,7 @@ rules that did it:
   the host has more than 8000 sockets in `TIME_WAIT` (`scripts/agent/host-check.sh`).
 - **Group PRs of one wave conflict with each other.** Before queueing any of them, run
   `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches, in queue order: it names each branch
-  that conflicts with the ones before it (rebase it on them), then gates the merged wave once.
+  that conflicts with the ones before it (rebase it on them) and, when none conflicts, gates the merged wave once.
 - **Merging and waiting.** Repo auto-merge is off, so `gh pr merge` fails: enqueue with the GraphQL
   `enqueuePullRequest` mutation after reading every check's conclusion; the queue builds up to 5 PRs together.
   Wait in the background (`scripts/agent/watch-prs.py` exits when a PR turns green, red or conflicted), never in a

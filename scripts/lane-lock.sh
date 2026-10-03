@@ -2,68 +2,89 @@
 # lane-lock.sh <pid>: let one Lima lane VM run on this host at a time (issue #561). Every lane VM forwards
 # 127.0.0.1:8080 and 8081, so a second VM's suite would talk to the first one.
 #
-# Called first by every recipe that boots a funcd VM, with the recipe shell's pid. It waits for a live holder, takes
-# over the lock of a holder that has exited, refuses to start beside a running funcd VM, then records <pid> as the
-# holder. The lock frees itself when that process exits, so the recipe needs no trap. A recipe run by one that holds
-# the lock (lima-example-all running lima-example) passes it on through FUNCD_LANE_LOCK_HOLDER.
+# Every recipe that boots a funcd VM calls it first, with its shell's pid. The lock is a symlink whose target names
+# the holder by pid and start time, so a reused pid never passes for it; creating the symlink is atomic. A waiter
+# waits for a live holder and takes over the lock of one that has exited. Every removal, a takeover or the release by
+# the detached watcher that follows the holder, runs under a second lock and re-reads the holder first, so a live
+# holder's lock is never removed. The holder then refuses to start beside a running funcd VM. A recipe run by one
+# that holds the lock (lima-example-all running lima-example) passes it on through FUNCD_LANE_LOCK_HOLDER.
 #
 #   scripts/lane-lock.sh $$          # under set -e, on its own line: a refusal must stop the recipe
 #   export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
 #
-# FUNCD_LANE_WAIT (seconds, default 3600) bounds the wait; FUNCD_LANE_LOCK_DIR and FUNCD_LANE_LIMACTL are for tests.
+# FUNCD_LANE_WAIT (seconds, default 3600) bounds the wait. FUNCD_LANE_LOCK_DIR, FUNCD_LANE_LIMACTL and
+# FUNCD_LANE_POLL (seconds between tries, default 1) are for tests.
 set -uo pipefail
 pid=${1:?usage: lane-lock.sh <pid of the recipe shell>}
-dir=${FUNCD_LANE_LOCK_DIR:-$HOME/.cache/funcd-lima}/lane.lock
+base=${FUNCD_LANE_LOCK_DIR:-$HOME/.cache/funcd-lima}
+lock=$base/lane.lock
+guard=$base/lane.lock.guard
 limactl=${FUNCD_LANE_LIMACTL:-limactl}
+poll=${FUNCD_LANE_POLL:-1}
 deadline=$((SECONDS + ${FUNCD_LANE_WAIT:-3600}))
 
-holder() { cat "$dir/pid" 2>/dev/null; }
-alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+ident() { # <pid>: "<pid> <start time>", or nothing when no such process runs
+  local s
+  s=$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ')
+  [ -n "$s" ] && echo "$1 ${s# }"
+}
+holder() { readlink "$lock" 2>/dev/null; }
+live() { [ -n "$1" ] && [ "$(ident "${1%% *}")" = "$1" ]; }
+
+# remove_if <identity>: remove the lock when it still names <identity>, under the guard. A guard older than a minute
+# was left by a process that died holding it.
+remove_if() {
+  until mkdir "$guard" 2>/dev/null; do
+    find "$guard" -maxdepth 0 -mmin +1 -exec rmdir {} \; 2>/dev/null
+    sleep "$poll"
+  done
+  [ "$(holder)" = "$1" ] && rm -f "$lock"
+  rmdir "$guard"
+}
 
 running_vms() {
   command -v "$limactl" >/dev/null 2>&1 || return 0
   "$limactl" list --format '{{.Name}} {{.Status}}' 2>/dev/null | awk '$1 ~ /^funcd-bench/ && $2 == "Running" { print $1 }'
 }
 
+me=$(ident "$pid") || { echo "lane-lock: no process $pid to hold the lock" >&2; exit 2; }
 nested=0
-if [ -n "${FUNCD_LANE_LOCK_HOLDER:-}" ] && [ "$(holder)" = "$FUNCD_LANE_LOCK_HOLDER" ] && alive "$FUNCD_LANE_LOCK_HOLDER"; then
+h=$(holder)
+if [ -n "${FUNCD_LANE_LOCK_HOLDER:-}" ] && [ "${h%% *}" = "$FUNCD_LANE_LOCK_HOLDER" ] && live "$h"; then
   nested=1
 fi
 
-mkdir -p "$(dirname "$dir")"
+mkdir -p "$base"
 said=0
 while [ "$nested" = 0 ]; do
-  if mkdir "$dir" 2>/dev/null; then
-    echo "$pid" >"$dir/pid"
+  if ln -s "$me" "$lock" 2>/dev/null; then
+    (
+      trap '' HUP
+      while kill -0 "$pid" 2>/dev/null; do sleep "$poll"; done
+      remove_if "$me"
+    ) </dev/null >/dev/null 2>&1 &
     break
   fi
-  h=$(holder)
-  if [ -n "$h" ] && ! alive "$h"; then
-    tomb="$dir.free.$$"
-    if mv "$dir" "$tomb" 2>/dev/null; then
-      if [ "$(cat "$tomb/pid" 2>/dev/null)" = "$h" ]; then
-        rm -rf "$tomb"
-      else
-        mv "$tomb" "$dir" 2>/dev/null || rm -rf "$tomb"
-      fi
-    fi
-    continue
-  fi
   if [ "$SECONDS" -ge "$deadline" ]; then
-    echo "lane-lock: another lane (pid ${h:-?}) still holds $dir; gave up waiting" >&2
+    echo "lane-lock: the lane run of pid $(holder | cut -d' ' -f1) still holds $lock; gave up waiting" >&2
     exit 1
   fi
-  if [ $((SECONDS - said)) -ge 60 ] || [ "$said" = 0 ]; then
-    echo "lane-lock: waiting for the lane run of pid ${h:-?} to finish (one Lima lane VM per host)" >&2
+  h=$(holder)
+  if [ -n "$h" ] && ! live "$h"; then
+    remove_if "$h"
+    continue
+  fi
+  if [ "$said" = 0 ] || [ $((SECONDS - said)) -ge 60 ]; then
+    echo "lane-lock: waiting for the lane run of pid ${h%% *} to finish (one Lima lane VM per host)" >&2
     said=$SECONDS
   fi
-  sleep 2
+  sleep "$poll"
 done
 
 vms=$(running_vms)
 if [ -n "$vms" ]; then
-  [ "$nested" = 1 ] || rm -rf "$dir"
+  [ "$nested" = 1 ] || remove_if "$me"
   echo "lane-lock: a funcd VM is already running: $vms. Its forwarded ports would collide with this lane." >&2
-  echo "lane-lock: stop it first (just lima-down, or limactl delete -f <name>), then rerun." >&2
+  echo "lane-lock: stop it first (just lima-down, or limactl delete -f $vms), then rerun." >&2
   exit 1
 fi

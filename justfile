@@ -181,7 +181,7 @@ lima-up:
     set -euo pipefail
     scripts/lane-lock.sh $$
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
-    just build-runtime-images
+    just ARCH={{ARCH}} build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd ./cmd/funcd
     limactl start --name {{lima_name}} --tty=false scripts/lima.yaml
@@ -219,7 +219,7 @@ lima-example name:
     set -euo pipefail
     scripts/lane-lock.sh $$
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
-    just build-runtime-images
+    just ARCH={{ARCH}} build-runtime-images
     name='{{name}}'; deps='{{lima_deps}}'; vm='{{lima_name}}-{{name}}'
     mkdir -p "$deps"
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
@@ -282,7 +282,7 @@ lima-example-metastore:
     set -euo pipefail
     scripts/lane-lock.sh $$
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
-    just build-runtime-images
+    just ARCH={{ARCH}} build-runtime-images
     mkdir -p {{lima_deps}}
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcd    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o {{lima_deps}}/funcdctl ./cmd/funcdctl

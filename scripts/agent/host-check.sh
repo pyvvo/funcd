@@ -16,8 +16,9 @@ else
 fi
 if [ "$n" -gt "$limit" ]; then
   echo "host: $n sockets in TIME_WAIT (limit $limit): the ephemeral port range is nearly used up, so tests would fail" \
-    "to connect. Find the source (macOS: netstat -anv | grep TIME_WAIT; Linux: ss -tanp state time-wait), stop the" \
-    "stress loop or probe, and wait for the sockets to expire before gating." >&2
+    "to connect. Find the source (macOS: netstat -anv | grep TIME_WAIT shows the process; Linux, where these sockets" \
+    "have no owner: ss -Htan state time-wait | awk '{print \$4}' | sort | uniq -c | sort -rn | head shows the peers)," \
+    "stop the stress loop or probe, and wait for the sockets to expire before gating." >&2
   exit 1
 fi
 echo "host: $n sockets in TIME_WAIT (limit $limit)"

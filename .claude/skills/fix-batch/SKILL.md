@@ -62,11 +62,11 @@ Record every review of the batch, in order, with `scorecard.py record --issue <N
 `/fix-review` Step 5) on one branch from `origin/main`, and open one PR, merged after the group PRs (its report
 links point at files they add).
 
-## Step 4 — Lanes, then merging
+## Step 4 — Wave check, lanes, then merging
 
 1. Before queueing any group PR, run `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches,
    in queue order. A `CONFLICT` line names a branch that conflicts with the ones before it: rebase it on them, rerun
-   its gate, push, and rerun the check. The check then gates the merged wave once (issue #563).
+   its gate, push, and rerun the check. When no branch conflicts, it gates the merged wave once (issue #563).
 2. Groups flagged "Lima lane pending" run their lanes one VM at a time, from a checkout under `$HOME`; the lane
    recipes take a host lock (`scripts/lane-lock.sh`), so lane jobs started at once run one after the other.
 3. Read every check's conclusion, then enqueue green PRs with the GraphQL `enqueuePullRequest` mutation
