@@ -55,8 +55,12 @@ def md_path(ledger: str) -> str:
 
 
 def subject(r: dict) -> str:
-    """The reviewed subject: an ADR number, or #N for an issue fix."""
-    return f"#{r['issue']}" if r.get("issue") else str(r.get("adr", ""))
+    """The reviewed subject: an ADR number, #N for an issue fix, or <repo>#N for a language-repo issue."""
+    return issue_ref(r["issue"]) if r.get("issue") else str(r.get("adr", ""))
+
+
+def issue_ref(issue: str) -> str:
+    return issue if "#" in issue else f"#{issue}"
 
 
 def render(ledger: str) -> str:
@@ -165,7 +169,7 @@ def cmd_record(args) -> None:
         json.dump(records, f, indent=2)
         f.write("\n")
     cmd_render(args)
-    what = f"#{args.issue}" if args.issue else f"ADR-{args.adr}"
+    what = issue_ref(args.issue) if args.issue else f"ADR-{args.adr}"
     print(f"recorded review: {args.model} on {what} ({args.phase}) → {args.verdict}")
 
 
@@ -176,7 +180,7 @@ def main() -> None:
     rec = sub.add_parser("record", help="append a review record + regenerate the scorecard")
     rec.add_argument("--ledger", required=True)
     rec.add_argument("--adr", default="", help="ADR number, e.g. 0001")
-    rec.add_argument("--issue", default="", help="issue number of a fix review, e.g. 24 (with --phase fix)")
+    rec.add_argument("--issue", default="", help="issue of a fix review, e.g. 24, or funcd-python#30 for a language repo (with --phase fix)")
     rec.add_argument("--phase", required=True, help=f"one of {PHASES}")
     rec.add_argument("--model", required=True, help="model that produced the work, e.g. sonnet-4.6")
     rec.add_argument("--verdict", required=True, help=f"one of {VERDICTS}")
