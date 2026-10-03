@@ -629,6 +629,40 @@ func TestIssue437_FailedBuildOptionsClosesDrivers(t *testing.T) {
 	})
 }
 
+// Issue #507: a buildOptions call that fails after it built the OTLP telemetry pipeline shuts it down within a short
+// bound, so it leaves no exporter goroutines or gRPC connections behind even when no collector is listening.
+func TestIssue507_FailedBuildOptionsShutsDownTelemetry(t *testing.T) {
+	telemetryGoroutines := func() int {
+		buf := make([]byte, 1<<22)
+		n := 0
+		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(g, "go.opentelemetry.io/otel") || strings.Contains(g, "google.golang.org/grpc") {
+				n++
+			}
+		}
+		return n
+	}
+	require.Zero(t, telemetryGoroutines())
+
+	dir := shortDataDir(t)
+	t.Setenv("TMPDIR", dir)
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	cfg, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+	cfg.Workflow.Retention = "bogus"
+	cfg.Telemetry.Endpoint = "127.0.0.1:4317"
+	cfg.Telemetry.Insecure = true
+
+	start := time.Now()
+	_, _, _, _, err = buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Less(t, time.Since(start), 10*time.Second, "the telemetry shutdown is not bounded")
+	require.Eventually(t, func() bool { return telemetryGoroutines() == 0 }, 3*time.Second, 50*time.Millisecond,
+		"the OTLP telemetry pipeline is still running")
+}
+
 // captureSpy records whether the platform installed the funclog capture hook (runtime.LogCapturer, ADR-0081).
 type captureSpy struct {
 	fnruntime.Runtime
