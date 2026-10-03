@@ -73,7 +73,7 @@ func walk(s *schema, path string) error {
 		return nil // enum of literals (typically strings) — supported
 	}
 
-	switch s.primaryType() {
+	switch s.Type.Primary() {
 	case "object", "": // a bare {properties:…} with no "type" is still an object
 		return walkObject(s, path)
 	case "array":
@@ -129,7 +129,7 @@ func walkUnion(s *schema, path string) error {
 // checkFormat admits only the profile's `format` values (ADR-0058). Every runtime must compile them; any
 // other format would pass push and fail the worker's validator compile instead.
 func checkFormat(s *schema, path string) error {
-	switch s.primaryType() {
+	switch s.Type.Primary() {
 	case "string":
 		if slices.Contains([]string{"", "date-time", "uuid", "email", "uri"}, s.Format) {
 			return nil

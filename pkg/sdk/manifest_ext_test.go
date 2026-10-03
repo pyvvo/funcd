@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -120,4 +122,41 @@ func TestScenario_types_node(t *testing.T) {
 	require.Contains(t, s, "export interface FuncOutput")
 	require.Contains(t, s, "count: number;")
 	require.Contains(t, s, `kv: "pycounters";`, "the binding context is typed by alias")
+}
+
+// Issue #498: a contract the profile gate accepts with the ADR-0058 nullable form `type: [T, "null"]`, on a
+// field, an array item or a whole side, generates `T | None` (python) and `T | null` (node) types.
+func TestIssue498_GenerateTypesMapsNullableTypeList(t *testing.T) {
+	t.Parallel()
+	input := []byte(`{"type":"object","properties":{"note":{"type":["string","null"]},` +
+		`"tags":{"type":["array","null"],"items":{"type":["integer","null"]}}},` +
+		`"required":["note"],"additionalProperties":false}`)
+	output := []byte(`{"type":["object","null"],"properties":{"id":{"type":"string"}},` +
+		`"required":["id"],"additionalProperties":false}`)
+	require.NoError(t, contract.Check(input))
+	require.NoError(t, contract.Check(output))
+
+	cases := map[v1.RuntimeName]struct {
+		file string
+		want []string
+	}{
+		"python314": {file: "funcd_types.py", want: []string{
+			"    note: str | None\n",
+			"    tags: list[int | None] | None  # optional\n",
+			"FuncOutput = dict[str, object] | None  # non-record contract side\n",
+		}},
+		"nodejs22": {file: "funcd.d.ts", want: []string{
+			"  note: string | null;\n",
+			"  tags?: (number | null)[] | null;\n",
+			"export type FuncOutput = Record<string, unknown> | null;\n",
+		}},
+	}
+	for runtime, tc := range cases {
+		m := &sdk.Manifest{Runtime: runtime, Contract: sdk.Contract{Input: input, Output: output}}
+		files, err := sdk.GenerateTypes(m)
+		require.NoError(t, err, runtime)
+		for _, w := range tc.want {
+			require.Contains(t, string(files[tc.file]), w, runtime)
+		}
+	}
 }

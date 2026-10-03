@@ -85,6 +85,10 @@ const (
 	devNamespace = "default"
 	// devResourceGroup is a fixed resource group for the synthesized dev resources.
 	devResourceGroup = "dev"
+	// devManagedTag marks an object funcdctl dev synthesized (its value is devManagedBy), so a --persist boot
+	// deletes only its own objects that the manifests no longer name, never one the user applied.
+	devManagedTag = "managed-by"
+	devManagedBy  = "funcdctl-dev"
 	// devContractFile is the ADR-0123 delivered-contract dotfile `funcdctl dev` writes into the bundle
 	// dir (the working tree). The Function reconciler probes the bundle root for it and sets
 	// FUNCD_CONTRACT_PATH, so the shim runtime-compiles + enforces the manifest's contract with no push.
@@ -449,6 +453,10 @@ func resolveWorkflowPlan(op, path string, wf *v1.Workflow) ([]plannedFunc, error
 	if wf.ResourceGroup == "" {
 		wf.ResourceGroup = devResourceGroup
 	}
+	if wf.Tags == nil {
+		wf.Tags = v1.Tags{}
+	}
+	wf.Tags[devManagedTag] = devManagedBy
 	return pfs, nil
 }
 
@@ -507,7 +515,8 @@ func catalogAliases(pfs []plannedFunc) []string {
 // synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
 // function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
 // frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then the
-// Workflow (nil for a function set). It returns once serving; the caller cancels ctx to stop.
+// Workflow (nil for a function set). Over a durable metastore it then deletes what an earlier session
+// synthesized that the manifests no longer name. It returns once serving; the caller cancels ctx to stop.
 func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
@@ -576,8 +585,10 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	if len(pfs) > 0 {
 		devBlock, baseDir = pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
 	}
-	needPython := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") })
-	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython)
+	isPython := func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") }
+	needPython := slices.ContainsFunc(pfs, isPython)
+	needNode := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return !isPython(pf) })
+	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython, needNode)
 	if sherr != nil {
 		return nil, sherr
 	}
@@ -722,23 +733,60 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	}
 	inst.client = client
 
-	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → extras
-	// (the Workflow references its step Functions). ADR-0121's reconcile-time existence gate resolves
-	// against what is already applied.
+	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → the KVStores and
+	// Buckets that drop a table or prefix (stageResources) → extras (the Workflow references its step Functions).
+	// ADR-0121's reconcile-time existence gate resolves against what is already applied.
+	firstRes, lastRes, serr := stageResources(ctx, op, client, resObjs)
+	if serr != nil {
+		return nil, serr
+	}
 	var extraObjs []v1.Object
 	if wf != nil {
 		extraObjs = []v1.Object{wf.obj}
+		wf.applied = append(slices.Clone(fnObjs), wf.obj)
 	}
-	for _, group := range [][]v1.Object{resObjs, fnObjs, extraObjs} {
+	for _, group := range [][]v1.Object{firstRes, fnObjs, lastRes, extraObjs} {
 		for _, obj := range group {
 			if aerr := applyDesired(ctx, client, obj); aerr != nil {
 				return nil, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName())
 			}
 		}
 	}
+	applied := resObjs
+	if plan.storeDir != "" {
+		stale, lerr := pruneStale(ctx, client, slices.Concat(resObjs, fnObjs, extraObjs))
+		if lerr != nil {
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
+		}
+		applied = slices.Concat(resObjs, stale)
+	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, wf, resObjs, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
 	return inst, nil
+}
+
+// pruneStale deletes each object an earlier --persist session synthesized that desired no longer holds, as a
+// reload prunes them (ADR-0125: the manifests are the session's desired state), and returns the ones that stay.
+// Only an object carrying devManagedTag is the session's, so an object the user applied is never deleted. The
+// kinds are listed in apply order, so a Workflow goes before its Functions and a Function before what it binds.
+func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object) ([]v1.Object, error) {
+	var prev []v1.Object
+	for _, kind := range []v1.Kind{
+		v1.KindKVStore, v1.KindBucket, v1.KindSecret, v1.KindCatalogService, v1.KindConfigMap,
+		v1.KindRole, v1.KindRolesAssignment, v1.KindFunction, v1.KindWorkflow,
+	} {
+		objs, err := c.List(ctx, kind, devNamespace)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range objs {
+			if o.GetObjectMeta().Tags[devManagedTag] == devManagedBy {
+				prev = append(prev, o)
+			}
+		}
+	}
+	kept := pruneRemoved(ctx, c, prev, desired, true)
+	return kept[len(desired):], nil
 }
 
 // applyDesired applies obj, re-applying it on a Conflict. A PUT is an optimistic update against the
@@ -753,6 +801,66 @@ func applyDesired(ctx context.Context, c *sdk.Client, obj v1.Object) error {
 		}
 	}
 	return err
+}
+
+// stageResources splits the apply of resObjs around the Functions that bind them. Admission refuses to drop a table
+// of a KVStore or a prefix of a Bucket while a Function binds it (ADR-0073), and a Function that binds a new one waits
+// for it (ADR-0121), so a KVStore or Bucket that drops one its live version holds is applied first with it kept, and
+// again as desired (last) once the Functions no longer bind it.
+func stageResources(ctx context.Context, op string, c *sdk.Client, resObjs []v1.Object) (first, last []v1.Object, err error) {
+	for _, obj := range resObjs {
+		kind := obj.GroupVersionKind().Kind
+		if kind != v1.KindKVStore && kind != v1.KindBucket {
+			first = append(first, obj)
+			continue
+		}
+		live, gerr := c.Get(ctx, kind, devNamespace, obj.GetName())
+		if fault.KindOf(gerr) == fault.NotFound {
+			first = append(first, obj)
+			continue
+		}
+		if gerr != nil {
+			return nil, nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "read %s %q", kind, obj.GetName())
+		}
+		kept := obj
+		switch want := obj.(type) {
+		case *v1.KVStore:
+			if l, ok := live.(*v1.KVStore); ok {
+				if tables := keepDropped(want.Spec.Tables, l.Spec.Tables, func(t v1.KVTable) string { return t.Name }); tables != nil {
+					wide := *want
+					wide.Spec.Tables = tables
+					kept = &wide
+				}
+			}
+		case *v1.Bucket:
+			if l, ok := live.(*v1.Bucket); ok {
+				if prefixes := keepDropped(want.Spec.Prefixes, l.Spec.Prefixes, func(p v1.BucketPrefix) string { return p.Name }); prefixes != nil {
+					wide := *want
+					wide.Spec.Prefixes = prefixes
+					kept = &wide
+				}
+			}
+		}
+		first = append(first, kept)
+		if kept != obj {
+			last = append(last, obj)
+		}
+	}
+	return first, last, nil
+}
+
+// keepDropped returns want followed by each entry of live whose name want lacks, or nil when want lacks none.
+func keepDropped[T v1.KVTable | v1.BucketPrefix](want, live []T, name func(T) string) []T {
+	var dropped []T
+	for _, l := range live {
+		if !slices.ContainsFunc(want, func(w T) bool { return name(w) == name(l) }) {
+			dropped = append(dropped, l)
+		}
+	}
+	if dropped == nil {
+		return nil
+	}
+	return append(slices.Clone(want), dropped...)
 }
 
 // devHandler is one from-source function's hot-reload state (ADR-0125 boot sequence, "watch files, re-apply on
@@ -812,7 +920,8 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 }
 
 // watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
-// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied.
+// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied, plus
+// the objects of an earlier session it could not delete.
 func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
@@ -824,7 +933,9 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-t.C:
 			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs)
 			if wf != nil {
-				err = errors.Join(err, wf.reapply(ctx, op, c, hs))
+				var werr error
+				hs, werr = wf.reapply(ctx, op, c, hs)
+				err = errors.Join(err, werr)
 			}
 			if err != nil && ctx.Err() == nil {
 				slog.Default().Warn("hot-reload failed", "err", err)
@@ -835,10 +946,10 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 
 // reloadChanged re-applies every function whose files changed since the last poll, as bootDev applied them: it
 // re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
-// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then deletes the
-// resources of *applied that the set no longer holds. A failed reload is reported once and retried on the next edit;
-// an apply that lost a race with a concurrent status write (Conflict) is re-applied in place, then on the next poll
-// once those attempts run out.
+// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then drops the
+// tables and prefixes no Function binds any more (stageResources) and deletes the resources of *applied that the set
+// no longer holds. A failed reload is reported once and retried on the next edit; an apply that lost a race with a
+// concurrent status write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
 func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
 	var changed []*devHandler
 	var errs []error
@@ -871,7 +982,11 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	if serr != nil {
 		return errors.Join(append(errs, serr)...)
 	}
-	for _, obj := range resObjs {
+	firstRes, lastRes, gerr := stageResources(ctx, op, c, resObjs)
+	if gerr != nil {
+		return errors.Join(append(errs, gerr)...)
+	}
+	for _, obj := range firstRes {
 		if aerr := applyDesired(ctx, c, obj); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
 			if fault.KindOf(aerr) == fault.Conflict {
@@ -901,16 +1016,24 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 			}
 		}
 	}
+	if len(errs) == loadErrs {
+		for _, obj := range lastRes {
+			if aerr := applyDesired(ctx, c, obj); aerr != nil {
+				errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
+			}
+		}
+	}
 	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs)
 	return errors.Join(errs...)
 }
 
-// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, and the
-// stamp of the file version last acted on.
+// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, the stamp
+// of the file version last acted on, and the step Functions and Workflow the session applied, which a reload prunes.
 type devWorkflow struct {
-	path string
-	obj  *v1.Workflow
-	seen string
+	path    string
+	obj     *v1.Workflow
+	seen    string
+	applied []v1.Object
 }
 
 // fileStamp is the size and mtime of the file at path, which an editor's save changes.
@@ -923,25 +1046,27 @@ func fileStamp(path string) (string, error) {
 }
 
 // reapply re-applies the Workflow when its file changed since the last poll, resolved as the boot resolved it
-// (ADR-0125, "watch files, re-apply on change"). A step whose function is not running needs a restart, which it
-// warns about, as for a changed main. A failed reload is reported once and retried on the next edit; an apply
-// that keeps losing a race with a concurrent status write (Conflict) is retried on the next poll.
-func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) error {
+// (ADR-0125, "watch files, re-apply on change"), then deletes the Workflow of a previous name and the Function of
+// each step the file no longer holds, and returns the handlers of the steps it still holds. A step whose function is
+// not running needs a restart, which it warns about, as for a changed main. A failed reload is reported once and
+// retried on the next edit; an apply that keeps losing a race with a concurrent status write (Conflict) is retried
+// on the next poll.
+func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) ([]*devHandler, error) {
 	stamp, serr := fileStamp(w.path)
 	if serr != nil || stamp == w.seen {
-		return nil
+		return hs, nil
 	}
 	w.seen = stamp
 	wf, isWorkflow, derr := detectWorkflow(op, w.path)
 	if derr != nil {
-		return derr
+		return hs, derr
 	}
 	if !isWorkflow {
-		return fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
+		return hs, fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
 	}
 	pfs, rerr := resolveWorkflowPlan(op, w.path, wf)
 	if rerr != nil {
-		return rerr
+		return hs, rerr
 	}
 	for _, pf := range pfs {
 		if !slices.ContainsFunc(hs, func(h *devHandler) bool { return h.pf.name == pf.name }) {
@@ -952,9 +1077,17 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 		if fault.KindOf(aerr) == fault.Conflict {
 			w.seen = ""
 		}
-		return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
+		return hs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
 	}
-	return nil
+	hs = slices.DeleteFunc(hs, func(h *devHandler) bool {
+		return !slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return pf.name == h.pf.name })
+	})
+	next := make([]v1.Object, 0, len(hs)+1)
+	for _, h := range hs {
+		next = append(next, synthesizeFunction(h.pf, h.bundle))
+	}
+	w.applied = pruneRemoved(ctx, c, w.applied, append(next, wf), true)
+	return hs, nil
 }
 
 // pruneRemoved deletes, last applied first, each resource of prev that next no longer holds (ADR-0125: the
@@ -1694,11 +1827,12 @@ func manifestEntry(m *sdk.Manifest, dir, defaultEntry string, defaultIsolate boo
 	return dir, defaultEntry, defaultIsolate
 }
 
-// setMeta stamps the shared namespace/resource-group onto a synthesized resource.
+// setMeta stamps the shared namespace/resource-group and the dev ownership tag onto a synthesized resource.
 func setMeta(meta *v1.ObjectMeta, name v1.ObjectName) {
 	meta.Name = name
 	meta.Namespace = devNamespace
 	meta.ResourceGroup = devResourceGroup
+	meta.Tags = v1.Tags{devManagedTag: devManagedBy}
 }
 
 // resolveSecretData resolves a dev.secrets entry's ${ENV_VAR} values from the process environment. The
@@ -1742,8 +1876,9 @@ func resolveInterpreter(p, baseDir string) string {
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
 // A python that cannot import the shim is never registered, as in the daemon; when the run has a
-// python handler (needPython), a missing python or one that cannot load the shim is a startup error.
-func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython bool) (_ []funcd.Option, cleanup func(), err error) {
+// python handler (needPython), a missing python or one that cannot load the shim is a startup error;
+// when it has a handler for the default (node) shim (needNode), a missing node is.
+func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython, needNode bool) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
 		return nil, nil, fault.Wrapf(derr, fault.Internal, op, "create shim temp dir")
@@ -1768,6 +1903,9 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		if p, lerr := exec.LookPath("node"); lerr == nil {
 			node = p
 		}
+	}
+	if node == "" && needNode {
+		return nil, nil, fault.NotFoundf(op, "no node interpreter found for the node handler (need node on PATH; set FUNCD_NODE or dev.node)")
 	}
 	if node != "" {
 		shimPath := filepath.Join(dir, "shim.mjs")

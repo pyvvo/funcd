@@ -29,11 +29,12 @@ import (
 )
 
 // requireRuntime skips a test when `funcdctl dev` would find no usable runtime shim to boot the platform,
-// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself, so a python3
-// that cannot load the shim counts as missing, exactly as at startup.
+// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself for the node
+// handler these lanes declare, so a missing node or a python3 that cannot load the shim counts as missing,
+// exactly as at startup.
 func requireRuntime(t *testing.T) {
 	t.Helper()
-	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false)
+	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false, true)
 	if fault.KindOf(err) == fault.NotFound {
 		t.Skipf("funcdctl dev needs a runtime shim to boot: %v", err)
 	}
@@ -382,6 +383,58 @@ func TestScenarioDevPersistSecretsReReadFromEnv(t *testing.T) {
 	_, err = a.startDev(context.Background(), dir, "", devConfig{persist: true, persistTo: root})
 	require.Error(t, err, "a missing env var fails fast even under --persist (secret not recovered from disk)")
 	require.Contains(t, err.Error(), varName)
+}
+
+// A --persist restart brings the dev namespace to what the current manifests describe (ADR-0125): the boot deletes
+// what an earlier session synthesized for a removed manifest or binding, and keeps an object the user applied.
+func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
+	requireRuntime(t)
+	manifest := func(bindings string) string {
+		return "runtime: nodejs22\nhandler: handle\n" + bindings + permissiveContract
+	}
+	const handler = "export function handle() { return { ok: true }; }\n"
+	dir := devProject(t, map[string]string{
+		"front.funcdctl.yaml": manifest("bindings:\n  config:\n    - settings\n") + "dev:\n  config:\n    settings:\n      MODE: one\n",
+		"front.mjs":           handler,
+		"back.funcdctl.yaml":  manifest(""),
+		"back.mjs":            handler,
+	})
+	root, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	a := &cli{out: io.Discard}
+	cfg := devConfig{persist: true, persistTo: root}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	inst1, err := a.startDev(ctx1, dir, "", cfg)
+	require.NoError(t, err)
+	user := &v1.ConfigMap{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap},
+		ObjectMeta: v1.ObjectMeta{Name: "user-settings", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+	}
+	_, err = inst1.client.Apply(ctx1, user)
+	require.NoError(t, err)
+	cancel1()
+	require.NoError(t, inst1.stop())
+
+	require.NoError(t, os.Remove(filepath.Join(dir, "back.funcdctl.yaml")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "front.funcdctl.yaml"), []byte(manifest("")), 0o600))
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	inst2, err := a.startDev(ctx2, dir, "", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
+
+	for _, o := range []struct {
+		kind v1.Kind
+		name v1.ObjectName
+	}{{v1.KindFunction, "back"}, {v1.KindRolesAssignment, "dev-blob-writer-back"}, {v1.KindConfigMap, "settings"}} {
+		require.Eventually(t, func() bool {
+			_, gerr := inst2.client.Get(ctx2, o.kind, devNamespace, o.name)
+			return fault.KindOf(gerr) == fault.NotFound
+		}, 10*time.Second, 50*time.Millisecond, "the boot deletes the %s %q no manifest names", o.kind, o.name)
+	}
+	_, err = inst2.client.Get(ctx2, v1.KindConfigMap, devNamespace, "user-settings")
+	require.NoError(t, err, "the boot keeps an object the user applied")
 }
 
 // TestResolvePersistPlanEphemeralDefault — the zero devConfig keeps every kind on memory (all dirs empty).
