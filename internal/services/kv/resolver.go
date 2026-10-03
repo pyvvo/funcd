@@ -2,11 +2,11 @@ package kv
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/services"
 )
 
 // Binding is the resolved KV binding for a (caller, alias) pair (ADR-0073): the target store + table,
@@ -41,21 +41,8 @@ const defaultResolverTTL = 5 * time.Second
 // (ns, function, alias). Resolution is default-deny: the caller's spec.kv entry for the alias must
 // exist; with none, Forbidden.
 type metaResolver struct {
-	r   MetaReader
-	ttl time.Duration
-
-	mu      sync.Mutex
-	cache   map[string]cachedBinding
-	sweepAt int // cache size that triggers the next sweep of expired entries
-}
-
-// minSweepLen is the floor of sweepAt: an insert sweeps expired entries once the cache reaches twice its
-// size after the last sweep, so the cache stays bounded by the live bindings at amortized O(1) per insert.
-const minSweepLen = 64
-
-type cachedBinding struct {
-	b      Binding
-	expiry time.Time
+	r     MetaReader
+	cache *services.BindingCache[Binding]
 }
 
 // NewResolver builds the metastore-backed BindingResolver. r is required.
@@ -63,11 +50,7 @@ func NewResolver(r MetaReader) (BindingResolver, error) {
 	if r == nil {
 		return nil, fault.Invalidf("services.kv.NewResolver", "meta reader is required")
 	}
-	return &metaResolver{r: r, ttl: defaultResolverTTL, cache: map[string]cachedBinding{}}, nil
-}
-
-func resolverKey(ns v1.NamespaceName, fn v1.ObjectName, alias string) string {
-	return string(ns) + "\x00" + string(fn) + "\x00" + alias
+	return &metaResolver{r: r, cache: services.NewBindingCache[Binding](defaultResolverTTL)}, nil
 }
 
 // Resolve maps (ns, fn, alias) → Binding, default-deny. It reads the caller Function's spec.kv for the
@@ -75,17 +58,9 @@ func resolverKey(ns v1.NamespaceName, fn v1.ObjectName, alias string) string {
 // ttl; a miss (Forbidden) is never cached.
 func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error) {
 	const op = "services.kv.Resolver.Resolve"
-	key := resolverKey(ns, fn, alias)
-
-	m.mu.Lock()
-	if c, ok := m.cache[key]; ok {
-		if time.Now().Before(c.expiry) {
-			m.mu.Unlock()
-			return c.b, nil
-		}
-		delete(m.cache, key)
+	if b, ok := m.cache.Get(ns, fn, alias); ok {
+		return b, nil
 	}
-	m.mu.Unlock()
 
 	// The caller function's spec.kv is the capability list (default-deny on a miss).
 	fobj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
@@ -143,17 +118,6 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 		MaxValueBytes: ks.Spec.EffectiveMaxValueBytes(),
 		MaxKeyBytes:   ks.Spec.EffectiveMaxKeyBytes(),
 	}
-	now := time.Now()
-	m.mu.Lock()
-	if len(m.cache) >= m.sweepAt {
-		for k, c := range m.cache {
-			if !now.Before(c.expiry) {
-				delete(m.cache, k)
-			}
-		}
-		m.sweepAt = max(2*len(m.cache), minSweepLen)
-	}
-	m.cache[key] = cachedBinding{b: b, expiry: now.Add(m.ttl)}
-	m.mu.Unlock()
+	m.cache.Put(ns, fn, alias, b)
 	return b, nil
 }
