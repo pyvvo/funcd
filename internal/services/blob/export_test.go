@@ -1,6 +1,10 @@
 package blob
 
-import "time"
+import (
+	"time"
+
+	"github.com/pyvvo/funcd/internal/services"
+)
 
 // NewResolverTTL and CacheLen let the external tests drive the resolver's TTL cache (issue #170).
 func NewResolverTTL(r MetaReader, ttl time.Duration) (BindingResolver, error) {
@@ -8,13 +12,10 @@ func NewResolverTTL(r MetaReader, ttl time.Duration) (BindingResolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	br.(*metaResolver).ttl = ttl
+	br.(*metaResolver).cache = services.NewBindingCache[Binding](ttl)
 	return br, nil
 }
 
 func CacheLen(r BindingResolver) int {
-	m := r.(*metaResolver)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.cache)
+	return r.(*metaResolver).cache.Len()
 }
