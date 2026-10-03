@@ -10,6 +10,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -60,9 +61,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	client := d.HTTPClient
 	if client == nil {
-		// Its own transport: a CloseIdleConnections on the process-wide http.DefaultTransport fails a probe whose
-		// connection it closes (#460, as #287 for the Function probe).
-		client = &http.Client{Timeout: 2 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
+		client = httpx.Client(2 * time.Second)
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,

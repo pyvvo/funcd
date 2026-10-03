@@ -17,6 +17,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 type compiledRoute struct {
@@ -36,8 +37,7 @@ type driver struct {
 // requests — http.DefaultTransport keeps only 2 idle conns/host, which churns connections
 // into TIME_WAIT and exhausts ephemeral ports under load (ADR-0041, surfaced by ADR-0040).
 func New() gateway.Gateway {
-	t, _ := http.DefaultTransport.(*http.Transport)
-	tr := t.Clone()
+	tr := httpx.Transport()
 	tr.MaxIdleConns = 512
 	tr.MaxIdleConnsPerHost = 256 // ≫ the stdlib default of 2 — reuse upstream conns under concurrency
 	tr.IdleConnTimeout = 90 * time.Second

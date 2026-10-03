@@ -55,8 +55,8 @@ func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 
 // The readiness probe keeps its connections out of http.DefaultTransport: every httptest.Server.Close in the process
 // closes that transport's idle connections, and one landing while a probe's connection is parked fails the probe.
+// Not parallel: it closes the process-wide transport's idle connections, which other tests may have parked there.
 func TestIssue287_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
-	t.Parallel()
 	addr, conns := countingServer(t, func(w http.ResponseWriter) { w.WriteHeader(http.StatusOK) })
 
 	r := newShimReconciler(t, fakeResolver{})

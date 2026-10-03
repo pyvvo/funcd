@@ -102,6 +102,11 @@ linters:
         # sanctioned `...any` printf-variadic form is re-allowed under exclusions below.
         - pattern: "\\bany\\b"
           msg: "do not use 'any' (or interface{}) in exported or port signatures; use a typed struct, typed enum, or json.RawMessage"
+        # #564: anything in the process can close the shared transport's idle connections (every
+        # httptest.Server.Close does), failing a caller whose connection was parked there. Anchored, so a
+        # chained use (http.DefaultClient.Do) is reported once, on the inner selector.
+        - pattern: "^http\\.Default(Client|Transport)$"
+          msg: "use internal/platform/httpx instead of the process-wide http.DefaultClient/DefaultTransport"
   exclusions:
     generated: lax
     rules:
@@ -114,6 +119,12 @@ linters:
       - linters:
           - forbidigo
         path: '(^|/)generated/|\.gen\.go$'
+      # #564: the shared-client ban is for production code. Tests may use the shared client and transport, and
+      # pkg/sdk is a client library: without WithHTTPClient it uses its caller's http.DefaultClient.
+      - linters:
+          - forbidigo
+        path: '_test\.go$|(^|/)pkg/sdk/'
+        text: 'http\.Default(Client|Transport)'
 
 run:
   timeout: 5m

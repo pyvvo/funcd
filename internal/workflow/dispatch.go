@@ -13,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // attemptHeader carries the 1-based attempt number to the step function so it can
@@ -88,7 +89,7 @@ func NewHTTPDispatcher(d DispatchDeps) (*HTTPDispatcher, error) {
 	}
 	client := d.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = httpx.Client(0)
 	}
 	log := d.Logger
 	if log == nil {

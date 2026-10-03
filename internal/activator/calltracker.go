@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // idleRetention bounds the tracker's map: an upstream with no call in flight and no hand-out for this long is
@@ -39,10 +40,10 @@ func NewCallTracker(c clock.Clock) *CallTracker {
 }
 
 // Wrap returns a RoundTripper that counts each request to its URL's host:port from RoundTrip until the response body
-// is closed, or until RoundTrip fails. A nil rt wraps http.DefaultTransport.
+// is closed, or until RoundTrip fails. A nil rt wraps a new httpx.Transport.
 func (t *CallTracker) Wrap(rt http.RoundTripper) http.RoundTripper {
 	if rt == nil {
-		rt = http.DefaultTransport
+		rt = httpx.Transport()
 	}
 	return &countingTransport{t: t, rt: rt}
 }
