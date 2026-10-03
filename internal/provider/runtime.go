@@ -60,7 +60,9 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	client := d.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Second}
+		// Its own transport: a CloseIdleConnections on the process-wide http.DefaultTransport fails a probe whose
+		// connection it closes (#460, as #287 for the Function probe).
+		client = &http.Client{Timeout: 2 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,

@@ -483,3 +483,35 @@ func TestIssue376_ReadinessProbeReusesConnection(t *testing.T) {
 	}
 	require.EqualValues(t, 1, conns.Load(), "10 probes must share one keep-alive connection")
 }
+
+// The readiness probe keeps its connections out of http.DefaultTransport: every httptest.Server.Close in the process
+// closes that transport's idle connections, and one landing while a probe's connection is parked fails the probe.
+func TestIssue460_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	host := addr.IP.String()
+
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port)})
+	require.NoError(t, err)
+	spec := specFor(host, addr.Port, nil)
+	ctx := context.Background()
+	st, err := pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.True(t, st.Ready)
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	st, err = pr.Converge(ctx, spec)
+	require.NoError(t, err)
+	require.True(t, st.Ready)
+	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the probe's")
+}
