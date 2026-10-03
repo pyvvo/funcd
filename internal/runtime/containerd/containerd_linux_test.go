@@ -85,11 +85,11 @@ func TestIssue40_RestartReclaimsLeftoverWorker(t *testing.T) {
 	require.Equal(t, runtime.StateRunning, got.State)
 }
 
-// scenario: worker-lateral-deny — two containerd workeres on their own netns
+// scenario: worker-lateral-deny — two containerd workers on their own netns
 // cannot reach each other directly (default-deny lateral); function→function
 // traffic is only via the gateway (deferred: Linux integration lane).
 func TestScenarioWorkerLateralDeny(t *testing.T) {
 	requireIntegration(t)
 	t.Skip("lateral-deny assertion is wired on the Linux VM lane (P-S/F20): " +
-		"start two workeres, attempt a direct TCP dial between their netns IPs, expect refusal")
+		"start two workers, attempt a direct TCP dial between their netns IPs, expect refusal")
 }

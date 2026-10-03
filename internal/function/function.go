@@ -1,6 +1,6 @@
 // Package function is the Function lifecycle reconciler (ADR-0020): the one
 // controller.Reconciler for KindFunction. It stamps immutable Revisions, schedules +
-// provisions workeres via the runtime port to the EFFECTIVE desired replica count
+// provisions workers via the runtime port to the EFFECTIVE desired replica count
 // (honoring the activator's wake Status.Phase, not blindly spec.replicas), validates
 // the shape (materialization gate — no route to a broken function), programs the gateway
 // with the FULL route table (gateway.ProgramRoutes is replace-all), and writes status.
@@ -339,7 +339,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			// delete path: stop the function's workeres, then re-program routes without it.
+			// delete path: stop the function's workers, then re-program routes without it.
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
@@ -798,8 +798,8 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 }
 
 // stopNeverReady stops failed, the replica readiness judged failed, if it still runs — it ran for bootTimeout without
-// becoming ready (ADR-0030 §4b) — and fn has been Degraded as long, so convergeRevision replaces it after the backoff
-// like a crash under repair (ADR-0142). A replica that served before fn lost its last ready one keeps bootTimeout from
+// becoming ready (ADR-0030 §4b) — and fn has been Degraded as long, so convergeRevision (ensurePool, for a pool worker)
+// replaces it after the backoff like a crash under repair (ADR-0142). A replica that served before fn lost its last ready one keeps bootTimeout from
 // then, so one failed probe of a busy worker does not stop it. It reports whether it stopped the replica.
 func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed runtime.InstanceID) (bool, error) {
 	rc, _ := fn.Status.Conditions.Get(condReady)
@@ -1171,7 +1171,7 @@ func (r *Reconciler) servingWorkerRuns(ctx context.Context, fn *v1.Function) (bo
 func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) ([]runtime.Instance, error) {
 	all, err := r.runtime.List(ctx, ns)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), "function.instances", "list workeres")
+		return nil, fault.Wrapf(err, fault.KindOf(err), "function.instances", "list workers")
 	}
 	out := make([]runtime.Instance, 0, len(all))
 	for _, in := range all {
@@ -1569,8 +1569,6 @@ func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 	return fmt.Sprintf("runtime %q is not available on this node: no python shim is registered", rt), true
 }
 
-// workerSpec builds one replica's runtime spec. It is pure: secretEnv is the already-resolved
-// secret env map (ADR-0057), merged into Env with reserved-FUNCD_-key precedence; nil ⇒ none.
 // addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial the per-sandbox worker-node
 // local API — context.invoke (ADR-0064) AND context.kv (ADR-0069). EVERY function gets the socket (KV is
 // available to all; the link-as-grant check for invoke stays at RESOLVE time, so a linkless function's
@@ -1671,6 +1669,8 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
+// secretEnv is the already-resolved secret env map (ADR-0057), merged into Env with
+// reserved-FUNCD_-key precedence; nil ⇒ none.
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command

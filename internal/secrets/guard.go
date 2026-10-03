@@ -2,6 +2,8 @@ package secrets
 
 import (
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -40,4 +42,16 @@ func EnvValueProblem(v string) string {
 		return "contains a NUL byte"
 	}
 	return ""
+}
+
+// EnvDataProblem returns the first key of data, in sorted order, whose value EnvValueProblem rejects,
+// with the problem; "" and "" if env delivery can carry every value. The sorted order keeps the error,
+// and so a Function's Ready message, the same from one reconcile to the next.
+func EnvDataProblem[V string | []byte](data map[string]V) (key, problem string) {
+	for _, k := range slices.Sorted(maps.Keys(data)) {
+		if p := EnvValueProblem(string(data[k])); p != "" {
+			return k, p
+		}
+	}
+	return "", ""
 }

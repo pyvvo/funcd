@@ -257,3 +257,32 @@ func TestIssue156_IndexRefusesDigestSourceConsistently(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue451_IndexOfMissingLayoutWritesNothing: `funcdctl index` into an oci-layout:// path that holds no layout (a
+// mistyped directory) fails with fault.NotFound and writes nothing there, as a read does since #361.
+func TestIssue451_IndexOfMissingLayoutWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	index := func(dir string) error {
+		_, err := artifact.PushIndex(ctx, "oci-layout://"+dir+":fn", []string{"oci-layout://" + dir + ":fn-amd64"})
+		return err
+	}
+	t.Run("absent", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(t.TempDir(), "no-such-layout")
+		err := index(dir)
+		require.NoDirExists(t, dir, "index created a layout at the missing path")
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "a missing layout is fault.NotFound: %v", err)
+		require.ErrorContains(t, err, "no OCI layout")
+	})
+	t.Run("empty", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		err := index(dir)
+		entries, rerr := os.ReadDir(dir)
+		require.NoError(t, rerr)
+		require.Empty(t, entries, "index wrote into the empty directory")
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "an empty directory is no layout: %v", err)
+		require.ErrorContains(t, err, "no OCI layout")
+	})
+}

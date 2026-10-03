@@ -572,10 +572,10 @@ func TestIssue79_ShapeValidCarriesShimLoadError(t *testing.T) {
 	})
 }
 
-// bringUpRealShim runs the real Node shim via the process driver against a file artifact
-// and reconciles the function until it reports readiness — the shared node-gated fixture.
+// bringUpRealShim runs the real Node shim via the process driver against a file artifact holding
+// handler src and reconciles the function until it reports readiness — the shared node-gated fixture.
 // It skips the test when the shim or node is unavailable (ADR-0030 node lane).
-func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.Gateway) {
+func bringUpRealShim(t *testing.T, src string) (store.Store, *function.Reconciler, gateway.Gateway) {
 	t.Helper()
 	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
@@ -584,7 +584,7 @@ func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.G
 	}
 
 	artifact := filepath.Join(t.TempDir(), "handler.mjs")
-	require.NoError(t, os.WriteFile(artifact, []byte("export function handle(_, event) { return { echoed: event }; }\n"), 0o600))
+	require.NoError(t, os.WriteFile(artifact, []byte(src), 0o600))
 
 	st := store.New(memory.New())
 	rt := process.New()
@@ -608,16 +608,15 @@ func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.G
 	_, err = st.Create(context.Background(), fn)
 	require.NoError(t, err)
 
-	// Reconcile until the shim boots + reports readiness (the process driver assigns the port).
+	// Reconcile until the boot settles: the reconciler fails a replica not ready within its boot timeout (ADR-0030
+	// §4b), so the wait sets no deadline of its own for a loaded runner to outlast (issue #452).
 	var phase v1.Phase
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		_, rerr := r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "echo"})
 		require.NoError(t, rerr)
 		got, gerr := st.Get(context.Background(), v1.KindFunction.GVK(), "default", "echo")
 		require.NoError(t, gerr)
-		phase = got.(*v1.Function).Status.Phase
-		if phase == v1.PhaseReady {
+		if phase = got.(*v1.Function).Status.Phase; phase != v1.PhaseDeploying {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -630,7 +629,7 @@ func bringUpRealShim(t *testing.T) (store.Store, *function.Reconciler, gateway.G
 // node lane). The real Node shim boots from a file artifact, becomes Ready, and serves the
 // handler over HTTP at the gateway-resolved upstream.
 func TestScenarioShimEndToEndNode(t *testing.T) {
-	_, _, gw := bringUpRealShim(t)
+	_, _, gw := bringUpRealShim(t, "export function handle(_, event) { return { echoed: event }; }\n")
 
 	rs, err := gw.Routes(context.Background())
 	require.NoError(t, err)
@@ -644,6 +643,27 @@ func TestScenarioShimEndToEndNode(t *testing.T) {
 // scenario: shim-fixed-port-bind (node-gated, ADR-0032) — with FUNCD_PORT set the shim binds
 // the fixed port on all interfaces (container mode) instead of the loopback+portfile path.
 func TestScenarioShimFixedPortBindNode(t *testing.T) {
+	require.True(t, shimReadyOnFixedPort(t, "export function handle() {}\n"), "the shim bound the fixed FUNCD_PORT and reported readiness")
+}
+
+// A real Node shim that boots slower than the former fixed 5 s waits, as on a loaded CI runner, still reaches
+// readiness, both under the reconciler and on a fixed port: the waits are bounded by funcd's own boot timeout.
+func TestIssue452_RealShimWaitsOutASlowBoot(t *testing.T) {
+	const slow = "await new Promise((resolve) => setTimeout(resolve, 6000));\nexport function handle() {}\n"
+	t.Run("reconciled", func(t *testing.T) {
+		t.Parallel()
+		bringUpRealShim(t, slow)
+	})
+	t.Run("fixed port", func(t *testing.T) {
+		t.Parallel()
+		require.True(t, shimReadyOnFixedPort(t, slow), "a shim that boots in 6 s bound the fixed FUNCD_PORT and reported readiness")
+	})
+}
+
+// shimReadyOnFixedPort starts the real Node shim on handler src with FUNCD_PORT set and reports whether it bound
+// that port and reported readiness. It skips the test when the shim or node is unavailable (ADR-0030 node lane).
+func shimReadyOnFixedPort(t *testing.T, src string) bool {
+	t.Helper()
 	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -651,7 +671,7 @@ func TestScenarioShimFixedPortBindNode(t *testing.T) {
 	}
 
 	artifact := filepath.Join(t.TempDir(), "handler.mjs")
-	require.NoError(t, os.WriteFile(artifact, []byte("export function handle() {}\n"), 0o600))
+	require.NoError(t, os.WriteFile(artifact, []byte(src), 0o600))
 
 	// Pick a free port, then hand it to the shim via FUNCD_PORT.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -666,22 +686,31 @@ func TestScenarioShimFixedPortBindNode(t *testing.T) {
 		"FUNCD_ARTIFACT="+artifact, "FUNCD_HANDLER=handle", "FUNCD_PORT="+strconv.Itoa(port))
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
 
+	// The shim gets the boot budget the reconciler gives a replica (ADR-0030 §4b); one that exits fails at once.
 	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/health/readiness"
-	var ok bool
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(function.BootTimeout)
 	for time.Now().Before(deadline) {
+		select {
+		case <-exited:
+			return false
+		default:
+		}
 		resp, gerr := http.Get(url) //nolint:gosec // url is a test-local loopback address
 		if gerr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				ok = true
-				break
+				return true
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	require.True(t, ok, "the shim bound the fixed FUNCD_PORT and reported readiness")
+	return false
 }
 
 // NOTE (ADR-0108): the former `timer-invokes-real-handler` e2e is removed — a v2 timer PUBLISHES a

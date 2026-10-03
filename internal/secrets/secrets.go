@@ -48,7 +48,8 @@ func NewResolver(d Deps) (*Resolver, error) {
 
 // ResolveEnv reads the named Secrets in ns (store-decrypted), PDP-authorized (read), and
 // returns their merged Data as an env-var map for worker injection. A value env delivery cannot
-// carry (EnvValueProblem: not valid UTF-8, or a NUL byte) is fault.Invalid.
+// carry (EnvDataProblem: not valid UTF-8, or a NUL byte) is fault.Invalid; the first such key
+// in sorted order is named.
 func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error) {
 	const op = "secrets.ResolveEnv"
 	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns})
@@ -68,12 +69,11 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 		if !ok {
 			return nil, fault.Internalf(op, "object %s/%s is not a Secret", ns, name)
 		}
+		if k, p := EnvDataProblem(sec.Spec.Data); p != "" {
+			return nil, fault.Invalidf(op, "secret %q key %q %s; env delivery cannot carry binary data (base64-encode it)", name, k, p)
+		}
 		for k, v := range sec.Spec.Data {
-			s := string(v)
-			if p := EnvValueProblem(s); p != "" {
-				return nil, fault.Invalidf(op, "secret %q key %q %s; env delivery cannot carry binary data (base64-encode it)", name, k, p)
-			}
-			env[k] = s
+			env[k] = string(v)
 		}
 	}
 	return env, nil

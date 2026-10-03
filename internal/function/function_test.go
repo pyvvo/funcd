@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/controller"
@@ -124,7 +125,7 @@ func TestScenarioReconcileProvisionsAndRoutes(t *testing.T) {
 	h.createFn(t, "echo", 2, true)
 	h.reconcile(t, "echo")
 
-	require.Equal(t, 2, h.running(t, "echo"), "2 workeres provisioned")
+	require.Equal(t, 2, h.running(t, "echo"), "2 workers provisioned")
 	fn := h.getFn(t, "echo")
 	require.Equal(t, v1.PhaseReady, fn.Status.Phase)
 	require.Equal(t, 2, fn.Status.Replicas)
@@ -144,7 +145,7 @@ func TestScenarioShapeInvalidBlocksReady(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionFalse, c.Status, "ShapeValid: False")
 	require.Empty(t, h.routes(t), "no route to a shape-invalid function")
-	require.Equal(t, 0, h.running(t, "broken"), "no workeres provisioned")
+	require.Equal(t, 0, h.running(t, "broken"), "no workers provisioned")
 }
 
 // scenario: endpoints-resolves-ready-upstream.
@@ -211,7 +212,7 @@ func TestScenarioDeleteReclaims(t *testing.T) {
 	require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "echo", ""))
 	h.reconcile(t, "echo") // sees it gone → teardown
 
-	require.Equal(t, 0, h.running(t, "echo"), "workeres stopped")
+	require.Equal(t, 0, h.running(t, "echo"), "workers stopped")
 	require.Empty(t, h.routes(t), "route removed")
 }
 
@@ -221,7 +222,7 @@ func TestScenarioWakeProvisionsScaledToZero(t *testing.T) {
 	h := newHarness(t)
 	h.createFn(t, "agent", 0, true) // MinReplicas defaults to 0 (scale-to-zero); spec.replicas 0
 	h.reconcile(t, "agent")
-	require.Equal(t, 0, h.running(t, "agent"), "scaled to zero — no workeres")
+	require.Equal(t, 0, h.running(t, "agent"), "scaled to zero — no workers")
 
 	// The activator wakes it (partitioned Phase = Deploying).
 	h.setPhase(t, "agent", v1.PhaseDeploying)
@@ -278,4 +279,20 @@ func TestScenarioRouteToleratesUnresolvedUpstream(t *testing.T) {
 	}
 	require.True(t, haveAlpha, "the resolved function stays routed")
 	require.False(t, haveBeta, "the unresolved-upstream function is omitted, not a batch-rejecting error")
+}
+
+// listFailer is a runtime whose List always fails.
+type listFailer struct{ runtime.Runtime }
+
+func (listFailer) List(context.Context, v1.NamespaceName) ([]runtime.Instance, error) {
+	return nil, fault.Unavailablef("test.List", "runtime down")
+}
+
+// Issue #448: the error a failed runtime List returns says "list workers", not "list workers".
+func TestIssue448_ListFailureSaysListWorkers(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, func(d *function.Deps) { d.Runtime = listFailer{Runtime: d.Runtime} })
+	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "gone"})
+	require.ErrorContains(t, err, "function.instances: list workers: test.List: runtime down")
+	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 }
