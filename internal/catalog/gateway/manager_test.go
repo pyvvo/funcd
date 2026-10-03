@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,4 +230,43 @@ func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, post(granted))
 	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
 	require.Contains(t, logs.String(), `"level":"WARN"`, "the engine failure is logged through the injected logger")
+}
+
+// TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle: the catalog proxy keeps its engine connections out of
+// http.DefaultTransport. Every httptest.Server.Close in the process closes that transport's idle connections, and
+// one landing while an engine call has just picked a parked connection fails the call with a 503. Not parallel: it
+// closes the default transport's idle connections, which would break the other tests' parked connections.
+func TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle(t *testing.T) {
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	master := []byte("issue-531-master")
+	keys := NewCatalogKeys(master, st)
+
+	conns := new(atomic.Int32)
+	up := httptest.NewUnstartedServer((&engineStub{}).handler())
+	up.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	up.Start()
+	t.Cleanup(up.Close)
+
+	mgr := NewManager("", "", keys, buildPDP(t, st), nil)
+	t.Cleanup(mgr.Shutdown)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, up.URL, engineToken)
+	require.NoError(t, err)
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+	query := func() {
+		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(granted)))
+		require.NoError(t, perr)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	}
+
+	query()
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	query()
+	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the proxy's engine connections")
 }

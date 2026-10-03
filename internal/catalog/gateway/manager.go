@@ -23,7 +23,8 @@ type Manager struct {
 	keys     CatalogKeys
 	pdp      auth.Authorizer
 	log      *slog.Logger
-	proxyLog *slog.Logger // the proxies' logger (component catalog.gateway)
+	proxyLog *slog.Logger    // the proxies' logger (component catalog.gateway)
+	engines  *http.Transport // the proxies' engine transport, kept across retargets
 
 	// bindHost is the interface each proxy listens on; publishHost is the host injected into functions as
 	// FUNCD_CATALOG_<ALIAS>_URL. They differ under containerd (ADR-0137, mirroring the s3gateway
@@ -90,6 +91,7 @@ func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authori
 		pdp:         pdp,
 		log:         log.With("component", "catalog.gateway.manager"),
 		proxyLog:    log.With("component", "catalog.gateway"),
+		engines:     newEngineTransport(),
 		bindHost:    bindHost,
 		publishHost: publishHost,
 		servers:     make(map[string]*managedProxy),
@@ -119,7 +121,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		if existing.upstream != upstream || existing.engineToken != engineToken {
 			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
 			// consumers already hold keeps working.
-			existing.handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
+			existing.handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog))
 			existing.upstream, existing.engineToken = upstream, engineToken
 			m.log.Debug("catalog proxy retargeted", "catalog", key, "upstream", upstream)
 		}
@@ -131,7 +133,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
 	handler := &retargetable{}
-	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
+	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog))
 	srv := newProxyServer(handler, m.proxyLog)
 	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp
@@ -181,6 +183,7 @@ func (m *Manager) Shutdown() {
 	for key, mp := range m.servers {
 		m.closeProxy(key, mp)
 	}
+	m.engines.CloseIdleConnections()
 }
 
 // closeProxy stops one proxy and deletes it from the map. The caller must hold m.mu. Closing the
