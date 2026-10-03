@@ -129,7 +129,7 @@ docs/
 │  ├─ repository-layout.md          # api / pkg / cmd / internal / shim / e2e / tests / bench (ADR-0001)
 │  ├─ conventions.md                # exists (docs/conventions.md → ADR-0002)
 │  ├─ testing.md                    # contract suites per port, pkg/funcd e2e, Venom lanes, chaos tier (ADR-0025/0047/0077)
-│  ├─ design-process.md             # ADR-0000 gates + the four document layers; skills pipeline (.claude/CLAUDE.md)
+│  ├─ design-process.md             # exists (docs/method/README.md: the whole method, from ADR to chaos campaign and audit)
 │  ├─ adr-index.md                  # generated from docs/adr headers (139 today: status + Realizes)
 │  ├─ feature-versions.md           # → docs/feat
 │  ├─ roadmap.md                    # → docs/roadmap
