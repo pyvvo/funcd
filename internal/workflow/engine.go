@@ -259,7 +259,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 	// skipped the admission cap. The over-cap input stays out of the run record and the FailureContext.
 	if e.cfg.PayloadLimit > 0 && int64(len(input)) > e.cfg.PayloadLimit {
 		rec.Input = nil
-		return e.failAtStart(ctx, rec, rs, outputs, spec, nil, fault.Invalidf(engineOp, "run %q input %d bytes exceeds the payload limit %d — pass large data by reference on the blob substrate", runName, len(input), e.cfg.PayloadLimit))
+		return e.failAtStart(ctx, rec, rs, outputs, spec, nil, fault.Invalidf(engineOp, "run %q input %d bytes exceeds the payload limit %d (PayloadLimitExceeded) — pass large data by reference on the blob substrate", runName, len(input), e.cfg.PayloadLimit))
 	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
@@ -272,7 +272,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 		if fault.KindOf(err) != fault.PayloadTooLarge {
 			return nil, err
 		}
-		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded", runName))
+		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded (RunRecordTooLarge)", runName))
 	}
 	return e.drive(ctx, stop, rec, rs, outputs, spec, input)
 }

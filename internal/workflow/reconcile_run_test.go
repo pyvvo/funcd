@@ -723,6 +723,44 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 	}
 }
 
+// Issue #447: a run that fails at start, before any step runs, names the cause in its Ready reason: an
+// input over workflow.payloadLimit (a Sensor-created run skips admission), or a first record over the run
+// store's value limit, whether the record is kept without its input or never stored.
+func TestIssue447_RunStartFailureReasonNamesCause(t *testing.T) {
+	ctx := context.Background()
+	pad := `{"pad":"` + strings.Repeat("x", 1<<20-60) + `"}`
+	for _, tc := range []struct {
+		name, input, reason string
+		params              json.RawMessage
+		limit               int64
+	}{
+		{name: "payload cap", input: `{"pad":"xxxxxxxx"}`, limit: 8, reason: "PayloadLimitExceeded"},
+		{name: "record input", input: pad, limit: 1 << 20, reason: "RunRecordTooLarge"},
+		{name: "record spec", input: `{}`, params: json.RawMessage(pad), limit: 1 << 20, reason: "RunRecordTooLarge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			a := step("a", "")
+			a.Params = tc.params
+			seedWorkflow(t, s, "wf", a)
+			seedRun(t, s, "wf-1", "wf", tc.input)
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: tc.limit}})
+			if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "wf-1"}); err != nil {
+				t.Fatalf("Reconcile = %v, want the run ended Failed", err)
+			}
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "wf-1")
+			st := obj.(*v1.WorkflowRun).Status
+			c, _ := st.Conditions.Get(condReady)
+			if st.Phase != runFailed || c.Status != v1.ConditionFalse || c.Reason != tc.reason || f.calls["a"] != 0 {
+				t.Fatalf("phase=%q Ready=%+v step a dispatched %d times, want Failed with Ready=False/%s and no step run", st.Phase, c, f.calls["a"], tc.reason)
+			}
+		})
+	}
+}
+
 // Issue 67: the retention sweep deletes closed WorkflowRun objects, so the parent's status.runs must
 // keep its lifetime terminal counts instead of recounting only the runs that are still stored.
 func TestIssue67_RunCountsSurviveRunDeletion(t *testing.T) {

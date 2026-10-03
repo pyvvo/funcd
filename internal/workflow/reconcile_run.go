@@ -135,7 +135,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
 	// A first record over the run store's value limit even without its input is refused on every requeue.
 	if rec == nil && !started && fault.KindOf(err) == fault.PayloadTooLarge {
-		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(err.Error()), Message: capErr(err.Error())})
+		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: capErr(err.Error())})
 	}
 	// A terminal record is the run's outcome whatever its cause's kind (a missing child Workflow is NotFound).
 	terminal := rec != nil && rec.Terminal()
@@ -263,10 +263,11 @@ func replayReason(err error) string {
 	return reasonToken(err.Error(), "ReplayRejected", "SeedInvalid", "DigestDrift")
 }
 
-// failureReason is the Ready=False reason of a Failed run: the ADR-0094/0099 run failure reason its
-// cause names, else StepFailed (every other run failure is a step's).
+// failureReason is the Ready=False reason of a Failed run: the run failure reason its cause names (the
+// ADR-0094/0099 reasons, or a run-start payload cap or run record size refusal), else StepFailed (every
+// other run failure is a step's).
 func failureReason(cause string) string {
-	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded")
+	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded", "PayloadLimitExceeded", "RunRecordTooLarge")
 }
 
 // reasonToken returns the first of tokens that msg names, else fallback.
