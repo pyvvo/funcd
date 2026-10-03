@@ -28,19 +28,22 @@ func exitCode(t *testing.T, cmd *exec.Cmd) (int, string) {
 	return 0, string(out)
 }
 
+// stashHook runs the PreToolUse stash hook on a tool event.
+func stashHook(t *testing.T, event string) (int, string) {
+	t.Helper()
+	cmd := exec.Command("python3", filepath.Join("agent", "no-stash.py"))
+	cmd.Stdin = strings.NewReader(event)
+	return exitCode(t, cmd)
+}
+
+// bash is the hook's event for a Bash command.
+func bash(command string) string {
+	return `{"tool_name":"Bash","tool_input":{"command":` + strconv.Quote(command) + `}}`
+}
+
 // The PreToolUse hook refuses a git stash that changes the stash, wherever git is the command, and lets every
 // other command run, including ones that only mention git stash in their arguments (issue #560).
 func TestIssue560_StashHookBlocksStashWrites(t *testing.T) {
-	hook, err := filepath.Abs(filepath.Join("agent", "no-stash.py"))
-	require.NoError(t, err)
-	run := func(input string) (int, string) {
-		cmd := exec.Command("python3", hook)
-		cmd.Stdin = strings.NewReader(input)
-		return exitCode(t, cmd)
-	}
-	bash := func(command string) string {
-		return `{"tool_name":"Bash","tool_input":{"command":` + strconv.Quote(command) + `}}`
-	}
 	for _, c := range []string{"git stash", "git stash pop", "git stash -u", "git -C wt stash push -m wip",
 		"cd a && git stash apply", "scripts/agent/d git stash drop", "git --no-pager stash clear", "git -P stash pop",
 		`git -C "$(git rev-parse --show-toplevel)" stash pop`, "git --work-tree . stash", `bash -c "git stash pop"`,
@@ -50,24 +53,43 @@ func TestIssue560_StashHookBlocksStashWrites(t *testing.T) {
 		"for f in a b; do git stash push $f; done", "{ git stash pop; }", "! git stash pop",
 		`out="$(git stash pop 2>&1)"`, `echo "$(git stash pop)"`, "echo `git stash pop`", "bash -lc 'git stash pop'",
 		"sudo -u me git stash pop", "nice -n 10 git stash pop", "timeout 60 git stash pop", "xargs git stash drop"} {
-		code, out := run(bash(c))
+		code, out := stashHook(t, bash(c))
 		require.Equal(t, 2, code, "%q must be blocked", c)
 		require.Contains(t, out, "git show <base>:<file>", c)
 	}
 	for _, c := range []string{"git stash list", "git stash show -p", "git status", "git log --grep=stash", "echo stash",
 		"echo git stash", "grep -rn 'git stash' .", "rg 'git stash pop' docs/", "git grep 'git stash'",
 		"git log -S 'git stash'", `git commit -m "fix: git stash pop lost changes"`, "gh pr create --body 'never git stash'"} {
-		code, out := run(bash(c))
+		code, out := stashHook(t, bash(c))
 		require.Equal(t, 0, code, "%q must run: %s", c, out)
 	}
 	for _, input := range []string{`{"tool_name":"Edit","tool_input":{"command":"git stash"}}`, "[]", "not json"} {
-		code, _ := run(input)
+		code, _ := stashHook(t, input)
 		require.Equal(t, 0, code, "%s is not a Bash command and must pass", input)
 	}
 
 	settings, err := os.ReadFile(filepath.Join("..", ".claude", "settings.json"))
 	require.NoError(t, err)
 	require.Contains(t, string(settings), "scripts/agent/no-stash.py", "the project settings wire the hook")
+}
+
+// The hook reads a quote that spans lines and a heredoc as the shell does: a commit message or a heredoc that only
+// mentions git stash runs, a heredoc that feeds a shell does not, nor a function body or watch's script; a
+// wrapper's arguments are not its command (issue #576).
+func TestIssue576_StashHookReadsHeredocsAndWrappers(t *testing.T) {
+	for _, c := range []string{"function f { git stash pop; }", "watch 'git stash pop'", "watch -n 5 git stash drop",
+		"bash <<'EOF'\ngit stash pop\nEOF", "cat <<'EOF' | sh\ngit stash pop\nEOF", "cat <<EOF\n$(git stash pop)\nEOF",
+		"echo \"two\nlines\"\ngit stash pop", "grep -n '<<EOF' f\ngit stash pop"} {
+		code, out := stashHook(t, bash(c))
+		require.Equal(t, 2, code, "%q must be blocked: %s", c, out)
+	}
+	for _, c := range []string{
+		"git commit -m \"$(cat <<'EOF'\nfix(agents): refuse `git stash pop`\n\ngit stash pop lost a fix.\nEOF\n)\"",
+		"git commit -F - <<'EOF'\ngit stash drop is refused\nEOF", "cat > notes.txt <<'EOF'\ndon't run git stash pop\nEOF\ngit status",
+		"timeout 5 echo git stash", "watch -n 5 git stash list"} {
+		code, out := stashHook(t, bash(c))
+		require.Equal(t, 0, code, "%q must run: %s", c, out)
+	}
 }
 
 // laneEnv is the environment of a lane-lock test: its own lock dir and a fake limactl.
@@ -210,6 +232,54 @@ func TestIssue561_LaneLockSurvivesItsEnvironment(t *testing.T) {
 	require.Equal(t, 1, code, out)
 	require.Contains(t, out, "is a directory")
 	require.NotContains(t, e.readLog(), "slipped")
+}
+
+// The lane lock refuses a directory at its path without leaving a link inside it, takes over a dead holder's lock
+// even when the lock dir vanishes during the takeover, and tells a held guard from one it cannot create (issue #576).
+func TestIssue576_LaneLockReportsItsGuard(t *testing.T) {
+	const dead = "999999 Thu Jan  1 00:00:00 1970"
+	t.Run("directory at the lock path", func(t *testing.T) {
+		e := newLaneEnv(t)
+		dir := filepath.Join(e.dir, "lane.holder")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		code, out := exitCode(t, e.holder(`echo slipped >> "$2"`))
+		require.Equal(t, 1, code, out)
+		require.Contains(t, out, "is a directory")
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		require.Empty(t, entries, "no link is left inside the directory")
+	})
+	t.Run("lock dir vanishes during a takeover", func(t *testing.T) {
+		e := newLaneEnv(t)
+		e.staleLock(t, dead)
+		rm, err := exec.LookPath("rm")
+		require.NoError(t, err)
+		bin := t.TempDir()
+		removeDir := "#!/bin/sh\nexec '" + rm + "' -rf \"${2%/*}\"\n" // rm -f <lock> removes the whole lock dir
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "rm"), []byte(removeDir), 0o755))
+		code, out := exitCode(t, e.holder(`echo took >> "$2"`, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH")))
+		require.Equal(t, 0, code, out)
+		require.Equal(t, "took\n", e.readLog())
+	})
+	t.Run("held guard", func(t *testing.T) {
+		e := newLaneEnv(t)
+		e.staleLock(t, dead)
+		require.NoError(t, os.Mkdir(filepath.Join(e.dir, "lane.holder.guard"), 0o755))
+		code, out := exitCode(t, e.holder(`echo ran >> "$2"`, "FUNCD_LANE_GUARD_WAIT=1"))
+		require.Equal(t, 1, code, out)
+		require.Contains(t, out, "has been held for two minutes")
+		require.Empty(t, e.readLog())
+	})
+	t.Run("guard that cannot be created", func(t *testing.T) {
+		e := newLaneEnv(t)
+		e.staleLock(t, dead)
+		require.NoError(t, os.WriteFile(filepath.Join(e.dir, "lane.holder.guard"), nil, 0o644))
+		code, out := exitCode(t, e.holder(`echo ran >> "$2"`, "FUNCD_LANE_GUARD_WAIT=1"))
+		require.Equal(t, 1, code, out)
+		require.Contains(t, out, "could not take the guard")
+		require.NotContains(t, out, "has been held")
+		require.Empty(t, e.readLog())
+	})
 }
 
 // The gate's host check stops on a saturated port range, before the gate's first step, and passes otherwise
