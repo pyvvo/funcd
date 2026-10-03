@@ -30,8 +30,9 @@ shared checkout: `git worktree add -q -b fix/i<N> <scratch>/wt/i<N> origin/main`
 1. **Fix** — `/fix` Steps 2–6: regression test first, root-cause fix, revert check, one commit with `Fixes #N`.
    Checks on the touched packages only; no e2e suite, no `go test ./...`, no lanes — the gate runs those once.
 2. **Review** — as soon as the fix is committed, `/fix-review` by an independent agent in the same worktree: the
-   revert check with `git revert --no-commit` then `git reset --hard`, 1–3 targeted mutants, reuse and
-   conventions, the touched packages' checks. Its report goes to a scratch reports dir; it returns the ledger
+   revert check of `/fix-review` Step 2.1 (an `origin/main` overlay of the changed non-test files, or a
+   scratch worktree for a test that reads a file at runtime; never a revert of the commit, which also removes
+   the test), 1–3 targeted mutants, reuse and conventions, the touched packages' checks. Its report goes to a scratch reports dir; it returns the ledger
    fields instead of editing the ledger.
 3. **Rework** on `changes-requested`: one new commit per round in the same worktree, then a re-review; at most 3
    reviews. An issue that still fails, does not reproduce, or turns out to need a decision is **parked** with the
