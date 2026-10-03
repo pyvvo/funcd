@@ -36,8 +36,8 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/parquet-go/parquet-go v0.30.1
-	github.com/pyvvo/funcd-python v0.3.3
-	github.com/pyvvo/funcd-typescript v0.4.2
+	github.com/pyvvo/funcd-python v0.3.4
+	github.com/pyvvo/funcd-typescript v0.4.3
 	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
