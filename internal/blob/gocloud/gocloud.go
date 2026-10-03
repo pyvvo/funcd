@@ -124,7 +124,11 @@ func (k *bucket) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
-	iter := k.b.List(&gcblob.ListOptions{Prefix: prefix})
+	walk := prefix
+	if k.file {
+		walk = fileWalkPrefix(prefix)
+	}
+	iter := k.b.List(&gcblob.ListOptions{Prefix: walk})
 	var out []blob.Attributes
 	for {
 		obj, err := iter.Next(ctx)
@@ -139,10 +143,27 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 			// delimiter mode would — skip pseudo-directory entries.
 			continue
 		}
+		if !strings.HasPrefix(obj.Key, prefix) {
+			continue
+		}
 		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime})
 	}
 	sortByKey(out)
 	return out, nil
+}
+
+// fileWalkPrefix cuts prefix before the first rune fileblob would not walk to: it starts its
+// List at filepath.Join(dir, prefix[:lastSlash]), which cleans "//", "./" and "../", while it
+// stores a key under its escaped path, hex-escaping a control rune, a "/" after "/" or "..",
+// and a key's trailing "/" ("a//b/c" lives at "a/__0x2f__b/c"). List filters the wider walk
+// back to prefix (issue #459).
+func fileWalkPrefix(prefix string) string {
+	for i, r := range prefix {
+		if r < ' ' || r == '/' && (i == 0 || i == len(prefix)-1 || prefix[i-1] == '/' || prefix[i-1] == '.') {
+			return prefix[:i]
+		}
+	}
+	return prefix
 }
 
 // sortByKey orders attributes by Key. List guarantees sorted output as a port contract,
