@@ -424,3 +424,32 @@ func TestIssue361_ReadOfMissingLayoutWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestIssue582_CachedSingleFileResolvesHandlerNotPycache: a cache hit on a single-file artifact
+// resolves the handler file even after Python has written __pycache__/ beside it — the directory
+// sorts before handler.py and must never be returned as the artifact.
+func TestIssue582_CachedSingleFileResolvesHandlerNotPycache(t *testing.T) {
+	t.Parallel()
+	ref := layoutRef(t, "v1")
+	body := "def handle(ctx, event):\n    return event\n"
+	handler := filepath.Join(t.TempDir(), "handler.py")
+	require.NoError(t, os.WriteFile(handler, []byte(body), 0o600))
+	digest, err := artifact.Push(context.Background(), ref, handler, nil, "", "")
+	require.NoError(t, err)
+
+	m := artifact.NewOrasMaterializer(t.TempDir(), "")
+	path, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+	require.Equal(t, "handler.py", filepath.Base(path))
+
+	pycache := filepath.Join(filepath.Dir(path), "__pycache__")
+	require.NoError(t, os.Mkdir(pycache, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(pycache, "handler.cpython-314.pyc"), []byte("pyc"), 0o600))
+
+	again, err := m.Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+	require.Equal(t, path, again, "a cache hit returns the handler, not __pycache__")
+	fi, err := os.Stat(again)
+	require.NoError(t, err)
+	require.True(t, fi.Mode().IsRegular(), "the materialized artifact is a regular file")
+}
