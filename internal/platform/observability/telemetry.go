@@ -54,19 +54,48 @@ func NewTelemetry(ctx context.Context, cfg TelemetryConfig) (*Telemetry, error) 
 	if cfg.Endpoint == "" {
 		return noopTelemetry(), nil
 	}
+	return newTelemetry(ctx, cfg.ServiceName, otlpExporters(cfg))
+}
 
-	res := newResource(cfg.ServiceName)
+// exporters builds the three exporters; a test substitutes failing ones (issue #508).
+type exporters struct {
+	trace  func(context.Context) (sdktrace.SpanExporter, error)
+	metric func(context.Context) (sdkmetric.Exporter, error)
+	log    func(context.Context) (sdklog.Exporter, error)
+}
 
-	traceExp, err := otlptracegrpc.New(ctx, grpcTraceOpts(cfg)...)
+func otlpExporters(cfg TelemetryConfig) exporters {
+	return exporters{
+		trace: func(ctx context.Context) (sdktrace.SpanExporter, error) {
+			return otlptracegrpc.New(ctx, grpcTraceOpts(cfg)...)
+		},
+		metric: func(ctx context.Context) (sdkmetric.Exporter, error) {
+			return otlpmetricgrpc.New(ctx, grpcMetricOpts(cfg)...)
+		},
+		log: func(ctx context.Context) (sdklog.Exporter, error) {
+			return otlploggrpc.New(ctx, grpcLogOpts(cfg)...)
+		},
+	}
+}
+
+// newTelemetry builds the SDK providers over the exporters. Each exporter holds a gRPC connection, so a
+// failed build shuts down the ones built before it (issue #508).
+func newTelemetry(ctx context.Context, serviceName string, exp exporters) (*Telemetry, error) {
+	res := newResource(serviceName)
+
+	traceExp, err := exp.trace(ctx)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, "observability.NewTelemetry", "build OTLP trace exporter")
 	}
-	metricExp, err := otlpmetricgrpc.New(ctx, grpcMetricOpts(cfg)...)
+	metricExp, err := exp.metric(ctx)
 	if err != nil {
+		_ = traceExp.Shutdown(ctx)
 		return nil, fault.Wrapf(err, fault.Unavailable, "observability.NewTelemetry", "build OTLP metric exporter")
 	}
-	logExp, err := otlploggrpc.New(ctx, grpcLogOpts(cfg)...)
+	logExp, err := exp.log(ctx)
 	if err != nil {
+		_ = traceExp.Shutdown(ctx)
+		_ = metricExp.Shutdown(ctx)
 		return nil, fault.Wrapf(err, fault.Unavailable, "observability.NewTelemetry", "build OTLP log exporter")
 	}
 

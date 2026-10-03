@@ -283,7 +283,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 			}
 			pol.InternalAllow = append(pol.InternalAllow, ap)
 		}
-		opts = append(opts, funcd.WithEgressIsolation(network.New(true), pol))
+		opts = append(opts, funcd.WithEgressIsolation(network.New(true, root), pol))
 		// Egress gateway + DNS forwarder (ADR-0117, F81): the enforcement point F80 redirects into. Only
 		// wired when a forwarder port is configured (the forwarder is mandatory for domain policy).
 		if n.DNSForwarderPort != 0 {
@@ -675,6 +675,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 			CNIConfDir:  c.CNIConfDir,
 			StateDir:    c.StateDir,
 			SubnetCIDR:  c.SubnetCIDR,
+			Logger:      logger,
 		})
 		if err != nil {
 			_ = mgr.Close()

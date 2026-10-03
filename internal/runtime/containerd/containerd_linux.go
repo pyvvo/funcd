@@ -51,12 +51,13 @@ const (
 
 // Config configures the containerd driver (the composition root supplies it).
 type Config struct {
-	Socket      string // /run/containerd/containerd.sock
-	Snapshotter string // overlayfs
-	CNIBinDir   string // /opt/cni/bin
-	CNIConfDir  string // funcd-written conflist dir
-	StateDir    string // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
-	SubnetCIDR  string // lateral bridge subnet
+	Socket      string       // /run/containerd/containerd.sock
+	Snapshotter string       // overlayfs
+	CNIBinDir   string       // /opt/cni/bin
+	CNIConfDir  string       // funcd-written conflist dir
+	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
+	SubnetCIDR  string       // lateral bridge subnet
+	Logger      *slog.Logger // nil ⇒ slog.Default()
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -144,6 +145,9 @@ func setupLogChannel(ctrID string, spec runtime.WorkerSpec, capture runtime.LogC
 // enables ip_forward (best-effort — a missing /proc on a non-standard host is logged, not fatal).
 func New(cfg Config) (runtime.Runtime, error) {
 	const op = "runtime.containerd.New"
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	client, err := containerd.New(cfg.Socket)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "connect to containerd at %q", cfg.Socket)
@@ -155,7 +159,7 @@ func New(cfg Config) (runtime.Runtime, error) {
 		return nil, fault.Wrapf(err, fault.Internal, op, "write funcd cni conflist")
 	}
 	if err := setIPForward("/proc/sys/net/ipv4/ip_forward"); err != nil {
-		slog.Warn("could not enable ip_forward; container networking may not route",
+		cfg.Logger.Warn("could not enable ip_forward; container networking may not route",
 			"op", op, "error", err)
 	}
 	cni, err := gocni.New(

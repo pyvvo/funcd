@@ -211,6 +211,37 @@ func TestIssue141_WorkerFailureIsProblemJSONViaSlog(t *testing.T) {
 	require.Contains(t, logs.String(), "level=WARN", "the failure is logged through slog")
 }
 
+// A worker that fails mid-body makes ReverseProxy log the failed body copy itself; that line goes through
+// the activator's slog logger, naming the upstream, never the stdlib log package (ADR-0002). Not parallel:
+// it captures log's output.
+func TestIssue511_BodyCopyErrorLogsThroughSlog(t *testing.T) {
+	var stdlog bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&stdlog)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(backend.Close)
+
+	var logs bytes.Buffer
+	a := newActivator(t, activator.Deps{
+		Endpoints: &fakeEndpoints{upstream: backend.URL, ready: true},
+		Scaler:    &fakeScaler{},
+		Logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	serve(a, activator.FunctionRef{Namespace: "default", Name: "truncating"})
+
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+	require.Contains(t, logs.String(), "read error during body copy")
+	require.Contains(t, logs.String(), "component=activator upstream="+backend.URL, "the line carries the activator's attributes")
+}
+
 // scenario: cold-start-buffer-and-forward — a cold request triggers ScaleTo(1) once,
 // is held until a ready upstream appears, then forwarded.
 func TestScenarioColdStartBufferAndForward(t *testing.T) {

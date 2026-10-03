@@ -557,6 +557,7 @@ func (p *Platform) buildControlPlane() error {
 			DNS:         fwd,
 			Authz:       cedarPDP,
 			Audit:       egressAuditSink{logger: p.logger.With("component", "egress.audit")},
+			Logger:      p.logger.With("component", "egress.gateway"),
 		})
 	}
 

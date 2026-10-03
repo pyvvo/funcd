@@ -12,6 +12,7 @@ package egress
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 
 	"github.com/pyvvo/funcd/internal/auth"
@@ -32,6 +33,7 @@ type Deps struct {
 	DNS         DomainResolver  // forwarder-attested (worker, dst-IP) → domains (the trust anchor)
 	Authz       auth.Authorizer // the PDP (egress::connect over a NetDestination)
 	Audit       AuditSink       // every connection (allowed + blocked) → the funclog channel
+	Logger      *slog.Logger    // nil ⇒ slog.Default()
 }
 
 // WorkerIndex resolves a worker's funcd0 source IP to its (namespace, function) principal Ref.
@@ -66,6 +68,9 @@ type AuditRecord struct {
 func New(enabled bool, d Deps) Gateway {
 	if !enabled {
 		return noopGateway{}
+	}
+	if d.Logger == nil {
+		d.Logger = slog.Default()
 	}
 	return newGateway(d)
 }

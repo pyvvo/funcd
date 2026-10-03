@@ -8,6 +8,7 @@ package network
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -65,12 +66,15 @@ func (p Policy) Validate() error {
 
 // New returns a Manager: the google/nftables driver when enabled on Linux, else a no-op. This file is
 // un-tagged and delegates to the build-tagged newDriver (nftables_linux.go vs nftables_other.go),
-// so New compiles on every GOOS.
-func New(enabled bool) Manager {
+// so New compiles on every GOOS. A nil logger means slog.Default().
+func New(enabled bool, logger *slog.Logger) Manager {
 	if !enabled {
 		return noop{}
 	}
-	return newDriver()
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return newDriver(logger)
 }
 
 // noop is the disabled / non-Linux Manager: it programs nothing and never errors.

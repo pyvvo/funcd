@@ -7,18 +7,21 @@
 package containerd
 
 import (
+	"log/slog"
+
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
 // Config configures the containerd driver (the composition root supplies it).
 type Config struct {
-	Socket      string // /run/containerd/containerd.sock
-	Snapshotter string // overlayfs
-	CNIBinDir   string // /opt/cni/bin
-	CNIConfDir  string // funcd-written conflist dir
-	StateDir    string // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
-	SubnetCIDR  string // lateral bridge subnet
+	Socket      string       // /run/containerd/containerd.sock
+	Snapshotter string       // overlayfs
+	CNIBinDir   string       // /opt/cni/bin
+	CNIConfDir  string       // funcd-written conflist dir
+	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
+	SubnetCIDR  string       // lateral bridge subnet
+	Logger      *slog.Logger // nil ⇒ slog.Default()
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime
