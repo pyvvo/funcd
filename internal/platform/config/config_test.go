@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -164,6 +165,52 @@ func TestImageOverrideEnvParsed(t *testing.T) {
 	require.Equal(t, "reg/py:2", c.Runtime.Containerd.ImageOverride["python314"])
 }
 
+// Every config key has a FUNCD_* env override (ADR-0062 Decision 4), the ADR-0111/0114/0115 keys too;
+// lists split on "," and maps on "," + "=" as FUNCD_IMAGE_OVERRIDE does (issue #438).
+func TestIssue438_EveryKeyHasEnvOverride(t *testing.T) {
+	var missing []string
+	var walk func(prefix string, typ reflect.Type)
+	walk = func(prefix string, typ reflect.Type) {
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			switch {
+			case f.Type.Kind() == reflect.Struct:
+				walk(prefix+name+".", f.Type)
+			case prefix == "" && (name == "apiVersion" || name == "kind"):
+			case f.Tag.Get("env") == "":
+				missing = append(missing, prefix+name)
+			}
+		}
+	}
+	walk("", reflect.TypeFor[config.Config]())
+	require.Emptyf(t, missing, "config keys without a FUNCD_* env override")
+
+	t.Setenv("FUNCD_TLS_HOSTS", "a.example,b.example")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_ORIGINS", "https://a.example,https://b.example")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_METHODS", "GET,POST")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_HEADERS", "X-A,X-B")
+	t.Setenv("FUNCD_SHAPING_CORS_MAX_AGE_SECONDS", "600")
+	t.Setenv("FUNCD_SHAPING_HEADERS_SET", "X-Frame-Options=DENY,Strict-Transport-Security=max-age=31536000")
+	t.Setenv("FUNCD_SHAPING_HEADERS_REMOVE", "Server,X-Powered-By")
+	t.Setenv("FUNCD_NETWORK_INTERNAL_ALLOW", "10.63.0.1:9000,10.63.0.1:4317")
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.example", "b.example"}, c.Server.TLS.Hosts)
+	cors := c.Server.Shaping.CORS
+	require.Equal(t, []string{"https://a.example", "https://b.example"}, cors.AllowOrigins)
+	require.Equal(t, []string{"GET", "POST"}, cors.AllowMethods)
+	require.Equal(t, []string{"X-A", "X-B"}, cors.AllowHeaders)
+	require.Equal(t, 600, cors.MaxAgeSeconds)
+	require.Equal(t, map[string]string{"X-Frame-Options": "DENY", "Strict-Transport-Security": "max-age=31536000"}, c.Server.Shaping.Headers.Set)
+	require.Equal(t, []string{"Server", "X-Powered-By"}, c.Server.Shaping.Headers.Remove)
+	require.Equal(t, []string{"10.63.0.1:9000", "10.63.0.1:4317"}, c.Server.Network.InternalAllow)
+
+	t.Setenv("FUNCD_SHAPING_CORS_MAX_AGE_SECONDS", "-1")
+	_, err = config.Load("", config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an env-sourced negative maxAgeSeconds is rejected")
+}
+
 // FUNCD_AUTH_NAMESPACES is a comma-separated list (envSeparator).
 func TestNamespacesEnvList(t *testing.T) {
 	t.Setenv("FUNCD_AUTH_NAMESPACES", "a,b,c")
@@ -316,30 +363,38 @@ func TestScenarioUnknownKeyRejected(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an unknown key is rejected, not ignored")
 }
 
-// the validator matrix — Config.Validate() is the single value gate (source-agnostic, ADR-0062).
-// For every field carrying a `validate` tag, enumerate its ACCEPTED set (must pass) and
-// representative REJECTED values (must be fault.Invalid), mutating one field off a valid base.
-// This is the parametrized form: each {field, value, valid} is one case (the analog of pytest's
-// @parametrize). It subsumes the old TestConfigValidate (good passes + a bad enum is rejected).
-func TestValidateMatrix(t *testing.T) {
-	base, err := config.Load("", config.Flags{})
-	require.NoError(t, err)
+type vc struct {
+	value string
+	valid bool
+}
 
-	type vc struct {
-		value string
-		valid bool
-	}
-	for _, field := range []struct {
-		name  string
-		set   func(*config.Config, string)
-		cases []vc
-	}{
+type matrixField struct {
+	name  string
+	set   func(*config.Config, string)
+	cases []vc
+}
+
+// validateMatrix is TestValidateMatrix's case table; TestIssue435_MatrixCoversEveryEnumField holds it
+// to every enum field.
+func validateMatrix() []matrixField {
+	return []matrixField{
 		// omitempty,eq — empty is VALID (the envelope is optional), only the exact tag passes.
 		{"apiVersion", func(c *config.Config, v string) { c.APIVersion = v }, []vc{
 			{"", true}, {"funcd.io/v1alpha1", true}, {"funcd.io/v2", false},
 		}},
 		{"kind", func(c *config.Config, v string) { c.Kind = v }, []vc{
 			{"", true}, {"FuncdConfig", true}, {"Function", false},
+		}},
+		// omitempty,oneof — empty is VALID: every member passes, everything else fails.
+		{"server.tls.mode", func(c *config.Config, v string) { c.Server.TLS.Mode = v }, []vc{
+			{"", true}, {"selfsigned", true}, {"provided", true}, {"acme", true},
+			{"letsencrypt", false}, {"ACME", false},
+		}},
+		{"server.limits.key", func(c *config.Config, v string) { c.Server.Limits.Key = v }, []vc{
+			{"", true}, {"clientIP", true}, {"function", true}, {"clientip", false}, {"header", false},
+		}},
+		{"kvstore.engine", func(c *config.Config, v string) { c.Kvstore.Engine = v }, []vc{
+			{"", true}, {"memory", true}, {"badger", true}, {"file", false}, {"Badger", false},
 		}},
 		// oneof — empty is INVALID (no omitempty): every member passes, everything else fails.
 		{"storage.mode", func(c *config.Config, v string) { c.Storage.Mode = v }, []vc{
@@ -358,7 +413,22 @@ func TestValidateMatrix(t *testing.T) {
 		{"funclog.bucket", func(c *config.Config, v string) { c.Funclog.Bucket = v }, []vc{
 			{"funcd-system", true}, {"", true}, {"logs", false},
 		}},
-	} {
+	}
+}
+
+// the validator matrix — Config.Validate() is the single value gate (source-agnostic, ADR-0062).
+// For every enum field (an `eq` or `oneof` validate tag), enumerate its ACCEPTED set (must pass) and
+// representative REJECTED values (must be fault.Invalid), mutating one field off a valid base. The
+// numeric bounds are covered by TestIssue164_NegativeLimitsRejected and
+// TestIssue326_OutOfRangeNumbersRejected, storage.dataDir by TestIssue332_EmptyDataDirRejected and
+// site.defaultIndex by TestScenarioSiteDefaultIndexConfig.
+// This is the parametrized form: each {field, value, valid} is one case (the analog of pytest's
+// @parametrize). It subsumes the old TestConfigValidate (good passes + a bad enum is rejected).
+func TestValidateMatrix(t *testing.T) {
+	base, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+
+	for _, field := range validateMatrix() {
 		for _, c := range field.cases {
 			t.Run(field.name+"="+strconv.Quote(c.value), func(t *testing.T) {
 				cfg := base
@@ -373,6 +443,42 @@ func TestValidateMatrix(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Every enum field has matrix cases with a rejected value, so a field added without them fails here.
+func TestIssue435_MatrixCoversEveryEnumField(t *testing.T) {
+	rejected := map[string]bool{}
+	for _, field := range validateMatrix() {
+		for _, c := range field.cases {
+			rejected[field.name] = rejected[field.name] || !c.valid
+		}
+	}
+	var missing []string
+	for _, key := range enumKeys("", reflect.TypeFor[config.Config]()) {
+		if !rejected[key] {
+			missing = append(missing, key)
+		}
+	}
+	require.Empty(t, missing, "enum fields without a rejected value in TestValidateMatrix")
+}
+
+// enumKeys returns the dotted yaml key of every field of t whose validate tag has an eq or oneof rule.
+func enumKeys(prefix string, t reflect.Type) []string {
+	var keys []string
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if f.Type.Kind() == reflect.Struct {
+			keys = append(keys, enumKeys(prefix+name+".", f.Type)...)
+			continue
+		}
+		for rule := range strings.SplitSeq(f.Tag.Get("validate"), ",") {
+			if strings.HasPrefix(rule, "eq=") || strings.HasPrefix(rule, "oneof=") {
+				keys = append(keys, prefix+name)
+			}
+		}
+	}
+	return keys
 }
 
 // Locate: an explicit/env path that doesn't exist ⇒ fault.NotFound; none ⇒ "" (zero-config).

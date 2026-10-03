@@ -29,11 +29,13 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
+	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -66,7 +68,7 @@ func TestDaemonSubstrate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			opts, label, _, err := substrateOptions(context.Background(), tc.memoryOnly, dir)
+			opts, label, _, _, err := substrateOptions(context.Background(), tc.memoryOnly, dir)
 			require.NoError(t, err)
 			require.Equal(t, tc.label, label)
 
@@ -102,7 +104,7 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	cfg, err := config.Load("funcdconfig.yaml", config.Flags{})
 	require.NoError(t, err)
 
-	opts, label, _, err := substrateOptions(context.Background(), false, cfg.Storage.DataDir)
+	opts, label, _, _, err := substrateOptions(context.Background(), false, cfg.Storage.DataDir)
 	require.NoError(t, err)
 	require.Equal(t, "file", label)
 	require.Equal(t, filepath.Join(cwd, "data"), cfg.Storage.DataDir)
@@ -126,7 +128,7 @@ func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := shortDataDir(t)
 			dataDir := filepath.Join(base, name)
-			opts, label, _, err := substrateOptions(context.Background(), false, dataDir)
+			opts, label, _, _, err := substrateOptions(context.Background(), false, dataDir)
 			require.NoError(t, err)
 			require.Equal(t, "file", label)
 			all := append([]funcd.Option{
@@ -552,6 +554,78 @@ func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
 		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
 		require.NoError(t, err)
 		require.NoError(t, closeExec())
+	})
+}
+
+// A negative or malformed funclog.segmentMaxAge fails startup with fault.Invalid naming the key, instead of the
+// sink silently sealing at its 10s default; empty and 0 keep the sink default (issue #436).
+func TestIssue436_NegativeFunclogSegmentMaxAgeRejected(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := shortDataDir(t)
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	base, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+
+	for _, bad := range []string{"-3h", "bogus"} {
+		t.Run(bad, func(t *testing.T) {
+			cfg := base
+			cfg.Funclog.SegmentMaxAge = bad
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, "funclog.segmentMaxAge")
+		})
+	}
+	for _, ok := range []string{"", "0s", "2s"} {
+		t.Run("ok="+ok, func(t *testing.T) {
+			cfg := base
+			cfg.Funclog.SegmentMaxAge = ok
+			_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+			require.NoError(t, err)
+			require.NoError(t, closeExec())
+		})
+	}
+}
+
+// Issue #437: a buildOptions call that fails after it opened the store, the substrate and the KV driver closes
+// them, so it leaves no NATS server running and no Badger directory locked.
+func TestIssue437_FailedBuildOptionsClosesDrivers(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	load := func(t *testing.T, dir, yaml string) config.Config {
+		path := filepath.Join(dir, "funcdconfig.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("storage:\n  dataDir: \""+dir+"\"\n"+yaml), 0o600))
+		cfg, err := config.Load(path, config.Flags{})
+		require.NoError(t, err)
+		cfg.Workflow.Retention = "bogus"
+		return cfg
+	}
+	expectInvalid := func(t *testing.T, cfg config.Config) {
+		_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+		require.Error(t, err)
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+	}
+
+	t.Run("memory", func(t *testing.T) {
+		dir := shortDataDir(t)
+		t.Setenv("TMPDIR", dir) // the in-memory bus keeps its JetStream dir under TMPDIR until it is closed
+		expectInvalid(t, load(t, dir, "  mode: memory\n"))
+		left, err := filepath.Glob(filepath.Join(dir, "funcd-bus-mem-*"))
+		require.NoError(t, err)
+		require.Empty(t, left, "the in-memory NATS server is still running")
+	})
+
+	t.Run("file", func(t *testing.T) {
+		cfg := load(t, shortDataDir(t), "kvstore:\n  engine: badger\n")
+		expectInvalid(t, cfg)
+		eng, err := badgerstore.Open(cfg.Storage.MetastoreDir)
+		require.NoError(t, err, "the metastore is still open")
+		require.NoError(t, eng.Close())
+		kv, err := kvbadger.Open(cfg.Kvstore.DataDir)
+		require.NoError(t, err, "the KV driver is still open")
+		require.NoError(t, kv.(io.Closer).Close())
 	})
 }
 

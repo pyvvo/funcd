@@ -33,7 +33,9 @@ type Manager struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	serves sync.WaitGroup // one per srv.Serve goroutine; Close waits for them (issue #433)
 	mu     sync.Mutex
+	closed bool
 	active map[string]*serving // "ns/name" → its listener
 }
 
@@ -66,6 +68,9 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	key := string(ns) + "/" + string(name)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return "", fault.Unavailablef(op, "the local API manager is closed")
+	}
 	if s, ok := m.active[key]; ok {
 		return s.path, nil
 	}
@@ -80,7 +85,11 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 		scancel()
 		return "", err
 	}
-	go func() { _ = srv.Serve(ln) }()
+	m.serves.Add(1)
+	go func() {
+		defer m.serves.Done()
+		_ = srv.Serve(ln)
+	}()
 	m.active[key] = &serving{path: path, srv: srv, cancel: scancel}
 	m.logger.Debug("serving worker-node local API", "function", key, "socket", path)
 	return path, nil
@@ -101,8 +110,14 @@ func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	_ = os.Remove(s.path)
 }
 
-// Close stops every serving listener.
-func (m *Manager) Close() { m.cancel() }
+// Close stops every serving listener and returns once each is closed. SocketFor fails after Close.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.cancel()
+	m.serves.Wait()
+}
 
 // maxSocketPath is the longest socket path that binds and that a shim can dial: sun_path less its
 // terminating NUL (103 bytes on macOS, 107 on Linux).

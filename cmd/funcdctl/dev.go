@@ -1052,7 +1052,7 @@ func buildPersistDrivers(op string, cfg devConfig, m *sdk.Manifest) (opts []func
 		if merr := os.MkdirAll(plan.blobDir, 0o700); merr != nil {
 			return fail(fault.Wrapf(merr, fault.Internal, op, "create blob dir %q", plan.blobDir))
 		}
-		b, e := gocloud.Open(context.Background(), "file://"+plan.blobDir)
+		b, e := gocloud.Open(context.Background(), gocloud.FileURL(plan.blobDir))
 		if e != nil {
 			return fail(fault.Wrapf(e, fault.KindOf(e), op, "open durable blob at %q", plan.blobDir))
 		}
