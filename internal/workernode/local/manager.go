@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -86,16 +88,31 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 		scancel()
 		return "", err
 	}
-	done := make(chan struct{})
+	s := &serving{path: path, srv: srv, cancel: scancel, done: make(chan struct{})}
+	m.active[key] = s
 	m.serves.Add(1)
-	go func() {
-		defer m.serves.Done()
-		defer close(done)
-		_ = srv.Serve(ln)
-	}()
-	m.active[key] = &serving{path: path, srv: srv, cancel: scancel, done: done}
+	go m.serve(key, s, func() error { return srv.Serve(ln) })
 	m.logger.Debug("serving worker-node local API", "function", key, "socket", path)
 	return path, nil
+}
+
+// serve runs s's server (srv.Serve on its listener) until it stops. A stop other than Close or Remove is
+// logged and drops s from active, so the next SocketFor binds the socket again instead of handing out a
+// dead path (issue #546). done is closed before mu is taken: Remove holds mu while it waits on done.
+func (m *Manager) serve(key string, s *serving, run func() error) {
+	defer m.serves.Done()
+	err := run()
+	close(s.done)
+	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return
+	}
+	m.logger.Warn("worker-node local API stopped serving", "function", key, "socket", s.path, "err", err.Error())
+	m.mu.Lock()
+	if m.active[key] == s {
+		delete(m.active, key)
+	}
+	m.mu.Unlock()
+	s.cancel()
 }
 
 // Remove stops + deletes the local API listener for (ns, name), if any — called when the Function is
