@@ -1738,7 +1738,7 @@ func resolveInterpreter(p, baseDir string) string {
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
 // A python that cannot import the shim is never registered, as in the daemon; when the run has a
-// python handler (needPython) that is a startup error naming the interpreter's reason.
+// python handler (needPython), a missing python or one that cannot load the shim is a startup error.
 func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython bool) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
@@ -1782,6 +1782,9 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		if p, lerr := exec.LookPath("python3"); lerr == nil {
 			python = p
 		}
+	}
+	if python == "" && needPython {
+		return nil, nil, fault.NotFoundf(op, "no python interpreter found for the python handler (need python3 on PATH; set FUNCD_PYTHON or dev.python)")
 	}
 	if python != "" {
 		shimEntry, _, perr := shimpython.Extract(filepath.Join(dir, "shim-python"))

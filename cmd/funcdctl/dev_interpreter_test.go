@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -60,5 +61,50 @@ func TestIssue322_UnusablePythonFailsAtStartup(t *testing.T) {
 			"handler.mjs":   "export function handle() { return {}; }\n",
 		})
 		require.NoError(t, err, "an unusable python does not block a node handler")
+	})
+}
+
+// Issue #430: with node on PATH and no python anywhere, funcdctl dev registered only node and started; the
+// python Function then failed RuntimeUnavailable at reconcile. A python handler with no python found now
+// fails at startup; a node handler still starts.
+func TestIssue430_MissingPythonFailsAtStartup(t *testing.T) {
+	realNode, _ := exec.LookPath("node")
+	t.Setenv("FUNCD_PYTHON", "")
+	t.Setenv("PATH", t.TempDir())
+	start := func(t *testing.T, files map[string]string) error {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		a := &cli{out: io.Discard}
+		inst, err := a.startDev(ctx, devProject(t, files), "", devConfig{})
+		t.Cleanup(func() {
+			cancel()
+			if inst != nil {
+				_ = inst.stop()
+			}
+		})
+		return err
+	}
+
+	t.Run("python-handler", func(t *testing.T) {
+		node := filepath.Join(t.TempDir(), "node")
+		require.NoError(t, os.WriteFile(node, []byte("#!/bin/sh\nexit 1\n"), 0o700))
+		t.Setenv("FUNCD_NODE", node)
+		err := start(t, map[string]string{
+			"funcdctl.yaml": "runtime: python314\nhandler: handle\n" + permissiveContract,
+			"handler.py":    "def handle(event, context):\n    return {}\n",
+		})
+		require.Error(t, err, "a python handler with no python found fails at startup")
+		require.Contains(t, err.Error(), "no python interpreter", "the error says no python was found")
+	})
+	t.Run("node-handler", func(t *testing.T) {
+		if realNode == "" {
+			t.Skip("node not on PATH; skipping the funcdctl dev node lane")
+		}
+		t.Setenv("FUNCD_NODE", realNode)
+		err := start(t, map[string]string{
+			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+			"handler.mjs":   "export function handle() { return {}; }\n",
+		})
+		require.NoError(t, err, "a missing python does not block a node handler")
 	})
 }
