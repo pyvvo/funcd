@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/pdata/plog"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
@@ -28,6 +27,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -267,28 +267,19 @@ func (h *shimRig) countLogBodies(prefix string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var u plog.JSONUnmarshaler
 	n := 0
 	for _, o := range objs {
 		data, err := h.bucket.Get(ctx, o.Key)
 		if err != nil {
 			return 0, err
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			logs, err := u.UnmarshalLogs([]byte(line))
-			if err != nil {
-				return 0, err
-			}
-			for i := range logs.ResourceLogs().Len() {
-				scopes := logs.ResourceLogs().At(i).ScopeLogs()
-				for j := range scopes.Len() {
-					recs := scopes.At(j).LogRecords()
-					for k := range recs.Len() {
-						if strings.HasPrefix(recs.At(k).Body().AsString(), prefix) {
-							n++
-						}
-					}
-				}
+		rows, err := compact.DecodeJSONL(data)
+		if err != nil {
+			return 0, err
+		}
+		for _, r := range rows {
+			if strings.HasPrefix(r.Body, prefix) {
+				n++
 			}
 		}
 	}
