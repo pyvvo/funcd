@@ -798,8 +798,8 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 }
 
 // stopNeverReady stops failed, the replica readiness judged failed, if it still runs — it ran for bootTimeout without
-// becoming ready (ADR-0030 §4b) — and fn has been Degraded as long, so convergeRevision replaces it after the backoff
-// like a crash under repair (ADR-0142). A replica that served before fn lost its last ready one keeps bootTimeout from
+// becoming ready (ADR-0030 §4b) — and fn has been Degraded as long, so convergeRevision (ensurePool, for a pool worker)
+// replaces it after the backoff like a crash under repair (ADR-0142). A replica that served before fn lost its last ready one keeps bootTimeout from
 // then, so one failed probe of a busy worker does not stop it. It reports whether it stopped the replica.
 func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed runtime.InstanceID) (bool, error) {
 	rc, _ := fn.Status.Conditions.Get(condReady)

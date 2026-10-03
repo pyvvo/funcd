@@ -39,6 +39,19 @@ func (h *shimHarness) shapeValid(t *testing.T, name string) v1.ConditionStatus {
 	return c.Status
 }
 
+// degradedSinceAnHour moves name's Ready condition transition an hour back, as if name had been Degraded that long.
+func (h *shimHarness) degradedSinceAnHour(t *testing.T, name string) {
+	t.Helper()
+	fn := h.getFn(t, name)
+	for i := range fn.Status.Conditions {
+		if fn.Status.Conditions[i].Type == "Ready" {
+			fn.Status.Conditions[i].LastTransitionTime = time.Now().Add(-time.Hour)
+		}
+	}
+	_, err := h.st.Update(context.Background(), fn)
+	require.NoError(t, err)
+}
+
 // deployReady creates name and reconciles it to Ready.
 func (h *shimHarness) deployReady(t *testing.T, name string) {
 	t.Helper()
@@ -184,14 +197,7 @@ func TestIssue309_NeverReadyReplacementIsReplacedAfterBackoff(t *testing.T) {
 	res := h.reconcile(t, "stall")
 	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a replica is kept while the Function has been Degraded for less than the boot timeout")
 
-	fn := h.getFn(t, "stall")
-	for i := range fn.Status.Conditions {
-		if fn.Status.Conditions[i].Type == "Ready" {
-			fn.Status.Conditions[i].LastTransitionTime = time.Now().Add(-time.Hour)
-		}
-	}
-	_, err := h.st.Update(context.Background(), fn)
-	require.NoError(t, err)
+	h.degradedSinceAnHour(t, "stall")
 	creates, _ := h.rt.counts()
 	res = h.reconcile(t, "stall")
 	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
