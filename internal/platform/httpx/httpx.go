@@ -5,6 +5,7 @@
 package httpx
 
 import (
+	"net"
 	"net/http"
 	"time"
 )
@@ -14,7 +15,16 @@ func Transport() *http.Transport {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok { //nolint:forbidigo // copies the settings, never the pool
 		return t.Clone()
 	}
-	return &http.Transport{Proxy: http.ProxyFromEnvironment}
+	// Something replaced http.DefaultTransport with another RoundTripper: use the settings net/http gives it.
+	return &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 }
 
 // Client returns a client over a new Transport; a zero timeout means none, as for http.DefaultClient.
