@@ -2,12 +2,12 @@
 # `just lima-example-fn-to-fn`, run host-side AFTER the self-deploying Lima VM is Ready (it replaced the
 # bash invoke script). All steps are data-plane http against the VM's forwarded :8081 — front declares a
 # link to greeter and brokers a synchronous context.invoke; the link IS the capability (no link ⇒ fails
-# closed). The one exec step reads in-VM state (the invoke sockets) to show the link default-deny.
+# closed). The one exec step reads in-VM state: front's local-API socket.
 #
 # Proves: (1) happy path — front invokes greeter and wraps its greeting; (2) contract propagation — a
 # missing name reaches greeter, whose stricter contract rejects it (422), and that 422 propagates back
 # through front; (3) direct greeter with a bad type — the contract gate (ADR-0058) returns 422 before the
-# handler; (4) only the linked caller (front) has an invoke socket.
+# handler; (4) front has its local-API socket, named by a hash of its namespace/name (#41).
 name: fn-to-fn links — invoke + contract propagation (ADR-0064/0058, containerd lane)
 
 vars:
@@ -19,7 +19,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/front"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":"venom"}}'
         retry: 10            # first call: absorb any warm-up after Ready
         delay: 1
@@ -36,7 +37,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/front"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{}}'
         info: "front response → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
@@ -49,18 +51,19 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/greeter"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":123}}'                                # name must be a string (input schema)
         assertions:
           - result.statuscode ShouldEqual 422
 
-  - name: link default-deny — the linked caller (front) has an invoke socket
+  - name: front has its local-API socket
     steps:
-      # in-VM read of the per-function local-API sockets (not forwarded) — the link is the capability.
+      # in-VM read (the sockets are not forwarded); a socket is named hex(sha256("<ns>/<name>")[:10]).sock.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo ls -1 /var/lib/funcd/data/invoke/
-        info: "invoke sockets → {{.result.systemout}}"
+          limactl shell {{.vm}} -- sh -c 'n=$(printf %s default/front | sha256sum | cut -c1-20).sock && sudo test -S /var/lib/funcd/data/invoke/$n && echo $n'
+        info: "front's socket → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring front
+          - result.systemout ShouldContainSubstring .sock

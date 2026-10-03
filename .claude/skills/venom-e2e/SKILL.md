@@ -80,7 +80,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/<fn>"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":"venom"}}'
         retry: 10            # first call: absorb any warm-up after Ready
         delay: 1
@@ -99,7 +100,8 @@ testcases:
       - type: http          # retry/delay IS the reconcile wait — no poll loop
         method: POST
         url: "{{.dp}}/function/<fn>"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"name":"venom"}}'
         retry: 30
         delay: 2

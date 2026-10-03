@@ -30,7 +30,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/egress-probe"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"url":"https://example.com"}}'
         # retry-as-wait: the first invoke may land before the sandbox is warm; retry to a 200 envelope.
         retry: 20
@@ -57,7 +58,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/egress-probe"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"url":"https://www.example.com"}}'
         # absorb the policy-cache recompile + the worker-index sync tick (deny-then-allow settle).
         retry: 25
@@ -79,7 +81,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/egress-probe"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"url":"https://1.1.1.1"}}'
         retry: 25
         delay: 3
@@ -96,7 +99,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.dp}}/function/egress-probe"
-        headers: { content-type: application/json }
+        headers:
+          content-type: application/json
         body: '{"data":{"url":"https://1.0.0.1"}}'
         retry: 10
         delay: 2
