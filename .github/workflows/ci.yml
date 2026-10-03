@@ -139,4 +139,4 @@ jobs:
           restore-keys: go-${{ runner.os }}-
 
       - name: Run e2e scenarios (pkg/funcd, -tags e2e)
-        run: nix develop --command just test-e2e
+        run: nix develop --command just test-e2e -v

@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -49,38 +50,7 @@ func TestBloatAudit(t *testing.T) {
 	require.NoError(t, err)
 	script, err := filepath.Abs(filepath.Join("agent", "audit.py"))
 	require.NoError(t, err)
-	repo := t.TempDir()
-	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=audit", "GIT_AUTHOR_EMAIL=", "GIT_COMMITTER_NAME=audit", "GIT_COMMITTER_EMAIL=")
-	run := func(name string, args ...string) (string, int) {
-		cmd := exec.Command(name, args...)
-		cmd.Dir, cmd.Env = repo, env
-		out, err := cmd.CombinedOutput()
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return string(out), exit.ExitCode()
-		}
-		require.NoError(t, err, string(out))
-		return string(out), 0
-	}
-	git := func(args ...string) {
-		out, code := run("git", args...)
-		require.Zero(t, code, out)
-	}
-	current := "main"
-	commit := func(branch, msg string, files map[string]string) {
-		if branch != current {
-			git("checkout", "-q", "-b", branch, "main")
-			current = branch
-		}
-		for path, body := range files {
-			require.NoError(t, os.MkdirAll(filepath.Join(repo, filepath.Dir(path)), 0o750))
-			require.NoError(t, os.WriteFile(filepath.Join(repo, path), []byte(body), 0o600))
-		}
-		git("add", "-A")
-		git("commit", "-q", "-m", msg)
-	}
-	git("init", "-q", "-b", "main")
+	run, commit := fixtureRepo(t)
 	gomod := "module example.com/audit\n\ngo 1.26\n\nreplace example.com/dep => ./dep\n\nreplace example.com/ind => ./ind\n\n"
 	spread := strings.Replace(histogram, "Histogram", "Spread", 1)
 	doc := func(perLine int) string {
@@ -165,4 +135,72 @@ func TestBloatAudit(t *testing.T) {
 	out, code = audit("scoped")
 	require.Equal(t, 1, code, out)
 	require.Contains(t, out, "`sleep:b/b.go` `b/b.go:5` time.Sleep or a bare <-time.After in production code [FAIL]")
+}
+
+// fixtureRepo makes a throwaway git repository on main: run runs a command in it, commit writes files and commits
+// them on a branch, which it creates from main on first use.
+func fixtureRepo(t *testing.T) (run func(string, ...string) (string, int),
+	commit func(branch, msg string, files map[string]string),
+) {
+	t.Helper()
+	repo := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=audit", "GIT_AUTHOR_EMAIL=", "GIT_COMMITTER_NAME=audit", "GIT_COMMITTER_EMAIL=")
+	run = func(name string, args ...string) (string, int) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir, cmd.Env = repo, env
+		out, err := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return string(out), exit.ExitCode()
+		}
+		require.NoError(t, err, string(out))
+		return string(out), 0
+	}
+	git := func(args ...string) {
+		out, code := run("git", args...)
+		require.Zero(t, code, out)
+	}
+	current := "main"
+	commit = func(branch, msg string, files map[string]string) {
+		if branch != current {
+			git("checkout", "-q", "-b", branch, "main")
+			current = branch
+		}
+		for path, body := range files {
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, filepath.Dir(path)), 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, path), []byte(body), 0o600))
+		}
+		git("add", "-A")
+		git("commit", "-q", "-m", msg)
+	}
+	git("init", "-q", "-b", "main")
+	return run, commit
+}
+
+// A flaky test's output in the full-mode report holds its failing run's error, even when the passing runs after it
+// print more lines than the report keeps of one run.
+func TestIssue547_FlakyOutputKeepsFailingRun(t *testing.T) {
+	t.Parallel()
+	script, err := filepath.Abs(filepath.Join("agent", "audit.py"))
+	require.NoError(t, err)
+	run, commit := fixtureRepo(t)
+	commit("main", "base", map[string]string{"go.mod": "module example.com/audit\n\ngo 1.26\n"})
+	commit("flaky", "test: add a flaky test", map[string]string{"f/f_test.go": "package f\n\nimport \"testing\"\n\n" +
+		"var runs int\n\nfunc TestFlip(t *testing.T) {\n\truns++\n\tif runs == 1 {\n\t\tt.Fatal(\"first run fails\")\n\t}\n" +
+		"\tfor i := range 20 {\n\t\tt.Log(\"passing line\", i)\n\t}\n}\n"})
+	report := filepath.Join(t.TempDir(), "audit.json")
+	out, code := run("python3", script, "--base", "main", "--head", "flaky", "--full", "--no-lint", "--report-only",
+		"--json", report)
+	require.Zero(t, code, out)
+	require.Contains(t, out, "- flaky: example.com/audit/f TestFlip\n")
+	raw, err := os.ReadFile(report)
+	require.NoError(t, err)
+	var data struct {
+		Flakes struct {
+			Output map[string][]string `json:"output"`
+		} `json:"flakes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &data))
+	require.Contains(t, strings.Join(data.Flakes.Output["example.com/audit/f TestFlip"], "\n"), "first run fails")
 }

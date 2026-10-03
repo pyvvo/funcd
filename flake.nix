@@ -46,6 +46,8 @@
           git
           lefthook  # git hooks manager (gofmt gate — see lefthook.yml); installed by the shellHook
           act  # run GitHub Actions locally (nektos/act) — needs a docker daemon (colima on macOS)
+          # the Python shim's interpreter and runtime dep (ADR-0049/0123), 3.14 for the pool host (ADR-0050)
+          (python314.withPackages (ps: [ ps.fastjsonschema ]))
         ]) ++ limaFor system ++ [ (venomFor system) ];
         shellHook = ''
           echo "funcd dev shell — go $(go version | awk '{print $3}')"
