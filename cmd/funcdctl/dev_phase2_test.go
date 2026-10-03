@@ -29,11 +29,12 @@ import (
 )
 
 // requireRuntime skips a test when `funcdctl dev` would find no usable runtime shim to boot the platform,
-// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself, so a python3
-// that cannot load the shim counts as missing, exactly as at startup.
+// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself for the node
+// handler these lanes declare, so a missing node or a python3 that cannot load the shim counts as missing,
+// exactly as at startup.
 func requireRuntime(t *testing.T) {
 	t.Helper()
-	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false)
+	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false, true)
 	if fault.KindOf(err) == fault.NotFound {
 		t.Skipf("funcdctl dev needs a runtime shim to boot: %v", err)
 	}

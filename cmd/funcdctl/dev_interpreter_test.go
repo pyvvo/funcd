@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // scenario: dev-python-from-manifest / dev-interpreter-env-overrides (the resolution half) — a manifest
@@ -106,5 +108,46 @@ func TestIssue430_MissingPythonFailsAtStartup(t *testing.T) {
 			"handler.mjs":   "export function handle() { return {}; }\n",
 		})
 		require.NoError(t, err, "a missing python does not block a node handler")
+	})
+}
+
+// Issue #503: with no node found and a python that loads the shim, funcdctl dev registered python as the
+// default shim and started; the node Function then ran on the python shim. A node handler with no node
+// found now fails at startup; a python handler still starts.
+func TestIssue503_MissingNodeFailsAtStartup(t *testing.T) {
+	python := filepath.Join(t.TempDir(), "python3")
+	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	t.Setenv("FUNCD_PYTHON", python)
+	t.Setenv("FUNCD_NODE", "")
+	t.Setenv("PATH", t.TempDir())
+	start := func(t *testing.T, files map[string]string) error {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		a := &cli{out: io.Discard}
+		inst, err := a.startDev(ctx, devProject(t, files), "", devConfig{})
+		t.Cleanup(func() {
+			cancel()
+			if inst != nil {
+				_ = inst.stop()
+			}
+		})
+		return err
+	}
+
+	t.Run("node-handler", func(t *testing.T) {
+		err := start(t, map[string]string{
+			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+			"handler.mjs":   "export function handle() { return {}; }\n",
+		})
+		require.Error(t, err, "a node handler with no node found fails at startup")
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "a missing node is NotFound: %v", err)
+		require.Contains(t, err.Error(), "no node interpreter", "the error says no node was found")
+	})
+	t.Run("python-handler", func(t *testing.T) {
+		err := start(t, map[string]string{
+			"funcdctl.yaml": "runtime: python314\nhandler: handle\n" + permissiveContract,
+			"handler.py":    "def handle(event, context):\n    return {}\n",
+		})
+		require.NoError(t, err, "a missing node does not block a python handler")
 	})
 }

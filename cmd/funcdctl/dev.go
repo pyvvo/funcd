@@ -585,8 +585,10 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	if len(pfs) > 0 {
 		devBlock, baseDir = pfs[0].m.Dev, filepath.Dir(pfs[0].manifestPath)
 	}
-	needPython := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") })
-	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython)
+	isPython := func(pf plannedFunc) bool { return strings.HasPrefix(string(pf.m.Runtime), "python") }
+	needPython := slices.ContainsFunc(pfs, isPython)
+	needNode := slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return !isPython(pf) })
+	shimOpts, shimCleanup, sherr := devShimOptions(ctx, op, devBlock, baseDir, needPython, needNode)
 	if sherr != nil {
 		return nil, sherr
 	}
@@ -1874,8 +1876,9 @@ func resolveInterpreter(p, baseDir string) string {
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
 // A python that cannot import the shim is never registered, as in the daemon; when the run has a
-// python handler (needPython), a missing python or one that cannot load the shim is a startup error.
-func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython bool) (_ []funcd.Option, cleanup func(), err error) {
+// python handler (needPython), a missing python or one that cannot load the shim is a startup error;
+// when it has a handler for the default (node) shim (needNode), a missing node is.
+func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython, needNode bool) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
 		return nil, nil, fault.Wrapf(derr, fault.Internal, op, "create shim temp dir")
@@ -1900,6 +1903,9 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		if p, lerr := exec.LookPath("node"); lerr == nil {
 			node = p
 		}
+	}
+	if node == "" && needNode {
+		return nil, nil, fault.NotFoundf(op, "no node interpreter found for the node handler (need node on PATH; set FUNCD_NODE or dev.node)")
 	}
 	if node != "" {
 		shimPath := filepath.Join(dir, "shim.mjs")
