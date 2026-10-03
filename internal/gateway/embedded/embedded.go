@@ -32,7 +32,7 @@ type driver struct {
 }
 
 // New returns an embedded reverse-proxy gateway (dev/e2e/CI). Its reverse proxies share one
-// pooled upstream transport so connections to the function workeres are reused across
+// pooled upstream transport so connections to the function workers are reused across
 // requests — http.DefaultTransport keeps only 2 idle conns/host, which churns connections
 // into TIME_WAIT and exhausts ephemeral ports under load (ADR-0041, surfaced by ADR-0040).
 func New() gateway.Gateway {

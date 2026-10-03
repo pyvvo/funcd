@@ -415,6 +415,43 @@ func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
 	require.Zero(t, res.RequeueAfter, "a Failed member is not polled again")
 }
 
+// Issue #422: a serving pooled member whose new pool worker runs but never becomes ready is not re-probed every 200 ms
+// for good. Once the pool worker has run for the boot timeout and the member has been Degraded as long, the pool worker
+// is stopped and created again on a later pass, as a solo replica is (#309, ADR-0142, ADR-0030 §4b).
+func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+	pool := v1.ObjectName("__pool__nodejs22__stall")
+	id := runtime.NewInstanceID("default", pool, "", 0)
+	h.create(t, "stall", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "stall" })
+	h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+
+	h.rt.exitRevision(pool, "", 0, runtime.StateFailed, time.Minute)
+	h.rt.hold(id, true)
+	h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the restarted pool worker boots")
+
+	h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
+	res := h.reconcile(t, "stall")
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "the pool worker is kept while the member has been Degraded for less than the boot timeout")
+
+	h.degradedSinceAnHour(t, "stall")
+	creates, _ := h.rt.counts()
+	res = h.reconcile(t, "stall")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
+	require.Equal(t, testPeriod, res.RequeueAfter, "the pass waits out the period instead of re-probing the hung pool worker")
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates(pool)[""][0], "the hung pool worker is stopped")
+	require.Contains(t, h.condition(t, "stall", "Ready").Message, "did not become ready")
+	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "stall"), "a hung pool worker of a serving member is not a shape failure")
+
+	h.rt.hold(id, false)
+	h.reconcile(t, "stall")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates+1, after, "the hung pool worker is created again")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+}
+
 // Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
 // naming the start error, as a solo worker does (#73), and a later pass creates the pool worker again, writing
 // nothing while it still fails.

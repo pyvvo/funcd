@@ -181,13 +181,24 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		return verdict{}, err
 	}
 	serving := servingPhase(fn.Status.Phase)
+	var repairErr string
 	if serving {
-		failed = "" // ADR-0142: in a pass that started serving, a Failed replica is a crash under repair
+		// ADR-0142: in a pass that started serving, a Failed pool worker is a crash under repair, and so is one that
+		// never became ready (issue #422); ensurePool creates a stopped one again on a later pass
+		stopped, serr := r.stopNeverReady(ctx, fn, failed)
+		if serr != nil {
+			return verdict{}, serr
+		}
+		if stopped {
+			running--
+			repairErr = notReadyError()
+		}
+		failed = ""
 	}
 	if ready >= 1 {
 		fn.Status.ServingRevision = fn.Status.CurrentRevision
 	}
-	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, startErr: startErr}, nil
+	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, startErr: startErr, repairErr: repairErr}, nil
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions

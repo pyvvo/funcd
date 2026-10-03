@@ -45,7 +45,7 @@ type Config struct {
 		TLS struct {
 			Enabled  bool     `json:"enabled,omitempty" env:"FUNCD_TLS_ENABLED"`
 			Mode     string   `json:"mode,omitempty" env:"FUNCD_TLS_MODE" validate:"omitempty,oneof=selfsigned provided acme"`
-			Hosts    []string `json:"hosts,omitempty"`
+			Hosts    []string `json:"hosts,omitempty" env:"FUNCD_TLS_HOSTS" envSeparator:","`
 			CertFile string   `json:"certFile,omitempty" env:"FUNCD_TLS_CERT_FILE"`
 			KeyFile  string   `json:"keyFile,omitempty" env:"FUNCD_TLS_KEY_FILE"`
 			Email    string   `json:"email,omitempty" env:"FUNCD_TLS_EMAIL"`
@@ -72,14 +72,15 @@ type Config struct {
 		// Edge shaping (ADR-0114, F78): CORS / response headers / gzip compression. Off by default.
 		Shaping struct {
 			CORS struct {
-				AllowOrigins  []string `json:"allowOrigins,omitempty"`
-				AllowMethods  []string `json:"allowMethods,omitempty"`
-				AllowHeaders  []string `json:"allowHeaders,omitempty"`
-				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty" validate:"min=0"`
+				AllowOrigins  []string `json:"allowOrigins,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_ORIGINS" envSeparator:","`
+				AllowMethods  []string `json:"allowMethods,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_METHODS" envSeparator:","`
+				AllowHeaders  []string `json:"allowHeaders,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_HEADERS" envSeparator:","`
+				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty" env:"FUNCD_SHAPING_CORS_MAX_AGE_SECONDS" validate:"min=0"`
 			} `json:"cors,omitempty"`
 			Headers struct {
-				Set    map[string]string `json:"set,omitempty"`
-				Remove []string          `json:"remove,omitempty"`
+				// The env form splits pairs on ",", so a header value that contains a comma needs the file.
+				Set    map[string]string `json:"set,omitempty" env:"FUNCD_SHAPING_HEADERS_SET" envSeparator:"," envKeyValSeparator:"="`
+				Remove []string          `json:"remove,omitempty" env:"FUNCD_SHAPING_HEADERS_REMOVE" envSeparator:","`
 			} `json:"headers,omitempty"`
 			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION"`
 		} `json:"shaping,omitempty"`
@@ -96,7 +97,7 @@ type Config struct {
 			// with the gateway when Egress is on (Linux/containerd only).
 			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
 			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
-			InternalAllow    []string `json:"internalAllow,omitempty"`
+			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:","`
 		} `json:"network,omitempty"`
 	} `json:"server,omitempty"`
 	Storage struct {

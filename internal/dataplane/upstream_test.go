@@ -1,10 +1,16 @@
 package dataplane_test
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/textproto"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +19,8 @@ import (
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/dataplane"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/edge/shape"
+	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -69,4 +77,128 @@ func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
 	require.GreaterOrEqual(t, rec.Code, 500, "an unreachable upstream is a 5xx, not a panic")
+}
+
+// The Upstream proxy sits behind the same edge chain as the activator, so an upstream 1xx must not
+// drop the edge's X-Request-Id and CORS headers on an Upstream route either.
+func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
+	t.Parallel()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/expect":
+			_, _ = io.Copy(io.Discard, r.Body) // the first body read answers Expect with 100 Continue
+		case "/drop":
+			w.WriteHeader(http.StatusEarlyHints)
+			panic(http.ErrAbortHandler)
+		default:
+			w.WriteHeader(http.StatusEarlyHints)
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(up.Close)
+	rtr := router.New()
+	require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+	}}))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, nil),
+		gateway.RequestID, shape.Chain(shape.Config{CORS: &shape.CORS{AllowOrigins: []string{"*"}}})))
+	t.Cleanup(edge.Close)
+	client := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		body    io.Reader
+		interim int
+		status  int
+	}{
+		{name: "early-hints", path: "/hints", interim: http.StatusEarlyHints, status: http.StatusOK},
+		{name: "expect-continue", path: "/expect", body: bytes.NewReader(make([]byte, 4096)), interim: http.StatusContinue, status: http.StatusOK},
+		{name: "upstream-fails-after-1xx", path: "/drop", interim: http.StatusEarlyHints, status: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var codes []int
+			trace := &httptrace.ClientTrace{Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
+				codes = append(codes, code)
+				return nil
+			}}
+			method := http.MethodGet
+			if tc.body != nil {
+				method = http.MethodPost
+			}
+			req, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), method, edge.URL+"/catalog/lake"+tc.path, tc.body)
+			require.NoError(t, err)
+			req.Header.Set("Origin", "https://app.example")
+			if tc.body != nil {
+				req.Header.Set("Expect", "100-continue")
+			}
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.Contains(t, codes, tc.interim, "the upstream 1xx is relayed")
+			require.Equal(t, tc.status, resp.StatusCode)
+			require.Equal(t, "https://app.example", resp.Header.Get("Access-Control-Allow-Origin"))
+			require.Contains(t, resp.Header.Values("Vary"), "Origin")
+			require.NotEmpty(t, resp.Header.Get("X-Request-Id"))
+		})
+	}
+}
+
+// TestIssue440_UpstreamErrorsLogThroughSlog: a failed edge upstream call (ADR-0138) is logged once
+// through the data plane's slog logger, naming the upstream and the error, and ReverseProxy's own
+// errors (a failed body copy) go through the same handler, never the stdlib log package. Not parallel:
+// it swaps the stdlib logger's output.
+func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
+	var stdlog bytes.Buffer
+	prevOut := log.Writer()
+	log.SetOutput(&stdlog)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+
+	stopped := httptest.NewServer(http.NotFoundHandler())
+	stopped.Close()
+	truncating := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(truncating.Close)
+
+	cases := []struct {
+		name     string
+		upstream string
+		logged   string
+		warns    int
+	}{
+		{name: "an unreachable upstream", upstream: stopped.URL, logged: "connection refused", warns: 1},
+		{name: "an upstream that fails mid-body", upstream: truncating.URL, logged: "read error during body copy", warns: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rtr := router.New()
+			require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+				Namespace: "default",
+				Auth:      v1.AuthOpen,
+				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
+			}}))
+			st := store.New(memory.New())
+			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+			require.NoError(t, err)
+			var logs bytes.Buffer
+			h := dataplane.Handler(st, act, rtr, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+
+			require.Contains(t, logs.String(), tc.logged)
+			require.Equal(t, tc.warns, strings.Count(logs.String(), "level=WARN"), logs.String())
+			require.Equal(t, tc.warns, strings.Count(logs.String(), "upstream="+tc.upstream), "every line names the upstream")
+		})
+	}
+	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
 }

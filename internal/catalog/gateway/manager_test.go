@@ -170,6 +170,26 @@ func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
 	require.Greater(t, srv.IdleTimeout, clientIdle, "an idle keep-alive connection must be closed, after the client's own idle timeout")
 }
 
+// TestIssue454_ProxyServerErrorsUseTheManagerLogger: net/http logs its own server errors (an accept error,
+// a recovered panic) through the http.Server's ErrorLog, and through the stdlib log package when it is nil,
+// so they bypassed the Manager's logger and its format.
+func TestIssue454_ProxyServerErrorsUseTheManagerLogger(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	st := store.New(memory.New())
+	mgr := NewManager("", "", NewCatalogKeys([]byte("i454-master"), st), buildPDP(t, st), slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(mgr.Shutdown)
+	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
+	require.NoError(t, err)
+
+	mgr.mu.Lock()
+	srv := mgr.servers[managerKey("data", "lake")].server
+	mgr.mu.Unlock()
+	require.NotNil(t, srv.ErrorLog, "the catalog proxy's net/http errors must go through the Manager's logger")
+	srv.ErrorLog.Print("issue-454 probe")
+	require.Contains(t, logs.String(), `"level":"WARN","msg":"issue-454 probe","component":"catalog.gateway"`)
+}
+
 // TestIssue379_ProxyLogsThroughManagerLogger: the catalog PEP proxy logs through the logger the
 // Manager was given (ADR-0002 §6), and an unreachable engine is logged there, not through the
 // stdlib log package. Not parallel: it captures log's output.

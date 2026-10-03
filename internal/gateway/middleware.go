@@ -6,8 +6,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -30,25 +33,36 @@ func Chain(h http.Handler, mw ...Middleware) http.Handler {
 // requestIDKey is the context key for the request id (struct key — no global).
 type requestIDKey struct{}
 
-// Recover is a middleware that turns a handler panic into an RFC 9457
-// problem+json 500 instead of crashing the connection. A panic is re-panicked
-// when no problem can be written: http.ErrAbortHandler (net/http's signal to
-// abort, e.g. a proxied stream whose upstream died mid-body), or any panic after
-// the response committed (#338). net/http then aborts the connection, so the
-// client sees the truncation, and logs any panic other than ErrAbortHandler.
-func Recover(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cw := &commitWriter{ResponseWriter: w}
-		defer func() {
-			if rec := recover(); rec != nil {
-				if err, ok := rec.(error); cw.committed || ok && errors.Is(err, http.ErrAbortHandler) {
-					panic(rec)
+// Recover returns a middleware that turns a handler panic into an RFC 9457
+// problem+json 500 instead of crashing the connection. As the operation's owner
+// (ADR-0002 §3) it logs the panic once to logger (nil means slog.Default()), with
+// its value, stack and request id; the client's problem omits the panic text. A
+// panic is re-panicked when no problem can be written: http.ErrAbortHandler
+// (net/http's signal to abort, e.g. a proxied stream whose upstream died
+// mid-body), or any panic after the response committed (#338). net/http then
+// aborts the connection, so the client sees the truncation, and logs any panic
+// other than ErrAbortHandler.
+func Recover(logger *slog.Logger) Middleware {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cw := &commitWriter{ResponseWriter: w}
+			defer func() {
+				if rec := recover(); rec != nil {
+					if err, ok := rec.(error); cw.committed || ok && errors.Is(err, http.ErrAbortHandler) {
+						panic(rec)
+					}
+					// Recover runs outside RequestID, so the id is read from the response header it set.
+					logger.ErrorContext(r.Context(), "handler panic",
+						"panic", fmt.Sprint(rec), "request_id", w.Header().Get("X-Request-Id"), "stack", string(debug.Stack()))
+					fault.WriteProblem(w, fault.Internalf("gateway.Recover", "handler panic"))
 				}
-				fault.WriteProblem(w, fault.Internalf("gateway.Recover", "handler panic: %v", rec))
-			}
-		}()
-		next.ServeHTTP(cw, r)
-	})
+			}()
+			next.ServeHTTP(cw, r)
+		})
+	}
 }
 
 // commitWriter records whether the response has committed (a final status, a

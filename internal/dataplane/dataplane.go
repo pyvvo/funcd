@@ -236,10 +236,14 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	if remainder == "" {
 		remainder = "/"
 	}
+	logger := s.logger.With("upstream", m.Upstream)
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, perr error) {
+	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
+	proxy.ErrorHandler = func(w http.ResponseWriter, pr *http.Request, perr error) {
+		logger.WarnContext(pr.Context(), "edge upstream call failed", "error", perr)
 		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream unreachable: %v", perr))
 	}
+	activator.KeepEdgeHeaders(proxy, w)
 	// Address the upstream at its own root: replace the request path with the stripped remainder
 	// (NewSingleHostReverseProxy's default Director would join the target path with the full request
 	// path, keeping the matched prefix — we want it stripped).
