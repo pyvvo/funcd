@@ -411,28 +411,11 @@ func parseLevel(level string) slog.Level {
 // with a warning.
 func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
 	noop := func(context.Context) {}
-	if cfg.Kvstore.Backup.Enabled && cfg.Kvstore.Backup.Target == "" {
-		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+	memory, err := checkKVStoreConfig(cfg, logger)
+	if err != nil {
+		return nil, noop, err
 	}
-	if cfg.Kvstore.Cdc.Enabled && cfg.Kvstore.Cdc.Sink == "" {
-		return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
-	}
-	if cfg.Storage.Mode == "memory" {
-		if cfg.Kvstore.Engine == "badger" {
-			logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
-		}
-		if cfg.Kvstore.Backup.Enabled || cfg.Kvstore.Cdc.Enabled {
-			logger.Warn("funcd: storage.mode memory ignores kvstore.backup and kvstore.cdc — no KV backup or change feed runs")
-		}
-		return kvmemory.New(), noop, nil
-	}
-	if cfg.Kvstore.Engine != "badger" {
-		if cfg.Kvstore.Backup.Enabled {
-			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.backup.enabled requires kvstore.engine: badger")
-		}
-		if cfg.Kvstore.Cdc.Enabled {
-			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled requires kvstore.engine: badger")
-		}
+	if memory {
 		return kvmemory.New(), noop, nil
 	}
 	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load
@@ -440,45 +423,13 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		kv, err := kvbadger.Open(dir)
 		return kv, noop, err
 	}
-
-	var bucket blob.Bucket
-	var bcfg kvbadger.BackupConfig
-	if cfg.Kvstore.Backup.Enabled {
-		interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
-		if err != nil {
-			return nil, noop, err
-		}
-		rebaseline, err := parseDurationOr("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour)
-		if err != nil {
-			return nil, noop, err
-		}
-		b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
-		if err != nil {
-			return nil, noop, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
-		}
-		bucket = b
-		bcfg = kvbadger.BackupConfig{
-			Interval:   interval,
-			Rebaseline: rebaseline,
-			ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
-		}
+	bucket, bcfg, err := kvBackup(ctx, cfg)
+	if err != nil {
+		return nil, noop, err
 	}
-
-	var sink bus.Bus
-	var ccfg kvbadger.CDCConfig
-	if cfg.Kvstore.Cdc.Enabled {
-		if theBus == nil {
-			return nil, noop, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
-		}
-		retention, err := parseDurationOr("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour)
-		if err != nil {
-			return nil, noop, err
-		}
-		sink = theBus
-		ccfg = kvbadger.CDCConfig{
-			Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
-			Retention: retention,
-		}
+	sink, ccfg, err := kvCDC(cfg, theBus)
+	if err != nil {
+		return nil, noop, err
 	}
 
 	kv, seams, err := kvbadger.OpenWithSeamsFor(dir, bucket, bcfg, sink, ccfg)
@@ -497,6 +448,78 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		}
 	}
 	return kv, start, nil
+}
+
+// checkKVStoreConfig rejects a kvstore config buildKVStore cannot honor and reports whether the KV runs in
+// memory: storage.mode memory (which warns about what it overrides) or an engine other than badger.
+func checkKVStoreConfig(cfg config.Config, logger *slog.Logger) (memory bool, err error) {
+	if cfg.Kvstore.Backup.Enabled && cfg.Kvstore.Backup.Target == "" {
+		return false, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+	}
+	if cfg.Kvstore.Cdc.Enabled && cfg.Kvstore.Cdc.Sink == "" {
+		return false, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
+	}
+	if cfg.Storage.Mode == "memory" {
+		if cfg.Kvstore.Engine == "badger" {
+			logger.Warn("funcd: storage.mode memory overrides kvstore.engine badger — KV data is in memory and lost on restart")
+		}
+		if cfg.Kvstore.Backup.Enabled || cfg.Kvstore.Cdc.Enabled {
+			logger.Warn("funcd: storage.mode memory ignores kvstore.backup and kvstore.cdc — no KV backup or change feed runs")
+		}
+		return true, nil
+	}
+	if cfg.Kvstore.Engine != "badger" {
+		if cfg.Kvstore.Backup.Enabled {
+			return false, fault.Invalidf("buildKVStore", "kvstore.backup.enabled requires kvstore.engine: badger")
+		}
+		if cfg.Kvstore.Cdc.Enabled {
+			return false, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled requires kvstore.engine: badger")
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// kvBackup opens the kvstore.backup target and resolves its intervals (ADR-0067); disabled ⇒ no bucket.
+func kvBackup(ctx context.Context, cfg config.Config) (blob.Bucket, kvbadger.BackupConfig, error) {
+	if !cfg.Kvstore.Backup.Enabled {
+		return nil, kvbadger.BackupConfig{}, nil
+	}
+	interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, err
+	}
+	rebaseline, err := parseDurationOr("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour)
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, err
+	}
+	b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
+	}
+	return b, kvbadger.BackupConfig{
+		Interval:   interval,
+		Rebaseline: rebaseline,
+		ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
+	}, nil
+}
+
+// kvCDC resolves the kvstore.cdc change feed onto the bus (ADR-0068); disabled ⇒ no sink.
+func kvCDC(cfg config.Config, theBus bus.Bus) (bus.Bus, kvbadger.CDCConfig, error) {
+	if !cfg.Kvstore.Cdc.Enabled {
+		return nil, kvbadger.CDCConfig{}, nil
+	}
+	if theBus == nil {
+		return nil, kvbadger.CDCConfig{}, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
+	}
+	retention, err := parseDurationOr("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour)
+	if err != nil {
+		return nil, kvbadger.CDCConfig{}, err
+	}
+	return theBus, kvbadger.CDCConfig{
+		Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
+		Retention: retention,
+	}, nil
 }
 
 // parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive

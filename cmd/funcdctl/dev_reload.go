@@ -183,25 +183,7 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 // no longer holds. A failed reload is reported once and retried on the next edit; an apply that lost a race with a
 // concurrent status write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
 func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
-	var changed []*devHandler
-	var errs []error
-	for _, h := range hs {
-		fp, ferr := h.fingerprint(stateDirs)
-		if ferr != nil || fp == h.seen {
-			continue
-		}
-		h.seen = fp
-		m, lerr := loadManifestAt(op, h.pf.manifestPath)
-		if lerr != nil {
-			errs = append(errs, fault.Wrapf(lerr, fault.KindOf(lerr), op, "reload %s", h.pf.name))
-			continue
-		}
-		if m.Main != h.pf.m.Main || m.Dev.Backends != h.pf.m.Dev.Backends || m.Dev.Node != h.pf.m.Dev.Node || m.Dev.Python != h.pf.m.Dev.Python {
-			slog.Default().Warn("restart funcdctl dev to apply a changed main, dev.backends, dev.node or dev.python", "function", h.pf.name)
-		}
-		h.pf.m = m
-		changed = append(changed, h)
-	}
+	changed, errs := changedHandlers(op, hs, stateDirs)
 	if len(changed) == 0 {
 		return errors.Join(errs...)
 	}
@@ -257,6 +239,30 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	}
 	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs)
 	return errors.Join(errs...)
+}
+
+// changedHandlers returns the handlers whose files changed since the last poll, each with its manifest re-read and
+// its new fingerprint marked seen, and an error for each edited manifest that does not load. A handler whose files
+// cannot be fingerprinted (an editor's save swaps the file) is retried on the next poll.
+func changedHandlers(op string, hs []*devHandler, stateDirs []string) (changed []*devHandler, errs []error) {
+	for _, h := range hs {
+		fp, ferr := h.fingerprint(stateDirs)
+		if ferr != nil || fp == h.seen {
+			continue
+		}
+		h.seen = fp
+		m, lerr := loadManifestAt(op, h.pf.manifestPath)
+		if lerr != nil {
+			errs = append(errs, fault.Wrapf(lerr, fault.KindOf(lerr), op, "reload %s", h.pf.name))
+			continue
+		}
+		if m.Main != h.pf.m.Main || m.Dev.Backends != h.pf.m.Dev.Backends || m.Dev.Node != h.pf.m.Dev.Node || m.Dev.Python != h.pf.m.Dev.Python {
+			slog.Default().Warn("restart funcdctl dev to apply a changed main, dev.backends, dev.node or dev.python", "function", h.pf.name)
+		}
+		h.pf.m = m
+		changed = append(changed, h)
+	}
+	return changed, errs
 }
 
 // devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, the stamp
