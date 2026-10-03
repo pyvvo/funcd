@@ -45,18 +45,27 @@ func devProject(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// runDev boots funcdctl dev over the project dir and returns the running instance; it is torn down
-// (ctx cancelled, platform drained, contract dotfile removed) at test end.
-func runDev(t *testing.T, dir string) *devInstance {
+// tryStartDev boots funcdctl dev over path (a manifest dir or a workflow.yaml) and returns the instance
+// with the start error; whatever started is torn down (ctx cancelled, platform drained, contract dotfile
+// removed) at test end.
+func tryStartDev(t *testing.T, path string) (*devInstance, error) {
 	t.Helper()
-	a := &cli{out: io.Discard}
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := a.startDev(ctx, dir, "", devConfig{})
-	require.NoError(t, err)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, path, "", devConfig{})
 	t.Cleanup(func() {
 		cancel()
-		_ = inst.stop()
+		if inst != nil {
+			_ = inst.stop()
+		}
 	})
+	return inst, err
+}
+
+// runDev boots funcdctl dev over the project dir and returns the running instance.
+func runDev(t *testing.T, dir string) *devInstance {
+	t.Helper()
+	inst, err := tryStartDev(t, dir)
+	require.NoError(t, err)
 	return inst
 }
 

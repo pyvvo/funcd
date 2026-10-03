@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -23,17 +22,11 @@ import (
 )
 
 // startDevPath boots funcdctl dev over an explicit path (a workflow.yaml or a manifest dir) and tears it
-// down at test end. It mirrors runDev but does not assume the path is a directory.
+// down at test end.
 func startDevPath(t *testing.T, path string) *devInstance {
 	t.Helper()
-	a := &cli{out: io.Discard}
-	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := a.startDev(ctx, path, "", devConfig{})
+	inst, err := tryStartDev(t, path)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		cancel()
-		_ = inst.stop()
-	})
 	return inst
 }
 
