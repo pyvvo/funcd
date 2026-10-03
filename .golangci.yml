@@ -107,6 +107,9 @@ linters:
         # chained use (http.DefaultClient.Do) is reported once, on the inner selector.
         - pattern: "^http\\.Default(Client|Transport)$"
           msg: "use internal/platform/httpx instead of the process-wide http.DefaultClient/DefaultTransport"
+        # #571: the package-level helpers send through http.DefaultClient.
+        - pattern: "^http\\.(Get|Head|Post|PostForm)$"
+          msg: "use a client from internal/platform/httpx; http.Get, Head, Post and PostForm use the process-wide http.DefaultClient"
   exclusions:
     generated: lax
     rules:
@@ -119,12 +122,12 @@ linters:
       - linters:
           - forbidigo
         path: '(^|/)generated/|\.gen\.go$'
-      # #564: the shared-client ban is for production code. Tests may use the shared client and transport, and
+      # #564, #571: the shared-client ban is for production code. Tests may use the shared client and transport, and
       # pkg/sdk is a client library: without WithHTTPClient it uses its caller's http.DefaultClient.
       - linters:
           - forbidigo
         path: '_test\.go$|(^|/)pkg/sdk/'
-        text: 'http\.Default(Client|Transport)'
+        text: 'use of `http\.(Default(Client|Transport)|Get|Head|Post|PostForm)`'
 
 run:
   timeout: 5m
