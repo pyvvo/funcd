@@ -28,6 +28,24 @@ const MODEL = args.model || 'claude-opus-5-5'
 const TRAILER = args.trailer || 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
 const LANE_PATHS = 'internal/runtime/containerd, internal/network, e2e/ or scripts/lanes.yaml'
 
+// This run changes code, so at most five of its agents run at once, whatever the workflow runner allows (a
+// read-only campaign may run more): more parallel agents on one host caused the 2026-10 campaign's contention
+// incidents. Every agent call goes through run().
+const MAX_AGENTS = Math.min(5, args.maxAgents || 5)
+let freeAgents = MAX_AGENTS
+const agentWaiters = []
+const run = async (prompt, opts) => {
+  if (freeAgents > 0) freeAgents--
+  else await new Promise(resolve => agentWaiters.push(resolve))
+  try {
+    return await agent(prompt, opts)
+  } finally {
+    const next = agentWaiters.shift()
+    if (next) next()
+    else freeAgents++
+  }
+}
+
 const EFFICIENT = `WORK EFFICIENTLY: every turn costs seconds, so use few of them.
 - Send independent tool calls together in ONE turn. Read a whole file once rather than many slices. Chain dependent shell steps with && in one call.
 - Keep outputs short: run only the tests you need (\`-run\`) and filter output (\`2>&1 | tail -25\`, \`| grep -E 'FAIL|ok |panic'\`).
@@ -163,18 +181,18 @@ const lanePrompt = (wt, specs) => `Run the Lima lanes for this wave. colima must
 Return whether all passed, each PASS/FAIL line, and a note with the failing case and assertion from .cache/lanes/<lane>.log of the main checkout if one failed.`
 
 async function doIssue(it) {
-  const fx = await agent(fixPrompt(it), { label: `fix:#${it.n}`, phase: 'Fix', schema: FIX })
+  const fx = await run(fixPrompt(it), { label: `fix:#${it.n}`, phase: 'Fix', schema: FIX })
   if (!fx) return { issue: it.n, status: 'parked', reason: 'the fixer returned nothing', defects: [] }
   if (fx.status !== 'committed' || !fx.commits.length) return { issue: it.n, status: 'parked', reason: fx.reason, defects: fx.new_defects }
   const commits = [...fx.commits]
   const rounds = []
   for (let round = 1; round <= 3; round++) {
     if (round > 1) {
-      const rw = await agent(reworkPrompt(it, rounds[rounds.length - 1].report_path), { label: `rework:#${it.n}`, phase: 'Rework', schema: REWORK })
+      const rw = await run(reworkPrompt(it, rounds[rounds.length - 1].report_path), { label: `rework:#${it.n}`, phase: 'Rework', schema: REWORK })
       if (!rw || !rw.done) return { issue: it.n, status: 'parked', reason: rw ? rw.note : 'rework failed', defects: fx.new_defects }
       commits.push(...rw.commits)
     }
-    const v = await agent(reviewPrompt(it, commits, round), { label: `review:#${it.n}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
+    const v = await run(reviewPrompt(it, commits, round), { label: `review:#${it.n}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
     if (!v) return { issue: it.n, status: 'parked', reason: 'the reviewer returned nothing', defects: fx.new_defects }
     rounds.push(v)
     if (v.verdict === 'pass') return { issue: it.n, status: 'passed', commits, rounds, needs_lane: fx.needs_lane, defects: fx.new_defects }
@@ -202,7 +220,7 @@ const done = await pipeline(
     await acquire()
     let ig
     try {
-      ig = await agent(integratePrompt(u, passed, parkedEarly), { label: `integrate:${u.key}`, phase: 'Integrate', schema: INTEGRATE, model: 'sonnet', effort: 'medium' })
+      ig = await run(integratePrompt(u, passed, parkedEarly), { label: `integrate:${u.key}`, phase: 'Integrate', schema: INTEGRATE, model: 'sonnet', effort: 'medium' })
     } finally {
       release()
     }
@@ -219,20 +237,20 @@ let wave = null
 if (opened.length > 1) {
   phase('Wave')
   const first = units.find(u => u.key === opened[0].unit)
-  wave = await agent(wavePrompt(gwt(first), opened.map(r => r.branch)), { label: 'wave-check', phase: 'Wave', schema: WAVE, model: 'sonnet', effort: 'low' })
+  wave = await run(wavePrompt(gwt(first), opened.map(r => r.branch)), { label: 'wave-check', phase: 'Wave', schema: WAVE, model: 'sonnet', effort: 'low' })
 }
 const rows = out.flatMap(r => r.rows)
 let ledger = null
 if (rows.length && args.ledger !== false) {
   phase('Ledger')
-  ledger = await agent(ledgerPrompt(rows), { label: 'ledger', phase: 'Ledger', schema: PRS, model: 'sonnet', effort: 'low' })
+  ledger = await run(ledgerPrompt(rows), { label: 'ledger', phase: 'Ledger', schema: PRS, model: 'sonnet', effort: 'low' })
 }
 const laneSpecs = opened.filter(r => r.needs_lane).map(r => `${r.branch}:all`)
 let lanes = null
 if (laneSpecs.length) {
   phase('Lanes')
   const first = units.find(u => u.key === opened[0].unit)
-  lanes = await agent(lanePrompt(gwt(first), laneSpecs), { label: 'lanes', phase: 'Lanes', schema: LANE, model: 'sonnet', effort: 'low' })
+  lanes = await run(lanePrompt(gwt(first), laneSpecs), { label: 'lanes', phase: 'Lanes', schema: LANE, model: 'sonnet', effort: 'low' })
 }
 return {
   ledger_pr: ledger ? ledger.pr_url : '',

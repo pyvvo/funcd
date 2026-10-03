@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -33,6 +34,9 @@ func TestIssue566_PipelineScriptsParse(t *testing.T) {
 			src, err := os.ReadFile(f)
 			require.NoError(t, err)
 			require.NotRegexp(t, `/(Users|home)/[a-z]`, string(src), "%s names a machine path; take it from args", f)
+			require.Contains(t, string(src), "Math.min(5,", "%s caps its agents at five", f)
+			require.Len(t, regexp.MustCompile(`(^|[^.\w])agent\(`).FindAllString(string(src), -1), 1,
+				"%s calls agent() only inside run(), so every agent counts against the cap", f)
 			body := strings.Replace(string(src), "export const meta", "const meta", 1)
 			wrapped := filepath.Join(t.TempDir(), "workflow.mjs")
 			require.NoError(t, os.WriteFile(wrapped, []byte("async function workflow(args, agent, parallel, pipeline, phase, log) {\n"+body+"\n}\n"), 0o644))

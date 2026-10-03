@@ -25,6 +25,24 @@ const MODEL = args.model || 'claude-opus-5-5'
 const TRAILER = args.trailer || 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
 const D = 'scripts/agent/d'
 
+// This run changes code, so at most five of its agents run at once, whatever the workflow runner allows (a
+// read-only campaign may run more): more parallel agents on one host caused the 2026-10 campaign's contention
+// incidents. Every agent call goes through run().
+const MAX_AGENTS = Math.min(5, args.maxAgents || 5)
+let freeAgents = MAX_AGENTS
+const agentWaiters = []
+const run = async (prompt, opts) => {
+  if (freeAgents > 0) freeAgents--
+  else await new Promise(resolve => agentWaiters.push(resolve))
+  try {
+    return await agent(prompt, opts)
+  } finally {
+    const next = agentWaiters.shift()
+    if (next) next()
+    else freeAgents++
+  }
+}
+
 const ref = (it) => it.repoIssue ? `#${it.repoIssue}` : `pyvvo/funcd#${it.n}`
 const tag = (it) => it.repoIssue ? `r${it.repoIssue}` : `${it.n}`
 const iwt = (u, it) => `${SP}/wt/${u.key}-${tag(it)}`
@@ -136,18 +154,18 @@ Return the PR URL, the fixed issue refs, the parked ones with reasons, the just 
 
 async function doIssue(u, it) {
   const label = `${u.key}:${tag(it)}`
-  const fx = await agent(fixPrompt(u, it), { label: `fix:${label}`, phase: 'Fix', schema: FIX })
+  const fx = await run(fixPrompt(u, it), { label: `fix:${label}`, phase: 'Fix', schema: FIX })
   if (!fx) return { ref: ref(it), it, status: 'parked', reason: 'the fixer returned nothing', defects: [] }
   if (fx.status !== 'committed' || !fx.commits.length) return { ref: ref(it), it, status: 'parked', reason: fx.reason, defects: fx.new_defects, funcd_side: fx.funcd_side }
   const commits = [...fx.commits]
   const rounds = []
   for (let round = 1; round <= 3; round++) {
     if (round > 1) {
-      const rw = await agent(reworkPrompt(u, it, rounds[rounds.length - 1].report_path), { label: `rework:${label}`, phase: 'Rework', schema: REWORK })
+      const rw = await run(reworkPrompt(u, it, rounds[rounds.length - 1].report_path), { label: `rework:${label}`, phase: 'Rework', schema: REWORK })
       if (!rw || !rw.done) return { ref: ref(it), it, status: 'parked', reason: rw ? rw.note : 'rework failed', defects: fx.new_defects, funcd_side: fx.funcd_side }
       commits.push(...rw.commits)
     }
-    const v = await agent(reviewPrompt(u, it, commits, round), { label: `review:${label}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
+    const v = await run(reviewPrompt(u, it, commits, round), { label: `review:${label}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
     if (!v) return { ref: ref(it), it, status: 'parked', reason: 'the reviewer returned nothing', defects: fx.new_defects, funcd_side: fx.funcd_side }
     rounds.push(v)
     if (v.verdict === 'pass') return { ref: ref(it), it, status: 'passed', commits, rounds, defects: fx.new_defects, funcd_side: fx.funcd_side, test: fx.test }
@@ -167,7 +185,7 @@ const out = await pipeline(
     if (args.pilot) return { repo: u.repo, pilot: rs.map(r => ({ ref: r.ref, status: r.status, reason: r.reason || '', commits: r.commits || [], funcd_side: r.funcd_side || '', rounds: (r.rounds || []).map(v => ({ verdict: v.verdict, summary: v.summary })) })) }
     const base = { repo: u.repo, results: rs.map(r => ({ ref: r.ref, n: r.it.n || null, repoIssue: r.it.repoIssue || null, status: r.status, reason: r.reason || '', test: r.test || '', funcd_side: r.funcd_side || '', reports: (r.rounds || []).map(v => v.report_path), rows: (r.rounds || []).map(v => ({ verdict: v.verdict, b: v.blockers, m: v.majors, n: v.minors, a: v.model_attributed, p: v.dod_passed, t: v.dod_total, notes: v.notes })), defects: r.defects || [] })) }
     if (!passed.length) return { ...base, pr: '', fixed: [], parked: parkedEarly }
-    const ig = await agent(integratePrompt(u, passed, parkedEarly), { label: `integrate:${u.key}`, phase: 'Integrate', schema: INTEGRATE, model: 'sonnet', effort: 'medium' })
+    const ig = await run(integratePrompt(u, passed, parkedEarly), { label: `integrate:${u.key}`, phase: 'Integrate', schema: INTEGRATE, model: 'sonnet', effort: 'medium' })
     if (!ig) return { ...base, pr: '', fixed: [], parked: parkedEarly, problems: 'integrator failed' }
     return { ...base, pr: ig.pr_url, fixed: ig.fixed, parked: [...parkedEarly, ...ig.parked], ci: ig.ci, problems: ig.problems }
   },

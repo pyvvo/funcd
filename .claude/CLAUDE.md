@@ -313,6 +313,11 @@ rules that did it:
   independent calls together in one turn, read a file once with Read rather than in `sed`/`grep` slices, chain
   dependent shell steps with `&&`, and filter test output (`-run`, `| tail -25`). Large pasted outputs slow every
   later turn.
+- **At most five agents at once in a run that changes code, the repo or GitHub**, of every kind combined (in a
+  fix wave, its reviewers too), also in ultracode mode: the committed workflows route every `agent()` call through a
+  semaphore capped at five. A read-only campaign that changes nothing (an audit, a discovery sweep, verifying
+  defect notes) may run more. Prefer high-value, safe iterations over speed: a round that creates more issues than
+  it fixes is a loss.
 - **One job per item, in parallel; integrate at the end.** Give each issue its own worktree from `origin/main` and
   review it the moment its fix is committed. Group barriers and sequential chunks leave slots idle; a cheap
   integrator cherry-picks a group's passing commits onto the latest main.
