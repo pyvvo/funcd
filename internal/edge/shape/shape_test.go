@@ -337,3 +337,30 @@ func TestIssue439_GzipVariantWeakensStrongETag(t *testing.T) {
 	require.Equal(t, `W/"v1"`, rec.Header().Get("ETag"), "an already weak ETag is kept")
 	require.Equal(t, content, gunzip(rec))
 }
+
+// RFC 9110 §15.3.7, §15.4.5: a 206 and a 304 carry the Vary that a 200 to the same request carries.
+func TestIssue510_RangeAndNotModifiedVaryOnAcceptEncoding(t *testing.T) {
+	content := strings.Repeat("0123456789", 100)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		http.ServeContent(w, r, "a.txt", time.Time{}, strings.NewReader(content))
+	})
+	for name, tc := range map[string]struct {
+		hdr  map[string]string
+		code int
+	}{
+		"gzip 304":     {map[string]string{"Accept-Encoding": "gzip", "If-None-Match": `W/"v1"`}, http.StatusNotModified},
+		"identity 304": {map[string]string{"If-None-Match": `"v1"`}, http.StatusNotModified},
+		"gzip 206":     {map[string]string{"Accept-Encoding": "gzip", "Range": "bytes=0-9"}, http.StatusPartialContent},
+		"identity 206": {map[string]string{"Range": "bytes=0-9"}, http.StatusPartialContent},
+	} {
+		req := httptest.NewRequest("GET", "http://x/a", nil)
+		for k, v := range tc.hdr {
+			req.Header.Set(k, v)
+		}
+		rec := serve(shape.Chain(shape.Config{Compression: true}), next, req)
+		require.Equal(t, tc.code, rec.Code, name)
+		require.Empty(t, rec.Header().Get("Content-Encoding"), name)
+		require.Contains(t, rec.Header().Values("Vary"), "Accept-Encoding", name)
+	}
+}

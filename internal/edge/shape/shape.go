@@ -184,14 +184,18 @@ func (g *gzipWriter) decide(code int) {
 	// A 206's Content-Range indexes the identity bytes, and a 204/304 has no body to encode.
 	unencodable := code == http.StatusPartialContent || code == http.StatusNoContent ||
 		code == http.StatusNotModified || h.Get("Content-Range") != ""
-	if code == http.StatusNotModified && g.accept && !streaming && h.Get("Content-Encoding") == "" {
+	if streaming || h.Get("Content-Encoding") != "" {
+		return // passthrough: never gzip a stream/upgrade or an already-encoded body
+	}
+	// RFC 9110 §12.5.5: both the gzip and the identity variant depend on it; §15.3.7, §15.4.5: a 206 and
+	// a 304 carry the Vary of their 200.
+	if code != http.StatusNoContent {
+		h.Add("Vary", "Accept-Encoding")
+	}
+	if code == http.StatusNotModified && g.accept {
 		weakenETag(h) // RFC 9110 §15.4.5: a 304 carries the ETag that its 200, the gzip variant, would carry
 	}
-	if streaming || unencodable || h.Get("Content-Encoding") != "" {
-		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
-	}
-	h.Add("Vary", "Accept-Encoding") // RFC 9110 §12.5.5: both the gzip and the identity variant depend on it
-	if !g.accept {
+	if unencodable || !g.accept {
 		return
 	}
 	h.Set("Content-Encoding", "gzip")
