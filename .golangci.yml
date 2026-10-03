@@ -117,6 +117,8 @@ linters:
 
 run:
   timeout: 5m
+  # Parallel worktrees lint on one host; the default host-wide lock fails a second run after 5 s.
+  allow-parallel-runners: true
 
 issues:
   max-issues-per-linter: 0

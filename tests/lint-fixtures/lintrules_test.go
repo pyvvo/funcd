@@ -41,7 +41,13 @@ func repoRoot(t *testing.T) string {
 // golangci-lint reports findings).
 func lintFixture(t *testing.T, pkg string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("go", "tool", "golangci-lint", "run", "--allow-parallel-runners", "--build-tags", "lintfixture", "./"+pkg)
+	return golangciLint(t, "--allow-parallel-runners", "--build-tags", "lintfixture", "./"+pkg)
+}
+
+// golangciLint runs `go tool golangci-lint run <args>` from the repo root, as the just recipes do.
+func golangciLint(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.Command("go", append([]string{"tool", "golangci-lint", "run"}, args...)...)
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -136,5 +142,23 @@ func TestIssue289_LintFixtureRunsWhileAnotherLintHoldsTheLock(t *testing.T) {
 	out, err := lintFixture(t, "tests/lint-fixtures/any-leak")
 	if err == nil || !strings.Contains(out, "forbidigo") {
 		t.Fatalf("expected the forbidigo finding while another golangci-lint holds the lock, got:\n%s", out)
+	}
+}
+
+// `just lint`, `just ci` and gate.sh run golangci-lint without --allow-parallel-runners, so with
+// another golangci-lint on the host holding the lock, a clean package must still lint clean.
+func TestIssue415_LintPassesWhileAnotherLintHoldsTheLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	lock := flock.New(filepath.Join(tmp, "golangci-lint.lock"))
+	if ok, err := lock.TryLock(); !ok || err != nil {
+		t.Fatalf("hold the golangci-lint lock: ok=%v err=%v", ok, err)
+	}
+	t.Cleanup(func() { _ = lock.Unlock() })
+	if out, err := golangciLint(t, "./tests/lint-fixtures"); err != nil {
+		t.Fatalf("expected a clean lint while another golangci-lint holds the lock, got %v:\n%s", err, out)
 	}
 }
