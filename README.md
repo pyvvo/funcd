@@ -13,43 +13,15 @@ Kubernetes-inspired internals, designed for the agent era.
   inputs/outputs) an implementer needs. Features are scaffolded and implemented **from
   ADRs**, gradually — no big-bang implementation.
 
-## Workflow
+## How funcd is built
 
-Each gate has a skill (`.claude/skills/`): **plan** → **decide** → **judge** → **build** →
-**review**.
+funcd is written mostly by AI agents under a fixed method: a person decides, and agents draft and judge each
+design (an ADR), build it with its scenario tests, review it by running it, attack the shipped system in chaos
+campaigns, fix what breaks test-first, and audit whether the fixes made the code worse. Each step is a skill in
+`.claude/skills/`, and every review is recorded per model in `docs/reviews/`.
 
-0. **Scope & sequence** — `docs/feat/` lists what a version must contain; the
-   **`roadmap-planner`** skill sequences the ADRs into a computed delivery plan
-   (`docs/roadmap/`: build waves, critical path).
-1. **Brainstorm** a topic from that list with the **`adr`** skill (component, feature,
-   cross-cutting concern).
-2. **ADR** captures the decision and its contracts; mark it `Proposed` when ready.
-3. **Judge gate** — the **`adr-judge`** skill reviews the ADR *document* against the
-   blueprint, feat row, and related ADRs (inconsistency, bias, scope creep, strengths to
-   keep); the human weighs the verdict and accepts. The feat row advances.
-4. **Scaffold** — the **`adr-scaffold`** skill turns the ADR into a compiling skeleton:
-   interfaces, facades, deps, one skipped test per scenario — no logic.
-5. **Review gate** — the **`adr-impl-review`** skill *runs* the verification (build/lint/test,
-   tree diff) against the ADR + Definition of Done, gives a severity-tiered verdict, and
-   **records a per-model quality scorecard** (`docs/reviews/`).
-6. **Implement** the feature; make the test skeletons pass.
-7. **Validate**: full test suite green — every ADR scenario now passes.
-8. **Implementation review** (recommended) — `adr-impl-review` again audits code + tests against
-   the ADR and updates the model scorecard.
-
-## The current workflow (ADR-0000 gates 0–5)
-
-| # | Gate | Skill | Your model | Status moves it makes |
-|---|---|---|---|---|
-| 0 | Scope the version | `roadmap-planner` | — | (sequences ADRs; writes roadmap) |
-| 1–2 | Brainstorm → Draft | [adr](.claude/skills/adr/SKILL.md) | Opus 4.8 MAX | ADR `Draft → Proposed`; feat `idea → adr` |
-| 3 | **Judge gate** (the ADR *document*) | [adr-judge](.claude/skills/adr-judge/SKILL.md) | Opus 4.8 Extra | none — it only reports; **you** then accept |
-| — | **Acceptance** (human call) | — | you | ADR `→ Accepted`; **blueprint + roadmap synced here**; feat `→ accepted` |
-| 4 | **Implement** (ADR + blueprint → working code) | [adr-impl](.claude/skills/adr-impl/SKILL.md) | Sonnet 4.6 medium | ADR `Accepted → Reviewing`; feat `→ reviewing` |
-| 5 | **Review gate** (the *code*) | [adr-impl-review](.claude/skills/adr-impl-review/SKILL.md) | Opus 4.8 Extra | **pass** → ADR `Reviewing → Implemented`, feat `→ implemented`; **else** → report, advances nothing |
-
-**The loop** (exactly as you said): review `changes-requested`/`fail` → ADR stays `Reviewing` → back to gate 4 (`adr-impl`) to fix the `model`-attributed findings → re-review → repeat until the review gate passes and stamps `Implemented`. (`adr`-attributed findings don't loop here — they break out to a *new superseding ADR*.)
-
+**[docs/method/README.md](docs/method/README.md)** describes the whole method. [ADR-0000](docs/adr/0000-adr-process.md)
+holds the design-process rules and [.claude/CLAUDE.md](.claude/CLAUDE.md) the working agreement.
 
 ## Repositories
 
