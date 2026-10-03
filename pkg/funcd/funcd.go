@@ -88,6 +88,9 @@ const (
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
 	defaultLocalNode     = "local"
 	shutdownTimeout      = 15 * time.Second
+	// closeTimeout is Shutdown's own bound when Run stops, so an HTTP drain that used all of shutdownTimeout still
+	// leaves the log Routes and telemetry time to flush (issue #453); 15 s + 5 s fits the unit's TimeoutStopSec=30.
+	closeTimeout = 5 * time.Second
 	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
@@ -318,6 +321,7 @@ type Platform struct {
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
 
+	drainTimeout time.Duration // Run's bound on the HTTP drain: shutdownTimeout, unless a test exhausts it
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -334,7 +338,7 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowDefaultRetry: defaultWorkflowRetry,
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
 	}
-	p := &Platform{cfg: cfg}
+	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -1187,7 +1191,7 @@ func (p *Platform) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.drainTimeout)
 	defer cancel()
 	p.logger.InfoContext(stopCtx, "platform stopping")
 	// Drain both HTTP servers (stop accepting) before the ports close — an in-flight
@@ -1195,7 +1199,9 @@ func (p *Platform) Run(ctx context.Context) error {
 	_ = p.dataPlaneServer.Shutdown(stopCtx)
 	_ = p.httpServer.Shutdown(stopCtx)
 	wg.Wait() // drain controller + eventing + activator before closing ports
-	return p.Shutdown(stopCtx)
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancelClose()
+	return p.Shutdown(closeCtx)
 }
 
 // Shutdown closes the platform's components (the control-plane listener, the five
