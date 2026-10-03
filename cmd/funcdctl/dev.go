@@ -359,12 +359,14 @@ func (d *devInstance) stop() error {
 // caller cancels ctx to stop.
 func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfig) (*devInstance, error) {
 	const op = "funcdctl dev"
+	// Stamp the path before it is read, so an edit to a workflow file racing the boot still reloads it.
+	stamp, _ := fileStamp(path)
 	// Phase 3 (Decision 8): a Workflow CRD is the DAG. Detect it FIRST — a workflow.yaml is not a
 	// funcdctl.yaml, so it must not be run through the function resolver.
 	if wf, isWorkflow, derr := detectWorkflow(op, path); derr != nil {
 		return nil, derr
 	} else if isWorkflow {
-		return a.startDevWorkflow(ctx, op, path, wf, cfg)
+		return a.startDevWorkflow(ctx, op, &devWorkflow{path: path, obj: wf, seen: stamp}, cfg)
 	}
 	// Phase 3 (Decision 9): resolve the function set — all `<stem>.funcdctl.yaml` in a dir, one by stem,
 	// or the single generic funcdctl.yaml (the Phase-1/2 path, unchanged).
@@ -381,16 +383,16 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 // REWRITTEN to dispatch to it by `function.ref` — so the real embedded workflow engine runs the DAG
 // with no OCI pull (the materializer only materializes image steps; a ref step targets an existing
 // Function directly). builtin (wait/pass) and pre-existing ref steps run as-is.
-func (a *cli) startDevWorkflow(ctx context.Context, op, path string, wf *v1.Workflow, cfg devConfig) (*devInstance, error) {
-	pfs, err := resolveWorkflowPlan(op, path, wf)
+func (a *cli) startDevWorkflow(ctx context.Context, op string, wf *devWorkflow, cfg devConfig) (*devInstance, error) {
+	pfs, err := resolveWorkflowPlan(op, wf.path, wf.obj)
 	if err != nil {
 		return nil, err
 	}
-	inst, berr := a.bootDev(ctx, op, pfs, []v1.Object{wf}, cfg)
+	inst, berr := a.bootDev(ctx, op, pfs, wf, cfg)
 	if berr != nil {
 		return nil, berr
 	}
-	inst.workflow = string(wf.Name)
+	inst.workflow = string(wf.obj.Name)
 	return inst, nil
 }
 
@@ -504,9 +506,9 @@ func catalogAliases(pfs []plannedFunc) []string {
 // bootDev is the shared boot path for a function set (single, multi, or a workflow's step functions): it
 // synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
 // function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
-// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then any
-// extra objects (the Workflow). It returns once serving; the caller cancels ctx to stop.
-func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraObjs []v1.Object, cfg devConfig) (_ *devInstance, err error) {
+// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then the
+// Workflow (nil for a function set). It returns once serving; the caller cancels ctx to stop.
+func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
 	}
@@ -691,6 +693,8 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 
 	opts = append(opts, shimOpts...)
 	p, nerr := funcd.New(opts...)
+	// New owns the durable drivers from here: a failed New has closed them, a platform closes them on Shutdown.
+	closeDurable = nil
 	if nerr != nil {
 		return nil, nerr
 	}
@@ -698,7 +702,19 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	inst.gatewayURL = "http://" + p.DataPlaneAddr()
 	inst.controlURL = "http://" + p.Addr()
 
-	go func() { inst.runErr <- p.Run(ctx) }()
+	// A boot that fails once Run is up stops the platform (Run's Shutdown closes its drivers) before the
+	// cleanups run, so no controller outlives the boot on a released driver.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	go func() { inst.runErr <- p.Run(runCtx) }()
+	defer func() {
+		if err != nil {
+			cancelRun()
+			<-inst.runErr
+		}
+	}()
+	if serr := p.WaitS3Gateway(runCtx); serr != nil {
+		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "serve the S3 frontend on %s", inst.s3Endpoint)
+	}
 
 	client, cerr := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
 	if cerr != nil {
@@ -709,6 +725,10 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → extras
 	// (the Workflow references its step Functions). ADR-0121's reconcile-time existence gate resolves
 	// against what is already applied.
+	var extraObjs []v1.Object
+	if wf != nil {
+		extraObjs = []v1.Object{wf.obj}
+	}
 	for _, group := range [][]v1.Object{resObjs, fnObjs, extraObjs} {
 		for _, obj := range group {
 			if aerr := applyDesired(ctx, client, obj); aerr != nil {
@@ -717,7 +737,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		}
 	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, resObjs, stateDirs, inst.watchDone)
 	return inst, nil
 }
 
@@ -791,8 +811,9 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 	return fmt.Sprintf("sha256:%x", sum.Sum(nil)), nil
 }
 
-// watchHandlers polls every function's files for an edit until ctx is done (ADR-0125, hot-reload on change).
-func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string, done chan<- struct{}) {
+// watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
+// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied.
+func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -801,7 +822,11 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := reloadChanged(ctx, op, c, hs, stateDirs); err != nil && ctx.Err() == nil {
+			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs)
+			if wf != nil {
+				err = errors.Join(err, wf.reapply(ctx, op, c, hs))
+			}
+			if err != nil && ctx.Err() == nil {
 				slog.Default().Warn("hot-reload failed", "err", err)
 			}
 		}
@@ -810,10 +835,11 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 
 // reloadChanged re-applies every function whose files changed since the last poll, as bootDev applied them: it
 // re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
-// across functions), then re-delivers each edited bundle and contract and re-applies its Function. A failed
-// reload is reported once and retried on the next edit; an apply that lost a race with a concurrent status
-// write (Conflict) is retried on the next poll.
-func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string) error {
+// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then deletes the
+// resources of *applied that the set no longer holds. A failed reload is reported once and retried on the next edit;
+// an apply that lost a race with a concurrent status write (Conflict) is re-applied in place, then on the next poll
+// once those attempts run out.
+func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
 	var changed []*devHandler
 	var errs []error
 	for _, h := range hs {
@@ -836,6 +862,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	if len(changed) == 0 {
 		return errors.Join(errs...)
 	}
+	loadErrs := len(errs)
 	pfs := make([]plannedFunc, 0, len(hs))
 	for _, h := range hs {
 		pfs = append(pfs, h.pf)
@@ -845,7 +872,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		return errors.Join(append(errs, serr)...)
 	}
 	for _, obj := range resObjs {
-		if _, aerr := c.Apply(ctx, obj); aerr != nil {
+		if aerr := applyDesired(ctx, c, obj); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
 			if fault.KindOf(aerr) == fault.Conflict {
 				for _, h := range changed {
@@ -867,14 +894,98 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		}
 		fn := synthesizeFunction(h.pf, h.bundle)
 		fn.Spec.ImageDigest = h.seen
-		if _, aerr := c.Apply(ctx, fn); aerr != nil {
+		if aerr := applyDesired(ctx, c, fn); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Function %q", fn.Name))
 			if fault.KindOf(aerr) == fault.Conflict {
 				h.seen = ""
 			}
 		}
 	}
+	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs)
 	return errors.Join(errs...)
+}
+
+// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, and the
+// stamp of the file version last acted on.
+type devWorkflow struct {
+	path string
+	obj  *v1.Workflow
+	seen string
+}
+
+// fileStamp is the size and mtime of the file at path, which an editor's save changes.
+func fileStamp(path string) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d\x00%d", fi.Size(), fi.ModTime().UnixNano()), nil
+}
+
+// reapply re-applies the Workflow when its file changed since the last poll, resolved as the boot resolved it
+// (ADR-0125, "watch files, re-apply on change"). A step whose function is not running needs a restart, which it
+// warns about, as for a changed main. A failed reload is reported once and retried on the next edit; an apply
+// that keeps losing a race with a concurrent status write (Conflict) is retried on the next poll.
+func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) error {
+	stamp, serr := fileStamp(w.path)
+	if serr != nil || stamp == w.seen {
+		return nil
+	}
+	w.seen = stamp
+	wf, isWorkflow, derr := detectWorkflow(op, w.path)
+	if derr != nil {
+		return derr
+	}
+	if !isWorkflow {
+		return fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
+	}
+	pfs, rerr := resolveWorkflowPlan(op, w.path, wf)
+	if rerr != nil {
+		return rerr
+	}
+	for _, pf := range pfs {
+		if !slices.ContainsFunc(hs, func(h *devHandler) bool { return h.pf.name == pf.name }) {
+			slog.Default().Warn("restart funcdctl dev to run a new workflow step function", "function", pf.name)
+		}
+	}
+	if aerr := applyDesired(ctx, c, wf); aerr != nil {
+		if fault.KindOf(aerr) == fault.Conflict {
+			w.seen = ""
+		}
+		return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
+	}
+	return nil
+}
+
+// pruneRemoved deletes, last applied first, each resource of prev that next no longer holds (ADR-0125: the
+// manifests are the session's desired state) and returns what the session keeps: next, then each removed resource it
+// did not delete. del is false when the reload failed to apply, as a Function may still bind a removed resource. A
+// KVStore or Bucket that still holds data refuses the delete (ADR-0073), so a reload never drops data: it stays with
+// a warning, and the next reload retries it.
+func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool) []v1.Object {
+	key := func(o v1.Object) string { return string(o.GroupVersionKind().Kind) + "/" + string(o.GetName()) }
+	want := make(map[string]bool, len(next))
+	for _, o := range next {
+		want[key(o)] = true
+	}
+	var kept []v1.Object
+	for i := len(prev) - 1; i >= 0; i-- {
+		o := prev[i]
+		if want[key(o)] {
+			continue
+		}
+		if del {
+			err := c.Delete(ctx, o.GroupVersionKind().Kind, devNamespace, o.GetName())
+			if err == nil || fault.KindOf(err) == fault.NotFound {
+				continue
+			}
+			slog.Default().Warn("a resource removed from the manifests stays until it can be deleted",
+				"kind", o.GroupVersionKind().Kind, "name", o.GetName(), "err", err)
+		}
+		kept = append(kept, o)
+	}
+	slices.Reverse(kept)
+	return append(next, kept...)
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,
@@ -919,7 +1030,8 @@ func devS3Options(op string, opts *[]funcd.Option, fnName string, s3port int, in
 
 // freeLocalAddr reserves an ephemeral node-private TCP address by binding :0 and releasing it — the
 // s3gateway binds its own listener at Run and only reports the configured address, so `funcdctl dev`
-// picks a concrete free port up front (a small, dev-acceptable bind race). Loopback only.
+// picks a concrete free port up front. Another process can take it before the gateway binds it; bootDev
+// then fails on WaitS3Gateway instead of showing the endpoint. Loopback only.
 func freeLocalAddr() (string, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1630,7 +1742,7 @@ func resolveInterpreter(p, baseDir string) string {
 // A default shim (node when present, else python) is always registered so the reconciler's
 // materializer gate is satisfied; at least one runtime must be on PATH (or FUNCD_NODE/FUNCD_PYTHON).
 // A python that cannot import the shim is never registered, as in the daemon; when the run has a
-// python handler (needPython) that is a startup error naming the interpreter's reason.
+// python handler (needPython), a missing python or one that cannot load the shim is a startup error.
 func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string, needPython bool) (_ []funcd.Option, cleanup func(), err error) {
 	dir, derr := os.MkdirTemp("", "funcdctl-dev-shim")
 	if derr != nil {
@@ -1674,6 +1786,9 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		if p, lerr := exec.LookPath("python3"); lerr == nil {
 			python = p
 		}
+	}
+	if python == "" && needPython {
+		return nil, nil, fault.NotFoundf(op, "no python interpreter found for the python handler (need python3 on PATH; set FUNCD_PYTHON or dev.python)")
 	}
 	if python != "" {
 		shimEntry, _, perr := shimpython.Extract(filepath.Join(dir, "shim-python"))

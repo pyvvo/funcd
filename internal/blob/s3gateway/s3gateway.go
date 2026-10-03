@@ -64,6 +64,8 @@ type Server struct {
 
 	mu      sync.Mutex
 	ready   chan struct{}
+	stopped chan struct{}
+	runErr  error
 	serveCh chan error
 	closed  bool
 	stop    context.CancelFunc // ends the backend's life context
@@ -121,7 +123,7 @@ func New(d Deps) (*Server, error) {
 	}
 	root := middlewares.RootUserConfig{Access: rootAccess, Secret: rootSecret}
 
-	s := &Server{listen: d.Listen, log: logger, ready: make(chan struct{}), stop: stop}
+	s := &Server{listen: d.Listen, log: logger, ready: make(chan struct{}), stopped: make(chan struct{}), stop: stop}
 	// nil for the audit/admin loggers, event sender, and metrics manager — all nil-checked
 	// in versitygw's controllers (ADR-0085 verified).
 	api, err := s3api.New(backendImpl, root, region, iamImpl, nil, nil, nil, nil,
@@ -148,8 +150,9 @@ func New(d Deps) (*Server, error) {
 // Run binds the node-private listener and serves until ctx is done (ADR-0085). It is
 // opt-in: the daemon only calls it when s3gateway.enabled. Run blocks; callers run it in
 // a goroutine. On ctx cancellation it triggers a graceful ShutDown.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Server) Run(ctx context.Context) (err error) {
 	const op = "s3gateway.Run"
+	defer func() { s.signalStopped(err) }()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -180,6 +183,29 @@ func (s *Server) Run(ctx context.Context) error {
 // callers (and tests) wait on it instead of a fixed sleep.
 func (s *Server) Ready() <-chan struct{} { return s.ready }
 
+// Wait blocks until the listener is bound and accepting (nil), Run has returned first (its error), or ctx is
+// done (ctx's error). versitygw binds the address only when Run serves it, so a taken port surfaces here.
+func (s *Server) Wait(ctx context.Context) error {
+	select {
+	case <-s.ready:
+		return nil
+	case <-s.stopped:
+		select {
+		case <-s.ready:
+			return nil
+		default:
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.runErr != nil {
+			return s.runErr
+		}
+		return fault.Unavailablef("s3gateway.Wait", "s3 gateway stopped before it listened on %s", s.listen)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Close gracefully shuts the server down (idempotent).
 func (s *Server) Close() error {
 	s.mu.Lock()
@@ -208,6 +234,18 @@ func (s *Server) signalReady() {
 	case <-s.ready:
 	default:
 		close(s.ready)
+	}
+}
+
+// signalStopped records why the first Run returned and wakes Wait.
+func (s *Server) signalStopped(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.stopped:
+	default:
+		s.runErr = err
+		close(s.stopped)
 	}
 }
 

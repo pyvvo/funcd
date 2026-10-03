@@ -1047,6 +1047,16 @@ func (p *Platform) Addr() string { return p.addr }
 // after New (ADR-0033).
 func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 
+// WaitS3Gateway blocks until the WithS3Gateway frontend is bound and serving (nil), it stopped first (its error),
+// or ctx is done. The gateway binds its address only once Run starts it (ADR-0085), so a taken port surfaces here,
+// not from New. Without the gateway it returns nil.
+func (p *Platform) WaitS3Gateway(ctx context.Context) error {
+	if p.s3gw == nil {
+		return nil
+	}
+	return p.s3gw.Wait(ctx)
+}
+
 // Run starts the control loops + the control-plane server and blocks until ctx is
 // cancelled, then shuts down gracefully and returns nil. It owns the crash-only
 // lifecycle (ADR-0028).

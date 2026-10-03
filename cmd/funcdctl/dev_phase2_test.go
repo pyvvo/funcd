@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,20 +24,52 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// requireRuntime skips a test when neither node nor python3 is on PATH — `funcdctl dev` needs a runtime
-// shim to boot the platform (devShimOptions), even for the S3 / persist lanes that never invoke a handler.
+// requireRuntime skips a test when `funcdctl dev` would find no usable runtime shim to boot the platform,
+// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself, so a python3
+// that cannot load the shim counts as missing, exactly as at startup.
 func requireRuntime(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err == nil {
-		return
+	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false)
+	if fault.KindOf(err) == fault.NotFound {
+		t.Skipf("funcdctl dev needs a runtime shim to boot: %v", err)
 	}
-	if _, err := exec.LookPath("python3"); err == nil {
-		return
-	}
-	t.Skip("neither node nor python3 on PATH; funcdctl dev needs a runtime shim to boot")
+	require.NoError(t, err)
+	cleanup()
+}
+
+// Issue #431: on a host with no node and a python3 that cannot load the shim, funcdctl dev finds no
+// runtime, yet requireRuntime saw python3 on PATH and let the gated tests run into that startup error.
+func TestIssue431_RequireRuntimeSkipsWhenPythonCannotLoadShim(t *testing.T) {
+	bin := t.TempDir()
+	python := filepath.Join(bin, "python3")
+	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n"), 0o700))
+	t.Setenv("PATH", bin)
+	t.Setenv("FUNCD_NODE", "")
+	t.Setenv("FUNCD_PYTHON", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return {}; }\n",
+	}), "", devConfig{})
+	t.Cleanup(func() {
+		cancel()
+		if inst != nil {
+			_ = inst.stop()
+		}
+	})
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "funcdctl dev finds no usable runtime on this host: %v", err)
+
+	ran := false
+	t.Run("gated", func(t *testing.T) {
+		requireRuntime(t)
+		ran = true
+	})
+	require.False(t, ran, "requireRuntime skips a test that funcdctl dev cannot boot")
 }
 
 // devS3Client builds a real aws-sdk-go-v2 S3 client (path-style, the printed dev creds, BaseEndpoint = the
@@ -56,6 +90,27 @@ func devS3Client(t *testing.T, inst *devInstance) *awss3.Client {
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
+}
+
+// TestIssue432_DevFailsWhenS3PortIsTaken: another process holds the S3 frontend's port. The gateway binds it only
+// when the platform runs, so startDev must fail instead of returning an endpoint the gateway never bound.
+func TestIssue432_DevFailsWhenS3PortIsTaken(t *testing.T) {
+	requireRuntime(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = taken.Close() })
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{s3port: taken.Addr().(*net.TCPAddr).Port})
+	if err == nil {
+		cancel()
+		_ = inst.stop()
+	}
+	require.ErrorIs(t, err, syscall.EADDRINUSE, "funcdctl dev showed an S3 endpoint the gateway never bound")
 }
 
 // scenario: dev-inspect-blob-via-s3 — a function bound to a bucket writes an object THROUGH the dev S3
@@ -156,22 +211,35 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.Equal(t, blobVal, gotBlob)
 }
 
-// conflictOnFirstPut answers the first PUT of one Function with the store conflict the control plane returns
-// when a controller writes the object's status between the API's read and its update (ADR-0018 read-RV-then-
-// update), and passes every other request through.
-type conflictOnFirstPut struct {
-	next http.RoundTripper
-	name string
-	hit  atomic.Bool
+// failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every
+// other request through, and reports whether that PUT was made. startDev builds its SDK client from
+// http.DefaultClient, so its transport is the only seam on an apply.
+func failFirstPut(t *testing.T, name string, problem error) *atomic.Bool {
+	t.Helper()
+	prev := http.DefaultClient.Transport
+	next := prev
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	f := &firstPutFault{next: next, path: "/apis/funcd.io/v1alpha1/namespaces/default/functions/" + name, problem: problem}
+	http.DefaultClient.Transport = f
+	t.Cleanup(func() { http.DefaultClient.Transport = prev })
+	return &f.hit
 }
 
-func (c *conflictOnFirstPut) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method != http.MethodPut || r.URL.Path != "/apis/funcd.io/v1alpha1/namespaces/default/functions/"+c.name ||
-		!c.hit.CompareAndSwap(false, true) {
-		return c.next.RoundTrip(r)
+type firstPutFault struct {
+	next    http.RoundTripper
+	path    string
+	problem error
+	hit     atomic.Bool
+}
+
+func (f *firstPutFault) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodPut || r.URL.Path != f.path || !f.hit.CompareAndSwap(false, true) {
+		return f.next.RoundTrip(r)
 	}
 	rec := httptest.NewRecorder()
-	fault.WriteProblem(rec, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", c.name))
+	fault.WriteProblem(rec, f.problem)
 	return rec.Result(), nil
 }
 
@@ -194,22 +262,94 @@ func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
 	cancel1()
 	require.NoError(t, inst1.stop())
 
-	// startDev builds its SDK client from http.DefaultClient, so its transport is the only seam on the re-apply.
-	prev := http.DefaultClient.Transport
-	next := prev
-	if next == nil {
-		next = http.DefaultTransport
-	}
-	conflict := &conflictOnFirstPut{next: next, name: name}
-	http.DefaultClient.Transport = conflict
-	t.Cleanup(func() { http.DefaultClient.Transport = prev })
+	// The store conflict the control plane returns when a controller writes the Function's status between the
+	// API's read and its update (ADR-0018 read-RV-then-update).
+	hit := failFirstPut(t, name, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", name))
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	t.Cleanup(cancel2)
 	inst2, err := a.startDev(ctx2, dir, "", cfg)
 	require.NoError(t, err, "a Conflict on the re-apply is retried, not fatal to the boot")
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
-	require.True(t, conflict.hit.Load(), "the re-apply met the injected Conflict")
+	require.True(t, hit.Load(), "the re-apply met the injected Conflict")
+}
+
+// A boot that fails once its platform runs must stop that platform before returning, so the platform's Shutdown
+// closes each durable driver once and none is closed under its running controllers: the control port is free
+// again and a retry reopens the same --persist dir.
+func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
+	requireRuntime(t)
+	const name = "issue426"
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	root, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	cport := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	a := &cli{out: io.Discard}
+	cfg := devConfig{persist: true, persistTo: root, cport: cport, name: name}
+
+	hit := failFirstPut(t, name, fault.Invalidf("admission", "Function %q rejected", name))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	_, err = a.startDev(ctx, dir, "", cfg)
+	require.Error(t, err, "a rejected apply fails the boot")
+	require.True(t, hit.Load(), "the boot failed on the injected apply rejection, after its platform started")
+
+	conn, derr := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+	if derr == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, derr, "a failed boot stops the platform it started")
+
+	inst, err := a.startDev(ctx, dir, "", cfg)
+	require.NoError(t, err, "the failed boot released the control port and the durable drivers")
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
+}
+
+// A hot-reload re-apply that loses its update to a controller's status write (Conflict) is re-applied in
+// place, as the boot apply is (#398), so the poll reports no failure for a reload that took.
+func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nbindings:\n  config:\n    - app-config\n" + permissiveContract +
+			"dev:\n  config:\n    app-config:\n      APP_MODE: one\n",
+		"handler.mjs": "export function handle() { return { ok: true }; }\n",
+	})
+	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	puts := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		puts[r.Method+" "+r.URL.Path]++
+		first := puts[r.Method+" "+r.URL.Path] == 1
+		mu.Unlock()
+		if first {
+			fault.WriteProblem(w, fault.Conflictf("store.Update", "%s resourceVersion mismatch", r.URL.Path))
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL)
+	require.NoError(t, err)
+
+	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
+	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, &[]v1.Object{}, nil),
+		"a Conflict on a hot-reload apply is re-applied in place, not reported")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/functions/"+string(pfs[0].name))
+	for path, n := range puts {
+		require.Equal(t, 2, n, "%s met one Conflict and was re-applied once", path)
+	}
 }
 
 // scenario: dev-persist-survives-restart (secrets facet) — secrets are NEVER served from the durable
