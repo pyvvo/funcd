@@ -165,8 +165,9 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 // buildOptions assembles the daemon's []funcd.Option from the resolved config (ADR-0061): the
 // production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
 // bind addresses, the logger, telemetry, and the execution wiring. It returns the options, the
-// execution closer the caller must defer, and the substrate label. The platform owns the drivers.
-func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]funcd.Option, func() error, func(context.Context), string, error) {
+// execution closer the caller must defer, and the substrate label. The platform owns the drivers; a failed
+// call closes the ones it already opened (issue #437).
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
 	// Control-plane credential: auth.token / FUNCD_TOKEN, or the built-in dev token + a warning
 	// (Production() ships no default token — ADR-0028).
 	token := cfg.Auth.Token
@@ -175,20 +176,34 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 		root.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
 	}
 
+	var opened []io.Closer
+	defer func() {
+		if err != nil {
+			for i := len(opened) - 1; i >= 0; i-- {
+				_ = opened[i].Close()
+			}
+		}
+	}()
+
 	st, err := buildStore(cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
+	opened = append(opened, st)
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
 	// Built before the KV driver so the opt-in KV CDC (ADR-0068) can publish to the same bus.
-	substrateOpts, substrate, theBus, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
+	substrateOpts, substrate, bucket, theBus, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
+	opened = append(opened, bucket, theBus)
 	kvDriver, startKV, err := buildKVStore(ctx, cfg, theBus, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
+	}
+	if c, ok := kvDriver.(io.Closer); ok {
+		opened = append(opened, c)
 	}
 
 	// Production() wires the fixed production drivers + the data-plane listener (ADR-0028/0033); the
@@ -580,36 +595,36 @@ func configSource(path string) string {
 
 // substrateOptions builds the blob + bus drivers for the daemon (ADR-0043): in-memory (ephemeral,
 // no disk) when memoryOnly, else file-backed under dataDir (durable). It returns the options, the active
-// substrate label for the startup log, and the bus (so the opt-in KV CDC can publish to it, ADR-0068).
-// The platform owns + closes the drivers.
-func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]funcd.Option, string, bus.Bus, error) {
+// substrate label for the startup log, and the bucket and bus (so the opt-in KV CDC can publish to the bus,
+// ADR-0068, and a failed buildOptions can close both). The platform owns + closes the drivers.
+func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]funcd.Option, string, blob.Bucket, bus.Bus, error) {
 	if memoryOnly {
 		bucket, err := gocloud.Open(ctx, "mem://")
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("open in-memory blob: %w", err)
+			return nil, "", nil, nil, fmt.Errorf("open in-memory blob: %w", err)
 		}
 		messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("open in-memory bus: %w", err)
+			return nil, "", nil, nil, fmt.Errorf("open in-memory bus: %w", err)
 		}
-		return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "memory", messaging, nil
+		return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "memory", bucket, messaging, nil
 	}
 	blobDir, natsDir := filepath.Join(dataDir, "blob"), filepath.Join(dataDir, "nats")
 	if err := os.MkdirAll(blobDir, 0o700); err != nil {
-		return nil, "", nil, fmt.Errorf("create blob dir %s: %w", blobDir, err)
+		return nil, "", nil, nil, fmt.Errorf("create blob dir %s: %w", blobDir, err)
 	}
 	if err := os.MkdirAll(natsDir, 0o700); err != nil {
-		return nil, "", nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
+		return nil, "", nil, nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
 	}
 	bucket, err := gocloud.Open(ctx, gocloud.FileURL(blobDir))
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("open file blob: %w", err)
+		return nil, "", nil, nil, fmt.Errorf("open file blob: %w", err)
 	}
 	messaging, err := nats.Open(ctx, nats.Options{Storage: nats.FileStorage, StoreDir: natsDir})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("open file bus: %w", err)
+		return nil, "", nil, nil, fmt.Errorf("open file bus: %w", err)
 	}
-	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", messaging, nil
+	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", bucket, messaging, nil
 }
 
 // noopClose is the execution closer for the process lane (nothing to tear down).
