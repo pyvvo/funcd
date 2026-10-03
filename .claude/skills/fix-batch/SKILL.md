@@ -14,7 +14,7 @@ issue still gets the full test-first fix and its own independent [`/fix-review`]
 
 The pipeline is committed (issue #566): `.claude/workflows/fix-batch.js` for funcd issues and
 `.claude/workflows/shim-fix.js` for issues whose root cause is in pyvvo/funcd-typescript or pyvvo/funcd-python.
-After Step 0, run it with the Workflow tool (`name: "fix-batch"`; each file's header lists its args); it carries
+After Step 0, run it with the Workflow tool (`name: "fix-batch"` or `name: "shim-fix"`; each file's header lists its args, and `wave` must be new for each run, since it goes into every branch and report name); it carries
 Steps 1–3, the wave check and the lanes, and returns per group the PR, the fixed and parked issues and the new
 defects noted. Each issue carries its kind: a bug or flake is fixed test-first; a task (a cleanup from an audit)
 is done to its "Done when", with a failing-first test only where it changes behavior. An issue can also carry a
@@ -24,7 +24,7 @@ Around it:
 - `scripts/agent/triage.sh <pr>`: the one-screen view before queueing (checks, size, the gate and audit lines, the
   masking-pattern counts of the added lines);
 - `scripts/agent/queue.sh <state-dir> <pr>...`: enqueue green PRs, or hold the ones that need a lane (and any
-  PR it cannot read); after a held PR's lanes pass, add `<pr>:<head sha>` to `<state-dir>/lane-passed.txt` and rerun;
+  PR it cannot read); after a held PR's lanes pass, add the `<pr>:<12-character head sha>` line its held message prints to `<state-dir>/lane-passed.txt` and rerun;
 - `scripts/agent/lanes.sh <branch>:<lane|all>...`: the lanes of a held PR, one after the other;
 - `scripts/agent/watch-prs.py <state-dir>/handled.json`: wait in the background for the next PR event.
 
@@ -43,7 +43,7 @@ Around it:
 ## Step 1 — One job per issue, in parallel
 
 For every issue at once, each in its own worktree from `origin/main` under the session scratchpad (never the
-shared checkout: `git worktree add -q -b fix/i<N> <scratch>/wt/i<N> origin/main`):
+shared checkout: `git worktree add -q -b fix/w<wave>-i<N> <scratch>/wt/i<N> origin/main`):
 
 1. **Fix** — `/fix` Steps 2–6: regression test first, root-cause fix, revert check, one commit with `Fixes #N`.
    Checks on the touched packages only; no e2e suite, no `go test ./...`, no lanes — the gate runs those once.
@@ -59,7 +59,7 @@ shared checkout: `git worktree add -q -b fix/i<N> <scratch>/wt/i<N> origin/main`
 ## Step 2 — Integrate each group (a fast model is enough)
 
 When all of a group's jobs are done:
-1. A branch `fix/<T>-<group-slug>` from the **latest** `origin/main`; cherry-pick the passing issues' commits in
+1. A branch `fix/w<wave>-<T>-<group-key>` from the **latest** `origin/main`; cherry-pick the passing issues' commits in
    priority order. A mechanical conflict is resolved; any other skips that issue as parked.
 2. Copy the group's review reports into `docs/reviews/` and commit them. Do **not** touch
    `docs/reviews/model-ledger.json` or `model-scorecard.md`: parallel PRs appending to them conflict.
@@ -71,7 +71,7 @@ When all of a group's jobs are done:
    round (a fix, or a justified `audit-allow:` line in its commit message) in the next run. The integrator never
    writes a waiver. A `host` failure means the ports are exhausted: wait and rerun.
 4. Push and open the PR: a Conventional-Commit title naming the group (it becomes the squash commit and the
-   release note); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
+   release note), typed `fix` when any applied commit changes product behavior (the notes list only fix and feat); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
    `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; a
    "Lima lane pending" note when a fix touches `internal/runtime/containerd`, `internal/network`, `e2e/` or
    `scripts/lanes.yaml`; the attribution line.

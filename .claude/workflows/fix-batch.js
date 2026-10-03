@@ -16,7 +16,7 @@ export const meta = {
 // args: {
 //   sp: a scratch directory for the worktrees and review reports (outside the repository),
 //   repo: a funcd checkout to add the worktrees from (its own branch is never touched),
-//   wave: a label for the wave's ledger branch,
+//   wave: a label for this run, new for each run: it goes into every branch and review report name,
 //   units: [{ key, group, tracker (0 for none), all (the unit holds every open sub-issue of its tracker),
 //             issues: [{ n, p (priority), t (title), k ('bug', 'flake' or 'task'; default 'bug'),
 //                        note (a decision the person already made for it, optional) }] }],
@@ -30,6 +30,7 @@ const TRAILER = args.trailer || 'Co-Authored-By: Claude Opus 5.5 <noreply@anthro
 for (const k of ['sp', 'repo', 'wave', 'units']) {
   if (args[k] == null) throw new Error(`fix-batch: args.${k} is required`)
 }
+const PATH_LEAK = "/(Users|home)/[^<]|/private/|/var/folders/|/tmp/|-Users-"
 const LANE_PATHS = 'internal/runtime/containerd, internal/network, e2e/ or scripts/lanes.yaml'
 
 // This run changes code, so at most five of its agents run at once, whatever the workflow runner allows (a
@@ -115,7 +116,8 @@ const iwt = (n) => `${SP}/wt/i${n}`
 // Branch names carry the wave, so a later wave can retry an issue without colliding with an earlier branch.
 const ibranch = (n) => `fix/w${args.wave}-i${n}`
 const gwt = (u) => `${SP}/wt/g-${u.key}`
-const reportOf = (n, round) => `${SP}/reports/issue-${n}-fix-${MODEL}${round > 1 ? '-' + round : ''}.md`
+// The wave in the name keeps a later retry of a parked issue from overwriting the report a ledger PR committed.
+const reportOf = (n, round) => `${SP}/reports/issue-${n}-fix-${MODEL}-w${args.wave}${round > 1 ? '-' + round : ''}.md`
 const gbranch = (u) => u.tracker ? `fix/w${args.wave}-${u.tracker}-${u.key}` : `fix/w${args.wave}-${u.issues[0].n}-${u.key}`
 const multi = (u) => u.tracker || u.issues.length > 1
 
@@ -163,7 +165,7 @@ ${RULES(iwt(it.n))}
 
 Return the verdict, the report path, the counts (blockers, majors, minors, model_attributed), dod_passed of dod_total for the checklist items that apply, a one-line ledger note tagging each finding's attribution, and a two-sentence summary.`
 
-const reworkPrompt = (it, report) => `Address the review findings on the fix for pyvvo/funcd issue #${it.n}, in its worktree ${iwt(it.n)} (branch ${ibranch(it.n)}), following ${iwt(it.n)}/.claude/skills/fix/SKILL.md (rework). The report: ${report}.${isTask(it) ? ' This is a task (kind/task): its "Done when" is the target, not a failing-first regression test.' : ''}${it.note ? ` The person already decided, for this issue: ${it.note}; keep to that decision.` : ''} Resolve every finding attributed to the model (leave issue, adr and env ones, but mention them) in ONE new commit on top (\`fix(<scope>): address review of #${it.n}\`, body \`Refs #${it.n}\`, then \`${TRAILER}\`); never rewrite earlier commits. Re-run the regression test with -race and the touched packages' checks. If a finding needs a design decision, set done=false and explain.
+const reworkPrompt = (it, report) => `Address the review findings on the fix for pyvvo/funcd issue #${it.n}, in its worktree ${iwt(it.n)} (branch ${ibranch(it.n)}), following ${iwt(it.n)}/.claude/skills/fix/SKILL.md (rework). The report: ${report}.${isTask(it) ? ' This is a task (kind/task): its "Done when" is the target, not a failing-first regression test.' : ''}${it.note ? ` The person already decided, for this issue: ${it.note}; keep to that decision.` : ''} Resolve every finding attributed to the model (leave issue, adr and env ones, but mention them) in ONE new commit on top (\`<type>(<scope>): address review of #${it.n}\`, with the type and scope of the issue's first commit, body \`Refs #${it.n}\`, then \`${TRAILER}\`); never rewrite earlier commits. Re-run the regression test with -race and the touched packages' checks. If a finding needs a design decision, set done=false and explain.
 
 ${EFFICIENT}
 
@@ -173,10 +175,10 @@ const integratePrompt = (u, passed, parkedEarly) => `Integrate the reviewed fixe
 
 1. One call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b ${gbranch(u)} ${gwt(u)} origin/main\`.
 2. Cherry-pick each issue's commits, in this order: ${passed.map(p => `#${p.issue}: ${p.commits.join(' ')}`).join('; ')}. On a conflict, resolve it when it is mechanical (keep both sides' intent); otherwise \`git cherry-pick --abort\`, skip that issue and report it parked with the reason.
-3. Copy these review reports into docs/reviews/ (keep the file names): ${passed.flatMap(p => p.reports.map(r => `${SP}/reports/${r}`)).join(', ')}. First check them for machine paths (\`grep -nE '/(Users|home)/[^<]|/private/|/var/folders/' <the copied files>\`) and rewrite any hit as a repo-relative path or drop it: these files are tracked. Commit them: \`docs(reviews): fix reviews for ${u.tracker ? `the ${u.group} group (#${u.tracker})` : passed.map(p => `#${p.issue}`).join(', ')}\`, then the line \`${TRAILER}\`. Do NOT touch docs/reviews/model-ledger.json or model-scorecard.md: one ledger PR records the whole wave.
-4. Run the gate, one call (about 5 minutes): \`cd ${gwt(u)} && scripts/agent/gate.sh\`. It prints PASS/FAIL per step (logs in .cache/gate/). On GATE FAIL, find the issue whose commit broke it (the failing package or test points at it), \`git revert --no-edit\` that issue's commits, remove its review reports from docs/reviews/ in the same follow-up commit, run the gate once more, and report that issue parked. If the gate still fails, do not open a PR: report the failing step and every issue left parked. An \`audit\` FAIL names a hard flag with its file:line (a new production copy, a production time.Sleep, an unexplained //nolint or a new direct dependency): remove it with a follow-up commit when that is mechanical (reuse the existing helper, explain the nolint, wait on a hook instead of a sleep); otherwise revert that issue's commits and park it. Never write an \`audit-allow:\` waiver yourself. A \`host\` FAIL means the machine's ports are exhausted: wait a few minutes and rerun, never park for it.
+3. Copy the review reports of the issues whose commits you applied into docs/reviews/ (keep the file names); the reports per issue: ${passed.map(p => `#${p.issue}: ${p.reports.map(r => `${SP}/reports/${r}`).join(' ')}`).join('; ')}. First check them for machine paths (\`grep -nE '${PATH_LEAK}' <the copied files>\`) and rewrite any hit as a repo-relative path or drop it: these files are tracked. Commit them: \`docs(reviews): fix reviews for ${u.tracker ? `the ${u.group} group (#${u.tracker})` : passed.map(p => `#${p.issue}`).join(', ')}\`, then the line \`${TRAILER}\`. Do NOT touch docs/reviews/model-ledger.json or model-scorecard.md: one ledger PR records the whole wave.
+4. Run the gate, one call (about 5 minutes): \`cd ${gwt(u)} && scripts/agent/gate.sh\`. It prints PASS/FAIL per step (logs in .cache/gate/). On GATE FAIL, find the issue whose commit broke it (the failing package or test points at it), \`git revert --no-edit\` that issue's commits, run the gate once more, and report that issue parked. If the gate still fails, do not open a PR: report the failing step and every issue left parked. An \`audit\` FAIL names a hard flag with its file:line (a new production copy, a production time.Sleep, an unexplained //nolint or a new direct dependency): remove it with a follow-up commit when that is mechanical (reuse the existing helper, explain the nolint, wait on a hook instead of a sleep); otherwise revert that issue's commits and park it. Whenever an issue is skipped or reverted, its review reports leave docs/reviews/ in the same follow-up commit (the ledger PR adds them). Never write an \`audit-allow:\` waiver yourself. A \`host\` FAIL means the machine's ports are exhausted: wait a few minutes and rerun, never park for it.
 5. Push (\`git push -q -u origin ${gbranch(u)}\`) and open the PR: \`gh pr create --repo pyvvo/funcd --base main --head ${gbranch(u)}\`, with
-   - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject"}, where the type is ${passed.some(p => p.commits.some(c => /^\S+ fix[(:!]/.test(c))) ? '\`fix\` (a cherry-picked commit is a fix: the release notes list only fix and feat)' : '\`fix\` when the group changes behavior and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise'} (a Conventional Commit: it becomes the squash commit and the release note);
+   - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject"}, where the type is \`fix\` when any applied commit changes product behavior (check \`git log --format=%s origin/main..HEAD\` and \`git diff --stat origin/main\`: a fix commit that changes non-test code outside scripts/ and .claude/), because the release notes list only fix and feat, and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise (a Conventional Commit: it becomes the squash commit and the release note);
    - a body: a summary; a table (issue, cause, fix, regression test, review verdict with a link to its docs/reviews report); the parked issues with reasons; the gate result with the audit's size, clone and complexity lines; one \`Fixes #N\` line per fixed issue${u.tracker ? (u.all ? `, plus \`Fixes #${u.tracker}\` if every listed issue is fixed (this unit holds every open issue of the tracker)` : `; do NOT add \`Fixes #${u.tracker}\`: the tracker keeps issues that need an ADR`) : ''}; a "Lima lane pending" note when a fix touches ${LANE_PATHS}; and the final line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
 Do not merge or queue. Issues parked before review (list them in the body): ${JSON.stringify(parkedEarly)}.
 
@@ -191,7 +193,7 @@ Return passed (WAVE PASS), every CONFLICT line, the gate's PASS/FAIL lines, and 
 
 const ledgerPrompt = (rows) => `Record the fix reviews of this wave in the funcd model ledger and open one PR.
 1. One call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b docs/fix-review-ledger-${args.wave} ${SP}/wt/ledger origin/main\`.
-2. For each row with copy=true, copy ${SP}/reports/<report> into docs/reviews/ (no group PR adds it: its issue was parked or reverted), after checking it for machine paths as the integrators do. Then for each row below, in order, from the worktree: \`python3 .claude/skills/adr-impl-review/scripts/scorecard.py record --ledger docs/reviews/model-ledger.json --issue <issue> --phase fix --model ${MODEL} --verdict <verdict> --blockers <b> --majors <m> --minors <n> --model-attributed <a> --dod-passed <p> --dod-total <t> --report docs/reviews/<report file name> --notes "<notes>"\`.
+2. For each row with copy=true, copy ${SP}/reports/<report> into docs/reviews/ (no group PR adds it: its issue was parked or reverted), after checking it for machine paths (\`grep -nE '${PATH_LEAK}'\`) and rewriting any hit. Then for each row below, in order, from the worktree: \`python3 .claude/skills/adr-impl-review/scripts/scorecard.py record --ledger docs/reviews/model-ledger.json --issue <issue> --phase fix --model ${MODEL} --verdict <verdict> --blockers <b> --majors <m> --minors <n> --model-attributed <a> --dod-passed <p> --dod-total <t> --report docs/reviews/<report file name> --notes "<notes>"\`.
 3. Commit (\`docs(reviews): record the fix reviews of wave ${args.wave}\`, then \`${TRAILER}\`), push, and open the PR (\`gh pr create --repo pyvvo/funcd --base main\`): the body says what it records, that it merges after the wave's group PRs (its report links point at files they add), and ends with the line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
 ${RULES(`${SP}/wt/ledger`).replace('- No pushes, no PRs, no GitHub writes (reading issues is fine).\n', '- Push only this branch and open only this PR.\n')}
 Rows: ${JSON.stringify(rows)}`
@@ -199,22 +201,23 @@ Rows: ${JSON.stringify(rows)}`
 const lanePrompt = (wt, specs) => `Run the Lima lanes for this wave. colima must be running first (\`colima status\`, else \`colima start\`; \`docker context show\` prints colima). Then run \`cd ${wt} && scripts/agent/lanes.sh ${specs.join(' ')}\` with the Bash tool's run_in_background and wait for its completion notification, never as one foreground call: a full lane run takes about 12 minutes per spec, and the tool stops a foreground call after 10 (each lane runs through the host lane lock, one after the other; a lane that refuses because a funcd VM is already running names it: report that, do not delete a VM you did not start). Edit, commit and push nothing.
 Return whether all passed, each PASS/FAIL line, and a note with the failing case and assertion from .cache/lanes/<branch>-<lane>.log of the main checkout (slashes in the branch become underscores) if one failed.`
 
-// A thrown agent call parks its issue with the reason instead of dropping it from the result.
+// A thrown agent call parks its issue with the reason instead of dropping it from the result; the reviews it
+// already had still reach the ledger.
 async function doIssue(it) {
+  const rounds = []
   try {
-    return await doIssueSteps(it)
+    return await doIssueSteps(it, rounds)
   } catch (e) {
     log(`#${it.n}: the pipeline failed on it: ${e && e.message}`)
-    return { issue: it.n, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, defects: [] }
+    return { issue: it.n, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, rounds, defects: [] }
   }
 }
 
-async function doIssueSteps(it) {
+async function doIssueSteps(it, rounds) {
   const fx = await run(fixPrompt(it), { label: `fix:#${it.n}`, phase: 'Fix', schema: FIX })
   if (!fx) return { issue: it.n, status: 'parked', reason: 'the fixer returned nothing', defects: [] }
   if (fx.status !== 'committed' || !fx.commits.length) return { issue: it.n, status: 'parked', reason: fx.reason, defects: fx.new_defects }
   const commits = [...fx.commits]
-  const rounds = []
   for (let round = 1; round <= 3; round++) {
     if (round > 1) {
       const rw = await run(reworkPrompt(it, rounds[rounds.length - 1].report_path), { label: `rework:#${it.n}`, phase: 'Rework', schema: REWORK })
@@ -222,7 +225,7 @@ async function doIssueSteps(it) {
       commits.push(...rw.commits)
     }
     const v = await run(reviewPrompt(it, commits, round), { label: `review:#${it.n}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
-    if (!v) return { issue: it.n, status: 'parked', reason: 'the reviewer returned nothing', defects: fx.new_defects }
+    if (!v) return { issue: it.n, status: 'parked', reason: 'the reviewer returned nothing', rounds, defects: fx.new_defects }
     rounds.push(v)
     if (v.verdict === 'pass') return { issue: it.n, status: 'passed', commits, rounds, needs_lane: fx.needs_lane, defects: fx.new_defects }
     if (v.verdict === 'fail') break
@@ -259,7 +262,7 @@ const done = await pipeline(
       release()
     }
     if (!ig) return { ...base, pr: '', fixed: [], problems: 'integrator failed' }
-    const fixedSet = new Set(ig.fixed)
+    const fixedSet = new Set(ig.pr_url ? ig.fixed : [])
     const rows = rowsOf(fixedSet)
     return { ...base, pr: ig.pr_url, branch: ig.branch || gbranch(u), fixed: ig.fixed, parked: [...parkedEarly, ...ig.parked], needs_lane: ig.needs_lane, lanes_hint: ig.lanes_hint, gate: ig.gate, problems: ig.problems, rows }
   },
@@ -267,24 +270,33 @@ const done = await pipeline(
 
 const out = done.filter(Boolean)
 const opened = out.filter(r => r.pr)
+// The end stages report a failed agent as a null result rather than losing the groups' results.
+const tryRun = async (name, prompt, opts) => {
+  try {
+    return await run(prompt, opts)
+  } catch (e) {
+    log(`${name}: the agent failed: ${e && e.message}`)
+    return null
+  }
+}
 let wave = null
 if (opened.length > 1) {
   phase('Wave')
   const first = units.find(u => u.key === opened[0].unit)
-  wave = await run(wavePrompt(gwt(first), opened.map(r => r.branch)), { label: 'wave-check', phase: 'Wave', schema: WAVE, model: 'sonnet', effort: 'low' })
+  wave = await tryRun('wave', wavePrompt(gwt(first), opened.map(r => r.branch)), { label: 'wave-check', phase: 'Wave', schema: WAVE, model: 'sonnet', effort: 'low' })
 }
 const rows = out.flatMap(r => r.rows)
 let ledger = null
 if (rows.length && args.ledger !== false) {
   phase('Ledger')
-  ledger = await run(ledgerPrompt(rows), { label: 'ledger', phase: 'Ledger', schema: PRS, model: 'sonnet', effort: 'low' })
+  ledger = await tryRun('ledger', ledgerPrompt(rows), { label: 'ledger', phase: 'Ledger', schema: PRS, model: 'sonnet', effort: 'low' })
 }
 const laneSpecs = opened.filter(r => r.needs_lane).map(r => `${r.branch}:all`)
 let lanes = null
 if (laneSpecs.length) {
   phase('Lanes')
   const first = units.find(u => u.key === opened[0].unit)
-  lanes = await run(lanePrompt(gwt(first), laneSpecs), { label: 'lanes', phase: 'Lanes', schema: LANE, model: 'sonnet', effort: 'low' })
+  lanes = await tryRun('lanes', lanePrompt(gwt(first), laneSpecs), { label: 'lanes', phase: 'Lanes', schema: LANE, model: 'sonnet', effort: 'low' })
 }
 return {
   ledger_pr: ledger ? ledger.pr_url : '',

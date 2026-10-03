@@ -10,9 +10,11 @@ set -uo pipefail
 state=${1:?usage: queue.sh <state-dir> <pr>...}
 shift
 mkdir -p "$state"
+unread=0
 for n in "$@"; do
   if ! info=$(gh pr view "$n" --repo pyvvo/funcd --json id,headRefOid) || ! files=$(gh pr diff "$n" --repo pyvvo/funcd --name-only); then
     echo "#$n held: cannot read the PR or its diff, rerun"
+    unread=1
     continue
   fi
   id=$(jq -r .id <<<"$info")
@@ -34,3 +36,4 @@ EOF
   echo "#$n $(gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{state position}}}' \
       -f id="$id" --jq '.data.enqueuePullRequest.mergeQueueEntry | "\(.state) \(.position)"' 2>&1 | tail -1)"
 done
+exit "$unread"

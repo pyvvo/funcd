@@ -5,6 +5,7 @@
 # prints one PASS/FAIL line, and removes the checkout. Full logs: .cache/lanes/<branch>-<lane>.log in the main checkout,
 # with the slashes of the branch turned into underscores. A full lane run takes about 12 minutes per spec.
 set -u
+[ $# -gt 0 ] || { echo "usage: lanes.sh <branch>:<lane|all>..." >&2; exit 2; }
 root=$(cd "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
 case "$root/" in "$HOME"/*) ;; *) echo "lanes: the main checkout $root is not under \$HOME, which colima cannot mount" >&2; exit 2 ;; esac
 logs="$root/.cache/lanes"
