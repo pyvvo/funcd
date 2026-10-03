@@ -88,6 +88,9 @@ const (
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
 	defaultLocalNode     = "local"
 	shutdownTimeout      = 15 * time.Second
+	// closeTimeout is Shutdown's own bound when Run stops, so an HTTP drain that used all of shutdownTimeout still
+	// leaves the log Routes and telemetry time to flush (issue #453); 15 s + 5 s fits the unit's TimeoutStopSec=30.
+	closeTimeout = 5 * time.Second
 	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
@@ -318,6 +321,7 @@ type Platform struct {
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
 
+	drainTimeout time.Duration // Run's bound on the HTTP drain: shutdownTimeout, unless a test exhausts it
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -334,7 +338,7 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowDefaultRetry: defaultWorkflowRetry,
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
 	}
-	p := &Platform{cfg: cfg}
+	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -920,7 +924,10 @@ func (p *Platform) buildControlPlane() error {
 	}
 	// ReadTimeout bounds the request read, as on the data plane (issue #90); with no IdleTimeout set,
 	// net/http also uses it as the keep-alive idle bound, so a silent client cannot hold a connection (#300).
-	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
+	// ErrorLog sends net/http's own errors (TLS handshake, accept, recovered panic) through the configured
+	// logger; left nil they go to the stdlib log package, bypassing the log format (#454).
+	httpErrorLog := slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)
+	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, ErrorLog: httpErrorLog}
 
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
@@ -957,15 +964,15 @@ func (p *Platform) buildControlPlane() error {
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
-	dpHandler := gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+	dpHandler := gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
 	// limiter: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its caller's
 	// in-flight slot or rate token (#87).
-	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, edgeShape))
+	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, edgeShape))
 	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
 	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
 	// deadline once the body is read, so it does not cut a long-running handler.
-	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second}
+	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, ErrorLog: httpErrorLog}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)
@@ -1187,7 +1194,7 @@ func (p *Platform) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.drainTimeout)
 	defer cancel()
 	p.logger.InfoContext(stopCtx, "platform stopping")
 	// Drain both HTTP servers (stop accepting) before the ports close — an in-flight
@@ -1195,7 +1202,9 @@ func (p *Platform) Run(ctx context.Context) error {
 	_ = p.dataPlaneServer.Shutdown(stopCtx)
 	_ = p.httpServer.Shutdown(stopCtx)
 	wg.Wait() // drain controller + eventing + activator before closing ports
-	return p.Shutdown(stopCtx)
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancelClose()
+	return p.Shutdown(closeCtx)
 }
 
 // Shutdown closes the platform's components (the control-plane listener, the five

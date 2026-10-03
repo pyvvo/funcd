@@ -235,7 +235,7 @@ func TestIssue311_PanicStillCountedLoggedAndSpanEnded(t *testing.T) {
 			)
 			var buf bytes.Buffer
 			mw := observ.Chain(observ.Config{Metrics: true, AccessLog: true, Trace: true}, tel, slog.New(slog.NewJSONHandler(&buf, nil)))
-			h := gateway.Chain(tc.next, gateway.Recover, gateway.RequestID, mw)
+			h := gateway.Chain(tc.next, gateway.Recover(slog.New(slog.DiscardHandler)), gateway.RequestID, mw)
 
 			var got error
 			func() {

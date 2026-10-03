@@ -12,6 +12,7 @@ package activator
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -415,7 +416,25 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 		a.logger.WarnContext(r.Context(), "upstream call failed", "upstream", upstream, "error", perr)
 		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
 	}
+	KeepEdgeHeaders(rp, w)
 	rp.ServeHTTP(w, r)
+}
+
+// KeepEdgeHeaders makes rp put the headers w carries now back before the final response or the error
+// response: httputil.ReverseProxy clears the whole header map after it relays an upstream 1xx, which
+// would drop the X-Request-Id and CORS headers the edge set before proxying (#417). It sets
+// rp.ModifyResponse and wraps rp.ErrorHandler, which must be set first.
+func KeepEdgeHeaders(rp *httputil.ReverseProxy, w http.ResponseWriter) {
+	edge := w.Header().Clone()
+	rp.ModifyResponse = func(*http.Response) error {
+		maps.Copy(w.Header(), edge)
+		return nil
+	}
+	onError := rp.ErrorHandler
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		maps.Copy(w.Header(), edge)
+		onError(w, r, err)
+	}
 }
 
 // rebase addresses r under base, the path an upstream serves its function at: r's root is base

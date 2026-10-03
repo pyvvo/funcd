@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -108,6 +109,19 @@ func Run(ctx context.Context, shimPath, poolShimPath string, cfg Config) ([]Repo
 	return reports, nil
 }
 
+// openFileBlob opens the file backend's blob store in dir, creating dir first.
+func openFileBlob(ctx context.Context, dir string) (blob.Bucket, error) {
+	const op = "bench.openFileBlob"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "blob dir")
+	}
+	bucket, err := gocloud.Open(ctx, gocloud.FileURL(dir))
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "open file blob")
+	}
+	return bucket, nil
+}
+
 func runBackend(ctx context.Context, shimPath, bundle string, backend Backend, cfg Config) (Report, error) {
 	const op = "bench.runBackend"
 	tmp, err := os.MkdirTemp("", "funcd-bench-*")
@@ -122,16 +136,13 @@ func runBackend(ctx context.Context, shimPath, bundle string, backend Backend, c
 		funcd.WithArtifactStore(filepath.Join(tmp, "artifacts")),
 	}
 	if backend == BackendFile {
-		blobDir, natsDir := filepath.Join(tmp, "blob"), filepath.Join(tmp, "nats")
-		if err := os.MkdirAll(blobDir, 0o700); err != nil {
-			return Report{}, fault.Wrapf(err, fault.Internal, op, "blob dir")
+		bucket, err := openFileBlob(ctx, filepath.Join(tmp, "blob"))
+		if err != nil {
+			return Report{}, err
 		}
+		natsDir := filepath.Join(tmp, "nats")
 		if err := os.MkdirAll(natsDir, 0o700); err != nil {
 			return Report{}, fault.Wrapf(err, fault.Internal, op, "nats dir")
-		}
-		bucket, err := gocloud.Open(ctx, "file://"+blobDir)
-		if err != nil {
-			return Report{}, fault.Wrapf(err, fault.Internal, op, "open file blob")
 		}
 		messaging, err := nats.Open(ctx, nats.Options{Storage: nats.FileStorage, StoreDir: natsDir})
 		if err != nil {

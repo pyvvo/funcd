@@ -1,11 +1,13 @@
 package local
 
 import (
+	"bytes"
 	"embed"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -30,6 +32,28 @@ func TestIssue163_LocalAPIReapsIdleKeepAliveConns(t *testing.T) {
 	srv := m.active["team-a/a"].srv
 	m.mu.Unlock()
 	require.Positive(t, srv.IdleTimeout, "the local API must close a keep-alive connection left idle")
+}
+
+// TestIssue454_LocalAPIServerErrorsUseTheManagerLogger: net/http logs its own server errors (an accept
+// error, a recovered panic) through the http.Server's ErrorLog, and through the stdlib log package when it
+// is nil, so they bypassed the Manager's logger and its format.
+func TestIssue454_LocalAPIServerErrorsUseTheManagerLogger(t *testing.T) {
+	dir, err := os.MkdirTemp("", "i454") // short: a unix socket path is capped near 104 bytes
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	var logs bytes.Buffer
+	m := NewManager(dir, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(m.Close)
+	_, err = m.SocketFor("team-a", "a")
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	srv := m.active["team-a/a"].srv
+	m.mu.Unlock()
+	require.NotNil(t, srv.ErrorLog, "the local API's net/http errors must go through the Manager's logger")
+	srv.ErrorLog.Print("issue-454 probe")
+	require.Contains(t, logs.String(), `"level":"WARN","msg":"issue-454 probe","component":"workernode.local"`)
 }
 
 // packageSources is the package's compiled source, so a go test -overlay of a file is what the test reads.
