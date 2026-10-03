@@ -24,11 +24,11 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
 	"github.com/pyvvo/funcd/internal/runtime"
-	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/internal/testkit/realshim"
 )
 
 // fakeRuntime is a controllable runtime.Runtime for the shim-mode reconciler tests
@@ -572,64 +572,19 @@ func TestIssue79_ShapeValidCarriesShimLoadError(t *testing.T) {
 	})
 }
 
-// bringUpRealShim runs the real Node shim via the process driver against a file artifact holding
-// handler src and reconciles the function until it reports readiness — the shared node-gated fixture.
-// It skips the test when the shim or node is unavailable (ADR-0030 node lane).
-func bringUpRealShim(t *testing.T, src string) (store.Store, *function.Reconciler, gateway.Gateway) {
+// bringUpRealShim brings Function "echo" up to Ready on the real Node shim from a file artifact holding handler src.
+func bringUpRealShim(t *testing.T, src string) gateway.Gateway {
 	t.Helper()
-	shim := langmod.NodeShim(t)
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not on PATH; skipping the node-gated shim lane")
-	}
-
 	artifact := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(artifact, []byte(src), 0o600))
-
-	st := store.New(memory.New())
-	rt := process.New()
-	t.Cleanup(func() { _ = rt.Close() })
-	sch, err := singlenode.New("local", v1.HostPlatform())
-	require.NoError(t, err)
-	gw := embedded.New()
-	r, err := function.NewReconciler(function.Deps{
-		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
-		Materializer: function.NewFileMaterializer(),
-		ShimCommand:  []string{node, shim},
-	})
-	require.NoError(t, err)
-
-	obj, _ := v1.NewObject(v1.KindFunction)
-	fn := obj.(*v1.Function)
-	fn.Name, fn.Namespace, fn.ResourceGroup = "echo", "default", "rg1"
-	fn.Spec.Replicas = 1
-	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
-	fn.Spec.Image = "file://" + artifact
-	_, err = st.Create(context.Background(), fn)
-	require.NoError(t, err)
-
-	// Reconcile until the boot settles: the reconciler fails a replica not ready within its boot timeout (ADR-0030
-	// §4b), so the wait sets no deadline of its own for a loaded runner to outlast (issue #452).
-	var phase v1.Phase
-	for {
-		_, rerr := r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "echo"})
-		require.NoError(t, rerr)
-		got, gerr := st.Get(context.Background(), v1.KindFunction.GVK(), "default", "echo")
-		require.NoError(t, gerr)
-		if phase = got.(*v1.Function).Status.Phase; phase != v1.PhaseDeploying {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	require.Equal(t, v1.PhaseReady, phase, "the real Node shim booted and reported readiness")
-	return st, r, gw
+	return realshim.Ready(t, function.NewFileMaterializer(), "file://"+artifact, "")
 }
 
 // scenario: shim-executes-handler + reconciler-materializes-and-runs (node-gated, ADR-0030
 // node lane). The real Node shim boots from a file artifact, becomes Ready, and serves the
 // handler over HTTP at the gateway-resolved upstream.
 func TestScenarioShimEndToEndNode(t *testing.T) {
-	_, _, gw := bringUpRealShim(t, "export function handle(_, event) { return { echoed: event }; }\n")
+	gw := bringUpRealShim(t, "export function handle(_, event) { return { echoed: event }; }\n")
 
 	rs, err := gw.Routes(context.Background())
 	require.NoError(t, err)
