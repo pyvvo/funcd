@@ -8053,5 +8053,35 @@
     "dod_total": 7,
     "report": "docs/reviews/issue-553-fix-claude-opus-5-5-w8.md",
     "notes": "No findings. Task refactor: the audit linters flag CompactOnce on origin/main (funlen, gocognit, gocyclo 24) and report 0 issues at head. No test file changed, and the funclog tests pass under -race. 4/4 mutants killed (#217 TestIssue84 among the killers). The fault op of the delete and prune errors is renamed to the helper name, which the commit states and which follows the per-helper op convention, so it is not a finding. No new defects."
+  },
+  {
+    "date": "2026-10-03",
+    "issue": "551",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/issue-551-fix-claude-opus-5-5-w9.md",
+    "notes": "pass; Done-when met (bootDev 47 stmts/gocyclo 14, reloadChanged 40 stmts, devShimOptions gocyclo 15), no behavior change, dev tests unchanged and green under -race; Minor (model): checkFixedPorts and the durable close on an S3-option failure have no test (mutant m3 survives, a gap that predates the change)"
+  },
+  {
+    "date": "2026-10-03",
+    "issue": "554",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 7,
+    "dod_total": 8,
+    "report": "docs/reviews/issue-554-fix-claude-opus-5-5-w9.md",
+    "notes": "pass; minor(model): a bucket opened by kvBackup is not closed when kvCDC then fails (pre-existing, moved rather than fixed on the way); minor(issue): the kvCDC nil-bus guard is untested and mutant m2 survives (pre-existing gap); no TestIssue554 because this is a refactor task, and both Done-when lines were verified (audit funlen/gocyclo/gocognit clean, cmd/funcd tests pass unchanged with -race)."
   }
 ]
