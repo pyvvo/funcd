@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.4](https://github.com/pyvvo/funcd/compare/v0.2.3...v0.2.4) (2026-10-03)
+
+
+### Bug Fixes
+
+* **catalog:** keep the catalog proxy's engine calls off http.DefaultTransport ([#537](https://github.com/pyvvo/funcd/issues/537)) ([9466b23](https://github.com/pyvvo/funcd/commit/9466b23fb7697e79bb13221a949462554f94962e))
+* **deps:** pin funcd-typescript v0.4.3 and funcd-python v0.3.4 ([#541](https://github.com/pyvvo/funcd/issues/541)) ([3efb66e](https://github.com/pyvvo/funcd/commit/3efb66ed3cbab90477cbfef60f10cad360921e81))
+* **deps:** pin funcd-typescript v0.4.4 and funcd-python v0.3.5 ([#543](https://github.com/pyvvo/funcd/issues/543)) ([03cc357](https://github.com/pyvvo/funcd/commit/03cc357123297b45669d880fd90a382fc33c649a))
+* **edge:** send Vary: Accept-Encoding on 304 and 206 responses under edge compression ([#528](https://github.com/pyvvo/funcd/issues/528)) ([090f969](https://github.com/pyvvo/funcd/commit/090f9692dd67985438849d536ab25bf621357eab))
+* **funcdctl:** fix dev reload, restart and startup gaps and SDK nullable types ([#520](https://github.com/pyvvo/funcd/issues/520)) ([#535](https://github.com/pyvvo/funcd/issues/535)) ([a2d51d3](https://github.com/pyvvo/funcd/commit/a2d51d3800037a1821091a4118675b7b2929980f))
+* **funcd:** shut down on setup errors, keep socket, validate header ([#519](https://github.com/pyvvo/funcd/issues/519)) ([#530](https://github.com/pyvvo/funcd/issues/530)) ([3d4ca0b](https://github.com/pyvvo/funcd/commit/3d4ca0bf4d68b8e9b77189d79cc7f5c485a60965))
+* **function:** harden shim test helper and share real-shim setup ([#525](https://github.com/pyvvo/funcd/issues/525)) ([#538](https://github.com/pyvvo/funcd/issues/538)) ([0447ae8](https://github.com/pyvvo/funcd/commit/0447ae8c014d4924a7a644809134f7bb91964b72))
+* **observability:** shut down exporters, route logs via the configured logger ([#526](https://github.com/pyvvo/funcd/issues/526)) ([#539](https://github.com/pyvvo/funcd/issues/539)) ([5d4603d](https://github.com/pyvvo/funcd/commit/5d4603d1969c2126b896397e025767ea093d983a))
+* **runtime:** clean up failed Create logs and reuse imported image ([#521](https://github.com/pyvvo/funcd/issues/521)) ([#533](https://github.com/pyvvo/funcd/issues/533)) ([0f04485](https://github.com/pyvvo/funcd/commit/0f044853014d8c12cbc46d049394d42da2438377))
+* **services:** S3 gateway ModTime and bind failure, provider doc, test helper ([#523](https://github.com/pyvvo/funcd/issues/523)) ([#536](https://github.com/pyvvo/funcd/issues/536)) ([58ee7af](https://github.com/pyvvo/funcd/commit/58ee7af1673cee92cec356dce396ac04a2496ca4))
+* **skills:** keep fix-batch regression test, drop stale lint-lock note ([#524](https://github.com/pyvvo/funcd/issues/524)) ([#529](https://github.com/pyvvo/funcd/issues/529)) ([485e53a](https://github.com/pyvvo/funcd/commit/485e53af4ef4b23476cdb98bcb903a04e6787063))
+* **workflow:** keep input defaults, reject non-null void input, fix docs ([#522](https://github.com/pyvvo/funcd/issues/522)) ([#532](https://github.com/pyvvo/funcd/issues/532)) ([3777821](https://github.com/pyvvo/funcd/commit/3777821d0908ff7941b71eae3a1aa749be73d893))
+
 ## [0.2.3](https://github.com/pyvvo/funcd/compare/v0.2.2...v0.2.3) (2026-10-03)
 
 
