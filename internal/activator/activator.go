@@ -4,7 +4,7 @@
 // waits for a ready upstream to appear, then forwards the held request (or 503s on
 // timeout, or at once for a Failed function); and it runs a periodic idle-reclaim
 // pass that scales idle functions to zero. It emits a scale INTENT through two seams
-// (Endpoints read / Scaler write); it does not provision workeres (that is the P-M
+// (Endpoints read / Scaler write); it does not provision workers (that is the P-M
 // Function reconciler) and it does not register a Function reconciler
 // (one-reconciler-per-gvk, ADR-0015).
 package activator

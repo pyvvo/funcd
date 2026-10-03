@@ -1,6 +1,6 @@
 // Package function is the Function lifecycle reconciler (ADR-0020): the one
 // controller.Reconciler for KindFunction. It stamps immutable Revisions, schedules +
-// provisions workeres via the runtime port to the EFFECTIVE desired replica count
+// provisions workers via the runtime port to the EFFECTIVE desired replica count
 // (honoring the activator's wake Status.Phase, not blindly spec.replicas), validates
 // the shape (materialization gate — no route to a broken function), programs the gateway
 // with the FULL route table (gateway.ProgramRoutes is replace-all), and writes status.
@@ -339,7 +339,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			// delete path: stop the function's workeres, then re-program routes without it.
+			// delete path: stop the function's workers, then re-program routes without it.
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
@@ -1171,7 +1171,7 @@ func (r *Reconciler) servingWorkerRuns(ctx context.Context, fn *v1.Function) (bo
 func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) ([]runtime.Instance, error) {
 	all, err := r.runtime.List(ctx, ns)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), "function.instances", "list workeres")
+		return nil, fault.Wrapf(err, fault.KindOf(err), "function.instances", "list workers")
 	}
 	out := make([]runtime.Instance, 0, len(all))
 	for _, in := range all {
