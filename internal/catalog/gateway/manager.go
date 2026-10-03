@@ -132,7 +132,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	}
 	handler := &retargetable{}
 	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.proxyLog))
-	srv := newProxyServer(handler)
+	srv := newProxyServer(handler, m.proxyLog)
 	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
 	m.servers[key] = mp
 
@@ -194,9 +194,11 @@ func (m *Manager) closeProxy(key string, mp *managedProxy) {
 // newProxyServer builds a proxy's http.Server. The read timeouts cut off a peer that stalls before the PEP has
 // read its token, as on the data plane (issue #312); net/http clears the read deadline once the body is read,
 // so a long query is not cut. IdleTimeout outlasts the 90 s client keep-alive of the data plane's edge reverse
-// proxy (ADR-0138), so that client closes an idle connection first.
-func newProxyServer(h http.Handler) *http.Server {
-	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+// proxy (ADR-0138), so that client closes an idle connection first. ErrorLog sends net/http's own errors
+// through log, not the stdlib log package (#454).
+func newProxyServer(h http.Handler, log *slog.Logger) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral

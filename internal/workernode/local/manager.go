@@ -75,7 +75,7 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	path := filepath.Join(m.dir, sockName(key))
 	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
-	ln, srv, err := listen(sctx, op, path, h)
+	ln, srv, err := listen(sctx, op, path, h, m.logger)
 	if err != nil {
 		scancel()
 		return "", err
