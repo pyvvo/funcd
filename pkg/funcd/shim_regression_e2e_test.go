@@ -118,7 +118,8 @@ func shortDataDir(t *testing.T) string {
 }
 
 // requirePython returns an interpreter that can load the Python shim (3.12 or later, 3.14 or later for the
-// pool host, with fastjsonschema): FUNCD_PYTHON, else python3.14 or python3 on PATH. It skips without one.
+// pool host, with fastjsonschema): FUNCD_PYTHON, else python3.14 or python3 on PATH. Without one it skips, but
+// fails in CI (CI set), whose dev shell pins one: a skip there would hide the lane (issue #544).
 func requirePython(t *testing.T, pool bool) string {
 	t.Helper()
 	minor := 12
@@ -135,7 +136,11 @@ func requirePython(t *testing.T, pool bool) string {
 			return path
 		}
 	}
-	t.Skipf("no Python 3.%d or later with fastjsonschema (set FUNCD_PYTHON); skipping the Python shim lane", minor)
+	missing := fmt.Sprintf("no Python 3.%d or later with fastjsonschema (set FUNCD_PYTHON)", minor)
+	if os.Getenv("CI") != "" {
+		t.Fatal(missing + "; CI must run the Python shim lane")
+	}
+	t.Skip(missing + "; skipping the Python shim lane")
 	return ""
 }
 
