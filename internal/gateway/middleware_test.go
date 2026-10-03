@@ -2,10 +2,13 @@ package gateway_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -59,9 +62,39 @@ func TestRecoverMiddleware(t *testing.T) {
 		nilMap["boom"] = 1 //nolint:staticcheck // deliberate nil-map write to trigger a panic for Recover
 	})
 	rec := httptest.NewRecorder()
-	gateway.Recover(panicker).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	gateway.Recover(slog.New(slog.DiscardHandler))(panicker).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Header().Get("Content-Type"), "application/problem+json")
+}
+
+// Issue #418: a recovered panic is logged once, with its value, its stack and the request id, and the
+// client's 500 problem+json does not carry the panic text.
+func TestIssue418_RecoverLogsPanicOnce(t *testing.T) {
+	t.Parallel()
+	var logs syncBuffer
+	panicker := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("secret-418") })
+	h := gateway.Chain(panicker, gateway.Recover(slog.New(slog.NewJSONHandler(&logs, nil))), gateway.RequestID)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "req-418")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, 1, strings.Count(logs.String(), "\n"), "the panic is logged once")
+	var entry struct {
+		Level     string `json:"level"`
+		Panic     string `json:"panic"`
+		RequestID string `json:"request_id"`
+		Stack     string `json:"stack"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(logs.String()), &entry))
+	require.Equal(t, "ERROR", entry.Level)
+	require.Equal(t, "secret-418", entry.Panic)
+	require.Equal(t, "req-418", entry.RequestID)
+	require.Contains(t, entry.Stack, "TestIssue418_RecoverLogsPanicOnce", "the stack reaches the panicking handler")
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Header().Get("Content-Type"), "application/problem+json")
+	require.NotContains(t, rec.Body.String(), "secret-418", "the panic text stays out of the client's problem")
 }
 
 // Issue #91: a mid-stream abort (httputil.ReverseProxy panics http.ErrAbortHandler when the
@@ -74,7 +107,7 @@ func TestIssue91_RecoverRepanicsErrAbortHandler(t *testing.T) {
 		_ = http.NewResponseController(w).Flush()
 		panic(http.ErrAbortHandler)
 	})
-	srv := httptest.NewServer(gateway.Recover(streamer))
+	srv := httptest.NewServer(gateway.Recover(nil)(streamer))
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
@@ -97,7 +130,7 @@ func TestIssue338_RecoverAbortsCommittedResponseOnPanic(t *testing.T) {
 		_ = http.NewResponseController(w).Flush()
 		panic("boom after commit")
 	})
-	srv := httptest.NewUnstartedServer(gateway.Recover(streamer))
+	srv := httptest.NewUnstartedServer(gateway.Recover(nil)(streamer))
 	logs := &syncBuffer{}
 	srv.Config.ErrorLog = log.New(logs, "", 0)
 	srv.Start()
