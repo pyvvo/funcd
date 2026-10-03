@@ -245,6 +245,20 @@ func (h *shimRig) postConcurrently(name, body string, n int) func() []reply {
 	}
 }
 
+// inFlight returns a file a slow handler appends one byte to when it starts, and a wait until n handlers have
+// started, so the call that faults the worker goes out only once the slow calls are in flight on it.
+func inFlight(t *testing.T) (string, func(n int)) {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "started")
+	return marker, func(n int) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			fi, err := os.Stat(marker)
+			return err == nil && fi.Size() == int64(n)
+		}, 15*time.Second, 20*time.Millisecond, "%d slow calls are in flight", n)
+	}
+}
+
 // replyFields are the reply-body fields the tests read.
 type replyFields struct {
 	PID    int    `json:"pid"`
@@ -447,8 +461,12 @@ server.listen(0, '127.0.0.1', () => writeFileSync(process.env.FUNCD_PORTFILE, St
 `), 0o600))
 	h := newShimRig(t, "", funcd.WithRuntimeShimFor("rawhttp", node, rawShim))
 	h.deploy(t, "rawcallee", shimFn{runtime: "rawhttp1", ext: ".mjs", src: "export {};\n"})
-	caller := nodeFn(`export async function handle(ctx, e) {
-  if (e.data && e.data.slow) await new Promise((r) => setTimeout(r, 1500));
+	caller := nodeFn(`import { appendFileSync } from 'node:fs';
+export async function handle(ctx, e) {
+  if (e.data && e.data.slow) {
+    appendFileSync(e.data.started, '.');
+    await new Promise((r) => setTimeout(r, 1500));
+  }
   if (e.data && e.data.invoke) {
     try {
       await ctx.invoke('callee', {});
@@ -466,8 +484,9 @@ server.listen(0, '127.0.0.1', () => writeFileSync(process.env.FUNCD_PORTFILE, St
 
 	pid := decodeReply(t, h.post("ncaller", `{}`)).PID
 	require.NotZero(t, pid)
-	slow := h.postConcurrently("ncaller", `{"slow":true}`, 1)
-	time.Sleep(200 * time.Millisecond)
+	started, waitStarted := inFlight(t)
+	slow := h.postConcurrently("ncaller", fmt.Sprintf(`{"slow":true,"started":%q}`, started), 1)
+	waitStarted(1)
 	got := h.post("ncaller", `{"invoke":true}`)
 	require.Equal(t, http.StatusOK, got.status, "the caller's catch handles the rejection: %s", got.body)
 	out := decodeReply(t, got)
@@ -530,9 +549,13 @@ func pythonCanPool(py string) bool {
 // after it returned exited the worker, cutting off every call in flight on it.
 func TestIssue132_StrayNodeFaultKeepsSoloWorkerServing(t *testing.T) {
 	h := newShimRig(t, "")
-	h.deploy(t, "nstray", nodeFn(`export async function handle(_c, e) {
+	h.deploy(t, "nstray", nodeFn(`import { appendFileSync } from 'node:fs';
+export async function handle(_c, e) {
   const kind = e.data && e.data.kind;
-  if (kind === 'slow') await new Promise((r) => setTimeout(r, 1500));
+  if (kind === 'slow') {
+    appendFileSync(e.data.started, '.');
+    await new Promise((r) => setTimeout(r, 1500));
+  }
   if (kind === 'unhandled') Promise.reject(new Error('nobody awaits this'));
   if (kind === 'uncaught') setTimeout(() => { throw new Error('thrown after return'); }, 10);
   return { pid: process.pid };
@@ -542,8 +565,9 @@ func TestIssue132_StrayNodeFaultKeepsSoloWorkerServing(t *testing.T) {
 	pid := decodeReply(t, h.post("nstray", `{}`)).PID
 	require.NotZero(t, pid)
 	for _, kind := range []string{"unhandled", "uncaught"} {
-		slow := h.postConcurrently("nstray", `{"kind":"slow"}`, 2)
-		time.Sleep(200 * time.Millisecond)
+		started, waitStarted := inFlight(t)
+		slow := h.postConcurrently("nstray", fmt.Sprintf(`{"kind":"slow","started":%q}`, started), 2)
+		waitStarted(2)
 		trigger := h.post("nstray", fmt.Sprintf(`{"kind":%q}`, kind))
 		require.Equal(t, http.StatusOK, trigger.status, "%s: %s", kind, trigger.body)
 		for _, r := range slow() {
