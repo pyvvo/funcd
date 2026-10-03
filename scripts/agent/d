@@ -19,4 +19,7 @@ set +eu # the generated environment script is not written for errexit/nounset
 # shellcheck disable=SC1090
 source "$env_file" >/dev/null 2>&1
 export PATH="$PATH:$orig_path"
+# golangci-lint caches each package's issues with their absolute paths, so a cache shared by every worktree replays
+# the issues of a removed worktree without its //nolint lines and path rules: each checkout gets its own cache.
+export GOLANGCI_LINT_CACHE="${GOLANGCI_LINT_CACHE:-$root/.cache/golangci-lint}"
 exec "$@"
