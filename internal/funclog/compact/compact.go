@@ -164,8 +164,26 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 	}
 	nowNano := c.clock.Now().UTC().UnixNano()
 
-	// Group closed-window raw. A window is closed when now >= windowStart+Window; open windows are the
-	// live tail F54 still reads as JSONL — leave them untouched.
+	var st Stats
+	for _, w := range c.groupClosedWindows(objs, nowNano) {
+		rows, rawDeleted, err := c.compactWindow(ctx, w)
+		st.RawDeleted += rawDeleted
+		if err != nil {
+			return st, err
+		}
+		if rows > 0 {
+			st.Windows++
+			st.Rows += rows
+		}
+	}
+	st.CompactedPruned, err = c.pruneCompacted(ctx, objs, nowNano)
+	return st, err
+}
+
+// groupClosedWindows groups the raw keys of closed windows, sorted by (ns, fn, start) for a deterministic pass. A
+// window is closed when now >= windowStart+Window; open windows are the live tail F54 still reads as JSONL — they
+// are left untouched.
+func (c *Compactor) groupClosedWindows(objs []blob.Attributes, nowNano int64) []*window {
 	grouped := map[string]*window{}
 	for _, o := range objs {
 		bk, ok := parseRawKey(o.Key)
@@ -174,7 +192,7 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 		}
 		start := windowStartNano(bk.sealNano, c.window)
 		if nowNano < start+int64(c.window) {
-			continue // window still open — preserved
+			continue
 		}
 		gk := bk.ns + "\x00" + bk.fn + "\x00" + strconv.FormatInt(start, 10)
 		w := grouped[gk]
@@ -184,8 +202,6 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 		}
 		w.raw = append(w.raw, bk.key)
 	}
-
-	// Deterministic order (stable behavior + tests).
 	windows := make([]*window, 0, len(grouped))
 	for _, w := range grouped {
 		windows = append(windows, w)
@@ -199,66 +215,72 @@ func (c *Compactor) CompactOnce(ctx context.Context) (Stats, error) {
 		}
 		return windows[i].start < windows[j].start
 	})
+	return windows
+}
 
-	var st Stats
-	for _, w := range windows {
-		key := compactedKey(w.ns, w.fn, w.start)
-		rows, folded, rerr := c.readCompacted(ctx, key)
-		if rerr != nil {
-			return st, rerr
-		}
-		var pending []string
-		for _, bkey := range w.raw {
-			if _, ok := folded[bkey]; !ok {
-				pending = append(pending, bkey)
-				folded[bkey] = struct{}{}
-			}
-		}
-		fresh, rerr := c.readRaw(ctx, pending)
-		if fault.KindOf(rerr) == fault.Invalid {
-			// An undecodable object never heals on retry, so it must not stall the pass. The whole window stays
-			// raw: compacting only its good objects would later be overwritten at the same deterministic key.
-			c.log.WarnContext(ctx, "funclog compaction skipped a window with an undecodable raw object", "error", rerr)
-			continue
-		}
-		if rerr != nil {
-			return st, rerr
-		}
-		rows = append(rows, fresh...)
-		if len(rows) == 0 {
-			continue
-		}
-		if werr := c.writeCompacted(ctx, key, rows, folded); werr != nil {
-			return st, werr
-		}
-		// Parquet durably written — only NOW delete the consumed raw (crash-safe: a crash here re-Puts
-		// the same deterministic compacted key next pass, no loss, no duplicate).
-		for _, bkey := range w.raw {
-			if derr := c.bucket.Delete(ctx, bkey); derr != nil {
-				return st, fault.Wrapf(derr, fault.KindOf(derr), op, "delete raw %q", bkey)
-			}
-			st.RawDeleted++
-		}
-		st.Windows++
-		st.Rows += len(rows)
+// compactWindow merges the window's pending raw into its compacted Parquet, then deletes the window's raw — only
+// after the Put succeeds (crash-safe: a crash between them re-Puts the same deterministic compacted key next pass,
+// no loss, no duplicate). It returns the rows written (0 when the window is skipped) and the raw deleted so far.
+func (c *Compactor) compactWindow(ctx context.Context, w *window) (rows, rawDeleted int, err error) {
+	const op = "compact.Compactor.compactWindow"
+	key := compactedKey(w.ns, w.fn, w.start)
+	kept, folded, err := c.readCompacted(ctx, key)
+	if err != nil {
+		return 0, 0, err
 	}
-
-	// Retention: prune compacted older than Retention (0 ⇒ keep forever). Uses the pre-write listing, so the
-	// objects just written (current windows) are never candidates.
-	if c.retention > 0 {
-		cutoff := nowNano - int64(c.retention)
-		for _, o := range objs {
-			ws, ok := parseCompactedWindowStart(o.Key)
-			if !ok || ws >= cutoff {
-				continue
-			}
-			if derr := c.bucket.Delete(ctx, o.Key); derr != nil {
-				return st, fault.Wrapf(derr, fault.KindOf(derr), op, "prune compacted %q", o.Key)
-			}
-			st.CompactedPruned++
+	var pending []string
+	for _, bkey := range w.raw {
+		if _, ok := folded[bkey]; !ok {
+			pending = append(pending, bkey)
+			folded[bkey] = struct{}{}
 		}
 	}
-	return st, nil
+	fresh, err := c.readRaw(ctx, pending)
+	if fault.KindOf(err) == fault.Invalid {
+		// An undecodable object never heals on retry, so it must not stall the pass. The whole window stays
+		// raw: compacting only its good objects would later be overwritten at the same deterministic key.
+		c.log.WarnContext(ctx, "funclog compaction skipped a window with an undecodable raw object", "error", err)
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	kept = append(kept, fresh...)
+	if len(kept) == 0 {
+		return 0, 0, nil
+	}
+	if err := c.writeCompacted(ctx, key, kept, folded); err != nil {
+		return 0, 0, err
+	}
+	for _, bkey := range w.raw {
+		if err := c.bucket.Delete(ctx, bkey); err != nil {
+			return 0, rawDeleted, fault.Wrapf(err, fault.KindOf(err), op, "delete raw %q", bkey)
+		}
+		rawDeleted++
+	}
+	return len(kept), rawDeleted, nil
+}
+
+// pruneCompacted deletes compacted objects older than Retention (0 ⇒ keep forever) and returns how many it deleted.
+// It works on the pre-write listing, so the objects this pass just wrote (current windows) are never candidates.
+func (c *Compactor) pruneCompacted(ctx context.Context, objs []blob.Attributes, nowNano int64) (int, error) {
+	const op = "compact.Compactor.pruneCompacted"
+	if c.retention <= 0 {
+		return 0, nil
+	}
+	cutoff := nowNano - int64(c.retention)
+	pruned := 0
+	for _, o := range objs {
+		ws, ok := parseCompactedWindowStart(o.Key)
+		if !ok || ws >= cutoff {
+			continue
+		}
+		if err := c.bucket.Delete(ctx, o.Key); err != nil {
+			return pruned, fault.Wrapf(err, fault.KindOf(err), op, "prune compacted %q", o.Key)
+		}
+		pruned++
+	}
+	return pruned, nil
 }
 
 // readCompacted reads the window's existing Parquet at key, if any: its rows and the raw keys already folded into it.
