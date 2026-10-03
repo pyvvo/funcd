@@ -64,16 +64,20 @@ links point at files they add).
 
 ## Step 4 — Lanes, then merging
 
-1. Groups flagged "Lima lane pending" run their lanes one VM at a time, from a checkout under `$HOME`.
-2. Read every check's conclusion, then enqueue green PRs with the GraphQL `enqueuePullRequest` mutation
+1. Before queueing any group PR, run `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches,
+   in queue order. A `CONFLICT` line names a branch that conflicts with the ones before it: rebase it on them, rerun
+   its gate, push, and rerun the check. The check then gates the merged wave once (issue #563).
+2. Groups flagged "Lima lane pending" run their lanes one VM at a time, from a checkout under `$HOME`; the lane
+   recipes take a host lock (`scripts/lane-lock.sh`), so lane jobs started at once run one after the other.
+3. Read every check's conclusion, then enqueue green PRs with the GraphQL `enqueuePullRequest` mutation
    (`gh pr merge` fails: auto-merge is off); hold a lane-pending PR until its lane passes. A merge-group run that
    fails on a known flake: rerun or re-enqueue. A PR left conflicting by an earlier merge: rebase it on main,
    rerun the gate, push.
-3. Wait in the background with `scripts/agent/watch-prs.py <handled.json>` (it exits when a PR turns green, red
+4. Wait in the background with `scripts/agent/watch-prs.py <handled.json>` (it exits when a PR turns green, red
    or conflicted), not in a foreground loop.
-4. Leave the release-please PR open until the batch's groups have merged, then merge it once: one release per
+5. Leave the release-please PR open until the batch's groups have merged, then merge it once: one release per
    resolved batch.
-5. Once the groups have merged, run the bloat audit in full mode over the batch's range and list the cleanup
+6. Once the groups have merged, run the bloat audit in full mode over the batch's range and list the cleanup
    issues it suggests, for filing after the user's go.
 
 ## When to stop and ask
