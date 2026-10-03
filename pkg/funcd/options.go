@@ -133,8 +133,8 @@ func WithCatalogProxyHost(host string) Option {
 }
 
 // WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; without this option it
-// runs in memory with the daemon config's defaults (300s step timeout, 720h retention, one attempt, 1 MiB
-// payload cap). This option sets its persistence + tunables: dataDir is the Badger run-state directory
+// runs in memory with the daemon config's defaults (300s step timeout, 720h retention, one attempt,
+// 256 KiB payload cap). This option sets its persistence + tunables: dataDir is the Badger run-state directory
 // (empty ⇒ in-memory), defaultStepTimeout bounds a single step invocation (0 ⇒ none), retention is how
 // long terminal runs survive before the periodic sweep reclaims them (0 ⇒ never), defaultRetry is the
 // per-step attempt cap when a step declares no retry (< 1 ⇒ 1), and payloadLimit caps a run's input (at

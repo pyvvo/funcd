@@ -8,7 +8,8 @@ import "encoding/json"
 // subsumption + void rules; full JSON-Schema/structural subsumption is a documented follow-on.
 
 // FieldDiff is one required consumer field a producer or document does not satisfy. Got == "" ⇒ the
-// field is missing; otherwise Got is the actual primitive type and Want the required one.
+// field is missing; otherwise Got is the actual primitive type and Want the required one. Field == "" ⇒
+// the whole document is mistyped (a non-null document against a void schema).
 type FieldDiff struct {
 	Field string
 	Want  string
@@ -16,17 +17,22 @@ type FieldDiff struct {
 }
 
 func (d FieldDiff) String() string {
+	if d.Field == "" {
+		return "input is " + d.Got + ", want " + d.Want
+	}
 	if d.Got == "" {
 		return "\"" + d.Field + "\" (want " + d.Want + ") is missing"
 	}
 	return "\"" + d.Field + "\" is " + d.Got + ", want " + d.Want
 }
 
-// SchemaView is the F65-relevant subset of a JSON Schema: a type, typed top-level properties, and the
-// required set. A void schema is type "null" (or empty/absent — nothing required).
+// SchemaView is the F65-relevant subset of a JSON Schema: a type, typed top-level properties, their
+// declared defaults (ADR-0095), and the required set. A void schema is type "null" (or empty/absent —
+// nothing required).
 type SchemaView struct {
 	Type     string
-	Props    map[string]string // property name → primitive type
+	Props    map[string]string          // property name → primitive type
+	Defaults map[string]json.RawMessage // property name → declared default, for the properties that have one
 	Required []string
 }
 
@@ -35,7 +41,8 @@ func ParseSchemaView(raw json.RawMessage) SchemaView {
 	var s struct {
 		Type       string `json:"type"`
 		Properties map[string]struct {
-			Type string `json:"type"`
+			Type    string          `json:"type"`
+			Default json.RawMessage `json:"default"`
 		} `json:"properties"`
 		Required []string `json:"required"`
 	}
@@ -43,10 +50,14 @@ func ParseSchemaView(raw json.RawMessage) SchemaView {
 		_ = json.Unmarshal(raw, &s)
 	}
 	props := make(map[string]string, len(s.Properties))
+	defaults := map[string]json.RawMessage{}
 	for name, p := range s.Properties {
 		props[name] = p.Type
+		if p.Default != nil {
+			defaults[name] = p.Default
+		}
 	}
-	return SchemaView{Type: s.Type, Props: props, Required: s.Required}
+	return SchemaView{Type: s.Type, Props: props, Defaults: defaults, Required: s.Required}
 }
 
 // IsVoid reports whether a schema declares no data (a null-typed or empty schema — ADR-0090 void).
@@ -56,9 +67,16 @@ func (s SchemaView) IsVoid() bool {
 
 // CheckInput reports the required properties of the schema not satisfied by an actual JSON document
 // (doc↔schema primitive match). A JSON number satisfies integer or number (a doc can't distinguish
-// them). Empty ⇒ valid. Used by WorkflowRun admission and the engine's run-start gate (ADR-0098).
+// them). A void schema admits only a null or absent document (ADR-0090). Empty ⇒ valid. Used by
+// WorkflowRun admission and the engine's run-start gate (ADR-0098).
 func CheckInput(doc, schema json.RawMessage) []FieldDiff {
 	s := ParseSchemaView(schema)
+	if s.Type == "null" {
+		if got := jsonPrimitive(doc); len(doc) != 0 && got != "null" {
+			return []FieldDiff{{Want: "null", Got: got}}
+		}
+		return nil
+	}
 	if len(s.Required) == 0 {
 		return nil
 	}

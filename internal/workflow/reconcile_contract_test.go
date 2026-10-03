@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -235,4 +236,35 @@ func TestIssue296_OnFailureHandlerOutsideWorkflowContract(t *testing.T) {
 			t.Fatalf("expected SchemaMismatch/EdgeTypeMismatch, got %+v", wf.Status.Conditions)
 		}
 	})
+}
+
+// Issue #499: a void root input (ADR-0090) makes the derived workflow input void, so admission and the
+// run-start gate reject a non-null run input instead of handing it to a root that answers 422.
+func TestIssue499_VoidRootRejectsNonNullRunInput(t *testing.T) {
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:extract": {Input: sc(`{"type":"null"}`), Output: obj(map[string]string{"rows": "integer"}, "rows")},
+	}}
+	wf, _ := reconcileWF(t, newStore(t), c, fnStep("extract", "oci:extract"))
+	if !ready(wf) {
+		t.Fatalf("a void-input workflow must be Ready, conditions=%+v", wf.Status.Conditions)
+	}
+	in := wf.Status.Contract.Input
+	if v1.ParseSchemaView(in).Type != "null" {
+		t.Fatalf("status.contract.input of a void root must be void, got %s", in)
+	}
+	for _, doc := range []string{``, `null`} {
+		if d := v1.CheckInput(sc(doc), in); len(d) != 0 {
+			t.Fatalf("input %q must satisfy a void contract, got %v", doc, d)
+		}
+	}
+	if d := v1.CheckInput(sc(`{"file":"x.csv"}`), in); len(d) != 1 {
+		t.Fatalf("an object input must violate a void contract, got %v", d)
+	}
+
+	f := newFake()
+	rec, err := newTestEngine(t, f, Config{}).Execute(context.Background(), "default", "run-void", "wf",
+		wf.Spec, sc(`{"file":"x.csv"}`), StartOptions{Contract: wf.Status.Contract})
+	if err == nil || !strings.Contains(err.Error(), "InputSchemaMismatch") || rec.Phase != runFailed || f.calls["extract"] != 0 {
+		t.Fatalf("want an InputSchemaMismatch Failed run with no dispatch, got phase %s err %v calls %d", rec.Phase, err, f.calls["extract"])
+	}
 }

@@ -26,7 +26,8 @@ type WorkflowRunSpec struct {
 	// admission); control-plane metadata, size-bounded by the engine.
 	Input json.RawMessage `json:"input,omitempty"`
 	// Paused requests a graceful pause: no new steps dispatch, in-flight steps finish
-	// (set by `funcdctl workflow pause`, cleared by `resume`).
+	// (set by `funcdctl workflow pause`, cleared by `resume`). Ignored once the run is already
+	// terminal: the run keeps its phase.
 	Paused bool `json:"paused,omitempty"`
 	// Cancel requests cancellation (ADR-0094): a declarative one-way intent, the same shape
 	// as Paused. Set by `funcdctl workflow cancel`, it is observed by the run reconciler on
