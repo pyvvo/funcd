@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -543,5 +544,80 @@ func TestIssue429_DevReloadDeletesRemovedResources(t *testing.T) {
 		_, found, err := inst.kv.Get(ctx, key)
 		require.NoError(t, err)
 		require.True(t, found, "the store's data survives the reload")
+	})
+}
+
+// TestIssue490_DevReloadDropsBoundTableAndPrefix — ADR-0125 ("watch files, re-apply on change"): an edit that drops
+// one kv table and renames one blob prefix while the store and bucket keep another reaches the running session, and a
+// --persist restart after it boots. Admission refuses to drop a table or prefix a Function still binds, so the
+// Function must stop binding it first.
+func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
+	requireNode(t)
+	manifest := func(kv, blob string) string {
+		return "runtime: nodejs22\nhandler: handle\nbindings:\n  kv:\n    - alias: hot\n      store: cache\n      table: hot\n" + kv +
+			"  blob:\n    - alias: raw\n      bucket: media\n      prefix: raw\n" + blob + permissiveContract
+	}
+	before := manifest("    - alias: cold\n      store: cache\n      table: cold\n", "    - alias: old\n      bucket: media\n      prefix: old\n")
+	after := manifest("", "    - alias: fresh\n      bucket: media\n      prefix: fresh\n")
+	const handler = "export function handle() { return { ok: true }; }\n"
+	settled := func(inst *devInstance) bool {
+		ctx := context.Background()
+		var got []string
+		ks, err := inst.client.Get(ctx, v1.KindKVStore, "default", "cache")
+		if err != nil {
+			return false
+		}
+		for _, tb := range ks.(*v1.KVStore).Spec.Tables {
+			got = append(got, "table "+tb.Name)
+		}
+		bk, err := inst.client.Get(ctx, v1.KindBucket, "default", "media")
+		if err != nil {
+			return false
+		}
+		for _, p := range bk.(*v1.Bucket).Spec.Prefixes {
+			got = append(got, "prefix "+p.Name)
+		}
+		fn, err := inst.client.Get(ctx, v1.KindFunction, "default", v1.ObjectName(inst.functions[0]))
+		if err != nil {
+			return false
+		}
+		for _, b := range fn.(*v1.Function).Spec.KV {
+			got = append(got, "kv "+b.Table)
+		}
+		for _, b := range fn.(*v1.Function).Spec.Blob {
+			got = append(got, "blob "+b.Prefix)
+		}
+		return slices.Equal(got, []string{"table hot", "prefix fresh", "prefix raw", "kv hot", "blob raw", "blob fresh"})
+	}
+
+	t.Run("reload", func(t *testing.T) {
+		dir := devProject(t, map[string]string{"funcdctl.yaml": before, "handler.mjs": handler})
+		inst := runDev(t, dir)
+		waitReady(t, inst)
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(after), 0o600))
+		require.Eventually(t, func() bool { return settled(inst) }, 20*time.Second, 100*time.Millisecond,
+			"the reload drops the table and the prefix from the Function, the KVStore and the Bucket")
+	})
+
+	t.Run("persist-restart", func(t *testing.T) {
+		dir := devProject(t, map[string]string{"funcdctl.yaml": before, "handler.mjs": handler})
+		root, err := os.MkdirTemp("", "funcd")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(root) })
+		cfg := devConfig{persist: true, persistTo: root}
+
+		ctx1, cancel1 := context.WithCancel(context.Background())
+		inst1, err := (&cli{out: io.Discard}).startDev(ctx1, dir, "", cfg)
+		require.NoError(t, err)
+		cancel1()
+		require.NoError(t, inst1.stop())
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(after), 0o600))
+		ctx2, cancel2 := context.WithCancel(context.Background())
+		inst2, err := (&cli{out: io.Discard}).startDev(ctx2, dir, "", cfg)
+		require.NoError(t, err, "a restart applies the Function before the KVStore and Bucket drop what it bound")
+		t.Cleanup(func() { cancel2(); _ = inst2.stop() })
+		require.True(t, settled(inst2), "the restart drops the table and the prefix")
 	})
 }

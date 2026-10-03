@@ -722,14 +722,18 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	}
 	inst.client = client
 
-	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → extras
-	// (the Workflow references its step Functions). ADR-0121's reconcile-time existence gate resolves
-	// against what is already applied.
+	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → the KVStores and
+	// Buckets that drop a table or prefix (stageResources) → extras (the Workflow references its step Functions).
+	// ADR-0121's reconcile-time existence gate resolves against what is already applied.
+	firstRes, lastRes, serr := stageResources(ctx, op, client, resObjs)
+	if serr != nil {
+		return nil, serr
+	}
 	var extraObjs []v1.Object
 	if wf != nil {
 		extraObjs = []v1.Object{wf.obj}
 	}
-	for _, group := range [][]v1.Object{resObjs, fnObjs, extraObjs} {
+	for _, group := range [][]v1.Object{firstRes, fnObjs, lastRes, extraObjs} {
 		for _, obj := range group {
 			if aerr := applyDesired(ctx, client, obj); aerr != nil {
 				return nil, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName())
@@ -753,6 +757,66 @@ func applyDesired(ctx context.Context, c *sdk.Client, obj v1.Object) error {
 		}
 	}
 	return err
+}
+
+// stageResources splits the apply of resObjs around the Functions that bind them. Admission refuses to drop a table
+// of a KVStore or a prefix of a Bucket while a Function binds it (ADR-0073), and a Function that binds a new one waits
+// for it (ADR-0121), so a KVStore or Bucket that drops one its live version holds is applied first with it kept, and
+// again as desired (last) once the Functions no longer bind it.
+func stageResources(ctx context.Context, op string, c *sdk.Client, resObjs []v1.Object) (first, last []v1.Object, err error) {
+	for _, obj := range resObjs {
+		kind := obj.GroupVersionKind().Kind
+		if kind != v1.KindKVStore && kind != v1.KindBucket {
+			first = append(first, obj)
+			continue
+		}
+		live, gerr := c.Get(ctx, kind, devNamespace, obj.GetName())
+		if fault.KindOf(gerr) == fault.NotFound {
+			first = append(first, obj)
+			continue
+		}
+		if gerr != nil {
+			return nil, nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "read %s %q", kind, obj.GetName())
+		}
+		kept := obj
+		switch want := obj.(type) {
+		case *v1.KVStore:
+			if l, ok := live.(*v1.KVStore); ok {
+				if tables := keepDropped(want.Spec.Tables, l.Spec.Tables, func(t v1.KVTable) string { return t.Name }); tables != nil {
+					wide := *want
+					wide.Spec.Tables = tables
+					kept = &wide
+				}
+			}
+		case *v1.Bucket:
+			if l, ok := live.(*v1.Bucket); ok {
+				if prefixes := keepDropped(want.Spec.Prefixes, l.Spec.Prefixes, func(p v1.BucketPrefix) string { return p.Name }); prefixes != nil {
+					wide := *want
+					wide.Spec.Prefixes = prefixes
+					kept = &wide
+				}
+			}
+		}
+		first = append(first, kept)
+		if kept != obj {
+			last = append(last, obj)
+		}
+	}
+	return first, last, nil
+}
+
+// keepDropped returns want followed by each entry of live whose name want lacks, or nil when want lacks none.
+func keepDropped[T v1.KVTable | v1.BucketPrefix](want, live []T, name func(T) string) []T {
+	var dropped []T
+	for _, l := range live {
+		if !slices.ContainsFunc(want, func(w T) bool { return name(w) == name(l) }) {
+			dropped = append(dropped, l)
+		}
+	}
+	if dropped == nil {
+		return nil
+	}
+	return append(slices.Clone(want), dropped...)
 }
 
 // devHandler is one from-source function's hot-reload state (ADR-0125 boot sequence, "watch files, re-apply on
@@ -835,10 +899,10 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 
 // reloadChanged re-applies every function whose files changed since the last poll, as bootDev applied them: it
 // re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
-// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then deletes the
-// resources of *applied that the set no longer holds. A failed reload is reported once and retried on the next edit;
-// an apply that lost a race with a concurrent status write (Conflict) is re-applied in place, then on the next poll
-// once those attempts run out.
+// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then drops the
+// tables and prefixes no Function binds any more (stageResources) and deletes the resources of *applied that the set
+// no longer holds. A failed reload is reported once and retried on the next edit; an apply that lost a race with a
+// concurrent status write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
 func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
 	var changed []*devHandler
 	var errs []error
@@ -871,7 +935,11 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	if serr != nil {
 		return errors.Join(append(errs, serr)...)
 	}
-	for _, obj := range resObjs {
+	firstRes, lastRes, gerr := stageResources(ctx, op, c, resObjs)
+	if gerr != nil {
+		return errors.Join(append(errs, gerr)...)
+	}
+	for _, obj := range firstRes {
 		if aerr := applyDesired(ctx, c, obj); aerr != nil {
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
 			if fault.KindOf(aerr) == fault.Conflict {
@@ -898,6 +966,13 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 			errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Function %q", fn.Name))
 			if fault.KindOf(aerr) == fault.Conflict {
 				h.seen = ""
+			}
+		}
+	}
+	if len(errs) == loadErrs {
+		for _, obj := range lastRes {
+			if aerr := applyDesired(ctx, c, obj); aerr != nil {
+				errs = append(errs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply %s %q", obj.GroupVersionKind().Kind, obj.GetName()))
 			}
 		}
 	}
