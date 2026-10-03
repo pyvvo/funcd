@@ -575,14 +575,15 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
 		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
 		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
-		// single-file cache has no sidecar → fall back to the lone NON-dotfile file. Dotfiles
+		// single-file cache has no sidecar → fall back to the lone NON-dotfile regular file. Dotfiles
 		// (.funcd-entry, .funcd-contract.json — ADR-0123) are metadata, never the handler, so the
-		// resolver skips them; the delivered contract sidecar can never displace the handler.
+		// resolver skips them; the delivered contract sidecar can never displace the handler. A
+		// directory is never the handler either: Python writes __pycache__/ beside it on import.
 		if entry := bundleEntryFromCache(cacheDir); entry != "" {
 			return filepath.Join(cacheDir, filepath.FromSlash(entry)), nil
 		}
 		for _, e := range entries {
-			if !strings.HasPrefix(e.Name(), ".") {
+			if !strings.HasPrefix(e.Name(), ".") && e.Type().IsRegular() {
 				return filepath.Join(cacheDir, e.Name()), nil // cached single-file (immutable per digest)
 			}
 		}
