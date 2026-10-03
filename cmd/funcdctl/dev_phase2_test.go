@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -341,7 +342,7 @@ func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
-	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, nil, nil),
+	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, &[]v1.Object{}, nil),
 		"a Conflict on a hot-reload apply is re-applied in place, not reported")
 	mu.Lock()
 	defer mu.Unlock()
