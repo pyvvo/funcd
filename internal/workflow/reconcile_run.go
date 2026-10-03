@@ -110,17 +110,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, r.cancelRun(ctx, run)
 	}
 
-	// Pause request: mark Paused, dispatch nothing.
+	// Pause request: mark Paused, dispatch nothing. A run that finished before the pause keeps its phase.
 	if run.Spec.Paused {
-		if err := r.engine.Pause(ctx, req.Namespace, req.Name); err != nil && fault.KindOf(err) != fault.NotFound {
-			return controller.Result{}, err
-		}
-		run.Status.Phase = runPaused
-		if err := r.updateRunStatus(ctx, run); err != nil {
-			return controller.Result{}, err
-		}
-		r.linkRun(ctx, run)
-		return controller.Result{}, nil
+		return controller.Result{}, r.applyRequest(ctx, run, r.engine.Pause, runPaused)
 	}
 
 	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
@@ -143,9 +135,11 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	rec, err := r.drive(withTransitions(ctx, r.mirrorTransition(run)), run, wf, started)
 	// A first record over the run store's value limit even without its input is refused on every requeue.
 	if rec == nil && !started && fault.KindOf(err) == fault.PayloadTooLarge {
-		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(err.Error()), Message: capErr(err.Error())})
+		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: capErr(err.Error())})
 	}
-	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
+	// A terminal record is the run's outcome whatever its cause's kind (a missing child Workflow is NotFound).
+	terminal := rec != nil && rec.Terminal()
+	if err != nil && !terminal && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
@@ -171,19 +165,26 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 // short-circuit keeps it from being re-driven) and refreshes the parent's status.runs. It runs
 // on the controller workqueue when it observes spec.cancel — the declarative cancel path.
 func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) error {
-	if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
+	return r.applyRequest(ctx, run, r.engine.Cancel, runCancelled)
+}
+
+// applyRequest applies a declarative cancel or pause through op, then mirrors the run record into
+// WorkflowRun.status (fallback when the run has no record) and refreshes the parent's status.runs. op
+// leaves a terminal record unchanged, so a run that finished first is mirrored with its own phase.
+func (r *RunReconciler) applyRequest(ctx context.Context, run *v1.WorkflowRun, op func(context.Context, v1.NamespaceName, v1.ObjectName) error, fallback v1.Phase) error {
+	if err := op(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
 		return err
 	}
 	rec, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)
 	if gerr == nil {
 		mirror(run, rec)
 	} else {
-		run.Status.Phase = runCancelled
+		run.Status.Phase = fallback
 	}
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return uerr
 	}
-	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
+	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled or finished run's root span (the distinct second emit site)
 	r.linkRun(ctx, run)
 	return nil
 }
@@ -228,7 +229,7 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 		}
 		return rec, err
 	}
-	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, RunUID: run.UID})
+	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: run.UID})
 }
 
 // started reports whether run has an engine record of its own. The record that an earlier WorkflowRun of
@@ -262,10 +263,11 @@ func replayReason(err error) string {
 	return reasonToken(err.Error(), "ReplayRejected", "SeedInvalid", "DigestDrift")
 }
 
-// failureReason is the Ready=False reason of a Failed run: the ADR-0094/0099 run failure reason its
-// cause names, else StepFailed (every other run failure is a step's).
+// failureReason is the Ready=False reason of a Failed run: the run failure reason its cause names (the
+// ADR-0094/0099 reasons, or a run-start payload cap or run record size refusal), else StepFailed (every
+// other run failure is a step's).
 func failureReason(cause string) string {
-	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded")
+	return reasonToken(cause, "StepFailed", "InputSchemaMismatch", "RunTimedOut", "SubworkflowDepthExceeded", "PayloadLimitExceeded", "RunRecordTooLarge")
 }
 
 // reasonToken returns the first of tokens that msg names, else fallback.
@@ -288,6 +290,21 @@ func stepImages(wf *v1.Workflow) map[v1.ObjectName]string {
 	for _, s := range wf.Status.Steps {
 		if s.Image != "" {
 			m[s.Name] = s.Image
+		}
+	}
+	return m
+}
+
+// stepContracts returns the ADR-0098 cache's per-step I/O contracts, pinned on the run so a when: binds
+// a schema default at evaluation (ADR-0095).
+func stepContracts(wf *v1.Workflow) map[v1.ObjectName]v1.WorkflowContract {
+	if len(wf.Status.Steps) == 0 {
+		return nil
+	}
+	m := make(map[v1.ObjectName]v1.WorkflowContract, len(wf.Status.Steps))
+	for _, s := range wf.Status.Steps {
+		if s.Contract != nil {
+			m[s.Name] = *s.Contract
 		}
 	}
 	return m

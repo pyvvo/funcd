@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/expr"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 // checkWhenConditions type-checks every step's when.condition at RECONCILE against its parents' cached
@@ -69,19 +71,22 @@ func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) 
 	if !ok {
 		return expr.Field{}, fault.NotFoundf("workflow.when", "root %q not in scope", root)
 	}
+	required := true // ADR-0095: a path is required only if every segment is in its parent's `required`
 	for _, seg := range path {
 		var view struct {
 			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
 		}
 		_ = json.Unmarshal(cur, &view)
 		if view.Properties == nil {
 			// The schema is silent about nesting — V1 can't type deeper; accept permissively.
-			return expr.Field{Type: "string", Required: true}, nil
+			return expr.Field{Type: "string", Required: required}, nil
 		}
 		next, found := view.Properties[seg]
 		if !found {
 			return expr.Field{}, fault.NotFoundf("workflow.when", "field %q not in the schema", seg)
 		}
+		required = required && slices.Contains(view.Required, seg)
 		cur = next
 	}
 	var t struct {
@@ -89,28 +94,34 @@ func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) 
 		Items struct {
 			Type string `json:"type"`
 		} `json:"items"`
+		Default json.RawMessage `json:"default"`
 	}
 	_ = json.Unmarshal(cur, &t)
-	return expr.Field{Type: t.Type, Items: t.Items.Type, Required: true}, nil
+	return expr.Field{Type: t.Type, Items: t.Items.Type, Required: required, HasDefault: t.Default != nil, Default: t.Default}, nil
 }
 
 // evalWhen evaluates a step's when.condition (ADR-0095 native-JS boolean) against
 // the run input and the step's direct-parent outputs. Roots are `step.<parent>.output`
 // and `input`. This is the RUNTIME path: the resolver infers field types from the
 // actual documents (the static reconcile-time check against cached contracts is F65's
-// job). A parse/type/eval error is surfaced as a step failure by the caller.
-func (e *Engine) evalWhen(condition string, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (bool, error) {
+// job) and binds an absent field to the default its run-pinned schema declares.
+// A parse/type/eval error is surfaced as a step failure by the caller.
+func (e *Engine) evalWhen(condition string, n *stepNode, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (bool, error) {
 	docs := map[string]json.RawMessage{"input": input}
 	for _, p := range n.dependsOn {
 		if out, ok := outputs[p]; ok {
 			docs["step."+string(p)+".output"] = out
 		}
 	}
+	var inputSchema json.RawMessage
+	if rec.Contract != nil {
+		inputSchema = rec.Contract.Input
+	}
 	ex, err := expr.Parse(condition, expr.Condition)
 	if err != nil {
 		return false, fault.Wrapf(err, fault.Invalid, engineOp, "when condition for step %q", n.name)
 	}
-	if err := ex.Check(docResolver{docs}); err != nil {
+	if err := ex.Check(docResolver{docs: docs, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema).schemas}); err != nil {
 		return false, fault.Wrapf(err, fault.Invalid, engineOp, "when condition for step %q", n.name)
 	}
 	ok, err := ex.EvalBool(docs)
@@ -189,7 +200,7 @@ func (e *Engine) evalSelect(src string, n *stepNode, input json.RawMessage, outp
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
 	}
-	if err := ex.Check(docResolver{docs}); err != nil {
+	if err := ex.Check(docResolver{docs: docs}); err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
 	}
 	out, err := ex.Eval(docs)
@@ -201,10 +212,12 @@ func (e *Engine) evalSelect(src string, n *stepNode, input json.RawMessage, outp
 
 // docResolver is an expr.Resolver that infers field types from actual JSON documents
 // (the runtime resolver): each key is an exposed root, and a path's type comes from
-// the value found there. Present ⇒ Required (no default); a missing last segment ⇒ the absent
-// expr.Field, which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound.
+// the value found there. Present ⇒ Required (no default); missing with a default in schemas ⇒ that
+// defaulted Field, which Eval binds (ADR-0095); else a missing last segment ⇒ the absent expr.Field,
+// which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound.
 type docResolver struct {
-	docs map[string]json.RawMessage
+	docs    map[string]json.RawMessage
+	schemas map[string]json.RawMessage // per root, the run-pinned schema; nil ⇒ no defaults
 }
 
 func (r docResolver) Roots() []string {
@@ -228,6 +241,9 @@ func (r docResolver) Resolve(root string, path []string) (expr.Field, error) {
 		}
 		next, ok := obj[seg]
 		if !ok {
+			if f, err := (schemaResolver{r.schemas}).Resolve(root, path); err == nil && f.HasDefault {
+				return f, nil
+			}
 			if i == len(path)-1 {
 				return expr.Field{}, nil
 			}

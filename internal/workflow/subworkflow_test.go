@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,29 @@ func (f fakeChildren) Child(_ context.Context, _ v1.NamespaceName, name v1.Objec
 	}
 	return spec, nil, nil // tests exercise child specs without a digest cache (nil ⇒ fallback to spec refs)
 }
+
+// fakeChildWorkflows resolves whole child Workflows (spec + ADR-0098 status cache), the ChildWorkflowResolver
+// stand-in; its Child mirrors the production resolver.
+type fakeChildWorkflows map[v1.ObjectName]*v1.Workflow
+
+func (f fakeChildWorkflows) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
+	wf, err := f.ChildWorkflow(ctx, ns, name)
+	if err != nil {
+		return v1.WorkflowSpec{}, nil, err
+	}
+	return wf.Spec, stepImages(wf), nil
+}
+
+func (f fakeChildWorkflows) ChildWorkflow(_ context.Context, _ v1.NamespaceName, name v1.ObjectName) (*v1.Workflow, error) {
+	wf, ok := f[name]
+	if !ok {
+		return nil, fault.NotFoundf("test", "no child workflow %q", name)
+	}
+	return wf, nil
+}
+
+// issue420DefaultedOutput is an output schema whose optional field y defaults to "d" (ADR-0095).
+const issue420DefaultedOutput = `{"type":"object","properties":{"y":{"type":"string","default":"d"}}}`
 
 func subwfStep(name, child string, deps ...string) v1.WorkflowStep {
 	s := v1.WorkflowStep{Name: v1.ObjectName(name), Workflow: &v1.WorkflowRef{Ref: v1.ObjectName(child)}}
@@ -293,6 +317,87 @@ func TestIssue349_StoppedChildRunsItsOnFailureHandler(t *testing.T) {
 			}
 			if got := strings.Contains(child.Error, "RunTimedOut"); got != tc.deadline {
 				t.Fatalf("child error %q: RunTimedOut %v, want %v", child.Error, got, tc.deadline)
+			}
+		})
+	}
+}
+
+// Issue #420: an inline child run pins its Workflow's per-step contracts like a top-level run, so a when on
+// an optional child-step output field binds the schema default instead of failing with "unknown field".
+func TestIssue420_InlineChildRunBindsSchemaDefault(t *testing.T) {
+	f := newFake() // c_a returns {}: y is absent and must bind to its default "d"
+	gated := step("c_b", "", "c_a")
+	gated.When = &v1.StepWhen{Condition: `${{ step.c_a.output.y === "d" }}`}
+	kid := &v1.Workflow{Spec: spec(step("c_a", ""), gated)}
+	kid.Status.Steps = []v1.WorkflowStepStatus{{Name: "c_a", Contract: &v1.WorkflowContract{Output: json.RawMessage(issue420DefaultedOutput)}}}
+	e := childEngine(t, f, fakeChildWorkflows{"kid": kid}, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-p", "parent", spec(subwfStep("sub", "kid")), json.RawMessage(`{}`), StartOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rec.Phase != runSucceeded || f.calls["c_b"] != 1 {
+		t.Fatalf("run phase=%s c_b calls=%d, want Succeeded with c_b run on the bound default", rec.Phase, f.calls["c_b"])
+	}
+}
+
+// backoffStopDispatcher fails s with a retryable error, and fails x permanently once s waits in its
+// retry backoff.
+type backoffStopDispatcher struct {
+	*fakeDispatcher
+	sFailed chan struct{}
+	once    sync.Once
+}
+
+func (d *backoffStopDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == "x" {
+		select {
+		case <-d.sFailed:
+		case <-time.After(2 * time.Second):
+			return nil, Permanent(errors.New("s was not dispatched while x was in flight"))
+		}
+		time.Sleep(50 * time.Millisecond) // s now waits in its backoff
+	}
+	out, err := d.fakeDispatcher.Dispatch(ctx, req)
+	if req.Step == "s" {
+		d.once.Do(func() { close(d.sFailed) })
+	}
+	return out, err
+}
+
+// Issue #445: a step whose context ends while it waits in its retry backoff keeps its last dispatch error
+// as its cause (ADR-0100), and only a deadline labels its run RunTimedOut: an inline child that its
+// parent's fail-fast stopped did not time out.
+func TestIssue445_StepStoppedInBackoffKeepsItsDispatchCause(t *testing.T) {
+	s := retryStep("s", 3)
+	s.Function.Retry.Backoff = 30 * time.Second
+	timed := spec(s)
+	timed.Timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name     string
+		parent   v1.WorkflowSpec
+		run      v1.ObjectName
+		deadline bool
+	}{
+		{"parent-fail-fast", spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r")), "run-p-sub", false},
+		{"run-deadline", timed, "run-p", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			f.failing["s"], f.permanent["x"] = true, true
+			d := &backoffStopDispatcher{fakeDispatcher: f, sFailed: make(chan struct{})}
+			e := childEngine(t, d, fakeChildren{"kid": spec(s)}, Config{})
+			if _, err := e.Execute(context.Background(), "default", "run-p", "top", tc.parent, json.RawMessage(`{}`), StartOptions{}); err == nil {
+				t.Fatal("the run must fail")
+			}
+			rec, err := e.runs.Get(context.Background(), "default", tc.run)
+			if err != nil {
+				t.Fatalf("run record %s: %v", tc.run, err)
+			}
+			if st := stepState(rec, "s"); f.calls["s"] != 1 || st == nil || st.Phase != v1.StepFailed || st.Error != "retryable 5xx" {
+				t.Fatalf("step s after %d dispatches: %+v, want Failed with its dispatch error \"retryable 5xx\"", f.calls["s"], st)
+			}
+			if got := strings.Contains(rec.Error, "RunTimedOut"); got != tc.deadline {
+				t.Fatalf("run error %q: RunTimedOut %v, want %v", rec.Error, got, tc.deadline)
 			}
 		})
 	}

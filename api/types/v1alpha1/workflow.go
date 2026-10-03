@@ -95,7 +95,7 @@ type WorkflowStep struct {
 	When *StepWhen `json:"when,omitempty"`
 	// Params is a static overlay merged over the step's flowing input (static wins). For a function
 	// step it overlays the dispatched input; a pass expression sees the overlaid input; a wait
-	// ignores it (output = input verbatim).
+	// ignores it (output = input verbatim). The onFailure handler takes none (FailureContext only).
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
@@ -401,7 +401,8 @@ func (w *Workflow) validateAcyclic(op string) error {
 }
 
 // validateOnFailure checks the handler names a real function step (ADR-0096: the engine dispatches it)
-// outside the DAG (no dependsOn/when, and no step depends on it).
+// outside the DAG (no dependsOn/when, and no step depends on it) whose input is the FailureContext alone
+// (ADR-0094: no params).
 func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error {
 	if w.Spec.OnFailure == "" {
 		return nil
@@ -417,6 +418,9 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 			}
 			if len(s.DependsOn) != 0 || s.When != nil {
 				return fault.Invalidf(op, "onFailure handler %q must have no dependsOn and no when", s.Name)
+			}
+			if len(s.Params) != 0 {
+				return fault.Invalidf(op, "onFailure handler %q must have no params: its input is the engine's FailureContext", s.Name)
 			}
 			continue
 		}

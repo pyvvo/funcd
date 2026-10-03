@@ -197,6 +197,47 @@ func TestRunReconcilerPause(t *testing.T) {
 	}
 }
 
+// Issue #419: a pause that arrives after the run finished (its terminal status write lost a conflict, so
+// status.phase is not terminal yet) mirrors the run's own phase and emits its root span (ADR-0103).
+func TestIssue419_PauseOfFinishedRunMirrorsItsPhase(t *testing.T) {
+	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			ctx := context.Background()
+			s := newStore(t)
+			seedWorkflow(t, s, "wf", step("a", ""))
+			seedRun(t, s, "run-419", "wf", `{}`)
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-419")
+			run := obj.(*v1.WorkflowRun)
+			run.Spec.Paused = true
+			run.Status.Phase = runRunning
+			if _, err := s.Update(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+			eng := engineWith(t, newFake())
+			_ = eng.runs.Put(ctx, &runstate.Record{
+				Namespace: "default", Name: "run-419", Workflow: "wf", Phase: phase,
+				TraceID: "11111111111111111111111111111111", RootSpanID: "2222222222222222",
+				StartedAt: 1_700_000_000_000_000_000, UpdatedAt: 1_700_000_000_001_000_000,
+				Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}},
+			})
+			sink := &fakeTraceSink{}
+			rr := NewRunReconciler(s, eng, sink, nil)
+
+			if _, err := rr.Reconcile(ctx, runReq("run-419")); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			rec, _ := eng.runs.Get(ctx, "default", "run-419")
+			obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-419")
+			if got := obj.(*v1.WorkflowRun).Status.Phase; got != phase || rec.Phase != phase || rec.Paused {
+				t.Fatalf("status.phase %s, record phase %s, record paused %v; want %s, not paused", got, rec.Phase, rec.Paused, phase)
+			}
+			if sink.count() != 1 {
+				t.Fatalf("emitted %d run-root spans, want 1", sink.count())
+			}
+		})
+	}
+}
+
 // stepGate holds one step's dispatch until released, so a test can read status while that step runs.
 type stepGate struct {
 	*fakeDispatcher
@@ -473,6 +514,49 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 	}
 }
 
+// Issue #420: a when on an optional parent-output field obeys ADR-0095's defaults rule. Unguarded and
+// without a default it fails reconcile (WhenTypeError); a guard or a schema default makes it Ready, and
+// the run binds the default when the parent's output omits the field instead of failing.
+func TestIssue420_WhenOnOptionalOutputFieldFollowsDefaultsRule(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a": {Output: json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string","default":"d"}}}`)},
+		"oci:b": {Input: obj(map[string]string{"x": "string"})},
+	}}
+	reconcileWhen := func(name, cond string) *v1.Workflow {
+		t.Helper()
+		b := fnStep("b", "oci:b", "a")
+		b.When = &v1.StepWhen{Condition: cond}
+		seedWF(t, s, name, nil, fnStep("a", "oci:a"), b)
+		wf, _ := reconcileByName(t, s, c, name)
+		return wf
+	}
+	if wf := reconcileWhen("unguarded", `${{ step.a.output.x === "v" }}`); ready(wf) || mismatchReason(wf) != "WhenTypeError" {
+		t.Errorf("unguarded optional field: Ready=%v reason=%q, want not Ready, SchemaMismatch/WhenTypeError", ready(wf), mismatchReason(wf))
+	}
+	if wf := reconcileWhen("guarded", `${{ step.a.output.x !== undefined && step.a.output.x === "v" }}`); !ready(wf) {
+		t.Errorf("guarded optional field must be Ready, got %+v", wf.Status.Conditions)
+	}
+	if wf := reconcileWhen("defaulted", `${{ step.a.output.y === "d" }}`); !ready(wf) {
+		t.Fatalf("defaulted optional field must be Ready, got %+v", wf.Status.Conditions)
+	}
+
+	seedRun(t, s, "defaulted-1", "defaulted", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake() // a returns {}: y is absent and must bind to its default "d"
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
+	if st := got.(*v1.WorkflowRun).Status; st.Phase != runSucceeded || f.calls["b"] != 1 {
+		t.Fatalf("run phase=%q conditions=%+v b calls=%d, want Succeeded with b run on the bound default", st.Phase, st.Conditions, f.calls["b"])
+	}
+}
+
 // Issue #123: a run whose Workflow is missing (never created, or deleted) is not a reconcile error
 // retried every second forever. A run that has not started waits Pending with
 // Ready=False/WorkflowNotFound on a backoff and starts once the Workflow exists; cancel still
@@ -634,6 +718,44 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 			}
 			if rec, err := rstate.Get(ctx, "default", "big-1"); err != nil || rec.Phase != runFailed || len(rec.Input) != 0 {
 				t.Fatalf("run record = %v (err %v), want Failed without the over-cap input", rec, err)
+			}
+		})
+	}
+}
+
+// Issue #447: a run that fails at start, before any step runs, names the cause in its Ready reason: an
+// input over workflow.payloadLimit (a Sensor-created run skips admission), or a first record over the run
+// store's value limit, whether the record is kept without its input or never stored.
+func TestIssue447_RunStartFailureReasonNamesCause(t *testing.T) {
+	ctx := context.Background()
+	pad := `{"pad":"` + strings.Repeat("x", 1<<20-60) + `"}`
+	for _, tc := range []struct {
+		name, input, reason string
+		params              json.RawMessage
+		limit               int64
+	}{
+		{name: "payload cap", input: `{"pad":"xxxxxxxx"}`, limit: 8, reason: "PayloadLimitExceeded"},
+		{name: "record input", input: pad, limit: 1 << 20, reason: "RunRecordTooLarge"},
+		{name: "record spec", input: `{}`, params: json.RawMessage(pad), limit: 1 << 20, reason: "RunRecordTooLarge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			a := step("a", "")
+			a.Params = tc.params
+			seedWorkflow(t, s, "wf", a)
+			seedRun(t, s, "wf-1", "wf", tc.input)
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: tc.limit}})
+			if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "wf-1"}); err != nil {
+				t.Fatalf("Reconcile = %v, want the run ended Failed", err)
+			}
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "wf-1")
+			st := obj.(*v1.WorkflowRun).Status
+			c, _ := st.Conditions.Get(condReady)
+			if st.Phase != runFailed || c.Status != v1.ConditionFalse || c.Reason != tc.reason || f.calls["a"] != 0 {
+				t.Fatalf("phase=%q Ready=%+v step a dispatched %d times, want Failed with Ready=False/%s and no step run", st.Phase, c, f.calls["a"], tc.reason)
 			}
 		})
 	}
@@ -1016,5 +1138,28 @@ func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
 		if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || !slices.Equal(links.Active, []v1.ObjectName{"loop-1"}) {
 			t.Fatalf("reconcile %d: status.runs = %+v, want Active [loop-1]", i, links)
 		}
+	}
+}
+
+// Issue #444: a run that a sub-workflow step fails because its child Workflow is gone (a NotFound cause)
+// ends Failed in the same reconcile: its terminal record is mirrored, not returned as a reconcile error.
+func TestIssue444_NotFoundSubworkflowFailureMirroredInSameReconcile(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "parent", subwfStep("sub", "gone"))
+	seedRun(t, s, "parent-1", "parent", `{}`)
+	rr := NewRunReconciler(s, childEngine(t, newFake(), fakeChildren{}, Config{}), nil, nil)
+
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "parent-1"}); err != nil {
+		t.Fatalf("Reconcile = %v, want nil: a run failure is a terminal outcome, not a reconcile error", err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "parent-1")
+	st := obj.(*v1.WorkflowRun).Status
+	if c, ok := st.Conditions.Get(condReady); st.Phase != runFailed || !ok || c.Status != v1.ConditionFalse || !strings.Contains(c.Message, `"gone"`) {
+		t.Fatalf("phase=%q Ready=%+v, want Failed with Ready=False naming the missing child", st.Phase, c)
+	}
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "parent")
+	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Failed != 1 || len(links.Active) != 0 {
+		t.Fatalf("status.runs = %+v, want Failed=1 Active=0", links)
 	}
 }
