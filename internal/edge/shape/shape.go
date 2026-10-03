@@ -101,11 +101,13 @@ type headerWriter struct {
 	wrote bool
 }
 
-func (h *headerWriter) apply() {
+// apply runs the rules on every header block up to the final one: httputil.ReverseProxy clears the
+// headers after it relays a 1xx (#417).
+func (h *headerWriter) apply(code int) {
 	if h.wrote {
 		return
 	}
-	h.wrote = true
+	h.wrote = !interim(code)
 	for k, v := range h.cfg.Set {
 		h.Header().Set(k, v)
 	}
@@ -113,9 +115,9 @@ func (h *headerWriter) apply() {
 		h.Header().Del(k)
 	}
 }
-func (h *headerWriter) WriteHeader(code int) { h.apply(); h.ResponseWriter.WriteHeader(code) }
+func (h *headerWriter) WriteHeader(code int) { h.apply(code); h.ResponseWriter.WriteHeader(code) }
 func (h *headerWriter) Write(b []byte) (int, error) {
-	h.apply()
+	h.apply(http.StatusOK)
 	return h.ResponseWriter.Write(b)
 }
 func (h *headerWriter) Flush()                                       { flush(h.ResponseWriter) }
@@ -182,6 +184,9 @@ func (g *gzipWriter) decide(code int) {
 	// A 206's Content-Range indexes the identity bytes, and a 204/304 has no body to encode.
 	unencodable := code == http.StatusPartialContent || code == http.StatusNoContent ||
 		code == http.StatusNotModified || h.Get("Content-Range") != ""
+	if code == http.StatusNotModified && g.accept && !streaming && h.Get("Content-Encoding") == "" {
+		weakenETag(h) // RFC 9110 §15.4.5: a 304 carries the ETag that its 200, the gzip variant, would carry
+	}
 	if streaming || unencodable || h.Get("Content-Encoding") != "" {
 		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
 	}
@@ -191,12 +196,21 @@ func (g *gzipWriter) decide(code int) {
 	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown
+	weakenETag(h)
 	g.gz = gzip.NewWriter(g.ResponseWriter)
+}
+
+// weakenETag marks a strong ETag weak (RFC 9110 §8.8.3): a strong ETag names the identity bytes, so an
+// If-Range on the gzip variant must not match it; a weak one still revalidates via If-None-Match.
+func weakenETag(h http.Header) {
+	if et := h.Get("ETag"); et != "" && !strings.HasPrefix(et, "W/") {
+		h.Set("ETag", "W/"+et)
+	}
 }
 
 func (g *gzipWriter) WriteHeader(code int) {
 	// A 1xx is interim: httputil.ReverseProxy relays it and then clears the headers (#305).
-	if code < 100 || code > 199 || code == http.StatusSwitchingProtocols {
+	if !interim(code) {
 		g.decide(code)
 	}
 	g.ResponseWriter.WriteHeader(code)
@@ -225,6 +239,11 @@ func (g *gzipWriter) Flush() {
 	flush(g.ResponseWriter)
 }
 func (g *gzipWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hijack(g.ResponseWriter) }
+
+// interim reports whether code is a 1xx that a final status follows (101 ends the exchange).
+func interim(code int) bool {
+	return code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols
+}
 
 func flush(w http.ResponseWriter) {
 	if f, ok := w.(http.Flusher); ok {

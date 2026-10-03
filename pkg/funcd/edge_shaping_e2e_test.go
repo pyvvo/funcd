@@ -119,7 +119,7 @@ func TestScenarioE2EFullEdgeChainStreaming(t *testing.T) {
 	// Assemble the REAL chain in funcd's exact order (funcd.go): Recover, RequestID (outer) → observ →
 	// limit → shape (inner) → terminal.
 	chain := gateway.Chain(terminal,
-		gateway.Recover, gateway.RequestID,
+		gateway.Recover(logger), gateway.RequestID,
 		observ.Chain(observ.Config{Metrics: true, AccessLog: true, Trace: true}, tel, logger),
 		limit.Chain(limit.Config{}), // limits off (pass-through) — this test is about shaping+streaming, not rejects
 		shape.Chain(shape.Config{

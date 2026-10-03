@@ -964,11 +964,11 @@ func (p *Platform) buildControlPlane() error {
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
-	dpHandler := gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+	dpHandler := gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
 	// limiter: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its caller's
 	// in-flight slot or rate token (#87).
-	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover, gateway.RequestID, edgeObserv, edgeShape))
+	dpHolder.Set(gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, edgeShape))
 	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
 	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
 	// deadline once the body is read, so it does not cut a long-running handler.
