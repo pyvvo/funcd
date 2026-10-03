@@ -71,7 +71,7 @@ type worker struct {
 	ip        string
 	port      int // the fixed FUNCD_PORT the shim binds in this netns (ADR-0032); 0 if unset
 	logPath   string
-	ownLog    bool // the driver created logPath, so Remove deletes it
+	ownLog    bool // the driver created logPath, so Remove or a re-create deletes it
 	createdAt time.Time
 	released  bool // Stop has released the task, the CNI attachment and the container, so Remove may forget it
 
@@ -320,8 +320,12 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		logListener: logLn, logDir: logDir,
 	}
 	d.mu.Lock()
+	replaced := d.instances[id]
 	d.instances[id] = sb
 	d.mu.Unlock()
+	if replaced != nil {
+		removeLog(replaced) // a re-create forgets the worker Stop released (ADR-0142) without a Remove
+	}
 
 	success = true // keep the log channel; teardown is owned by Stop now
 	return runtime.Instance{
@@ -440,10 +444,15 @@ func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	}
 	delete(d.instances, id)
 	d.mu.Unlock()
+	removeLog(sb)
+	return nil
+}
+
+// removeLog deletes a forgotten worker's log file when the driver created it.
+func removeLog(sb *worker) {
 	if sb.ownLog {
 		_ = os.Remove(sb.logPath)
 	}
-	return nil
 }
 
 // closeLogChannel tears down a worker's Path B log channel (ADR-0081): closes the accept loop's

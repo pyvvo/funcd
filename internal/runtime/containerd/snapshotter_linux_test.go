@@ -37,6 +37,33 @@ import (
 // snapshot there, and remove a leftover one from there, not from containerd's default snapshotter.
 func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 	ctx := leases.WithLease(context.Background(), "issue370")
+	cs, layer, manifest := fakeImage(t)
+	spec := runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "issue370",
+		Revision:  "issue370-1",
+		Image:     "funcd/issue370:latest",
+		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+	}
+	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
+	rootfs := t.TempDir()
+	overlay := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{}}
+	native := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{layer.String(): true, ctrID + "-snap": true}}
+	ctrs := &memContainers{records: map[string]containers.Container{}}
+	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
+		map[string]snapshots.Snapshotter{"overlayfs": overlay, "native": native})
+	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+
+	_, err := d.Create(ctx, spec)
+	require.NoError(t, err, "the image layers are in the configured snapshotter, so the worker's snapshot must be prepared there")
+	require.Equal(t, "native", ctrs.records[ctrID].Snapshotter)
+	require.Empty(t, overlay.keys)
+}
+
+// fakeImage writes a one-layer image to a new content store and returns the store, the layer (the parent snapshot a
+// worker's snapshot is prepared from) and the image manifest.
+func fakeImage(t *testing.T) (content.Store, digest.Digest, ocispec.Descriptor) {
+	t.Helper()
 	cs, err := local.NewStore(t.TempDir())
 	require.NoError(t, err)
 	layer := writeBlob(t, cs, ocispec.MediaTypeImageLayer, []byte("layer")).Digest
@@ -54,36 +81,23 @@ func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 		Config:    writeBlob(t, cs, ocispec.MediaTypeImageConfig, cfgJSON),
 	})
 	require.NoError(t, err)
-	manifest := writeBlob(t, cs, ocispec.MediaTypeImageManifest, manifestJSON)
+	return cs, layer, writeBlob(t, cs, ocispec.MediaTypeImageManifest, manifestJSON)
+}
 
-	spec := runtime.WorkerSpec{
-		Namespace: "default",
-		Name:      "issue370",
-		Revision:  "issue370-1",
-		Image:     "funcd/issue370:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
-	}
-	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
-	rootfs := t.TempDir()
-	overlay := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{}}
-	native := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{layer.String(): true, ctrID + "-snap": true}}
-	ctrs := &memContainers{records: map[string]containers.Container{}}
+// fakeClient is a containerd client over in-memory services: it creates containers and tasks but runs nothing.
+func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs *memContainers, snaps map[string]snapshots.Snapshotter) *containerd.Client {
+	t.Helper()
 	client, err := containerd.New("", containerd.WithServices(
 		containerd.WithContentStore(cs),
-		containerd.WithImageStore(oneImage{img: images.Image{Name: spec.Image, Target: manifest}}),
+		containerd.WithImageStore(oneImage{img: img}),
 		containerd.WithContainerStore(ctrs),
-		containerd.WithSnapshotters(map[string]snapshots.Snapshotter{"overlayfs": overlay, "native": native}),
+		containerd.WithSnapshotters(snaps),
 		containerd.WithNamespaceService(noNamespaceLabels{}),
 		containerd.WithIntrospectionService(anySnapshotPlugin{}),
 		containerd.WithTaskClient(createdTasks{}),
 	))
 	require.NoError(t, err)
-	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
-
-	_, err = d.Create(ctx, spec)
-	require.NoError(t, err, "the image layers are in the configured snapshotter, so the worker's snapshot must be prepared there")
-	require.Equal(t, "native", ctrs.records[ctrID].Snapshotter)
-	require.Empty(t, overlay.keys)
+	return client
 }
 
 func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocispec.Descriptor {
