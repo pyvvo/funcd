@@ -486,11 +486,15 @@ func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration, recl
 }
 
 // Pause requests a graceful pause: the persisted run is marked Paused so the next
-// drive dispatches nothing new (in-flight steps, in the async model, finish first).
+// drive dispatches nothing new (in-flight steps, in the async model, finish first). A run that is
+// already terminal is left unchanged.
 func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
+	}
+	if rec.Terminal() {
+		return nil
 	}
 	if !rec.Paused { // a repeated pause keeps the interval's start
 		rec.PausedAt = e.clock.Now().UnixNano()

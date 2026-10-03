@@ -110,17 +110,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, r.cancelRun(ctx, run)
 	}
 
-	// Pause request: mark Paused, dispatch nothing.
+	// Pause request: mark Paused, dispatch nothing. A run that finished before the pause keeps its phase.
 	if run.Spec.Paused {
-		if err := r.engine.Pause(ctx, req.Namespace, req.Name); err != nil && fault.KindOf(err) != fault.NotFound {
-			return controller.Result{}, err
-		}
-		run.Status.Phase = runPaused
-		if err := r.updateRunStatus(ctx, run); err != nil {
-			return controller.Result{}, err
-		}
-		r.linkRun(ctx, run)
-		return controller.Result{}, nil
+		return controller.Result{}, r.applyRequest(ctx, run, r.engine.Pause, runPaused)
 	}
 
 	// A run that has not started waits while its Workflow is missing (ADR-0121) or the F65 gate holds it
@@ -171,19 +163,26 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 // short-circuit keeps it from being re-driven) and refreshes the parent's status.runs. It runs
 // on the controller workqueue when it observes spec.cancel — the declarative cancel path.
 func (r *RunReconciler) cancelRun(ctx context.Context, run *v1.WorkflowRun) error {
-	if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
+	return r.applyRequest(ctx, run, r.engine.Cancel, runCancelled)
+}
+
+// applyRequest applies a declarative cancel or pause through op, then mirrors the run record into
+// WorkflowRun.status (fallback when the run has no record) and refreshes the parent's status.runs. op
+// leaves a terminal record unchanged, so a run that finished first is mirrored with its own phase.
+func (r *RunReconciler) applyRequest(ctx context.Context, run *v1.WorkflowRun, op func(context.Context, v1.NamespaceName, v1.ObjectName) error, fallback v1.Phase) error {
+	if err := op(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
 		return err
 	}
 	rec, gerr := r.engine.runs.Get(ctx, run.Namespace, run.Name)
 	if gerr == nil {
 		mirror(run, rec)
 	} else {
-		run.Status.Phase = runCancelled
+		run.Status.Phase = fallback
 	}
 	if uerr := r.updateRunStatus(ctx, run); uerr != nil {
 		return uerr
 	}
-	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled run's root span (the distinct second emit site)
+	emitRunSpan(ctx, r.traces, rec, r.log) // ADR-0103: the cancelled or finished run's root span (the distinct second emit site)
 	r.linkRun(ctx, run)
 	return nil
 }

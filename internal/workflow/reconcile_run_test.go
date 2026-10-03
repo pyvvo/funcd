@@ -197,6 +197,47 @@ func TestRunReconcilerPause(t *testing.T) {
 	}
 }
 
+// Issue #419: a pause that arrives after the run finished (its terminal status write lost a conflict, so
+// status.phase is not terminal yet) mirrors the run's own phase and emits its root span (ADR-0103).
+func TestIssue419_PauseOfFinishedRunMirrorsItsPhase(t *testing.T) {
+	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			ctx := context.Background()
+			s := newStore(t)
+			seedWorkflow(t, s, "wf", step("a", ""))
+			seedRun(t, s, "run-419", "wf", `{}`)
+			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-419")
+			run := obj.(*v1.WorkflowRun)
+			run.Spec.Paused = true
+			run.Status.Phase = runRunning
+			if _, err := s.Update(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+			eng := engineWith(t, newFake())
+			_ = eng.runs.Put(ctx, &runstate.Record{
+				Namespace: "default", Name: "run-419", Workflow: "wf", Phase: phase,
+				TraceID: "11111111111111111111111111111111", RootSpanID: "2222222222222222",
+				StartedAt: 1_700_000_000_000_000_000, UpdatedAt: 1_700_000_000_001_000_000,
+				Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}},
+			})
+			sink := &fakeTraceSink{}
+			rr := NewRunReconciler(s, eng, sink, nil)
+
+			if _, err := rr.Reconcile(ctx, runReq("run-419")); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			rec, _ := eng.runs.Get(ctx, "default", "run-419")
+			obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-419")
+			if got := obj.(*v1.WorkflowRun).Status.Phase; got != phase || rec.Phase != phase || rec.Paused {
+				t.Fatalf("status.phase %s, record phase %s, record paused %v; want %s, not paused", got, rec.Phase, rec.Paused, phase)
+			}
+			if sink.count() != 1 {
+				t.Fatalf("emitted %d run-root spans, want 1", sink.count())
+			}
+		})
+	}
+}
+
 // stepGate holds one step's dispatch until released, so a test can read status while that step runs.
 type stepGate struct {
 	*fakeDispatcher
