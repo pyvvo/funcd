@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/versity/versitygw/s3api"
 	"github.com/versity/versitygw/s3api/middlewares"
@@ -30,6 +31,9 @@ const maxInFlightRequests = 4096
 // maxMultipartParts is the S3 ceiling on multipart part numbers (ADR-0080); versitygw
 // rejects a part beyond it. The default 0 would reject every part.
 const maxMultipartParts = 10000
+
+// shutdownRetry is how often Run repeats ShutDown until ServeMultiPort has returned (#583).
+const shutdownRetry = 10 * time.Millisecond
 
 // Deps configures the s3gateway server (ADR-0080 + ADR-0085).
 type Deps struct {
@@ -169,13 +173,30 @@ func (s *Server) Run(ctx context.Context) (err error) {
 	select {
 	case <-ctx.Done():
 		_ = s.Close()
-		<-s.serveCh // drain
+		s.awaitServe()
 		return ctx.Err()
 	case err := <-s.serveCh:
 		if err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "serve s3 gateway")
 		}
 		return nil
+	}
+}
+
+// awaitServe waits for ServeMultiPort to return after Close, repeating ShutDown until it does. fasthttp's ShutDown
+// closes only the listeners Serve has registered, and versitygw binds the address and fires the OnListen hook before
+// Serve registers its listener: a ShutDown before that finds none and returns, and Serve then serves until a later
+// ShutDown closes it (#583).
+func (s *Server) awaitServe() {
+	tick := time.NewTicker(shutdownRetry)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.serveCh:
+			return
+		case <-tick.C:
+			_ = s.api.ShutDown()
+		}
 	}
 }
 

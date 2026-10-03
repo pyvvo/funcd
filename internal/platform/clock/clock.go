@@ -3,7 +3,10 @@
 // deterministic fake instead of wall-clock time.
 package clock
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Clock is the port for time operations. Components depend on this interface;
 // the app injects System() in production and a Fake in tests.
@@ -20,10 +23,28 @@ func (system) Now() time.Time { return time.Now() }
 func System() Clock { return system{} }
 
 // Fake returns a clock fixed at the given time — useful for deterministic tests.
-func Fake(t time.Time) Clock { return &fake{t: t} }
+func Fake(t time.Time) Clock { return NewManual(t) }
 
-type fake struct {
-	t time.Time
+// Manual is a fake clock that stands still until Advance moves it, for tests of time-bounded behavior. Safe for
+// concurrent use.
+type Manual struct {
+	mu sync.Mutex
+	t  time.Time
 }
 
-func (f *fake) Now() time.Time { return f.t }
+// NewManual returns a Manual clock standing at t.
+func NewManual(t time.Time) *Manual { return &Manual{t: t} }
+
+// Now returns the clock's current time.
+func (m *Manual) Now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.t
+}
+
+// Advance moves the clock forward by d.
+func (m *Manual) Advance(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.t = m.t.Add(d)
+}

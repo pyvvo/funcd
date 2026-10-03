@@ -17,6 +17,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -311,29 +312,52 @@ func TestScenarioInFlightCallFinishesOnOldRevision(t *testing.T) {
 	require.NotContains(t, h.rt.revisionStates("echo"), v1.ObjectName("echo-1"))
 }
 
-// A call that never ends holds the drain only until DrainGrace has passed since the switch (ADR-0143 Decision 4.1).
-func TestDrainGraceBoundsAHungCall(t *testing.T) {
-	t.Parallel()
-	calls := activator.NewCallTracker(nil)
+const hungGrace = 30 * time.Millisecond
+
+// startHungDrain switches echo to revision 2 while a call that never ends is in flight on revision 1; the drain runs on
+// the returned clock with a DrainGrace of hungGrace.
+func startHungDrain(t *testing.T) (*shimHarness, *clock.Manual) {
+	t.Helper()
+	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
+	calls := activator.NewCallTracker(clk)
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, func(d *function.Deps) {
 		d.Calls = calls
-		d.DrainGrace = 30 * time.Millisecond
+		d.Clock = clk
+		d.DrainGrace = hungGrace
 	})
 	h.rt.serveBlockingRevision(t, "echo-1", "revision 1")
 	h.deployReady(t, "echo")
 	up, _ := h.upstream(t, "echo")
 	callInFlight(t, calls, up)
-
 	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
 	h.reconcile(t, "echo")
-	settle()
+	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.DrainingRevision)
+	return h, clk
+}
+
+// A call that never ends holds the drain only until DrainGrace has passed since the switch (ADR-0143 Decision 4.1).
+func TestDrainGraceBoundsAHungCall(t *testing.T) {
+	t.Parallel()
+	h, clk := startHungDrain(t)
+	clk.Advance(hungGrace - time.Millisecond)
 	h.reconcile(t, "echo")
 	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.DrainingRevision, "within the grace the call holds the drain")
 
-	time.Sleep(40 * time.Millisecond)
+	clk.Advance(time.Millisecond)
 	h.reconcile(t, "echo")
 	require.Empty(t, h.getFn(t, "echo").Status.DrainingRevision, "past the grace the worker stops anyway")
 	require.NotContains(t, h.rt.revisionStates("echo"), v1.ObjectName("echo-1"))
+}
+
+// A busy runner that spends longer than DrainGrace between the switch and the next pass does not cut the grace short:
+// it runs on the reconciler's clock (issue #574).
+func TestIssue574_WallTimeDoesNotEndTheDrainGrace(t *testing.T) {
+	t.Parallel()
+	h, clk := startHungDrain(t)
+	clk.Advance(2 * time.Millisecond)
+	time.Sleep(hungGrace + 10*time.Millisecond)
+	h.reconcile(t, "echo")
+	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.DrainingRevision, "within the grace the call holds the drain")
 }
 
 // A newer apply during a drain neither extends it nor switches before it ends (ADR-0143 Decisions 4.1, 4.4).
