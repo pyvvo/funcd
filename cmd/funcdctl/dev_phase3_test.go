@@ -63,7 +63,7 @@ func TestScenarioDevWorkflow(t *testing.T) {
 			"metadata:\n  name: pipeline\n  namespace: default\n" +
 			"spec:\n  steps:\n" +
 			"    - name: a\n      function:\n        image: oci-layout:///deps/registry:stepa\n" +
-			"    - name: b\n      function:\n        image: registry:stepb\n      dependsOn: [a]\n",
+			"    - name: b\n      function:\n        image: registry:stepb\n      dependsOn:\n        - a\n",
 		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
 		"stepa.mjs":           "export function handle(ctx, event) { return { step: 'a', n: (event.data?.n ?? 0) + 1 }; }\n",
 		"stepb.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
