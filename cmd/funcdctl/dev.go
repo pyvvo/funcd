@@ -734,7 +734,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 		}
 	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, wf, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, resObjs, stateDirs, inst.watchDone)
 	return inst, nil
 }
 
@@ -809,8 +809,8 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 }
 
 // watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
-// edit until ctx is done (ADR-0125, hot-reload on change).
-func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, stateDirs []string, done chan<- struct{}) {
+// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied.
+func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -819,7 +819,7 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			err := reloadChanged(ctx, op, c, hs, stateDirs)
+			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs)
 			if wf != nil {
 				err = errors.Join(err, wf.reapply(ctx, op, c, hs))
 			}
@@ -832,10 +832,11 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 
 // reloadChanged re-applies every function whose files changed since the last poll, as bootDev applied them: it
 // re-reads each edited manifest, re-synthesizes and re-applies the resources of the whole set (they are shared
-// across functions), then re-delivers each edited bundle and contract and re-applies its Function. A failed
-// reload is reported once and retried on the next edit; an apply that lost a race with a concurrent status
-// write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
-func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string) error {
+// across functions), then re-delivers each edited bundle and contract and re-applies its Function, then deletes the
+// resources of *applied that the set no longer holds. A failed reload is reported once and retried on the next edit;
+// an apply that lost a race with a concurrent status write (Conflict) is re-applied in place, then on the next poll
+// once those attempts run out.
+func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
 	var changed []*devHandler
 	var errs []error
 	for _, h := range hs {
@@ -858,6 +859,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	if len(changed) == 0 {
 		return errors.Join(errs...)
 	}
+	loadErrs := len(errs)
 	pfs := make([]plannedFunc, 0, len(hs))
 	for _, h := range hs {
 		pfs = append(pfs, h.pf)
@@ -896,6 +898,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 			}
 		}
 	}
+	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs)
 	return errors.Join(errs...)
 }
 
@@ -949,6 +952,37 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 		return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
 	}
 	return nil
+}
+
+// pruneRemoved deletes, last applied first, each resource of prev that next no longer holds (ADR-0125: the
+// manifests are the session's desired state) and returns what the session keeps: next, then each removed resource it
+// did not delete. del is false when the reload failed to apply, as a Function may still bind a removed resource. A
+// KVStore or Bucket that still holds data refuses the delete (ADR-0073), so a reload never drops data: it stays with
+// a warning, and the next reload retries it.
+func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool) []v1.Object {
+	key := func(o v1.Object) string { return string(o.GroupVersionKind().Kind) + "/" + string(o.GetName()) }
+	want := make(map[string]bool, len(next))
+	for _, o := range next {
+		want[key(o)] = true
+	}
+	var kept []v1.Object
+	for i := len(prev) - 1; i >= 0; i-- {
+		o := prev[i]
+		if want[key(o)] {
+			continue
+		}
+		if del {
+			err := c.Delete(ctx, o.GroupVersionKind().Kind, devNamespace, o.GetName())
+			if err == nil || fault.KindOf(err) == fault.NotFound {
+				continue
+			}
+			slog.Default().Warn("a resource removed from the manifests stays until it can be deleted",
+				"kind", o.GroupVersionKind().Kind, "name", o.GetName(), "err", err)
+		}
+		kept = append(kept, o)
+	}
+	slices.Reverse(kept)
+	return append(next, kept...)
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,

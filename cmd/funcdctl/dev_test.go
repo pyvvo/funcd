@@ -11,11 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -460,4 +462,86 @@ func TestIssue320_DevHotReloadsImportsAndManifest(t *testing.T) {
 			eventuallyServes(t, url, `{"data":{"oops":1}}`, http.StatusOK, `"mode":"two"`)
 		})
 	}
+}
+
+// deleteStatus passes every request through and records the response status of a DELETE of one path.
+type deleteStatus struct {
+	next http.RoundTripper
+	path string
+	code atomic.Int64
+}
+
+func (d *deleteStatus) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := d.next.RoundTrip(r)
+	if err == nil && r.Method == http.MethodDelete && r.URL.Path == d.path {
+		d.code.Store(int64(resp.StatusCode))
+	}
+	return resp, err
+}
+
+// TestIssue429_DevReloadDeletesRemovedResources — ADR-0125 ("watch files, re-apply on change"): a binding removed
+// from funcdctl.yaml deletes the resource the session synthesized for it, and a KVStore that still holds keys is
+// kept by its deletion protection (ADR-0073), so a reload never drops data.
+func TestIssue429_DevReloadDeletesRemovedResources(t *testing.T) {
+	requireNode(t)
+	const handler = "export function handle() { return { ok: true }; }\n"
+	const kvBinding = "bindings:\n  kv:\n    - alias: cache\n      store: a\n      table: entries\n"
+	unbound := "runtime: nodejs22\nhandler: handle\n" + permissiveContract
+	gone := func(inst *devInstance, kind v1.Kind, name v1.ObjectName) bool {
+		_, err := inst.client.Get(context.Background(), kind, "default", name)
+		return fault.KindOf(err) == fault.NotFound
+	}
+
+	t.Run("unused", func(t *testing.T) {
+		dir := devProject(t, map[string]string{
+			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + kvBinding + "  config:\n    - settings\n" +
+				permissiveContract + "dev:\n  config:\n    settings:\n      MODE: one\n",
+			"handler.mjs": handler,
+		})
+		inst := runDev(t, dir)
+		waitReady(t, inst)
+		require.False(t, gone(inst, v1.KindKVStore, "a"))
+		require.False(t, gone(inst, v1.KindConfigMap, "settings"))
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unbound), 0o600))
+		require.Eventually(t, func() bool {
+			return gone(inst, v1.KindKVStore, "a") && gone(inst, v1.KindConfigMap, "settings")
+		}, 20*time.Second, 100*time.Millisecond, "the reload deletes the KVStore and ConfigMap no manifest names")
+	})
+
+	t.Run("holds-keys", func(t *testing.T) {
+		dir := devProject(t, map[string]string{
+			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + kvBinding + permissiveContract,
+			"handler.mjs":   handler,
+		})
+		root, err := os.MkdirTemp("", "funcd")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+		// startDev builds its SDK client from http.DefaultClient, so its transport is the seam on the reload's delete.
+		prev := http.DefaultClient.Transport
+		next := prev
+		if next == nil {
+			next = http.DefaultTransport
+		}
+		del := &deleteStatus{next: next, path: "/apis/funcd.io/v1alpha1/namespaces/default/kvstores/a"}
+		http.DefaultClient.Transport = del
+		t.Cleanup(func() { http.DefaultClient.Transport = prev })
+
+		ctx, cancel := context.WithCancel(context.Background())
+		inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		require.NoError(t, err)
+		t.Cleanup(func() { cancel(); _ = inst.stop() })
+		const key = "default/a/entries/k"
+		require.NoError(t, inst.kv.Put(ctx, key, []byte("v")))
+
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unbound), 0o600))
+		require.Eventually(t, func() bool { return del.code.Load() != 0 }, 20*time.Second, 100*time.Millisecond,
+			"the reload deletes the KVStore no manifest names")
+		require.Equal(t, int64(http.StatusConflict), del.code.Load(), "deletion protection refuses a store that holds keys")
+		require.False(t, gone(inst, v1.KindKVStore, "a"))
+		_, found, err := inst.kv.Get(ctx, key)
+		require.NoError(t, err)
+		require.True(t, found, "the store's data survives the reload")
+	})
 }
