@@ -3,8 +3,10 @@ package local_test
 import (
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -53,4 +55,32 @@ func TestIssue433_SocketForAfterCloseFailsAndCreatesNothing(t *testing.T) {
 	require.Error(t, err, "SocketFor must fail after Close")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.NoDirExists(t, dir, "SocketFor after Close must not re-create the socket dir")
+}
+
+// Issue #491: a Function deleted and re-created under the same name gets the same socket path. Remove
+// returned before the old listener was closed, so the old listener's close (Go unlinks a Unix socket's
+// path on close) could run after SocketFor bound the new socket, and unlink it.
+func TestIssue491_RecreatedFunctionSocketSurvivesTheOldListener(t *testing.T) {
+	// one P: a close Remove leaves pending cannot run before the re-create binds, so the race always shows
+	prev := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+	dir, err := os.MkdirTemp("", "i491")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil)
+	t.Cleanup(m.Close)
+
+	for range 10 {
+		_, err := m.SocketFor("team-a", "f")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+		m.Remove("team-a", "f")
+		sock, err := m.SocketFor("team-a", "f")
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+		conn, err := net.Dial("unix", sock)
+		require.NoError(t, err, "the re-created Function's local API socket must stay dialable")
+		require.NoError(t, conn.Close())
+		m.Remove("team-a", "f")
+	}
 }

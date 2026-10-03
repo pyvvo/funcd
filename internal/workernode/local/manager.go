@@ -44,6 +44,7 @@ type serving struct {
 	path   string
 	srv    *http.Server
 	cancel context.CancelFunc // closes srv
+	done   chan struct{}      // closed once srv.Serve returns, so its listener is closed
 }
 
 // NewManager builds a Manager serving sockets under dir. invoker is the (possibly late-bound)
@@ -85,28 +86,33 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 		scancel()
 		return "", err
 	}
+	done := make(chan struct{})
 	m.serves.Add(1)
 	go func() {
 		defer m.serves.Done()
+		defer close(done)
 		_ = srv.Serve(ln)
 	}()
-	m.active[key] = &serving{path: path, srv: srv, cancel: scancel}
+	m.active[key] = &serving{path: path, srv: srv, cancel: scancel, done: done}
 	m.logger.Debug("serving worker-node local API", "function", key, "socket", path)
 	return path, nil
 }
 
 // Remove stops + deletes the local API listener for (ns, name), if any — called when the Function is
-// deleted, so the socket lifecycle tracks the resource (controller-driven, not leaked).
+// deleted, so the socket lifecycle tracks the resource (controller-driven, not leaked). It returns once
+// the listener is closed: closing a Unix listener unlinks its path, which a Function re-created under the
+// same name binds again (issue #491). It holds mu until then, so a concurrent SocketFor binds after it.
 func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	key := string(ns) + "/" + string(name)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	s, ok := m.active[key]
-	delete(m.active, key)
-	m.mu.Unlock()
 	if !ok {
 		return
 	}
+	delete(m.active, key)
 	s.cancel() // closes srv (no leak)
+	<-s.done
 	_ = os.Remove(s.path)
 }
 

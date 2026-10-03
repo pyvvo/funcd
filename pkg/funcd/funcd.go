@@ -1059,22 +1059,34 @@ func (p *Platform) WaitS3Gateway(ctx context.Context) error {
 
 // Run starts the control loops + the control-plane server and blocks until ctx is
 // cancelled, then shuts down gracefully and returns nil. It owns the crash-only
-// lifecycle (ADR-0028): when the S3 gateway cannot bind its address, Run shuts the
-// platform down and returns that error.
+// lifecycle (ADR-0028): a setup error, such as an S3 gateway that cannot bind its address, also shuts the
+// platform down before Run returns it.
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
 	p.logProviders(ctx)
+
+	ctx, cancelLoops := context.WithCancel(ctx)
+	defer cancelLoops()
+	var wg sync.WaitGroup
+	// abort stops the loops Run started and shuts the platform down, so a setup error leaves nothing open
+	// (issue #489, ADR-0028).
+	abort := func(err error) error {
+		cancelLoops()
+		wg.Wait()
+		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+		defer cancelClose()
+		return errors.Join(err, p.Shutdown(closeCtx))
+	}
 
 	// Egress network isolation (ADR-0115, F80): program the default-deny + redirect substrate once, at
 	// start, before any worker serves (fail-closed) — a no-op when disabled or non-Linux. A failure to
 	// program is fatal: a half-applied egress fence must not run.
 	if p.cfg.netManager != nil {
 		if err := p.cfg.netManager.Apply(ctx, p.cfg.netPolicy); err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "apply worker egress isolation")
+			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "apply worker egress isolation"))
 		}
 	}
 
-	var wg sync.WaitGroup
 	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
 		wg.Add(1)
 		go func() {
@@ -1086,12 +1098,10 @@ func (p *Platform) Run(ctx context.Context) error {
 		// versitygw binds the address only once Run serves it, so a taken port fails Run here, before anything
 		// else starts, as a taken control-plane port fails New (#497, ADR-0028).
 		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
-			wg.Wait()
-			closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
-			defer cancelClose()
-			return errors.Join(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"), p.Shutdown(closeCtx))
+			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"))
 		}
 	}
+
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
@@ -1190,19 +1200,19 @@ func (p *Platform) Run(ctx context.Context) error {
 		}
 		prov, terr := edgetls.New(spec, p.logger)
 		if terr != nil {
-			return fault.Wrapf(terr, fault.KindOf(terr), top, "build tls provider")
+			return abort(fault.Wrapf(terr, fault.KindOf(terr), top, "build tls provider"))
 		}
+		p.tlsProvider = prov
 		hosts := append(append([]string{}, spec.Hosts...), p.edgeRouter.Hosts()...)
 		if terr := prov.Manage(ctx, hosts); terr != nil {
-			return fault.Wrapf(terr, fault.KindOf(terr), top, "provision tls certs")
+			return abort(fault.Wrapf(terr, fault.KindOf(terr), top, "provision tls certs"))
 		}
 		cfg, terr := prov.TLSConfig()
 		if terr != nil {
-			return fault.Wrapf(terr, fault.KindOf(terr), top, "build tls config")
+			return abort(fault.Wrapf(terr, fault.KindOf(terr), top, "build tls config"))
 		}
 		p.httpServer.TLSConfig = cfg
 		p.dataPlaneServer.TLSConfig = cfg
-		p.tlsProvider = prov
 		serve = func(srv *http.Server, ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
 		p.logger.InfoContext(ctx, "TLS enabled", "mode", string(spec.Mode), "hosts", hosts)
 	}

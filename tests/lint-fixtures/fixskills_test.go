@@ -26,3 +26,22 @@ func TestIssue442_RevertCheckCoversRuntimeReads(t *testing.T) {
 		}
 	}
 }
+
+// TestIssue504_BatchRevertCheckKeepsTheTest: /fix commits the regression test with the fix, so a revert
+// check that reverts the commit also removes the test it must run. The /fix-batch review must use the
+// /fix-review revert check (an `origin/main` overlay of the non-test files, or a scratch worktree).
+func TestIssue504_BatchRevertCheckKeepsTheTest(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".claude", "skills", "fix-batch", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	if strings.Contains(text, "git revert") {
+		t.Error("/fix-batch revert check reverts the fix commit, which also removes the regression test")
+	}
+	for _, want := range []string{"/fix-review", "overlay", "scratch worktree"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("/fix-batch revert check does not follow the /fix-review revert check: missing %q", want)
+		}
+	}
+}

@@ -505,3 +505,25 @@ func TestIssue332_EmptyDataDirRejected(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an empty storage.dataDir is rejected")
 	require.ErrorContains(t, err, "storage.dataDir")
 }
+
+// A server.shaping.headers.set key that is not an HTTP header field name is rejected from the env and
+// the file. The env form splits on ",", so a comma in a value used to load a bogus " max-age" key that
+// net/http then dropped from the response.
+func TestIssue509_InvalidHeaderSetNameRejected(t *testing.T) {
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_SHAPING_HEADERS_SET", "Cache-Control=no-store, max-age=0")
+		_, err := config.Load("", config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a comma inside an env header value is rejected")
+		require.ErrorContains(t, err, "server.shaping.headers.set")
+	})
+	t.Run("file", func(t *testing.T) {
+		_, err := config.Load(writeCfg(t, "server:\n  shaping:\n    headers:\n      set:\n        \"X Bad\": v\n"), config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a header name with a space is rejected")
+		require.ErrorContains(t, err, "server.shaping.headers.set")
+	})
+	t.Run("comma value in file", func(t *testing.T) {
+		c, err := config.Load(writeCfg(t, "server:\n  shaping:\n    headers:\n      set:\n        Cache-Control: \"no-store, max-age=0\"\n"), config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"Cache-Control": "no-store, max-age=0"}, c.Server.Shaping.Headers.Set)
+	})
+}
