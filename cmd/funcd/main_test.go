@@ -555,6 +555,39 @@ func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
 	})
 }
 
+// A negative or malformed funclog.segmentMaxAge fails startup with fault.Invalid naming the key, instead of the
+// sink silently sealing at its 10s default; empty and 0 keep the sink default (issue #436).
+func TestIssue436_NegativeFunclogSegmentMaxAgeRejected(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := shortDataDir(t)
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	base, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+
+	for _, bad := range []string{"-3h", "bogus"} {
+		t.Run(bad, func(t *testing.T) {
+			cfg := base
+			cfg.Funclog.SegmentMaxAge = bad
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, "funclog.segmentMaxAge")
+		})
+	}
+	for _, ok := range []string{"", "0s", "2s"} {
+		t.Run("ok="+ok, func(t *testing.T) {
+			cfg := base
+			cfg.Funclog.SegmentMaxAge = ok
+			_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+			require.NoError(t, err)
+			require.NoError(t, closeExec())
+		})
+	}
+}
+
 // captureSpy records whether the platform installed the funclog capture hook (runtime.LogCapturer, ADR-0081).
 type captureSpy struct {
 	fnruntime.Runtime

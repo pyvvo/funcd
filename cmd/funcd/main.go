@@ -342,12 +342,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) ([]
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
 	// Function-log capture (ADR-0081) and its traces signal (ADR-0101); a zero segment size/age keeps the sink default.
-	var segmentMaxAge time.Duration
-	if cfg.Funclog.SegmentMaxAge != "" {
-		segmentMaxAge, err = time.ParseDuration(cfg.Funclog.SegmentMaxAge)
-		if err != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("parse funclog.segmentMaxAge %q: %w", cfg.Funclog.SegmentMaxAge, err)
-		}
+	segmentMaxAge, err := parseDuration("funclog.segmentMaxAge", cfg.Funclog.SegmentMaxAge, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithFunclog(segmentMaxAge, cfg.Funclog.SegmentMaxBytes))
 	if !cfg.Funclog.Enabled {
