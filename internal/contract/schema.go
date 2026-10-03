@@ -3,13 +3,14 @@ package contract
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 // schema is the subset of JSON Schema 2020-12 keywords the profile gate inspects. Unknown
 // keywords (title, description, minimum, pattern, …) are ignored — they constrain a
 // supported type but never change whether it is in profile.
 type schema struct {
-	Type                 typeField          `json:"type,omitempty"`
+	Type                 TypeField          `json:"type,omitempty"`
 	Properties           map[string]*schema `json:"properties,omitempty"`
 	Required             []string           `json:"required,omitempty"`
 	AdditionalProperties addlProps          `json:"additionalProperties,omitempty"`
@@ -39,25 +40,31 @@ func (s *schema) isEmpty() bool {
 		len(s.AllOf) == 0 && s.Not == nil && s.If == nil && s.Then == nil && s.Else == nil && s.Ref == ""
 }
 
-// primaryType returns the first non-"null" type, or "" when no type keyword is present.
-func (s *schema) primaryType() string {
-	for _, t := range s.Type.values {
-		if t != "null" {
-			return t
+// TypeField captures JSON Schema's `type`, which is a string OR an array of strings. The type generator
+// (pkg/sdk) decodes `type` with it too, so it reads every contract the gate accepts.
+type TypeField struct{ values []string }
+
+// Primary returns the first non-"null" type, or "" when no type keyword is present.
+func (t TypeField) Primary() string {
+	for _, n := range t.values {
+		if n != "null" {
+			return n
 		}
 	}
-	if len(s.Type.values) > 0 {
-		return s.Type.values[0] // only "null"
+	if len(t.values) > 0 {
+		return t.values[0] // only "null"
 	}
 	return ""
 }
 
-// typeField captures JSON Schema's `type`, which is a string OR an array of strings.
-type typeField struct{ values []string }
+// Nullable reports the ADR-0058 nullable form: a type list that holds "null" beside another type.
+func (t TypeField) Nullable() bool {
+	return len(t.values) > 1 && slices.Contains(t.values, "null")
+}
 
 // inProfile reports whether `type` is absent, one profile type, or the nullable list of one profile type
 // plus "null"; any other list is an untagged union (ADR-0058).
-func (t typeField) inProfile() bool {
+func (t TypeField) inProfile() bool {
 	nulls := 0
 	for _, n := range t.values {
 		switch n {
@@ -75,7 +82,7 @@ func (t typeField) inProfile() bool {
 // dropping it would turn the side into the `Json` (any) form.
 var errNullType = errors.New(`"type" is JSON null, not a type name; a void side is {"type":"null"} (quote "null" in YAML)`)
 
-func (t *typeField) UnmarshalJSON(b []byte) error {
+func (t *TypeField) UnmarshalJSON(b []byte) error {
 	var names []*string
 	if len(b) > 0 && b[0] == '[' {
 		if err := json.Unmarshal(b, &names); err != nil {

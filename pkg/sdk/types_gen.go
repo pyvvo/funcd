@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/contract"
 )
 
 // Filenames for the generated declaration files, keyed by runtime family.
@@ -62,11 +63,12 @@ func runtimeFamily(runtime string) string {
 	}
 }
 
-// typeSchema is the bounded JSON Schema view the generator needs (the funcd profile subset): a type, a
-// closed record's properties + required set, an array's items, and a scalar enum. Constructs outside the
-// profile (oneOf/anyOf/$ref) are gated away by contract.Check before types are ever generated.
+// typeSchema is the bounded JSON Schema view the generator needs (the funcd profile subset): a type (one
+// name or the nullable [T, "null"] list), a closed record's properties + required set, an array's items,
+// and a scalar enum. Constructs outside the profile (oneOf/anyOf/$ref) are gated away by contract.Check
+// before types are ever generated.
 type typeSchema struct {
-	Type       string                `json:"type"`
+	Type       contract.TypeField    `json:"type"`
 	Properties map[string]typeSchema `json:"properties"`
 	Required   []string              `json:"required"`
 	Items      *typeSchema           `json:"items"`
@@ -120,10 +122,10 @@ func genPyi(in, out typeSchema, b Bindings) []byte {
 	return []byte(buf.String())
 }
 
-// pyiClass renders one TypedDict for an object schema; a non-object schema degrades to a comment + an
-// alias to the scalar type (the profile's void/scalar sides).
+// pyiClass renders one TypedDict for an object schema; a non-object or nullable schema degrades to a
+// comment + an alias to its type expression (the profile's void/scalar sides).
 func pyiClass(name string, s typeSchema) string {
-	if s.Type != "object" || len(s.Properties) == 0 {
+	if !isRecord(s) {
 		return fmt.Sprintf("%s = %s  # non-record contract side\n", name, pyType(s))
 	}
 	var buf strings.Builder
@@ -138,9 +140,21 @@ func pyiClass(name string, s typeSchema) string {
 	return buf.String()
 }
 
-// pyType maps a bounded JSON Schema node to a Python type expression.
+// isRecord reports a non-nullable object schema with properties, the side rendered as a named record type.
+func isRecord(s typeSchema) bool {
+	return s.Type.Primary() == "object" && !s.Type.Nullable() && len(s.Properties) > 0
+}
+
+// pyType maps a bounded JSON Schema node to a Python type expression; a nullable node is `T | None`.
 func pyType(s typeSchema) string {
-	switch s.Type {
+	if s.Type.Nullable() {
+		return pyBaseType(s) + " | None"
+	}
+	return pyBaseType(s)
+}
+
+func pyBaseType(s typeSchema) string {
+	switch s.Type.Primary() {
 	case "string":
 		return "str"
 	case "integer":
@@ -193,9 +207,9 @@ func genDts(in, out typeSchema, b Bindings) []byte {
 	return []byte(buf.String())
 }
 
-// dtsType renders one interface for an object schema; a non-object side degrades to a type alias.
+// dtsType renders one interface for an object schema; a non-object or nullable side degrades to a type alias.
 func dtsType(name string, s typeSchema) string {
-	if s.Type != "object" || len(s.Properties) == 0 {
+	if !isRecord(s) {
 		return fmt.Sprintf("export type %s = %s;\n", name, tsType(s))
 	}
 	var buf strings.Builder
@@ -211,9 +225,16 @@ func dtsType(name string, s typeSchema) string {
 	return buf.String()
 }
 
-// tsType maps a bounded JSON Schema node to a TypeScript type expression.
+// tsType maps a bounded JSON Schema node to a TypeScript type expression; a nullable node is `T | null`.
 func tsType(s typeSchema) string {
-	switch s.Type {
+	if s.Type.Nullable() {
+		return tsBaseType(s) + " | null"
+	}
+	return tsBaseType(s)
+}
+
+func tsBaseType(s typeSchema) string {
+	switch s.Type.Primary() {
 	case "string":
 		return "string"
 	case "integer", "number":
@@ -225,6 +246,9 @@ func tsType(s typeSchema) string {
 	case "array":
 		if s.Items == nil {
 			return "unknown[]"
+		}
+		if s.Items.Type.Nullable() {
+			return fmt.Sprintf("(%s)[]", tsType(*s.Items))
 		}
 		return fmt.Sprintf("%s[]", tsType(*s.Items))
 	case "object":
