@@ -1,6 +1,7 @@
 export const meta = {
   name: 'shim-fix',
   description: 'Fix funcd issues whose root cause is in a language repo: one fixer + independent review per issue in that repo, then one PR per repo',
+  whenToUse: 'A /fix-batch run whose issues have their root cause in the shim or examples of pyvvo/funcd-typescript or pyvvo/funcd-python',
   phases: [
     { title: 'Fix', detail: 'one fixer per issue, in its own worktree of the language repo' },
     { title: 'Review', detail: 'one independent fix-review per issue, right after its fix' },
@@ -53,7 +54,7 @@ const ENV = (u) => `Toolchain: run every repo command as \`${D} <cmd>\` (the rep
 const EFFICIENT = `WORK EFFICIENTLY: send independent tool calls together in one turn, read a whole file once, chain dependent shell steps with &&, and filter output (\`| tail -25\`).`
 
 const RULES = (wt, repo) => `RULES:
-- Work only in ${wt} (start every shell command with \`cd ${wt} &&\`). Never touch another worktree, the session's working directory or the user's sibling checkouts; never git stash (refs/stash is shared by every worktree).
+- Work only in ${wt} (start every shell command with \`cd ${wt} &&\`); the one exception is the setup command that creates it from the language repo's checkout. Never touch another worktree, the session's working directory or the user's sibling checkouts; never git stash (refs/stash is shared by every worktree).
 - Read ${wt}/CLAUDE.md first and follow it: the formatter/linter it names, built files committed (TypeScript: \`just build\` after changing shim/src or an example, commit the outputs), Conventional Commits, block-style YAML, top-level imports, no comment bloat, release-please owns versions (never edit version.txt, CHANGELOG.md or package versions).
 - Design decisions live in funcd (${FUNCD}/docs/adr, read-only for you). A change to the funcd <-> shim contract (FUNCD_* env vars, the health endpoints, the invoke socket protocol, the log-capture wire format, trace spans) needs a funcd ADR first: if the only sound fix changes that contract, PARK. Filling a field the ADR already defines, or making the shim do what an Accepted/Implemented ADR already says, is not a contract change.
 - No pushes, no PRs, no GitHub writes (reading issues is fine).

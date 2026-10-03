@@ -23,7 +23,8 @@ Around it:
 
 - `scripts/agent/triage.sh <pr>`: the one-screen view before queueing (checks, size, the gate and audit lines, the
   masking-pattern counts of the added lines);
-- `scripts/agent/queue.sh <state-dir> <pr>...`: enqueue green PRs, or hold the ones that need a lane;
+- `scripts/agent/queue.sh <state-dir> <pr>...`: enqueue green PRs, or hold the ones that need a lane (and any
+  PR it cannot read); after a held PR's lanes pass, add `<pr>:<head sha>` to `<state-dir>/lane-passed.txt` and rerun;
 - `scripts/agent/lanes.sh <branch>:<lane|all>...`: the lanes of a held PR, one after the other;
 - `scripts/agent/watch-prs.py <state-dir>/handled.json`: wait in the background for the next PR event.
 
@@ -64,9 +65,11 @@ When all of a group's jobs are done:
    `docs/reviews/model-ledger.json` or `model-scorecard.md`: parallel PRs appending to them conflict.
 3. Run `scripts/agent/gate.sh` once: the [bloat audit](../bloat-audit/SKILL.md) of the group's diff, `just ci-full`,
    the Linux checks and a clean tree. When `just ci-full`, the Linux checks or the tree check fail, revert the
-   commits of the issue that caused it and rerun. A hard audit flag is not reverted: it goes back to that issue's
-   fixer as a rework round (a fix, or a justified `audit-allow:` line in its commit message), whose commit is
-   cherry-picked before the rerun; the integrator never writes a waiver.
+   commits of the issue that caused it, remove its review reports and rerun; if the rerun fails too, open no PR and
+   report it. A hard audit flag is removed with a follow-up commit when that is mechanical (reuse the existing
+   helper, explain the nolint); otherwise that issue is reverted and parked, and goes back to its fixer as a rework
+   round (a fix, or a justified `audit-allow:` line in its commit message) in the next run. The integrator never
+   writes a waiver. A `host` failure means the ports are exhausted: wait and rerun.
 4. Push and open the PR: a Conventional-Commit title naming the group (it becomes the squash commit and the
    release note); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
    `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; a
@@ -87,7 +90,8 @@ links point at files they add).
 2. Groups flagged "Lima lane pending" run their lanes one VM at a time, from a checkout under `$HOME`; the lane
    recipes take a host lock (`scripts/lane-lock.sh`), so lane jobs started at once run one after the other.
 3. Read every check's conclusion, then enqueue green PRs with the GraphQL `enqueuePullRequest` mutation
-   (`gh pr merge` fails: auto-merge is off); hold a lane-pending PR until its lane passes. A merge-group run that
+   (`gh pr merge` fails: auto-merge is off) with `scripts/agent/queue.sh`, which holds a lane-pending PR until its
+   lane passes and is recorded in `lane-passed.txt`. A merge-group run that
    fails on a known flake: rerun or re-enqueue. A PR left conflicting by an earlier merge: rebase it on main,
    rerun the gate, push.
 4. Wait in the background with `scripts/agent/watch-prs.py <handled.json>` (it exits when a PR turns green, red
