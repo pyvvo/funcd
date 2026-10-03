@@ -86,7 +86,9 @@ func Open(ctx context.Context, opts Options) (bus.Bus, error) {
 		cleanup()
 		return nil, ctx.Err()
 	}
-	nc, err := nats.Connect(srv.ClientURL())
+	// In process and within the startup budget: over loopback TCP with nats.go's 2s handshake default, a
+	// loaded host fails Open (issue #545).
+	nc, err := nats.Connect(srv.ClientURL(), nats.InProcessServer(srv), nats.Timeout(readyTimeout))
 	if err != nil {
 		srv.Shutdown()
 		cleanup()
