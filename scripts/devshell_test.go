@@ -1,7 +1,7 @@
 package scripts_test
 
 import (
-	"crypto/sha1" //nolint:gosec // the cache key of scripts/agent/d, not a security use
+	"crypto/sha1"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -23,11 +23,11 @@ func devshellCheckout(t *testing.T) string {
 	src, err := os.ReadFile(filepath.Join("agent", "d"))
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts", "agent"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "agent", "d"), src, 0o755)) //nolint:gosec // an executable script
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "agent", "d"), src, 0o755))
 	flake, lock := "{ }\n", "{}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "flake.nix"), []byte(flake), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "flake.lock"), []byte(lock), 0o600))
-	sum := sha1.Sum([]byte(flake + lock)) //nolint:gosec // matches d's shasum key
+	sum := sha1.Sum([]byte(flake + lock))
 	env := filepath.Join(root, ".cache", "devshell-env-"+hex.EncodeToString(sum[:])[:16]+".sh")
 	require.NoError(t, os.MkdirAll(filepath.Dir(env), 0o755))
 	require.NoError(t, os.WriteFile(env, []byte("true\n"), 0o600))
