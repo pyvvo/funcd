@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -27,17 +26,48 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// requireRuntime skips a test when neither node nor python3 is on PATH — `funcdctl dev` needs a runtime
-// shim to boot the platform (devShimOptions), even for the S3 / persist lanes that never invoke a handler.
+// requireRuntime skips a test when `funcdctl dev` would find no usable runtime shim to boot the platform,
+// even for the S3 / persist lanes that never invoke a handler. It asks devShimOptions itself, so a python3
+// that cannot load the shim counts as missing, exactly as at startup.
 func requireRuntime(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err == nil {
-		return
+	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false)
+	if fault.KindOf(err) == fault.NotFound {
+		t.Skipf("funcdctl dev needs a runtime shim to boot: %v", err)
 	}
-	if _, err := exec.LookPath("python3"); err == nil {
-		return
-	}
-	t.Skip("neither node nor python3 on PATH; funcdctl dev needs a runtime shim to boot")
+	require.NoError(t, err)
+	cleanup()
+}
+
+// Issue #431: on a host with no node and a python3 that cannot load the shim, funcdctl dev finds no
+// runtime, yet requireRuntime saw python3 on PATH and let the gated tests run into that startup error.
+func TestIssue431_RequireRuntimeSkipsWhenPythonCannotLoadShim(t *testing.T) {
+	bin := t.TempDir()
+	python := filepath.Join(bin, "python3")
+	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n"), 0o700))
+	t.Setenv("PATH", bin)
+	t.Setenv("FUNCD_NODE", "")
+	t.Setenv("FUNCD_PYTHON", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return {}; }\n",
+	}), "", devConfig{})
+	t.Cleanup(func() {
+		cancel()
+		if inst != nil {
+			_ = inst.stop()
+		}
+	})
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "funcdctl dev finds no usable runtime on this host: %v", err)
+
+	ran := false
+	t.Run("gated", func(t *testing.T) {
+		requireRuntime(t)
+		ran = true
+	})
+	require.False(t, ran, "requireRuntime skips a test that funcdctl dev cannot boot")
 }
 
 // devS3Client builds a real aws-sdk-go-v2 S3 client (path-style, the printed dev creds, BaseEndpoint = the
