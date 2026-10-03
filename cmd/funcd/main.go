@@ -231,8 +231,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
 
-	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. Storage defaults to
-	// <dataDir>/funcd-tls via the platform when StorageDir is empty.
+	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. The daemon keeps TLS state in
+	// <storage.dataDir>/tls.
 	if cfg.Server.TLS.Enabled {
 		opts = append(opts, funcd.WithTLS(edgetls.Spec{
 			Mode:       edgetls.Mode(cfg.Server.TLS.Mode),

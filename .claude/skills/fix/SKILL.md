@@ -61,7 +61,12 @@ subagents and workflows efficiently*); keep each command's real output, filtered
 1. The regression test passes, un-skipped, under `-race` for its package.
 2. **Revert check**: build the pre-fix version of each changed non-test file as an overlay
    (`git show origin/main:<file>` into a scratch file, `go test -overlay`) and confirm the regression
-   test fails again. A test that passes without the fix proves nothing.
+   test fails again. A test that passes without the fix proves nothing. An overlay changes only what the
+   build reads, not a file the test reads at runtime (`os.ReadFile`, `parser.ParseFile` with a path).
+   Embed a Go source the test checks with `//go:embed`, which the overlay does replace
+   (`internal/function/doc_test.go`); for a file the test cannot embed (a doc, a file outside the
+   package), run the test in a scratch worktree of `origin/main` with the test file copied in
+   (`git worktree add --detach <scratch> origin/main`, then `git worktree remove --force <scratch>`).
 3. The touched packages: their tests (`-race`), `go vet` and `go tool golangci-lint run` on them, and
    `go build ./...`.
 4. The repo-wide checks, once, when the branch is ready for its PR: `scripts/agent/gate.sh` (`just ci-full`
