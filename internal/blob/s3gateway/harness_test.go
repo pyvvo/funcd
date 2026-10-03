@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -80,10 +81,11 @@ type gw struct {
 // newGateway builds the full in-process stack (ADR-0080/0085): a real gocloud mem://
 // bucket per seeded Bucket, a real cedar PDP over the seeded resources, and the gateway
 // on an ephemeral loopback port. policies/external may be nil; opts adjust the Deps. It
-// registers cleanup.
+// registers cleanup. versitygw binds the address itself, so freeAddr can only reserve a
+// port and release it, and another process can take it first (#463): that bind collision
+// starts the gateway again on a fresh address; any other Run error fails the test.
 func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3gateway.ExternalKeys, makeBucket func(t *testing.T) blob.Bucket, opts ...func(*s3gateway.Deps)) *gw {
 	t.Helper()
-	ctx := context.Background()
 
 	ep, err := cedar.NewEntityProvider(meta)
 	require.NoError(t, err)
@@ -112,32 +114,40 @@ func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3
 		return out, nil
 	}
 
-	deps := s3gateway.Deps{
-		BucketFor: bucketFor,
-		Buckets:   listBuckets,
-		PDP:       pdp,
-		Master:    testMaster,
-		External:  external,
-		Listen:    freeAddr(t),
-		Logger:    nil,
-	}
-	for _, o := range opts {
-		o(&deps)
-	}
-	srv, err := s3gateway.New(deps)
-	require.NoError(t, err)
+	const attempts = 5
+	for i := 1; ; i++ {
+		deps := s3gateway.Deps{
+			BucketFor: bucketFor,
+			Buckets:   listBuckets,
+			PDP:       pdp,
+			Master:    testMaster,
+			External:  external,
+			Listen:    freeAddr(t),
+			Logger:    nil,
+		}
+		for _, o := range opts {
+			o(&deps)
+		}
+		srv, err := s3gateway.New(deps)
+		require.NoError(t, err)
 
-	runCtx, cancel := context.WithCancel(ctx)
-	go func() { _ = srv.Run(runCtx) }()
-	t.Cleanup(func() { cancel(); _ = srv.Close() })
-
-	select {
-	case <-srv.Ready():
-	case <-time.After(5 * time.Second):
-		t.Fatal("gateway did not become ready")
+		runCtx, cancel := context.WithCancel(context.Background())
+		runErr := make(chan error, 1)
+		go func() { runErr <- srv.Run(runCtx) }()
+		select {
+		case <-srv.Ready():
+			t.Cleanup(func() { cancel(); <-runErr; _ = srv.Close() })
+			return &gw{endpoint: "http://" + srv.Addr(), buckets: buckets, server: srv}
+		case err = <-runErr:
+		case <-time.After(5 * time.Second):
+			err = errors.New("gateway did not become ready")
+		}
+		cancel()
+		_ = srv.Close()
+		if !errors.Is(err, syscall.EADDRINUSE) || i == attempts {
+			t.Fatalf("gateway on %s: %v", deps.Listen, err)
+		}
 	}
-
-	return &gw{endpoint: "http://" + srv.Addr(), buckets: buckets, server: srv}
 }
 
 func memBucket(t *testing.T) blob.Bucket {

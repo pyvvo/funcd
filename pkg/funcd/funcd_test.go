@@ -206,6 +206,28 @@ func TestIssue350_WorkflowDefaultsWithoutWithWorkflow(t *testing.T) {
 	require.Zero(t, p.cfg.workflowStepTimeout, "an explicit zero still means no step timeout, in any option order")
 }
 
+// Issue #446: a platform built without WithDeadLetterQueue (funcdctl dev, any InMemory embedding) bounds the
+// eventing DLQ with the daemon's ADR-0118 retention and per-namespace cap, so the retention sweep runs.
+func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
+	t.Parallel()
+	daemon, err := platformconfig.Load("", platformconfig.Flags{})
+	require.NoError(t, err)
+	retention, err := time.ParseDuration(daemon.Eventing.Deadletter.Retention)
+	require.NoError(t, err)
+
+	p, err := New(InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Equal(t, retention, p.deadletterRetention)
+	require.Equal(t, daemon.Eventing.Deadletter.MaxEntries, p.deadletterMaxEntries)
+
+	p, err = New(WithDeadLetterQueue("", 3, 0, 0), InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Zero(t, p.deadletterRetention, "an explicit zero still means no TTL")
+	require.Zero(t, p.deadletterMaxEntries, "an explicit zero still means no cap")
+}
+
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial
 // platform), so the caller can fix the cause and call New again with the same data dirs.
 func TestIssue94_FailedNewReleasesResources(t *testing.T) {

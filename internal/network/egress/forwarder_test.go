@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -159,4 +160,15 @@ func TestIssue368_ServeCancelledEarlyReleasesListeners(t *testing.T) {
 	require.NoError(t, err, "the TCP port is released when Serve returns")
 	require.NoError(t, pc.Close())
 	require.NoError(t, ln.Close())
+}
+
+// Issue 455: Serve owns its DNS servers through a local slice, so the forwarder keeps no server state (and
+// no mutex guarding it) that would suggest another path, such as a shutdown, reaches them.
+func TestIssue455_ForwarderKeepsNoServerState(t *testing.T) {
+	typ := reflect.TypeFor[forwarder]()
+	fields := make([]string, 0, typ.NumField())
+	for f := range typ.Fields() {
+		fields = append(fields, f.Name)
+	}
+	require.Equal(t, []string{"listen", "upstream", "corr"}, fields)
 }

@@ -206,7 +206,10 @@ func New(d Deps) (*Engine, error) {
 type StartOptions struct {
 	Contract   *v1.WorkflowContract     // pinned derived contract; nil ⇒ no run-start input check
 	StepImages map[v1.ObjectName]string // step name → resolved digest-pinned image; stamps stepNode.revision (function steps)
-	RunUID     v1.UID                   // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
+	// StepContracts is the ADR-0098 cache's per-step I/O contract, pinned on the record: a when: binds an
+	// absent parent-output field to its schema default (ADR-0095). Nil ⇒ no defaults are bound.
+	StepContracts map[v1.ObjectName]v1.WorkflowContract
+	RunUID        v1.UID // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
 }
 
 // Execute runs a workflow synchronously to a terminal phase and returns the final
@@ -243,19 +246,20 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 	}
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, RunUID: opts.RunUID, Workflow: workflow, Phase: runRunning, Input: input,
-		Spec:         spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
-		Contract:     pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
-		Depth:        depth,  // sub-workflow nesting depth (ADR-0099)
-		TraceID:      traceID,
-		RootSpanID:   rootSpanID,
-		RootParentID: rootParentID, // ADR-0104: "" for top-level, the parent run's RootSpanID for a child
-		StartedAt:    e.clock.Now().UnixNano(),
+		Spec:          spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
+		Contract:      pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
+		StepContracts: opts.StepContracts,
+		Depth:         depth, // sub-workflow nesting depth (ADR-0099)
+		TraceID:       traceID,
+		RootSpanID:    rootSpanID,
+		RootParentID:  rootParentID, // ADR-0104: "" for top-level, the parent run's RootSpanID for a child
+		StartedAt:     e.clock.Now().UnixNano(),
 	}
 	// Run-start payload cap (ADR-0094): a run created on the internal store (a Sensor action, ADR-0109)
 	// skipped the admission cap. The over-cap input stays out of the run record and the FailureContext.
 	if e.cfg.PayloadLimit > 0 && int64(len(input)) > e.cfg.PayloadLimit {
 		rec.Input = nil
-		return e.failAtStart(ctx, rec, rs, outputs, spec, nil, fault.Invalidf(engineOp, "run %q input %d bytes exceeds the payload limit %d — pass large data by reference on the blob substrate", runName, len(input), e.cfg.PayloadLimit))
+		return e.failAtStart(ctx, rec, rs, outputs, spec, nil, fault.Invalidf(engineOp, "run %q input %d bytes exceeds the payload limit %d (PayloadLimitExceeded) — pass large data by reference on the blob substrate", runName, len(input), e.cfg.PayloadLimit))
 	}
 	// Run-start contract gate (ADR-0098): a run admitted before its workflow was Ready (async/Sensor
 	// start) is checked here against the now-pinned contract, and fails fast rather than dropping silently.
@@ -268,7 +272,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 		if fault.KindOf(err) != fault.PayloadTooLarge {
 			return nil, err
 		}
-		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded", runName))
+		return e.failAtStart(ctx, rec, rs, outputs, spec, input, fault.Wrapf(err, fault.Invalid, engineOp, "run %q cannot be recorded (RunRecordTooLarge)", runName))
 	}
 	return e.drive(ctx, stop, rec, rs, outputs, spec, input)
 }
@@ -377,7 +381,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	traceID, rootSpanID := mintTraceContext()
 	rec := &runstate.Record{
 		Namespace: ns, Name: runName, RunUID: runUID, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
-		Spec: spec, Contract: src.Contract, Depth: 0,
+		Spec: spec, Contract: src.Contract, StepContracts: src.StepContracts, Depth: 0,
 		TraceID: traceID, RootSpanID: rootSpanID, RootParentID: "",
 		SourceRun: seed.Run, SourceFrom: seed.From,
 		StartedAt: e.clock.Now().UnixNano(),
@@ -486,11 +490,15 @@ func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration, recl
 }
 
 // Pause requests a graceful pause: the persisted run is marked Paused so the next
-// drive dispatches nothing new (in-flight steps, in the async model, finish first).
+// drive dispatches nothing new (in-flight steps, in the async model, finish first). A run that is
+// already terminal is left unchanged.
 func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
+	}
+	if rec.Terminal() {
+		return nil
 	}
 	if !rec.Paused { // a repeated pause keeps the interval's start
 		rec.PausedAt = e.clock.Now().UnixNano()
@@ -610,7 +618,7 @@ func (e *Engine) startReady(ctx, stepCtx, runCtx context.Context, rec *runstate.
 		for _, n := range rs.pendingToSkip() {
 			n.phase = v1.StepSkipped
 		}
-		batch, skipped, err := e.selectRunnable(spec, rs, input, outputs)
+		batch, skipped, err := e.selectRunnable(spec, rs, rec, input, outputs)
 		if err != nil {
 			return started, err
 		}
@@ -718,14 +726,14 @@ func (e *writeAheadError) Unwrap() error { return e.err }
 
 // selectRunnable returns the ready steps that should run now (when true) and those
 // to Skip (when false).
-func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (run, skip []*stepNode, err error) {
+func (e *Engine) selectRunnable(spec v1.WorkflowSpec, rs *runState, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (run, skip []*stepNode, err error) {
 	for _, n := range rs.ready() {
 		st := specStep(spec, n.name)
 		if st == nil || st.When == nil {
 			run = append(run, n)
 			continue
 		}
-		ok, err := e.evalWhen(st.When.Condition, n, input, outputs)
+		ok, err := e.evalWhen(st.When.Condition, n, rec, input, outputs)
 		if err != nil {
 			e.markFailed(n, err) // the step whose condition cannot be evaluated carries the cause (ADR-0100)
 			return nil, nil, err
@@ -787,7 +795,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
 	// separately in drive and maps to RunTimedOut.
 	stepTimeout := e.stepTimeout(fn)
-	var lastErr error
+	var lastErr, stopped error
 	for attempt := first; attempt <= max(maxAttempts, first); attempt++ {
 		rs.mu.Lock()
 		n.attempts = attempt // ADR-0100: the dispatch attempt count
@@ -825,8 +833,11 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return nil, fault.Wrapf(ctx.Err(), fault.Unavailable, engineOp, "run deadline during backoff")
+				stopped = runStopped(ctx.Err())
 			case <-timer.C:
+			}
+			if stopped != nil {
+				break
 			}
 		}
 	}
@@ -835,6 +846,9 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 	rs.mu.Lock()
 	n.errMsg = capErr(lastErr.Error())
 	rs.mu.Unlock()
+	if stopped != nil { // the step's context ended in the backoff: a deadline or a stop, not the step
+		return nil, stopped
+	}
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
 }
 

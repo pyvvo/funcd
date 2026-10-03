@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -170,6 +172,52 @@ func TestIssue375_EscapeSequenceKeysNeverAlias(t *testing.T) {
 			data, err := b.Get(ctx, items[0].Key)
 			require.NoError(t, err)
 			require.Equal(t, []byte("v:"+key), data)
+		})
+	}
+}
+
+// TestIssue459_ListFindsKeysUnderEscapedPrefixes: fileblob stores a key under its escaped path
+// ("a//b/c" in "a/__0x2f__b/c") but starts its List walk at the raw, cleaned directory part of the
+// prefix, so a prefix holding "//", "../", a control rune or a trailing "/" — mid-path or at the
+// end — must still list every key it prefixes and no sibling ("pq" under "p/"), as on the memory
+// backend (ADR-0007 §1).
+func TestIssue459_ListFindsKeysUnderEscapedPrefixes(t *testing.T) {
+	ctx := context.Background()
+	keys := []string{"a//b/c", "x/../y/z", "../w", "d../e", "f/", "f/g", "h\x01/i", "p/q", "pq"}
+	prefixes := []string{
+		"a//b/", "a//b/c", "a//", "a/", "x/../y/", "x/../y/z", "x/../", "x/", "../", "d../",
+		"f/", "h\x01/", "h\x01/i", "p/", "",
+	}
+	for name, scheme := range map[string]string{"memory": "mem://", "file": "file://"} {
+		t.Run(name, func(t *testing.T) {
+			url := scheme
+			if name == "file" {
+				url += t.TempDir()
+			}
+			b, err := gocloud.Open(ctx, url)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			for _, k := range keys {
+				require.NoError(t, b.Put(ctx, k, []byte(k)), "Put(%q)", k)
+			}
+			for _, p := range prefixes {
+				want := []string{}
+				for _, k := range keys {
+					if strings.HasPrefix(k, p) {
+						want = append(want, k)
+					}
+				}
+				slices.Sort(want)
+				items, err := b.List(ctx, p)
+				if !assert.NoError(t, err, "List(%q)", p) {
+					continue
+				}
+				got := []string{}
+				for _, it := range items {
+					got = append(got, it.Key)
+				}
+				assert.Equal(t, want, got, "List(%q)", p)
+			}
 		})
 	}
 }

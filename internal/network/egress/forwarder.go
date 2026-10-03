@@ -63,9 +63,6 @@ type forwarder struct {
 	listen   netip.AddrPort
 	upstream netip.AddrPort
 	corr     *correlator
-
-	mu      sync.Mutex
-	servers []*dns.Server
 }
 
 // Serve runs the forwarder on UDP and TCP until ctx is cancelled: F80 redirects worker :53 on both, and a
@@ -89,10 +86,6 @@ func (f *forwarder) Serve(ctx context.Context) error {
 		{Addr: f.listen.String(), Net: "udp", Handler: mux},
 		{Addr: f.listen.String(), Net: "tcp", Handler: mux},
 	}
-	f.mu.Lock()
-	f.servers = servers
-	f.mu.Unlock()
-
 	errCh := make(chan error, len(servers))
 	started := make([]chan struct{}, len(servers))
 	exited := make([]chan struct{}, len(servers))

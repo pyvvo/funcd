@@ -18,8 +18,8 @@ import (
 // Function shape gate. Converge is re-entrant + idempotent: the per-provider reconciler calls it
 // on EVERY reconcile; it (re)creates a missing/failed engine, probes readiness, programs the
 // OPTIONAL ingress route once Ready, and returns status. This re-convergence IS the supervision
-// (restart-on-crash) — no separate watchdog. Teardown stops the engine (the driver owns netns
-// cleanup) and removes any programmed route.
+// (restart-on-crash) — no separate watchdog. Teardown stops and removes every engine replica (the
+// driver owns netns cleanup) and removes any programmed route.
 type Runtime interface {
 	Converge(ctx context.Context, spec ProviderSpec) (ProviderStatus, error)
 	Teardown(ctx context.Context, ref ProviderRef) error
@@ -60,7 +60,9 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	client := d.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Second}
+		// Its own transport: a CloseIdleConnections on the process-wide http.DefaultTransport fails a probe whose
+		// connection it closes (#460, as #287 for the Function probe).
+		client = &http.Client{Timeout: 2 * time.Second, Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,

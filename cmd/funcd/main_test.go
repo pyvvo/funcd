@@ -778,6 +778,22 @@ func TestIssue329_BuildFuncsCarryTheirOwnDocComment(t *testing.T) {
 	}
 }
 
+// Issue #441: the TLS wiring comment named the platform default <dataDir>/funcd-tls, which the daemon
+// never uses: it always sets StorageDir to <storage.dataDir>/tls.
+func TestIssue441_TLSCommentNamesTheDaemonStorageDir(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", mainSource, parser.ParseComments)
+	require.NoError(t, err)
+	var tlsComment string
+	for _, c := range f.Comments {
+		if strings.HasPrefix(c.Text(), "TLS termination (ADR-0111") {
+			tlsComment = c.Text()
+		}
+	}
+	require.NotEmpty(t, tlsComment, "main.go has no TLS termination comment")
+	assert.Contains(t, tlsComment, "<storage.dataDir>/tls")
+	assert.NotContains(t, tlsComment, "funcd-tls")
+}
+
 // cfgWithKeyFile builds a Config with only secrets.encryptionKeyFile set (the nested struct can't be
 // a flat literal). Memory mode keeps this encryptor-wiring test engine-agnostic — buildStore must not
 // open a real Badger directory (ADR-0065) for a test that only checks encryptor selection.

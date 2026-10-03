@@ -27,13 +27,17 @@ Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real outp
 
 1. **The regression test fails without the fix.** Overlay the `origin/main` version of each changed
    non-test file (`git show origin/main:<file>` into a scratch file, `go test -overlay`) and run the
-   `TestIssue<N>_…` test: it must fail, for the issue's reason. Passing without the fix → Blocker.
+   `TestIssue<N>_…` test: it must fail, for the issue's reason. Passing without the fix → Blocker. An
+   overlay does not reach a file the test reads at runtime unless the test embeds it (`//go:embed`): run
+   such a test in a scratch worktree of `origin/main` with the test file copied in ([`/fix`](../fix/SKILL.md)
+   Step 5.2) before calling it a Blocker.
 2. **It passes with the fix**, un-skipped, under `-race` for its package.
 3. **The user-visible behavior is fixed**: rerun the issue's own steps when that is cheap (a probe, a CLI
    sequence, a real daemon), not only the unit test.
 4. **Cause, not symptom**: the change removes the cause named in the issue (or a better-supported one).
    A longer timeout, an extra retry, a swallowed error or a skipped test that hides the defect → Blocker.
-5. **Mutants**: 1–3 overlay mutants on the fix's key lines; each must fail a test. A survivor is a test gap.
+5. **Mutants**: 1–3 overlay mutants on the fix's key lines (for a file a test reads at runtime, mutate it
+   in a scratch worktree of the branch instead); each must fail a test. A survivor is a test gap.
 6. **Scope**: every hunk serves the issue. An unrelated change → Major; a weakened or deleted test → Blocker.
 7. **Reuse, no duplication**: for everything the change adds — a helper, a type, a constant, a test harness,
    a dependency — search the package, its neighbours, `internal/platform`, `api/fault`, `internal/testkit`,

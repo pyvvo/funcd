@@ -613,6 +613,30 @@ func TestIssue395_CancelLeavesTerminalRunUnchanged(t *testing.T) {
 	}
 }
 
+// Issue #419: a pause on a terminal run is ignored, as a cancel is (#395): the run keeps its phase and
+// is not marked paused.
+func TestIssue419_PauseLeavesTerminalRunUnchanged(t *testing.T) {
+	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			rs, _ := badger.New(badger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rs.Close() })
+			ctx := context.Background()
+			_ = rs.Put(ctx, &runstate.Record{
+				Namespace: "default", Name: "run-419", Phase: phase,
+				Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}},
+			})
+			e, _ := New(Deps{Runs: rs, Dispatch: newFake()})
+			if err := e.Pause(ctx, "default", "run-419"); err != nil {
+				t.Fatalf("Pause: %v", err)
+			}
+			got, _ := rs.Get(ctx, "default", "run-419")
+			if got.Phase != phase || got.Paused || got.PausedAt != 0 {
+				t.Fatalf("after a pause of a terminal run: phase %s, paused %v, pausedAt %d; want %s, not paused", got.Phase, got.Paused, got.PausedAt, phase)
+			}
+		})
+	}
+}
+
 // scenario: pause-and-resume-run — pause stops new dispatch; resume completes it.
 func TestPauseAndResume(t *testing.T) {
 	f := newFake()
