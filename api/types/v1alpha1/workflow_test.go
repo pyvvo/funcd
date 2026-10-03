@@ -146,6 +146,22 @@ func TestIssue179_OnFailureHandlerMustBeFunctionStep(t *testing.T) {
 	}
 }
 
+// Issue #443: the engine dispatches the onFailure handler with the FailureContext only (ADR-0094), so
+// params on the handler would be silently dropped; admission rejects them instead.
+func TestIssue443_OnFailureHandlerRejectsParams(t *testing.T) {
+	handler := WorkflowStep{Name: "notify", Function: &FunctionStep{Image: "oci:notify"}, Params: json.RawMessage(`{"channel":"ops"}`)}
+	err := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{imgStep("boom"), handler}, OnFailure: "notify"}).Validate()
+	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), `"notify"`) || !strings.Contains(err.Error(), "params") {
+		t.Fatalf("Validate = %v, want Invalid naming the handler and params", err)
+	}
+	dagStep := imgStep("boom")
+	dagStep.Params = json.RawMessage(`{"channel":"ops"}`)
+	spec := WorkflowSpec{Steps: []WorkflowStep{dagStep, {Name: "notify", Function: &FunctionStep{Image: "oci:notify"}}}, OnFailure: "notify"}
+	if err := newWorkflow(spec).Validate(); err != nil {
+		t.Errorf("params on a DAG step rejected: %v", err)
+	}
+}
+
 // scenario: contract-defaults-required — an optional declared-contract property must
 // carry a default (the total-defaults rule).
 func TestWorkflowTotalDefaults(t *testing.T) {
