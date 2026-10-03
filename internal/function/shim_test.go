@@ -660,9 +660,30 @@ func TestIssue452_RealShimWaitsOutASlowBoot(t *testing.T) {
 	})
 }
 
+// TestIssue505_FixedPortShimStartsWhenItsReservedPortIsTaken: shimReadyOnFixedPort releases the port it reserves
+// before the shim binds it, so another process can take it first. The helper must still bring the shim up.
+func TestIssue505_FixedPortShimStartsWhenItsReservedPortIsTaken(t *testing.T) {
+	taken := false
+	takeReservedPort := func(port int) {
+		if taken {
+			return
+		}
+		l, err := net.Listen("tcp4", "0.0.0.0:"+strconv.Itoa(port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = l.Close() })
+		taken = true
+	}
+	require.True(t, shimReadyOnFixedPort(t, "export function handle() {}\n", takeReservedPort),
+		"the shim reported readiness although another listener took its first port")
+	require.True(t, taken, "the reserved port was taken before the shim started")
+}
+
 // shimReadyOnFixedPort starts the real Node shim on handler src with FUNCD_PORT set and reports whether it bound
 // that port and reported readiness. It skips the test when the shim or node is unavailable (ADR-0030 node lane).
-func shimReadyOnFixedPort(t *testing.T, src string) bool {
+// The shim binds FUNCD_PORT itself, so the helper can only reserve a free port and release it, and another process
+// can take it first (#505): a shim that exits on that bind collision starts again on a fresh port. beforeStart runs
+// with each port before the shim starts.
+func shimReadyOnFixedPort(t *testing.T, src string, beforeStart ...func(port int)) bool {
 	t.Helper()
 	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
@@ -673,17 +694,34 @@ func shimReadyOnFixedPort(t *testing.T, src string) bool {
 	artifact := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(artifact, []byte(src), 0o600))
 
-	// Pick a free port, then hand it to the shim via FUNCD_PORT.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
+	const attempts = 5
+	for i := 1; ; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := l.Addr().(*net.TCPAddr).Port
+		require.NoError(t, l.Close())
+		for _, f := range beforeStart {
+			f(port)
+		}
+		ready, stderr := runShimOnPort(t, node, shim, artifact, port)
+		if ready || !strings.Contains(stderr, "EADDRINUSE") || i == attempts {
+			return ready
+		}
+	}
+}
 
+// runShimOnPort runs the shim with FUNCD_PORT=port until it reports readiness, exits, or outlasts the boot budget
+// the reconciler gives a replica (ADR-0030 §4b). It returns whether the shim became ready and, when it exited, what
+// it wrote to stderr.
+func runShimOnPort(t *testing.T, node, shim, artifact string, port int) (bool, string) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var stderr strings.Builder
 	cmd := exec.CommandContext(ctx, node, shim)
 	cmd.Env = append(os.Environ(),
 		"FUNCD_ARTIFACT="+artifact, "FUNCD_HANDLER=handle", "FUNCD_PORT="+strconv.Itoa(port))
+	cmd.Stderr = &stderr
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	exited := make(chan struct{})
@@ -692,25 +730,26 @@ func shimReadyOnFixedPort(t *testing.T, src string) bool {
 		close(exited)
 	}()
 
-	// The shim gets the boot budget the reconciler gives a replica (ADR-0030 §4b); one that exits fails at once.
+	// A listener that took the port may never answer, so each probe is bounded.
+	probe := &http.Client{Timeout: time.Second}
 	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/health/readiness"
 	deadline := time.Now().Add(function.BootTimeout)
 	for time.Now().Before(deadline) {
 		select {
 		case <-exited:
-			return false
+			return false, stderr.String()
 		default:
 		}
-		resp, gerr := http.Get(url) //nolint:gosec // url is a test-local loopback address
+		resp, gerr := probe.Get(url)
 		if gerr == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return true
+				return true, ""
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return false
+	return false, ""
 }
 
 // NOTE (ADR-0108): the former `timer-invokes-real-handler` e2e is removed — a v2 timer PUBLISHES a
