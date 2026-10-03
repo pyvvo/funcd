@@ -1569,8 +1569,6 @@ func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 	return fmt.Sprintf("runtime %q is not available on this node: no python shim is registered", rt), true
 }
 
-// workerSpec builds one replica's runtime spec. It is pure: secretEnv is the already-resolved
-// secret env map (ADR-0057), merged into Env with reserved-FUNCD_-key precedence; nil ⇒ none.
 // addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial the per-sandbox worker-node
 // local API — context.invoke (ADR-0064) AND context.kv (ADR-0069). EVERY function gets the socket (KV is
 // available to all; the link-as-grant check for invoke stays at RESOLVE time, so a linkless function's
@@ -1671,6 +1669,8 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
+// secretEnv is the already-resolved secret env map (ADR-0057), merged into Env with
+// reserved-FUNCD_-key precedence; nil ⇒ none.
 func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
