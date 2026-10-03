@@ -152,6 +152,25 @@ func (h gatewayStopped) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h gatewayStopped) WithGroup(string) slog.Handler { return h }
 
+// takenPortReserve returns a reserve whose first address another listener, which taken returns, already holds: the
+// bind collision of #288, made deterministic.
+func takenPortReserve() (reserve func(*testing.T) string, taken func() net.Listener) {
+	var held net.Listener
+	reserve = func(t *testing.T) string {
+		addr := freeLoopbackAddr(t)
+		if held == nil {
+			l, err := net.Listen("tcp", addr)
+			if err != nil {
+				t.Fatalf("take the reserved port: %v", err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			held = l
+		}
+		return addr
+	}
+	return reserve, func() net.Listener { return held }
+}
+
 // TestIssue288_S3GatewayStartsWhenItsReservedPortIsTaken: freeLoopbackAddr releases the port it reserves, so a
 // parallel test can bind it before the gateway does. The gateway must still come up, on another port, instead of
 // the test waiting out the readiness timeout, whether the test serves the gateway alone or the whole platform.
@@ -171,23 +190,11 @@ func TestIssue288_S3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
 				t.Fatalf("data dir: %v", err)
 			}
 			t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
-			var taken net.Listener
-			reserve := func(t *testing.T) string {
-				addr := freeLoopbackAddr(t)
-				if taken == nil {
-					l, lerr := net.Listen("tcp", addr)
-					if lerr != nil {
-						t.Fatalf("take the reserved port: %v", lerr)
-					}
-					t.Cleanup(func() { _ = l.Close() })
-					taken = l
-				}
-				return addr
-			}
+			reserve, taken := takenPortReserve()
 			_, addr := startS3Gateway(t, reserve, func(addr string) (*Platform, error) {
 				return New(append([]Option{InMemory(), WithS3Gateway(addr, "", 0, "", dataDir)}, tc.opts...)...)
 			}, tc.serve)
-			if addr == taken.Addr().String() {
+			if addr == taken().Addr().String() {
 				t.Fatalf("the gateway reports the port another listener holds: %s", addr)
 			}
 			conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
