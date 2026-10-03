@@ -5,6 +5,7 @@ package network
 import (
 	"context"
 	"encoding/binary"
+	"log/slog"
 	"net/netip"
 	"strings"
 
@@ -22,7 +23,7 @@ const (
 	egressTableName  = "funcd_egress"  // inet family   — L3 accept/redirect/default-deny
 )
 
-func newDriver() Manager { return &nftDriver{} }
+func newDriver(*slog.Logger) Manager { return &nftDriver{} }
 
 // nftDriver programs the F80 isolation substrate via google/nftables (pure-Go netlink — no nft binary,
 // no cgo). It assembles two objects (see planTables) and applies them in one atomic Flush.

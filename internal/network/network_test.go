@@ -17,10 +17,10 @@ func goodPolicy() Policy {
 	}
 }
 
-// scenario: disabled-passthrough — New(false) is a no-op Manager: Apply/Remove program nothing and never
+// scenario: disabled-passthrough — New(false, nil) is a no-op Manager: Apply/Remove program nothing and never
 // error, so worker egress stays open exactly as before.
 func TestScenarioDisabledPassthrough(t *testing.T) {
-	m := New(false)
+	m := New(false, nil)
 	require.IsType(t, noop{}, m, "disabled ⇒ the no-op Manager")
 	require.NoError(t, m.Apply(context.Background(), goodPolicy()))
 	require.NoError(t, m.Remove(context.Background()))
@@ -30,8 +30,8 @@ func TestScenarioDisabledPassthrough(t *testing.T) {
 // anything was applied. The Linux driver's actual table deletion (delFuncdTables → Flush) needs a kernel
 // and is exercised by the Lima e2e lane (deferred), alongside the other behavioral scenarios.
 func TestScenarioTeardownClean(t *testing.T) {
-	require.NoError(t, New(false).Remove(context.Background()), "Remove on a disabled Manager is clean")
-	require.NoError(t, New(false).Remove(context.Background()), "Remove is idempotent (safe if never applied)")
+	require.NoError(t, New(false, nil).Remove(context.Background()), "Remove on a disabled Manager is clean")
+	require.NoError(t, New(false, nil).Remove(context.Background()), "Remove is idempotent (safe if never applied)")
 }
 
 // Policy.Validate gates a programmable policy: a non-zero subnet, a gateway-port target, and a resolver.

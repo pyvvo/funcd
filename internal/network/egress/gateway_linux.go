@@ -5,7 +5,6 @@ package egress
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -78,7 +77,7 @@ func (g *linuxGateway) handle(ctx context.Context, c *net.TCPConn) {
 
 	dst, err := originalDst(c)
 	if err != nil {
-		slog.Warn("egress: cannot recover original destination", "err", err)
+		g.deps.Logger.WarnContext(ctx, "egress: cannot recover original destination", "err", err)
 		return
 	}
 	src, ok := srcAddr(c)
@@ -89,7 +88,7 @@ func (g *linuxGateway) handle(ctx context.Context, c *net.TCPConn) {
 
 	dec, rec, derr := decideConnect(ctx, g.deps, src, dst, asserted)
 	if derr != nil {
-		slog.Warn("egress: authorization error", "err", derr, "dst", dst.String())
+		g.deps.Logger.WarnContext(ctx, "egress: authorization error", "err", derr, "dst", dst.String())
 		return
 	}
 	if g.deps.Audit != nil {
@@ -102,12 +101,12 @@ func (g *linuxGateway) handle(ctx context.Context, c *net.TCPConn) {
 
 	up, derr := net.Dial("tcp", dst.String())
 	if derr != nil {
-		slog.Warn("egress: dial allowed destination failed", "err", derr, "dst", dst.String())
+		g.deps.Logger.WarnContext(ctx, "egress: dial allowed destination failed", "err", derr, "dst", dst.String())
 		return
 	}
 	defer func() { _ = up.Close() }()
 	if serr := splice(replayed, up); serr != nil {
-		slog.Debug("egress: splice ended", "err", serr, "dst", dst.String())
+		g.deps.Logger.DebugContext(ctx, "egress: splice ended", "err", serr, "dst", dst.String())
 	}
 }
 
