@@ -86,7 +86,7 @@ func fakeImage(t *testing.T) (content.Store, digest.Digest, ocispec.Descriptor) 
 }
 
 // fakeClient is a containerd client over in-memory services: it creates containers and tasks but runs nothing.
-func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs *memContainers, snaps map[string]snapshots.Snapshotter) *containerd.Client {
+func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs containers.Store, snaps map[string]snapshots.Snapshotter) *containerd.Client {
 	t.Helper()
 	client, err := containerd.New("", containerd.WithServices(
 		containerd.WithContentStore(cs),

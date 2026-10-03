@@ -240,6 +240,16 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		logPath = f.Name()
 		_ = f.Close()
 	}
+	var logLn net.Listener
+	var logDir string
+	success := false
+	defer func() {
+		if !success { // the worker is never registered, so no Remove or Stop would free these
+			failed := &worker{logPath: logPath, ownLog: ownLog, logListener: logLn, logDir: logDir}
+			removeLog(failed)
+			closeLogChannel(failed)
+		}
+	}()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
 		return runtime.Instance{}, fault.Wrapf(err, fault.Internal, op, "create log dir")
 	}
@@ -249,8 +259,6 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	d.mu.Lock()
 	capture := d.capture
 	d.mu.Unlock()
-	var logLn net.Listener
-	var logDir string
 	if capture != nil {
 		mount, env, ln, dir, lerr := setupLogChannel(ctrID, spec, capture)
 		if lerr != nil {
@@ -260,13 +268,6 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		spec.Mounts = append(spec.Mounts, mount)
 		logLn, logDir = ln, dir
 	}
-	success := false
-	defer func() {
-		if !success && logLn != nil {
-			_ = logLn.Close()
-			_ = os.RemoveAll(logDir)
-		}
-	}()
 
 	// Give the worker a resolver: raw containerd provisions no /etc/resolv.conf, so without this the
 	// worker cannot resolve any domain (and every domain EgressPolicy rule is dead). Bind-mount the
@@ -327,7 +328,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		removeLog(replaced) // a re-create forgets the worker Stop released (ADR-0142) without a Remove
 	}
 
-	success = true // keep the log channel; teardown is owned by Stop now
+	success = true // keep the log file and channel; Stop and Remove own their teardown now
 	return runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
 		PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
