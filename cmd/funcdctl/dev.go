@@ -359,12 +359,14 @@ func (d *devInstance) stop() error {
 // caller cancels ctx to stop.
 func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfig) (*devInstance, error) {
 	const op = "funcdctl dev"
+	// Stamp the path before it is read, so an edit to a workflow file racing the boot still reloads it.
+	stamp, _ := fileStamp(path)
 	// Phase 3 (Decision 8): a Workflow CRD is the DAG. Detect it FIRST — a workflow.yaml is not a
 	// funcdctl.yaml, so it must not be run through the function resolver.
 	if wf, isWorkflow, derr := detectWorkflow(op, path); derr != nil {
 		return nil, derr
 	} else if isWorkflow {
-		return a.startDevWorkflow(ctx, op, path, wf, cfg)
+		return a.startDevWorkflow(ctx, op, &devWorkflow{path: path, obj: wf, seen: stamp}, cfg)
 	}
 	// Phase 3 (Decision 9): resolve the function set — all `<stem>.funcdctl.yaml` in a dir, one by stem,
 	// or the single generic funcdctl.yaml (the Phase-1/2 path, unchanged).
@@ -381,16 +383,16 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 // REWRITTEN to dispatch to it by `function.ref` — so the real embedded workflow engine runs the DAG
 // with no OCI pull (the materializer only materializes image steps; a ref step targets an existing
 // Function directly). builtin (wait/pass) and pre-existing ref steps run as-is.
-func (a *cli) startDevWorkflow(ctx context.Context, op, path string, wf *v1.Workflow, cfg devConfig) (*devInstance, error) {
-	pfs, err := resolveWorkflowPlan(op, path, wf)
+func (a *cli) startDevWorkflow(ctx context.Context, op string, wf *devWorkflow, cfg devConfig) (*devInstance, error) {
+	pfs, err := resolveWorkflowPlan(op, wf.path, wf.obj)
 	if err != nil {
 		return nil, err
 	}
-	inst, berr := a.bootDev(ctx, op, pfs, []v1.Object{wf}, cfg)
+	inst, berr := a.bootDev(ctx, op, pfs, wf, cfg)
 	if berr != nil {
 		return nil, berr
 	}
-	inst.workflow = string(wf.Name)
+	inst.workflow = string(wf.obj.Name)
 	return inst, nil
 }
 
@@ -504,9 +506,9 @@ func catalogAliases(pfs []plannedFunc) []string {
 // bootDev is the shared boot path for a function set (single, multi, or a workflow's step functions): it
 // synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
 // function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
-// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then any
-// extra objects (the Workflow). It returns once serving; the caller cancels ctx to stop.
-func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraObjs []v1.Object, cfg devConfig) (_ *devInstance, err error) {
+// frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then the
+// Workflow (nil for a function set). It returns once serving; the caller cancels ctx to stop.
+func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
 	}
@@ -720,6 +722,10 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	// Apply order: backing resources (KVStore/Bucket/ConfigMap/Secret) → Functions (bind them) → extras
 	// (the Workflow references its step Functions). ADR-0121's reconcile-time existence gate resolves
 	// against what is already applied.
+	var extraObjs []v1.Object
+	if wf != nil {
+		extraObjs = []v1.Object{wf.obj}
+	}
 	for _, group := range [][]v1.Object{resObjs, fnObjs, extraObjs} {
 		for _, obj := range group {
 			if aerr := applyDesired(ctx, client, obj); aerr != nil {
@@ -728,7 +734,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 		}
 	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, stateDirs, inst.watchDone)
 	return inst, nil
 }
 
@@ -802,8 +808,9 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 	return fmt.Sprintf("sha256:%x", sum.Sum(nil)), nil
 }
 
-// watchHandlers polls every function's files for an edit until ctx is done (ADR-0125, hot-reload on change).
-func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, stateDirs []string, done chan<- struct{}) {
+// watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
+// edit until ctx is done (ADR-0125, hot-reload on change).
+func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -812,7 +819,11 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := reloadChanged(ctx, op, c, hs, stateDirs); err != nil && ctx.Err() == nil {
+			err := reloadChanged(ctx, op, c, hs, stateDirs)
+			if wf != nil {
+				err = errors.Join(err, wf.reapply(ctx, op, c, hs))
+			}
+			if err != nil && ctx.Err() == nil {
 				slog.Default().Warn("hot-reload failed", "err", err)
 			}
 		}
@@ -886,6 +897,58 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, and the
+// stamp of the file version last acted on.
+type devWorkflow struct {
+	path string
+	obj  *v1.Workflow
+	seen string
+}
+
+// fileStamp is the size and mtime of the file at path, which an editor's save changes.
+func fileStamp(path string) (string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d\x00%d", fi.Size(), fi.ModTime().UnixNano()), nil
+}
+
+// reapply re-applies the Workflow when its file changed since the last poll, resolved as the boot resolved it
+// (ADR-0125, "watch files, re-apply on change"). A step whose function is not running needs a restart, which it
+// warns about, as for a changed main. A failed reload is reported once and retried on the next edit; an apply
+// that keeps losing a race with a concurrent status write (Conflict) is retried on the next poll.
+func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) error {
+	stamp, serr := fileStamp(w.path)
+	if serr != nil || stamp == w.seen {
+		return nil
+	}
+	w.seen = stamp
+	wf, isWorkflow, derr := detectWorkflow(op, w.path)
+	if derr != nil {
+		return derr
+	}
+	if !isWorkflow {
+		return fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
+	}
+	pfs, rerr := resolveWorkflowPlan(op, w.path, wf)
+	if rerr != nil {
+		return rerr
+	}
+	for _, pf := range pfs {
+		if !slices.ContainsFunc(hs, func(h *devHandler) bool { return h.pf.name == pf.name }) {
+			slog.Default().Warn("restart funcdctl dev to run a new workflow step function", "function", pf.name)
+		}
+	}
+	if aerr := applyDesired(ctx, c, wf); aerr != nil {
+		if fault.KindOf(aerr) == fault.Conflict {
+			w.seen = ""
+		}
+		return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
+	}
+	return nil
 }
 
 // devS3Options enables the ADR-0080/0085 S3 frontend (Decision 6): it reserves a free node-private port,

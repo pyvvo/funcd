@@ -3,11 +3,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +98,67 @@ func TestScenarioDevWorkflow(t *testing.T) {
 
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "a"), "step a executed from source")
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "b"), "step b executed from source (after a)")
+}
+
+// lockedBuffer is an io.Writer a test reads while other goroutines write to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestIssue428_DevReloadsEditedWorkflow — ADR-0125 boot sequence ("watch files, re-apply on change"): an edit to
+// the workflow file re-applies the Workflow with no restart, and a step whose function is not running warns
+// that a restart is needed.
+func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
+	requireNode(t)
+	var logs lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const head = "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: pipeline\n  namespace: default\nspec:\n  steps:\n"
+	step := func(name, stem, dependsOn string) string {
+		s := "    - name: " + name + "\n      function:\n        image: registry:" + stem + "\n"
+		if dependsOn != "" {
+			s += "      dependsOn:\n        - " + dependsOn + "\n"
+		}
+		return s
+	}
+	dir := devProject(t, map[string]string{
+		"workflow.yaml":       head + step("a", "stepa", ""),
+		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"stepa.mjs":           "export function handle() { return { step: 'a' }; }\n",
+		"stepc.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"stepc.mjs":           "export function handle() { return { step: 'c' }; }\n",
+	})
+	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
+	require.Equal(t, []string{"stepa"}, inst.functions)
+
+	edited := head + step("a", "stepa", "") + step("b", "stepa", "a") + step("c", "stepc", "b")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte(edited), 0o600))
+	ctx := context.Background()
+	require.Eventually(t, func() bool {
+		obj, err := inst.client.Get(ctx, v1.KindWorkflow, "default", "pipeline")
+		if err != nil {
+			return false
+		}
+		steps := obj.(*v1.Workflow).Spec.Steps
+		return len(steps) == 3 && steps[1].Function.Ref == "stepa" && steps[2].Function.Ref == "stepc"
+	}, 20*time.Second, 50*time.Millisecond, "the running dev session applies the edited Workflow")
+	require.True(t, strings.Contains(logs.String(), "restart funcdctl dev") && strings.Contains(logs.String(), "function=stepc"),
+		"a step whose function is not running warns that a restart is needed: %s", logs.String())
 }
 
 // runStepPhase returns a run's per-step phase from its mirrored status (or "" if absent).
