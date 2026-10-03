@@ -3,6 +3,7 @@ package envresolve_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -180,4 +181,48 @@ func TestIssue356_NULValueRejected(t *testing.T) {
 	require.Contains(t, err.Error(), `"nul-sec"`)
 	require.Contains(t, err.Error(), `"SEC_NUL"`)
 	require.NotContains(t, err.Error(), "a\x00b")
+}
+
+// With several values env delivery cannot carry, the error names the first bad key in sorted order on
+// every resolve, so a Function's Ready message does not change between reconciles.
+func TestIssue449_FirstBadKeyInSortedOrder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const ns v1.NamespaceName = "team-a"
+	st := store.New(storemem.New())
+	cfg := map[string]string{"A_OK": "fine"}
+	sec := map[string][]byte{"A_OK": []byte("fine")}
+	for i := range 16 {
+		k := fmt.Sprintf("BAD_%02d", i)
+		cfg[k] = "a\x00b"
+		sec[k] = []byte("\xff")
+	}
+	createConfigMap(t, st, ns, "bad-cfg", cfg)
+	obj, ok := v1.NewObject(v1.KindSecret)
+	require.True(t, ok)
+	s := obj.(*v1.Secret)
+	s.Name, s.Namespace, s.ResourceGroup = "bad-sec", ns, "rg1"
+	s.Spec.Data = sec
+	_, err := st.Create(ctx, s)
+	require.NoError(t, err)
+	sr, err := secrets.NewResolver(secrets.Deps{Store: st, Authorizer: rbac.New()})
+	require.NoError(t, err)
+	deps := envresolve.Deps{Secrets: sr, Store: st, Identity: devIdentity}
+
+	for _, tc := range []struct {
+		name            string
+		config, secrets []v1.ObjectName
+		side            error
+	}{
+		{name: "config", config: []v1.ObjectName{"bad-cfg"}, side: envresolve.ErrConfig},
+		{name: "secret", secrets: []v1.ObjectName{"bad-sec"}, side: envresolve.ErrSecret},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 50 {
+				_, err := envresolve.ResolveEnv(ctx, deps, ns, tc.config, tc.secrets)
+				require.ErrorIs(t, err, tc.side)
+				require.Contains(t, err.Error(), `key "BAD_00"`)
+			}
+		})
+	}
 }
