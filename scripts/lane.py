@@ -49,13 +49,18 @@ def writable_copy(src: str, dst: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        sys.exit("usage: lane.py <lane-name> <deps-dir>")
-    name, deps = sys.argv[1], sys.argv[2]
-
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root (scripts/..)
     os.chdir(root)
     lanes = yaml.safe_load(open(REGISTRY, encoding="utf-8"))
+    if sys.argv[1:] == ["--venom-lanes"]:
+        venom = [k for k, v in lanes.items() if isinstance(v, dict) and v.get("venom")]
+        if not venom:
+            sys.exit(f"{REGISTRY} lists no venom lane")
+        print(" ".join(venom))
+        return
+    if len(sys.argv) != 3:
+        sys.exit("usage: lane.py <lane-name> <deps-dir> | lane.py --venom-lanes")
+    name, deps = sys.argv[1], sys.argv[2]
     if name not in lanes:
         sys.exit(f"lane {name!r} is not in {REGISTRY} (have: {', '.join(sorted(lanes))})")
     spec = lanes[name]

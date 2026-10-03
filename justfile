@@ -257,7 +257,7 @@ lima-example-all:
     set -uo pipefail
     scripts/lane-lock.sh $$ || exit 1
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
-    lanes=$(python3 -c "import yaml; d=yaml.safe_load(open('scripts/lanes.yaml')); print(' '.join(k for k,v in d.items() if isinstance(v,dict) and v.get('venom')))")
+    lanes=$(python3 scripts/lane.py --venom-lanes) || { echo "lima-example-all: cannot list the lanes of scripts/lanes.yaml" >&2; exit 1; }
     echo "venom lanes: $lanes metastore"
     passed=""; failed=""
     for lane in $lanes; do
