@@ -397,7 +397,8 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 // forward reverse-proxies r to upstream, streaming each write immediately
 // (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity). A failed
 // upstream call is an Unavailable problem+json logged through slog (ADR-0002), not the
-// ReverseProxy default (a bare 502 logged through the stdlib log package).
+// ReverseProxy default (a bare 502 logged through the stdlib log package); ErrorLog sends
+// ReverseProxy's own errors (a failed body copy) through the same logger (#511).
 func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream string) {
 	const op = "activator.forward"
 	target, err := url.Parse(upstream)
@@ -412,8 +413,10 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.Transport = a.transport // reuse pooled upstream connections (ADR-0041)
+	logger := a.logger.With("upstream", upstream)
+	rp.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
-		a.logger.WarnContext(r.Context(), "upstream call failed", "upstream", upstream, "error", perr)
+		logger.WarnContext(r.Context(), "upstream call failed", "error", perr)
 		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
 	}
 	KeepEdgeHeaders(rp, w)
