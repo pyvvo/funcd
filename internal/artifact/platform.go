@@ -187,13 +187,14 @@ type indexSource struct {
 
 // PushIndex writes an OCI image index over sources — per-platform function manifests in the same repository or
 // layout as ref — tags it from ref and returns its digest (ADR-0145 Decision 2). Every rule is checked before
-// anything is written; a violation is fault.Invalid naming the source.
+// anything is written; a violation is fault.Invalid naming the source. The sources are read without opening the
+// target for writing, so a ref to a directory that holds no layout is fault.NotFound and writes nothing (issue #451).
 func PushIndex(ctx context.Context, ref string, sources []string) (digest string, err error) {
 	const op = "artifact.PushIndex"
 	if len(sources) == 0 {
 		return "", fault.Invalidf(op, "an index needs at least one source")
 	}
-	target, tag, terr := resolveTarget(ctx, ref)
+	reader, tag, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
@@ -207,7 +208,7 @@ func PushIndex(ctx context.Context, ref string, sources []string) (digest string
 	var srcs []indexSource
 	seen := map[v1.OCIPlatform]string{}
 	for _, s := range sources {
-		src, serr := readIndexSource(ctx, op, target, home, s)
+		src, serr := readIndexSource(ctx, op, reader, home, s)
 		if serr != nil {
 			return "", serr
 		}
@@ -248,6 +249,10 @@ func PushIndex(ctx context.Context, ref string, sources []string) (digest string
 		return "", fault.Wrapf(merr, fault.Internal, op, "encode index")
 	}
 	desc := content.NewDescriptorFromBytes(ocispec.MediaTypeImageIndex, data)
+	target, _, terr := resolveTarget(ctx, ref)
+	if terr != nil {
+		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
+	}
 	if perr := target.Push(ctx, desc, bytes.NewReader(data)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
 		return "", fault.Wrapf(perr, fault.Internal, op, "push index")
 	}
