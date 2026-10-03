@@ -341,7 +341,7 @@ func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
-	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, nil),
+	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, nil, nil),
 		"a Conflict on a hot-reload apply is re-applied in place, not reported")
 	mu.Lock()
 	defer mu.Unlock()
