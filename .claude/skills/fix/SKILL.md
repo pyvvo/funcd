@@ -69,8 +69,9 @@ subagents and workflows efficiently*); keep each command's real output, filtered
    (`git worktree add --detach <scratch> origin/main`, then `git worktree remove --force <scratch>`).
 3. The touched packages: their tests (`-race`), `go vet` and `go tool golangci-lint run` on them, and
    `go build ./...`.
-4. The repo-wide checks, once, when the branch is ready for its PR: `scripts/agent/gate.sh` (`just ci-full`
-   with e2e, the Linux build/vet/lint, a clean tree). In a `/fix-batch` the group's integrator runs it instead.
+4. The repo-wide checks, once, when the branch is ready for its PR: `scripts/agent/gate.sh` (the
+   [bloat audit](../bloat-audit/SKILL.md), `just ci-full` with e2e, the Linux build/vet/lint, a clean tree).
+   In a `/fix-batch` the group's integrator runs it instead.
    Add the Lima lane when the fix touches `internal/runtime/containerd`, `internal/network`, `e2e/` or
    `scripts/lanes.yaml`. Never run the e2e suite or `go test ./...` more than this once.
 

@@ -44,7 +44,10 @@ When all of a group's jobs are done:
    priority order. A mechanical conflict is resolved; any other skips that issue as parked.
 2. Copy the group's review reports into `docs/reviews/` and commit them. Do **not** touch
    `docs/reviews/model-ledger.json` or `model-scorecard.md`: parallel PRs appending to them conflict.
-3. Run `scripts/agent/gate.sh` once. On a failure, revert the commits of the issue that caused it and rerun.
+3. Run `scripts/agent/gate.sh` once: the [bloat audit](../bloat-audit/SKILL.md) of the group's diff, `just ci-full`,
+   the Linux checks and a clean tree. On a failure, revert the commits of the issue that caused it and rerun. A hard
+   audit flag goes back to that issue's fixer as a rework round (a fix, or a justified `audit-allow:` line in its
+   commit message); the integrator never writes a waiver.
 4. Push and open the PR: a Conventional-Commit title naming the group (it becomes the squash commit and the
    release note); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
    `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; a
@@ -68,6 +71,8 @@ links point at files they add).
    or conflicted), not in a foreground loop.
 4. Leave the release-please PR open until the batch's groups have merged, then merge it once: one release per
    resolved batch.
+5. Once the groups have merged, run the bloat audit in full mode over the batch's range and list the cleanup
+   issues it suggests, for filing after the user's go.
 
 ## When to stop and ask
 
@@ -78,5 +83,5 @@ with the rest of the batch.
 ## Report
 
 Per group: the PR, the fixed issues (review verdicts and reports), the parked ones with reasons, the gate and
-lane results; the issues set aside for `/adr` or the advisory flow; the ledger PR; any new defects the fixers
-listed, for filing with `/issue-management`.
+lane results; the issues set aside for `/adr` or the advisory flow; the ledger PR; the full-mode audit's summary;
+any new defects the fixers listed or the audit suggests, for filing with `/issue-management`.

@@ -86,6 +86,7 @@ decision takes the fix pipeline**, which starts from a GitHub issue instead of a
 |---|---|---|---|---|
 | fix | [fix](../.claude/skills/fix/SKILL.md) | issue → regression test that fails → root-cause fix → revert check → checks → PR (`Fixes #N`) | code + a `TestIssue<N>_…` test | — (the merged PR closes the issue) |
 | review | [fix-review](../.claude/skills/fix-review/SKILL.md) | independent review of the fix by **running** it: the test fails without the fix and passes with it, cause not symptom, scope, reuse with no duplication, conventions, ADR conformance; score the model | `docs/reviews/issue-<N>-fix-<model>.md` + a ledger row | nothing — it never edits the work |
+| audit | [bloat-audit](../.claude/skills/bloat-audit/SKILL.md) | once per PR as a `scripts/agent/gate.sh` step, after the reviews: the diff's size, new duplication, complexity growth, masking patterns, comment narration and new dependencies; a hard flag fails the gate unless an `audit-allow:` line justifies it. Full mode at a campaign's end adds a flake run | a report (`.cache/gate/audit.log`) | — (cleanup issues via `/issue-management`) |
 | batch | [fix-batch](../.claude/skills/fix-batch/SKILL.md) | many issues (a tracker's sub-issues, a list, a label): fix → review per issue, one PR per group | a branch + PR per group | — |
 
 An issue labelled `needs-adr`, or a fix that would change an Accepted ADR's decision, leaves the fix
@@ -318,7 +319,8 @@ rules that did it:
 - **Each check runs once, in one place.** Per-item agents run only the regression test (with `-race`) and the
   touched packages' tests, vet and lint. The repo-wide checks — `just ci-full` (e2e included), the Linux
   build/vet/lint, a clean tree — run once per PR via `scripts/agent/gate.sh`, then CI runs them again. Never run the
-  e2e suite or `go test ./...` inside a per-item fixer or reviewer.
+  e2e suite or `go test ./...` inside a per-item fixer or reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate
+  step too: diff-scoped, a few seconds per PR; its full mode, with the `-count=3` flake run, runs once per campaign.
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
   own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of
