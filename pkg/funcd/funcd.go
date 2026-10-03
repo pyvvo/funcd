@@ -1315,12 +1315,13 @@ func (contractResolver) Contract(ctx context.Context, image string) (v1.Workflow
 // spec from the store for a `workflow:` sub-workflow step's inline execution.
 type childResolver struct{ s store.Store }
 
+var _ workflow.ChildWorkflowResolver = childResolver{} // implements the optional seam: the inline child run pins its step contracts
+
 func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
-	obj, err := r.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name) // V1: same-namespace children (ADR-0099 scope)
+	wf, err := r.ChildWorkflow(ctx, ns, name)
 	if err != nil {
 		return v1.WorkflowSpec{}, nil, err
 	}
-	wf := obj.(*v1.Workflow)
 	// ADR-0107: the child's resolved step images (its ADR-0098 status cache) digest-pin the inline child run.
 	var images map[v1.ObjectName]string
 	if len(wf.Status.Steps) > 0 {
@@ -1332,6 +1333,14 @@ func (r childResolver) Child(ctx context.Context, ns v1.NamespaceName, name v1.O
 		}
 	}
 	return wf.Spec, images, nil
+}
+
+func (r childResolver) ChildWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.Workflow, error) {
+	obj, err := r.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name) // V1: same-namespace children (ADR-0099 scope)
+	if err != nil {
+		return nil, err
+	}
+	return obj.(*v1.Workflow), nil
 }
 
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.

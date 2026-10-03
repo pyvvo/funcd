@@ -22,6 +22,13 @@ type ChildResolver interface {
 	Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error)
 }
 
+// ChildWorkflowResolver is an optional ChildResolver extension, additive to ADR-0107's Child: a resolver that
+// implements it returns the child Workflow itself, so the inline child run pins the per-step contracts of its
+// ADR-0098 cache with its step images, from one read, and a when: binds a schema default there (ADR-0095).
+type ChildWorkflowResolver interface {
+	ChildWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.Workflow, error)
+}
+
 // runChild executes a sub-workflow step: guard the nesting depth, resolve the referenced workflow, run it
 // inline (a recursive execute at depth+1) with the step's flowing input, and return its run output. A
 // non-Succeeded child fails the step (the cause propagates → fail-fast fails the parent run). The child's
@@ -33,7 +40,7 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 	if parent.Depth+1 > e.cfg.MaxSubworkflowDepth { // backstop for a cycle that slipped the reconcile check
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: max nesting depth %d exceeded (SubworkflowDepthExceeded)", n.name, e.cfg.MaxSubworkflowDepth)
 	}
-	childSpec, childImages, err := e.children.Child(stop, parent.Namespace, child)
+	childSpec, childOpts, err := e.resolveChild(stop, parent.Namespace, child)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
@@ -43,7 +50,7 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 	// span under the parent run's span. The child runs inline (never through the reconciler), so the ENGINE
 	// emits its run-root span here — before the error check, so a FAILED child still gets its span.
 	// ADR-0107: the child's own step images digest-pin its record (no contract gate on the inline child).
-	rec, err := e.execute(ctx, stop, parent.Namespace, childRun, child, childSpec, childInput, StartOptions{StepImages: childImages}, parent.Depth+1, parent.TraceID, parent.RootSpanID)
+	rec, err := e.execute(ctx, stop, parent.Namespace, childRun, child, childSpec, childInput, childOpts, parent.Depth+1, parent.TraceID, parent.RootSpanID)
 	emitRunSpan(ctx, e.traces, rec, e.log)
 	if err != nil {
 		return nil, err // the child run failed → the step fails (propagate the cause)
@@ -52,6 +59,19 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 		return nil, fault.Invalidf(engineOp, "sub-workflow %q ended %s", child, rec.Phase)
 	}
 	return runOutput(childSpec, rec), nil
+}
+
+// resolveChild reads a child's spec and the start options its ADR-0098 status cache pins on the inline run.
+func (e *Engine) resolveChild(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, StartOptions, error) {
+	if r, ok := e.children.(ChildWorkflowResolver); ok {
+		wf, err := r.ChildWorkflow(ctx, ns, name)
+		if err != nil {
+			return v1.WorkflowSpec{}, StartOptions{}, err
+		}
+		return wf.Spec, StartOptions{StepImages: stepImages(wf), StepContracts: stepContracts(wf)}, nil
+	}
+	spec, images, err := e.children.Child(ctx, ns, name)
+	return spec, StartOptions{StepImages: images}, err
 }
 
 // runOutput composes a terminal run's output from its leaf step outputs — symmetric with the input model

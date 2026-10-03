@@ -26,6 +26,29 @@ func (f fakeChildren) Child(_ context.Context, _ v1.NamespaceName, name v1.Objec
 	return spec, nil, nil // tests exercise child specs without a digest cache (nil ⇒ fallback to spec refs)
 }
 
+// fakeChildWorkflows resolves whole child Workflows (spec + ADR-0098 status cache), the ChildWorkflowResolver
+// stand-in; its Child mirrors the production resolver.
+type fakeChildWorkflows map[v1.ObjectName]*v1.Workflow
+
+func (f fakeChildWorkflows) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
+	wf, err := f.ChildWorkflow(ctx, ns, name)
+	if err != nil {
+		return v1.WorkflowSpec{}, nil, err
+	}
+	return wf.Spec, stepImages(wf), nil
+}
+
+func (f fakeChildWorkflows) ChildWorkflow(_ context.Context, _ v1.NamespaceName, name v1.ObjectName) (*v1.Workflow, error) {
+	wf, ok := f[name]
+	if !ok {
+		return nil, fault.NotFoundf("test", "no child workflow %q", name)
+	}
+	return wf, nil
+}
+
+// issue420DefaultedOutput is an output schema whose optional field y defaults to "d" (ADR-0095).
+const issue420DefaultedOutput = `{"type":"object","properties":{"y":{"type":"string","default":"d"}}}`
+
 func subwfStep(name, child string, deps ...string) v1.WorkflowStep {
 	s := v1.WorkflowStep{Name: v1.ObjectName(name), Workflow: &v1.WorkflowRef{Ref: v1.ObjectName(child)}}
 	for _, d := range deps {
@@ -295,5 +318,23 @@ func TestIssue349_StoppedChildRunsItsOnFailureHandler(t *testing.T) {
 				t.Fatalf("child error %q: RunTimedOut %v, want %v", child.Error, got, tc.deadline)
 			}
 		})
+	}
+}
+
+// Issue #420: an inline child run pins its Workflow's per-step contracts like a top-level run, so a when on
+// an optional child-step output field binds the schema default instead of failing with "unknown field".
+func TestIssue420_InlineChildRunBindsSchemaDefault(t *testing.T) {
+	f := newFake() // c_a returns {}: y is absent and must bind to its default "d"
+	gated := step("c_b", "", "c_a")
+	gated.When = &v1.StepWhen{Condition: `${{ step.c_a.output.y === "d" }}`}
+	kid := &v1.Workflow{Spec: spec(step("c_a", ""), gated)}
+	kid.Status.Steps = []v1.WorkflowStepStatus{{Name: "c_a", Contract: &v1.WorkflowContract{Output: json.RawMessage(issue420DefaultedOutput)}}}
+	e := childEngine(t, f, fakeChildWorkflows{"kid": kid}, Config{})
+	rec, err := e.Execute(context.Background(), "default", "run-p", "parent", spec(subwfStep("sub", "kid")), json.RawMessage(`{}`), StartOptions{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if rec.Phase != runSucceeded || f.calls["c_b"] != 1 {
+		t.Fatalf("run phase=%s c_b calls=%d, want Succeeded with c_b run on the bound default", rec.Phase, f.calls["c_b"])
 	}
 }

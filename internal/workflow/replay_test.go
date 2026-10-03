@@ -286,3 +286,25 @@ func TestSubworkflowCopiedNotRerun(t *testing.T) {
 		t.Fatalf("after must re-run once, got %d", f.calls["after"])
 	}
 }
+
+// Issue #420: a replay copies the source run's pinned step contracts, so a re-run when binds the schema
+// default that its parent's copied output omits.
+func TestIssue420_ReplayBindsPinnedSchemaDefault(t *testing.T) {
+	f := newFake() // a returns {}: y is absent and must bind to its default "d"
+	e := newTestEngine(t, f, Config{})
+	ctx := context.Background()
+	gated := step("b", "", "a")
+	gated.When = &v1.StepWhen{Condition: `${{ step.a.output.y === "d" }}`}
+	opts := StartOptions{StepContracts: map[v1.ObjectName]v1.WorkflowContract{"a": {Output: json.RawMessage(issue420DefaultedOutput)}}}
+	if src, err := e.Execute(ctx, "default", "src", "wf", spec(step("a", ""), gated), json.RawMessage(`{}`), opts); err != nil || src.Phase != runSucceeded {
+		t.Fatalf("source run: err=%v, want Succeeded", err)
+	}
+	resetFake(f)
+	rec, err := e.Replay(ctx, "default", "rep", "wf", v1.ReplaySeed{Run: "src", From: "b"}, nil)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if rec.Phase != runSucceeded || f.calls["a"] != 0 || f.calls["b"] != 1 {
+		t.Fatalf("replay phase=%s a calls=%d b calls=%d, want Succeeded with only b re-run on the bound default", rec.Phase, f.calls["a"], f.calls["b"])
+	}
+}
