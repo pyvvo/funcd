@@ -43,7 +43,9 @@ Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real outp
    a dependency — search the package, its neighbours, `internal/platform`, `api/fault`, `internal/testkit`,
    the existing test harnesses, the module's dependencies and the standard library for what already does
    it. Duplicated logic, a copy-pasted block, or a hand-rolled version of an existing helper or library
-   feature → Major (Minor when trivial), naming the existing code to use instead.
+   feature → Major (Minor when trivial), naming the existing code to use instead. When the gate has run on the
+   branch, the [bloat audit](../bloat-audit/SKILL.md)'s `dupl` and cross-package clones in
+   `.cache/gate/audit.log` are evidence to cite; the review does not run the audit again.
 8. **Conventions**: ADR-0002 (ports and drivers, `api/fault` errors, typed IDs and enums, ctx-first, slog
    only, no `any` in signatures, the import graph), the `CLAUDE.md` style rules (block-style YAML,
    top-level imports, no comment bloat), and the surrounding code's naming and idiom. A breach → Major
