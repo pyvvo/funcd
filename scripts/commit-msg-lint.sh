@@ -13,8 +13,9 @@ case "${subject}" in
   "Merge "* | "Revert "* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
 esac
 
-# <type>[(scope)][!]: <description> — types per the spec; scope + breaking `!` optional; description non-empty.
-pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+'
+# <type>[(scope)][!]: <description> — types per the spec; scope (or a comma-separated scope list, which the
+# PR-title check accepts too) + breaking `!` optional; description non-empty.
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+(, ?[a-z0-9._/-]+)*\))?!?: .+'
 if [[ "${subject}" =~ ${pattern} ]]; then
   exit 0
 fi
