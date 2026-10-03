@@ -30,6 +30,9 @@ type Record struct {
 	// Contract is the workflow's derived I/O contract pinned at run start (ADR-0098): the run-start
 	// InputSchemaMismatch check reads it, and Resume uses this copy — immune to a mid-run re-derive.
 	Contract *v1.WorkflowContract `json:"contract,omitempty"`
+	// StepContracts are the per-step I/O contracts pinned at run start (the ADR-0098 cache): a when:
+	// binds an absent parent-output field to its schema default from them (ADR-0095).
+	StepContracts map[v1.ObjectName]v1.WorkflowContract `json:"stepContracts,omitempty"`
 	// Depth is the sub-workflow nesting depth (ADR-0099): 0 for a top-level run, +1 per child. The
 	// engine caps it (Config.MaxSubworkflowDepth) so a reference cycle fails cleanly, not by overflow.
 	Depth int `json:"depth,omitempty"`

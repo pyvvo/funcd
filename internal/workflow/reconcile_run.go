@@ -227,7 +227,7 @@ func (r *RunReconciler) drive(ctx context.Context, run *v1.WorkflowRun, wf *v1.W
 		}
 		return rec, err
 	}
-	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, RunUID: run.UID})
+	return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, run.Spec.Input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: run.UID})
 }
 
 // started reports whether run has an engine record of its own. The record that an earlier WorkflowRun of
@@ -287,6 +287,21 @@ func stepImages(wf *v1.Workflow) map[v1.ObjectName]string {
 	for _, s := range wf.Status.Steps {
 		if s.Image != "" {
 			m[s.Name] = s.Image
+		}
+	}
+	return m
+}
+
+// stepContracts returns the ADR-0098 cache's per-step I/O contracts, pinned on the run so a when: binds
+// a schema default at evaluation (ADR-0095).
+func stepContracts(wf *v1.Workflow) map[v1.ObjectName]v1.WorkflowContract {
+	if len(wf.Status.Steps) == 0 {
+		return nil
+	}
+	m := make(map[v1.ObjectName]v1.WorkflowContract, len(wf.Status.Steps))
+	for _, s := range wf.Status.Steps {
+		if s.Contract != nil {
+			m[s.Name] = *s.Contract
 		}
 	}
 	return m

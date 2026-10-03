@@ -514,6 +514,49 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 	}
 }
 
+// Issue #420: a when on an optional parent-output field obeys ADR-0095's defaults rule. Unguarded and
+// without a default it fails reconcile (WhenTypeError); a guard or a schema default makes it Ready, and
+// the run binds the default when the parent's output omits the field instead of failing.
+func TestIssue420_WhenOnOptionalOutputFieldFollowsDefaultsRule(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a": {Output: json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string","default":"d"}}}`)},
+		"oci:b": {Input: obj(map[string]string{"x": "string"})},
+	}}
+	reconcileWhen := func(name, cond string) *v1.Workflow {
+		t.Helper()
+		b := fnStep("b", "oci:b", "a")
+		b.When = &v1.StepWhen{Condition: cond}
+		seedWF(t, s, name, nil, fnStep("a", "oci:a"), b)
+		wf, _ := reconcileByName(t, s, c, name)
+		return wf
+	}
+	if wf := reconcileWhen("unguarded", `${{ step.a.output.x === "v" }}`); ready(wf) || mismatchReason(wf) != "WhenTypeError" {
+		t.Errorf("unguarded optional field: Ready=%v reason=%q, want not Ready, SchemaMismatch/WhenTypeError", ready(wf), mismatchReason(wf))
+	}
+	if wf := reconcileWhen("guarded", `${{ step.a.output.x !== undefined && step.a.output.x === "v" }}`); !ready(wf) {
+		t.Errorf("guarded optional field must be Ready, got %+v", wf.Status.Conditions)
+	}
+	if wf := reconcileWhen("defaulted", `${{ step.a.output.y === "d" }}`); !ready(wf) {
+		t.Fatalf("defaulted optional field must be Ready, got %+v", wf.Status.Conditions)
+	}
+
+	seedRun(t, s, "defaulted-1", "defaulted", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake() // a returns {}: y is absent and must bind to its default "d"
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
+	if st := got.(*v1.WorkflowRun).Status; st.Phase != runSucceeded || f.calls["b"] != 1 {
+		t.Fatalf("run phase=%q conditions=%+v b calls=%d, want Succeeded with b run on the bound default", st.Phase, st.Conditions, f.calls["b"])
+	}
+}
+
 // Issue #123: a run whose Workflow is missing (never created, or deleted) is not a reconcile error
 // retried every second forever. A run that has not started waits Pending with
 // Ready=False/WorkflowNotFound on a backoff and starts once the Workflow exists; cancel still
