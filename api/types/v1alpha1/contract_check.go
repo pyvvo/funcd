@@ -8,7 +8,8 @@ import "encoding/json"
 // subsumption + void rules; full JSON-Schema/structural subsumption is a documented follow-on.
 
 // FieldDiff is one required consumer field a producer or document does not satisfy. Got == "" ⇒ the
-// field is missing; otherwise Got is the actual primitive type and Want the required one.
+// field is missing; otherwise Got is the actual primitive type and Want the required one. Field == "" ⇒
+// the whole document is mistyped (a non-null document against a void schema).
 type FieldDiff struct {
 	Field string
 	Want  string
@@ -16,6 +17,9 @@ type FieldDiff struct {
 }
 
 func (d FieldDiff) String() string {
+	if d.Field == "" {
+		return "input is " + d.Got + ", want " + d.Want
+	}
 	if d.Got == "" {
 		return "\"" + d.Field + "\" (want " + d.Want + ") is missing"
 	}
@@ -63,9 +67,16 @@ func (s SchemaView) IsVoid() bool {
 
 // CheckInput reports the required properties of the schema not satisfied by an actual JSON document
 // (doc↔schema primitive match). A JSON number satisfies integer or number (a doc can't distinguish
-// them). Empty ⇒ valid. Used by WorkflowRun admission and the engine's run-start gate (ADR-0098).
+// them). A void schema admits only a null or absent document (ADR-0090). Empty ⇒ valid. Used by
+// WorkflowRun admission and the engine's run-start gate (ADR-0098).
 func CheckInput(doc, schema json.RawMessage) []FieldDiff {
 	s := ParseSchemaView(schema)
+	if s.Type == "null" {
+		if got := jsonPrimitive(doc); len(doc) != 0 && got != "null" {
+			return []FieldDiff{{Want: "null", Got: got}}
+		}
+		return nil
+	}
 	if len(s.Required) == 0 {
 		return nil
 	}

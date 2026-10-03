@@ -70,6 +70,8 @@ func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.Workflo
 	mergedDefaults := map[string]json.RawMessage{}
 	requiredSet := map[string]bool{}
 	dialect := ""
+	var voidInput json.RawMessage
+	nonVoid := false
 	for _, name := range rs.dagSteps() {
 		n := rs.steps[name]
 		if len(n.dependsOn) != 0 {
@@ -83,6 +85,11 @@ func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.Workflo
 			dialect = c.Dialect
 		}
 		in := v1.ParseSchemaView(c.Input)
+		if in.Type == "null" {
+			voidInput = c.Input
+			continue
+		}
+		nonVoid = true
 		for field, typ := range in.Props {
 			if prev, seen := mergedProps[field]; seen && prev != typ {
 				return v1.WorkflowContract{}, &schemaConflict{field: field, what: "types", a: prev, b: typ}
@@ -100,6 +107,9 @@ func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.Workflo
 		}
 	}
 	input := marshalObjectSchema(mergedProps, mergedDefaults, requiredSet)
+	if voidInput != nil && !nonVoid {
+		input = voidInput // void roots accept only null (ADR-0090), never an object
+	}
 
 	leaves := rs.leaves()
 	var output json.RawMessage
