@@ -7903,5 +7903,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-546-fix-claude-opus-5-5.md",
     "notes": "pass, no findings. Literal pre-fix overlay fails to compile because the m.serve seam is new; a behavioral revert of the seam body fails for the issue's reason (no WARN). 3 of 3 mutants killed (drop delete, drop warn, always log). Out of scope: catalog/gateway proxy goroutine keeps its entry after a Serve failure (follow-up candidate)."
+  },
+  {
+    "date": "2026-10-03",
+    "issue": "582",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 10,
+    "dod_total": 10,
+    "report": "docs/reviews/issue-582-fix-claude-opus-5-5-w6b.md",
+    "notes": "pass; revert overlay fails for the issue's reason (returns __pycache__) on macOS, -race 5/5, 2 mutants killed, vet+lint clean; minor (model): the fall-through comment 'Only dotfiles cached' is now imprecise; Linux e2e deferred to the group gate"
   }
 ]
