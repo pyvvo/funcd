@@ -32,14 +32,37 @@ func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.Workflow
 
 func seedRun(t *testing.T, s store.Store, name, workflow string, input string) {
 	t.Helper()
+	createRun(t, s, name, v1.WorkflowRunSpec{Workflow: v1.ObjectName(workflow), Input: json.RawMessage(input)})
+}
+
+// seedReplay creates the WorkflowRun name that replays the run source of Workflow "wf" from step from.
+func seedReplay(t *testing.T, s store.Store, name string, source, from v1.ObjectName) {
+	t.Helper()
+	createRun(t, s, name, v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: source, From: from}})
+}
+
+func createRun(t *testing.T, s store.Store, name string, spec v1.WorkflowRunSpec) {
+	t.Helper()
 	run := &v1.WorkflowRun{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
 		ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.WorkflowRunSpec{Workflow: v1.ObjectName(workflow), Input: json.RawMessage(input)},
+		Spec:       spec,
 	}
 	if _, err := s.Create(context.Background(), run); err != nil {
-		t.Fatalf("seed run: %v", err)
+		t.Fatalf("seed run %s: %v", name, err)
 	}
+}
+
+// reconcileRun reconciles the WorkflowRun name in "default", fails the test on a reconcile error and
+// returns the result with the re-read run.
+func reconcileRun(t *testing.T, ctx context.Context, rr *RunReconciler, s store.Store, name v1.ObjectName) (controller.Result, *v1.WorkflowRun) {
+	t.Helper()
+	res, err := rr.Reconcile(ctx, runReq(string(name)))
+	if err != nil {
+		t.Fatalf("Reconcile %s: %v", name, err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
+	return res, obj.(*v1.WorkflowRun)
 }
 
 // scenario: workflow-status-links-runs (+ the run-reconciler drives a run to terminal
@@ -474,18 +497,10 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 	f := newFake()
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	reconcile := func(name v1.ObjectName) (controller.Result, v1.WorkflowRunStatus) {
-		t.Helper()
-		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name})
-		if err != nil {
-			t.Fatalf("Reconcile %s: %v", name, err)
-		}
-		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
-		return res, obj.(*v1.WorkflowRun).Status
-	}
 
 	for name, reason := range map[v1.ObjectName]string{"loop-1": "WorkflowCycle", "typed-1": "EdgeTypeMismatch"} {
-		res, st := reconcile(name)
+		res, run := reconcileRun(t, ctx, rr, s, name)
+		st := run.Status
 		c, _ := st.Conditions.Get(condReady)
 		if st.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotReady" || !strings.Contains(c.Message, reason) || res.RequeueAfter <= 0 {
 			t.Fatalf("%s: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotReady naming %s, and a requeue", name, st.Phase, c, res.RequeueAfter, reason)
@@ -508,9 +523,9 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 	if wf, _ := reconcileByName(t, s, good, "typed"); !ready(wf) {
 		t.Fatalf("setup: fixed typed is not Ready: %+v", wf.Status.Conditions)
 	}
-	if _, st := reconcile("typed-1"); st.Phase != runSucceeded {
-		t.Fatalf("typed-1 after its workflow became Ready: phase=%q, want Succeeded", st.Phase)
-	} else if c, _ := st.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
+	if _, run := reconcileRun(t, ctx, rr, s, "typed-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("typed-1 after its workflow became Ready: phase=%q, want Succeeded", run.Status.Phase)
+	} else if c, _ := run.Status.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
 		t.Fatalf("typed-1 started but still reports Ready=%+v", c)
 	}
 }
@@ -631,15 +646,6 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 	f := newFake()
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	reconcile := func(name v1.ObjectName) (controller.Result, *v1.WorkflowRun) {
-		t.Helper()
-		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name})
-		if err != nil {
-			t.Fatalf("Reconcile %s: %v", name, err)
-		}
-		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
-		return res, obj.(*v1.WorkflowRun)
-	}
 	setSpec := func(run *v1.WorkflowRun, mut func(*v1.WorkflowRunSpec)) {
 		t.Helper()
 		mut(&run.Spec)
@@ -649,7 +655,7 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 	}
 
 	for range 3 {
-		res, run := reconcile("ghost-1")
+		res, run := reconcileRun(t, ctx, rr, s, "ghost-1")
 		c, _ := run.Status.Conditions.Get(condReady)
 		if run.Status.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotFound" || !strings.Contains(c.Message, `"nope"`) || res.RequeueAfter <= 0 {
 			t.Fatalf("orphan run: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotFound naming \"nope\", and a requeue", run.Status.Phase, c, res.RequeueAfter)
@@ -657,13 +663,13 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "ghost-1")
 	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Cancel = true })
-	if _, run := reconcile("ghost-1"); run.Status.Phase != runCancelled {
+	if _, run := reconcileRun(t, ctx, rr, s, "ghost-1"); run.Status.Phase != runCancelled {
 		t.Fatalf("cancel of an orphan run: phase=%q, want Cancelled", run.Status.Phase)
 	}
 
-	reconcile("ghost-2")
+	reconcileRun(t, ctx, rr, s, "ghost-2")
 	seedWorkflow(t, s, "later", step("b", ""))
-	if _, run := reconcile("ghost-2"); run.Status.Phase != runSucceeded {
+	if _, run := reconcileRun(t, ctx, rr, s, "ghost-2"); run.Status.Phase != runSucceeded {
 		t.Fatalf("run after its Workflow was created: phase=%q, want Succeeded", run.Status.Phase)
 	} else if c, _ := run.Status.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
 		t.Fatalf("started run still reports Ready=%+v", c)
@@ -671,7 +677,7 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 
 	obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "paused-1")
 	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Paused = true })
-	if _, run := reconcile("paused-1"); run.Status.Phase != runPaused {
+	if _, run := reconcileRun(t, ctx, rr, s, "paused-1"); run.Status.Phase != runPaused {
 		t.Fatalf("setup: phase=%q, want Paused", run.Status.Phase)
 	}
 	if err := s.Delete(ctx, v1.KindWorkflow.GVK(), "default", "wf", ""); err != nil {
@@ -679,7 +685,7 @@ func TestIssue123_RunOfMissingWorkflowWaits(t *testing.T) {
 	}
 	obj, _ = s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "paused-1")
 	setSpec(obj.(*v1.WorkflowRun), func(sp *v1.WorkflowRunSpec) { sp.Cancel = true })
-	if _, run := reconcile("paused-1"); run.Status.Phase != runCancelled {
+	if _, run := reconcileRun(t, ctx, rr, s, "paused-1"); run.Status.Phase != runCancelled {
 		t.Fatalf("cancel of a Paused run whose Workflow was deleted: phase=%q, want Cancelled", run.Status.Phase)
 	}
 	if f.calls["a"] != 0 {
@@ -699,15 +705,7 @@ func TestIssue176_ReplayOfSweptSourceFails(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0)
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(start)})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
-		t.Helper()
-		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
-			t.Fatalf("Reconcile %s returned %v (a requeue), want a terminal status", name, err)
-		}
-		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
-		return obj.(*v1.WorkflowRun)
-	}
-	if run := reconcile("swept"); run.Status.Phase != runSucceeded {
+	if _, run := reconcileRun(t, ctx, rr, s, "swept"); run.Status.Phase != runSucceeded {
 		t.Fatalf("setup: source phase=%q, want Succeeded", run.Status.Phase)
 	}
 	sweeper, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(start.Add(721 * time.Hour))})
@@ -715,16 +713,9 @@ func TestIssue176_ReplayOfSweptSourceFails(t *testing.T) {
 		t.Fatalf("setup: SweepExpired = %d, %v, want the source record swept", n, err)
 	}
 
-	replay := &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "swept-r-1", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "swept", From: "a"}},
-	}
-	if _, err := s.Create(ctx, replay); err != nil {
-		t.Fatalf("create replay: %v", err)
-	}
+	seedReplay(t, s, "swept-r-1", "swept", "a")
 	for range 2 {
-		run := reconcile("swept-r-1")
+		_, run := reconcileRun(t, ctx, rr, s, "swept-r-1")
 		c, _ := run.Status.Conditions.Get("ReplaySeeded")
 		if run.Status.Phase != runFailed || c.Status != v1.ConditionFalse || c.Reason != "SeedInvalid" || !strings.Contains(c.Message, `"swept"`) {
 			t.Fatalf("replay of a swept source: phase=%q ReplaySeeded=%+v, want Failed, ReplaySeeded=False/SeedInvalid naming \"swept\"", run.Status.Phase, c)
@@ -903,38 +894,22 @@ func TestIssue346_SweepReclaimsRunsWithoutRecord(t *testing.T) {
 		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
 		return NewRunReconciler(s, eng, nil, nil)
 	}
-	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
-		t.Helper()
-		if _, err := at(base).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
-			t.Fatalf("Reconcile %s: %v", name, err)
-		}
-		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
-		return obj.(*v1.WorkflowRun)
-	}
-
 	seedRun(t, s, "cancelled", "missing", `{}`)
-	run := reconcile("cancelled")
+	_, run := reconcileRun(t, ctx, at(base), s, "cancelled")
 	run.Spec.Cancel = true
 	if _, err := s.Update(ctx, run); err != nil {
 		t.Fatalf("cancel run: %v", err)
 	}
-	reconcile("cancelled")
-	replay := &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "rejected", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "absent", From: "a"}},
-	}
-	if _, err := s.Create(ctx, replay); err != nil {
-		t.Fatalf("create replay: %v", err)
-	}
-	reconcile("rejected")
+	reconcileRun(t, ctx, at(base), s, "cancelled")
+	seedReplay(t, s, "rejected", "absent", "a")
+	reconcileRun(t, ctx, at(base), s, "rejected")
 	seedRun(t, s, "orphaned", "wf", `{}`)
-	reconcile("orphaned")
+	reconcileRun(t, ctx, at(base), s, "orphaned")
 	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
 		t.Fatalf("delete record: %v", err)
 	}
 	seedRun(t, s, "waiting", "missing", `{}`)
-	if run := reconcile("waiting"); run.Status.Phase != runPending {
+	if _, run := reconcileRun(t, ctx, at(base), s, "waiting"); run.Status.Phase != runPending {
 		t.Fatalf("setup: waiting phase=%q, want Pending", run.Status.Phase)
 	}
 	names := []v1.ObjectName{"cancelled", "rejected", "orphaned"}
@@ -994,15 +969,7 @@ func TestIssue346_ReplayOfSweepRecordedSourceNamesTheCause(t *testing.T) {
 	t.Cleanup(func() { _ = rstate.Close() })
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	reconcile := func(name v1.ObjectName) *v1.WorkflowRun {
-		t.Helper()
-		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
-			t.Fatalf("Reconcile %s: %v", name, err)
-		}
-		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
-		return obj.(*v1.WorkflowRun)
-	}
-	reconcile("orphaned")
+	reconcileRun(t, ctx, rr, s, "orphaned")
 	if err := rstate.Delete(ctx, "default", "orphaned"); err != nil {
 		t.Fatalf("delete record: %v", err)
 	}
@@ -1010,15 +977,8 @@ func TestIssue346_ReplayOfSweepRecordedSourceNamesTheCause(t *testing.T) {
 		t.Fatalf("setup: SweepExpired = %d, %v; want the closed run recorded, not reclaimed", n, err)
 	}
 
-	replay := &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "replay-orphaned", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.WorkflowRunSpec{Workflow: "wf", Replay: &v1.ReplaySeed{Run: "orphaned", From: "a"}},
-	}
-	if _, err := s.Create(ctx, replay); err != nil {
-		t.Fatalf("create replay: %v", err)
-	}
-	run := reconcile("replay-orphaned")
+	seedReplay(t, s, "replay-orphaned", "orphaned", "a")
+	_, run := reconcileRun(t, ctx, rr, s, "replay-orphaned")
 	c, _ := run.Status.Conditions.Get("ReplaySeeded")
 	if run.Status.Phase != runFailed || c.Reason != "SeedInvalid" || !strings.Contains(c.Message, `"orphaned" has no checkpoint`) {
 		t.Fatalf("replay of a sweep-recorded source: phase=%q ReplaySeeded=%+v, want Failed, SeedInvalid saying \"orphaned\" has no checkpoint", run.Status.Phase, c)
