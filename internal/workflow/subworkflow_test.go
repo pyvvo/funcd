@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,5 +337,68 @@ func TestIssue420_InlineChildRunBindsSchemaDefault(t *testing.T) {
 	}
 	if rec.Phase != runSucceeded || f.calls["c_b"] != 1 {
 		t.Fatalf("run phase=%s c_b calls=%d, want Succeeded with c_b run on the bound default", rec.Phase, f.calls["c_b"])
+	}
+}
+
+// backoffStopDispatcher fails s with a retryable error, and fails x permanently once s waits in its
+// retry backoff.
+type backoffStopDispatcher struct {
+	*fakeDispatcher
+	sFailed chan struct{}
+	once    sync.Once
+}
+
+func (d *backoffStopDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
+	if req.Step == "x" {
+		select {
+		case <-d.sFailed:
+		case <-time.After(2 * time.Second):
+			return nil, Permanent(errors.New("s was not dispatched while x was in flight"))
+		}
+		time.Sleep(50 * time.Millisecond) // s now waits in its backoff
+	}
+	out, err := d.fakeDispatcher.Dispatch(ctx, req)
+	if req.Step == "s" {
+		d.once.Do(func() { close(d.sFailed) })
+	}
+	return out, err
+}
+
+// Issue #445: a step whose context ends while it waits in its retry backoff keeps its last dispatch error
+// as its cause (ADR-0100), and only a deadline labels its run RunTimedOut: an inline child that its
+// parent's fail-fast stopped did not time out.
+func TestIssue445_StepStoppedInBackoffKeepsItsDispatchCause(t *testing.T) {
+	s := retryStep("s", 3)
+	s.Function.Retry.Backoff = 30 * time.Second
+	timed := spec(s)
+	timed.Timeout = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name     string
+		parent   v1.WorkflowSpec
+		run      v1.ObjectName
+		deadline bool
+	}{
+		{"parent-fail-fast", spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r")), "run-p-sub", false},
+		{"run-deadline", timed, "run-p", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			f.failing["s"], f.permanent["x"] = true, true
+			d := &backoffStopDispatcher{fakeDispatcher: f, sFailed: make(chan struct{})}
+			e := childEngine(t, d, fakeChildren{"kid": spec(s)}, Config{})
+			if _, err := e.Execute(context.Background(), "default", "run-p", "top", tc.parent, json.RawMessage(`{}`), StartOptions{}); err == nil {
+				t.Fatal("the run must fail")
+			}
+			rec, err := e.runs.Get(context.Background(), "default", tc.run)
+			if err != nil {
+				t.Fatalf("run record %s: %v", tc.run, err)
+			}
+			if st := stepState(rec, "s"); f.calls["s"] != 1 || st == nil || st.Phase != v1.StepFailed || st.Error != "retryable 5xx" {
+				t.Fatalf("step s after %d dispatches: %+v, want Failed with its dispatch error \"retryable 5xx\"", f.calls["s"], st)
+			}
+			if got := strings.Contains(rec.Error, "RunTimedOut"); got != tc.deadline {
+				t.Fatalf("run error %q: RunTimedOut %v, want %v", rec.Error, got, tc.deadline)
+			}
+		})
 	}
 }

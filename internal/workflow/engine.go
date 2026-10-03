@@ -795,7 +795,7 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 	// A step-timeout is a retryable failure on a CHILD ctx; the parent (run) deadline is checked
 	// separately in drive and maps to RunTimedOut.
 	stepTimeout := e.stepTimeout(fn)
-	var lastErr error
+	var lastErr, stopped error
 	for attempt := first; attempt <= max(maxAttempts, first); attempt++ {
 		rs.mu.Lock()
 		n.attempts = attempt // ADR-0100: the dispatch attempt count
@@ -833,8 +833,11 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return nil, fault.Wrapf(ctx.Err(), fault.Unavailable, engineOp, "run deadline during backoff")
+				stopped = runStopped(ctx.Err())
 			case <-timer.C:
+			}
+			if stopped != nil {
+				break
 			}
 		}
 	}
@@ -843,6 +846,9 @@ func (e *Engine) dispatchStep(ctx context.Context, rec *runstate.Record, rs *run
 	rs.mu.Lock()
 	n.errMsg = capErr(lastErr.Error())
 	rs.mu.Unlock()
+	if stopped != nil { // the step's context ended in the backoff: a deadline or a stop, not the step
+		return nil, stopped
+	}
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
 }
 
