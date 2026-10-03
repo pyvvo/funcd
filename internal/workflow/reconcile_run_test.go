@@ -1102,3 +1102,26 @@ func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
 		}
 	}
 }
+
+// Issue #444: a run that a sub-workflow step fails because its child Workflow is gone (a NotFound cause)
+// ends Failed in the same reconcile: its terminal record is mirrored, not returned as a reconcile error.
+func TestIssue444_NotFoundSubworkflowFailureMirroredInSameReconcile(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "parent", subwfStep("sub", "gone"))
+	seedRun(t, s, "parent-1", "parent", `{}`)
+	rr := NewRunReconciler(s, childEngine(t, newFake(), fakeChildren{}, Config{}), nil, nil)
+
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "parent-1"}); err != nil {
+		t.Fatalf("Reconcile = %v, want nil: a run failure is a terminal outcome, not a reconcile error", err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "parent-1")
+	st := obj.(*v1.WorkflowRun).Status
+	if c, ok := st.Conditions.Get(condReady); st.Phase != runFailed || !ok || c.Status != v1.ConditionFalse || !strings.Contains(c.Message, `"gone"`) {
+		t.Fatalf("phase=%q Ready=%+v, want Failed with Ready=False naming the missing child", st.Phase, c)
+	}
+	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "parent")
+	if links := wfObj.(*v1.Workflow).Status.Runs; links == nil || links.Failed != 1 || len(links.Active) != 0 {
+		t.Fatalf("status.runs = %+v, want Failed=1 Active=0", links)
+	}
+}

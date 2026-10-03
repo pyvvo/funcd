@@ -137,7 +137,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 	if rec == nil && !started && fault.KindOf(err) == fault.PayloadTooLarge {
 		return r.failUnrecorded(ctx, run, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(err.Error()), Message: capErr(err.Error())})
 	}
-	if err != nil && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
+	// A terminal record is the run's outcome whatever its cause's kind (a missing child Workflow is NotFound).
+	terminal := rec != nil && rec.Terminal()
+	if err != nil && !terminal && fault.KindOf(err) != fault.Unavailable && fault.KindOf(err) != fault.Invalid {
 		return controller.Result{}, err // infra error; requeue via the controller
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
