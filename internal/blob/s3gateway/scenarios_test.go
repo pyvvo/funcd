@@ -660,3 +660,48 @@ func TestIssue463_GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, out.Body.Close())
 }
+
+// TestIssue496_GetObjectReportsModTime: a full or ranged GET reports the object's modification time as
+// Last-Modified, the value HEAD returns, never the time of the request, on both the RangeReader path and
+// the full-Get fallback.
+func TestIssue496_GetObjectReportsModTime(t *testing.T) {
+	fileBucket := func(dir string) func(t *testing.T) blob.Bucket {
+		return func(t *testing.T) blob.Bucket {
+			t.Helper()
+			b, err := gocloud.Open(context.Background(), "file://"+dir)
+			require.NoError(t, err)
+			return b
+		}
+	}
+	for name, wrap := range map[string]func(blob.Bucket) blob.Bucket{
+		"range-reader": func(b blob.Bucket) blob.Bucket { return b },
+		"fallback":     func(b blob.Bucket) blob.Bucket { return noRangeBucket{inner: b} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			open := fileBucket(dir)
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket { return wrap(open(t)) })
+			g.seed(t, "default", "lakehouse", "gold/q.parquet", []byte("0123456789"))
+			modTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+			require.NoError(t, os.Chtimes(filepath.Join(dir, "gold", "q.parquet"), modTime, modTime))
+			c := g.client(t, "default", "analytics")
+			ctx := context.Background()
+			bucket, key := ptrS("lakehouse"), ptrS("gold/q.parquet")
+
+			head, err := c.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key})
+			require.NoError(t, err)
+			require.Equal(t, modTime, aws.ToTime(head.LastModified).UTC())
+
+			for _, rng := range []string{"", "bytes=2-5"} {
+				in := &awss3.GetObjectInput{Bucket: bucket, Key: key}
+				if rng != "" {
+					in.Range = ptrS(rng)
+				}
+				out, gerr := c.GetObject(ctx, in)
+				require.NoError(t, gerr, "Range %q", rng)
+				require.NoError(t, out.Body.Close())
+				require.Equal(t, modTime, aws.ToTime(out.LastModified).UTC(), "Range %q", rng)
+			}
+		})
+	}
+}

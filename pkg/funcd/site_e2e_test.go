@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,7 +65,7 @@ func TestScenarioE2ESite(t *testing.T) {
 		"index.html": "<!doctype html><title>bi-B</title>",
 		"app.js":     "console.log('B')",
 	})
-	p, st, s3Addr := startSitePlatform(t, freeLoopbackAddr, refA)
+	p, st, s3Addr := startSitePlatform(t, funcd.FreeLoopbackAddr, refA)
 
 	getSite := func() *v1.Site {
 		obj, gerr := st.Get(ctx, v1.KindSite.GVK(), siteNS, "bi")
@@ -275,15 +274,6 @@ func TestIssue464_SiteS3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
 	defer cancel()
 	_, err := s3Client(t, "http://"+s3Addr, "unknown", "unknown").ListBuckets(ctx, &awss3.ListBucketsInput{})
 	require.Equal(t, http.StatusForbidden, s3Status(err), "the S3 gateway rejects an unknown key: %v", err)
-}
-
-func freeLoopbackAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return addr
 }
 
 // s3Client builds a real aws-sdk-go-v2 client (path-style, static keys) against the in-process gateway.

@@ -3,7 +3,12 @@ package funcd
 import (
 	"bytes"
 	"context"
+	"embed"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,6 +37,41 @@ func freeLoopbackAddr(t *testing.T) string {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr
+}
+
+// testSources is read through the embed so a `go test -overlay` revert check sees the overlaid source.
+//
+//go:embed *_test.go
+var testSources embed.FS
+
+// TestIssue517_FreeLoopbackAddrDefinedOnce: the internal and the external (e2e) test packages share one
+// freeLoopbackAddr; the external one reaches it through export_test.go.
+func TestIssue517_FreeLoopbackAddrDefinedOnce(t *testing.T) {
+	t.Parallel()
+	files, err := fs.Glob(testSources, "*_test.go")
+	if err != nil {
+		t.Fatalf("glob test sources: %v", err)
+	}
+	fset := token.NewFileSet()
+	var defs []string
+	for _, name := range files {
+		src, err := testSources.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "freeLoopbackAddr" {
+				defs = append(defs, fset.Position(fn.Pos()).String())
+			}
+		}
+	}
+	if len(defs) != 1 {
+		t.Fatalf("freeLoopbackAddr is defined %d times, want 1: %v", len(defs), defs)
+	}
 }
 
 // scenario: disabled-by-default (ADR-0080) — New(InMemory()) with no S3 config wires no
@@ -106,8 +146,8 @@ func startS3Gateway(t *testing.T, reserve func(*testing.T) string, build func(ad
 // s3GatewayRun serves only the platform's S3 gateway.
 func s3GatewayRun(ctx context.Context, p *Platform) error { return p.s3gw.Run(ctx) }
 
-// platformRun serves the whole platform, which starts the S3 gateway itself. Platform.Run logs the gateway's Run
-// error and drops it, so the returned logger option hands that error to serve, which then stops Run and returns it.
+// platformRun serves the whole platform, which starts the S3 gateway itself. Platform.Run returns a bind error
+// (#497) and logs any later gateway stop, so the returned logger option also hands that logged error to serve.
 func platformRun() (Option, func(context.Context, *Platform) error) {
 	stopped := make(gatewayStopped, 1)
 	return WithLogger(slog.New(stopped)), func(ctx context.Context, p *Platform) error {
@@ -203,6 +243,46 @@ func TestIssue288_S3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
 			}
 			_ = conn.Close()
 		})
+	}
+}
+
+// TestIssue497_RunFailsWhenS3GatewayCannotBind: the gateway binds its address only when Run serves it (ADR-0085).
+// When another listener holds that address, Run must fail at startup with the bind error and stop the platform,
+// instead of serving the control plane and the data plane without the S3 frontend.
+func TestIssue497_RunFailsWhenS3GatewayCannotBind(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold the gateway address: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	dataDir, err := os.MkdirTemp("", "funcd")
+	if err != nil {
+		t.Fatalf("data dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
+	p, err := New(InMemory(), WithS3Gateway(held.Addr().String(), "", 0, "", dataDir))
+	if err != nil {
+		t.Fatalf("New with the S3 gateway on %s: %v", held.Addr(), err)
+	}
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ran := make(chan error, 1)
+	go func() { ran <- p.Run(ctx) }()
+	select {
+	case err = <-ran:
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-ran
+		t.Fatal("Run kept serving the node without its S3 gateway")
+	}
+	if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("Run must fail with the gateway's bind error, got %v", err)
+	}
+	if conn, derr := net.DialTimeout("tcp", p.Addr(), time.Second); derr == nil {
+		_ = conn.Close()
+		t.Fatal("the control plane must not keep listening after the S3 gateway failed to bind")
 	}
 }
 
