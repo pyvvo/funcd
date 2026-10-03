@@ -122,6 +122,7 @@ func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
 		{"kvstore.backup.rebaseline", func(c *config.Config, v string) { c.Kvstore.Backup.Rebaseline = v }},
 		{"kvstore.cdc.retention", func(c *config.Config, v string) { c.Kvstore.Cdc.Retention = v }},
 	}
+	b := newMemBus(t)
 	for _, tc := range cases {
 		for _, bad := range []string{"5 minutes", "forever", "-3h", "0s"} {
 			t.Run(tc.key+"="+bad, func(t *testing.T) {
@@ -131,7 +132,7 @@ func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
 				cfg.Kvstore.Cdc.Enabled = true
 				cfg.Kvstore.Cdc.Sink = "kv.changes"
 				tc.set(&cfg, bad)
-				kv, _, err := buildKVStore(context.Background(), cfg, newMemBus(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+				kv, _, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)))
 				if c, ok := kv.(io.Closer); ok {
 					_ = c.Close()
 				}
@@ -197,10 +198,11 @@ func TestIssue303_KVSeamsNotSilentlyIgnoredOffBadger(t *testing.T) {
 			c.Kvstore.Cdc.Sink = "kv.changes"
 		}, "kvstore.engine"},
 	}
+	b := newMemBus(t)
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.set(&tc.cfg)
-			_, _, err := buildKVStore(context.Background(), tc.cfg, newMemBus(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			_, _, err := buildKVStore(context.Background(), tc.cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			require.Error(t, err)
 			require.Equal(t, fault.Invalid, fault.KindOf(err))
 			require.ErrorContains(t, err, tc.want)
@@ -214,7 +216,7 @@ func TestIssue303_KVSeamsNotSilentlyIgnoredOffBadger(t *testing.T) {
 		cfg.Kvstore.Cdc.Enabled = true
 		cfg.Kvstore.Cdc.Sink = "kv.changes"
 		var logs bytes.Buffer
-		kv, _, err := buildKVStore(context.Background(), cfg, newMemBus(t), slog.New(slog.NewTextHandler(&logs, nil)))
+		kv, _, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(&logs, nil)))
 		require.NoError(t, err)
 		require.NotNil(t, kv)
 		require.NoDirExists(t, cfg.Kvstore.DataDir)
