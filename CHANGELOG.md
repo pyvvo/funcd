@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.2](https://github.com/pyvvo/funcd/compare/v0.2.1...v0.2.2) (2026-10-03)
+
+
+### Bug Fixes
+
+* **ci:** lint dev-tag packages, close test platform, block-style e2e YAML ([#383](https://github.com/pyvvo/funcd/issues/383)) ([#397](https://github.com/pyvvo/funcd/issues/397)) ([4d64fbf](https://github.com/pyvvo/funcd/commit/4d64fbf2ad4a753b186b652bd935dee10dae6ea7))
+* **controlplane:** close idle conns, sync Site status, validate config ([#385](https://github.com/pyvvo/funcd/issues/385)) ([#409](https://github.com/pyvvo/funcd/issues/409)) ([a5db9d5](https://github.com/pyvvo/funcd/commit/a5db9d5c7067033b7f7cc893e1347bab40533d77))
+* **deps:** pin funcd-typescript v0.4.1 and funcd-python v0.3.2 ([#413](https://github.com/pyvvo/funcd/issues/413)) ([3346c65](https://github.com/pyvvo/funcd/commit/3346c65185022321b86c8dd005e6cf5e362999cb))
+* **docs:** document every config key and the built secret injection ([#390](https://github.com/pyvvo/funcd/issues/390)) ([#403](https://github.com/pyvvo/funcd/issues/403)) ([3c4e232](https://github.com/pyvvo/funcd/commit/3c4e232e037546c2b18421ce822943d37ecc977d))
+* **edge:** gzip, panic and problem-JSON data-plane fixes ([#386](https://github.com/pyvvo/funcd/issues/386)) ([#399](https://github.com/pyvvo/funcd/issues/399)) ([d9599dd](https://github.com/pyvvo/funcd/commit/d9599dde4d7c76d4615677c53a8474dff9decdbc))
+* **funcdctl:** fix manifest decoding and dev/apply/inspect defects ([#384](https://github.com/pyvvo/funcd/issues/384)) ([#405](https://github.com/pyvvo/funcd/issues/405)) ([e4a198b](https://github.com/pyvvo/funcd/commit/e4a198b5de56a5c1bb40d65df07403b71d286767))
+* **funcdctl:** retry a dev re-apply that loses its update to a controller ([#408](https://github.com/pyvvo/funcd/issues/408)) ([aa70d03](https://github.com/pyvvo/funcd/commit/aa70d037cae43e859bbc07706ec20480c75e0b22))
+* **function:** repair readiness, pool, socket and artifact packing faults ([#387](https://github.com/pyvvo/funcd/issues/387)) ([#410](https://github.com/pyvvo/funcd/issues/410)) ([65dc526](https://github.com/pyvvo/funcd/commit/65dc5266457d97839031a909e97264b450c81403))
+* **observ:** count handler panics and stop Pump read-error spin ([#388](https://github.com/pyvvo/funcd/issues/388)) ([#400](https://github.com/pyvvo/funcd/issues/400)) ([ecef0fb](https://github.com/pyvvo/funcd/commit/ecef0fb428035e4abd4daee5600f4b4d3bdaf133))
+* **runtime:** close temp-file, DNS forwarder and snapshotter leaks ([#391](https://github.com/pyvvo/funcd/issues/391)) ([#406](https://github.com/pyvvo/funcd/issues/406)) ([681fb82](https://github.com/pyvvo/funcd/commit/681fb8247224a4fba0dbdcab3dbcdd85c7267f2e))
+* **services:** bound, log and harden catalog, blob, kv and provider paths ([#389](https://github.com/pyvvo/funcd/issues/389)) ([#402](https://github.com/pyvvo/funcd/issues/402)) ([eb39f8b](https://github.com/pyvvo/funcd/commit/eb39f8b3b1c02d3b7239ffba99475c96ecf30027))
+* **test:** stop s3, lint-fixture and artifact seam test flakes ([#411](https://github.com/pyvvo/funcd/issues/411)) ([9e319ce](https://github.com/pyvvo/funcd/commit/9e319ce0b6eea1053b19ac9e512f0ce0da90a1f3))
+* **workflow:** fix the eventing fix-wave findings ([#382](https://github.com/pyvvo/funcd/issues/382)) ([#407](https://github.com/pyvvo/funcd/issues/407)) ([c407273](https://github.com/pyvvo/funcd/commit/c40727325c6d0dca6807fe66fa309838e79bccca))
+* **workflow:** ignore a cancel on a run that is already terminal ([#401](https://github.com/pyvvo/funcd/issues/401)) ([6fe883a](https://github.com/pyvvo/funcd/commit/6fe883abb0db90539ea74c3694fd63a360b2a68a))
+
 ## [0.2.1](https://github.com/pyvvo/funcd/compare/v0.2.0...v0.2.1) (2026-10-02)
 
 
