@@ -1,11 +1,3 @@
-// Package provider is the platform provider catalog (ADR-0082): the blueprint provider model
-// in code. A provider is a shared platform capability endpoint — funcd's wasmCloud-style
-// capability provider (a binding is the link, a port + ≥2 drivers the contract) — in two tiers:
-// built-in (in-daemon, pure-Go, trusted core) and add-on (an out-of-daemon deployed service
-// function). This package only CLASSIFIES: a Descriptor names a provider's existing ADR-0019
-// four-part shape (CRD + facade + controller + port + drivers); it replaces no facade/port/driver
-// and changes no runtime behavior. It is a leaf — it imports nothing from internal/ (fault lives
-// at api/fault), so cataloguing the providers adds no import edge to the packages it names.
 package provider
 
 import (
