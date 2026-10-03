@@ -30,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/envresolve"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -153,6 +154,8 @@ type Deps struct {
 	DrainGrace time.Duration
 	// HandOutSettle is how long after a hand-out, or after the switch, a worker may still receive a call; 0 ⇒ 2 s.
 	HandOutSettle time.Duration
+	// Clock times the drain from drainingSince; nil ⇒ clock.System().
+	Clock clock.Clock
 }
 
 // S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
@@ -246,10 +249,11 @@ type Reconciler struct {
 	// supervisionPeriod is the steady-state requeue and the replacement backoff (ADR-0142).
 	supervisionPeriod time.Duration
 
-	// calls, drainGrace and handOutSettle drive the drain of a demoted revision (ADR-0143).
+	// calls, drainGrace, handOutSettle and clock drive the drain of a demoted revision (ADR-0143).
 	calls         *activator.CallTracker
 	drainGrace    time.Duration
 	handOutSettle time.Duration
+	clock         clock.Clock
 }
 
 const (
@@ -308,6 +312,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if settle <= 0 {
 		settle = defaultHandOutSettle
 	}
+	clk := d.Clock
+	if clk == nil {
+		clk = clock.System()
+	}
 	return &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
@@ -329,6 +337,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		calls:               d.Calls,
 		drainGrace:          drainGrace,
 		handOutSettle:       settle,
+		clock:               clk,
 	}, nil
 }
 
@@ -843,7 +852,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		return verdict{}, err
 	}
 	if readyC == desired && fn.Status.DrainingRevision == "" {
-		now := time.Now()
+		now := r.clock.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: runningC, ready: readyC, serving: true, switched: true}, nil
 	}
@@ -1059,7 +1068,7 @@ func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration,
 	s, c, d := fn.Status.ServingRevision, fn.Status.CurrentRevision, fn.Status.DrainingRevision
 	var elapsed time.Duration
 	if fn.Status.DrainingSince != nil {
-		elapsed = time.Since(*fn.Status.DrainingSince)
+		elapsed = r.clock.Now().Sub(*fn.Status.DrainingSince)
 	}
 	draining := 0
 	for _, in := range insts {
