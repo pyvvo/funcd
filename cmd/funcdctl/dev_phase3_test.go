@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -159,6 +160,58 @@ func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
 	}, 20*time.Second, 50*time.Millisecond, "the running dev session applies the edited Workflow")
 	require.True(t, strings.Contains(logs.String(), "restart funcdctl dev") && strings.Contains(logs.String(), "function=stepc"),
 		"a step whose function is not running warns that a restart is needed: %s", logs.String())
+}
+
+// TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep — ADR-0125 ("watch files, re-apply on change"): a
+// reload that renames the Workflow deletes the Workflow of the old name, and one that removes a step deletes the
+// step's Function, which an edit to its files no longer applies again.
+func TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep(t *testing.T) {
+	requireNode(t)
+	head := func(name string) string {
+		return "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: " + name + "\n  namespace: default\nspec:\n  steps:\n"
+	}
+	const stepA = "    - name: a\n      function:\n        image: registry:stepa\n"
+	const stepB = "    - name: b\n      function:\n        image: registry:stepb\n      dependsOn:\n        - a\n"
+	dir := devProject(t, map[string]string{
+		"workflow.yaml":       head("pipeline") + stepA + stepB,
+		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"stepa.mjs":           "export function handle() { return { step: 'a' }; }\n",
+		"stepb.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"stepb.mjs":           "export function handle() { return { step: 'b' }; }\n",
+	})
+	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
+	ctx := context.Background()
+	gone := func(kind v1.Kind, name v1.ObjectName) bool {
+		_, err := inst.client.Get(ctx, kind, "default", name)
+		return fault.KindOf(err) == fault.NotFound
+	}
+	require.False(t, gone(v1.KindFunction, "stepb"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte(head("pipeline2")+stepA), 0o600))
+	require.Eventually(t, func() bool { return !gone(v1.KindWorkflow, "pipeline2") }, 20*time.Second, 50*time.Millisecond,
+		"the running dev session applies the renamed Workflow")
+	require.Eventually(t, func() bool { return gone(v1.KindWorkflow, "pipeline") && gone(v1.KindFunction, "stepb") },
+		20*time.Second, 50*time.Millisecond, "the reload deletes the Workflow of the old name and the Function of the removed step")
+	require.False(t, gone(v1.KindFunction, "stepa"))
+
+	// Each reload pass handles every function in turn, so once a second edit of stepa is applied, the pass that saw
+	// the edit of stepb has finished.
+	digest := func() string {
+		obj, err := inst.client.Get(ctx, v1.KindFunction, "default", "stepa")
+		if err != nil {
+			return ""
+		}
+		return obj.(*v1.Function).Spec.ImageDigest
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "stepb.mjs"), []byte("export function handle() { return { step: 'b2' }; }\n"), 0o600))
+	for _, src := range []string{"export function handle() { return { step: 'a2' }; }\n", "export function handle() { return { step: 'a33' }; }\n"} {
+		before := digest()
+		require.NotEmpty(t, before)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "stepa.mjs"), []byte(src), 0o600))
+		require.Eventually(t, func() bool { d := digest(); return d != "" && d != before }, 20*time.Second, 50*time.Millisecond,
+			"the reload applies the edit of stepa")
+	}
+	require.True(t, gone(v1.KindFunction, "stepb"), "an edit to the removed step's handler does not apply its Function again")
 }
 
 // runStepPhase returns a run's per-step phase from its mirrored status (or "" if absent).

@@ -732,6 +732,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	var extraObjs []v1.Object
 	if wf != nil {
 		extraObjs = []v1.Object{wf.obj}
+		wf.applied = append(slices.Clone(fnObjs), wf.obj)
 	}
 	for _, group := range [][]v1.Object{firstRes, fnObjs, lastRes, extraObjs} {
 		for _, obj := range group {
@@ -888,7 +889,9 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-t.C:
 			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs)
 			if wf != nil {
-				err = errors.Join(err, wf.reapply(ctx, op, c, hs))
+				var werr error
+				hs, werr = wf.reapply(ctx, op, c, hs)
+				err = errors.Join(err, werr)
 			}
 			if err != nil && ctx.Err() == nil {
 				slog.Default().Warn("hot-reload failed", "err", err)
@@ -980,12 +983,13 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 	return errors.Join(errs...)
 }
 
-// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, and the
-// stamp of the file version last acted on.
+// devWorkflow is the Workflow of a `funcdctl dev workflow.yaml` run: its file, the object bootDev applies, the stamp
+// of the file version last acted on, and the step Functions and Workflow the session applied, which a reload prunes.
 type devWorkflow struct {
-	path string
-	obj  *v1.Workflow
-	seen string
+	path    string
+	obj     *v1.Workflow
+	seen    string
+	applied []v1.Object
 }
 
 // fileStamp is the size and mtime of the file at path, which an editor's save changes.
@@ -998,25 +1002,27 @@ func fileStamp(path string) (string, error) {
 }
 
 // reapply re-applies the Workflow when its file changed since the last poll, resolved as the boot resolved it
-// (ADR-0125, "watch files, re-apply on change"). A step whose function is not running needs a restart, which it
-// warns about, as for a changed main. A failed reload is reported once and retried on the next edit; an apply
-// that keeps losing a race with a concurrent status write (Conflict) is retried on the next poll.
-func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) error {
+// (ADR-0125, "watch files, re-apply on change"), then deletes the Workflow of a previous name and the Function of
+// each step the file no longer holds, and returns the handlers of the steps it still holds. A step whose function is
+// not running needs a restart, which it warns about, as for a changed main. A failed reload is reported once and
+// retried on the next edit; an apply that keeps losing a race with a concurrent status write (Conflict) is retried
+// on the next poll.
+func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) ([]*devHandler, error) {
 	stamp, serr := fileStamp(w.path)
 	if serr != nil || stamp == w.seen {
-		return nil
+		return hs, nil
 	}
 	w.seen = stamp
 	wf, isWorkflow, derr := detectWorkflow(op, w.path)
 	if derr != nil {
-		return derr
+		return hs, derr
 	}
 	if !isWorkflow {
-		return fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
+		return hs, fault.Invalidf(op, "reload %q: the file no longer holds a Workflow", w.path)
 	}
 	pfs, rerr := resolveWorkflowPlan(op, w.path, wf)
 	if rerr != nil {
-		return rerr
+		return hs, rerr
 	}
 	for _, pf := range pfs {
 		if !slices.ContainsFunc(hs, func(h *devHandler) bool { return h.pf.name == pf.name }) {
@@ -1027,9 +1033,17 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 		if fault.KindOf(aerr) == fault.Conflict {
 			w.seen = ""
 		}
-		return fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
+		return hs, fault.Wrapf(aerr, fault.KindOf(aerr), op, "apply Workflow %q", wf.Name)
 	}
-	return nil
+	hs = slices.DeleteFunc(hs, func(h *devHandler) bool {
+		return !slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return pf.name == h.pf.name })
+	})
+	next := make([]v1.Object, 0, len(hs)+1)
+	for _, h := range hs {
+		next = append(next, synthesizeFunction(h.pf, h.bundle))
+	}
+	w.applied = pruneRemoved(ctx, c, w.applied, append(next, wf), true)
+	return hs, nil
 }
 
 // pruneRemoved deletes, last applied first, each resource of prev that next no longer holds (ADR-0125: the
