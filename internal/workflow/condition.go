@@ -107,24 +107,15 @@ func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) 
 // job) and binds an absent field to the default its run-pinned schema declares.
 // A parse/type/eval error is surfaced as a step failure by the caller.
 func (e *Engine) evalWhen(condition string, n *stepNode, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (bool, error) {
-	docs := map[string]json.RawMessage{"input": input}
-	for _, p := range n.dependsOn {
-		if out, ok := outputs[p]; ok {
-			docs["step."+string(p)+".output"] = out
-		}
-	}
-	var inputSchema json.RawMessage
-	if rec.Contract != nil {
-		inputSchema = rec.Contract.Input
-	}
+	res := runtimeResolver(n, rec, input, outputs)
 	ex, err := expr.Parse(condition, expr.Condition)
 	if err != nil {
 		return false, fault.Wrapf(err, fault.Invalid, engineOp, "when condition for step %q", n.name)
 	}
-	if err := ex.Check(docResolver{docs: docs, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema).schemas}); err != nil {
+	if err := ex.Check(res); err != nil {
 		return false, fault.Wrapf(err, fault.Invalid, engineOp, "when condition for step %q", n.name)
 	}
-	ok, err := ex.EvalBool(docs)
+	ok, err := ex.EvalBool(res.docs)
 	if err != nil {
 		return false, fault.Wrapf(err, fault.Invalid, engineOp, "evaluating when for step %q", n.name)
 	}
@@ -135,9 +126,9 @@ func (e *Engine) evalWhen(condition string, n *stepNode, rec *runstate.Record, i
 // duration (on ctx, so the run-timeout interrupts it) then Succeeds with its flowing input passed
 // through verbatim. A pass evaluates its Select expression to the step's output. Neither dispatches.
 // It is a normal step — Running then Succeeded; there is no special Waiting state.
-func (e *Engine) runBuiltin(ctx context.Context, st *v1.WorkflowStep, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+func (e *Engine) runBuiltin(ctx context.Context, rec *runstate.Record, st *v1.WorkflowStep, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	if st.Builtin.Wait != "" {
-		d, werr := e.evalWait(n, st.Builtin.Wait, input, outputs)
+		d, werr := e.evalWait(n, rec, st.Builtin.Wait, input, outputs)
 		if werr != nil {
 			return nil, werr
 		}
@@ -152,12 +143,12 @@ func (e *Engine) runBuiltin(ctx context.Context, st *v1.WorkflowStep, n *stepNod
 		}
 		return e.flowingInput(n, input, outputs), nil // pass the flowing input through (verbatim)
 	}
-	return e.evalPass(n, st.Builtin.Pass, input, outputs)
+	return e.evalPass(n, rec, st.Builtin.Pass, input, outputs)
 }
 
 // evalWait resolves a builtin wait step's duration (ADR-0096): a Go duration string ("30s") or a
 // ${{ }} goja Select expression evaluating to a number of seconds (float; sub-second allowed).
-func (e *Engine) evalWait(n *stepNode, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (time.Duration, error) {
+func (e *Engine) evalWait(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (time.Duration, error) {
 	if !strings.HasPrefix(strings.TrimSpace(raw), "${{") {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
@@ -168,7 +159,7 @@ func (e *Engine) evalWait(n *stepNode, raw string, input json.RawMessage, output
 		}
 		return d, nil
 	}
-	v, err := e.evalSelect(raw, n, input, outputs)
+	v, err := e.evalSelect(raw, n, rec, input, outputs)
 	if err != nil {
 		return 0, err
 	}
@@ -183,31 +174,42 @@ func (e *Engine) evalWait(n *stepNode, raw string, input json.RawMessage, output
 }
 
 // evalPass evaluates a builtin pass step's Select expression → its output (ADR-0096; no dispatch).
-func (e *Engine) evalPass(n *stepNode, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
-	return e.evalSelect(raw, n, input, outputs)
+func (e *Engine) evalPass(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+	return e.evalSelect(raw, n, rec, input, outputs)
 }
 
 // evalSelect parses+checks+evaluates a ${{ }} Select expression against the run input + direct-parent
 // outputs (the same doc model as when.condition). Shared by dynamic wait and pass.
-func (e *Engine) evalSelect(src string, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+func (e *Engine) evalSelect(src string, n *stepNode, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
+	res := runtimeResolver(n, rec, input, outputs)
+	ex, err := expr.Parse(src, expr.Select)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
+	}
+	if err := ex.Check(res); err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
+	}
+	out, err := ex.Eval(res.docs)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "evaluating builtin for step %q", n.name)
+	}
+	return out, nil
+}
+
+// runtimeResolver builds the runtime doc model of a step's when, wait or pass: the run input and the
+// step's direct-parent outputs, with each root's run-pinned schema so an absent field binds its default.
+func runtimeResolver(n *stepNode, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) docResolver {
 	docs := map[string]json.RawMessage{"input": input}
 	for _, p := range n.dependsOn {
 		if out, ok := outputs[p]; ok {
 			docs["step."+string(p)+".output"] = out
 		}
 	}
-	ex, err := expr.Parse(src, expr.Select)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
+	var inputSchema json.RawMessage
+	if rec.Contract != nil {
+		inputSchema = rec.Contract.Input
 	}
-	if err := ex.Check(docResolver{docs: docs}); err != nil {
-		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "builtin expression for step %q", n.name)
-	}
-	out, err := ex.Eval(docs)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Invalid, engineOp, "evaluating builtin for step %q", n.name)
-	}
-	return out, nil
+	return docResolver{docs: docs, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema).schemas}
 }
 
 // docResolver is an expr.Resolver that infers field types from actual JSON documents

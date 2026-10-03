@@ -168,3 +168,22 @@ func TestBuiltinRejectsBadExpression(t *testing.T) {
 		t.Fatal("a pass referencing an unknown root must fail the run")
 	}
 }
+
+// Issue #495: a pass and a dynamic wait bind an absent parent-output field to the default its run-pinned
+// schema declares (ADR-0095, ADR-0096), as a when does, instead of failing the run.
+func TestIssue495_BuiltinBindsSchemaDefault(t *testing.T) {
+	f := newFake() // a returns {}: y is absent and must bind to its default "d"
+	e := newTestEngine(t, f, Config{})
+	opts := StartOptions{StepContracts: map[v1.ObjectName]v1.WorkflowContract{"a": {Output: json.RawMessage(issue420DefaultedOutput)}}}
+	rec, err := e.Execute(context.Background(), "default", "run-495", "wf", spec(
+		step("a", ""),
+		passStep("p", "${{ {y: step.a.output.y} }}", "a"),
+		waitStep("w", `${{ step.a.output.y === "d" ? 0 : 60 }}`, "a"),
+	), json.RawMessage(`{}`), opts)
+	if err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("run: err=%v phase=%s, want Succeeded", err, rec.Phase)
+	}
+	if got := string(outputOf(rec, "p")); got != `{"y":"d"}` {
+		t.Fatalf("pass output = %s, want {\"y\":\"d\"}", got)
+	}
+}

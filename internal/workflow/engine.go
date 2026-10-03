@@ -660,7 +660,7 @@ func (e *Engine) runStep(ctx, stepCtx context.Context, rec *runstate.Record, rs 
 	case st != nil && st.Builtin != nil:
 		// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
 		// then it Succeeds. No dispatch, no special state (ADR-0096).
-		return e.runBuiltin(stepCtx, st, n, input, parents)
+		return e.runBuiltin(stepCtx, rec, st, n, input, parents)
 	case st != nil && st.Workflow != nil: // a sub-workflow step runs a child workflow inline (ADR-0099)
 		return e.runChild(ctx, stepCtx, rec, st.Workflow.Ref, n, input, parents)
 	default:
