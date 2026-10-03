@@ -98,6 +98,10 @@ const (
 	defaultWorkflowRetention    = 720 * time.Hour
 	defaultWorkflowRetry        = 1
 	defaultWorkflowPayloadLimit = 256 << 10
+	// The eventing DLQ bounds when WithDeadLetterQueue is not given: the daemon config's eventing.deadletter.*
+	// defaults (ADR-0118), so a dead letter is evicted the same way in dev and in production.
+	defaultDeadletterRetention  = 720 * time.Hour
+	defaultDeadletterMaxEntries = 1000
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -333,6 +337,8 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowRetention:    defaultWorkflowRetention,
 		workflowDefaultRetry: defaultWorkflowRetry,
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
+		deadletterRetention:  defaultDeadletterRetention,
+		deadletterMaxEntries: defaultDeadletterMaxEntries,
 	}
 	p := &Platform{cfg: cfg}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
