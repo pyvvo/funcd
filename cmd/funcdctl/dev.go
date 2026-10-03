@@ -85,6 +85,10 @@ const (
 	devNamespace = "default"
 	// devResourceGroup is a fixed resource group for the synthesized dev resources.
 	devResourceGroup = "dev"
+	// devManagedTag marks an object funcdctl dev synthesized (its value is devManagedBy), so a --persist boot
+	// deletes only its own objects that the manifests no longer name, never one the user applied.
+	devManagedTag = "managed-by"
+	devManagedBy  = "funcdctl-dev"
 	// devContractFile is the ADR-0123 delivered-contract dotfile `funcdctl dev` writes into the bundle
 	// dir (the working tree). The Function reconciler probes the bundle root for it and sets
 	// FUNCD_CONTRACT_PATH, so the shim runtime-compiles + enforces the manifest's contract with no push.
@@ -449,6 +453,10 @@ func resolveWorkflowPlan(op, path string, wf *v1.Workflow) ([]plannedFunc, error
 	if wf.ResourceGroup == "" {
 		wf.ResourceGroup = devResourceGroup
 	}
+	if wf.Tags == nil {
+		wf.Tags = v1.Tags{}
+	}
+	wf.Tags[devManagedTag] = devManagedBy
 	return pfs, nil
 }
 
@@ -507,7 +515,8 @@ func catalogAliases(pfs []plannedFunc) []string {
 // synthesizes the resources (resolving env secrets FAIL-FAST before any side effect), delivers each
 // function's bundle + ADR-0123 contract, boots the embedded platform with the extracted shims + the S3
 // frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then the
-// Workflow (nil for a function set). It returns once serving; the caller cancels ctx to stop.
+// Workflow (nil for a function set). Over a durable metastore it then deletes what an earlier session
+// synthesized that the manifests no longer name. It returns once serving; the caller cancels ctx to stop.
 func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
@@ -741,9 +750,41 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 			}
 		}
 	}
+	applied := resObjs
+	if plan.storeDir != "" {
+		stale, lerr := pruneStale(ctx, client, slices.Concat(resObjs, fnObjs, extraObjs))
+		if lerr != nil {
+			return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
+		}
+		applied = slices.Concat(resObjs, stale)
+	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, wf, resObjs, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
 	return inst, nil
+}
+
+// pruneStale deletes each object an earlier --persist session synthesized that desired no longer holds, as a
+// reload prunes them (ADR-0125: the manifests are the session's desired state), and returns the ones that stay.
+// Only an object carrying devManagedTag is the session's, so an object the user applied is never deleted. The
+// kinds are listed in apply order, so a Workflow goes before its Functions and a Function before what it binds.
+func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object) ([]v1.Object, error) {
+	var prev []v1.Object
+	for _, kind := range []v1.Kind{
+		v1.KindKVStore, v1.KindBucket, v1.KindSecret, v1.KindCatalogService, v1.KindConfigMap,
+		v1.KindRole, v1.KindRolesAssignment, v1.KindFunction, v1.KindWorkflow,
+	} {
+		objs, err := c.List(ctx, kind, devNamespace)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range objs {
+			if o.GetObjectMeta().Tags[devManagedTag] == devManagedBy {
+				prev = append(prev, o)
+			}
+		}
+	}
+	kept := pruneRemoved(ctx, c, prev, desired, true)
+	return kept[len(desired):], nil
 }
 
 // applyDesired applies obj, re-applying it on a Conflict. A PUT is an optimistic update against the
@@ -877,7 +918,8 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 }
 
 // watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
-// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied.
+// edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied, plus
+// the objects of an earlier session it could not delete.
 func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
@@ -1783,11 +1825,12 @@ func manifestEntry(m *sdk.Manifest, dir, defaultEntry string, defaultIsolate boo
 	return dir, defaultEntry, defaultIsolate
 }
 
-// setMeta stamps the shared namespace/resource-group onto a synthesized resource.
+// setMeta stamps the shared namespace/resource-group and the dev ownership tag onto a synthesized resource.
 func setMeta(meta *v1.ObjectMeta, name v1.ObjectName) {
 	meta.Name = name
 	meta.Namespace = devNamespace
 	meta.ResourceGroup = devResourceGroup
+	meta.Tags = v1.Tags{devManagedTag: devManagedBy}
 }
 
 // resolveSecretData resolves a dev.secrets entry's ${ENV_VAR} values from the process environment. The
