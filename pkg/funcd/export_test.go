@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+// FreeLoopbackAddr hands the S3 gateway's port reservation to the external tests.
+func FreeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	return freeLoopbackAddr(t)
+}
+
 // TakenPortReserve hands the #288 bind collision to the external tests.
 func TakenPortReserve() (reserve func(*testing.T) string, taken func() net.Listener) {
 	return takenPortReserve()

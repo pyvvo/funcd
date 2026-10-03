@@ -3,7 +3,12 @@ package funcd
 import (
 	"bytes"
 	"context"
+	"embed"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,6 +37,41 @@ func freeLoopbackAddr(t *testing.T) string {
 	addr := l.Addr().String()
 	_ = l.Close()
 	return addr
+}
+
+// testSources is read through the embed so a `go test -overlay` revert check sees the overlaid source.
+//
+//go:embed *_test.go
+var testSources embed.FS
+
+// TestIssue517_FreeLoopbackAddrDefinedOnce: the internal and the external (e2e) test packages share one
+// freeLoopbackAddr; the external one reaches it through export_test.go.
+func TestIssue517_FreeLoopbackAddrDefinedOnce(t *testing.T) {
+	t.Parallel()
+	files, err := fs.Glob(testSources, "*_test.go")
+	if err != nil {
+		t.Fatalf("glob test sources: %v", err)
+	}
+	fset := token.NewFileSet()
+	var defs []string
+	for _, name := range files {
+		src, err := testSources.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "freeLoopbackAddr" {
+				defs = append(defs, fset.Position(fn.Pos()).String())
+			}
+		}
+	}
+	if len(defs) != 1 {
+		t.Fatalf("freeLoopbackAddr is defined %d times, want 1: %v", len(defs), defs)
+	}
 }
 
 // scenario: disabled-by-default (ADR-0080) — New(InMemory()) with no S3 config wires no
