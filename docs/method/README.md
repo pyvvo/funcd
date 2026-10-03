@@ -172,6 +172,8 @@ lesson is now enforced (tracker #567):
 | A test that closed the process-wide HTTP transport broke other tests | A lint rule bans the shared `http.DefaultClient` and `http.DefaultTransport`; callers use `internal/platform/httpx` |
 | A committed archive carried a local owner name | A test reads every committed archive and fails on owner names or macOS metadata |
 | The pipeline's own fixes lived in a session scratchpad | The pipeline is committed (`.claude/workflows/`, `scripts/agent/`) |
+| Tests that skipped in CI hid a Linux-only bug: pooled Python never became Ready (#582) | CI fails, instead of skipping, when the Python shim tests lack their interpreter (#544), which the dev shell pins |
+| A group PR titled `test:` carried a bug fix, which the release notes would have left out | The integrator types a group `fix` when an applied fix commit changes product code |
 
 ## 7. Measure the agents
 
