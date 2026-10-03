@@ -11,7 +11,7 @@
 // A per-provider reconciler (the F48 CatalogService first) assembles a ProviderSpec and calls
 // Converge on every reconcile; Converge is re-entrant + idempotent and a crashed engine is
 // recreated on the next pass (supervision = re-convergence, no separate watchdog). Teardown stops
-// the engine and removes any programmed route.
+// and removes every engine replica and removes any programmed route.
 package provider
 
 import (
