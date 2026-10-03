@@ -184,6 +184,9 @@ func (g *gzipWriter) decide(code int) {
 	// A 206's Content-Range indexes the identity bytes, and a 204/304 has no body to encode.
 	unencodable := code == http.StatusPartialContent || code == http.StatusNoContent ||
 		code == http.StatusNotModified || h.Get("Content-Range") != ""
+	if code == http.StatusNotModified && g.accept && !streaming && h.Get("Content-Encoding") == "" {
+		weakenETag(h) // RFC 9110 §15.4.5: a 304 carries the ETag that its 200, the gzip variant, would carry
+	}
 	if streaming || unencodable || h.Get("Content-Encoding") != "" {
 		return // passthrough: never gzip a stream/upgrade, a range/bodyless response, or an already-encoded body
 	}
@@ -193,12 +196,16 @@ func (g *gzipWriter) decide(code int) {
 	}
 	h.Set("Content-Encoding", "gzip")
 	h.Del("Content-Length") // gzipped length is unknown
-	// RFC 9110 §8.8.3: a strong ETag names the identity bytes, so an If-Range on the gzip variant must
-	// not match it; a weak one still revalidates via If-None-Match.
+	weakenETag(h)
+	g.gz = gzip.NewWriter(g.ResponseWriter)
+}
+
+// weakenETag marks a strong ETag weak (RFC 9110 §8.8.3): a strong ETag names the identity bytes, so an
+// If-Range on the gzip variant must not match it; a weak one still revalidates via If-None-Match.
+func weakenETag(h http.Header) {
 	if et := h.Get("ETag"); et != "" && !strings.HasPrefix(et, "W/") {
 		h.Set("ETag", "W/"+et)
 	}
-	g.gz = gzip.NewWriter(g.ResponseWriter)
 }
 
 func (g *gzipWriter) WriteHeader(code int) {

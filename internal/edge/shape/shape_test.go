@@ -323,6 +323,11 @@ func TestIssue439_GzipVariantWeakensStrongETag(t *testing.T) {
 
 	rec = get(`"v1"`, map[string]string{"Accept-Encoding": "gzip", "If-None-Match": gzipETag})
 	require.Equal(t, http.StatusNotModified, rec.Code, "the gzip variant still revalidates")
+	require.Equal(t, gzipETag, rec.Header().Get("ETag"), "the 304 carries the ETag of the gzip 200 it revalidates")
+
+	rec = get(`"v1"`, map[string]string{"If-None-Match": `"v1"`})
+	require.Equal(t, http.StatusNotModified, rec.Code)
+	require.Equal(t, `"v1"`, rec.Header().Get("ETag"), "the identity variant's 304 keeps its strong ETag")
 
 	rec = get(`"v1"`, nil)
 	require.Equal(t, `"v1"`, rec.Header().Get("ETag"), "the identity variant keeps its strong ETag")
