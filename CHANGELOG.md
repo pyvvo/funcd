@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.5](https://github.com/pyvvo/funcd/compare/v0.2.4...v0.2.5) (2026-10-03)
+
+
+### Bug Fixes
+
+* **artifact:** give oras-go a transport of its own ([#585](https://github.com/pyvvo/funcd/issues/585)) ([113aa5e](https://github.com/pyvvo/funcd/commit/113aa5e942a9af227b066624f38a1c76d3fa3d96))
+* **artifact:** resolve a cached single-file bundle to its handler, never a directory ([#584](https://github.com/pyvvo/funcd/issues/584)) ([13b723c](https://github.com/pyvvo/funcd/commit/13b723c8586fb2a64b19b2cea6759efccf94042d))
+* connect NATS in process, share test helpers, drop sleeps ([#559](https://github.com/pyvvo/funcd/issues/559)) ([#578](https://github.com/pyvvo/funcd/issues/578)) ([e6b7974](https://github.com/pyvvo/funcd/commit/e6b7974fafea26a3b771952d558cb3942758d99a))
+* **function:** stabilize revision drain and s3gateway shutdown flakes ([#586](https://github.com/pyvvo/funcd/issues/586)) ([addb4bc](https://github.com/pyvvo/funcd/commit/addb4bc3c8f44dfacb8213357679e916e13f93e8))
+* **platform:** give every HTTP caller its own transport ([#570](https://github.com/pyvvo/funcd/issues/570)) ([da24df4](https://github.com/pyvvo/funcd/commit/da24df4670cd9440f50d1931ed436fd37f64cec0))
+* **workernode:** log a failed local API Serve and drop its dead socket ([#559](https://github.com/pyvvo/funcd/issues/559)) ([#579](https://github.com/pyvvo/funcd/issues/579)) ([458c565](https://github.com/pyvvo/funcd/commit/458c5658e14a683841175e1dda50dcc811b71532))
+
 ## [0.2.4](https://github.com/pyvvo/funcd/compare/v0.2.3...v0.2.4) (2026-10-03)
 
 
