@@ -162,3 +162,16 @@ func TestIssue415_LintPassesWhileAnotherLintHoldsTheLock(t *testing.T) {
 		t.Fatalf("expected a clean lint while another golangci-lint holds the lock, got %v:\n%s", err, out)
 	}
 }
+
+// #289 and #415 removed the lint-lock failure, so the agent notes must no longer warn about it.
+func TestIssue512_AgentNotesDropTheLintLockFailure(t *testing.T) {
+	for _, f := range []string{".claude/CLAUDE.md", ".github/copilot-instructions.md"} {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "parallel golangci-lint is running") {
+			t.Errorf("%s still says the lint-fixtures tests fail while another golangci-lint holds the lock", f)
+		}
+	}
+}
