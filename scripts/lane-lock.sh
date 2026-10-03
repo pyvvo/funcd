@@ -3,11 +3,13 @@
 # 127.0.0.1:8080 and 8081, so a second VM's suite would talk to the first one.
 #
 # Every recipe that boots a funcd VM calls it first, with its shell's pid. The lock is a symlink whose target names
-# the holder by pid and start time, so a reused pid never passes for it; creating the symlink is atomic. A waiter
-# waits for a live holder and takes over the lock of one that has exited. Every removal, a takeover or the release by
-# the detached watcher that follows the holder, runs under a second lock and re-reads the holder first, so a live
-# holder's lock is never removed. The holder then refuses to start beside a running funcd VM. A recipe run by one
-# that holds the lock (lima-example-all running lima-example) passes it on through FUNCD_LANE_LOCK_HOLDER.
+# the holder by pid and start time (read in the C locale and UTC, so callers in other locales or time zones agree),
+# so a reused pid never passes for it; creating the symlink is atomic. A waiter waits for a live holder and takes over
+# the lock of one that has exited. Every removal, a takeover or the release by the detached watcher that follows the
+# holder, runs under a second lock and re-reads the holder first, so a live holder's lock is never removed; a removal
+# that finds the lock gone, or waits two minutes for that second lock, gives up. The holder then refuses to start
+# beside a running funcd VM. A recipe run by one that holds the lock (lima-example-all running lima-example) passes it
+# on through FUNCD_LANE_LOCK_HOLDER.
 #
 #   scripts/lane-lock.sh $$          # under set -e, on its own line: a refusal must stop the recipe
 #   export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
@@ -17,24 +19,27 @@
 set -uo pipefail
 pid=${1:?usage: lane-lock.sh <pid of the recipe shell>}
 base=${FUNCD_LANE_LOCK_DIR:-$HOME/.cache/funcd-lima}
-lock=$base/lane.lock
-guard=$base/lane.lock.guard
+lock=$base/lane.holder
+guard=$base/lane.holder.guard
 limactl=${FUNCD_LANE_LIMACTL:-limactl}
 poll=${FUNCD_LANE_POLL:-1}
 deadline=$((SECONDS + ${FUNCD_LANE_WAIT:-3600}))
 
 ident() { # <pid>: "<pid> <start time>", or nothing when no such process runs
   local s
-  s=$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ')
+  s=$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ')
   [ -n "$s" ] && echo "$1 ${s# }"
 }
 holder() { readlink "$lock" 2>/dev/null; }
 live() { [ -n "$1" ] && [ "$(ident "${1%% *}")" = "$1" ]; }
 
 # remove_if <identity>: remove the lock when it still names <identity>, under the guard. A guard older than a minute
-# was left by a process that died holding it.
+# was left by a process that died holding it. Returns 1 after two minutes without the guard.
 remove_if() {
+  local until=$((SECONDS + 120))
   until mkdir "$guard" 2>/dev/null; do
+    [ "$(holder)" = "$1" ] || return 0
+    [ "$SECONDS" -lt "$until" ] || return 1
     find "$guard" -maxdepth 0 -mmin +1 -exec rmdir {} \; 2>/dev/null
     sleep "$poll"
   done
@@ -57,7 +62,7 @@ fi
 mkdir -p "$base"
 said=0
 while [ "$nested" = 0 ]; do
-  if ln -s "$me" "$lock" 2>/dev/null; then
+  if ln -s "$me" "$lock" 2>/dev/null && [ "$(holder)" = "$me" ]; then
     (
       trap '' HUP
       while kill -0 "$pid" 2>/dev/null; do sleep "$poll"; done
@@ -70,8 +75,12 @@ while [ "$nested" = 0 ]; do
     exit 1
   fi
   h=$(holder)
+  if [ -d "$lock" ] && [ ! -L "$lock" ]; then
+    echo "lane-lock: $lock is a directory, not a lock; remove it and rerun" >&2
+    exit 1
+  fi
   if [ -n "$h" ] && ! live "$h"; then
-    remove_if "$h"
+    remove_if "$h" || { echo "lane-lock: $guard has been held for two minutes; remove it if no lane is starting" >&2; exit 1; }
     continue
   fi
   if [ "$said" = 0 ] || [ $((SECONDS - said)) -ge 60 ]; then

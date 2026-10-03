@@ -4,9 +4,10 @@ refs/stash is shared by every worktree of a repository, so with parallel agents 
 another agent's changes; in the 2026-10 fix campaign that lost a fix. `git stash list` and `git stash show` stay
 allowed. Exit 2 blocks the command and shows stderr to the agent; anything else lets it run.
 
-The command is split into shell words, so `git stash` inside a quoted argument (a commit message, a grep pattern)
-is not a command. git counts only in command position: at the start of a segment, after variable assignments, or
-after a wrapper such as `scripts/agent/d`, `env`, `sudo` or `nix develop -c`.
+Each line is split into shell words, so `git stash` inside a quoted argument (a commit message, a grep pattern) is
+not a command. git counts in command position: at the start of a segment, after assignments, reserved words
+(`if`, `do`, `!`, `{`, ...) or a wrapper and its arguments (`scripts/agent/d`, `env`, `sudo`, `timeout 60`,
+`nix develop -c`, ...), inside `$(...)` or backticks, and in the script of `bash -c`.
 """
 import json
 import os
@@ -15,39 +16,73 @@ import shlex
 import sys
 
 READ_ONLY = {"list", "show"}
-WRAPPERS = {"d", "env", "sudo", "time", "command", "nice", "nohup", "exec", "nix", "develop"}
+WRAPPERS = {"d", "env", "sudo", "time", "command", "nice", "nohup", "exec", "nix", "develop", "timeout", "xargs",
+            "watch", "caffeinate", "stdbuf"}
+RESERVED = {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "time"}
 SHELLS = {"sh", "bash", "zsh", "dash"}
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 SEPARATORS = set(";&|()")
+SUBSTITUTION = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`")
 FALLBACK = re.compile(r"\bgit(?:\s+(?:-C\s+\S+|-c\s+\S+|-\S+))*\s+stash\b(?:\s+([a-z]+))?")
 
 
+def strip_comment(line):
+    """Cut a bash comment: a # outside quotes at the start of a word."""
+    quote, i = None, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
+            return line[:i]
+        i += 1
+    return line
+
+
 def segments(command):
-    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=";&|()")
-    lexer.whitespace_split = True
-    segment = []
-    for token in lexer:
-        if set(token) <= SEPARATORS:
-            if segment:
-                yield segment
-            segment = []
-        else:
-            segment.append(token)
-    if segment:
-        yield segment
+    for line in command.replace("\\\n", " ").split("\n"):
+        lexer = shlex.shlex(strip_comment(line), posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        segment = []
+        for token in lexer:
+            if set(token) <= SEPARATORS:
+                if segment:
+                    yield segment
+                segment = []
+            else:
+                segment.append(token)
+        if segment:
+            yield segment
 
 
 def blocked_segment(words):
-    i = 0
-    while i < len(words) and (re.match(r"^[A-Za-z_]\w*=", words[i]) or os.path.basename(words[i]) in WRAPPERS
-                              or (i > 0 and words[i].startswith("-"))):
-        i += 1
+    i, wrapped = 0, False
+    while i < len(words):
+        name = os.path.basename(words[i])
+        if re.match(r"^[A-Za-z_]\w*=", words[i]) or words[i] in RESERVED:
+            i += 1
+        elif name in WRAPPERS:
+            wrapped = True
+            i += 1
+        elif wrapped and name != "git" and name not in SHELLS:
+            i += 1  # a wrapper's options and arguments
+        else:
+            break
     if i >= len(words):
         return False
     name = os.path.basename(words[i])
-    if name in SHELLS and "-c" in words[i + 1:]:
-        script = words.index("-c", i + 1) + 1
-        return script < len(words) and blocked(words[script])
+    if name in SHELLS:
+        for j in range(i + 1, len(words) - 1):
+            if re.match(r"^-[A-Za-z]*c[A-Za-z]*$", words[j]):
+                return blocked(words[j + 1])
+        return False
     if name != "git":
         return False
     i += 1
@@ -59,6 +94,8 @@ def blocked_segment(words):
 
 
 def blocked(command):
+    if any(blocked(m.group(1) or m.group(2) or "") for m in SUBSTITUTION.finditer(command)):
+        return True
     try:
         return any(blocked_segment(words) for words in segments(command))
     except ValueError:  # unbalanced quotes: fall back to a plain search, which errs on the side of blocking
@@ -78,7 +115,8 @@ def main():
     print("git stash is blocked in this repository: refs/stash is shared by every worktree, so a parallel agent's "
           "stash pop restores the wrong changes (issue #560). To compare against a base, write "
           "`git show <base>:<file>` into a scratch file and use `go test -overlay`; to set work aside, commit it on a "
-          "branch.", file=sys.stderr)
+          "branch. If `git stash` only appears inside text (a heredoc, a message), put that text in a file.",
+          file=sys.stderr)
     return 2
 
 

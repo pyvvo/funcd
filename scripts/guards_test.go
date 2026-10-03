@@ -44,7 +44,12 @@ func TestIssue560_StashHookBlocksStashWrites(t *testing.T) {
 	for _, c := range []string{"git stash", "git stash pop", "git stash -u", "git -C wt stash push -m wip",
 		"cd a && git stash apply", "scripts/agent/d git stash drop", "git --no-pager stash clear", "git -P stash pop",
 		`git -C "$(git rev-parse --show-toplevel)" stash pop`, "git --work-tree . stash", `bash -c "git stash pop"`,
-		"nix develop -c git stash", "FOO=1 git stash", "git status\ngit stash pop"} {
+		"nix develop -c git stash", "FOO=1 git stash", "git status\ngit stash pop",
+		"# revert check\ngit stash\ngo test ./x/\ngit stash pop", "cd wt  # the worktree\ngit stash pop",
+		"nix run nixpkgs#hello; git stash pop", "if git diff --quiet; then git stash pop; fi",
+		"for f in a b; do git stash push $f; done", "{ git stash pop; }", "! git stash pop",
+		`out="$(git stash pop 2>&1)"`, `echo "$(git stash pop)"`, "echo `git stash pop`", "bash -lc 'git stash pop'",
+		"sudo -u me git stash pop", "nice -n 10 git stash pop", "timeout 60 git stash pop", "xargs git stash drop"} {
 		code, out := run(bash(c))
 		require.Equal(t, 2, code, "%q must be blocked", c)
 		require.Contains(t, out, "git show <base>:<file>", c)
@@ -71,14 +76,22 @@ type laneEnv struct {
 	vms            func(string) string
 }
 
+// newLaneEnv runs a copy of the script from its own temp dir, so the test can tell its watchers apart and fails when
+// one outlives the test.
 func newLaneEnv(t *testing.T) laneEnv {
 	t.Helper()
 	tmp := t.TempDir()
 	for name, out := range map[string]string{"none": "colima Running", "one": "funcd-bench-kv Running"} {
 		require.NoError(t, os.WriteFile(filepath.Join(tmp, "limactl-"+name), []byte("#!/bin/sh\necho '"+out+"'\n"), 0o755))
 	}
-	lock, err := filepath.Abs("lane-lock.sh")
+	src, err := os.ReadFile("lane-lock.sh")
 	require.NoError(t, err)
+	lock := filepath.Join(tmp, "lane-lock.sh")
+	require.NoError(t, os.WriteFile(lock, src, 0o755))
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return exec.Command("pgrep", "-f", lock).Run() != nil }, 10*time.Second,
+			50*time.Millisecond, "a lock watcher outlived its holder")
+	})
 	return laneEnv{lock: lock, dir: filepath.Join(tmp, "locks"), log: filepath.Join(tmp, "log"),
 		vms: func(name string) string { return filepath.Join(tmp, "limactl-"+name) }}
 }
@@ -101,7 +114,7 @@ func (e laneEnv) readLog() string {
 func (e laneEnv) staleLock(t *testing.T, identity string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(e.dir, 0o755))
-	require.NoError(t, os.Symlink(identity, filepath.Join(e.dir, "lane.lock")))
+	require.NoError(t, os.Symlink(identity, filepath.Join(e.dir, "lane.holder")))
 }
 
 // Two lane runs on one host take turns; a recipe run by the holder inherits the lock; a bounded wait gives up; a
@@ -126,7 +139,7 @@ func TestIssue561_LaneLockRunsOneLaneAtATime(t *testing.T) {
 	require.Equal(t, []string{"A " + holderPID, "nested", "A-done", "B"}, strings.Split(strings.TrimSpace(e.readLog()), "\n"),
 		"the nested recipe runs while its parent holds the lock, and the second lane only after the first ends")
 
-	lock := filepath.Join(e.dir, "lane.lock")
+	lock := filepath.Join(e.dir, "lane.holder")
 	require.Eventually(t, func() bool { _, err := os.Lstat(lock); return os.IsNotExist(err) }, 5*time.Second, 50*time.Millisecond,
 		"the watcher frees the lock once its holder exits")
 
@@ -174,6 +187,29 @@ func TestIssue561_LaneLockTakeoverHasNoRace(t *testing.T) {
 	code, out := exitCode(t, e.holder(`echo reused >> "$2"`, "FUNCD_LANE_WAIT=5"))
 	require.Equal(t, 0, code, out)
 	require.Contains(t, e.readLog(), "reused", "a live pid with another start time is not the holder")
+}
+
+// The lock's holder identity does not depend on the caller's time zone, its watcher ends even when the lock dir is
+// deleted under it, and a directory at the lock's path is refused rather than slipped past (issue #561).
+func TestIssue561_LaneLockSurvivesItsEnvironment(t *testing.T) {
+	e := newLaneEnv(t)
+	first := e.holder(`echo A >> "$2"; sleep 2; echo A-done >> "$2"`, "TZ=UTC")
+	require.NoError(t, first.Start())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.Wait() }()
+	require.Eventually(t, func() bool { return strings.HasPrefix(e.readLog(), "A") }, 10*time.Second, 20*time.Millisecond)
+	code, out := exitCode(t, e.holder(`echo tokyo >> "$2"`, "TZ=Asia/Tokyo", "FUNCD_LANE_WAIT=1"))
+	require.Equal(t, 1, code, "a holder in another time zone is still the holder: %s", out)
+	require.NotContains(t, e.readLog(), "tokyo")
+	require.NoError(t, os.RemoveAll(e.dir), "the lock dir vanishes under a live holder")
+	require.NoError(t, <-firstDone)
+
+	e = newLaneEnv(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(e.dir, "lane.holder"), 0o755))
+	code, out = exitCode(t, e.holder(`echo slipped >> "$2"`))
+	require.Equal(t, 1, code, out)
+	require.Contains(t, out, "is a directory")
+	require.NotContains(t, e.readLog(), "slipped")
 }
 
 // The gate's host check stops on a saturated port range, before the gate's first step, and passes otherwise
