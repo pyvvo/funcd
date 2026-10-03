@@ -165,6 +165,52 @@ func TestImageOverrideEnvParsed(t *testing.T) {
 	require.Equal(t, "reg/py:2", c.Runtime.Containerd.ImageOverride["python314"])
 }
 
+// Every config key has a FUNCD_* env override (ADR-0062 Decision 4), the ADR-0111/0114/0115 keys too;
+// lists split on "," and maps on "," + "=" as FUNCD_IMAGE_OVERRIDE does (issue #438).
+func TestIssue438_EveryKeyHasEnvOverride(t *testing.T) {
+	var missing []string
+	var walk func(prefix string, typ reflect.Type)
+	walk = func(prefix string, typ reflect.Type) {
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			switch {
+			case f.Type.Kind() == reflect.Struct:
+				walk(prefix+name+".", f.Type)
+			case prefix == "" && (name == "apiVersion" || name == "kind"):
+			case f.Tag.Get("env") == "":
+				missing = append(missing, prefix+name)
+			}
+		}
+	}
+	walk("", reflect.TypeFor[config.Config]())
+	require.Emptyf(t, missing, "config keys without a FUNCD_* env override")
+
+	t.Setenv("FUNCD_TLS_HOSTS", "a.example,b.example")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_ORIGINS", "https://a.example,https://b.example")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_METHODS", "GET,POST")
+	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_HEADERS", "X-A,X-B")
+	t.Setenv("FUNCD_SHAPING_CORS_MAX_AGE_SECONDS", "600")
+	t.Setenv("FUNCD_SHAPING_HEADERS_SET", "X-Frame-Options=DENY,Strict-Transport-Security=max-age=31536000")
+	t.Setenv("FUNCD_SHAPING_HEADERS_REMOVE", "Server,X-Powered-By")
+	t.Setenv("FUNCD_NETWORK_INTERNAL_ALLOW", "10.63.0.1:9000,10.63.0.1:4317")
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.example", "b.example"}, c.Server.TLS.Hosts)
+	cors := c.Server.Shaping.CORS
+	require.Equal(t, []string{"https://a.example", "https://b.example"}, cors.AllowOrigins)
+	require.Equal(t, []string{"GET", "POST"}, cors.AllowMethods)
+	require.Equal(t, []string{"X-A", "X-B"}, cors.AllowHeaders)
+	require.Equal(t, 600, cors.MaxAgeSeconds)
+	require.Equal(t, map[string]string{"X-Frame-Options": "DENY", "Strict-Transport-Security": "max-age=31536000"}, c.Server.Shaping.Headers.Set)
+	require.Equal(t, []string{"Server", "X-Powered-By"}, c.Server.Shaping.Headers.Remove)
+	require.Equal(t, []string{"10.63.0.1:9000", "10.63.0.1:4317"}, c.Server.Network.InternalAllow)
+
+	t.Setenv("FUNCD_SHAPING_CORS_MAX_AGE_SECONDS", "-1")
+	_, err = config.Load("", config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an env-sourced negative maxAgeSeconds is rejected")
+}
+
 // FUNCD_AUTH_NAMESPACES is a comma-separated list (envSeparator).
 func TestNamespacesEnvList(t *testing.T) {
 	t.Setenv("FUNCD_AUTH_NAMESPACES", "a,b,c")
