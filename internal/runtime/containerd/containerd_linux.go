@@ -643,14 +643,23 @@ func (d *driver) snapshotter() string {
 
 // resolveImage makes the requested image available in the function's OWN containerd namespace
 // (nctx already carries it). containerd images are per-namespace, so the driver — not the
-// Manager — owns availability: it first looks the image up in this namespace; if it is absent
-// and a curated embedded tar exists for the ref, it imports the embed into this namespace (NO
-// registry pull — ADR-0054) and unpacks it; only a non-curated ref (an ImageOverride pointing
-// at a real registry) falls back to a Pull.
+// Manager — owns availability: it first looks the image up in this namespace and unpacks it if
+// the configured snapshotter lacks its layers; if it is absent and a curated embedded tar exists
+// for the ref, it imports the embed into this namespace (NO registry pull — ADR-0054) and unpacks
+// it; only a non-curated ref (an ImageOverride pointing at a real registry) falls back to a Pull.
 func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.Image, error) {
 	image, err := d.client.GetImage(nctx, ref)
 	if err == nil {
-		return image, nil // already present in this namespace
+		// The image record outlives a failed unpack and a snapshotter change, and WithNewSnapshot
+		// does not unpack.
+		unpacked, uerr := image.IsUnpacked(nctx, d.snapshotter())
+		if uerr == nil && !unpacked {
+			uerr = image.Unpack(nctx, d.snapshotter())
+		}
+		if uerr != nil {
+			return nil, mapErr(uerr, op, "unpack image %q", ref)
+		}
+		return image, nil
 	}
 	if !errdefs.IsNotFound(err) {
 		return nil, mapErr(err, op, "look up image %q", ref)

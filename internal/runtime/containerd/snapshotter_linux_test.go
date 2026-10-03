@@ -15,6 +15,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/diff"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/introspection"
 	"github.com/containerd/containerd/v2/core/leases"
@@ -100,6 +101,58 @@ func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs *memConta
 	return client
 }
 
+// Issue 456: an image already in the function's namespace but not unpacked into the configured snapshotter (the
+// snapshotter changed, or the unpack after an import failed) must be unpacked before Create prepares its snapshot.
+func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
+	ctx := leases.WithLease(context.Background(), "issue456")
+	cs, err := local.NewLabeledStore(t.TempDir(), memLabels{})
+	require.NoError(t, err)
+	layer := writeBlob(t, cs, ocispec.MediaTypeImageLayer, []byte("layer"))
+	cfgJSON, err := json.Marshal(ocispec.Image{
+		Platform: ocispec.Platform{OS: "linux"},
+		RootFS: ocispec.RootFS{
+			Type:    "layers",
+			DiffIDs: []digest.Digest{layer.Digest},
+		},
+	})
+	require.NoError(t, err)
+	manifestJSON, err := json.Marshal(ocispec.Manifest{
+		Versioned: ocispecs.Versioned{SchemaVersion: 2},
+		MediaType: ocispec.MediaTypeImageManifest,
+		Config:    writeBlob(t, cs, ocispec.MediaTypeImageConfig, cfgJSON),
+		Layers:    []ocispec.Descriptor{layer},
+	})
+	require.NoError(t, err)
+	manifest := writeBlob(t, cs, ocispec.MediaTypeImageManifest, manifestJSON)
+
+	spec := runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "issue456",
+		Revision:  "issue456-1",
+		Image:     "funcd/issue456:latest",
+		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+	}
+	rootfs := t.TempDir()
+	overlay := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{layer.Digest.String(): true}}
+	native := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{}}
+	client, err := containerd.New("", containerd.WithServices(
+		containerd.WithContentStore(cs),
+		containerd.WithImageStore(oneImage{img: images.Image{Name: spec.Image, Target: manifest}}),
+		containerd.WithContainerStore(&memContainers{records: map[string]containers.Container{}}),
+		containerd.WithSnapshotters(map[string]snapshots.Snapshotter{"overlayfs": overlay, "native": native}),
+		containerd.WithDiffService(uncompressedApplier{}),
+		containerd.WithNamespaceService(noNamespaceLabels{}),
+		containerd.WithIntrospectionService(anySnapshotPlugin{}),
+		containerd.WithTaskClient(createdTasks{}),
+	))
+	require.NoError(t, err)
+	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+
+	_, err = d.Create(ctx, spec)
+	require.NoError(t, err, "the image is present but its layers are only in another snapshotter, so Create must unpack it first")
+	require.True(t, native.keys[layer.Digest.String()], "the layer must be unpacked into the configured snapshotter")
+}
+
 func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocispec.Descriptor {
 	t.Helper()
 	desc := ocispec.Descriptor{MediaType: mediaType, Digest: digest.FromBytes(b), Size: int64(len(b))}
@@ -115,7 +168,7 @@ type memSnapshotter struct {
 }
 
 func (s *memSnapshotter) Prepare(ctx context.Context, key, parent string, _ ...snapshots.Opt) ([]mount.Mount, error) {
-	if !s.keys[parent] {
+	if parent != "" && !s.keys[parent] {
 		return nil, fmt.Errorf("parent snapshot %s does not exist: %w", parent, errdefs.ErrNotFound)
 	}
 	if s.keys[key] {
@@ -123,6 +176,22 @@ func (s *memSnapshotter) Prepare(ctx context.Context, key, parent string, _ ...s
 	}
 	s.keys[key] = true
 	return s.Mounts(ctx, key)
+}
+
+func (s *memSnapshotter) Stat(_ context.Context, key string) (snapshots.Info, error) {
+	if !s.keys[key] {
+		return snapshots.Info{}, fmt.Errorf("snapshot %s: %w", key, errdefs.ErrNotFound)
+	}
+	return snapshots.Info{Name: key, Kind: snapshots.KindCommitted}, nil
+}
+
+func (s *memSnapshotter) Commit(_ context.Context, name, key string, _ ...snapshots.Opt) error {
+	if !s.keys[key] {
+		return fmt.Errorf("snapshot %s: %w", key, errdefs.ErrNotFound)
+	}
+	delete(s.keys, key)
+	s.keys[name] = true
+	return nil
 }
 
 func (s *memSnapshotter) Mounts(context.Context, string) ([]mount.Mount, error) {
@@ -135,6 +204,37 @@ func (s *memSnapshotter) Remove(_ context.Context, key string) error {
 	}
 	delete(s.keys, key)
 	return nil
+}
+
+// memLabels keeps content labels in memory, so the content store accepts the labels Unpack writes.
+type memLabels map[digest.Digest]map[string]string
+
+func (l memLabels) Get(d digest.Digest) (map[string]string, error) { return l[d], nil }
+
+func (l memLabels) Set(d digest.Digest, labels map[string]string) error {
+	l[d] = labels
+	return nil
+}
+
+func (l memLabels) Update(d digest.Digest, update map[string]string) (map[string]string, error) {
+	if l[d] == nil {
+		l[d] = map[string]string{}
+	}
+	for k, v := range update {
+		if v == "" {
+			delete(l[d], k)
+		} else {
+			l[d][k] = v
+		}
+	}
+	return l[d], nil
+}
+
+// uncompressedApplier applies an uncompressed layer, whose diff ID is its blob digest.
+type uncompressedApplier struct{ containerd.DiffService }
+
+func (uncompressedApplier) Apply(_ context.Context, desc ocispec.Descriptor, _ []mount.Mount, _ ...diff.ApplyOpt) (ocispec.Descriptor, error) {
+	return ocispec.Descriptor{MediaType: ocispec.MediaTypeImageLayer, Digest: desc.Digest, Size: desc.Size}, nil
 }
 
 type memContainers struct {
