@@ -21,6 +21,7 @@ require (
 	github.com/containerd/go-cni v1.1.13
 	github.com/danielgtaylor/huma/v2 v2.38.0
 	github.com/dgraph-io/badger/v4 v4.9.2
+	github.com/distribution/reference v0.6.0
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-jose/go-jose/v4 v4.1.4
@@ -167,7 +168,6 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
-	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

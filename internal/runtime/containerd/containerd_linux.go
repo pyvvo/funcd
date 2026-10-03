@@ -29,6 +29,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	gocni "github.com/containerd/go-cni"
+	"github.com/distribution/reference"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -650,6 +651,12 @@ func (d *driver) snapshotter() string {
 // it; only a non-curated ref (an ImageOverride pointing at a real registry) falls back to a Pull.
 func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.Image, error) {
 	image, err := d.client.GetImage(nctx, ref)
+	if errdefs.IsNotFound(err) {
+		// The image store matches names exactly, and Import stores a curated tar under its normalized name.
+		if named, perr := reference.ParseDockerRef(ref); perr == nil && named.String() != ref {
+			image, err = d.client.GetImage(nctx, named.String())
+		}
+	}
 	if err == nil {
 		// The image record outlives a failed unpack and a snapshotter change, and WithNewSnapshot
 		// does not unpack.
@@ -669,8 +676,8 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 	if tar, ok := embedimg.TarForImageRef(ref); ok {
 		// Import brings the curated tar into nctx's namespace. Our curated tars carry exactly ONE
 		// image (built --provenance=false --sbom=false), so use the returned image directly — the
-		// tar names it "docker.io/funcd/runtime-<rt>:latest", which will not match an exact lookup
-		// of spec.Image ("funcd/runtime-<rt>:latest").
+		// tar names it "docker.io/funcd/runtime-<rt>:latest", the normalized name the lookup above
+		// finds on the next Create.
 		imported, ierr := d.client.Import(nctx, tar)
 		if ierr != nil {
 			return nil, mapErr(ierr, op, "import embedded image for %q", ref)
