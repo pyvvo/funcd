@@ -1048,8 +1048,8 @@ func (p *Platform) Addr() string { return p.addr }
 func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 
 // WaitS3Gateway blocks until the WithS3Gateway frontend is bound and serving (nil), it stopped first (its error),
-// or ctx is done. The gateway binds its address only once Run starts it (ADR-0085), so a taken port surfaces here,
-// not from New. Without the gateway it returns nil.
+// or ctx is done. The gateway binds its address only once Run starts it (ADR-0085), so a taken port surfaces here
+// and from Run, not from New. Without the gateway it returns nil.
 func (p *Platform) WaitS3Gateway(ctx context.Context) error {
 	if p.s3gw == nil {
 		return nil
@@ -1059,7 +1059,8 @@ func (p *Platform) WaitS3Gateway(ctx context.Context) error {
 
 // Run starts the control loops + the control-plane server and blocks until ctx is
 // cancelled, then shuts down gracefully and returns nil. It owns the crash-only
-// lifecycle (ADR-0028).
+// lifecycle (ADR-0028): when the S3 gateway cannot bind its address, Run shuts the
+// platform down and returns that error.
 func (p *Platform) Run(ctx context.Context) error {
 	p.logger.InfoContext(ctx, "platform starting", "addr", p.addr, "dataPlaneAddr", p.dataPlaneAddr)
 	p.logProviders(ctx)
@@ -1074,6 +1075,23 @@ func (p *Platform) Run(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
+	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
+			}
+		}()
+		// versitygw binds the address only once Run serves it, so a taken port fails Run here, before anything
+		// else starts, as a taken control-plane port fails New (#497, ADR-0028).
+		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
+			wg.Wait()
+			closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+			defer cancelClose()
+			return errors.Join(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"), p.Shutdown(closeCtx))
+		}
+	}
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
@@ -1130,15 +1148,6 @@ func (p *Platform) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			p.runDeadLetterRetention(ctx)
-		}()
-	}
-	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
-			}
 		}()
 	}
 	if p.egressForwarder != nil { // ADR-0117 (F81): the DNS forwarder / domain trust anchor (stops on ctx cancel)
