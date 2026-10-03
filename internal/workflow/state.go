@@ -47,8 +47,7 @@ type stepNode struct {
 // derived onFailure handler (excluded from the DAG). It is the pure state machine;
 // the engine persists a serialized form and mirrors phase into WorkflowRun.status.
 type runState struct {
-	// mu guards the step nodes, the run outputs and the record they persist into while steps run
-	// concurrently (drive).
+	// mu guards a run's state while its steps run concurrently; activeRun names what it covers.
 	mu        sync.Mutex
 	steps     map[v1.ObjectName]*stepNode
 	order     []v1.ObjectName // deterministic iteration order (spec order)
