@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 const contentTypeCE = "application/cloudevents+json"
@@ -33,7 +35,10 @@ type Waker interface {
 type HTTPInvoker struct {
 	Endpoints activator.Endpoints
 	Waker     Waker
-	Client    *http.Client
+	Client    *http.Client // nil: a client of the invoker's own, built on the first call
+
+	defaultOnce   sync.Once
+	defaultClient *http.Client
 }
 
 // Invoke resolves fn's ready upstream (waking it if cold) and POSTs the CloudEvent. A transport/5xx/4xx
@@ -64,16 +69,12 @@ func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	if err != nil {
 		return fault.Internalf(op, "marshal cloudevent: %v", err)
 	}
-	client := i.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(body))
 	if err != nil {
 		return fault.Internalf(op, "build request: %v", err)
 	}
 	req.Header.Set("Content-Type", contentTypeCE)
-	resp, err := client.Do(req)
+	resp, err := i.client().Do(req)
 	if err != nil {
 		return fault.Unavailablef(op, "POST to %s/%s upstream: %v", ns, fn, err)
 	}
@@ -89,4 +90,13 @@ func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 		return fault.Unavailablef(op, "function %s/%s returned status %d: %s", ns, fn, resp.StatusCode, capMsg(string(answer)))
 	}
 	return nil
+}
+
+// client returns Client, or the invoker's default, built once so its calls reuse their connections.
+func (i *HTTPInvoker) client() *http.Client {
+	if i.Client != nil {
+		return i.Client
+	}
+	i.defaultOnce.Do(func() { i.defaultClient = httpx.Client(0) })
+	return i.defaultClient
 }

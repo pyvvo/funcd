@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -109,8 +110,7 @@ type activity struct {
 // per request, which on http.DefaultTransport (2 idle conns/host) churns ports into TIME_WAIT
 // and exhausts the ephemeral range under load (ADR-0041, surfaced by ADR-0040).
 func newPooledTransport() *http.Transport {
-	t, _ := http.DefaultTransport.(*http.Transport)
-	tr := t.Clone()
+	tr := httpx.Transport()
 	tr.MaxIdleConns = 512
 	tr.MaxIdleConnsPerHost = 256 // ≫ the stdlib default of 2
 	tr.IdleConnTimeout = 90 * time.Second

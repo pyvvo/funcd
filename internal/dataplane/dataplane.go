@@ -31,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -61,6 +62,7 @@ type Server struct {
 	enforcer  *authn.Enforcer
 	static    *static.Handler
 	logger    *slog.Logger
+	transport *http.Transport // the Upstream routes' connection pool, shared by every request
 }
 
 // Handler builds the data-plane HTTP handler. The activator is the sole serving path;
@@ -72,7 +74,10 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *a
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{store: st, activator: act, router: rtr, enforcer: enf, static: stat, logger: logger.With("component", "dataplane")}
+	return &Server{
+		store: st, activator: act, router: rtr, enforcer: enf, static: stat, logger: logger.With("component", "dataplane"),
+		transport: httpx.Transport(),
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +243,7 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	}
 	logger := s.logger.With("upstream", m.Upstream)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = s.transport
 	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	proxy.ErrorHandler = func(w http.ResponseWriter, pr *http.Request, perr error) {
 		logger.WarnContext(pr.Context(), "edge upstream call failed", "error", perr)

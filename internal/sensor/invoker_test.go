@@ -126,3 +126,41 @@ func TestIssue48_WarmInvokeCountsAsActivity(t *testing.T) {
 	}
 	require.Empty(t, sc.targets, "a function invoked every 40s with a 1m idle timeout is never reclaimed")
 }
+
+// An HTTPInvoker without a Client builds its default client once, so concurrent first deliveries and later ones
+// reuse its connections: a client per call would dial every delivery.
+func TestIssue564_SensorInvokerReusesItsDefaultClient(t *testing.T) {
+	conns := new(atomic.Int32)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	inv := &sensor.HTTPInvoker{Endpoints: readyEndpoints{upstream: srv.URL}}
+	invoke := func() error {
+		return inv.Invoke(context.Background(), "default", "target", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1"})
+	}
+
+	const concurrency = 16
+	start := make(chan struct{})
+	errs := make(chan error, concurrency)
+	for range concurrency {
+		go func() {
+			<-start
+			errs <- invoke()
+		}()
+	}
+	close(start)
+	for range concurrency {
+		require.NoError(t, <-errs)
+	}
+	for range 10 {
+		require.NoError(t, invoke())
+	}
+	require.LessOrEqual(t, conns.Load(), int32(concurrency), "the deliveries after the concurrent ones reuse its connections")
+}

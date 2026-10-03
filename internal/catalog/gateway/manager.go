@@ -10,6 +10,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private
@@ -91,7 +92,7 @@ func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authori
 		pdp:         pdp,
 		log:         log.With("component", "catalog.gateway.manager"),
 		proxyLog:    log.With("component", "catalog.gateway"),
-		engines:     newEngineTransport(),
+		engines:     httpx.Transport(),
 		bindHost:    bindHost,
 		publishHost: publishHost,
 		servers:     make(map[string]*managedProxy),

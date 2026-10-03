@@ -126,6 +126,23 @@ func TestScenario_PlatformLeafBlocksOtherInternalImport(t *testing.T) {
 	}
 }
 
+// Production code must not use the process-wide http.DefaultClient or http.DefaultTransport: anything in the
+// process can close the shared transport's idle connections (#564).
+func TestIssue564_LintBlocksSharedHTTPClient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("shells out to golangci-lint; skipped under -short")
+	}
+	out, err := lintFixture(t, "tests/lint-fixtures/shared-http-client")
+	if err == nil {
+		t.Fatalf("expected golangci-lint to FAIL on the shared-http-client fixture, but it passed:\n%s", out)
+	}
+	for _, use := range []string{"http.DefaultClient", "http.DefaultTransport"} {
+		if !strings.Contains(out, "use of `"+use+"` forbidden") {
+			t.Errorf("expected a forbidigo finding for %s, got:\n%s", use, out)
+		}
+	}
+}
+
 // Another golangci-lint on the machine holds its lock (os.TempDir()/golangci-lint.lock);
 // a fixture run must still report its finding instead of waiting and giving up.
 func TestIssue289_LintFixtureRunsWhileAnotherLintHoldsTheLock(t *testing.T) {

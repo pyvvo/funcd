@@ -6,11 +6,13 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
 	"net/textproto"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -201,4 +203,45 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 		})
 	}
 	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
+}
+
+// The Upstream proxy keeps its connections out of http.DefaultTransport: every httptest.Server.Close in the process
+// closes that transport's idle connections, and one landing while an Upstream call has just picked a parked connection
+// fails the call. Not parallel: it closes the default transport's idle connections, which would break the other tests'
+// parked connections.
+func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.T) {
+	conns := new(atomic.Int32)
+	up := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	up.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	up.Start()
+	t.Cleanup(up.Close)
+
+	rtr := router.New()
+	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+	}}))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil)
+	get := func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	get()
+	get()
+	require.EqualValues(t, 1, conns.Load(), "two Upstream calls share one keep-alive connection")
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+	get()
+	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the data plane's")
 }

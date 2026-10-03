@@ -12,6 +12,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // EngineTarget is the single CatalogService this proxy endpoint fronts (ADR-0137): its Cedar resource
@@ -49,14 +50,7 @@ type catalogProxy struct {
 // NewCatalogProxy builds the catalog PEP proxy handler fronting one CatalogService engine (ADR-0137).
 // It logs through slog.Default; the Manager builds its proxies over its own logger (ADR-0002 §6).
 func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget) http.Handler {
-	return newCatalogProxy(keys, pdp, engine, newEngineTransport(), slog.Default().With("component", "catalog.gateway"))
-}
-
-// newEngineTransport returns a transport of the proxy's own: a CloseIdleConnections on the process-wide
-// http.DefaultTransport (every httptest.Server.Close calls it) breaks an engine call that has just picked a parked
-// connection there (#531).
-func newEngineTransport() *http.Transport {
-	return http.DefaultTransport.(*http.Transport).Clone()
+	return newCatalogProxy(keys, pdp, engine, httpx.Transport(), slog.Default().With("component", "catalog.gateway"))
 }
 
 // newCatalogProxy builds the proxy over transport and log. A failed engine call is a 502 logged through log, not

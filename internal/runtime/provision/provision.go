@@ -29,6 +29,7 @@ import (
 	"runtime"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // Pinned runtime versions (ADR-0056). These match the validated Lima/homebox set
@@ -158,6 +159,8 @@ func LayDown(ctx context.Context, binDir, cniDir string) error {
 		return fault.Wrapf(err, fault.Internal, op, "create cni dir %q", cniDir)
 	}
 
+	// One client per LayDown, not per asset: the downloads share the release hosts' keep-alive connections.
+	client := httpx.Client(0)
 	for _, a := range assets {
 		if a.present != nil && a.present(binDir, cniDir) {
 			continue // idempotent: already laid down at the pinned version
@@ -166,7 +169,7 @@ func LayDown(ctx context.Context, binDir, cniDir string) error {
 		if !ok {
 			return fault.Invalidf(op, "%s: no pinned digest for arch %q", a.Name, arch)
 		}
-		data, err := download(ctx, a.URLFor(arch))
+		data, err := download(ctx, client, a.URLFor(arch))
 		if err != nil {
 			return fault.Wrapf(err, fault.Unavailable, op, "download %s %s", a.Name, a.Version)
 		}
@@ -206,12 +209,12 @@ func Plan(binDir, cniDir string) []string {
 
 // download fetches url fully into memory (bounded by maxAssetBytes). The bytes are NOT written to
 // disk — the caller verifies the SHA-256 first.
-func download(ctx context.Context, url string) ([]byte, error) {
+func download(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
