@@ -30,7 +30,7 @@ const TRAILER = args.trailer || 'Co-Authored-By: Claude Opus 5.5 <noreply@anthro
 for (const k of ['sp', 'repo', 'wave', 'units']) {
   if (args[k] == null) throw new Error(`fix-batch: args.${k} is required`)
 }
-const PATH_LEAK = "/(Users|home)/[^<]|/private/|/var/folders/|/tmp/|-Users-"
+const PATH_LEAK = "/(Users|home)/[^<]|/private/|/var/folders/|/tmp/(claude-|nix-shell)|-Users-"
 const LANE_PATHS = 'internal/runtime/containerd, internal/network, e2e/ or scripts/lanes.yaml'
 
 // This run changes code, so at most five of its agents run at once, whatever the workflow runner allows (a
@@ -178,7 +178,7 @@ const integratePrompt = (u, passed, parkedEarly) => `Integrate the reviewed fixe
 3. Copy the review reports of the issues whose commits you applied into docs/reviews/ (keep the file names); the reports per issue: ${passed.map(p => `#${p.issue}: ${p.reports.map(r => `${SP}/reports/${r}`).join(' ')}`).join('; ')}. First check them for machine paths (\`grep -nE '${PATH_LEAK}' <the copied files>\`) and rewrite any hit as a repo-relative path or drop it: these files are tracked. Commit them: \`docs(reviews): fix reviews for ${u.tracker ? `the ${u.group} group (#${u.tracker})` : passed.map(p => `#${p.issue}`).join(', ')}\`, then the line \`${TRAILER}\`. Do NOT touch docs/reviews/model-ledger.json or model-scorecard.md: one ledger PR records the whole wave.
 4. Run the gate, one call (about 5 minutes): \`cd ${gwt(u)} && scripts/agent/gate.sh\`. It prints PASS/FAIL per step (logs in .cache/gate/). On GATE FAIL, find the issue whose commit broke it (the failing package or test points at it), \`git revert --no-edit\` that issue's commits, run the gate once more, and report that issue parked. If the gate still fails, do not open a PR: report the failing step and every issue left parked. An \`audit\` FAIL names a hard flag with its file:line (a new production copy, a production time.Sleep, an unexplained //nolint or a new direct dependency): remove it with a follow-up commit when that is mechanical (reuse the existing helper, explain the nolint, wait on a hook instead of a sleep); otherwise revert that issue's commits and park it. Whenever an issue is skipped or reverted, its review reports leave docs/reviews/ in the same follow-up commit (the ledger PR adds them). Never write an \`audit-allow:\` waiver yourself. A \`host\` FAIL means the machine's ports are exhausted: wait a few minutes and rerun, never park for it.
 5. Push (\`git push -q -u origin ${gbranch(u)}\`) and open the PR: \`gh pr create --repo pyvvo/funcd --base main --head ${gbranch(u)}\`, with
-   - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject"}, where the type is \`fix\` when any applied commit changes product behavior (check \`git log --format=%s origin/main..HEAD\` and \`git diff --stat origin/main\`: a fix commit that changes non-test code outside scripts/ and .claude/), because the release notes list only fix and feat, and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise (a Conventional Commit: it becomes the squash commit and the release note);
+   - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject, retyped by this rule when it disagrees"}, where the type is \`fix\` when any applied commit changes product behavior (check \`git log --format=%s --name-only origin/main..HEAD\`: a fix commit whose own files include non-test code outside scripts/ and .claude/), because the release notes list only fix and feat, and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise (a Conventional Commit: it becomes the squash commit and the release note);
    - a body: a summary; a table (issue, cause, fix, regression test, review verdict with a link to its docs/reviews report); the parked issues with reasons; the gate result with the audit's size, clone and complexity lines; one \`Fixes #N\` line per fixed issue${u.tracker ? (u.all ? `, plus \`Fixes #${u.tracker}\` if every listed issue is fixed (this unit holds every open issue of the tracker)` : `; do NOT add \`Fixes #${u.tracker}\`: the tracker keeps issues that need an ADR`) : ''}; a "Lima lane pending" note when a fix touches ${LANE_PATHS}; and the final line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
 Do not merge or queue. Issues parked before review (list them in the body): ${JSON.stringify(parkedEarly)}.
 
@@ -204,18 +204,20 @@ Return whether all passed, each PASS/FAIL line, and a note with the failing case
 // A thrown agent call parks its issue with the reason instead of dropping it from the result; the reviews it
 // already had still reach the ledger.
 async function doIssue(it) {
-  const rounds = []
+  const st = { rounds: [], defects: [] }
   try {
-    return await doIssueSteps(it, rounds)
+    return await doIssueSteps(it, st)
   } catch (e) {
     log(`#${it.n}: the pipeline failed on it: ${e && e.message}`)
-    return { issue: it.n, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, rounds, defects: [] }
+    return { issue: it.n, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, rounds: st.rounds, defects: st.defects }
   }
 }
 
-async function doIssueSteps(it, rounds) {
+async function doIssueSteps(it, st) {
+  const rounds = st.rounds
   const fx = await run(fixPrompt(it), { label: `fix:#${it.n}`, phase: 'Fix', schema: FIX })
   if (!fx) return { issue: it.n, status: 'parked', reason: 'the fixer returned nothing', defects: [] }
+  st.defects = fx.new_defects || []
   if (fx.status !== 'committed' || !fx.commits.length) return { issue: it.n, status: 'parked', reason: fx.reason, defects: fx.new_defects }
   const commits = [...fx.commits]
   for (let round = 1; round <= 3; round++) {
@@ -264,7 +266,8 @@ const done = await pipeline(
     if (!ig) return { ...base, pr: '', fixed: [], problems: 'integrator failed' }
     const fixedSet = new Set(ig.pr_url ? ig.fixed : [])
     const rows = rowsOf(fixedSet)
-    return { ...base, pr: ig.pr_url, branch: ig.branch || gbranch(u), fixed: ig.fixed, parked: [...parkedEarly, ...ig.parked], needs_lane: ig.needs_lane, lanes_hint: ig.lanes_hint, gate: ig.gate, problems: ig.problems, rows }
+    const noPR = ig.pr_url ? [] : ig.fixed.map(n => ({ issue: n, reason: 'no PR was opened for its group' }))
+    return { ...base, pr: ig.pr_url, branch: ig.branch || gbranch(u), fixed: [...fixedSet], parked: [...parkedEarly, ...ig.parked, ...noPR], needs_lane: ig.needs_lane, lanes_hint: ig.lanes_hint, gate: ig.gate, problems: ig.problems, rows }
   },
 )
 

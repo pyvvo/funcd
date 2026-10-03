@@ -158,29 +158,31 @@ Return the PR URL, the fixed issue refs, the parked ones with reasons, the just 
 
 // A thrown agent call parks its issue with the reason instead of dropping it from the result.
 async function doIssue(u, it) {
-  const rounds = []
+  const st = { rounds: [], defects: [] }
   try {
-    return await doIssueSteps(u, it, rounds)
+    return await doIssueSteps(u, it, st)
   } catch (e) {
     log(`${u.key}:${tag(it)}: the pipeline failed on it: ${e && e.message}`)
-    return { ref: ref(it), it, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, rounds, defects: [] }
+    return { ref: ref(it), it, status: 'parked', reason: `the pipeline failed on it: ${e && e.message}`, rounds: st.rounds, defects: st.defects }
   }
 }
 
-async function doIssueSteps(u, it, rounds) {
+async function doIssueSteps(u, it, st) {
+  const rounds = st.rounds
   const label = `${u.key}:${tag(it)}`
   const fx = await run(fixPrompt(u, it), { label: `fix:${label}`, phase: 'Fix', schema: FIX })
   if (!fx) return { ref: ref(it), it, status: 'parked', reason: 'the fixer returned nothing', defects: [] }
+  st.defects = fx.new_defects || []
   if (fx.status !== 'committed' || !fx.commits.length) return { ref: ref(it), it, status: 'parked', reason: fx.reason, defects: fx.new_defects, funcd_side: fx.funcd_side }
   const commits = [...fx.commits]
   for (let round = 1; round <= 3; round++) {
     if (round > 1) {
       const rw = await run(reworkPrompt(u, it, rounds[rounds.length - 1].report_path), { label: `rework:${label}`, phase: 'Rework', schema: REWORK })
-      if (!rw || !rw.done) return { ref: ref(it), it, status: 'parked', reason: rw ? rw.note : 'rework failed', defects: fx.new_defects, funcd_side: fx.funcd_side }
+      if (!rw || !rw.done) return { ref: ref(it), it, status: 'parked', reason: rw ? rw.note : 'rework failed', rounds, defects: fx.new_defects, funcd_side: fx.funcd_side }
       commits.push(...rw.commits)
     }
     const v = await run(reviewPrompt(u, it, commits, round), { label: `review:${label}${round > 1 ? '-r' + round : ''}`, phase: round === 1 ? 'Review' : 'Rework', schema: REVIEW, effort: 'medium' })
-    if (!v) return { ref: ref(it), it, status: 'parked', reason: 'the reviewer returned nothing', defects: fx.new_defects, funcd_side: fx.funcd_side }
+    if (!v) return { ref: ref(it), it, status: 'parked', reason: 'the reviewer returned nothing', rounds, defects: fx.new_defects, funcd_side: fx.funcd_side }
     rounds.push(v)
     if (v.verdict === 'pass') return { ref: ref(it), it, status: 'passed', commits, rounds, defects: fx.new_defects, funcd_side: fx.funcd_side, test: fx.test }
     if (v.verdict === 'fail') break
