@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,9 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/bus"
+	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/network"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 )
 
@@ -161,6 +164,64 @@ func TestScenarioRunShutdownLifecycle(t *testing.T) {
 
 	// The bus is closed: a Publish on the closed bus now fails.
 	require.Error(t, p.cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")))
+}
+
+// removeProbe is a network.Manager whose Apply returns applyErr and that records whether Shutdown removed it.
+type removeProbe struct {
+	applyErr error
+	removed  bool
+}
+
+func (r *removeProbe) Apply(context.Context, network.Policy) error { return r.applyErr }
+func (r *removeProbe) Remove(context.Context) error                { r.removed = true; return nil }
+
+// Issue #489: a setup error in Run (egress isolation, TLS) stops the loops Run started and shuts the platform down
+// before Run returns it, so the daemon does not exit with its stores, listeners and runtime still open (ADR-0028).
+func TestIssue489_RunShutsDownOnSetupError(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.pem")
+	cases := []struct {
+		name  string
+		probe *removeProbe
+		opts  []Option
+		want  string
+	}{
+		{
+			name:  "egress isolation",
+			probe: &removeProbe{applyErr: errors.New("program nftables: permission denied")},
+			want:  "apply worker egress isolation",
+		},
+		{
+			name:  "tls provisioning",
+			probe: &removeProbe{},
+			opts:  []Option{WithTLS(edgetls.Spec{Mode: edgetls.ModeProvided, CertFile: missing, KeyFile: missing})},
+			want:  "provision tls certs",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := New(append([]Option{InMemory(), WithoutLogCompaction(), WithEgressIsolation(tc.probe, network.Policy{})}, tc.opts...)...)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			done := make(chan error, 1)
+			go func() { done <- p.Run(ctx) }()
+			select {
+			case err = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Run did not return on its setup error")
+			}
+			require.ErrorContains(t, err, tc.want)
+
+			require.True(t, tc.probe.removed, "Shutdown ran before Run returned")
+			require.Error(t, p.cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")), "the bus is closed")
+			if conn, derr := net.Dial("tcp", p.Addr()); derr == nil {
+				_ = conn.Close()
+				t.Fatal("the control-plane listener is still open")
+			}
+		})
+	}
 }
 
 // WithNodePlatform (ADR-0145) sets the platform the scheduler and the materializer share; the default is the
