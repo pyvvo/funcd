@@ -143,7 +143,9 @@ func mapBlobErr(err error) error {
 
 // GetObject serves a GET (ADR-0080), honoring a byte-range via GetObjectInput.Range.
 // A driver implementing blob.RangeReader serves the range directly; otherwise the
-// gateway falls back to a full Get + slice (rangereader-fallback scenario).
+// gateway falls back to a full Get + slice (rangereader-fallback scenario). A ranged GET
+// sends no ETag, like HEAD: the object's MD5 needs the whole body, and an MD5 of the range
+// would change from range to range.
 func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.GetObjectOutput, error) {
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
@@ -164,14 +166,17 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 		return nil, err
 	}
 
-	return &awss3.GetObjectOutput{
+	out := &awss3.GetObjectOutput{
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: ptr(int64(len(data))),
 		ContentRange:  contentRange,
 		LastModified:  ptr(time.Now().UTC()),
 		AcceptRanges:  ptr("bytes"),
-		ETag:          ptr(etag(data)),
-	}, nil
+	}
+	if contentRange == nil {
+		out.ETag = ptr(etag(data))
+	}
+	return out, nil
 }
 
 // getRange serves a Range header the way S3 does (RFC 9110 §14): the object size bounds

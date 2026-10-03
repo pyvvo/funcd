@@ -549,3 +549,42 @@ func TestIssue380_ETagsAreQuoted(t *testing.T) {
 	require.Len(t, parts.Parts, 1)
 	require.Equal(t, want, aws.ToString(parts.Parts[0].ETag), "ListParts")
 }
+
+// TestIssue425_RangedGetKeepsObjectETag: a ranged GET never sends an ETag computed over the range.
+// It carries the object's ETag (the one PutObject and a full GET return) or none, on both the
+// RangeReader path and the full-Get fallback.
+func TestIssue425_RangedGetKeepsObjectETag(t *testing.T) {
+	drivers := map[string]func(t *testing.T) blob.Bucket{
+		"range-reader": memBucket,
+		"fallback":     func(t *testing.T) blob.Bucket { return noRangeBucket{inner: memBucket(t)} },
+	}
+	for name, makeBucket := range drivers {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeBucket)
+			ctx := context.Background()
+			reader := g.client(t, "default", "analytics")
+			bucket, key := ptrS("lakehouse"), ptrS("bronze/abc.bin")
+
+			put, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+				Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("abcdefgh")),
+			})
+			require.NoError(t, err)
+			want := aws.ToString(put.ETag)
+
+			full, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key})
+			require.NoError(t, err)
+			require.NoError(t, full.Body.Close())
+			require.Equal(t, want, aws.ToString(full.ETag), "a full GET carries the PutObject ETag")
+
+			for _, rng := range []string{"bytes=0-3", "bytes=4-7"} {
+				out, gerr := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, Range: ptrS(rng)})
+				require.NoError(t, gerr, "Range %s", rng)
+				require.NoError(t, out.Body.Close())
+				require.NotEmpty(t, aws.ToString(out.ContentRange), "Range %s is a 206", rng)
+				if got := aws.ToString(out.ETag); got != "" {
+					require.Equal(t, want, got, "Range %s must carry the object's ETag or none", rng)
+				}
+			}
+		})
+	}
+}
