@@ -15,7 +15,7 @@ import (
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/errdef"
-	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -310,11 +310,11 @@ func repositoryOf(ref string) (string, error) {
 	if dir, _, ok := parseLocalRef(ref); ok {
 		return "oci-layout://" + dir, nil
 	}
-	repo, err := remote.NewRepository(ref)
+	r, err := registry.ParseReference(ref)
 	if err != nil {
 		return "", fault.Invalidf("artifact.repositoryOf", "parse registry ref %q: %v", ref, err)
 	}
-	return repo.Reference.Registry + "/" + repo.Reference.Repository, nil
+	return r.Registry + "/" + r.Repository, nil
 }
 
 // resolveTargetRef is the tag or digest part of a ref, without opening a target.
@@ -322,9 +322,9 @@ func resolveTargetRef(ref string) (repo, tag string, err error) {
 	if dir, t, ok := parseLocalRef(ref); ok {
 		return dir, t, nil
 	}
-	r, rerr := remote.NewRepository(ref)
+	r, rerr := registry.ParseReference(ref)
 	if rerr != nil {
 		return "", "", rerr
 	}
-	return r.Reference.Registry + "/" + r.Reference.Repository, r.Reference.Reference, nil
+	return r.Registry + "/" + r.Repository, r.Reference, nil
 }

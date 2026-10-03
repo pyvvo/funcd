@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -258,7 +259,7 @@ func timeColdRequest(ctx context.Context, url string) time.Duration {
 		return 0
 	}
 	req.Header.Set("content-type", "application/json")
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := httpx.Client(30 * time.Second).Do(req)
 	if err != nil {
 		return 0
 	}

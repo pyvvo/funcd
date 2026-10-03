@@ -18,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,10 +35,12 @@ import (
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/credentials"
+	"oras.land/oras-go/v2/registry/remote/retry"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 const (
@@ -370,6 +373,7 @@ func Login(ctx context.Context, registry, user, pass string) error {
 	if rerr != nil {
 		return fault.Invalidf(op, "registry %q: %v", registry, rerr)
 	}
+	reg.Client = registryClient(nil)
 	if lerr := credentials.Login(ctx, store, reg, auth.Credential{Username: user, Password: pass}); lerr != nil {
 		return fault.Wrapf(lerr, fault.Unavailable, op, "login to %s", registry)
 	}
@@ -413,10 +417,22 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	if rerr != nil {
 		return nil, "", fault.Invalidf(op, "parse registry ref %q: %v", ref, rerr)
 	}
+	var cred auth.CredentialFunc
 	if credStore, cerr := credentials.NewStoreFromDocker(credentials.StoreOptions{}); cerr == nil {
-		repo.Client = &auth.Client{Client: auth.DefaultClient.Client, Cache: auth.NewCache(), Credential: credentials.Credential(credStore)}
+		cred = credentials.Credential(credStore)
 	}
+	repo.Client = registryClient(cred)
 	return repo, repo.Reference.Reference, nil
+}
+
+// registryClient is oras-go's retrying auth client over a transport of its own: its default client, also used when
+// a repository's Client is nil, sends through http.DefaultTransport (#571).
+func registryClient(cred auth.CredentialFunc) *auth.Client {
+	return &auth.Client{
+		Client:     &http.Client{Transport: retry.NewTransport(httpx.Transport())},
+		Cache:      auth.NewCache(),
+		Credential: cred,
+	}
 }
 
 // layoutTarget is a local OCI layout. oras-go's oci.Store reads index.json once, when it opens, and rewrites the whole
