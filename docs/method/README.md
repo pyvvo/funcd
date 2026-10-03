@@ -42,6 +42,8 @@ flowchart LR
   enforces it.
 - **Every loop has a stopping rule.** Fixing produces new findings, so each round raises the bar for what gets
   fixed until the chain converges.
+- **Safe, high-value iterations beat speed.** A round that creates more issues than it fixes is a loss, so a run
+  that changes code uses at most five agents at once.
 
 ## 1. Decide: documents drive the code
 
@@ -181,6 +183,8 @@ reviews: 145 of ADR implementations and 373 of fixes.
 The agents are also measured as a process. Workflow transcripts record each call's time and tokens, which is how
 these rules were found (CLAUDE.md, *Running subagents and workflows efficiently*):
 
+- A run that changes code, the repository or GitHub uses at most five agents at once, its reviewers included; the
+  committed workflows enforce the cap. A read-only campaign (an audit, a discovery sweep) may use more.
 - Turns are the main cost, so batch tool calls and read each file once.
 - Run one job per item in parallel, each in its own worktree; avoid barriers between groups.
 - Run each expensive check once, in the gate, never in both the fixer and the reviewer.
