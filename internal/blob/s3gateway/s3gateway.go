@@ -66,6 +66,7 @@ type Server struct {
 	ready   chan struct{}
 	serveCh chan error
 	closed  bool
+	stop    context.CancelFunc // ends the backend's life context
 }
 
 // New builds the gateway server (ADR-0085). It validates Deps, constructs the in-process
@@ -100,6 +101,7 @@ func New(d Deps) (*Server, error) {
 		maxUpload = defaultMaxUpload
 	}
 
+	life, stop := context.WithCancel(context.Background())
 	backendImpl := &be{
 		bucketFor: d.BucketFor,
 		buckets:   d.Buckets,
@@ -108,16 +110,18 @@ func New(d Deps) (*Server, error) {
 		maxUpload: maxUpload,
 		log:       logger,
 		mp:        newMultipartStore(),
+		life:      life,
 	}
 	iamImpl := &iam{master: d.Master, external: d.External}
 
 	rootAccess, rootSecret, err := randomRoot()
 	if err != nil {
+		stop()
 		return nil, fault.Wrapf(err, fault.Internal, op, "generate internal root account")
 	}
 	root := middlewares.RootUserConfig{Access: rootAccess, Secret: rootSecret}
 
-	s := &Server{listen: d.Listen, log: logger, ready: make(chan struct{})}
+	s := &Server{listen: d.Listen, log: logger, ready: make(chan struct{}), stop: stop}
 	// nil for the audit/admin loggers, event sender, and metrics manager — all nil-checked
 	// in versitygw's controllers (ADR-0085 verified).
 	api, err := s3api.New(backendImpl, root, region, iamImpl, nil, nil, nil, nil,
@@ -134,6 +138,7 @@ func New(d Deps) (*Server, error) {
 		s3api.WithDisableACL(),
 		s3api.WithOnListen(s.signalReady))
 	if err != nil {
+		stop()
 		return nil, fault.Wrapf(err, fault.Internal, op, "build s3api server")
 	}
 	s.api = api
@@ -183,6 +188,7 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.stop()
 	if s.api == nil {
 		return nil
 	}

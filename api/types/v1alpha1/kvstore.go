@@ -67,20 +67,22 @@ type KVStoreStatus struct {
 	Bindings int `json:"bindings,omitempty"`
 }
 
-// EffectiveMaxValueBytes returns the per-value cap, applying the default when the spec is 0.
+// EffectiveMaxValueBytes returns the per-value cap, applying the default when the spec is 0 and clamping to
+// MaxValueBytesLimit: a store persisted before Validate enforced the limit is never re-validated.
 func (s KVStoreSpec) EffectiveMaxValueBytes() int64 {
 	if s.MaxValueBytes <= 0 {
 		return DefaultMaxValueBytes
 	}
-	return s.MaxValueBytes
+	return min(s.MaxValueBytes, MaxValueBytesLimit)
 }
 
-// EffectiveMaxKeyBytes returns the per-key cap, applying the default when the spec is 0.
+// EffectiveMaxKeyBytes returns the per-key cap, applying the default when the spec is 0 and clamping to
+// MaxKeyBytesLimit: a store persisted before Validate enforced the limit is never re-validated.
 func (s KVStoreSpec) EffectiveMaxKeyBytes() int {
 	if s.MaxKeyBytes <= 0 {
 		return DefaultMaxKeyBytes
 	}
-	return s.MaxKeyBytes
+	return min(s.MaxKeyBytes, MaxKeyBytesLimit)
 }
 
 // GroupVersionKind returns the constant GVK for KVStore.

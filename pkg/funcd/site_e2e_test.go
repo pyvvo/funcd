@@ -57,10 +57,6 @@ func pushSiteBundle(t *testing.T, layout, tag string, files map[string]string) (
 // REAL S3 frontend by both a bound Function and an external Identity.
 func TestScenarioE2ESite(t *testing.T) {
 	ctx := context.Background()
-	bucket, err := gocloud.Open(ctx, "mem://")
-	require.NoError(t, err)
-	messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
-	require.NoError(t, err)
 	layout := filepath.Join(t.TempDir(), "layout")
 	refA, digestA := pushSiteBundle(t, layout, "v1", map[string]string{
 		"index.html":   "<!doctype html><title>bi-A</title>",
@@ -70,54 +66,10 @@ func TestScenarioE2ESite(t *testing.T) {
 		"index.html": "<!doctype html><title>bi-B</title>",
 		"app.js":     "console.log('B')",
 	})
-
-	st := store.New(memory.New())
-	// The sibling data the app fetches: the lakehouse `gold` prefix, written straight into the substrate
-	// (the same per-namespace view the S3 frontend, the static handler, and the Site reconciler share).
-	const ns = "openteam"
-	require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows")))
-
-	siteObj := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
-	siteObj.Name, siteObj.Namespace, siteObj.ResourceGroup = "bi", ns, "rg1"
-	siteObj.Spec = v1.SiteSpec{
-		Image:   refA,
-		Bucket:  v1.SiteBucket{Name: "reports", Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}},
-		Prefix:  "bi",
-		SPA:     true,
-		Ingress: v1.SiteIngress{Host: "bi.example.com", Public: true, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
-	}
-	seed(t, st, siteObj)
-	// bundle-prefix-has-no-writer principals: a Function BOUND to the site prefix (read grant only) and an
-	// external managed Identity with no role assignment.
-	uploader := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
-	uploader.Name, uploader.Namespace, uploader.ResourceGroup = "uploader", ns, "rg1"
-	uploader.Spec = v1.FunctionSpec{Runtime: "nodejs22", Blob: []v1.FunctionBlob{{Alias: "bi", Bucket: "reports", Prefix: "bi"}}}
-	seed(t, st, uploader)
-	ext := &v1.Identity{TypeMeta: v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity}}
-	ext.Name, ext.Namespace, ext.ResourceGroup = "publisher", ns, "rg1"
-	ext.Spec = v1.IdentitySpec{Type: v1.IdentityTypeExternal}
-	seed(t, st, ext)
-
-	master := filepath.Join(t.TempDir(), "master.key")
-	require.NoError(t, os.WriteFile(master, []byte("e2e-node-master-secret-0123456789"), 0o600))
-	s3Addr := freeLoopbackAddr(t)
-	p, err := funcd.New(
-		funcd.WithBlob(bucket), funcd.WithBus(messaging),
-		funcd.WithStore(st), funcd.WithRuntime(process.New()),
-		funcd.WithGateway(embedded.New()), funcd.WithListenAddr("127.0.0.1:0"),
-		funcd.WithDataPlaneAddr("127.0.0.1:0"),
-		funcd.WithS3Gateway(s3Addr, "", 0, master, t.TempDir()),
-		funcd.WithDevAuth(funcd.DevToken, ns),
-		funcd.WithArtifactStore(t.TempDir()),
-	)
-	require.NoError(t, err)
-	runCtx, cancel := context.WithCancel(ctx)
-	doneCh := make(chan error, 1)
-	go func() { doneCh <- p.Run(runCtx) }()
-	t.Cleanup(func() { cancel(); <-doneCh })
+	p, st, s3Addr := startSitePlatform(t, freeLoopbackAddr, refA)
 
 	getSite := func() *v1.Site {
-		obj, gerr := st.Get(ctx, v1.KindSite.GVK(), ns, "bi")
+		obj, gerr := st.Get(ctx, v1.KindSite.GVK(), siteNS, "bi")
 		require.NoError(t, gerr)
 		return obj.(*v1.Site)
 	}
@@ -132,12 +84,12 @@ func TestScenarioE2ESite(t *testing.T) {
 
 	// The owned resources: the Bucket (site prefix ownerless + the declared gold prefix, no OwnerReference)
 	// and the Route (owner-stamped, data mount + bundle rule).
-	bobj, err := st.Get(ctx, v1.KindBucket.GVK(), ns, "reports")
+	bobj, err := st.Get(ctx, v1.KindBucket.GVK(), siteNS, "reports")
 	require.NoError(t, err)
 	b := bobj.(*v1.Bucket)
 	require.Equal(t, []v1.BucketPrefix{{Name: "bi"}, {Name: "gold", Owner: "etl"}}, b.Spec.Prefixes)
 	require.Empty(t, b.OwnerReferences)
-	robj, err := st.Get(ctx, v1.KindRoute.GVK(), ns, "bi")
+	robj, err := st.Get(ctx, v1.KindRoute.GVK(), siteNS, "bi")
 	require.NoError(t, err)
 	rt := robj.(*v1.Route)
 	require.Len(t, rt.OwnerReferences, 1)
@@ -224,7 +176,7 @@ func TestScenarioE2ESite(t *testing.T) {
 	// 403 for the bound Function (its binding grants read only) and for the external Identity (no writer
 	// role); a read of the bound prefix by the Function still works (the binding is a read grant).
 	key := "bi/" + strings.ReplaceAll(digestB, ":", "-") + "/index.html"
-	kp := s3gateway.DeriveKeypair([]byte("e2e-node-master-secret-0123456789"), ns, "uploader")
+	kp := s3gateway.DeriveKeypair([]byte(siteMaster), siteNS, "uploader")
 	fnClient := s3Client(t, "http://"+s3Addr, kp.AccessKey, kp.SecretKey)
 	_, err = fnClient.PutObject(ctx, &awss3.PutObjectInput{Bucket: aws.String("reports"), Key: aws.String(key), Body: bytes.NewReader([]byte("defaced"))})
 	require.Equal(t, http.StatusForbidden, s3Status(err), "a bound Function cannot write the site prefix: %v", err)
@@ -234,7 +186,7 @@ func TestScenarioE2ESite(t *testing.T) {
 
 	var access, secret string
 	require.Eventually(t, func() bool {
-		sobj, gerr := st.Get(ctx, v1.KindSecret.GVK(), ns, "publisher")
+		sobj, gerr := st.Get(ctx, v1.KindSecret.GVK(), siteNS, "publisher")
 		if gerr != nil {
 			return false
 		}
@@ -250,6 +202,79 @@ func TestScenarioE2ESite(t *testing.T) {
 	code, body, _ = get("/")
 	require.Equal(t, http.StatusOK, code)
 	require.Contains(t, body, "<title>bi-B</title>")
+}
+
+// siteNS and siteMaster are the namespace and the node S3 master secret of the site e2e platform.
+const (
+	siteNS     = "openteam"
+	siteMaster = "e2e-node-master-secret-0123456789"
+)
+
+// startSitePlatform runs a platform whose substrate holds the `bi` Site at image, the sibling `gold` data the app
+// fetches, a Function bound to the site prefix (read grant only) and an external Identity with no role assignment.
+// Its S3 gateway listens on an address from reserve, through the #288 retry: a start that loses its port shuts the
+// platform down with its substrate, so each attempt builds and seeds its own (#464).
+func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image string) (*funcd.Platform, store.Store, string) {
+	t.Helper()
+	master := filepath.Join(t.TempDir(), "master.key")
+	require.NoError(t, os.WriteFile(master, []byte(siteMaster), 0o600))
+	var st store.Store
+	p, s3Addr := funcd.StartWithS3Gateway(t, reserve, func(s3Addr string, logger funcd.Option) (*funcd.Platform, error) {
+		ctx := context.Background()
+		bucket, err := gocloud.Open(ctx, "mem://")
+		require.NoError(t, err)
+		messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
+		require.NoError(t, err)
+		st = store.New(memory.New())
+		// Written straight into the substrate: the per-namespace view the S3 frontend, the static handler, and the
+		// Site reconciler share.
+		require.NoError(t, bucket.Put(ctx, "s3/"+siteNS+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows")))
+
+		siteObj := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
+		siteObj.Name, siteObj.Namespace, siteObj.ResourceGroup = "bi", siteNS, "rg1"
+		siteObj.Spec = v1.SiteSpec{
+			Image:   image,
+			Bucket:  v1.SiteBucket{Name: "reports", Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}},
+			Prefix:  "bi",
+			SPA:     true,
+			Ingress: v1.SiteIngress{Host: "bi.example.com", Public: true, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
+		}
+		seed(t, st, siteObj)
+		uploader := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+		uploader.Name, uploader.Namespace, uploader.ResourceGroup = "uploader", siteNS, "rg1"
+		uploader.Spec = v1.FunctionSpec{Runtime: "nodejs22", Blob: []v1.FunctionBlob{{Alias: "bi", Bucket: "reports", Prefix: "bi"}}}
+		seed(t, st, uploader)
+		ext := &v1.Identity{TypeMeta: v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity}}
+		ext.Name, ext.Namespace, ext.ResourceGroup = "publisher", siteNS, "rg1"
+		ext.Spec = v1.IdentitySpec{Type: v1.IdentityTypeExternal}
+		seed(t, st, ext)
+
+		return funcd.New(
+			funcd.WithBlob(bucket), funcd.WithBus(messaging),
+			funcd.WithStore(st), funcd.WithRuntime(process.New()),
+			funcd.WithGateway(embedded.New()), funcd.WithListenAddr("127.0.0.1:0"),
+			funcd.WithDataPlaneAddr("127.0.0.1:0"),
+			funcd.WithS3Gateway(s3Addr, "", 0, master, shortDataDir(t)),
+			funcd.WithDevAuth(funcd.DevToken, siteNS),
+			funcd.WithArtifactStore(shortDataDir(t)),
+			logger,
+		)
+	})
+	return p, st, s3Addr
+}
+
+// TestIssue464_SiteS3GatewayStartsWhenItsReservedPortIsTaken: the site scenario reserves its S3 gateway port and
+// releases it, so another listener can bind it before the gateway does. The platform must still serve S3 at the
+// address the scenario's clients use.
+func TestIssue464_SiteS3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
+	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": "<!doctype html>"})
+	reserve, taken := funcd.TakenPortReserve()
+	_, _, s3Addr := startSitePlatform(t, reserve, ref)
+	require.NotEqual(t, taken().Addr().String(), s3Addr, "the S3 clients target the port another listener holds")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := s3Client(t, "http://"+s3Addr, "unknown", "unknown").ListBuckets(ctx, &awss3.ListBucketsInput{})
+	require.Equal(t, http.StatusForbidden, s3Status(err), "the S3 gateway rejects an unknown key: %v", err)
 }
 
 func freeLoopbackAddr(t *testing.T) string {

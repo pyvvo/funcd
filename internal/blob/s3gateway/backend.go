@@ -40,9 +40,23 @@ type be struct {
 	maxUpload int64
 	log       *slog.Logger
 	mp        *multipartStore
+	life      context.Context // canceled when the gateway closes
 }
 
 var _ backend.Backend = (*be)(nil)
+
+// opContext gives a backend op its own context with the request's values (issue 462).
+// versitygw hands the backend fasthttp's pooled RequestCtx, whose Done reads server state that
+// Close rewrites unsynchronized, so a context derived from it races the shutdown. The op's
+// context ends when the op returns or the gateway closes.
+func (b *be) opContext(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(b.life, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
 
 // accessDenied is the S3 403 the PEP returns on a deny (ADR-0080).
 func accessDenied() error { return s3err.GetAPIError(s3err.ErrAccessDenied) }
@@ -143,8 +157,12 @@ func mapBlobErr(err error) error {
 
 // GetObject serves a GET (ADR-0080), honoring a byte-range via GetObjectInput.Range.
 // A driver implementing blob.RangeReader serves the range directly; otherwise the
-// gateway falls back to a full Get + slice (rangereader-fallback scenario).
+// gateway falls back to a full Get + slice (rangereader-fallback scenario). A ranged GET
+// sends no ETag, like HEAD: the object's MD5 needs the whole body, and an MD5 of the range
+// would change from range to range.
 func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.GetObjectOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
 	sub, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix)
@@ -164,14 +182,17 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 		return nil, err
 	}
 
-	return &awss3.GetObjectOutput{
+	out := &awss3.GetObjectOutput{
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: ptr(int64(len(data))),
 		ContentRange:  contentRange,
 		LastModified:  ptr(time.Now().UTC()),
 		AcceptRanges:  ptr("bytes"),
-		ETag:          ptr(etag(data)),
-	}, nil
+	}
+	if contentRange == nil {
+		out.ETag = ptr(etag(data))
+	}
+	return out, nil
 }
 
 // getRange serves a Range header the way S3 does (RFC 9110 §14): the object size bounds
@@ -232,6 +253,8 @@ func objectSize(ctx context.Context, sub blob.Bucket, key string) (int64, error)
 // attributes, never its body. It reports no ETag, like the listing: the MD5 needs the whole body, and a HEAD
 // ETag that differs from a ranged GET's fails DuckDB's per-read ETag check.
 func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.HeadObjectOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
 	sub, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix)
@@ -253,6 +276,8 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 
 // listing collects the objects under a bound prefix that match an optional sub-prefix.
 func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix string) ([]s3response.Object, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	prefix, objPrefix := splitKey(keyPrefix)
 	sub, _, err := b.authorize(ctx, action, bucket, prefix)
 	if err != nil {
@@ -384,6 +409,8 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 // PutObject writes an object (ADR-0080): s3::write, single-writer (owner). The body is
 // buffered (bounded by maxUpload) then Put once — the blob port has no streaming seam.
 func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
@@ -402,6 +429,8 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 
 // DeleteObject removes an object (ADR-0080): s3::write.
 func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*awss3.DeleteObjectOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
@@ -416,6 +445,8 @@ func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*aw
 
 // DeleteObjects is the batch delete (ADR-0080): each key is a per-object s3::write PEP.
 func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s3response.DeleteResult, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	var res s3response.DeleteResult
 	if in.Delete == nil {
@@ -466,6 +497,8 @@ func (b *be) bound(ctx context.Context, pr principal, bkt v1.Bucket) (bool, erro
 // the caller is bound to it (ADR-0080). Like the object PEP, any other case is 403, so
 // an unbound caller cannot tell an existing bucket from a missing one.
 func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.HeadBucketOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	pr, err := b.caller(ctx)
 	if err != nil {
 		return nil, err
@@ -492,6 +525,8 @@ func (b *be) HeadBucket(ctx context.Context, in *awss3.HeadBucketInput) (*awss3.
 // ListBuckets returns the Buckets the caller is bound to (ADR-0080), filtered by the
 // request prefix.
 func (b *be) ListBuckets(ctx context.Context, in s3response.ListBucketsInput) (s3response.ListAllMyBucketsResult, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	pr, err := b.caller(ctx)
 	if err != nil {
 		return s3response.ListAllMyBucketsResult{}, err

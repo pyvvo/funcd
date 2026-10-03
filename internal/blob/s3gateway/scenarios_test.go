@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -548,4 +549,114 @@ func TestIssue380_ETagsAreQuoted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, parts.Parts, 1)
 	require.Equal(t, want, aws.ToString(parts.Parts[0].ETag), "ListParts")
+}
+
+// TestIssue425_RangedGetKeepsObjectETag: a ranged GET never sends an ETag computed over the range.
+// It carries the object's ETag (the one PutObject and a full GET return) or none, on both the
+// RangeReader path and the full-Get fallback.
+func TestIssue425_RangedGetKeepsObjectETag(t *testing.T) {
+	drivers := map[string]func(t *testing.T) blob.Bucket{
+		"range-reader": memBucket,
+		"fallback":     func(t *testing.T) blob.Bucket { return noRangeBucket{inner: memBucket(t)} },
+	}
+	for name, makeBucket := range drivers {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeBucket)
+			ctx := context.Background()
+			reader := g.client(t, "default", "analytics")
+			bucket, key := ptrS("lakehouse"), ptrS("bronze/abc.bin")
+
+			put, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+				Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("abcdefgh")),
+			})
+			require.NoError(t, err)
+			want := aws.ToString(put.ETag)
+
+			full, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key})
+			require.NoError(t, err)
+			require.NoError(t, full.Body.Close())
+			require.Equal(t, want, aws.ToString(full.ETag), "a full GET carries the PutObject ETag")
+
+			for _, rng := range []string{"bytes=0-3", "bytes=4-7"} {
+				out, gerr := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, Range: ptrS(rng)})
+				require.NoError(t, gerr, "Range %s", rng)
+				require.NoError(t, out.Body.Close())
+				require.NotEmpty(t, aws.ToString(out.ContentRange), "Range %s is a 206", rng)
+				if got := aws.ToString(out.ETag); got != "" {
+					require.Equal(t, want, got, "Range %s must carry the object's ETag or none", rng)
+				}
+			}
+		})
+	}
+}
+
+// ctxBucket hands the test the context of each Put; with block set, the Put waits for that
+// context to end instead of writing.
+type ctxBucket struct {
+	blob.Bucket
+	puts  chan context.Context
+	block atomic.Bool
+}
+
+func (c *ctxBucket) Put(ctx context.Context, key string, data []byte) error {
+	c.puts <- ctx
+	if c.block.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.Bucket.Put(ctx, key, data)
+}
+
+// Issue #462: the substrate never gets fasthttp's pooled RequestCtx, whose Done reads server
+// state that Close rewrites. Its context ends with the request, so nothing derived from it
+// (gocloud's NewWriter) outlives the request, and Close still cancels an op in flight.
+func TestIssue462_BlobContextEndsWithRequest(t *testing.T) {
+	sub := &ctxBucket{puts: make(chan context.Context, 1)}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket {
+		t.Helper()
+		sub.Bucket = memBucket(t)
+		return sub
+	})
+	owner := g.client(t, "default", "etl-svc")
+	put := func() error {
+		_, err := owner.PutObject(context.Background(), &awss3.PutObjectInput{
+			Bucket: ptrS("lakehouse"), Key: ptrS("bronze/x.parquet"), Body: bytes.NewReader([]byte("rows")),
+		}, func(o *awss3.Options) { o.RetryMaxAttempts = 1 })
+		return err
+	}
+
+	require.NoError(t, put())
+	require.ErrorIs(t, (<-sub.puts).Err(), context.Canceled, "the blob context ends with the request")
+
+	sub.block.Store(true)
+	errc := make(chan error, 1)
+	go func() { errc <- put() }()
+	inFlight := <-sub.puts
+	require.NoError(t, g.server.Close())
+	require.ErrorIs(t, inFlight.Err(), context.Canceled, "Close cancels a blob op in flight")
+	require.Error(t, <-errc)
+}
+
+// TestIssue463_GatewayStartsWhenItsReservedPortIsTaken: freeAddr releases the port it reserves, so another test
+// process can bind it before the gateway does. newGateway must still bring the gateway up, on another port,
+// instead of waiting out the readiness timeout.
+func TestIssue463_GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
+	var taken net.Listener
+	takeReservedPort := func(d *s3gateway.Deps) {
+		if taken != nil {
+			return
+		}
+		l, err := net.Listen("tcp", d.Listen)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = l.Close() })
+		taken = l
+	}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket, takeReservedPort)
+	require.NotEqual(t, taken.Addr().String(), g.server.Addr(), "the gateway reports the port another listener holds")
+
+	g.seed(t, "default", "lakehouse", "gold/q.parquet", []byte("rows"))
+	out, err := g.client(t, "default", "analytics").GetObject(context.Background(),
+		&awss3.GetObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet")})
+	require.NoError(t, err)
+	require.NoError(t, out.Body.Close())
 }

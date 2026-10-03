@@ -250,3 +250,42 @@ func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 	}
 	require.Positive(t, stored, "at least one cap must be accepted and stored")
 }
+
+// rawMeta serves objects as persisted, without the store's write-time Validate: a metastore written by an
+// older release can hold a spec that today's Validate rejects.
+type rawMeta map[v1.ObjectName]v1.Object
+
+func (m rawMeta) Get(_ context.Context, gvk v1.GroupVersionKind, _ v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if o, ok := m[name]; ok && o.GroupVersionKind() == gvk {
+		return o, nil
+	}
+	return nil, fault.NotFoundf("rawMeta", "%s %q not found", gvk.Kind, name)
+}
+
+// TestIssue461_StoredOverLimitCapsAreClamped — a KVStore persisted before #377/#169 can hold caps above
+// MaxKeyBytesLimit/MaxValueBytesLimit. The resolved binding clamps them, so an over-limit key or value is
+// Invalid at the facade instead of reaching Badger (Internal) or the local API's put buffer.
+func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: "fn"})
+	ks.Spec.MaxKeyBytes, ks.Spec.MaxValueBytes = 100000, 4<<20
+	require.Error(t, ks.Validate(), "precondition: today's Validate rejects the stored caps")
+	r, err := kv.NewResolver(rawMeta{
+		"fn":     mkFunctionWithKV("fn", v1.FunctionKV{Alias: "b", Store: "legacy", Table: "t"}),
+		"legacy": ks,
+	})
+	require.NoError(t, err)
+	db, err := kvbadger.Open(t.TempDir(), kvbadger.WithSyncWrites(false), kvbadger.WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.(io.Closer).Close() })
+	f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: r, Authorizer: allowAll{}})
+	require.NoError(t, err)
+
+	err = f.Put(ctx, "default", "fn", "b", strings.Repeat("k", 70000), []byte("v"))
+	require.Equalf(t, fault.Invalid, fault.KindOf(err), "a 70000-byte key is over MaxKeyBytesLimit: %.200v", err)
+	err = f.Put(ctx, "default", "fn", "b", "k", make([]byte, v1.MaxValueBytesLimit+1))
+	require.Equalf(t, fault.Invalid, fault.KindOf(err), "a value over MaxValueBytesLimit: %.200v", err)
+	require.NoError(t, f.Put(ctx, "default", "fn", "b", strings.Repeat("k", v1.MaxKeyBytesLimit), []byte("v")),
+		"a key at MaxKeyBytesLimit is stored")
+}
