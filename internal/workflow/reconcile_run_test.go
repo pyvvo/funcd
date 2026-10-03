@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -554,6 +555,62 @@ func TestIssue420_WhenOnOptionalOutputFieldFollowsDefaultsRule(t *testing.T) {
 	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
 	if st := got.(*v1.WorkflowRun).Status; st.Phase != runSucceeded || f.calls["b"] != 1 {
 		t.Fatalf("run phase=%q conditions=%+v b calls=%d, want Succeeded with b run on the bound default", st.Phase, st.Conditions, f.calls["b"])
+	}
+}
+
+// Issue #494: the derived workflow input keeps a root property's schema default, so a when on that
+// optional input field type-checks at reconcile and the run binds the default when the input omits it.
+func TestIssue494_WhenOnDefaultedInputFieldBindsDefault(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a": {Input: json.RawMessage(`{"type":"object","properties":{"x":{"type":"string","default":"d"}}}`)},
+		"oci:b": {},
+	}}
+	b := fnStep("b", "oci:b", "a")
+	b.When = &v1.StepWhen{Condition: `${{ input.x === "d" }}`}
+	seedWF(t, s, "defaulted", nil, fnStep("a", "oci:a"), b)
+	wf, _ := reconcileByName(t, s, c, "defaulted")
+	if !ready(wf) {
+		t.Fatalf("when on a defaulted optional input field must be Ready, got %+v", wf.Status.Conditions)
+	}
+	var in struct {
+		Properties map[string]struct {
+			Default json.RawMessage `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(wf.Status.Contract.Input, &in); err != nil || string(in.Properties["x"].Default) != `"d"` {
+		t.Fatalf("status.contract.input = %s, want x to keep its default \"d\"", wf.Status.Contract.Input)
+	}
+
+	seedRun(t, s, "defaulted-1", "defaulted", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
+	if st := got.(*v1.WorkflowRun).Status; st.Phase != runSucceeded || f.calls["b"] != 1 {
+		t.Fatalf("run phase=%q conditions=%+v b calls=%d, want Succeeded with b run on the bound input default", st.Phase, st.Conditions, f.calls["b"])
+	}
+
+	rs := newRunState(spec(step("x", ""), step("y", "")))
+	rs.steps["y"].dependsOn = nil // force a second root, as TestDeriveWorkflowContract does
+	roots := func(dx, dy string) map[v1.ObjectName]v1.WorkflowContract {
+		return map[v1.ObjectName]v1.WorkflowContract{
+			"x": {Input: json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer","default":` + dx + `}}}`)},
+			"y": {Input: json.RawMessage(`{"type":"object","properties":{"n":{"type":"integer","default":` + dy + `}}}`)},
+		}
+	}
+	var sc *schemaConflict
+	if _, err := deriveWorkflowContract(rs, roots("1", "2")); !errors.As(err, &sc) {
+		t.Fatalf("roots with different defaults for one field: err=%v, want a RootSchemaConflict", err)
+	}
+	if _, err := deriveWorkflowContract(rs, roots("1", " 1 ")); err != nil {
+		t.Fatalf("roots with the same default must merge, got %v", err)
 	}
 }
 

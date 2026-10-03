@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -59,12 +60,14 @@ func compositeSchema(parentOutputs map[v1.ObjectName]json.RawMessage) json.RawMe
 	return b
 }
 
-// deriveWorkflowContract combines the root steps' input schemas (a conflicting primitive on a shared
-// required field ⇒ error, RootSchemaConflict) and composes the leaf outputs: a single leaf ⇒ its output
-// verbatim, multiple leaves ⇒ the composite keyed by step name (symmetric with the run-output model).
+// deriveWorkflowContract combines the root steps' input schemas, keeping each property's default so a
+// when: on input binds it (ADR-0095); a conflicting primitive or default on a shared field ⇒ error,
+// RootSchemaConflict. It composes the leaf outputs: a single leaf ⇒ its output verbatim, multiple
+// leaves ⇒ the composite keyed by step name (symmetric with the run-output model).
 // The onFailure handler is outside the DAG, so it is never a root (ADR-0094).
 func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.WorkflowContract) (v1.WorkflowContract, error) {
 	mergedProps := map[string]string{}
+	mergedDefaults := map[string]json.RawMessage{}
 	requiredSet := map[string]bool{}
 	dialect := ""
 	for _, name := range rs.dagSteps() {
@@ -82,15 +85,21 @@ func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.Workflo
 		in := v1.ParseSchemaView(c.Input)
 		for field, typ := range in.Props {
 			if prev, seen := mergedProps[field]; seen && prev != typ {
-				return v1.WorkflowContract{}, &schemaConflict{field: field, a: prev, b: typ}
+				return v1.WorkflowContract{}, &schemaConflict{field: field, what: "types", a: prev, b: typ}
 			}
 			mergedProps[field] = typ
+		}
+		for field, def := range in.Defaults {
+			if prev, seen := mergedDefaults[field]; seen && !sameJSONValue(prev, def) {
+				return v1.WorkflowContract{}, &schemaConflict{field: field, what: "defaults", a: string(prev), b: string(def)}
+			}
+			mergedDefaults[field] = def
 		}
 		for _, r := range in.Required {
 			requiredSet[r] = true
 		}
 	}
-	input := marshalObjectSchema(mergedProps, requiredSet)
+	input := marshalObjectSchema(mergedProps, mergedDefaults, requiredSet)
 
 	leaves := rs.leaves()
 	var output json.RawMessage
@@ -108,20 +117,36 @@ func deriveWorkflowContract(rs *runState, contracts map[v1.ObjectName]v1.Workflo
 	return v1.WorkflowContract{Dialect: dialect, Input: input, Output: output}, nil
 }
 
-// schemaConflict is a RootSchemaConflict: two roots require the same field at different primitive types.
+// schemaConflict is a RootSchemaConflict: two roots declare the same field with different primitive
+// types or different defaults.
 type schemaConflict struct {
-	field, a, b string
+	field, what, a, b string
 }
 
 func (e *schemaConflict) Error() string {
-	return fmt.Sprintf("root steps require field %q at conflicting types %s vs %s", e.field, e.a, e.b)
+	return fmt.Sprintf("root steps declare field %q with conflicting %s %s vs %s", e.field, e.what, e.a, e.b)
 }
 
-// marshalObjectSchema builds an object JSON Schema from a props map + required set.
-func marshalObjectSchema(props map[string]string, required map[string]bool) json.RawMessage {
-	p := map[string]map[string]string{}
+// sameJSONValue reports whether two JSON values are the same text, ignoring insignificant whitespace.
+func sameJSONValue(a, b json.RawMessage) bool {
+	var ca, cb bytes.Buffer
+	if json.Compact(&ca, a) != nil || json.Compact(&cb, b) != nil {
+		return bytes.Equal(a, b)
+	}
+	return bytes.Equal(ca.Bytes(), cb.Bytes())
+}
+
+// propSchema is one property of a marshalled object schema.
+type propSchema struct {
+	Type    string          `json:"type"`
+	Default json.RawMessage `json:"default,omitempty"`
+}
+
+// marshalObjectSchema builds an object JSON Schema from a props map, their defaults and a required set.
+func marshalObjectSchema(props map[string]string, defaults map[string]json.RawMessage, required map[string]bool) json.RawMessage {
+	p := map[string]propSchema{}
 	for name, typ := range props {
-		p[name] = map[string]string{"type": typ}
+		p[name] = propSchema{Type: typ, Default: defaults[name]}
 	}
 	req := make([]string, 0, len(required))
 	for r := range required {

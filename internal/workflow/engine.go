@@ -942,6 +942,7 @@ type failureContext struct {
 func failureContextSchema() json.RawMessage {
 	return marshalObjectSchema(
 		map[string]string{"workflow": "string", "run": "string", "failedStep": "string", "reason": "string", "input": "object"},
+		nil,
 		map[string]bool{"workflow": true, "run": true, "failedStep": true, "reason": true, "input": true},
 	)
 }
