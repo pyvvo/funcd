@@ -2,7 +2,9 @@ package bench
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -69,4 +71,22 @@ func TestBenchSmoke(t *testing.T) {
 	require.NoError(t, err)
 	require.FileExists(t, pmd, "pool markdown report (pool-throughput-bench)")
 	require.FileExists(t, pjs, "pool json report (pool-throughput-bench)")
+}
+
+// issue 434: the file backend's blob dir opens when its path holds URL syntax ('#', '?', '%'), as it does under a
+// TMPDIR with such a name, and an object written through the bucket lands in exactly that dir.
+func TestIssue434_FileBlobDirWithURLSyntaxOpens(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name, "blob")
+			b, err := openFileBlob(ctx, dir)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			require.NoError(t, b.Put(ctx, "k", []byte("v")))
+			got, err := os.ReadFile(filepath.Join(dir, "k"))
+			require.NoError(t, err)
+			require.Equal(t, "v", string(got))
+		})
+	}
 }

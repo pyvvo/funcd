@@ -308,3 +308,22 @@ func TestResolvePersistPlanBackendOverrides(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "metastore"), p3.storeDir, "metastore is still durable under --persist")
 	require.Equal(t, filepath.Join(root, "blob"), p3.blobDir, "blob defaults to durable under --persist")
 }
+
+// issue 434: a durable blob dir whose path holds URL syntax ('#', '?', '%') opens, and an object written through
+// the bucket lands in exactly that dir.
+func TestIssue434_DurableBlobDirWithURLSyntaxOpens(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name, "blob")
+			m := &sdk.Manifest{Dev: sdk.Dev{Backends: sdk.Backends{Blob: dir}}}
+			_, _, bkt, closeAll, err := buildPersistDrivers("t", devConfig{}, m)
+			require.NoError(t, err)
+			t.Cleanup(closeAll)
+			require.NoError(t, bkt.Put(ctx, "k", []byte("v")))
+			got, err := os.ReadFile(filepath.Join(dir, "k"))
+			require.NoError(t, err)
+			require.Equal(t, "v", string(got))
+		})
+	}
+}
