@@ -86,7 +86,7 @@ func fakeImage(t *testing.T) (content.Store, digest.Digest, ocispec.Descriptor) 
 }
 
 // fakeClient is a containerd client over in-memory services: it creates containers and tasks but runs nothing.
-func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs *memContainers, snaps map[string]snapshots.Snapshotter) *containerd.Client {
+func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs containers.Store, snaps map[string]snapshots.Snapshotter) *containerd.Client {
 	t.Helper()
 	client, err := containerd.New("", containerd.WithServices(
 		containerd.WithContentStore(cs),
@@ -151,6 +151,27 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 	_, err = d.Create(ctx, spec)
 	require.NoError(t, err, "the image is present but its layers are only in another snapshotter, so Create must unpack it first")
 	require.True(t, native.keys[layer.Digest.String()], "the layer must be unpacked into the configured snapshotter")
+}
+
+// Issue 493: containerd imports a curated tar under its normalized name (docker.io/funcd/runtime-<rt>:latest), so a
+// later Create of the short curated ref must find that image instead of importing the embedded tar again.
+func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
+	ctx := leases.WithLease(context.Background(), "issue493")
+	cs, layer, manifest := fakeImage(t)
+	spec := runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "issue493",
+		Revision:  "issue493-1",
+		Image:     "funcd/runtime-nodejs22:latest",
+		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+	}
+	overlay := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
+	client := fakeClient(t, cs, images.Image{Name: "docker.io/" + spec.Image, Target: manifest},
+		&memContainers{records: map[string]containers.Container{}}, map[string]snapshots.Snapshotter{"overlayfs": overlay})
+	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+
+	_, err := d.Create(ctx, spec)
+	require.NoError(t, err, "the curated image is already imported under its normalized name, so Create must use it, not import the embedded tar again")
 }
 
 func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocispec.Descriptor {
@@ -260,7 +281,13 @@ type oneImage struct {
 	img images.Image
 }
 
-func (s oneImage) Get(context.Context, string) (images.Image, error) { return s.img, nil }
+// Get matches names exactly, like containerd's image store.
+func (s oneImage) Get(_ context.Context, name string) (images.Image, error) {
+	if name != s.img.Name {
+		return images.Image{}, fmt.Errorf("image %q: %w", name, errdefs.ErrNotFound)
+	}
+	return s.img, nil
+}
 
 type noNamespaceLabels struct{ namespaces.Store }
 
