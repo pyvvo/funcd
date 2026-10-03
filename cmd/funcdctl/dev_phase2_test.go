@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -88,6 +89,27 @@ func devS3Client(t *testing.T, inst *devInstance) *awss3.Client {
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
+}
+
+// TestIssue432_DevFailsWhenS3PortIsTaken: another process holds the S3 frontend's port. The gateway binds it only
+// when the platform runs, so startDev must fail instead of returning an endpoint the gateway never bound.
+func TestIssue432_DevFailsWhenS3PortIsTaken(t *testing.T) {
+	requireRuntime(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = taken.Close() })
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{s3port: taken.Addr().(*net.TCPAddr).Port})
+	if err == nil {
+		cancel()
+		_ = inst.stop()
+	}
+	require.ErrorIs(t, err, syscall.EADDRINUSE, "funcdctl dev showed an S3 endpoint the gateway never bound")
 }
 
 // scenario: dev-inspect-blob-via-s3 — a function bound to a bucket writes an object THROUGH the dev S3

@@ -712,6 +712,9 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 			<-inst.runErr
 		}
 	}()
+	if serr := p.WaitS3Gateway(runCtx); serr != nil {
+		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "serve the S3 frontend on %s", inst.s3Endpoint)
+	}
 
 	client, cerr := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
 	if cerr != nil {
@@ -1027,7 +1030,8 @@ func devS3Options(op string, opts *[]funcd.Option, fnName string, s3port int, in
 
 // freeLocalAddr reserves an ephemeral node-private TCP address by binding :0 and releasing it — the
 // s3gateway binds its own listener at Run and only reports the configured address, so `funcdctl dev`
-// picks a concrete free port up front (a small, dev-acceptable bind race). Loopback only.
+// picks a concrete free port up front. Another process can take it before the gateway binds it; bootDev
+// then fails on WaitS3Gateway instead of showing the endpoint. Loopback only.
 func freeLocalAddr() (string, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
