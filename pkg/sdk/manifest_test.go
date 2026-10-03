@@ -303,6 +303,61 @@ spec:
 	require.Contains(t, err.Error(), "paused")
 }
 
+// A plain scalar that YAML reads as a number or a boolean keeps its text when it lands in a string — a
+// string field, a []string element or a map key: 1.10, 0755, 0x1F and 1e3 never become 1.1, 493, 31 and
+// 1000. A number field still gets the number.
+func TestIssue416_NumberLikeTextInStringFieldKeepsText(t *testing.T) {
+	obj, err := sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: c
+  namespace: default
+  tags:
+    0755: 1.10
+spec:
+  data:
+    VERSION: 1.10
+    MODE: 0755
+    HEX: 0x1F
+    EXP: 1e3
+    FLAG: True
+    PORT: 8080
+`))
+	require.NoError(t, err)
+	cm, ok := obj.(*v1.ConfigMap)
+	require.True(t, ok)
+	require.Equal(t, map[string]string{
+		"VERSION": "1.10",
+		"MODE":    "0755",
+		"HEX":     "0x1F",
+		"EXP":     "1e3",
+		"FLAG":    "True",
+		"PORT":    "8080",
+	}, cm.Spec.Data)
+	require.Equal(t, v1.Tags{"0755": "1.10"}, cm.Tags)
+
+	obj, err = sdk.DecodeManifest([]byte(`
+apiVersion: funcd.io/v1alpha1
+kind: EgressPolicy
+metadata:
+  name: e
+  namespace: default
+spec:
+  rules:
+    - to:
+        domains:
+          - 1.10
+      ports:
+        - 0x1BB
+`))
+	require.NoError(t, err)
+	ep, ok := obj.(*v1.EgressPolicy)
+	require.True(t, ok)
+	require.Equal(t, []string{"1.10"}, ep.Spec.Rules[0].To.Domains)
+	require.Equal(t, []int{443}, ep.Spec.Rules[0].Ports)
+}
+
 // A manifest key the typed object does not know is rejected at decode, not silently dropped before the
 // request is built: the server's additionalProperties:false edge (ADR-0108 no-binding-field-schema) never
 // sees a key the client discarded, so `funcdctl apply` would report a manifest applied that was not.

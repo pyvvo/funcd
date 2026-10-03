@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -329,11 +331,7 @@ func DecodeManifestDocuments(data []byte) ([]ManifestDocument, error) {
 			continue
 		}
 		quoteStrings(&doc)
-		raw, err := yamlv3.Marshal(&doc)
-		if err != nil {
-			return nil, fault.Invalidf(op, "re-encode manifest document %d: %v", n, err)
-		}
-		obj, err := decodeDocument(raw)
+		obj, err := decodeDocument(&doc)
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "manifest document %d", n)
 		}
@@ -346,7 +344,11 @@ func DecodeManifestDocuments(data []byte) ([]ManifestDocument, error) {
 }
 
 // decodeDocument decodes one manifest document into its concrete v1.Object.
-func decodeDocument(data []byte) (v1.Object, error) {
+func decodeDocument(doc *yamlv3.Node) (v1.Object, error) {
+	data, err := yamlv3.Marshal(doc)
+	if err != nil {
+		return nil, fault.Invalidf("sdk.DecodeManifest", "re-encode manifest: %v", err)
+	}
 	// sigs.k8s.io/yaml accepts YAML *and* JSON (JSON is valid YAML), so `apply` takes either —
 	// the kubectl-style manifest experience, reusing the api/types json tags.
 	var tm v1.TypeMeta
@@ -359,6 +361,10 @@ func decodeDocument(data []byte) (v1.Object, error) {
 	obj, ok := v1.NewObject(tm.Kind)
 	if !ok {
 		return nil, fault.Invalidf("sdk.DecodeManifest", "unknown kind %q", tm.Kind)
+	}
+	quoteTextScalars(doc, reflect.TypeOf(obj))
+	if data, err = yamlv3.Marshal(doc); err != nil {
+		return nil, fault.Invalidf("sdk.DecodeManifest", "re-encode manifest: %v", err)
 	}
 	// Strict: a key the typed object lacks would be dropped by toWireBody before the server's
 	// additionalProperties:false edge could reject it (ADR-0108), so the apply would report success.
@@ -379,6 +385,109 @@ func quoteStrings(n *yamlv3.Node) {
 	for _, c := range n.Content {
 		quoteStrings(c)
 	}
+}
+
+// quoteTextScalars double-quotes every plain scalar that YAML reads as a number or a boolean when it lands
+// in a string: a mapping key, or a value whose target type t (walked by json tags) is a string. sigs.k8s.io/yaml
+// would parse it and format the value back, so 1.10, 0755 and 0x1F would reach a string field as "1.1", "493"
+// and "31" (issue #416). A value bound for a number, bool, json.RawMessage or any field keeps its type.
+func quoteTextScalars(n *yamlv3.Node, t reflect.Type) {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch n.Kind {
+	case yamlv3.DocumentNode:
+		for _, c := range n.Content {
+			quoteTextScalars(c, t)
+		}
+	case yamlv3.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key := n.Content[i]
+			quoteTextScalar(key)
+			var vt reflect.Type
+			switch {
+			case t == nil:
+			case t.Kind() == reflect.Map:
+				vt = t.Elem()
+			case t.Kind() == reflect.Struct:
+				vt = jsonFieldType(t, key.Value)
+			}
+			quoteTextScalars(n.Content[i+1], vt)
+		}
+	case yamlv3.SequenceNode:
+		var et reflect.Type
+		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+			et = t.Elem()
+		}
+		for _, c := range n.Content {
+			quoteTextScalars(c, et)
+		}
+	case yamlv3.ScalarNode:
+		if t != nil && t.Kind() == reflect.String {
+			quoteTextScalar(n)
+		}
+	}
+}
+
+func quoteTextScalar(n *yamlv3.Node) {
+	if n.Kind != yamlv3.ScalarNode || n.Style != 0 {
+		return
+	}
+	switch n.ShortTag() {
+	case "!!int", "!!float", "!!bool":
+		n.Tag = "!!str"
+		n.Style = yamlv3.DoubleQuotedStyle
+	}
+}
+
+// jsonFieldType returns the type of the field of struct t that encoding/json decodes key into: an exact
+// name match first, then a case-insensitive one. It returns nil when no field matches.
+func jsonFieldType(t reflect.Type, key string) reflect.Type {
+	var fold reflect.Type
+	for _, f := range jsonFields(t) {
+		if f.Name == key {
+			return f.Type
+		}
+		if fold == nil && strings.EqualFold(f.Name, key) {
+			fold = f.Type
+		}
+	}
+	return fold
+}
+
+// jsonFields lists the fields of struct t under their json names, with the fields of an untagged or
+// `json:",inline"` embedded struct promoted unless an outer field has the same name.
+func jsonFields(t reflect.Type) []reflect.StructField {
+	var own, promoted []reflect.StructField
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if et := f.Type; f.Anonymous && name == "" {
+			if et.Kind() == reflect.Pointer {
+				et = et.Elem()
+			}
+			if et.Kind() == reflect.Struct {
+				promoted = append(promoted, jsonFields(et)...)
+				continue
+			}
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if name != "" {
+			f.Name = name
+		}
+		own = append(own, f)
+	}
+	for _, p := range promoted {
+		if !slices.ContainsFunc(own, func(o reflect.StructField) bool { return o.Name == p.Name }) {
+			own = append(own, p)
+		}
+	}
+	return own
 }
 
 // problemToFault maps a non-2xx response to a typed fault.Error. It keys on the JSON
