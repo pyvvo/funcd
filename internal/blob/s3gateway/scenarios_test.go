@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -634,4 +635,28 @@ func TestIssue462_BlobContextEndsWithRequest(t *testing.T) {
 	require.NoError(t, g.server.Close())
 	require.ErrorIs(t, inFlight.Err(), context.Canceled, "Close cancels a blob op in flight")
 	require.Error(t, <-errc)
+}
+
+// TestIssue463_GatewayStartsWhenItsReservedPortIsTaken: freeAddr releases the port it reserves, so another test
+// process can bind it before the gateway does. newGateway must still bring the gateway up, on another port,
+// instead of waiting out the readiness timeout.
+func TestIssue463_GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
+	var taken net.Listener
+	takeReservedPort := func(d *s3gateway.Deps) {
+		if taken != nil {
+			return
+		}
+		l, err := net.Listen("tcp", d.Listen)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = l.Close() })
+		taken = l
+	}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket, takeReservedPort)
+	require.NotEqual(t, taken.Addr().String(), g.server.Addr(), "the gateway reports the port another listener holds")
+
+	g.seed(t, "default", "lakehouse", "gold/q.parquet", []byte("rows"))
+	out, err := g.client(t, "default", "analytics").GetObject(context.Background(),
+		&awss3.GetObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("gold/q.parquet")})
+	require.NoError(t, err)
+	require.NoError(t, out.Body.Close())
 }
