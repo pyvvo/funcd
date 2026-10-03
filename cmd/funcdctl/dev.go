@@ -691,6 +691,8 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 
 	opts = append(opts, shimOpts...)
 	p, nerr := funcd.New(opts...)
+	// New owns the durable drivers from here: a failed New has closed them, a platform closes them on Shutdown.
+	closeDurable = nil
 	if nerr != nil {
 		return nil, nerr
 	}
@@ -698,7 +700,16 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, extraOb
 	inst.gatewayURL = "http://" + p.DataPlaneAddr()
 	inst.controlURL = "http://" + p.Addr()
 
-	go func() { inst.runErr <- p.Run(ctx) }()
+	// A boot that fails once Run is up stops the platform (Run's Shutdown closes its drivers) before the
+	// cleanups run, so no controller outlives the boot on a released driver.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	go func() { inst.runErr <- p.Run(runCtx) }()
+	defer func() {
+		if err != nil {
+			cancelRun()
+			<-inst.runErr
+		}
+	}()
 
 	client, cerr := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
 	if cerr != nil {

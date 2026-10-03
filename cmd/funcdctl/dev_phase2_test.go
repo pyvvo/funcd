@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -156,22 +157,35 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.Equal(t, blobVal, gotBlob)
 }
 
-// conflictOnFirstPut answers the first PUT of one Function with the store conflict the control plane returns
-// when a controller writes the object's status between the API's read and its update (ADR-0018 read-RV-then-
-// update), and passes every other request through.
-type conflictOnFirstPut struct {
-	next http.RoundTripper
-	name string
-	hit  atomic.Bool
+// failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every
+// other request through, and reports whether that PUT was made. startDev builds its SDK client from
+// http.DefaultClient, so its transport is the only seam on an apply.
+func failFirstPut(t *testing.T, name string, problem error) *atomic.Bool {
+	t.Helper()
+	prev := http.DefaultClient.Transport
+	next := prev
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	f := &firstPutFault{next: next, path: "/apis/funcd.io/v1alpha1/namespaces/default/functions/" + name, problem: problem}
+	http.DefaultClient.Transport = f
+	t.Cleanup(func() { http.DefaultClient.Transport = prev })
+	return &f.hit
 }
 
-func (c *conflictOnFirstPut) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method != http.MethodPut || r.URL.Path != "/apis/funcd.io/v1alpha1/namespaces/default/functions/"+c.name ||
-		!c.hit.CompareAndSwap(false, true) {
-		return c.next.RoundTrip(r)
+type firstPutFault struct {
+	next    http.RoundTripper
+	path    string
+	problem error
+	hit     atomic.Bool
+}
+
+func (f *firstPutFault) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodPut || r.URL.Path != f.path || !f.hit.CompareAndSwap(false, true) {
+		return f.next.RoundTrip(r)
 	}
 	rec := httptest.NewRecorder()
-	fault.WriteProblem(rec, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", c.name))
+	fault.WriteProblem(rec, f.problem)
 	return rec.Result(), nil
 }
 
@@ -194,22 +208,54 @@ func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
 	cancel1()
 	require.NoError(t, inst1.stop())
 
-	// startDev builds its SDK client from http.DefaultClient, so its transport is the only seam on the re-apply.
-	prev := http.DefaultClient.Transport
-	next := prev
-	if next == nil {
-		next = http.DefaultTransport
-	}
-	conflict := &conflictOnFirstPut{next: next, name: name}
-	http.DefaultClient.Transport = conflict
-	t.Cleanup(func() { http.DefaultClient.Transport = prev })
+	// The store conflict the control plane returns when a controller writes the Function's status between the
+	// API's read and its update (ADR-0018 read-RV-then-update).
+	hit := failFirstPut(t, name, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", name))
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	t.Cleanup(cancel2)
 	inst2, err := a.startDev(ctx2, dir, "", cfg)
 	require.NoError(t, err, "a Conflict on the re-apply is retried, not fatal to the boot")
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
-	require.True(t, conflict.hit.Load(), "the re-apply met the injected Conflict")
+	require.True(t, hit.Load(), "the re-apply met the injected Conflict")
+}
+
+// A boot that fails once its platform runs must stop that platform before returning, so the platform's Shutdown
+// closes each durable driver once and none is closed under its running controllers: the control port is free
+// again and a retry reopens the same --persist dir.
+func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
+	requireRuntime(t)
+	const name = "issue426"
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	root, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	cport := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	a := &cli{out: io.Discard}
+	cfg := devConfig{persist: true, persistTo: root, cport: cport, name: name}
+
+	hit := failFirstPut(t, name, fault.Invalidf("admission", "Function %q rejected", name))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	_, err = a.startDev(ctx, dir, "", cfg)
+	require.Error(t, err, "a rejected apply fails the boot")
+	require.True(t, hit.Load(), "the boot failed on the injected apply rejection, after its platform started")
+
+	conn, derr := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+	if derr == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, derr, "a failed boot stops the platform it started")
+
+	inst, err := a.startDev(ctx, dir, "", cfg)
+	require.NoError(t, err, "the failed boot released the control port and the durable drivers")
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
 }
 
 // scenario: dev-persist-survives-restart (secrets facet) — secrets are NEVER served from the durable
