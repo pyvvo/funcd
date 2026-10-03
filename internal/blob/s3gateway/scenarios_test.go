@@ -588,3 +588,50 @@ func TestIssue425_RangedGetKeepsObjectETag(t *testing.T) {
 		})
 	}
 }
+
+// ctxBucket hands the test the context of each Put; with block set, the Put waits for that
+// context to end instead of writing.
+type ctxBucket struct {
+	blob.Bucket
+	puts  chan context.Context
+	block atomic.Bool
+}
+
+func (c *ctxBucket) Put(ctx context.Context, key string, data []byte) error {
+	c.puts <- ctx
+	if c.block.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.Bucket.Put(ctx, key, data)
+}
+
+// Issue #462: the substrate never gets fasthttp's pooled RequestCtx, whose Done reads server
+// state that Close rewrites. Its context ends with the request, so nothing derived from it
+// (gocloud's NewWriter) outlives the request, and Close still cancels an op in flight.
+func TestIssue462_BlobContextEndsWithRequest(t *testing.T) {
+	sub := &ctxBucket{puts: make(chan context.Context, 1)}
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket {
+		t.Helper()
+		sub.Bucket = memBucket(t)
+		return sub
+	})
+	owner := g.client(t, "default", "etl-svc")
+	put := func() error {
+		_, err := owner.PutObject(context.Background(), &awss3.PutObjectInput{
+			Bucket: ptrS("lakehouse"), Key: ptrS("bronze/x.parquet"), Body: bytes.NewReader([]byte("rows")),
+		}, func(o *awss3.Options) { o.RetryMaxAttempts = 1 })
+		return err
+	}
+
+	require.NoError(t, put())
+	require.ErrorIs(t, (<-sub.puts).Err(), context.Canceled, "the blob context ends with the request")
+
+	sub.block.Store(true)
+	errc := make(chan error, 1)
+	go func() { errc <- put() }()
+	inFlight := <-sub.puts
+	require.NoError(t, g.server.Close())
+	require.ErrorIs(t, inFlight.Err(), context.Canceled, "Close cancels a blob op in flight")
+	require.Error(t, <-errc)
+}

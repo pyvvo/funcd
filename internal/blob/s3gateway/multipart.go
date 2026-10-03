@@ -140,6 +140,8 @@ func (m *multipartStore) parts(id string) ([]s3response.Part, bool) {
 
 // CreateMultipartUpload starts a buffered multipart upload (ADR-0080): s3::write PEP.
 func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMultipartUploadInput) (s3response.InitiateMultipartUploadResult, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	key := deref(in.Key)
 	prefix, _ := splitKey(key)
@@ -152,6 +154,8 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 
 // UploadPart buffers one part (ADR-0080): s3::write PEP; the upload's total is capped by maxUpload.
 func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.UploadPartOutput, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, _ := splitKey(deref(in.Key))
 	if _, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix); err != nil {
@@ -174,6 +178,8 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 // CompleteMultipartUpload assembles the buffered parts and Puts the object once
 // (ADR-0080): s3::write PEP, total bounded by maxUpload (fail-closed).
 func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMultipartUploadInput) (s3response.CompleteMultipartUploadResult, string, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
@@ -202,6 +208,8 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 
 // AbortMultipartUpload discards buffered parts (ADR-0080): s3::write PEP.
 func (b *be) AbortMultipartUpload(ctx context.Context, in *awss3.AbortMultipartUploadInput) error {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	prefix, _ := splitKey(deref(in.Key))
 	if _, _, err := b.authorize(ctx, authz.ActionS3Write, deref(in.Bucket), prefix); err != nil {
 		return err
@@ -212,6 +220,8 @@ func (b *be) AbortMultipartUpload(ctx context.Context, in *awss3.AbortMultipartU
 
 // ListParts lists buffered parts (ADR-0080): s3::read PEP (a metadata view of the upload).
 func (b *be) ListParts(ctx context.Context, in *awss3.ListPartsInput) (s3response.ListPartsResult, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
 	bucket := deref(in.Bucket)
 	prefix, _ := splitKey(deref(in.Key))
 	if _, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix); err != nil {
