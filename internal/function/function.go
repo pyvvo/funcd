@@ -927,10 +927,10 @@ type convergeOpts struct {
 	serving, untried, scaleDown bool
 }
 
-// revisionPass is what convergeRevision left of a revision: its running count among the indexes, the earliest time a
-// replica waiting out its backoff may be replaced (zero if none), and the first error starting a replica — a Start
-// error or a local API socket that could not be provisioned — which the pass writes to the status instead of failing
-// before it (issues #73, #358).
+// revisionPass is what convergeRevision left of a revision, or ensurePool of a pool worker: its running count among the
+// indexes, the earliest time a replica waiting out its backoff may be replaced (zero if none), and the first error
+// starting a replica — a Start error or a local API socket that could not be provisioned — which the pass writes to the
+// status instead of failing before it (issues #73, #358).
 type revisionPass struct {
 	running  int
 	retryAt  time.Time
