@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
@@ -189,4 +190,29 @@ func TestNewBlobTraceSinkValidation(t *testing.T) {
 	require.Error(t, err) // nil bucket
 	_, err = funclog.NewBlobTraceSink(funclog.Deps{Bucket: memBucket(t)})
 	require.Error(t, err) // nil clock
+}
+
+// A run-root span's replica is its run record name, which grows by "-<step>" per inline sub-workflow level
+// (internal/workflow/subworkflow.go), so a depth-3 chain of 63-byte names is 255 bytes. Its segment must
+// still be stored on a file:// bucket, where each key segment is a file name, and two replicas that share a
+// long prefix must keep distinct keys.
+func TestTraceKey_LongReplicaStoredOnFileBucket(t *testing.T) {
+	ctx := context.Background()
+	b, err := gocloud.Open(ctx, gocloud.FileURL(t.TempDir()))
+	require.NoError(t, err)
+	s := newTraceSink(t, b, 1<<20)
+	label := strings.Repeat("a", 63)
+	run := label + strings.Repeat("-"+label, 3)
+	replicas := []string{run, run[:len(run)-1] + "b"}
+	for _, r := range replicas {
+		res := funclog.Resource{Namespace: "default", Function: "wf", Replica: r}
+		require.NoError(t, s.AppendSpan(ctx, res, serverSpan()))
+		key, err := s.Flush(ctx, res)
+		require.NoError(t, err)
+		ra := readBackTraces(t, b, key).ResourceSpans().At(0).Resource().Attributes().AsRaw()
+		require.Equal(t, r, ra["replica"], "the Resource keeps the full replica")
+	}
+	objs, err := b.List(ctx, "traces/")
+	require.NoError(t, err)
+	require.Len(t, objs, len(replicas), "replicas that share a long prefix keep distinct keys")
 }

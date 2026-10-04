@@ -280,12 +280,8 @@ func marshalTraceOTLP(res Resource, spans []Span, now time.Time) ([]byte, error)
 
 // traceSegmentKey partitions objects as traces/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl.
 func traceSegmentKey(res Resource, now time.Time) string {
-	replica := res.Replica
-	if replica == "" {
-		replica = "na"
-	}
 	return fmt.Sprintf("traces/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), replica)
+		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
 }
 
 func estimateSpanBytes(sp Span) int {

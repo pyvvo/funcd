@@ -2,6 +2,7 @@ package funclog
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -280,12 +281,27 @@ func tenantOf(r Resource) string {
 
 // segmentKey partitions objects as logs/<ns>/<fn>/<date>/<unixnano>-<replica>.otlp.jsonl.
 func segmentKey(res Resource, now time.Time) string {
-	replica := res.Replica
-	if replica == "" {
-		replica = "na"
-	}
 	return fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl",
-		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), replica)
+		res.Namespace, res.Function, now.UTC().Format("2006-01-02"), now.UTC().UnixNano(), keyReplica(res.Replica))
+}
+
+// maxKeyReplica bounds the replica part of a segment key. A run-root span's replica is its run record name,
+// which grows with each inline sub-workflow level, while the key's last segment is one file name on a file://
+// bucket (255 bytes, less fileblob's temp-file suffix). The full replica stays in the OTLP Resource.
+const maxKeyReplica = 63
+
+// keyReplica is the replica part of a segment key: "na" when unset, and a replica longer than maxKeyReplica
+// becomes its prefix plus a hash of the whole, so the key stays bounded and distinct.
+func keyReplica(replica string) string {
+	if replica == "" {
+		return "na"
+	}
+	if len(replica) <= maxKeyReplica {
+		return replica
+	}
+	sum := sha256.Sum256([]byte(replica))
+	suffix := "-" + hex.EncodeToString(sum[:8])
+	return replica[:maxKeyReplica-len(suffix)] + suffix
 }
 
 func estimateBytes(e Entry) int {
