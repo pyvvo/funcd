@@ -3,6 +3,7 @@ package s3gateway
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
@@ -292,8 +293,14 @@ func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix
 	return out, nil
 }
 
+// maxListXML bounds the encoded entries of a listing page: versitygw answers a response body over
+// 4 MiB with 500 InternalError (maxXMLBodyLen in s3api/controllers). The 64 KiB left holds the rest
+// of the page, whose prefix, marker and delimiter echo a request that fits an 8 KiB header.
+const maxListXML = 4<<20 - 64<<10
+
 // listPage is one S3 listing page: the keys and common prefixes after a marker, at most
-// limit entries in all, with the marker that resumes the listing when truncated.
+// limit entries and maxListXML encoded bytes in all, with the marker that resumes the
+// listing when truncated.
 type listPage struct {
 	contents  []s3response.Object
 	prefixes  []awstypes.CommonPrefix
@@ -303,12 +310,13 @@ type listPage struct {
 
 // paginate applies the S3 listing parameters to objs, which blob.List returns sorted by
 // key (ADR-0007), so the keys sharing a common prefix are adjacent.
-func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit int32) listPage {
+func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit int32) (listPage, error) {
 	var p listPage
 	if limit <= 0 {
-		return p
+		return p, nil
 	}
 	var last string
+	size := 0
 	for _, o := range objs {
 		key := deref(o.Key)
 		if key <= marker {
@@ -323,11 +331,18 @@ func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit 
 				}
 			}
 		}
-		if int32(len(p.contents)+len(p.prefixes)) == limit {
+		n, err := entryLen(o, cp)
+		if err != nil {
+			return listPage{}, err
+		}
+		// The entry must fit with its name again as the next marker; the first one always goes, so the listing advances.
+		count := int32(len(p.contents) + len(p.prefixes))
+		if count == limit || (count > 0 && size+2*n > maxListXML) {
 			p.truncated = true
 			p.next = last
-			return p
+			return p, nil
 		}
+		size += n
 		if cp != "" {
 			p.prefixes = append(p.prefixes, awstypes.CommonPrefix{Prefix: ptr(cp)})
 			last = cp
@@ -336,7 +351,21 @@ func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit 
 			last = key
 		}
 	}
-	return p
+	return p, nil
+}
+
+// entryLen is the size of a listing entry as versitygw encodes the page with encoding/xml: the
+// common prefix cp when set, else the object o.
+func entryLen(o s3response.Object, cp string) (int, error) {
+	var b bytes.Buffer
+	enc := xml.NewEncoder(&b)
+	var err error
+	if cp != "" {
+		err = enc.EncodeElement(awstypes.CommonPrefix{Prefix: &cp}, xml.StartElement{Name: xml.Name{Local: "CommonPrefixes"}})
+	} else {
+		err = enc.EncodeElement(o, xml.StartElement{Name: xml.Name{Local: "Contents"}})
+	}
+	return b.Len(), err
 }
 
 // pageSize is the request's MaxKeys, or the S3 default of 1000 when it names none.
@@ -357,7 +386,10 @@ func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s
 	}
 	limit := pageSize(in.MaxKeys)
 	marker := max(deref(in.StartAfter), deref(in.ContinuationToken))
-	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), marker, limit)
+	p, err := paginate(objs, deref(in.Prefix), deref(in.Delimiter), marker, limit)
+	if err != nil {
+		return s3response.ListObjectsV2Result{}, err
+	}
 	return s3response.ListObjectsV2Result{
 		Name:                  ptr(bucket),
 		Prefix:                in.Prefix,
@@ -381,7 +413,10 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 		return s3response.ListObjectsResult{}, err
 	}
 	limit := pageSize(in.MaxKeys)
-	p := paginate(objs, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
+	p, err := paginate(objs, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
+	if err != nil {
+		return s3response.ListObjectsResult{}, err
+	}
 	return s3response.ListObjectsResult{
 		Name:           ptr(bucket),
 		Prefix:         in.Prefix,
