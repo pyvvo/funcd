@@ -58,13 +58,17 @@ type bucket struct {
 	file bool
 }
 
-// checkKey rejects a key the file backend cannot keep as its own object: fileblob
-// reserves the ".attrs" suffix and its "__0x<hex>__" escape (a raw one shares the path of
-// the key it encodes and lists decoded), and its filepath.Join cleans a "." segment, a
-// trailing ".." and a leading "/", which would land the key on another key's file.
+// checkKey rejects a key the file backend cannot keep as its own object: an empty key
+// names the bucket root, not an object; fileblob reserves the ".attrs" suffix and its
+// "__0x<hex>__" escape (a raw one shares the path of the key it encodes and lists
+// decoded), and its filepath.Join cleans a "." segment, a trailing ".." and a leading
+// "/", which would land the key on another key's file.
 func (k *bucket) checkKey(op, key string) error {
 	if !k.file {
 		return nil
+	}
+	if key == "" {
+		return fault.Invalidf(op, "an empty key names the bucket root, not an object, on the file backend")
 	}
 	if strings.HasSuffix(key, fileAttrsSuffix) {
 		return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, fileAttrsSuffix)
