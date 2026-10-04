@@ -388,6 +388,11 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 		if !ok {
 			continue
 		}
+		if len(st.Params) > 0 { // the engine overlays them on any step, a root included (stepInput)
+			if diffs := objectIntoVoid(child.Input); len(diffs) > 0 {
+				return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("params of step %q: %s", st.Name, v1.FieldDiffs(diffs))}
+			}
+		}
 		producer, has := producerSchema(rs.steps[st.Name], contracts)
 		if !has {
 			continue // a root, or all parents untyped
@@ -398,7 +403,11 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 	}
 	// The onFailure handler's producer is the engine's FailureContext, without a params overlay (ADR-0094).
 	if hc, ok := contracts[wf.Spec.OnFailure]; ok {
-		if diffs := checkEdge(failureContextSchema(), hc.Input, nil); len(diffs) > 0 {
+		diffs := objectIntoVoid(hc.Input)
+		if len(diffs) == 0 {
+			diffs = checkEdge(failureContextSchema(), hc.Input, nil)
+		}
+		if len(diffs) > 0 {
 			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("FailureContext into onFailure handler %q: %s", wf.Spec.OnFailure, v1.FieldDiffs(diffs))}
 		}
 	}

@@ -268,3 +268,51 @@ func TestIssue499_VoidRootRejectsNonNullRunInput(t *testing.T) {
 		t.Fatalf("want an InputSchemaMismatch Failed run with no dispatch, got phase %s err %v calls %d", rec.Phase, err, f.calls["extract"])
 	}
 }
+
+// Issue #542: a void input ({"type":"null"}, ADR-0090) takes only null, yet the engine sends an onFailure
+// handler its object FailureContext and overlays a step's spec.params as an object. ADR-0094 checks both at
+// reconcile, so the workflow must not go Ready and then fail every run (or lose its failure notice) on 422.
+func TestIssue542_VoidInputRejectsFailureContextAndParams(t *testing.T) {
+	void := sc(`{"type":"null"}`)
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a":      {Input: void, Output: void},
+		"oci:b":      {Input: void, Output: void},
+		"oci:notify": {Input: void, Output: void},
+	}}
+	withParams := func(st v1.WorkflowStep) v1.WorkflowStep {
+		st.Params = sc(`{"region":"eu"}`)
+		return st
+	}
+	for _, tc := range []struct {
+		name      string
+		spec      v1.WorkflowSpec
+		mismatch  bool
+		namedStep string
+	}{
+		{name: "void steps without params", spec: v1.WorkflowSpec{Steps: []v1.WorkflowStep{fnStep("a", "oci:a"), fnStep("b", "oci:b", "a")}}},
+		{name: "void onFailure handler", mismatch: true, namedStep: "notify", spec: v1.WorkflowSpec{
+			Steps:     []v1.WorkflowStep{fnStep("a", "oci:a"), fnStep("notify", "oci:notify")},
+			OnFailure: "notify",
+		}},
+		{name: "params on a void step", mismatch: true, namedStep: "b", spec: v1.WorkflowSpec{
+			Steps: []v1.WorkflowStep{fnStep("a", "oci:a"), withParams(fnStep("b", "oci:b", "a"))},
+		}},
+		{name: "params on a void root", mismatch: true, namedStep: "a", spec: v1.WorkflowSpec{
+			Steps: []v1.WorkflowStep{withParams(fnStep("a", "oci:a"))},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wf, _ := reconcileSpec(t, newStore(t), c, tc.spec)
+			if !tc.mismatch {
+				if !ready(wf) {
+					t.Fatalf("void steps fed only null must be Ready, conditions=%+v", wf.Status.Conditions)
+				}
+				return
+			}
+			cond, _ := wf.Status.Conditions.Get(condSchemaMismatch)
+			if ready(wf) || mismatchReason(wf) != "EdgeTypeMismatch" || !strings.Contains(cond.Message, `"`+tc.namedStep+`"`) {
+				t.Fatalf("an object into the void input of %q must be SchemaMismatch/EdgeTypeMismatch naming it, got %+v", tc.namedStep, wf.Status.Conditions)
+			}
+		})
+	}
+}
