@@ -323,7 +323,8 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 			d.cfg.Logger.Warn("could not release the CNI attachment of a failed network setup",
 				"op", op, "attachment", cniID, "error", rerr)
 		}
-		_, _ = task.Delete(nctx)
+		// containerd deletes neither a created task that has a pid nor its container until the task is killed.
+		_, _ = task.Delete(nctx, containerd.WithProcessKill)
 		_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
 		return runtime.Instance{}, mapErr(err, op, "attach netns for %q", cniID)
 	}

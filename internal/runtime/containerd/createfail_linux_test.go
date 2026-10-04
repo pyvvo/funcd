@@ -83,6 +83,35 @@ func TestCreate_FailedNetworkSetupRemovesCNIAttachment(t *testing.T) {
 	require.Empty(t, ctrs.records, "a failed Create must still delete its container")
 }
 
+// A Create whose network setup fails must kill its task before it deletes it: containerd refuses to delete a created
+// task that has a pid, and then refuses to delete its container, so the init process, its netns, the container and its
+// snapshot would outlive the failed Create.
+func TestCreate_FailedNetworkSetupKillsTask(t *testing.T) {
+	ctx := leases.WithLease(context.Background(), "killtask")
+	cs, layer, manifest := fakeImage(t)
+	spec := runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "killtask",
+		Revision:  "killtask-1",
+		Image:     "funcd/killtask:latest",
+		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+	}
+	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
+	ctrs := &memContainers{records: map[string]containers.Container{}}
+	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
+	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
+		map[string]snapshots.Snapshotter{"overlayfs": snap})
+	d := &driver{client: client, cni: &failingSetupCNI{}, instances: map[runtime.InstanceID]*worker{}}
+
+	_, err := d.Create(ctx, spec)
+	require.ErrorIs(t, err, errFirewallAdd, "Create must return the Setup error")
+	tasks := client.TaskService().(*createdTasks)
+	require.Equal(t, []string{ctrID}, tasks.killed, "a failed Create must kill its created task")
+	require.Equal(t, []string{ctrID}, tasks.deleted, "a failed Create must delete its task")
+	require.Empty(t, ctrs.records, "a failed Create must delete its container")
+	require.NotContains(t, snap.keys, ctrID+"-snap", "a failed Create must remove its snapshot")
+}
+
 var errFirewallAdd = errors.New("plugin type=\"firewall\" failed (add)")
 
 // failingSetupCNI fails Setup as a plugin after the bridge does (the IP is allocated by then) and records each Remove.
