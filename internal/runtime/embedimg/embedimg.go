@@ -21,11 +21,13 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+
+	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // curatedRepoPrefix is the normalized repository prefix of every embedded image (`just
 // build-runtime-images` tags funcd/runtime-<rt>:latest), the name client.Import stores it under.
-const curatedRepoPrefix = "docker.io/funcd/runtime-"
+const curatedRepoPrefix = "docker.io/" + config.DefaultImagePrefix
 
 // curated holds the embedded per-arch OCI image tars. The build wires the arch-matching
 // tars in (a per-arch release build embeds its own matching-arch image — ADR-0054).

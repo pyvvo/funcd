@@ -3,6 +3,8 @@ package ctrmanager
 import (
 	"context"
 	"testing"
+
+	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // scenario: system-containerd-override — Given --containerd <socket> (ExternalSocket set),
@@ -43,6 +45,29 @@ func TestImageFor_OverrideReplacesItsRuntimeImage(t *testing.T) {
 	}
 	if got, want := imageFor("python314"), "funcd/runtime-python314:latest"; got != want {
 		t.Fatalf("image for python314 = %q, want the curated %q", got, want)
+	}
+}
+
+// A runtime image is pulled only from a registry the operator chose: an imageOverride entry or a custom imagePrefix.
+// With the default prefix only the embedded images are used, so its refs are not pullable.
+func TestPullable_OnlyOperatorChosenRegistry(t *testing.T) {
+	const override = "ghcr.io/example/custom-node:2"
+	cfg := Config{ImageOverride: map[string]string{"nodejs22": override}}
+	imageFor, pullable := cfg.ImageFor(config.DefaultImagePrefix), cfg.Pullable(config.DefaultImagePrefix)
+	if ref := imageFor("deno"); pullable(ref) {
+		t.Fatalf("%q comes from the default prefix, so it must not be pullable", ref)
+	}
+	if !pullable(imageFor("nodejs22")) {
+		t.Fatalf("the imageOverride ref %q must be pullable", override)
+	}
+
+	const custom = "registry.example/team/runtime-"
+	imageFor, pullable = cfg.ImageFor(custom), cfg.Pullable(custom)
+	if ref := imageFor("deno"); !pullable(ref) {
+		t.Fatalf("%q comes from a custom imagePrefix, so it must be pullable", ref)
+	}
+	if ref := "funcd/runtime-deno:latest"; pullable(ref) {
+		t.Fatalf("%q is under neither the custom prefix nor an override, so it must not be pullable", ref)
 	}
 }
 

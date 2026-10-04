@@ -111,7 +111,7 @@ runtime:
   #   cniConfDir: ""              # CNI conflist dir. default: <dataDir>/cni
   #   stateDir: ""                # files funcd bind-mounts into workers (e.g. resolv.conf). default: <dataDir>/run
   #   subnetCIDR: 10.63.0.0/16    # lateral bridge subnet. default: 10.63.0.0/16
-  #   imagePrefix: funcd/runtime- # curated image prefix. default: funcd/runtime-
+  #   imagePrefix: funcd/runtime- # runtime image prefix; a custom one is pulled from its registry. default: funcd/runtime- (embedded images only)
   #   imageOverride:              # runtimeFamily → image ref, pulled instead of the embedded tar. default: none
 
 # --- secrets: at-rest encryption of Secret values (ADR-0022) -----------------------------------

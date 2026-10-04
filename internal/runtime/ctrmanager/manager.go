@@ -20,8 +20,10 @@ package ctrmanager
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // FuncdRoot is funcd's runtime root — the value the install command + the Manager already use.
@@ -52,8 +54,7 @@ type Config struct {
 	// only on the private-managed path.
 	DataRoot string
 	// ImageOverride maps a runtime to a registry ref (--image runtime=ref) that ImageFor yields in
-	// place of the curated image; the containerd driver pulls every ref other than the embedded
-	// curated image itself from its registry (embedimg.TarForImageRef).
+	// place of the curated image and the containerd driver pulls (Pullable).
 	ImageOverride map[string]string
 }
 
@@ -65,6 +66,24 @@ func (c Config) ImageFor(prefix string) func(runtime string) string {
 			return ref
 		}
 		return prefix + rt + ":latest"
+	}
+}
+
+// Pullable reports whether the containerd driver may pull ref, an image that is not embedded
+// (containerd.Config.Pullable). A runtime image is pulled only from a registry the operator chose:
+// an ImageOverride entry or a custom prefix. With config.DefaultImagePrefix only the embedded images
+// are used, so a runtime in neither the embed nor the override is a fault.NotFound (ADR-0054).
+func (c Config) Pullable(prefix string) func(ref string) bool {
+	return func(ref string) bool {
+		if prefix != config.DefaultImagePrefix && strings.HasPrefix(ref, prefix) {
+			return true
+		}
+		for _, override := range c.ImageOverride {
+			if ref == override {
+				return true
+			}
+		}
+		return false
 	}
 }
 

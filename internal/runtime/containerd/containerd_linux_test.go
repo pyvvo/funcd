@@ -36,6 +36,7 @@ func integrationConfig() containerd.Config {
 		CNIBinDir:   "/opt/cni/bin",
 		CNIConfDir:  "/var/lib/funcd/cni/conf",
 		SubnetCIDR:  "10.63.0.0/16",
+		Pullable:    func(string) bool { return true }, // the contract runs a public test image
 	}
 }
 

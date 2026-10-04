@@ -57,6 +57,10 @@ type Config struct {
 	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string       // lateral bridge subnet
 	Logger      *slog.Logger // nil ⇒ slog.Default()
+
+	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
+	// nil ⇒ none may.
+	Pullable func(ref string) bool
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -651,7 +655,8 @@ func (d *driver) snapshotter() string {
 // Manager — owns availability: it first looks the image up in this namespace and unpacks it if
 // the configured snapshotter lacks its layers; if it is absent and a curated embedded tar exists
 // for the ref, it imports the embed into this namespace (NO registry pull — ADR-0054) and unpacks
-// it; only a non-curated ref (an ImageOverride, or a runtime with no embedded tar) falls back to a Pull.
+// it; any other ref is pulled only when Config.Pullable allows it (an ImageOverride or a custom
+// imagePrefix), else it is a fault.NotFound.
 func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.Image, error) {
 	name := normalizedRef(ref) // Import stores a curated tar under it, and Pull must resolve it
 	image, err := d.client.GetImage(nctx, ref)
@@ -695,6 +700,9 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 		return image, nil
 	}
 
+	if d.cfg.Pullable == nil || !d.cfg.Pullable(ref) {
+		return nil, fault.NotFoundf(op, "runtime image %q is not embedded; set runtime.containerd.imageOverride or imagePrefix to pull it", ref)
+	}
 	image, err = d.client.Pull(nctx, name, containerd.WithPullUnpack,
 		containerd.WithPullSnapshotter(d.snapshotter()))
 	if err != nil {

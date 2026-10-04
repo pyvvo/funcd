@@ -22,6 +22,10 @@ type Config struct {
 	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string       // lateral bridge subnet
 	Logger      *slog.Logger // nil ⇒ slog.Default()
+
+	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
+	// nil ⇒ none may.
+	Pullable func(ref string) bool
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime

@@ -700,6 +700,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 			StateDir:    c.StateDir,
 			SubnetCIDR:  c.SubnetCIDR,
 			Logger:      logger,
+			Pullable:    mgrCfg.Pullable(c.ImagePrefix),
 		})
 		if err != nil {
 			_ = mgr.Close()

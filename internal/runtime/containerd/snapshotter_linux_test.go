@@ -32,7 +32,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
+	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 )
 
 // Issue 370: resolveImage unpacks the image into the configured snapshotter, so Create must prepare the worker's
@@ -87,9 +90,9 @@ func fakeImage(t *testing.T) (content.Store, digest.Digest, ocispec.Descriptor) 
 }
 
 // fakeClient is a containerd client over in-memory services: it creates containers and tasks but runs nothing.
-func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs containers.Store, snaps map[string]snapshots.Snapshotter) *containerd.Client {
+func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs containers.Store, snaps map[string]snapshots.Snapshotter, extra ...containerd.ServicesOpt) *containerd.Client {
 	t.Helper()
-	client, err := containerd.New("", containerd.WithServices(
+	client, err := containerd.New("", containerd.WithServices(append([]containerd.ServicesOpt{
 		containerd.WithContentStore(cs),
 		containerd.WithImageStore(oneImage{img: img}),
 		containerd.WithContainerStore(ctrs),
@@ -97,7 +100,7 @@ func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs container
 		containerd.WithNamespaceService(noNamespaceLabels{}),
 		containerd.WithIntrospectionService(anySnapshotPlugin{}),
 		containerd.WithTaskClient(createdTasks{}),
-	))
+	}, extra...)...))
 	require.NoError(t, err)
 	return client
 }
@@ -175,7 +178,7 @@ func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
 	require.NoError(t, err, "the curated image is already imported under its normalized name, so Create must use it, not import the embedded tar again")
 }
 
-// A runtime image under the default prefix (funcd/runtime-<rt>:latest) with no curated embed must be pulled from
+// A runtime image under a custom imagePrefix with no registry host (acme/runtime-<rt>:latest) must be pulled from
 // Docker Hub. containerd's resolver reads a ref's first path element as the registry host, so resolveImage must pull
 // the normalized name. Found while judging draft ADR-0149.
 func TestResolveImage_PullsShortRefFromDockerHub(t *testing.T) {
@@ -185,15 +188,68 @@ func TestResolveImage_PullsShortRefFromDockerHub(t *testing.T) {
 	require.NoError(t, err)
 	client := fakeClient(t, cs, images.Image{}, &memContainers{records: map[string]containers.Container{}},
 		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}})
-	d := &driver{client: client, instances: map[runtime.InstanceID]*worker{}}
+	const prefix = "acme/runtime-"
+	mapping := ctrmanager.Config{}
+	d := &driver{cfg: Config{Pullable: mapping.Pullable(prefix)}, client: client, instances: map[runtime.InstanceID]*worker{}}
 
-	_, err = d.resolveImage(ctx, "create", "funcd/runtime-deno:latest")
+	_, err = d.resolveImage(ctx, "create", mapping.ImageFor(prefix)("deno"))
 	var uerr *url.Error
 	require.ErrorAs(t, err, &uerr, "the pull must reach the registry request")
 	u, err := url.Parse(uerr.URL)
 	require.NoError(t, err)
 	require.Equal(t, "registry-1.docker.io", u.Host, "a short ref names a Docker Hub repository, not a registry host")
-	require.Equal(t, "/v2/funcd/runtime-deno/manifests/latest", u.Path)
+	require.Equal(t, "/v2/acme/runtime-deno/manifests/latest", u.Path)
+}
+
+// A runtime image is pulled only from a registry the operator chose: an imageOverride entry or a custom imagePrefix.
+// With the default prefix only the embedded images are used, so a runtime with no embedded image is a fault.NotFound
+// and nothing is pulled.
+func TestResolveImage_DefaultPrefixRuntimeIsNotPulled(t *testing.T) {
+	mapping := ctrmanager.Config{}
+	d, pulls := pullDriver(t, mapping.Pullable(config.DefaultImagePrefix))
+
+	_, err := d.resolveImage(context.Background(), "create", mapping.ImageFor(config.DefaultImagePrefix)("deno"))
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "a default-prefix runtime with no embedded image: %v", err)
+	require.ErrorContains(t, err, "imageOverride")
+	require.Zero(t, pulls.n, "a default-prefix ref must never reach Pull")
+}
+
+// An imageOverride ref is the operator's choice, so resolveImage still pulls it.
+func TestResolveImage_OverrideRefIsPulled(t *testing.T) {
+	const ref = "ghcr.io/example/runtime-deno:2"
+	mapping := ctrmanager.Config{ImageOverride: map[string]string{"deno": ref}}
+	d, pulls := pullDriver(t, mapping.Pullable(config.DefaultImagePrefix))
+
+	_, err := d.resolveImage(context.Background(), "create", mapping.ImageFor(config.DefaultImagePrefix)("deno"))
+	require.ErrorIs(t, err, errPullRecorded)
+	require.Equal(t, 1, pulls.n, "an imageOverride ref must reach Pull")
+}
+
+// pullDriver returns a driver whose client has no image and counts the pulls it starts.
+func pullDriver(t *testing.T, pullable func(string) bool) (*driver, *leaseCounter) {
+	t.Helper()
+	cs, err := local.NewStore(t.TempDir())
+	require.NoError(t, err)
+	pulls := &leaseCounter{}
+	client := fakeClient(t, cs, images.Image{}, &memContainers{records: map[string]containers.Container{}},
+		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}},
+		containerd.WithLeasesService(pulls))
+	return &driver{cfg: Config{Pullable: pullable}, client: client, instances: map[runtime.InstanceID]*worker{}}, pulls
+}
+
+var errPullRecorded = fmt.Errorf("pull recorded, not run: %w", errdefs.ErrUnavailable)
+
+// leaseCounter counts the pulls of a client whose context carries no lease: client.Pull creates a lease before it
+// resolves the ref, and resolveImage takes no other lease for an image that is not embedded. It fails the lease, so
+// the pull stops there.
+type leaseCounter struct {
+	leases.Manager
+	n int
+}
+
+func (c *leaseCounter) Create(context.Context, ...leases.Opt) (leases.Lease, error) {
+	c.n++
+	return leases.Lease{}, errPullRecorded
 }
 
 func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocispec.Descriptor {

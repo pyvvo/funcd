@@ -19,6 +19,7 @@ import (
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/testkit/bench"
 )
@@ -98,7 +99,7 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 	f.StringVar(&c.cniBinDir, "cni-bin-dir", "/opt/cni/bin", "CNI plugin dir (with --containerd)")
 	f.StringVar(&c.cniConfDir, "cni-conf-dir", "/etc/cni/net.d", "CNI conflist dir (with --containerd)")
 	f.StringVar(&c.subnetCIDR, "subnet-cidr", "10.63.0.0/16", "lateral bridge subnet (with --containerd)")
-	f.StringVar(&c.imagePrefix, "image-prefix", "funcd/runtime-", "curated image prefix (with --containerd)")
+	f.StringVar(&c.imagePrefix, "image-prefix", config.DefaultImagePrefix, "curated image prefix (with --containerd)")
 	return cmd
 }
 

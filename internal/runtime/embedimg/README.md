@@ -57,6 +57,7 @@ just embedimg-unpin    # clear it — needed before a legitimate placeholder upd
 
 A runtime with an `--image runtime=ref` override (`ImageOverride`, mapped by
 `ctrmanager.Config.ImageFor`) runs that ref instead of its curated image. The embed serves only
-the image it carries (`funcd/runtime-<rt>:latest`); the driver pulls every other ref from its
-registry (e.g. `ghcr.io/pyvvo/…`).
-A runtime in neither embed nor override is a `fault.NotFound` — never a silent miss.
+the image it carries (`funcd/runtime-<rt>:latest`). A runtime image is pulled only from a registry
+the operator chose (`ctrmanager.Config.Pullable`): an `imageOverride` entry or a custom
+`imagePrefix` (e.g. `ghcr.io/pyvvo/…`). With the default prefix only the embedded images are used,
+so a runtime in neither embed nor override is a `fault.NotFound` — never a silent miss.
