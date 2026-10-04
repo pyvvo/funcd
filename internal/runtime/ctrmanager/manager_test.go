@@ -3,6 +3,8 @@ package ctrmanager
 import (
 	"context"
 	"testing"
+
+	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // scenario: system-containerd-override — Given --containerd <socket> (ExternalSocket set),
@@ -30,6 +32,42 @@ func TestSystemContainerdOverride(t *testing.T) {
 	// Close on the external path is a no-op and must not error (funcd owns nothing).
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close(external): %v, want nil (no-op)", err)
+	}
+}
+
+// An ImageOverride (--image runtime=ref, ADR-0054) is the image of its runtime, so the driver pulls that ref
+// instead of importing the embedded tar; a runtime without one keeps the curated prefix+runtime+":latest".
+func TestImageFor_OverrideReplacesItsRuntimeImage(t *testing.T) {
+	const ref = "ghcr.io/example/custom-node:2"
+	imageFor := Config{ImageOverride: map[string]string{"nodejs22": ref}}.ImageFor("funcd/runtime-")
+	if got := imageFor("nodejs22"); got != ref {
+		t.Fatalf("image for nodejs22 = %q, want the override %q", got, ref)
+	}
+	if got, want := imageFor("python314"), "funcd/runtime-python314:latest"; got != want {
+		t.Fatalf("image for python314 = %q, want the curated %q", got, want)
+	}
+}
+
+// A runtime image is pulled only from a registry the operator chose: an imageOverride entry or a custom imagePrefix.
+// With the default prefix only the embedded images are used, so its refs are not pullable.
+func TestPullable_OnlyOperatorChosenRegistry(t *testing.T) {
+	const override = "ghcr.io/example/custom-node:2"
+	cfg := Config{ImageOverride: map[string]string{"nodejs22": override}}
+	imageFor, pullable := cfg.ImageFor(config.DefaultImagePrefix), cfg.Pullable(config.DefaultImagePrefix)
+	if ref := imageFor("deno"); pullable(ref) {
+		t.Fatalf("%q comes from the default prefix, so it must not be pullable", ref)
+	}
+	if !pullable(imageFor("nodejs22")) {
+		t.Fatalf("the imageOverride ref %q must be pullable", override)
+	}
+
+	const custom = "registry.example/team/runtime-"
+	imageFor, pullable = cfg.ImageFor(custom), cfg.Pullable(custom)
+	if ref := imageFor("deno"); !pullable(ref) {
+		t.Fatalf("%q comes from a custom imagePrefix, so it must be pullable", ref)
+	}
+	if ref := "funcd/runtime-deno:latest"; pullable(ref) {
+		t.Fatalf("%q is under neither the custom prefix nor an override, so it must not be pullable", ref)
 	}
 }
 

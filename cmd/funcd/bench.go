@@ -19,6 +19,7 @@ import (
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/testkit/bench"
 )
@@ -98,7 +99,7 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 	f.StringVar(&c.cniBinDir, "cni-bin-dir", "/opt/cni/bin", "CNI plugin dir (with --containerd)")
 	f.StringVar(&c.cniConfDir, "cni-conf-dir", "/etc/cni/net.d", "CNI conflist dir (with --containerd)")
 	f.StringVar(&c.subnetCIDR, "subnet-cidr", "10.63.0.0/16", "lateral bridge subnet (with --containerd)")
-	f.StringVar(&c.imagePrefix, "image-prefix", "funcd/runtime-", "curated image prefix (with --containerd)")
+	f.StringVar(&c.imagePrefix, "image-prefix", config.DefaultImagePrefix, "curated image prefix (with --containerd)")
 	return cmd
 }
 
@@ -306,11 +307,12 @@ func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error 
 	// ADR-0054 runtime Manager: ExternalSocket "" ⇒ a privately-managed containerd + embedded
 	// image import; a bench-specific DataRoot so it never collides with a live funcd daemon's
 	// containerd data-root (the dedicated-box isolation).
-	mgr, err := ctrmanager.New(ctrmanager.Config{
+	mgrCfg := ctrmanager.Config{
 		ExternalSocket: c.ctrSocket,
 		DataRoot:       filepath.Join(os.TempDir(), "funcd-bench-containerd"),
 		ImageOverride:  imageOverrides(),
-	})
+	}
+	mgr, err := ctrmanager.New(mgrCfg)
 	if err != nil {
 		return fmt.Errorf("build containerd runtime manager: %w", err)
 	}
@@ -326,7 +328,7 @@ func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error 
 	r, err := bench.RunContainerd(ctx, bench.ContainerdConfig{
 		Socket: socket, Namespace: benchContainerdNamespace, Snapshotter: c.snapshotter,
 		CNIBinDir: c.cniBinDir, CNIConfDir: c.cniConfDir, SubnetCIDR: c.subnetCIDR,
-		ImagePrefix: c.imagePrefix, ShimPath: "/opt/funcd/shim.mjs",
+		ImagePrefix: c.imagePrefix, ImageOverride: mgrCfg.ImageOverride, ShimPath: "/opt/funcd/shim.mjs",
 		Density: c.density, MemBudgetMB: c.budget, TargetFns: c.target,
 		Concurrency: c.concurrency, Duration: c.duration,
 	})

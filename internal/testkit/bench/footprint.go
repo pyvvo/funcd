@@ -24,6 +24,9 @@ type ContainerdConfig struct {
 	SubnetCIDR  string // lateral bridge subnet
 	ImagePrefix string // "funcd/runtime-"; image = prefix + runtime + ":latest"
 
+	// ImageOverride maps a runtime to the registry ref the lane runs instead (ctrmanager.Config.ImageFor).
+	ImageOverride map[string]string
+
 	// ShimPath is the in-container shim cmdline token (the curated image's entrypoint —
 	// "/opt/funcd/shim.mjs", ADR-0032). The container processes are host-visible PIDs, so
 	// shimRSSMB(ShimPath) sums the SAME containers' RSS — a same-population cgroup-vs-RSS ratio.

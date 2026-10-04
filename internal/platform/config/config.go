@@ -247,6 +247,11 @@ type Config struct {
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
 type Flags struct{ MemoryOnly *bool }
 
+// DefaultImagePrefix is the built-in runtime.containerd.imagePrefix, the repository the embedded curated runtime
+// images are tagged under. With it only the embedded images are used: a runtime image is pulled only from a registry
+// the operator chose, an imageOverride entry or a custom imagePrefix.
+const DefaultImagePrefix = "funcd/runtime-"
+
 // defaults returns the Config with every built-in default set (the bottom precedence tier; identical
 // to ADR-0061's defaults). The dataDir-relative containerd paths (Root, CNIConfDir) are derived in
 // Load after the merge, when DataDir is final.
@@ -261,7 +266,7 @@ func defaults() Config {
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"
 	c.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
-	c.Runtime.Containerd.ImagePrefix = "funcd/runtime-"
+	c.Runtime.Containerd.ImagePrefix = DefaultImagePrefix
 	c.Log.Format = "json"
 	c.Log.Level = "info"
 	c.Funclog.Enabled = true

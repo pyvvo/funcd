@@ -20,8 +20,10 @@ package ctrmanager
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // FuncdRoot is funcd's runtime root — the value the install command + the Manager already use.
@@ -51,10 +53,38 @@ type Config struct {
 	// DataRoot is the private containerd state dir (e.g. /var/lib/funcd/containerd) — used
 	// only on the private-managed path.
 	DataRoot string
-	// ImageOverride maps a runtime to a registry ref (--image runtime=ref): when present the
-	// Manager pulls that ref instead of importing the embedded tar. A runtime in neither the
-	// embed nor the override is a fault.NotFound.
+	// ImageOverride maps a runtime to a registry ref (--image runtime=ref) that ImageFor yields in
+	// place of the curated image and the containerd driver pulls (Pullable).
 	ImageOverride map[string]string
+}
+
+// ImageFor is the runtime→image mapping the containerd execution runs (funcd.WithContainerExecution):
+// a runtime's ImageOverride ref when set, else the curated prefix+runtime+":latest".
+func (c Config) ImageFor(prefix string) func(runtime string) string {
+	return func(rt string) string {
+		if ref := c.ImageOverride[rt]; ref != "" {
+			return ref
+		}
+		return prefix + rt + ":latest"
+	}
+}
+
+// Pullable reports whether the containerd driver may pull ref, an image that is not embedded
+// (containerd.Config.Pullable). A runtime image is pulled only from a registry the operator chose:
+// an ImageOverride entry or a custom prefix. With config.DefaultImagePrefix only the embedded images
+// are used, so a runtime in neither the embed nor the override is a fault.NotFound (ADR-0054).
+func (c Config) Pullable(prefix string) func(ref string) bool {
+	return func(ref string) bool {
+		if prefix != config.DefaultImagePrefix && strings.HasPrefix(ref, prefix) {
+			return true
+		}
+		for _, override := range c.ImageOverride {
+			if ref == override {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // New builds a Manager for cfg.

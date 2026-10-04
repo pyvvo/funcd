@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
+	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -43,9 +44,11 @@ func RunContainerd(ctx context.Context, cfg ContainerdConfig) (FootprintReport, 
 		ns = "funcd-bench"
 	}
 
+	images := ctrmanager.Config{ImageOverride: cfg.ImageOverride}
 	ccfg := containerd.Config{
 		Socket: cfg.Socket, Snapshotter: cfg.Snapshotter,
 		CNIBinDir: cfg.CNIBinDir, CNIConfDir: cfg.CNIConfDir, SubnetCIDR: cfg.SubnetCIDR,
+		Pullable: images.Pullable(cfg.ImagePrefix),
 	}
 	rt, err := containerd.New(ccfg)
 	if err != nil {
@@ -84,7 +87,7 @@ func RunContainerd(ctx context.Context, cfg ContainerdConfig) (FootprintReport, 
 		return FootprintReport{}, fault.Wrapf(werr, fault.Internal, op, "write handler bundle")
 	}
 
-	imageFor := func(rtName string) string { return cfg.ImagePrefix + rtName + ":latest" }
+	imageFor := images.ImageFor(cfg.ImagePrefix)
 	p, err := funcd.New(
 		funcd.InMemory(),
 		// InMemory() scopes the dev token to "default"; the lane deploys into its own isolated
