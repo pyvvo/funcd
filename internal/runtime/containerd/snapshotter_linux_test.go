@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	introspectionapi "github.com/containerd/containerd/api/services/introspection/v1"
 	tasksapi "github.com/containerd/containerd/api/services/tasks/v1"
+	tasktypes "github.com/containerd/containerd/api/types/task"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/content"
@@ -23,6 +25,7 @@ import (
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	"github.com/containerd/containerd/v2/plugins/content/local"
 	"github.com/containerd/errdefs"
 	gocni "github.com/containerd/go-cni"
@@ -31,6 +34,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -99,7 +104,7 @@ func fakeClient(t *testing.T, cs content.Store, img images.Image, ctrs container
 		containerd.WithSnapshotters(snaps),
 		containerd.WithNamespaceService(noNamespaceLabels{}),
 		containerd.WithIntrospectionService(anySnapshotPlugin{}),
-		containerd.WithTaskClient(createdTasks{}),
+		containerd.WithTaskClient(&createdTasks{}),
 	}, extra...)...))
 	require.NoError(t, err)
 	return client
@@ -147,7 +152,7 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 		containerd.WithDiffService(uncompressedApplier{}),
 		containerd.WithNamespaceService(noNamespaceLabels{}),
 		containerd.WithIntrospectionService(anySnapshotPlugin{}),
-		containerd.WithTaskClient(createdTasks{}),
+		containerd.WithTaskClient(&createdTasks{}),
 	))
 	require.NoError(t, err)
 	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
@@ -354,6 +359,14 @@ func (s *memContainers) Create(_ context.Context, c containers.Container) (conta
 	return c, nil
 }
 
+func (s *memContainers) Delete(_ context.Context, id string) error {
+	if _, ok := s.records[id]; !ok {
+		return fmt.Errorf("container %q: %w", id, errdefs.ErrNotFound)
+	}
+	delete(s.records, id)
+	return nil
+}
+
 type oneImage struct {
 	images.Store
 	img images.Image
@@ -379,10 +392,82 @@ func (anySnapshotPlugin) Plugins(context.Context, ...string) (*introspectionapi.
 	return &introspectionapi.PluginsResponse{Plugins: []*introspectionapi.Plugin{{}}}, nil
 }
 
-type createdTasks struct{ tasksapi.TasksClient }
+// createdTasks runs nothing: a task it creates stays created, with pid 1, until a kill stops it. It reports that
+// state like containerd, so containerd's client refuses to delete the task, and then its container, before the kill.
+type createdTasks struct {
+	tasksapi.TasksClient
+	mu      sync.Mutex
+	stopped map[string]chan struct{} // per live task, closed by the kill that stops it
+	killed  []string
+	deleted []string
+}
 
-func (createdTasks) Create(context.Context, *tasksapi.CreateTaskRequest, ...grpc.CallOption) (*tasksapi.CreateTaskResponse, error) {
+func (f *createdTasks) Create(_ context.Context, req *tasksapi.CreateTaskRequest, _ ...grpc.CallOption) (*tasksapi.CreateTaskResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopped == nil {
+		f.stopped = map[string]chan struct{}{}
+	}
+	f.stopped[req.ContainerID] = make(chan struct{})
 	return &tasksapi.CreateTaskResponse{Pid: 1}, nil
+}
+
+func (f *createdTasks) Get(_ context.Context, req *tasksapi.GetRequest, _ ...grpc.CallOption) (*tasksapi.GetResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stopped, ok := f.stopped[req.ContainerID]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
+	}
+	state := tasktypes.Status_CREATED
+	select {
+	case <-stopped:
+		state = tasktypes.Status_STOPPED
+	default:
+	}
+	return &tasksapi.GetResponse{Process: &tasktypes.Process{ID: req.ContainerID, Pid: 1, Status: state}}, nil
+}
+
+func (f *createdTasks) Kill(_ context.Context, req *tasksapi.KillRequest, _ ...grpc.CallOption) (*ptypes.Empty, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stopped, ok := f.stopped[req.ContainerID]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
+	}
+	select {
+	case <-stopped:
+	default:
+		close(stopped)
+	}
+	f.killed = append(f.killed, req.ContainerID)
+	return &ptypes.Empty{}, nil
+}
+
+func (f *createdTasks) Wait(ctx context.Context, req *tasksapi.WaitRequest, _ ...grpc.CallOption) (*tasksapi.WaitResponse, error) {
+	f.mu.Lock()
+	stopped, ok := f.stopped[req.ContainerID]
+	f.mu.Unlock()
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
+	}
+	select {
+	case <-stopped:
+		return &tasksapi.WaitResponse{ExitStatus: 137}, nil
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+}
+
+func (f *createdTasks) Delete(_ context.Context, req *tasksapi.DeleteTaskRequest, _ ...grpc.CallOption) (*tasksapi.DeleteResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.stopped[req.ContainerID]; !ok {
+		return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
+	}
+	delete(f.stopped, req.ContainerID)
+	f.deleted = append(f.deleted, req.ContainerID)
+	return &tasksapi.DeleteResponse{ExitStatus: 137}, nil
 }
 
 type attachedCNI struct{ gocni.CNI }
