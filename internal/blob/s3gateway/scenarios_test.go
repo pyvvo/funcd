@@ -3,10 +3,12 @@ package s3gateway_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -182,6 +184,58 @@ func TestIssue159_ListObjectsHonoursListingParams(t *testing.T) {
 	require.Empty(t, v1rest.Contents)
 	require.Equal(t, []string{"gold/e/"}, commonPrefixes(v1rest.CommonPrefixes))
 	require.False(t, *v1rest.IsTruncated)
+}
+
+// A listing page whose XML would pass versitygw's 4 MiB response cap pages on instead of answering 500:
+// S3-length keys made of '&' encode five times longer, so a page of 1000 keys, or of their 1000 common
+// prefixes, is over 5 MiB.
+func TestListObjects_PageStaysUnderXMLBodyCap(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	const n = 1000
+	var all, dirs []string
+	for i := range n {
+		dir := fmt.Sprintf("gold/%04d%s/", i, strings.Repeat("&", 1000))
+		all = append(all, dir+"x")
+		dirs = append(dirs, dir)
+		g.seed(t, "default", "lakehouse", dir+"x", []byte("x"))
+	}
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+
+	var listed []string
+	var token *string
+	for pages := 1; ; pages++ {
+		out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), ContinuationToken: token,
+		})
+		require.NoError(t, err, "ListObjectsV2 page %d", pages)
+		listed = append(listed, objectKeys(out.Contents)...)
+		if !*out.IsTruncated {
+			break
+		}
+		require.NotNil(t, out.NextContinuationToken, "a truncated page carries a continuation token")
+		require.Less(t, pages, len(all), "pagination does not terminate")
+		token = out.NextContinuationToken
+	}
+	require.Equal(t, all, listed, "pages cover every key once, in order")
+
+	var prefixes []string
+	var marker *string
+	for pages := 1; ; pages++ {
+		out, err := c.ListObjects(ctx, &awss3.ListObjectsInput{
+			Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"), Marker: marker,
+		})
+		require.NoError(t, err, "ListObjects page %d", pages)
+		require.Empty(t, out.Contents)
+		prefixes = append(prefixes, commonPrefixes(out.CommonPrefixes)...)
+		if !*out.IsTruncated {
+			break
+		}
+		require.NotNil(t, out.NextMarker, "a truncated page carries a next marker")
+		require.Less(t, pages, len(dirs), "pagination does not terminate")
+		marker = out.NextMarker
+	}
+	require.Equal(t, dirs, prefixes, "pages cover every common prefix once, in order")
 }
 
 func objectKeys(objs []awstypes.Object) []string {
