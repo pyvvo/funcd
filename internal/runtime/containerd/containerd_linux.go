@@ -29,7 +29,6 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	gocni "github.com/containerd/go-cni"
-	"github.com/distribution/reference"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -652,14 +651,12 @@ func (d *driver) snapshotter() string {
 // Manager — owns availability: it first looks the image up in this namespace and unpacks it if
 // the configured snapshotter lacks its layers; if it is absent and a curated embedded tar exists
 // for the ref, it imports the embed into this namespace (NO registry pull — ADR-0054) and unpacks
-// it; only a non-curated ref (an ImageOverride pointing at a real registry) falls back to a Pull.
+// it; only a non-curated ref (an ImageOverride, or a runtime with no embedded tar) falls back to a Pull.
 func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.Image, error) {
+	name := normalizedRef(ref) // Import stores a curated tar under it, and Pull must resolve it
 	image, err := d.client.GetImage(nctx, ref)
-	if errdefs.IsNotFound(err) {
-		// The image store matches names exactly, and Import stores a curated tar under its normalized name.
-		if named, perr := reference.ParseDockerRef(ref); perr == nil && named.String() != ref {
-			image, err = d.client.GetImage(nctx, named.String())
-		}
+	if errdefs.IsNotFound(err) && name != ref {
+		image, err = d.client.GetImage(nctx, name)
 	}
 	if err == nil {
 		// The image record outlives a failed unpack and a snapshotter change, and WithNewSnapshot
@@ -698,8 +695,7 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 		return image, nil
 	}
 
-	// Non-curated ref (ImageOverride at a real registry): pull it.
-	image, err = d.client.Pull(nctx, ref, containerd.WithPullUnpack,
+	image, err = d.client.Pull(nctx, name, containerd.WithPullUnpack,
 		containerd.WithPullSnapshotter(d.snapshotter()))
 	if err != nil {
 		return nil, mapErr(err, op, "pull image %q", ref)

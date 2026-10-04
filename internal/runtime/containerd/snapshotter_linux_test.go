@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"testing"
 
@@ -172,6 +173,27 @@ func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
 
 	_, err := d.Create(ctx, spec)
 	require.NoError(t, err, "the curated image is already imported under its normalized name, so Create must use it, not import the embedded tar again")
+}
+
+// A runtime image under the default prefix (funcd/runtime-<rt>:latest) with no curated embed must be pulled from
+// Docker Hub. containerd's resolver reads a ref's first path element as the registry host, so resolveImage must pull
+// the normalized name. Found while judging draft ADR-0149.
+func TestResolveImage_PullsShortRefFromDockerHub(t *testing.T) {
+	ctx, cancel := context.WithCancel(leases.WithLease(context.Background(), "pull"))
+	cancel() // the resolver builds the registry request and fails before dialing, so no network is needed
+	cs, err := local.NewStore(t.TempDir())
+	require.NoError(t, err)
+	client := fakeClient(t, cs, images.Image{}, &memContainers{records: map[string]containers.Container{}},
+		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}})
+	d := &driver{client: client, instances: map[runtime.InstanceID]*worker{}}
+
+	_, err = d.resolveImage(ctx, "create", "funcd/runtime-deno:latest")
+	var uerr *url.Error
+	require.ErrorAs(t, err, &uerr, "the pull must reach the registry request")
+	u, err := url.Parse(uerr.URL)
+	require.NoError(t, err)
+	require.Equal(t, "registry-1.docker.io", u.Host, "a short ref names a Docker Hub repository, not a registry host")
+	require.Equal(t, "/v2/funcd/runtime-deno/manifests/latest", u.Path)
 }
 
 func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocispec.Descriptor {
