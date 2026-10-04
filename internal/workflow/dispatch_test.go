@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,7 +215,8 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // TestIssue126_DispatchReadsOnlyWhatTheStepNeeds: the payload limit bounds the daemon's memory, not
 // only the stored output — the dispatcher reads an answer up to one byte past the limit, only the
-// head of a 4xx that the error keeps, and none of a 5xx it throws away.
+// head of a 4xx that the error keeps, and none of a 5xx it throws away; past that it discards at
+// most drainBodyMax before close.
 func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 	const limit = 1 << 20
 	answering := func(t *testing.T, status int) (*HTTPDispatcher, *streamedBody) {
@@ -237,7 +241,7 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if err == nil || rec.Phase != runFailed {
 			t.Fatalf("an over-limit output must fail the run: phase=%s err=%v", rec.Phase, err)
 		}
-		if body.read > limit+1 {
+		if body.read > limit+1+drainBodyMax {
 			t.Fatalf("read %d bytes of the answer under a %d-byte payload limit", body.read, limit)
 		}
 	})
@@ -248,7 +252,7 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if _, err := d.Dispatch(context.Background(), req); !isPermanent(err) {
 			t.Fatalf("4xx should be permanent, got %v", err)
 		}
-		if body.read > errBodyMax+1 {
+		if body.read > errBodyMax+1+drainBodyMax {
 			t.Fatalf("read %d bytes of a rejection whose error keeps %d", body.read, errBodyMax)
 		}
 	})
@@ -259,10 +263,53 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if _, err := d.Dispatch(context.Background(), req); err == nil || isPermanent(err) {
 			t.Fatalf("5xx should be retryable, got %v", err)
 		}
-		if body.read != 0 {
+		if body.read > drainBodyMax {
 			t.Fatalf("read %d bytes of a 5xx answer that is thrown away", body.read)
 		}
 	})
+}
+
+// TestDispatch_ReusesConnectionAfterUnreadBody: an answer the dispatcher does not keep in full (a retryable 5xx,
+// the tail of an over-limit output or of a rejection) is drained before close, so the next dispatch — a retry of
+// a failing step — reuses the keep-alive connection instead of dialing a new one (ADR-0041).
+func TestDispatch_ReusesConnectionAfterUnreadBody(t *testing.T) {
+	const dispatches, maxOutput = 5, 64
+	answer := strings.Repeat("x", 1<<10)
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"a 503 with a body", http.StatusServiceUnavailable},
+		{"a 2xx over MaxOutput", http.StatusOK},
+		{"a 4xx over the error head", http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dials atomic.Int64
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, answer)
+			}))
+			srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+				if s == http.StateNew {
+					dials.Add(1)
+				}
+			}
+			srv.Start()
+			t.Cleanup(srv.Close)
+			d, err := NewHTTPDispatcher(DispatchDeps{Endpoints: fakeEndpoints{upstream: srv.URL, ready: true}, Grant: fakeGrant{allow: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := dispatchReq("s")
+			req.MaxOutput = maxOutput
+			for range dispatches {
+				_, _ = d.Dispatch(context.Background(), req)
+			}
+			if n := dials.Load(); n != 1 {
+				t.Fatalf("%d dispatches dialed %d connections, want 1", dispatches, n)
+			}
+		})
+	}
 }
 
 // Issue #48: a step dispatched to a warm function counts as its activity, so idle reclaim never fires
