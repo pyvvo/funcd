@@ -773,3 +773,41 @@ func TestIssue111_DatePreconditionsAndCreateOnlyPut(t *testing.T) {
 	require.NoError(t, err, "If-None-Match: * creates a missing object")
 	require.Equal(t, "fresh", string(mustGet(t, g, "default", "lakehouse", "bronze/new.parquet")))
 }
+
+// Issue #111: a CompleteMultipartUpload with If-None-Match: * never overwrites an existing object,
+// and still creates a missing one.
+func TestIssue111_CreateOnlyMultipartComplete(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	bucket := ptrS("lakehouse")
+	_, err := owner.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: ptrS("bronze/x.parquet"), Body: bytes.NewReader([]byte("rows")),
+	})
+	require.NoError(t, err)
+	completeCreateOnly := func(key, body string) error {
+		create, cerr := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: &key})
+		require.NoError(t, cerr)
+		num := int32(1)
+		part, perr := owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: bucket, Key: &key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte(body)),
+		})
+		require.NoError(t, perr)
+		_, cerr = owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: bucket, Key: &key, UploadId: create.UploadId, IfNoneMatch: ptrS("*"),
+			MultipartUpload: &awstypes.CompletedMultipartUpload{
+				Parts: []awstypes.CompletedPart{{PartNumber: &num, ETag: part.ETag}},
+			},
+		})
+		return cerr
+	}
+
+	err = completeCreateOnly("bronze/x.parquet", "CLOBBERED")
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded, "If-None-Match: * over an existing object")
+	require.Equal(t, 412, statusCode(err))
+	require.Equal(t, "PreconditionFailed", coded.ErrorCode())
+	require.Equal(t, "rows", string(mustGet(t, g, "default", "lakehouse", "bronze/x.parquet")))
+	require.NoError(t, completeCreateOnly("bronze/new.parquet", "fresh"), "If-None-Match: * creates a missing object")
+	require.Equal(t, "fresh", string(mustGet(t, g, "default", "lakehouse", "bronze/new.parquet")))
+}

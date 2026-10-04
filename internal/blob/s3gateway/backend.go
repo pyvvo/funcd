@@ -410,9 +410,7 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 
 // PutObject writes an object (ADR-0080): s3::write, single-writer (owner). The body is
 // buffered (bounded by maxUpload) then Put once — the blob port has no streaming seam.
-// If-None-Match: * makes the write create-only (412 when the object exists); the check and the Put
-// are not atomic, as the blob port has no conditional Put. If-Match and an ETag If-None-Match stay
-// unevaluated: they need the object's ETag (issue 111).
+// If-None-Match: * makes the write create-only (createOnly).
 func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -423,14 +421,8 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 		return s3response.PutObjectOutput{}, err
 	}
 	key := blobKey(prefix, object)
-	if deref(in.IfNoneMatch) == "*" {
-		_, found, serr := blob.Stat(ctx, sub, key)
-		if serr != nil {
-			return s3response.PutObjectOutput{}, mapBlobErr(serr)
-		}
-		if cerr := backend.EvaluateObjectPutPreconditions("", nil, in.IfNoneMatch, found); cerr != nil {
-			return s3response.PutObjectOutput{}, cerr
-		}
+	if cerr := createOnly(ctx, sub, key, in.IfNoneMatch); cerr != nil {
+		return s3response.PutObjectOutput{}, cerr
 	}
 	data, rerr := b.readCapped(in.Body)
 	if rerr != nil {
@@ -640,6 +632,20 @@ func datePreconditions(modTime time.Time, pc backend.PreConditions) error {
 		return s3err.GetAPIError(s3err.ErrNotModified)
 	}
 	return nil
+}
+
+// createOnly refuses a write under If-None-Match: * when key exists (412 PreconditionFailed). The
+// check and the Put are not atomic, as the blob port has no conditional Put. If-Match and an ETag
+// If-None-Match stay unevaluated: they need the object's ETag (issue 111).
+func createOnly(ctx context.Context, sub blob.Bucket, key string, ifNoneMatch *string) error {
+	if deref(ifNoneMatch) != "*" {
+		return nil
+	}
+	_, found, err := blob.Stat(ctx, sub, key)
+	if err != nil {
+		return mapBlobErr(err)
+	}
+	return backend.EvaluateObjectPutPreconditions("", nil, ifNoneMatch, found)
 }
 
 // readCapped reads r into memory bounded by maxUpload (fail-closed: a body past the

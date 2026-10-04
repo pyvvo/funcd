@@ -176,7 +176,8 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 }
 
 // CompleteMultipartUpload assembles the buffered parts and Puts the object once
-// (ADR-0080): s3::write PEP, total bounded by maxUpload (fail-closed).
+// (ADR-0080): s3::write PEP, total bounded by maxUpload (fail-closed). If-None-Match: * makes
+// it create-only (createOnly); a refused Complete leaves the upload in place.
 func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMultipartUploadInput) (s3response.CompleteMultipartUploadResult, string, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -185,6 +186,10 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 	if err != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", err
+	}
+	key := blobKey(prefix, object)
+	if cerr := createOnly(ctx, sub, key, in.IfNoneMatch); cerr != nil {
+		return s3response.CompleteMultipartUploadResult{}, "", cerr
 	}
 	id := deref(in.UploadId)
 	data, aerr := b.mp.assemble(id, in.MultipartUpload)
@@ -195,7 +200,7 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 		b.mp.abort(id)
 		return s3response.CompleteMultipartUploadResult{}, "", s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
-	if perr := sub.Put(ctx, blobKey(prefix, object), data); perr != nil {
+	if perr := sub.Put(ctx, key, data); perr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", mapBlobErr(perr)
 	}
 	b.mp.abort(id)
