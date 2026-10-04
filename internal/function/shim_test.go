@@ -445,6 +445,26 @@ func TestScenarioContainerSpecMountsArtifact(t *testing.T) {
 	require.Equal(t, "8080", spec.Env["FUNCD_PORT"], "the shim binds the fixed netns port")
 }
 
+// The shims name each invocation span from FUNCD_FUNCTION and fall back to "invoke" (ADR-0101), so a
+// solo worker's env must carry its Function's name in process and container mode alike.
+func TestSpanNameEnv_SoloWorkerCarriesFunctionName(t *testing.T) {
+	t.Parallel()
+	for mode, harness := range map[string]func(*testing.T) *shimHarness{
+		"process":   func(t *testing.T) *shimHarness { return newShimHarness(t, http.StatusOK, false) },
+		"container": func(t *testing.T) *shimHarness { return newContainerHarness(t, http.StatusOK) },
+	} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			h := harness(t)
+			h.createFn(t, "echo")
+			h.reconcile(t, "echo")
+			spec, ok := h.rt.specFor("echo")
+			require.True(t, ok, "a worker was created")
+			require.Equal(t, "echo", spec.Env["FUNCD_FUNCTION"], "the shim names its spans after the Function")
+		})
+	}
+}
+
 // scenario: container-readiness-gates (ADR-0032) — container mode gates Ready + route on the
 // shim's readiness exactly like process mode (the addressing differs, the logic does not).
 func TestScenarioContainerReadinessGates(t *testing.T) {

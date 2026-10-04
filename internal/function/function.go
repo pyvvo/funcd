@@ -1689,6 +1689,16 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 	}
 }
 
+// shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
+// handler export (ADR-0030), and FUNCD_FUNCTION, which the shim names its invocation spans after (ADR-0101).
+func shimEnv(fn *v1.Function, artifact string) map[string]string {
+	return map[string]string{
+		"FUNCD_ARTIFACT": artifact,
+		"FUNCD_HANDLER":  fn.Spec.Handler,
+		"FUNCD_FUNCTION": string(fn.Name),
+	}
+}
+
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
@@ -1698,11 +1708,8 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
-		env := map[string]string{
-			"FUNCD_ARTIFACT": filepath.Join(containerArtifactDir, filepath.Base(artifactPath)),
-			"FUNCD_HANDLER":  fn.Spec.Handler,
-			"FUNCD_PORT":     strconv.Itoa(containerShimPort),
-		}
+		env := shimEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)))
+		env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
 		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		// FUNCD_CONTRACT_PATH (ADR-0123): the schema is delivered into the host bundle root
 		// (Dir(artifactPath)) which is bind-mounted at containerArtifactDir, so the in-worker path
@@ -1736,10 +1743,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 	}
 	if r.materializer != nil {
 		// Process mode (ADR-0030): ShimCommand launches the shim; loopback + portfile.
-		env := map[string]string{
-			"FUNCD_ARTIFACT": artifactPath,
-			"FUNCD_HANDLER":  fn.Spec.Handler,
-		}
+		env := shimEnv(fn, artifactPath)
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
 		// reads directly in process mode, so host root == worker root.
