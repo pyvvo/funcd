@@ -95,6 +95,28 @@ func CheckInput(doc, schema json.RawMessage) []FieldDiff {
 	return diffs
 }
 
+// CheckProps reports the top-level fields of a JSON document whose primitive type does not match the type
+// the schema declares for that property; an undeclared field is not checked. Unlike CheckInput it checks
+// what the document carries, not what the schema requires: a step's spec.params overlay only part of its
+// input (ADR-0094). A non-object document against an object schema is one whole-document diff.
+func CheckProps(doc, schema json.RawMessage) []FieldDiff {
+	s := ParseSchemaView(schema)
+	got := inferDocTypes(doc)
+	if got == nil {
+		if s.Type == "object" {
+			return []FieldDiff{{Want: "object", Got: jsonPrimitive(doc)}}
+		}
+		return nil
+	}
+	var diffs []FieldDiff
+	for field, g := range got {
+		if want, ok := s.Props[field]; ok && want != "" && !docTypeCompatible(g, want) {
+			diffs = append(diffs, FieldDiff{Field: field, Want: want, Got: g})
+		}
+	}
+	return diffs
+}
+
 // docTypeCompatible compares an inferred document primitive type against a required schema type; numeric
 // is one bucket (a JSON number satisfies integer or number).
 func docTypeCompatible(got, want string) bool {

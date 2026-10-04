@@ -46,6 +46,16 @@ func checkEdge(producer, consumer json.RawMessage, providedByParams map[string]b
 	return diffs
 }
 
+// objectIntoVoid reports a void input ({"type":"null"}, ADR-0090), which takes only null, for the objects
+// the engine itself sends whatever the edge carries: an onFailure handler's FailureContext and a step's
+// spec.params overlay (ADR-0094). checkEdge's void consumer requires nothing, so it never catches them.
+func objectIntoVoid(input json.RawMessage) []v1.FieldDiff {
+	if v1.ParseSchemaView(input).Type != "null" {
+		return nil
+	}
+	return []v1.FieldDiff{{Want: "null", Got: "object"}}
+}
+
 // compositeSchema builds the fan-in producer schema {properties: {<parent>: <object>}} keyed by parent
 // name (the ADR-0094 fan-in input model), each parent value typed "object".
 func compositeSchema(parentOutputs map[v1.ObjectName]json.RawMessage) json.RawMessage {
