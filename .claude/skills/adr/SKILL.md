@@ -41,6 +41,7 @@ Research **before** questioning, so questions are informed rather than lazy:
 - Derive everything derivable from the blueprint, existing ADRs, and the repo. Only the
   genuinely open, user-owned decisions become questions.
 
+If a brief refine already recorded the decider's answers, they are the brainstorm; do not ask again.
 Then ask the user the open questions in one batch (AskUserQuestion, 2–4 questions,
 recommended option first with "(Recommended)" suffix and honest trade-offs in the
 descriptions). Iterate with a second batch only if an answer opens a new branch. Good
@@ -116,9 +117,7 @@ when unsure, the `Realizes:` header decides: a user-facing feat-row gets a card,
 
 ## Step 3 — Review to acceptance
 
-1. Present the user a short summary: the decision itself, the alternatives that lost and
-   why, the workarounds, and anything you flagged as an open question. Link the file —
-   don't paste the whole ADR into chat.
+1. Present the acceptance brief (the `brief` skill). Link the file — don't paste the whole ADR into chat.
 2. When the draft is ready for review, set **Status: Proposed**, then run the **judge gate**
    (ADR-0000 gate #3): hand the ADR to the `adr-judge` skill for an evidence-cited,
    severity-tiered verdict — inconsistency, bias, scope creep, contract bugs, and the

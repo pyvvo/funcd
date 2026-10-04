@@ -72,6 +72,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 | plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
+| refine / accept | [brief](../.claude/skills/brief/SKILL.md) | brief the decider: a needs-adr card before its ADR (refine), a Proposed ADR before acceptance | nothing until the decider answers | refine → the answers recorded, then `adr`; on an explicit accept → the `adr` skill's acceptance steps |
 | build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
 | review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: ADR `Reviewing → Implemented` + feat row → `implemented` (sole stamper of `Implemented`); non-pass advances nothing (ADR stays `Reviewing`); still never edits the *work* (code) |
 
@@ -89,7 +90,7 @@ decision takes the fix pipeline**, which starts from a GitHub issue instead of a
 | audit | [bloat-audit](../.claude/skills/bloat-audit/SKILL.md) | once per PR as a `scripts/agent/gate.sh` step (after the reviews in `/fix-batch`): the diff's size, new duplication, complexity growth, masking patterns, comment narration and new dependencies; a hard flag fails the gate unless an `audit-allow:` line justifies it. Full mode at a campaign's end adds a flake run | a report (`.cache/gate/audit.log`) | — (cleanup issues via `/issue-management`) |
 | batch | [fix-batch](../.claude/skills/fix-batch/SKILL.md) | many issues (a tracker's sub-issues, a list, a label): fix → review per issue, one PR per group | a branch + PR per group | — |
 
-An issue labelled `needs-adr`, or a fix that would change an Accepted ADR's decision, leaves the fix
+An issue labelled `needs-adr` goes to `brief` (refine) and then `adr`, as does a fix that would change an Accepted ADR's decision, leaves the fix
 pipeline for `/adr`.
 
 ## ⚠️ Cross-document propagation rules
