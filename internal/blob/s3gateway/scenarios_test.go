@@ -759,3 +759,109 @@ func TestIssue496_GetObjectReportsModTime(t *testing.T) {
 		})
 	}
 }
+
+// Issue #111: GET and HEAD answer If-Modified-Since with 304 and If-Unmodified-Since with 412,
+// comparing at the one-second precision of Last-Modified, and leave a date condition to the ETag
+// condition that takes precedence over it. A PUT with If-None-Match: * never overwrites an existing
+// object.
+func TestIssue111_DatePreconditionsAndCreateOnlyPut(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner, reader := g.client(t, "default", "etl-svc"), g.client(t, "default", "analytics")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/x.parquet")
+	put := func(k *string, body string, ifNoneMatch *string) (*awss3.PutObjectOutput, error) {
+		return owner.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: bucket, Key: k, Body: bytes.NewReader([]byte(body)), IfNoneMatch: ifNoneMatch,
+		})
+	}
+	created, err := put(key, "rows", nil)
+	require.NoError(t, err)
+	head, err := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	lastModified := aws.ToTime(head.LastModified)
+	before := lastModified.Add(-time.Second)
+
+	status := func(err error) int {
+		if err == nil {
+			return 200
+		}
+		return statusCode(err)
+	}
+	cases := []struct {
+		name                 string
+		modSince, unmodSince *time.Time
+		ifMatch, ifNoneMatch *string
+		want                 int
+	}{
+		{name: "if-modified-since last-modified", modSince: &lastModified, want: 304},
+		{name: "if-modified-since before", modSince: &before, want: 200},
+		{name: "if-unmodified-since last-modified", unmodSince: &lastModified, want: 200},
+		{name: "if-unmodified-since before", unmodSince: &before, want: 412},
+		{name: "not modified and modified after", modSince: &lastModified, unmodSince: &before, want: 412},
+		{name: "if-match decides over if-unmodified-since", unmodSince: &before, ifMatch: created.ETag, want: 200},
+		{name: "if-none-match decides over if-modified-since", modSince: &lastModified, ifNoneMatch: ptrS(`"other"`), want: 200},
+	}
+	for _, tc := range cases {
+		out, gerr := reader.GetObject(ctx, &awss3.GetObjectInput{
+			Bucket: bucket, Key: key, IfModifiedSince: tc.modSince, IfUnmodifiedSince: tc.unmodSince,
+			IfMatch: tc.ifMatch, IfNoneMatch: tc.ifNoneMatch,
+		})
+		if gerr == nil {
+			require.NoError(t, out.Body.Close())
+		}
+		require.Equal(t, tc.want, status(gerr), "GET %s", tc.name)
+		_, herr := reader.HeadObject(ctx, &awss3.HeadObjectInput{
+			Bucket: bucket, Key: key, IfModifiedSince: tc.modSince, IfUnmodifiedSince: tc.unmodSince,
+			IfMatch: tc.ifMatch, IfNoneMatch: tc.ifNoneMatch,
+		})
+		require.Equal(t, tc.want, status(herr), "HEAD %s", tc.name)
+	}
+
+	_, err = put(key, "CLOBBERED", ptrS("*"))
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded, "If-None-Match: * over an existing object")
+	require.Equal(t, 412, statusCode(err))
+	require.Equal(t, "PreconditionFailed", coded.ErrorCode())
+	require.Equal(t, "rows", string(mustGet(t, g, "default", "lakehouse", "bronze/x.parquet")))
+	_, err = put(ptrS("bronze/new.parquet"), "fresh", ptrS("*"))
+	require.NoError(t, err, "If-None-Match: * creates a missing object")
+	require.Equal(t, "fresh", string(mustGet(t, g, "default", "lakehouse", "bronze/new.parquet")))
+}
+
+// Issue #111: a CompleteMultipartUpload with If-None-Match: * never overwrites an existing object,
+// and still creates a missing one.
+func TestIssue111_CreateOnlyMultipartComplete(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	bucket := ptrS("lakehouse")
+	_, err := owner.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: ptrS("bronze/x.parquet"), Body: bytes.NewReader([]byte("rows")),
+	})
+	require.NoError(t, err)
+	completeCreateOnly := func(key, body string) error {
+		create, cerr := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: &key})
+		require.NoError(t, cerr)
+		num := int32(1)
+		part, perr := owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: bucket, Key: &key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte(body)),
+		})
+		require.NoError(t, perr)
+		_, cerr = owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: bucket, Key: &key, UploadId: create.UploadId, IfNoneMatch: ptrS("*"),
+			MultipartUpload: &awstypes.CompletedMultipartUpload{
+				Parts: []awstypes.CompletedPart{{PartNumber: &num, ETag: part.ETag}},
+			},
+		})
+		return cerr
+	}
+
+	err = completeCreateOnly("bronze/x.parquet", "CLOBBERED")
+	var coded interface{ ErrorCode() string }
+	require.ErrorAs(t, err, &coded, "If-None-Match: * over an existing object")
+	require.Equal(t, 412, statusCode(err))
+	require.Equal(t, "PreconditionFailed", coded.ErrorCode())
+	require.Equal(t, "rows", string(mustGet(t, g, "default", "lakehouse", "bronze/x.parquet")))
+	require.NoError(t, completeCreateOnly("bronze/new.parquet", "fresh"), "If-None-Match: * creates a missing object")
+	require.Equal(t, "fresh", string(mustGet(t, g, "default", "lakehouse", "bronze/new.parquet")))
+}
