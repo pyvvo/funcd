@@ -452,6 +452,45 @@ func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
 }
 
+// Issue #70: a pool host that exits at boot (a member's handler cannot load) is created again on ADR-0142's backoff, as
+// a solo replica is — once it is one supervision period old — not on every 200 ms readiness poll. The member keeps the
+// phase it had while the pool host was restarted on every pass.
+func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		worker string
+		held   bool     // the pool host never serves, so the member has not served yet
+		phase  v1.Phase // the member's phase while its pool host waits out the backoff
+	}{
+		{"issue70-booting", true, v1.PhaseDeploying},
+		{"issue70-serving", false, v1.PhaseDegraded},
+	} {
+		t.Run(tc.worker, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withNodePool)
+			pool := v1.ObjectName("__pool__nodejs22__" + tc.worker)
+			h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), tc.held)
+			h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = tc.worker })
+			h.reconcile(t, "m")
+
+			h.rt.exitRevision(pool, "", 0, runtime.StateFailed, 0)
+			creates, _ := h.rt.counts()
+			res := h.reconcile(t, "m")
+			after, _ := h.rt.counts()
+			require.Equal(t, creates, after, "a pool host younger than one period is not created again")
+			require.Equal(t, tc.phase, h.getFn(t, "m").Status.Phase)
+			require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "m"))
+			require.Greater(t, res.RequeueAfter, time.Second, "the pass comes back when the backoff ends, not at the readiness poll")
+			require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod)
+
+			h.rt.exitRevision(pool, "", 0, runtime.StateFailed, controller.SupervisionPeriod)
+			h.reconcile(t, "m")
+			after, _ = h.rt.counts()
+			require.Equal(t, creates+1, after, "created again once the backoff has passed")
+		})
+	}
+}
+
 // Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
 // naming the start error, as a solo worker does (#73), and a later pass creates the pool worker again, writing
 // nothing while it still fails.

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -169,16 +170,20 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // per-function catalog token, so neither env reaches the pool (a catalog-consuming function runs solo, ADR-0086). The
 // serving revision follows the current one once the pool worker is ready (ADR-0143 Decision 8).
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment) (verdict, error) {
-	running, startErr, err := r.ensurePool(ctx, a.Key, fn)
+	pass, err := r.ensurePool(ctx, a.Key, fn)
 	if err != nil {
 		return verdict{}, err
 	}
+	running := pass.running
 	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
 	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
 	// (ADR-0046 Decision 5). Every (re)start creates the pool worker again, so it gets a solo replica's boot limit.
 	ready, failed, err := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, bootTimeout)
 	if err != nil {
 		return verdict{}, err
+	}
+	if !pass.retryAt.IsZero() {
+		failed = "" // the pool worker waits out its backoff: a crash under repair, which ensurePool re-creates (ADR-0142)
 	}
 	serving := servingPhase(fn.Status.Phase)
 	var repairErr string
@@ -198,65 +203,70 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if ready >= 1 {
 		fn.Status.ServingRevision = fn.Status.CurrentRevision
 	}
-	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, startErr: startErr, repairErr: repairErr}, nil
+	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, retryAt: pass.retryAt, startErr: pass.startErr, repairErr: repairErr}, nil
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions
 // 4 & 6): it builds the manifest from the key's admitted members, computes the pool's desired
 // replica as the max over those members' effective desired, and ensures exactly one pool
 // worker — created/restarted only when the desired manifest differs from the running one
-// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count and its Start error, which the
-// pass writes to the member's status, as for a solo worker (issue #73); the manifest is applied either way, so the next
-// pass starts the same worker again. self is the member being reconciled.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (int, error, error) {
+// (idempotent), reclaimed when desired is 0. It returns the pool worker's running count, its backoff deadline and its
+// Start error, which the pass writes to the member's status, as for a solo worker (issue #73); the manifest is applied
+// either way, so the next pass starts the same worker again. self is the member being reconciled.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function) (revisionPass, error) {
 	members, err := r.admittedMembers(ctx, key)
 	if err != nil {
-		return 0, nil, err
+		return revisionPass{}, err
 	}
 	manifest, desired, err := r.poolManifest(ctx, members, self)
 	if err != nil {
-		return 0, nil, err
+		return revisionPass{}, err
 	}
 	sig := manifestSignature(manifest)
 
 	poolName := poolInstanceName(key)
 	insts, err := r.namedInstances(ctx, key.Namespace, poolName)
 	if err != nil {
-		return 0, nil, err
+		return revisionPass{}, err
 	}
 	exists := len(insts) > 0
 	running := runningCount(insts) > 0
 
-	var startErr error
+	var pass revisionPass
 	switch {
 	case desired == 0:
 		// all members idle → reclaim the pool worker (RSS→0); next request wakes it.
 		if running {
 			if err := r.stopPool(ctx, insts); err != nil {
-				return 0, nil, err
+				return revisionPass{}, err
 			}
 		}
 		r.forgetPoolSig(key)
-		return 0, nil, nil
+		return revisionPass{}, nil
 	case !exists:
 		// first bring-up → create + start the pool worker from the current manifest.
-		if startErr, err = r.createPool(ctx, key, manifest); err != nil {
-			return 0, nil, err
+		if pass.startErr, err = r.createPool(ctx, key, manifest); err != nil {
+			return revisionPass{}, err
 		}
 		r.setPoolSig(key, sig)
 	case sig != r.poolSig(key):
 		// membership/artifact changed → rebuild: rewrite the manifest file then restart the
 		// existing pool worker (pool.mjs reads its manifest at boot only, ADR-0046 workaround).
 		// Restart reuses the instance id (a new PID), so a member never gets a second worker.
-		if startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
-			return 0, nil, err
+		if pass.startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
+			return revisionPass{}, err
 		}
 		r.setPoolSig(key, sig)
 	case !running:
-		// the pool worker exists but is stopped (a prior reclaim) or exited, and a member now wants
-		// it up with the same manifest → restart it.
-		if startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
-			return 0, nil, err
+		// the pool worker exists but is stopped or exited, and a member now wants it up with the same manifest → restart
+		// it by ADR-0142's per-replica table as a crash under repair, so one that exited is created again only once it is
+		// a period old: a pool host that cannot boot is retried once per period, as a solo replica is (issue #70).
+		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: insts[0]}, []int{0}, convergeOpts{serving: true}, time.Now(), r.supervisionPeriod)
+		if !pass.retryAt.IsZero() {
+			break
+		}
+		if pass.startErr, err = r.restartPool(ctx, key, insts, manifest); err != nil {
+			return revisionPass{}, err
 		}
 	default:
 		// up, manifest unchanged → no-op (the idempotent path; no restart).
@@ -264,9 +274,10 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 
 	insts, err = r.namedInstances(ctx, key.Namespace, poolName)
 	if err != nil {
-		return 0, nil, err
+		return revisionPass{}, err
 	}
-	return runningCount(insts), startErr, nil
+	pass.running = runningCount(insts)
+	return pass, nil
 }
 
 // admittedMembers returns the key's admitted members (the first PoolLimit by name), the set
