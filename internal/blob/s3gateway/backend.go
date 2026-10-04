@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -177,6 +178,11 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 	if !found {
 		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
 	}
+	if cerr := datePreconditions(attrs.ModTime, backend.PreConditions{
+		IfMatch: in.IfMatch, IfNoneMatch: in.IfNoneMatch, IfModSince: in.IfModifiedSince, IfUnmodeSince: in.IfUnmodifiedSince,
+	}); cerr != nil {
+		return nil, cerr
+	}
 
 	var data []byte
 	var contentRange *string
@@ -258,6 +264,11 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	}
 	if !found {
 		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
+	}
+	if cerr := datePreconditions(attrs.ModTime, backend.PreConditions{
+		IfMatch: in.IfMatch, IfNoneMatch: in.IfNoneMatch, IfModSince: in.IfModifiedSince, IfUnmodeSince: in.IfUnmodifiedSince,
+	}); cerr != nil {
+		return nil, cerr
 	}
 	return &awss3.HeadObjectOutput{
 		ContentLength: ptr(attrs.Size),
@@ -399,6 +410,9 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 
 // PutObject writes an object (ADR-0080): s3::write, single-writer (owner). The body is
 // buffered (bounded by maxUpload) then Put once — the blob port has no streaming seam.
+// If-None-Match: * makes the write create-only (412 when the object exists); the check and the Put
+// are not atomic, as the blob port has no conditional Put. If-Match and an ETag If-None-Match stay
+// unevaluated: they need the object's ETag (issue 111).
 func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -408,11 +422,21 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 	if err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
+	key := blobKey(prefix, object)
+	if deref(in.IfNoneMatch) == "*" {
+		_, found, serr := blob.Stat(ctx, sub, key)
+		if serr != nil {
+			return s3response.PutObjectOutput{}, mapBlobErr(serr)
+		}
+		if cerr := backend.EvaluateObjectPutPreconditions("", nil, in.IfNoneMatch, found); cerr != nil {
+			return s3response.PutObjectOutput{}, cerr
+		}
+	}
 	data, rerr := b.readCapped(in.Body)
 	if rerr != nil {
 		return s3response.PutObjectOutput{}, rerr
 	}
-	if perr := sub.Put(ctx, blobKey(prefix, object), data); perr != nil {
+	if perr := sub.Put(ctx, key, data); perr != nil {
 		return s3response.PutObjectOutput{}, mapBlobErr(perr)
 	}
 	return s3response.PutObjectOutput{ETag: etag(data)}, nil
@@ -601,6 +625,22 @@ func (b *be) GetBucketVersioning(context.Context, string) (s3response.GetBucketV
 }
 
 // --- helpers ---------------------------------------------------------------------
+
+// datePreconditions evaluates If-Unmodified-Since (412) and If-Modified-Since (304) against modTime
+// at the one-second precision of the Last-Modified header, in RFC 9110 §13.2.2 order. A date condition
+// is skipped when the ETag condition that takes precedence over it is present: evaluating that one
+// needs the object's ETag (issue 111). versitygw's EvaluatePreconditions is not used because it fails an
+// If-Unmodified-Since equal to Last-Modified.
+func datePreconditions(modTime time.Time, pc backend.PreConditions) error {
+	modTime = modTime.Truncate(time.Second)
+	if pc.IfMatch == nil && pc.IfUnmodeSince != nil && modTime.After(*pc.IfUnmodeSince) {
+		return s3err.GetPreconditionFailedErr(s3err.ConditionIfUnmodifiedSince)
+	}
+	if pc.IfNoneMatch == nil && pc.IfModSince != nil && !modTime.After(*pc.IfModSince) {
+		return s3err.GetAPIError(s3err.ErrNotModified)
+	}
+	return nil
+}
 
 // readCapped reads r into memory bounded by maxUpload (fail-closed: a body past the
 // cap is rejected, never OOMs the daemon — ADR-0080 Temporary workarounds).
