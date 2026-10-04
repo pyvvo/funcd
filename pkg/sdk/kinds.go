@@ -36,7 +36,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindEgressPolicy:    {"egresspolicies", true},
 	v1.KindInvocation:      {"invocations", true},
 	v1.KindRuntimeClass:    {"runtimeclasses", false},
-	v1.KindWorkerNode:      {"workers", false},
+	v1.KindWorkerNode:      {"workernodes", false},
 	v1.KindGateway:         {"gateways", false},
 	v1.KindKVStore:         {"kvstores", true},
 	v1.KindBucket:          {"buckets", true},
