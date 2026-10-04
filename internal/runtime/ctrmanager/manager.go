@@ -51,10 +51,20 @@ type Config struct {
 	// DataRoot is the private containerd state dir (e.g. /var/lib/funcd/containerd) — used
 	// only on the private-managed path.
 	DataRoot string
-	// ImageOverride maps a runtime to a registry ref (--image runtime=ref): when present the
-	// Manager pulls that ref instead of importing the embedded tar. A runtime in neither the
-	// embed nor the override is a fault.NotFound.
+	// ImageOverride maps a runtime to a registry ref (--image runtime=ref) that ImageFor yields in
+	// place of the curated image; the containerd driver pulls a non-curated ref from its registry.
 	ImageOverride map[string]string
+}
+
+// ImageFor is the runtime→image mapping the containerd execution runs (funcd.WithContainerExecution):
+// a runtime's ImageOverride ref when set, else the curated prefix+runtime+":latest".
+func (c Config) ImageFor(prefix string) func(runtime string) string {
+	return func(rt string) string {
+		if ref := c.ImageOverride[rt]; ref != "" {
+			return ref
+		}
+		return prefix + rt + ":latest"
+	}
 }
 
 // New builds a Manager for cfg.

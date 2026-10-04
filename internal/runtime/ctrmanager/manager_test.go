@@ -33,6 +33,19 @@ func TestSystemContainerdOverride(t *testing.T) {
 	}
 }
 
+// An ImageOverride (--image runtime=ref, ADR-0054) is the image of its runtime, so the driver pulls that ref
+// instead of importing the embedded tar; a runtime without one keeps the curated prefix+runtime+":latest".
+func TestImageFor_OverrideReplacesItsRuntimeImage(t *testing.T) {
+	const ref = "ghcr.io/example/custom-node:2"
+	imageFor := Config{ImageOverride: map[string]string{"nodejs22": ref}}.ImageFor("funcd/runtime-")
+	if got := imageFor("nodejs22"); got != ref {
+		t.Fatalf("image for nodejs22 = %q, want the override %q", got, ref)
+	}
+	if got, want := imageFor("python314"), "funcd/runtime-python314:latest"; got != want {
+		t.Fatalf("image for python314 = %q, want the curated %q", got, want)
+	}
+}
+
 // With ExternalSocket "" the Manager is the private-managed one (it does not start a child
 // at construction — supervision is on Ensure, which is root/Linux-gated). We assert it is
 // NOT the external manager, so the default really is the self-contained private path.

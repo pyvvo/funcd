@@ -678,11 +678,12 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
 		// supervises a PRIVATE containerd and imports the embedded curated images; with an external
 		// socket set it returns that socket and starts no child. The driver dials whatever Ensure yields.
-		mgr, err := ctrmanager.New(ctrmanager.Config{
+		mgrCfg := ctrmanager.Config{
 			ExternalSocket: c.Socket,
 			DataRoot:       c.Root,
 			ImageOverride:  c.ImageOverride,
-		})
+		}
+		mgr, err := ctrmanager.New(mgrCfg)
 		if err != nil {
 			return nil, noopClose, fmt.Errorf("build container manager: %w", err)
 		}
@@ -704,8 +705,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 			_ = mgr.Close()
 			return nil, noopClose, fmt.Errorf("containerd runtime (runtime.mode: containerd is Linux-only): %w", err)
 		}
-		imageFor := func(rt string) string { return c.ImagePrefix + rt + ":latest" }
-		return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(imageFor)}, mgr.Close, nil
+		return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix))}, mgr.Close, nil
 	}
 
 	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver.

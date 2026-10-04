@@ -306,11 +306,12 @@ func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error 
 	// ADR-0054 runtime Manager: ExternalSocket "" ⇒ a privately-managed containerd + embedded
 	// image import; a bench-specific DataRoot so it never collides with a live funcd daemon's
 	// containerd data-root (the dedicated-box isolation).
-	mgr, err := ctrmanager.New(ctrmanager.Config{
+	mgrCfg := ctrmanager.Config{
 		ExternalSocket: c.ctrSocket,
 		DataRoot:       filepath.Join(os.TempDir(), "funcd-bench-containerd"),
 		ImageOverride:  imageOverrides(),
-	})
+	}
+	mgr, err := ctrmanager.New(mgrCfg)
 	if err != nil {
 		return fmt.Errorf("build containerd runtime manager: %w", err)
 	}
@@ -326,7 +327,7 @@ func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error 
 	r, err := bench.RunContainerd(ctx, bench.ContainerdConfig{
 		Socket: socket, Namespace: benchContainerdNamespace, Snapshotter: c.snapshotter,
 		CNIBinDir: c.cniBinDir, CNIConfDir: c.cniConfDir, SubnetCIDR: c.subnetCIDR,
-		ImagePrefix: c.imagePrefix, ShimPath: "/opt/funcd/shim.mjs",
+		ImagePrefix: c.imagePrefix, ImageOverride: mgrCfg.ImageOverride, ShimPath: "/opt/funcd/shim.mjs",
 		Density: c.density, MemBudgetMB: c.budget, TargetFns: c.target,
 		Concurrency: c.concurrency, Duration: c.duration,
 	})
