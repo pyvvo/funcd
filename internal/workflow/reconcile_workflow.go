@@ -389,7 +389,11 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 			continue
 		}
 		if len(st.Params) > 0 { // the engine overlays them on any step, a root included (stepInput)
-			if diffs := objectIntoVoid(child.Input); len(diffs) > 0 {
+			diffs := objectIntoVoid(child.Input)
+			if len(diffs) == 0 {
+				diffs = v1.CheckProps(st.Params, child.Input)
+			}
+			if len(diffs) > 0 {
 				return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("params of step %q: %s", st.Name, v1.FieldDiffs(diffs))}
 			}
 		}

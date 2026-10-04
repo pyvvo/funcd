@@ -316,3 +316,46 @@ func TestIssue542_VoidInputRejectsFailureContextAndParams(t *testing.T) {
 		})
 	}
 }
+
+// Issue #542: the engine overlays spec.params on a step's input (static wins, ADR-0094), so a param whose
+// value has the wrong type makes the step answer 422 on every run. Reconcile checks each param value
+// against the property the step's input declares, required or optional, a root included.
+func TestIssue542_ParamsValueTypesChecked(t *testing.T) {
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:a":   {Output: obj(map[string]string{"rows": "integer"}, "rows")},
+		"oci:req": {Input: obj(map[string]string{"rows": "integer", "region": "string"}, "rows", "region")},
+		"oci:opt": {Input: obj(map[string]string{"rows": "integer", "region": "string"}, "rows")},
+	}}
+	for _, tc := range []struct {
+		name, image, params string
+		root                bool
+		named               string
+	}{
+		{name: "required param of the right type", image: "oci:req", params: `{"region":"eu"}`},
+		{name: "optional param of the right type", image: "oci:opt", params: `{"region":"eu"}`},
+		{name: "required param of the wrong type", image: "oci:req", params: `{"region":5}`, named: `"region" is number, want string`},
+		{name: "optional param of the wrong type", image: "oci:opt", params: `{"region":5}`, named: `"region" is number, want string`},
+		{name: "param of the wrong type on a root", image: "oci:req", params: `{"region":true}`, root: true, named: `"region" is boolean, want string`},
+		{name: "params not an object", image: "oci:opt", params: `"eu"`, named: "want object"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := fnStep("b", tc.image, "a")
+			steps := []v1.WorkflowStep{fnStep("a", "oci:a")}
+			if tc.root {
+				b.DependsOn, steps = nil, nil
+			}
+			b.Params = sc(tc.params)
+			wf, _ := reconcileWF(t, newStore(t), c, append(steps, b)...)
+			if tc.named == "" {
+				if !ready(wf) {
+					t.Fatalf("params of the declared types must leave the workflow Ready, conditions=%+v", wf.Status.Conditions)
+				}
+				return
+			}
+			cond, _ := wf.Status.Conditions.Get(condSchemaMismatch)
+			if ready(wf) || mismatchReason(wf) != "EdgeTypeMismatch" || !strings.Contains(cond.Message, `params of step "b"`) || !strings.Contains(cond.Message, tc.named) {
+				t.Fatalf("params %s must be SchemaMismatch/EdgeTypeMismatch naming step \"b\" and %s, got %+v", tc.params, tc.named, wf.Status.Conditions)
+			}
+		})
+	}
+}
