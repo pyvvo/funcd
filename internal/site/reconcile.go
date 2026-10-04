@@ -235,8 +235,9 @@ func (r *Reconciler) ensureBucket(ctx context.Context, s *v1.Site) (prefixOwned 
 
 // unpack pulls the digest-pinned bundle into a scratch dir and Puts every entry under sp — non-index
 // entries first, the index LAST so its presence is the completeness marker. A bundle without the index
-// is not uploaded at all (IndexMissing); a NotFound/Invalid pull, or an entry over the Bucket's
-// maxObjectBytes, is a NotReady reason; anything else is a transient error for the controller to retry.
+// is not uploaded at all (IndexMissing); a NotFound/Invalid pull, an entry over the Bucket's
+// maxObjectBytes, or one the substrate cannot store under its key, is a NotReady reason; anything else
+// is a transient error for the controller to retry.
 func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, digest, sp, index string) (reason, message string, err error) {
 	tmp, terr := os.MkdirTemp("", "funcd-site-")
 	if terr != nil {
@@ -282,8 +283,9 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 		}
 		if perr := view.Put(ctx, sp+rel, data); perr != nil {
 			// An object over the Bucket's maxObjectBytes (blob.Capped: Forbidden, or the size kind
-			// PayloadTooLarge) fails every retry until the spec or the Bucket changes (MapBucket).
-			if k := fault.KindOf(perr); k == fault.Forbidden || k == fault.PayloadTooLarge {
+			// PayloadTooLarge), or a key the substrate cannot store (Invalid), fails every retry until the
+			// spec or the Bucket changes (MapBucket).
+			if k := fault.KindOf(perr); k == fault.Forbidden || k == fault.PayloadTooLarge || k == fault.Invalid {
 				return "MaterializeFailed", perr.Error(), nil
 			}
 			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", sp+rel)

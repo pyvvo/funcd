@@ -667,3 +667,35 @@ func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
 		})
 	}
 }
+
+// A bundle entry the file substrate cannot store under its key (fault.Invalid: a name past the OS limit
+// once the substrate adds its own suffixes, or a suffix the file backend reserves) fails every retry the
+// same way an over-cap object does: the Site reports the object (NotReady MaterializeFailed) instead of
+// failing the reconcile into a hot retry.
+func TestSite_UnstorableObjectKeyIsNotReadyNotRetried(t *testing.T) {
+	for name, entry := range map[string]string{
+		"NameTooLong":    strings.Repeat("n", 245) + ".html",
+		"ReservedSuffix": "data.attrs",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			files, err := gocloud.Open(h.ctx, gocloud.FileURL(t.TempDir()))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = files.Close() })
+			h.shared = &recorder{Bucket: files}
+			digest := h.push("v1", map[string]string{"index.html": "<title>A</title>", entry: "x"})
+			h.seedSite("bi", "v1", nil)
+
+			res := h.reconcile("bi")
+			require.Zero(t, res.RequeueAfter)
+			s := h.site("bi")
+			c := readyCond(t, s)
+			require.Equal(t, "MaterializeFailed", c.Reason)
+			require.Contains(t, c.Message, "bi/"+slug(digest)+"/"+entry)
+			require.NotEqual(t, s.Generation, s.Status.ObservedGeneration, "a failed generation stays unobserved")
+			require.False(t, h.exists("bi/"+slug(digest)+"/index.html"))
+			_, gerr := h.st.Get(h.ctx, v1.KindRoute.GVK(), ns, "bi")
+			require.Error(t, gerr, "nothing is served")
+		})
+	}
+}
