@@ -317,6 +317,12 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	netnsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
 	result, err := d.cni.Setup(nctx, cniID, netnsPath)
 	if err != nil {
+		// Setup does not undo the plugins that succeeded and the CNI spec leaves that DEL to the runtime, so without it
+		// the host-local lease and the masquerade rules outlive the failed Create.
+		if rerr := d.cni.Remove(nctx, cniID, netnsPath); rerr != nil {
+			d.cfg.Logger.Warn("could not release the CNI attachment of a failed network setup",
+				"op", op, "attachment", cniID, "error", rerr)
+		}
 		_, _ = task.Delete(nctx)
 		_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
 		return runtime.Instance{}, mapErr(err, op, "attach netns for %q", cniID)

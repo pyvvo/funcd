@@ -31,6 +31,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -354,6 +356,14 @@ func (s *memContainers) Create(_ context.Context, c containers.Container) (conta
 	return c, nil
 }
 
+func (s *memContainers) Delete(_ context.Context, id string) error {
+	if _, ok := s.records[id]; !ok {
+		return fmt.Errorf("container %q: %w", id, errdefs.ErrNotFound)
+	}
+	delete(s.records, id)
+	return nil
+}
+
 type oneImage struct {
 	images.Store
 	img images.Image
@@ -383,6 +393,11 @@ type createdTasks struct{ tasksapi.TasksClient }
 
 func (createdTasks) Create(context.Context, *tasksapi.CreateTaskRequest, ...grpc.CallOption) (*tasksapi.CreateTaskResponse, error) {
 	return &tasksapi.CreateTaskResponse{Pid: 1}, nil
+}
+
+// Get finds no task (the fake runs nothing), so the cleanup of a failed Create can delete its container.
+func (createdTasks) Get(_ context.Context, req *tasksapi.GetRequest, _ ...grpc.CallOption) (*tasksapi.GetResponse, error) {
+	return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
 }
 
 type attachedCNI struct{ gocni.CNI }
