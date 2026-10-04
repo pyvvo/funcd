@@ -748,8 +748,10 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0139 (F103): the Site reconciler materializes a site bundle under a digest-scoped prefix of the
 	// SAME per-namespace Bucket view the S3 frontend and the static handler use (s3BucketFor), then owns
 	// the Bucket + Route it declares inline; its status is derived from the owned Route.
-	ctrl.Register(v1.KindSite.GVK(), site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger}))
-	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute) // status is derived from the same-named owned Route
+	siteReconciler := site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger})
+	ctrl.Register(v1.KindSite.GVK(), siteReconciler)
+	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute)             // status is derived from the same-named owned Route
+	ctrl.Watches(v1.KindBucket.GVK(), siteReconciler.MapBucket) // a raised maxObjectBytes lets a refused bundle deploy
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).

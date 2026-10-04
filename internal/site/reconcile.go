@@ -176,6 +176,25 @@ func MapRoute(_ context.Context, obj v1.Object) []controller.Request {
 	return []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: meta.Namespace, Name: meta.Name}}
 }
 
+// MapBucket is the controller.MapFunc that re-runs the reconcile of every Site declaring a changed Bucket:
+// a bundle its maxObjectBytes refused can deploy once the cap is raised, and no Site event follows a Bucket
+// write.
+func (r *Reconciler) MapBucket(ctx context.Context, obj v1.Object) []controller.Request {
+	meta := obj.GetObjectMeta()
+	list, err := r.store.List(ctx, v1.KindSite.GVK(), store.ListOptions{Namespace: meta.Namespace})
+	if err != nil {
+		r.logger.WarnContext(ctx, "list sites of a changed bucket", "namespace", string(meta.Namespace), "bucket", string(meta.Name), "error", err)
+		return nil
+	}
+	var reqs []controller.Request
+	for _, o := range list.Items {
+		if s, ok := o.(*v1.Site); ok && s.Spec.Bucket.Name == meta.Name {
+			reqs = append(reqs, controller.Request{GVK: v1.KindSite.GVK(), Namespace: s.Namespace, Name: s.Name})
+		}
+	}
+	return reqs
+}
+
 // routeOf reads the Site's same-named Route; nil when absent.
 func (r *Reconciler) routeOf(ctx context.Context, s *v1.Site) (*v1.Route, error) {
 	obj, err := r.store.Get(ctx, v1.KindRoute.GVK(), s.Namespace, s.Name)
@@ -216,8 +235,8 @@ func (r *Reconciler) ensureBucket(ctx context.Context, s *v1.Site) (prefixOwned 
 
 // unpack pulls the digest-pinned bundle into a scratch dir and Puts every entry under sp — non-index
 // entries first, the index LAST so its presence is the completeness marker. A bundle without the index
-// is not uploaded at all (IndexMissing); a NotFound/Invalid pull is a NotReady reason; anything else is
-// a transient error for the controller to retry.
+// is not uploaded at all (IndexMissing); a NotFound/Invalid pull, or an entry over the Bucket's
+// maxObjectBytes, is a NotReady reason; anything else is a transient error for the controller to retry.
 func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, digest, sp, index string) (reason, message string, err error) {
 	tmp, terr := os.MkdirTemp("", "funcd-site-")
 	if terr != nil {
@@ -256,26 +275,31 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 		return "IndexMissing", fmt.Sprintf("bundle %s has no %q; nothing materialized", digest, index), nil
 	}
 	slices.Sort(files)
-	put := func(rel string) error {
+	put := func(rel string) (reason, message string, err error) {
 		data, rerr := os.ReadFile(filepath.Join(tmp, filepath.FromSlash(rel))) //nolint:gosec // rel is a walked entry under the scratch dir
 		if rerr != nil {
-			return fault.Wrapf(rerr, fault.Internal, op, "read %q", rel)
+			return "", "", fault.Wrapf(rerr, fault.Internal, op, "read %q", rel)
 		}
 		if perr := view.Put(ctx, sp+rel, data); perr != nil {
-			return fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", sp+rel)
+			// An object over the Bucket's maxObjectBytes (blob.Capped: Forbidden, or the size kind
+			// PayloadTooLarge) fails every retry until the spec or the Bucket changes (MapBucket).
+			if k := fault.KindOf(perr); k == fault.Forbidden || k == fault.PayloadTooLarge {
+				return "MaterializeFailed", perr.Error(), nil
+			}
+			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", sp+rel)
 		}
-		return nil
+		return "", "", nil
 	}
 	for _, rel := range files {
 		if rel == index {
 			continue
 		}
-		if perr := put(rel); perr != nil {
-			return "", "", perr
+		if reason, msg, perr := put(rel); reason != "" || perr != nil {
+			return reason, msg, perr
 		}
 	}
-	if perr := put(index); perr != nil {
-		return "", "", perr
+	if reason, msg, perr := put(index); reason != "" || perr != nil {
+		return reason, msg, perr
 	}
 	r.logger.Info("site bundle materialized", "site", s.Name, "namespace", s.Namespace, "digest", digest, "objects", len(files))
 	return "", "", nil
