@@ -52,7 +52,8 @@ type Config struct {
 	// only on the private-managed path.
 	DataRoot string
 	// ImageOverride maps a runtime to a registry ref (--image runtime=ref) that ImageFor yields in
-	// place of the curated image; the containerd driver pulls a non-curated ref from its registry.
+	// place of the curated image; the containerd driver pulls every ref other than the embedded
+	// curated image itself from its registry (embedimg.TarForImageRef).
 	ImageOverride map[string]string
 }
 

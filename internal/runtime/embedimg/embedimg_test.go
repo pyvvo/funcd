@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,8 @@ func TestUnknownRuntimeHasNoEmbeddedTar(t *testing.T) {
 
 // scenario: embedded-image-no-registry — the containerd driver maps a curated image ref to its
 // embedded tar so it can import it into the function's own containerd namespace (no registry
-// pull). A ref that does not match the curated pattern reports ok=false (→ driver Pulls it).
+// pull). Any other ref reports ok=false (→ driver Pulls it), including an --image override named
+// after a curated runtime: importing the embed would run the curated image instead of the override.
 func TestTarForImageRef(t *testing.T) {
 	curated := []struct {
 		ref string
@@ -49,8 +51,8 @@ func TestTarForImageRef(t *testing.T) {
 		{"funcd/runtime-nodejs22:latest", "nodejs22"},
 		{"docker.io/funcd/runtime-nodejs22:latest", "nodejs22"},
 		{"funcd/runtime-python314:latest", "python314"},
-		{"runtime-python314:v1", "python314"},
 		{"funcd/runtime-nodejs22", "nodejs22"}, // no tag
+		{"funcd/runtime-duckdb", "duckdb"},
 	}
 	for _, c := range curated {
 		r, ok := TarForImageRef(c.ref)
@@ -69,6 +71,12 @@ func TestTarForImageRef(t *testing.T) {
 		"funcd/runtime-ruby33:latest", // unknown runtime
 		"docker.io/library/alpine:3.20",
 		"ghcr.io/acme/custom:latest",
+		"ghcr.io/pyvvo/runtime-nodejs22:v2",
+		"registry.example/team/nodejs22:1",
+		"localhost:5000/funcd/runtime-nodejs22:latest",
+		"funcd/runtime-nodejs22:v2",
+		"runtime-python314:v1",
+		"funcd/runtime-nodejs22@sha256:" + strings.Repeat("a", 64),
 	}
 	for _, ref := range nonCurated {
 		if _, ok := TarForImageRef(ref); ok {

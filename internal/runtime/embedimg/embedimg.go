@@ -19,7 +19,13 @@ import (
 	"embed"
 	"io"
 	"strings"
+
+	"github.com/distribution/reference"
 )
+
+// curatedRepoPrefix is the normalized repository prefix of every embedded image (`just
+// build-runtime-images` tags funcd/runtime-<rt>:latest), the name client.Import stores it under.
+const curatedRepoPrefix = "docker.io/funcd/runtime-"
 
 // curated holds the embedded per-arch OCI image tars. The build wires the arch-matching
 // tars in (a per-arch release build embeds its own matching-arch image — ADR-0054).
@@ -83,19 +89,23 @@ func isGzip(b []byte) bool {
 
 // TarForImageRef maps a curated image reference to its embedded OCI tar, so the containerd
 // driver can import the embed into the function's own containerd namespace on demand (no
-// registry pull — ADR-0054). It parses the runtime out of the ref: the path component after
-// the last "/", with a leading "runtime-" and a trailing ":<tag>" stripped — so
-// "funcd/runtime-nodejs22:latest" → "nodejs22" → Tar("nodejs22"). ok==false means the ref does
-// not match the curated pattern (an ImageOverride / arbitrary registry ref) — the driver then
-// falls back to a registry Pull.
+// registry pull — ADR-0054). Only the image an embedded tar carries matches: the ref must
+// normalize to "docker.io/funcd/runtime-<rt>:latest" (so "funcd/runtime-nodejs22" and
+// "funcd/runtime-nodejs22:latest" do). Any other ref — an ImageOverride such as
+// "ghcr.io/pyvvo/runtime-nodejs22:v2", another tag, registry or digest — reports ok==false and the
+// driver pulls it: importing the tar would run the curated image in its place.
 func TarForImageRef(ref string) (r io.Reader, ok bool) {
-	name := ref
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		name = name[i+1:] // drop the registry/repo prefix, keep the last path component
+	named, err := reference.ParseDockerRef(ref)
+	if err != nil {
+		return nil, false
 	}
-	if i := strings.LastIndex(name, ":"); i >= 0 {
-		name = name[:i] // strip the :<tag>
+	name, curated := strings.CutPrefix(named.String(), curatedRepoPrefix)
+	if !curated {
+		return nil, false
 	}
-	name = strings.TrimPrefix(name, "runtime-")
-	return Tar(name)
+	rt, latest := strings.CutSuffix(name, ":latest")
+	if !latest {
+		return nil, false
+	}
+	return Tar(rt)
 }
