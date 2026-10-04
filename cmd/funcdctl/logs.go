@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -65,7 +66,7 @@ func (a *cli) renderLogLines(lines []logread.Line, output string) error {
 			}
 			continue
 		}
-		line := l.Time.UTC().Format(time.RFC3339) + " [" + l.Severity + "] " + l.Replica + " " + l.Body
+		line := l.Time.UTC().Format(time.RFC3339) + " [" + termSafe(l.Severity) + "] " + termSafe(l.Replica) + " " + termSafe(l.Body)
 		if output == "wide" {
 			line += wideSuffix(l.Source, l.Invocation, l.TraceID, l.Attrs)
 		}
@@ -81,13 +82,13 @@ func (a *cli) renderLogLines(lines []logread.Line, output string) error {
 func wideSuffix(source, inv, traceID string, attrs json.RawMessage) string {
 	var b strings.Builder
 	if source != "" {
-		b.WriteString(" source=" + source)
+		b.WriteString(" source=" + termSafe(source))
 	}
 	if inv != "" {
-		b.WriteString(" inv=" + inv)
+		b.WriteString(" inv=" + termSafe(inv))
 	}
 	if traceID != "" {
-		b.WriteString(" trace=" + traceID)
+		b.WriteString(" trace=" + termSafe(traceID))
 	}
 	if len(attrs) > 0 {
 		var m map[string]json.RawMessage
@@ -102,9 +103,27 @@ func wideSuffix(source, inv, traceID string, attrs json.RawMessage) string {
 				if s, err := strconv.Unquote(v); err == nil { // a JSON string value → its text
 					v = s
 				}
-				b.WriteString(" " + k + "=" + v)
+				b.WriteString(" " + termSafe(k) + "=" + termSafe(v))
 			}
 		}
+	}
+	return b.String()
+}
+
+// termSafe escapes each rune a terminal would act on (control bytes, invalid UTF-8, non-printing runes) as
+// strconv.Quote does, so a function-supplied field cannot break the one-line-per-record output (ADR-0084)
+// or send escape sequences to the reader's tty. Printable text, quotes and backslashes pass unchanged.
+func termSafe(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		r, n := utf8.DecodeRuneInString(s)
+		if (r != utf8.RuneError || n > 1) && strconv.IsPrint(r) {
+			b.WriteString(s[:n])
+		} else {
+			q := strconv.Quote(s[:n])
+			b.WriteString(q[1 : len(q)-1])
+		}
+		s = s[n:]
 	}
 	return b.String()
 }

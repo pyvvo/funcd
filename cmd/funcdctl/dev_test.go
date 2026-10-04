@@ -345,6 +345,26 @@ func TestPrintLogFormatsLine(t *testing.T) {
 	}
 }
 
+// A streamed record's fields come from the function, so the dev log tee escapes what a terminal would act
+// on and keeps each record on one line, also for an unknown severity or a name wider than its column.
+func TestDevLogStylerEscapesControlBytes(t *testing.T) {
+	got := newDevLogStyler(&bytes.Buffer{}).format(funcd.LogLine{
+		Function: "a-function-name-wider-than-its-column",
+		Severity: "BOGUS\x1b[2J",
+		Body:     "multi\n  09:08:07  ingest       ERROR  forged\x1b]0;title\x07\x00\u009b\u2028end",
+		Time:     time.Date(2026, 7, 12, 9, 8, 7, 0, time.UTC),
+		Attrs:    map[string]string{"k\x1b": "a\x1b[31mb\nc"},
+	})
+	require.NotContains(t, got, "\n", "one line per record")
+	for _, r := range got {
+		require.False(t, r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == 0x2028, "raw control %U in %q", r, got)
+	}
+	require.Contains(t, got, "a-function-name-wider-than-its-column")
+	require.Contains(t, got, `BOGUS\x1b[2J`)
+	require.Contains(t, got, `multi\n  09:08:07  ingest       ERROR  forged\x1b]0;title\a\x00\u009b\u2028end`)
+	require.Contains(t, got, `k\x1b=a\x1b[31mb\nc`)
+}
+
 // TestPrintDevEnvDerivesDeterministicKeypair — `funcdctl dev --print-env` prints exactly the four AWS
 // export lines with the S3 keypair DERIVED (fixed devS3Master over the resolved first function — the same
 // keypair the banner shows, deterministic across calls), boots no server, and defaults the endpoint port
