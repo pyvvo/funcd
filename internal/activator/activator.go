@@ -397,13 +397,15 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 // forward reverse-proxies r to upstream, streaming each write immediately
 // (FlushInterval = -1) so SSE / token streams are not buffered (ADR-0013 parity). A failed
 // upstream call is an Unavailable problem+json logged through slog (ADR-0002), not the
-// ReverseProxy default (a bare 502 logged through the stdlib log package); ErrorLog sends
-// ReverseProxy's own errors (a failed body copy) through the same logger (#511).
+// ReverseProxy default (a bare 502 logged through the stdlib log package); the cause, like a malformed
+// upstream, names the worker's address, so it stays in the log. ErrorLog sends ReverseProxy's own
+// errors (a failed body copy) through the same logger (#511).
 func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream string) {
 	const op = "activator.forward"
 	target, err := url.Parse(upstream)
 	if err != nil || target.Scheme == "" || target.Host == "" {
-		fault.WriteProblem(w, fault.Internalf(op, "invalid upstream %q", upstream))
+		a.logger.ErrorContext(r.Context(), "worker upstream is not a valid URL", "upstream", upstream)
+		fault.WriteProblem(w, fault.Internalf(op, "worker upstream is misconfigured"))
 		return
 	}
 	if target.Path != "" {
@@ -417,7 +419,7 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	rp.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
 		logger.WarnContext(r.Context(), "upstream call failed", "error", perr)
-		fault.WriteProblem(w, fault.Wrapf(perr, fault.Unavailable, op, "upstream call failed"))
+		fault.WriteProblem(w, fault.Unavailablef(op, "upstream call failed"))
 	}
 	KeepEdgeHeaders(rp, w)
 	rp.ServeHTTP(w, r)
