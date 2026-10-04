@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -35,4 +36,63 @@ func TestLaneRegistryListsItsVenomLanes(t *testing.T) {
 	sort.Strings(got)
 	sort.Strings(want)
 	require.Equal(t, want, got)
+}
+
+// lanes.sh checked out every spec at .claude/worktrees/lane-<lane> and first removed whatever was there, so a second
+// run for another branch and the same lane deleted the first run's checkout under its running lane ("failed to get
+// current directory"). Here the first run's lane starts the second run, then checks that its own checkout survived.
+func TestLanesGivesEachRunItsOwnCheckout(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(home, "funcd")
+	env := append(os.Environ(), "HOME="+home, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=lanes", "GIT_AUTHOR_EMAIL=", "GIT_COMMITTER_NAME=lanes", "GIT_COMMITTER_EMAIL=")
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	write := func(path, body string, mode os.FileMode) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(body), mode))
+	}
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	git("init", "-q", "-b", "main")
+	write(filepath.Join(root, "scripts", "agent", "d"), "#!/bin/sh\nexec \"$@\"\n", 0o755)
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	git("branch", "fix/one")
+	git("branch", "fix/two")
+	git("remote", "add", "origin", root)
+	src, err := os.ReadFile(filepath.Join("agent", "lanes.sh"))
+	require.NoError(t, err)
+	lanes := filepath.Join(root, "scripts", "agent", "lanes.sh")
+	write(lanes, string(src), 0o755)
+
+	bin := t.TempDir()
+	write(filepath.Join(bin, "just"), `#!/bin/sh
+if [ -n "${LANES_SECOND:-}" ]; then
+  second=$LANES_SECOND
+  unset LANES_SECOND
+  "$second" fix/two:all
+fi
+test -f scripts/agent/d || { echo "the checkout of this run is gone"; exit 1; }
+`, 0o755)
+	cmd := exec.Command(lanes, "fix/one:all")
+	cmd.Env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "LANES_SECOND="+lanes)
+	code, out := exitCode(t, cmd)
+	first, err := os.ReadFile(filepath.Join(root, ".cache", "lanes", "fix_one-all.log"))
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "%s\nlog of fix/one:\n%s", out, first)
+	require.Contains(t, out, "fix/one:all @")
+	require.Contains(t, out, "PASS")
+	require.Contains(t, string(first), "fix/two:all @", "the second run ran inside the first one")
+	require.Contains(t, string(first), "PASS")
+
+	require.Equal(t, 1, strings.Count(git("worktree", "list"), "\n"), "each run removes its own checkout")
+	left, err := os.ReadDir(filepath.Join(root, ".claude", "worktrees"))
+	require.NoError(t, err)
+	require.Empty(t, left, "no checkout directory is left behind")
 }
