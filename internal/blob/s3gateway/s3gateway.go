@@ -52,7 +52,9 @@ type Deps struct {
 	External ExternalKeys
 	// Listen is the node-private bind address (e.g. 127.0.0.1:9000).
 	Listen string
-	// MaxUploadBytes caps a single buffered (multipart/put) object; 0 ⇒ defaultMaxUpload.
+	// MaxUploadBytes caps a single buffered (multipart/put) object; 0 ⇒ defaultMaxUpload. It also sizes the
+	// multipart budget (ADR-0188): buffered parts plus assembled copies stay within 3 × MaxUploadBytes daemon-wide,
+	// and one principal's parts within MaxUploadBytes.
 	MaxUploadBytes int64
 	// Logger is the server logger; nil ⇒ slog.Default(). The master secret is NEVER logged.
 	Logger *slog.Logger
@@ -115,7 +117,7 @@ func New(d Deps) (*Server, error) {
 		external:  d.External,
 		maxUpload: maxUpload,
 		log:       logger,
-		mp:        newMultipartStore(),
+		mp:        newMultipartStore(maxUpload),
 		life:      life,
 	}
 	iamImpl := &iam{master: d.Master, external: d.External}
