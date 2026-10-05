@@ -312,6 +312,9 @@ func (n noRangeBucket) Exists(ctx context.Context, key string) (bool, error) {
 func (n noRangeBucket) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
 	return n.inner.List(ctx, prefix)
 }
+func (n noRangeBucket) ListAfter(ctx context.Context, prefix, after string, limit int) ([]blob.Attributes, bool, error) {
+	return n.inner.ListAfter(ctx, prefix, after, limit)
+}
 func (n noRangeBucket) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
 	return n.inner.Attributes(ctx, key)
 }

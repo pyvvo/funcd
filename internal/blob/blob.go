@@ -19,6 +19,10 @@ type Bucket interface {
 	Delete(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
 	List(ctx context.Context, prefix string) ([]Attributes, error)
+	// ListAfter returns at most limit objects under prefix whose key sorts strictly after `after`, sorted by key,
+	// with the fields List fills; more is true exactly when a further key under prefix exists. limit < 1 is
+	// fault.Invalid (ADR-0184).
+	ListAfter(ctx context.Context, prefix, after string, limit int) (items []Attributes, more bool, err error)
 	// Attributes reads one object's attributes without its content; fault.NotFound if absent.
 	Attributes(ctx context.Context, key string) (Attributes, error)
 	SignedURL(ctx context.Context, key string, opts SignOptions) (string, error)

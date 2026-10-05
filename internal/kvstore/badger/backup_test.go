@@ -18,6 +18,8 @@ import (
 // fakeBucket is an in-memory blob.Bucket recording puts (count + bytes) and able to inject upload failures
 // — enough to prove default-off, incremental-delta, cursor-after-durable-upload, and restore parity.
 type fakeBucket struct {
+	// The port is embedded only to satisfy ListAfter, which the backup never calls.
+	blob.Bucket
 	mu      sync.Mutex
 	objs    map[string][]byte
 	puts    int

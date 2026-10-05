@@ -18,7 +18,11 @@ import (
 )
 
 // blobMapBucket is a tiny in-memory blob.Bucket for the local-API blob route tests (supports SignedURL).
-type blobMapBucket struct{ m map[string][]byte }
+// It embeds the port only to satisfy ListAfter, which these routes never call.
+type blobMapBucket struct {
+	iblob.Bucket
+	m map[string][]byte
+}
 
 func newBlobMapBucket() *blobMapBucket { return &blobMapBucket{m: map[string][]byte{}} }
 
