@@ -38,10 +38,29 @@ type FunctionRef struct {
 	UID       v1.UID        // set with Revision
 }
 
-// function is fn without its revision: idle reclaim is per Function, so a pinned call counts as its Function's
-// activity and its hand-out is spared like any other call to the Function.
+// function is fn without its revision.
 func (fn FunctionRef) function() FunctionRef {
 	return FunctionRef{Namespace: fn.Namespace, Name: fn.Name}
+}
+
+// reclaims are the refs whose idle reclaim stops fn's worker: fn and, for a ref pinned to a revision, its Function,
+// whose reclaim stops the serving revision a pinned call may reach.
+func (fn FunctionRef) reclaims() []FunctionRef {
+	if fn.Revision == "" {
+		return []FunctionRef{fn}
+	}
+	return []FunctionRef{fn, fn.function()}
+}
+
+// heldIdleTimeout is the idle window of a held revision whose Function has none, the step Functions' (ADR-0094), so a
+// paused run holds disk, never RAM (ADR-0190 Decision 10).
+const heldIdleTimeout = 5 * time.Minute
+
+// HeldRevision reports whether ref is pinned to a revision of f other than its current and serving ones (ADR-0190
+// Decision 6): a wake of it is a demand on that Revision, and its Revision.status, not f's phase, judges it.
+func HeldRevision(f *v1.Function, ref FunctionRef) bool {
+	rev := string(ref.Revision)
+	return rev != "" && f.UID == ref.UID && rev != f.Status.CurrentRevision && rev != f.Status.ServingRevision
 }
 
 // Endpoints resolves a function's currently-ready upstream. P-M/scheduler provide the
@@ -237,7 +256,7 @@ func (a *Activator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // upstream immediately; a not-ready one is woken via the existing per-fn singleflight.
 func (a *Activator) Wake(ctx context.Context, fn FunctionRef) (string, error) {
 	const op = "activator.Wake"
-	a.touch(fn.function())
+	a.touch(fn)
 	upstream, ready, err := a.endpoints.Upstream(ctx, fn)
 	if fault.KindOf(err) == fault.NotFound && fn.Revision != "" {
 		return "", fault.Wrapf(err, fault.NotFound, op, "resolve upstream for %s/%s", fn.Namespace, fn.Name) // a pin that is gone (ADR-0190)
@@ -250,20 +269,27 @@ func (a *Activator) Wake(ctx context.Context, fn FunctionRef) (string, error) {
 			return "", err
 		}
 	}
-	a.handedOut(fn.function(), upstream)
+	a.handedOut(fn, upstream)
 	return upstream, nil
 }
 
-// touch records last-activity for fn (also seeds first observation). It first waits out a reclaim writing fn's
-// scale-to-zero, so the caller then finds fn cold instead of a worker about to stop.
+// touch records last-activity for fn (also seeds first observation). It first waits out a reclaim writing a
+// scale-to-zero that stops fn's worker, so the caller then finds fn cold instead of a worker about to stop.
 func (a *Activator) touch(fn FunctionRef) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for done := a.reclaiming[fn]; done != nil; done = a.reclaiming[fn] {
-		a.mu.Unlock()
-		<-done
-		a.mu.Lock()
+	for _, k := range fn.reclaims() {
+		for done := a.reclaiming[k]; done != nil; done = a.reclaiming[k] {
+			a.mu.Unlock()
+			<-done
+			a.mu.Lock()
+		}
 	}
+	a.active(fn)
+}
+
+// active restarts fn's idle window; the caller holds a.mu.
+func (a *Activator) active(fn FunctionRef) {
 	e := a.lastActive[fn]
 	e.at = a.clock.Now()
 	a.lastActive[fn] = e
@@ -365,10 +391,11 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 	}
 }
 
-// failed returns FailedFault for fn's Function: once the wake is accepted, the reconciler
-// may fail the function during the activation (a shim that cannot load the handler).
-// Without a Store, or when the read fails, it is nil and the poll goes on.
+// failed returns FailedFault for fn's Function, or RevisionFailedFault for a held revision fn is pinned to (ADR-0190
+// Decision 5): once the wake is accepted, the reconciler may fail it during the activation (a shim that cannot load
+// the handler). Without a Store, or when a read fails, it is nil and the poll goes on.
 func (a *Activator) failed(ctx context.Context, fn FunctionRef) error {
+	const op = "activator.activate"
 	if a.store == nil {
 		return nil
 	}
@@ -382,7 +409,30 @@ func (a *Activator) failed(ctx context.Context, fn FunctionRef) error {
 	if !ok {
 		return nil
 	}
-	return FailedFault("activator.activate", f)
+	if !HeldRevision(f, fn) {
+		return FailedFault(op, f)
+	}
+	obj, err = a.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, fn.Revision)
+	if err != nil {
+		a.logger.DebugContext(ctx, "revision read failed during activation",
+			"namespace", string(fn.Namespace), "revision", string(fn.Revision), "error", err)
+		return nil
+	}
+	rev, ok := obj.(*v1.Revision)
+	if !ok {
+		return nil
+	}
+	return RevisionFailedFault(op, fn, rev)
+}
+
+// RevisionFailedFault is the fault.Unavailable a call pinned to the held revision rev is answered with when rev is
+// Failed, naming its Ready reason, else nil (ADR-0190 Decision 5).
+func RevisionFailedFault(op string, fn FunctionRef, rev *v1.Revision) error {
+	if rev.Status.Phase != v1.PhaseFailed {
+		return nil
+	}
+	ready, _ := rev.Status.Conditions.Get(condReady)
+	return fault.Unavailablef(op, "revision %q of function %s/%s is Failed (%s)", rev.Name, fn.Namespace, fn.Name, ready.Reason)
 }
 
 // FailedFault is the fault.Unavailable a call to f is answered with when f is Failed, naming
@@ -407,9 +457,7 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 		delete(a.inflight, fn)
 	}
 	if err == nil {
-		e := a.lastActive[fn.function()]
-		e.at = a.clock.Now()
-		a.lastActive[fn.function()] = e
+		a.active(fn)
 	}
 	a.mu.Unlock()
 	act.upstream = upstream
@@ -507,7 +555,9 @@ func rootedClean(p string) string {
 // than its IdleTimeout, that has no call in flight and no wake in progress. Functions with recent
 // activity, MinReplicas != 0, a zero IdleTimeout (reclaim disabled), or any other phase — Pending, Failed,
 // Deploying, Terminating, Idle — are skipped. A function not yet seen, or with a call in flight, is
-// given a full grace window from the current time. Entries for functions that no longer exist are dropped.
+// given a full grace window from the current time. Entries for functions that no longer exist are dropped. A held
+// revision is reclaimed by its pinned ref after its Function's IdleTimeout, or heldIdleTimeout when that is zero,
+// whatever the replica floor (ADR-0190 Decisions 6 and 10).
 func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	const op = "activator.ReclaimIdle"
 	list, err := a.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
@@ -516,42 +566,89 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	}
 	now := a.clock.Now()
 	live := make(map[FunctionRef]struct{}, len(list.Items))
+	fns := make(map[FunctionRef]*v1.Function, len(list.Items))
 	for _, obj := range list.Items {
 		fn, ok := obj.(*v1.Function)
 		if !ok {
 			continue
 		}
 		ref := FunctionRef{Namespace: fn.Namespace, Name: fn.Name}
-		live[ref] = struct{}{}
+		live[ref], fns[ref] = struct{}{}, fn
 		sc := fn.Spec.Scaling
 		if sc.MinReplicas != 0 || sc.IdleTimeout <= 0 {
 			continue // scale-to-zero / reclaim not enabled for this function
 		}
-		if !Reclaimable(fn) {
+		if Reclaimable(fn) {
+			a.reclaim(ctx, ref, fn.UID, now, sc.IdleTimeout, func(p FunctionRef) bool { return p.UID == fn.UID && !HeldRevision(fn, p) })
+		}
+	}
+	for _, ref := range a.pinnedRefs() {
+		fn, ok := fns[ref.function()]
+		if !ok || fn.UID != ref.UID {
+			continue // the pinned Function is gone: forgotten
+		}
+		if !HeldRevision(fn, ref) {
+			live[ref] = struct{}{} // a call pinned to the current or serving revision counts for its Function's reclaim
 			continue
 		}
-		done, idle := a.claimIdle(ref, fn.UID, now, sc.IdleTimeout)
-		if !idle {
-			continue
-		}
-		err := a.scaler.ScaleTo(ctx, ref, 0)
-		a.mu.Lock()
-		delete(a.reclaiming, ref)
-		a.mu.Unlock()
-		close(done)
+		obj, err := a.store.Get(ctx, v1.KindRevision.GVK(), ref.Namespace, ref.Revision)
 		if err != nil {
-			a.logger.WarnContext(ctx, "idle reclaim scale-to-zero failed",
-				"namespace", string(ref.Namespace), "name", string(ref.Name), "error", err)
+			continue
+		}
+		live[ref] = struct{}{}
+		// a held revision is reclaimed whatever the Function's replica floor, which is its current revision's
+		// (ADR-0190 Decision 6)
+		idle := fn.Spec.Scaling.IdleTimeout
+		if idle <= 0 {
+			idle = heldIdleTimeout
+		}
+		if rev, ok := obj.(*v1.Revision); ok && ReclaimablePhase(rev.Status.Phase) {
+			a.reclaim(ctx, ref, ref.UID, now, idle, nil)
 		}
 	}
 	a.forgetAllBut(live)
 	return nil
 }
 
+// reclaim scales ref to zero when claimIdle finds it idle.
+func (a *Activator) reclaim(ctx context.Context, ref FunctionRef, uid v1.UID, now time.Time, idleTimeout time.Duration, serves func(FunctionRef) bool) {
+	done, idle := a.claimIdle(ref, uid, now, idleTimeout, serves)
+	if !idle {
+		return
+	}
+	err := a.scaler.ScaleTo(ctx, ref, 0)
+	a.mu.Lock()
+	delete(a.reclaiming, ref)
+	a.mu.Unlock()
+	close(done)
+	if err != nil {
+		a.logger.WarnContext(ctx, "idle reclaim scale-to-zero failed",
+			"namespace", string(ref.Namespace), "name", string(ref.Name), "revision", string(ref.Revision), "error", err)
+	}
+}
+
+// pinnedRefs are the tracked refs pinned to a revision, whose activity idle reclaim judges per revision.
+func (a *Activator) pinnedRefs() []FunctionRef {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []FunctionRef
+	for ref := range a.lastActive {
+		if ref.Revision != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 // Reclaimable reports whether idle reclaim may move fn to Idle (ADR-0016 C2, ADR-0169, ADR-0185): a gate-held
 // Pending Function runs no worker, so it is never reclaimed.
 func Reclaimable(fn *v1.Function) bool {
-	switch fn.Status.Phase {
+	return ReclaimablePhase(fn.Status.Phase)
+}
+
+// ReclaimablePhase reports whether idle reclaim may move a Function or a held Revision in phase p to Idle.
+func ReclaimablePhase(p v1.Phase) bool {
+	switch p {
 	case v1.PhaseReady, v1.PhaseDegraded, "":
 		return true
 	}
@@ -559,27 +656,42 @@ func Reclaimable(fn *v1.Function) bool {
 }
 
 // claimIdle reports whether fn has seen no activity for idleTimeout and has no call in flight to an upstream Wake
-// handed out, and no wake in progress (its held requests are traffic, ADR-0016 C3); it then marks fn reclaiming, and
-// the caller closes done once the scale-to-zero is written. A fn not yet seen under this uid, or one with a call in
-// flight, is given a full grace window from now.
-func (a *Activator) claimIdle(fn FunctionRef, uid v1.UID, now time.Time, idleTimeout time.Duration) (done chan struct{}, idle bool) {
+// handed out, and no wake in progress (its held requests are traffic, ADR-0016 C3); the activity of a ref pinned to a
+// revision of fn that serves reports counts as fn's (ADR-0190 Decision 5). It then marks fn reclaiming, and the caller
+// closes done once the scale-to-zero is written. A fn not yet seen under this uid, or one with a call in flight, is
+// given a full grace window from now.
+func (a *Activator) claimIdle(fn FunctionRef, uid v1.UID, now time.Time, idleTimeout time.Duration, serves func(FunctionRef) bool) (done chan struct{}, idle bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, waking := a.inflight[fn]; waking {
-		a.lastActive[fn] = activity{at: now, uid: uid}
-		return nil, false
+	keys := []FunctionRef{fn}
+	for ref := range a.lastActive {
+		if serves != nil && ref.Revision != "" && ref.function() == fn && serves(ref) {
+			keys = append(keys, ref)
+		}
+	}
+	for _, k := range keys {
+		if _, waking := a.inflight[k]; waking {
+			a.lastActive[fn] = activity{at: now, uid: uid}
+			return nil, false
+		}
 	}
 	e, ok := a.lastActive[fn]
 	seen := ok && e.uid == uid
-	if seen && now.Sub(e.at) <= idleTimeout {
+	recent := seen && now.Sub(e.at) <= idleTimeout
+	for _, k := range keys[1:] {
+		recent = recent || now.Sub(a.lastActive[k].at) <= idleTimeout
+	}
+	if recent {
 		return nil, false
 	}
 	busy := false
-	for up := range a.upstreams[fn] {
-		if a.calls.Idle(up, 0) {
-			delete(a.upstreams[fn], up)
-		} else {
-			busy = true
+	for _, k := range keys {
+		for up := range a.upstreams[k] {
+			if a.calls.Idle(up, 0) {
+				delete(a.upstreams[k], up)
+			} else {
+				busy = true
+			}
 		}
 	}
 	if !seen || busy {

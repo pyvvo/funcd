@@ -806,6 +806,8 @@ func (p *Platform) buildControlPlane() error {
 		p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
+	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
+	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	// a change to what a namespace grants its Functions can move a pooled one to another pool
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)

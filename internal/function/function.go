@@ -323,6 +323,10 @@ type Reconciler struct {
 	// workflow run holds (ADR-0190 Decision 7): its passes skip the steady state until a pass retires them.
 	sparedMu sync.Mutex
 	spared   map[fnKey]v1.UID
+	// held names the Functions whose held revisions the next pass must look at (ADR-0190 Decisions 5 and 6): one a
+	// Revision event moved to Deploying or Idle, or one with a held revision still active. It is a hint from the
+	// Revision watch, guarded by sparedMu; the store's Revision.status stays the truth.
+	held map[fnKey]bool
 }
 
 // fnKey names a Function in the spared set.
@@ -455,6 +459,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		bootTimeout:         bootTO,
 		referentPoll:        min(referentPoll, period),
 		spared:              map[fnKey]v1.UID{},
+		held:                map[fnKey]bool{},
 	}, nil
 }
 
@@ -468,7 +473,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
-			r.setSpared(&v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}, false)
+			gone := &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}
+			r.setSpared(gone, false)
+			r.takeHeld(gone)
 			if derr := r.reclaimOrphanPools(ctx, req.Namespace); derr != nil {
 				return controller.Result{}, derr
 			}
@@ -544,13 +551,13 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		case errors.Is(err, errArtifactUnresolved):
 			// a registry that comes back or a tag pushed later raises no event on the Function, so the gate is re-checked
 			// every supervision period (issue #703)
-			return r.gateFailed(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil)
 		case errors.Is(err, errRevisionMissing):
-			return r.gateFailed(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil)
 		case errors.Is(err, errRevisionStampFailed):
 			// the status write first, then the error as a routeError, so failPass keeps the gate's status and controller
 			// backoff retries the stamp (ADR-0015; ADR-0161 Decision 1; ADR-0172 Decision 6)
-			if _, gerr := r.gateFailed(ctx, fn, gateFailure{reason: "RevisionStampFailed", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter); gerr != nil {
+			if _, gerr := r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionStampFailed", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil); gerr != nil {
 				return controller.Result{}, gerr
 			}
 			return controller.Result{}, routeError{err}
@@ -572,20 +579,20 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	if perr := r.placeable(ctx, fn, fn.Spec.Image, pinned); perr != nil {
 		if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
 			msg := placementMessage(perr)
-			return r.gateFailed(ctx, fn, gateFailure{reason: "NoMatchingPlatform", message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "NoMatchingPlatform", message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter, nil)
 		}
 		return controller.Result{}, perr
 	}
 
 	// 3. shape gate (materialization): a failure blocks Ready + programs no route.
 	if verr := r.validator.Validate(ctx, fn); verr != nil {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter, nil)
 	}
 
 	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the CatalogService
 	// engine image, fails here, before pooling's assign. An absent containerd image fails at Create instead (step 4).
 	if msg, missing := r.runtimeUnavailable(fn); missing {
-		return r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter, nil)
 	}
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
@@ -597,7 +604,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return controller.Result{}, err
 	}
 	if assign.Rejected {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, requeue: r.supervisionPeriod}, drainAfter)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, requeue: r.supervisionPeriod}, drainAfter, nil)
 	}
 	// Clear a stale PoolFull from a prior reconcile (e.g. the pool shrank and this member was
 	// admitted): the condition reflects current placement, never a leftover.
@@ -605,6 +612,53 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionFalse, Reason: "Admitted"})
 	}
 
+	// 3c-3d. binding gates: fn's current bindings resolve before any worker boots, a held revision's too (ADR-0190
+	// Decision 9).
+	env, err := r.bindings(ctx, fn)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	if env.gate != nil {
+		return r.heldThenGate(ctx, fn, *env.gate, drainAfter, &env)
+	}
+
+	// 3e. held revisions (ADR-0190 Decision 6): a revision a pinned call woke boots solo beside the current one. Their
+	// error is returned after the current revision's pass, which it neither stops nor writes (Decision 5).
+	heldAfter, herr := r.convergeHeld(ctx, fn, &env)
+	drainAfter = earliest(drainAfter, heldAfter)
+
+	// 4. converge to the EFFECTIVE desired count (honors the activator's wake Phase). Pooled: the one shared pool
+	// worker for the key, driven to the max desired over the key's admitted members (ADR-0046 Decision 6). Solo: per
+	// revision, moving the calls from the serving revision to the current one once it is ready (ADR-0143).
+	var v verdict
+	if assign.Pooled {
+		v, err = r.convergePooled(ctx, fn, assign, env.secret, env.catalog, idx)
+	} else {
+		v, err = r.convergeSolo(ctx, fn, pinned, env.secret, env.catalog)
+		if errors.Is(err, runtime.ErrImageUnavailable) {
+			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
+			// periodic pass tries the Create again, so an image that appears recovers the Function.
+			msg := withoutOp(err)
+			res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
+			return afterHeld(res, gerr, herr)
+		}
+	}
+	if err != nil {
+		return controller.Result{}, convergeError{err}
+	}
+	res, err := r.finish(ctx, fn, v, drainAfter)
+	return afterHeld(res, err, herr)
+}
+
+// boundEnv is the env fn's current bindings give every revision it boots, its secret and config env and its catalog
+// env, or the binding gate that stopped them.
+type boundEnv struct {
+	secret, catalog map[string]string
+	gate            *gateFailure
+}
+
+// bindings resolves fn's current bindings, or returns the first binding gate that fails.
+func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, error) {
 	// 3c. secret injection gate (ADR-0057, F15 last mile): resolve the function's bound secrets
 	// into an env map BEFORE provisioning any worker. A PDP-deny / missing Secret / unconfigured
 	// resolver fails the function CLOSED (not Ready, SecretResolveFailed, no worker) — never a worker
@@ -623,7 +677,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		if fault.KindOf(serr) == fault.NotFound {
 			requeue = r.referentPoll
 		}
-		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, requeue: requeue}, drainAfter)
+		return boundEnv{gate: &gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, requeue: requeue}}, nil
 	}
 
 	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
@@ -633,10 +687,10 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	// binding-validity admissions used to make synchronously at apply time.
 	refRequeue, refReason, refMsg, rferr := r.resolveDataReferences(ctx, fn)
 	if rferr != nil {
-		return controller.Result{}, rferr
+		return boundEnv{}, rferr
 	}
 	if refRequeue {
-		return r.gateFailed(ctx, fn, gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}, drainAfter)
+		return boundEnv{gate: &gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
 
 	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
@@ -646,32 +700,31 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	// empty URL/token (mirrors the ADR-0088 catalog-wait). A hard resolution error fails it closed.
 	catalogEnv, requeue, cerr := r.resolveCatalogEnv(ctx, fn)
 	if cerr != nil {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed}, drainAfter)
+		return boundEnv{gate: &gateFailure{reason: "CatalogResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed}}, nil
 	}
 	if requeue {
 		const msg = "a bound CatalogService is not Ready yet (no endpoint, token or live proxy); waiting"
-		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, drainAfter)
+		return boundEnv{gate: &gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
+	return boundEnv{secret: secretEnv, catalog: catalogEnv}, nil
+}
 
-	// 4. converge to the EFFECTIVE desired count (honors the activator's wake Phase). Pooled: the one shared pool
-	// worker for the key, driven to the max desired over the key's admitted members (ADR-0046 Decision 6). Solo: per
-	// revision, moving the calls from the serving revision to the current one once it is ready (ADR-0143).
-	var v verdict
-	if assign.Pooled {
-		v, err = r.convergePooled(ctx, fn, assign, secretEnv, catalogEnv, idx)
-	} else {
-		v, err = r.convergeSolo(ctx, fn, pinned, secretEnv, catalogEnv)
-		if errors.Is(err, runtime.ErrImageUnavailable) {
-			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
-			// periodic pass tries the Create again, so an image that appears recovers the Function.
-			msg := withoutOp(err)
-			return r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
-		}
+// heldThenGate converges fn's held revisions, then records the gate g that stopped its current revision, so that gate
+// never strands a woken held revision (ADR-0190 Decision 6). env is the bindings the pass resolved, nil when g stopped
+// it before them. A held revision's error is returned after the gate's status write.
+func (r *Reconciler) heldThenGate(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration, env *boundEnv) (controller.Result, error) {
+	heldAfter, herr := r.convergeHeld(ctx, fn, env)
+	res, err := r.gateFailed(ctx, fn, g, earliest(drainAfter, heldAfter))
+	return afterHeld(res, err, herr)
+}
+
+// afterHeld returns the held revisions' error herr once the pass's own status write succeeded, so failPass never writes
+// it to the Function's status.
+func afterHeld(res controller.Result, err, herr error) (controller.Result, error) {
+	if err == nil && herr != nil {
+		return controller.Result{}, routeError{herr}
 	}
-	if err != nil {
-		return controller.Result{}, convergeError{err}
-	}
-	return r.finish(ctx, fn, v, drainAfter)
+	return res, err
 }
 
 // convergeError is an error of the converge step — materialize, schedule, create, stop, list, the serving Revision's
@@ -1132,7 +1185,7 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 		return false
 	}
 	c := fn.Status.CurrentRevision
-	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" || r.isSpared(fn) {
+	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" || r.isSpared(fn) || r.heldPending(fn) {
 		return false
 	}
 	if rr, ok := fn.Status.Conditions.Get(condRevisionReady); !ok || rr.Status != v1.ConditionTrue {
@@ -1817,6 +1870,223 @@ func (r *Reconciler) isSpared(fn *v1.Function) bool {
 	return ok && uid == fn.UID
 }
 
+// markHeld asks the next pass of the Function ns/name to look at its held revisions.
+func (r *Reconciler) markHeld(ns v1.NamespaceName, name v1.ObjectName) {
+	r.sparedMu.Lock()
+	defer r.sparedMu.Unlock()
+	r.held[fnKey{ns, name}] = true
+}
+
+// takeHeld clears and reports fn's held-revision hint. A pass takes it before it reads the Revisions, so a Revision
+// event after the read marks it again.
+func (r *Reconciler) takeHeld(fn *v1.Function) bool {
+	r.sparedMu.Lock()
+	defer r.sparedMu.Unlock()
+	k := fnKey{fn.Namespace, fn.Name}
+	marked := r.held[k]
+	delete(r.held, k)
+	return marked
+}
+
+// heldPending reports whether fn's held revisions wait for a pass.
+func (r *Reconciler) heldPending(fn *v1.Function) bool {
+	r.sparedMu.Lock()
+	defer r.sparedMu.Unlock()
+	return r.held[fnKey{fn.Namespace, fn.Name}]
+}
+
+// MapRevision maps a changed Revision to the Function that controls it (ADR-0190 Decision 5): the scaler's wake
+// (Deploying) or reclaim (Idle) of a held revision is then acted on by that Function's next pass.
+func (r *Reconciler) MapRevision(_ context.Context, obj v1.Object) []controller.Request {
+	rev, ok := obj.(*v1.Revision)
+	if !ok {
+		return nil
+	}
+	owner, ok := v1.ControllerOf(rev.OwnerReferences)
+	if !ok || owner.Kind != v1.KindFunction {
+		return nil
+	}
+	if p := rev.Status.Phase; p == v1.PhaseDeploying || p == v1.PhaseIdle {
+		r.markHeld(rev.Namespace, owner.Name)
+	}
+	return []controller.Request{{GVK: v1.KindFunction.GVK(), Namespace: rev.Namespace, Name: owner.Name}}
+}
+
+// convergeHeld drives fn's held revisions, those other than its current and serving ones whose Revision.status a
+// wake or a pass has set (ADR-0190 Decisions 5 and 6). It reads them only when the Revision watch marked fn, when a
+// held revision is still active or when a held revision's workers were spared this pass. It returns how soon the
+// pass must come back for them (0 if none is active). env is fn's resolved bindings, nil to resolve them here.
+func (r *Reconciler) convergeHeld(ctx context.Context, fn *v1.Function, env *boundEnv) (requeue time.Duration, err error) {
+	if !r.takeHeld(fn) && !r.isSpared(fn) {
+		return 0, nil
+	}
+	// a held revision with no worker is not spared, so only the hint brings a failed or active one back
+	defer func() {
+		if err != nil || requeue > 0 {
+			r.markHeld(fn.Namespace, fn.Name)
+		}
+	}()
+	res, err := r.store.List(ctx, v1.KindRevision.GVK(), store.ListOptions{Namespace: fn.Namespace})
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.KindOf(err), "function.convergeHeld", "list revisions")
+	}
+	var revs []*v1.Revision
+	for _, obj := range res.Items {
+		rev, ok := obj.(*v1.Revision)
+		if !ok || rev.Status.Phase == "" || !v1.ControlledBy(rev.OwnerReferences, v1.KindFunction, fn.UID) ||
+			rev.Name == v1.ObjectName(fn.Status.CurrentRevision) || rev.Name == v1.ObjectName(fn.Status.ServingRevision) {
+			continue
+		}
+		revs = append(revs, rev)
+	}
+	if len(revs) == 0 {
+		return 0, nil
+	}
+	held, err := revhold.Held(ctx, r.store, fn.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	if env == nil {
+		e, err := r.bindings(ctx, fn)
+		if err != nil {
+			return 0, err
+		}
+		env = &e
+	}
+	for _, rev := range revs {
+		after, err := r.convergeHeldRevision(ctx, fn, rev, held.Revision(fn.Name, fn.UID, rev.Name), env)
+		if err != nil {
+			return 0, err
+		}
+		requeue = earliest(requeue, after)
+	}
+	return requeue, nil
+}
+
+// heldActive reports whether a held revision in phase p has, or is getting, a worker.
+func heldActive(p v1.Phase) bool {
+	return p == v1.PhaseDeploying || p == v1.PhaseReady || p == v1.PhaseDegraded
+}
+
+// convergeHeldRevision drives one held revision rev of fn by its phase: one a wake moved to Deploying, or one Ready or
+// Degraded, runs one solo worker through revisionTemplate and convergeRevision, and its readiness or failure is written
+// to rev's status (Decision 5); one idle reclaim moved to Idle has its workers retired; one no open run holds anymore
+// is written Idle, its workers being drain's. A Failed one stays Failed while held. Under a binding gate (Decision 9)
+// a woken one does not boot: a failed binding fails it with the gate's reason and a waiting one keeps it Deploying,
+// while a serving one keeps its worker as gateFailed keeps the serving revision's. It returns the pass's requeue for
+// rev (0 when rev is not active).
+func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision, held bool, env *boundEnv) (time.Duration, error) {
+	phase := rev.Status.Phase
+	switch {
+	case !held:
+		if !heldActive(phase) {
+			return 0, nil
+		}
+		return r.writeHeld(ctx, rev, v1.PhaseIdle, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "NoReplicas"}, 0)
+	case phase == v1.PhaseIdle:
+		return 0, r.retireRevision(ctx, fn, rev.Name)
+	case !heldActive(phase):
+		return 0, nil
+	}
+	if g := env.gate; g != nil {
+		ready := v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.readyMessage}
+		switch {
+		case phase != v1.PhaseDeploying:
+			return r.supervisionPeriod, nil
+		case g.phase == v1.PhaseFailed:
+			if err := r.retireRevision(ctx, fn, rev.Name); err != nil {
+				return 0, err
+			}
+			return r.writeHeld(ctx, rev, v1.PhaseFailed, ready, 0)
+		}
+		return r.writeHeld(ctx, rev, phase, ready, g.requeue)
+	}
+	tmpl, digest, err := r.revisionTemplate(ctx, fn, rev.Name)
+	if err != nil {
+		return r.heldBootFailed(ctx, rev, err)
+	}
+	serving := phase != v1.PhaseDeploying
+	pass, err := r.convergeRevision(ctx, tmpl, rev.Name, digest, replicaRange(1), convergeOpts{serving: serving, scaleDown: true}, env.secret, env.catalog)
+	if err != nil {
+		return r.heldBootFailed(ctx, rev, err)
+	}
+	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, rev.Name, pass.running, 1, readinessPath, r.bootTimeout, serving, r.boot)
+	if err != nil {
+		return 0, err
+	}
+	ul, err := r.stopUnlistened(ctx, fn, rev.Name, 1)
+	if err != nil {
+		return 0, err
+	}
+	if ul.crashLoop != "" {
+		crashLoop = ul.crashLoop
+	}
+	running := pass.running - len(ul.stopped)
+	retryAt := earlier(earlier(pass.retryAt, readyRetry), ul.retryAt)
+	poll := readinessPoll
+	if !retryAt.IsZero() && running == 0 {
+		poll = max(retryAt.Sub(r.clock.Now()), time.Millisecond)
+	}
+	switch {
+	case failed != "" && !serving:
+		return r.writeHeld(ctx, rev, v1.PhaseFailed, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: r.loadError(ctx, failed)}, 0)
+	case ready >= 1:
+		return r.writeHeld(ctx, rev, v1.PhaseReady, v1.Condition{Type: condReady, Status: v1.ConditionTrue}, r.supervisionPeriod)
+	case pass.startErr != nil && running == 0:
+		return r.writeHeld(ctx, rev, phase, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: pass.startErr.Error()}, poll)
+	case crashLoop != "":
+		return r.writeHeld(ctx, rev, phase, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: crashLoop}, poll)
+	case serving:
+		return r.writeHeld(ctx, rev, v1.PhaseDegraded, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"}, poll)
+	}
+	return r.writeHeld(ctx, rev, v1.PhaseDeploying, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShimNotReady"}, poll)
+}
+
+// heldBootFailed writes the error that kept the held revision rev from booting to its status, and retries it on the
+// supervision period (Decision 5): an absent image is RuntimeUnavailable, as for the current revision (ADR-0149
+// Decision 5), any other error StartFailed.
+func (r *Reconciler) heldBootFailed(ctx context.Context, rev *v1.Revision, err error) (time.Duration, error) {
+	reason, msg := "StartFailed", err.Error()
+	if errors.Is(err, runtime.ErrImageUnavailable) {
+		reason, msg = reasonRuntimeUnavailable, withoutOp(err)
+	}
+	return r.writeHeld(ctx, rev, rev.Status.Phase, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg}, r.supervisionPeriod)
+}
+
+// writeHeld writes phase and the Ready condition to the held revision rev's status when they differ from it, and
+// returns requeue. A write that conflicts with the scaler's comes back at readinessPoll instead of failing the pass.
+func (r *Reconciler) writeHeld(ctx context.Context, rev *v1.Revision, phase v1.Phase, ready v1.Condition, requeue time.Duration) (time.Duration, error) {
+	if cur, ok := rev.Status.Conditions.Get(condReady); ok && rev.Status.Phase == phase &&
+		cur.Status == ready.Status && cur.Reason == ready.Reason && cur.Message == ready.Message {
+		return requeue, nil
+	}
+	rev.Status.Phase = phase
+	rev.Status.Conditions.Set(ready)
+	if _, err := r.store.Update(ctx, rev); err != nil {
+		if fault.KindOf(err) == fault.Conflict {
+			return readinessPoll, nil
+		}
+		return 0, fault.Wrapf(err, fault.KindOf(err), "function.convergeHeld", "update revision %q", rev.Name)
+	}
+	return requeue, nil
+}
+
+// retireRevision stops and removes every worker of revision rev, so a later wake boots it afresh.
+func (r *Reconciler) retireRevision(ctx context.Context, fn *v1.Function, rev v1.ObjectName) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.Revision == rev {
+			if err := r.retire(ctx, in); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // stopRevision stops every worker of revision rev.
 func (r *Reconciler) stopRevision(ctx context.Context, fn *v1.Function, rev v1.ObjectName) error {
 	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
@@ -2409,7 +2679,12 @@ func (e endpoints) pinned(ctx context.Context, ref activator.FunctionRef, obj v1
 	} else {
 		up, _ = e.r.upstreamOf(ctx, ref.Namespace, ref.Name, ref.Revision)
 	}
-	ready := up != "" && (ref.Revision != servingRevision(f) || f.Status.Phase == v1.PhaseReady)
+	ready := up != "" && f.Status.Phase == v1.PhaseReady
+	if activator.HeldRevision(f, ref) { // judged by its own status (ADR-0190 Decision 5); "" is a worker kept from before
+		ready = up != "" && rev.Status.Phase != v1.PhaseIdle && rev.Status.Phase != v1.PhaseFailed
+	} else if ref.Revision != servingRevision(f) {
+		ready = up != ""
+	}
 	if ready && e.r.calls != nil {
 		e.r.calls.HandedOut(up)
 	}
