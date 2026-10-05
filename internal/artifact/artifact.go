@@ -442,11 +442,18 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	return repo, repo.Reference.Reference, nil
 }
 
+// registryResponseTimeout bounds one wait for a registry's response headers. A registry that accepts a request and
+// never answers then fails the call, after oras-go's retries, instead of holding the reconcile that made it, and the
+// controller's only worker, forever (#697).
+const registryResponseTimeout = 10 * time.Second
+
 // registryClient is oras-go's retrying auth client over a transport of its own: its default client, also used when
 // a repository's Client is nil, sends through http.DefaultTransport (#571).
 func registryClient(cred auth.CredentialFunc) *auth.Client {
+	tr := httpx.Transport()
+	tr.ResponseHeaderTimeout = registryResponseTimeout
 	return &auth.Client{
-		Client:     &http.Client{Transport: retry.NewTransport(httpx.Transport())},
+		Client:     &http.Client{Transport: retry.NewTransport(tr)},
 		Cache:      auth.NewCache(),
 		Credential: cred,
 	}
