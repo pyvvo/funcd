@@ -12,6 +12,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -143,6 +145,9 @@ type Config struct {
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
 		Namespaces []string `json:"namespaces,omitempty" env:"FUNCD_AUTH_NAMESPACES" envSeparator:","`
+		// Credentials is file-only (ADR-0171 Decision 1): caarlos0/env walks a slice of structs under an
+		// empty prefix, so stray 0_* variables would add zero-value entries.
+		Credentials CredentialList `json:"credentials,omitempty" env:"-" validate:"dive"`
 	} `json:"auth,omitempty"`
 	Secrets struct {
 		EncryptionKeyFile string `json:"encryptionKeyFile,omitempty" env:"FUNCD_SECRETS_ENCRYPTION_KEY_FILE"`
@@ -429,7 +434,7 @@ func (c Config) Validate() error {
 	})
 	err := v.Struct(c)
 	if err == nil {
-		return nil
+		return c.validateCredentials(op)
 	}
 	var verrs validator.ValidationErrors
 	if errors.As(err, &verrs) && len(verrs) > 0 {
@@ -442,6 +447,54 @@ func (c Config) Validate() error {
 		return fault.Invalidf(op, "config key %q has invalid value %q (want %s)", key, fmt.Sprint(fe.Value()), want)
 	}
 	return fault.Wrapf(err, fault.Invalid, op, "invalid config")
+}
+
+// CredentialList is auth.credentials (ADR-0171): nil means the key is absent. UnmarshalJSON makes a
+// present key non-nil, null included, and refuses an unknown entry key, which yaml.UnmarshalStrict
+// does not check below a custom unmarshaler.
+type CredentialList []Credential
+
+// Credential is one auth.credentials entry: the token lives in TokenFile, never in the config.
+type Credential struct {
+	TokenFile  string   `json:"tokenFile" validate:"required"`
+	Role       string   `json:"role" validate:"oneof=admin developer viewer"`
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
+// UnmarshalJSON decodes the list strictly, naming the entry index in an error.
+func (l *CredentialList) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return fmt.Errorf("auth.credentials: %w", err)
+	}
+	out := make(CredentialList, 0, len(raw))
+	for i, r := range raw {
+		dec := json.NewDecoder(bytes.NewReader(r))
+		dec.DisallowUnknownFields()
+		var e Credential
+		if err := dec.Decode(&e); err != nil {
+			return fmt.Errorf("auth.credentials[%d]: %w", i, err)
+		}
+		out = append(out, e)
+	}
+	*l = out
+	return nil
+}
+
+// validateCredentials applies ADR-0171 Decision 4: a present auth.credentials lists at least one entry
+// and never merges with the auth.token shorthand. Errors name keys, never a value.
+func (c Config) validateCredentials(op string) error {
+	switch {
+	case c.Auth.Credentials == nil:
+		return nil
+	case len(c.Auth.Credentials) == 0:
+		return fault.Invalidf(op, "config key %q is present but lists no entry: add an entry or remove the key", "auth.credentials")
+	case c.Auth.Token != "":
+		return fault.Invalidf(op, "config key %q is set beside auth.credentials: remove it (funcdctl reads FUNCD_TOKEN too, so unset it in the daemon's environment)", "auth.token (FUNCD_TOKEN)")
+	case len(c.Auth.Namespaces) != 1 || c.Auth.Namespaces[0] != "default":
+		return fault.Invalidf(op, "config key %q is set beside auth.credentials: remove it and scope each entry with its own namespaces", "auth.namespaces (FUNCD_AUTH_NAMESPACES)")
+	}
+	return nil
 }
 
 func fileExists(path string) bool {

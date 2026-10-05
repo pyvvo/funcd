@@ -1,6 +1,7 @@
 package funcd
 
 import (
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"strings"
@@ -476,10 +477,11 @@ func WithAuthorizer(a auth.Authorizer) Option {
 }
 
 // WithDevAuth wires a single developer-role credential for token, scoped to the
-// given namespaces (ADR-0028). It is the V1 dev/test credential mechanism — not a
-// production identity story (multi-role/issuance is V2) — and lets a public-surface
-// caller authenticate without importing internal/auth. InMemory() applies a default
-// (DevToken in "default"); Production() sets none (the operator supplies one).
+// given namespaces (ADR-0028), replacing any earlier credential store. It is the
+// dev/test shorthand; WithCredentials lists several tokens with roles (ADR-0171).
+// It lets a public-surface caller authenticate without importing internal/auth.
+// InMemory() applies a default (DevToken in "default"); Production() sets none
+// (the operator supplies WithCredentials or WithDevAuth).
 func WithDevAuth(token string, namespaces ...string) Option {
 	return func(c *config) error {
 		nss := make([]v1.NamespaceName, len(namespaces))
@@ -491,4 +493,71 @@ func WithDevAuth(token string, namespaces ...string) Option {
 		})
 		return nil
 	}
+}
+
+// Credential is one static control-plane and edge token (ADR-0171): Role is "admin",
+// "developer" or "viewer"; Namespaces scopes a developer or viewer (at least one) and
+// is empty for an admin.
+type Credential struct {
+	Token      string
+	Role       string
+	Namespaces []string
+}
+
+// WithCredentials builds the one credential store both PEPs read (ADR-0171 Decision 5),
+// replacing any earlier store (InMemory's dev token included); a later InMemory() or
+// WithDevAuth replaces it, so apply it after the preset. Entry i gets Subject
+// "credentials[i]". Errors name the index, never the token.
+func WithCredentials(creds ...Credential) Option {
+	return func(c *config) error {
+		const op = "funcd.WithCredentials"
+		if len(creds) == 0 {
+			return fault.Invalidf(op, "no credential given")
+		}
+		byToken := make(map[string]auth.Identity, len(creds))
+		first := make(map[string]int, len(creds))
+		for i, cr := range creds {
+			if err := checkCredential(op, i, cr); err != nil {
+				return err
+			}
+			if j, dup := first[cr.Token]; dup {
+				return fault.Invalidf(op, "credentials[%d] and credentials[%d] hold the same token", j, i)
+			}
+			first[cr.Token] = i
+			nss := make([]v1.NamespaceName, len(cr.Namespaces))
+			for k, n := range cr.Namespaces {
+				nss[k] = v1.NamespaceName(n)
+			}
+			byToken[cr.Token] = auth.Identity{Subject: fmt.Sprintf("credentials[%d]", i), Role: auth.Role(cr.Role), Namespaces: nss}
+		}
+		c.credentials = middleware.NewStaticCredentials(byToken)
+		return nil
+	}
+}
+
+func checkCredential(op string, i int, cr Credential) error {
+	if cr.Token == "" {
+		return fault.Invalidf(op, "credentials[%d]: token is empty", i)
+	}
+	for k := range len(cr.Token) {
+		if b := cr.Token[k]; b < 0x21 || b > 0x7e {
+			return fault.Invalidf(op, "credentials[%d]: token holds a byte outside printable ASCII 0x21-0x7E", i)
+		}
+	}
+	if cr.Token == DevToken {
+		return fault.Invalidf(op, "credentials[%d]: token equals the built-in funcd.DevToken", i)
+	}
+	switch auth.Role(cr.Role) {
+	case auth.RoleAdmin:
+		if len(cr.Namespaces) > 0 {
+			return fault.Invalidf(op, "credentials[%d]: an admin spans every namespace and takes no namespaces", i)
+		}
+	case auth.RoleDeveloper, auth.RoleViewer:
+		if len(cr.Namespaces) == 0 {
+			return fault.Invalidf(op, "credentials[%d]: a %s needs at least one namespace", i, cr.Role)
+		}
+	default:
+		return fault.Invalidf(op, "credentials[%d]: unknown role %q (want admin, developer or viewer)", i, cr.Role)
+	}
+	return nil
 }

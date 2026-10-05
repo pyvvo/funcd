@@ -295,7 +295,7 @@ func (c *config) validate() error {
 	case c.gateway == nil:
 		return fault.Invalidf(op, "gateway is required")
 	case c.credentials == nil:
-		return fault.Invalidf(op, "control-plane credentials are required (use WithDevAuth or a preset)")
+		return fault.Invalidf(op, "control-plane credentials are required (use WithCredentials, WithDevAuth or a preset)")
 	}
 	// Container execution runs every Function solo: no pool worker can run in a curated image (ADR-0173).
 	if c.imageFor != nil && (len(c.poolShim) > 0 || len(c.poolShimsByFamily) > 0) {

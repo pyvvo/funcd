@@ -1,7 +1,7 @@
 // Package authcontract is the shared conformance suite for the auth.Authorizer port
 // (ADR-0018): Run asserts the default-deny namespace-RBAC guarantee against any driver
 // — admin spans namespaces + cluster-scoped kinds, developer writes only in its
-// namespaces, viewer is read-only, and an unknown principal is denied. The built-in
+// namespaces, viewer is read-only and never reads a Secret, and an unknown principal is denied. The built-in
 // rbac driver runs it; the cedar-go V2 driver will inherit it.
 package authcontract
 
@@ -48,6 +48,8 @@ func Run(t *testing.T, a auth.Authorizer) {
 	must(viewer, auth.VerbList, v1.KindFunction, "team-a", true, "viewer lists in team-a")
 	must(viewer, auth.VerbCreate, v1.KindFunction, "team-a", false, "viewer denied write")
 	must(viewer, auth.VerbDelete, v1.KindFunction, "team-a", false, "viewer denied delete")
+	must(viewer, auth.VerbGet, v1.KindSecret, "team-a", false, "viewer denied get Secret")
+	must(viewer, auth.VerbList, v1.KindSecret, "team-a", false, "viewer denied list Secret")
 
 	// default-deny: unknown role / unscoped principal.
 	must(stranger, auth.VerbGet, v1.KindFunction, "team-a", false, "unknown role denied")

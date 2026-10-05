@@ -19,7 +19,7 @@ const (
 	RoleAdmin Role = "admin"
 	// RoleDeveloper may read+write within its bound namespaces.
 	RoleDeveloper Role = "developer"
-	// RoleViewer may only read within its bound namespaces.
+	// RoleViewer may only read within its bound namespaces, and never a Secret (ADR-0171).
 	RoleViewer Role = "viewer"
 )
 

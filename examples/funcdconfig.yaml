@@ -5,12 +5,12 @@
 # Start the daemon against it:   funcd --config examples/funcdconfig.yaml
 # The file is OPTIONAL — every key has a default, so `funcd` runs with no config at all. Precedence
 # is flag > env (FUNCD_*) > this file > default, so a FUNCD_* env var still overrides any value here.
-# EVERY key also has a FUNCD_* env override (ADR-0062): e.g. server.listenAddr ← FUNCD_LISTEN_ADDR,
+# EVERY key but auth.credentials (file-only, ADR-0171) also has a FUNCD_* env override (ADR-0062): e.g. server.listenAddr ← FUNCD_LISTEN_ADDR,
 # storage.dataDir ← FUNCD_DATA_DIR, log.level ← FUNCD_LOG_LEVEL, runtime.mode ← FUNCD_RUNTIME.
 #
 # As shipped this is a zero-infra DEV config: in-memory substrate (nothing on disk) + the process
 # runtime (the embedded Node/Python shim), control plane + data plane on localhost. For a real
-# deployment, switch storage.mode → file, runtime.mode → containerd, set a real auth.token, and a
+# deployment, switch storage.mode → file, runtime.mode → containerd, set auth.credentials, and a
 # secrets.encryptionKeyFile (see the commented blocks).
 apiVersion: funcd.io/v1alpha1     # optional envelope (validated only if present)
 kind: FuncdConfig                 # optional
@@ -102,11 +102,19 @@ storage:
 #   maxNestedInFlight: 10         # nested (fn-to-fn) calls in flight to one Function; 0 = default 10; cannot be disabled
 #   defaultTimeout: 60s           # how long an external invoke waits for its response to start when the Function sets no spec.timeout; at most 1h. default: 60s
 
-# --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
+# --- auth: control-plane and edge credentials (ADR-0028, ADR-0171) -----------------------------
 auth:
-  token: funcd-dev-token          # control-plane credential. default: a built-in dev token (with a warning)
+  token: funcd-dev-token          # one developer credential. default: a built-in dev token (with a warning)
   namespaces:                     # namespaces the token grants. default: [default]
     - default
+  # credentials:                  # role-scoped tokens, one file each, read at startup. default: none
+  #                               #   with it, remove token and non-default namespaces (and unset FUNCD_TOKEN)
+  #   - tokenFile: /etc/funcd/tokens/ops    # umask 077; openssl rand -hex 32 > /etc/funcd/tokens/ops
+  #     role: admin                         # admin | developer | viewer; an admin takes no namespaces
+  #   - tokenFile: /etc/funcd/tokens/team-a # mode 0600 or 0400, owned by funcd's user or root
+  #     role: developer
+  #     namespaces:                         # developer or viewer scope. default: default; quote a numeric name
+  #       - team-a
 
 # --- runtime: the function-execution lane (ADR-0036/0054) --------------------------------------
 runtime:

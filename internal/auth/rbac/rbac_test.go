@@ -114,6 +114,12 @@ func TestRbacAuthorizationMatrix(t *testing.T) {
 		{"viewer/cluster/runtimeclass", auth.RoleViewer, bound, auth.VerbGet, v1.KindRuntimeClass, "", false},
 		{"viewer/cluster/workernode", auth.RoleViewer, bound, auth.VerbGet, v1.KindWorkerNode, "", false},
 		{"viewer/cluster/gateway", auth.RoleViewer, bound, auth.VerbGet, v1.KindGateway, "", false},
+		{"viewer/get/secret", auth.RoleViewer, bound, auth.VerbGet, v1.KindSecret, home, false},
+		{"viewer/list/secret", auth.RoleViewer, bound, auth.VerbList, v1.KindSecret, home, false},
+		{"viewer/create/secret", auth.RoleViewer, bound, auth.VerbCreate, v1.KindSecret, home, false},
+		{"viewer/update/secret", auth.RoleViewer, bound, auth.VerbUpdate, v1.KindSecret, home, false},
+		{"viewer/delete/secret", auth.RoleViewer, bound, auth.VerbDelete, v1.KindSecret, home, false},
+		{"dev/get/secret", auth.RoleDeveloper, bound, auth.VerbGet, v1.KindSecret, home, true},
 
 		// unknown role — default-deny everything.
 		{"unknown/get/ns", auth.Role("robot"), bound, auth.VerbGet, v1.KindFunction, home, false},
