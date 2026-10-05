@@ -18,6 +18,8 @@ import (
 	wbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
+// seedWorkflow creates a Workflow with the given steps, Ready as its reconcile leaves one of untyped steps, so
+// its runs start (#712).
 func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.WorkflowStep) {
 	t.Helper()
 	wf := &v1.Workflow{
@@ -25,6 +27,7 @@ func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.Workflow
 		ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
 		Spec:       v1.WorkflowSpec{Steps: steps},
 	}
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked"})
 	if _, err := s.Create(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow: %v", err)
 	}
@@ -584,6 +587,59 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 	}
 }
 
+// Issue #712: a run of a Workflow with no Ready condition yet (never reconciled, or a step artifact not
+// pushed) waits like one held Ready=False, and the run-start contract gate rejects its input once the
+// Workflow is Ready, whichever of the two was reconciled first.
+func TestIssue712_RunWaitsForWorkflowWithoutReadyCondition(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	unpushed := fakeContracts{notReady: map[string]bool{"oci:p": true}}
+	seedWF(t, s, "pending", nil, fnStep("p", "oci:p"))
+	if wf, res := reconcileByName(t, s, unpushed, "pending"); res.RequeueAfter <= 0 || len(wf.Status.Conditions) != 0 {
+		t.Fatalf("setup: pending requeueAfter=%v conditions=%+v, want a requeue and no condition", res.RequeueAfter, wf.Status.Conditions)
+	}
+	seedWF(t, s, "typed", nil, fnStep("t", "oci:t"))
+	seedRun(t, s, "pending-1", "pending", `{}`)
+	seedRun(t, s, "typed-1", "typed", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil, 0)
+
+	for _, name := range []v1.ObjectName{"pending-1", "typed-1"} {
+		res, run := reconcileRun(t, ctx, rr, s, name)
+		c, _ := run.Status.Conditions.Get(condReady)
+		if run.Status.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 {
+			t.Errorf("%s: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotReady and a requeue", name, run.Status.Phase, c, res.RequeueAfter)
+		}
+	}
+	if len(f.order) != 0 {
+		t.Fatalf("runs of workflows without a Ready condition dispatched %v, want nothing", f.order)
+	}
+
+	contracts := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:p": {},
+		"oci:t": {Input: obj(map[string]string{"rows": "string"}, "rows")},
+	}}
+	for _, name := range []string{"pending", "typed"} {
+		if wf, _ := reconcileByName(t, s, contracts, name); !ready(wf) {
+			t.Fatalf("setup: %s is not Ready: %+v", name, wf.Status.Conditions)
+		}
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "pending-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("pending-1 after its workflow became Ready: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	_, run := reconcileRun(t, ctx, rr, s, "typed-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runFailed || c.Reason != "InputSchemaMismatch" {
+		t.Fatalf("typed-1 with input {} against a contract requiring rows: phase=%q Ready=%+v, want Failed/InputSchemaMismatch", run.Status.Phase, c)
+	}
+	if !slices.Equal(f.order, []v1.ObjectName{"p"}) {
+		t.Fatalf("dispatched %v, want only the step of pending-1", f.order)
+	}
+}
+
 // Issue #420: a when on an optional parent-output field obeys ADR-0095's defaults rule. Unguarded and
 // without a default it fails reconcile (WhenTypeError); a guard or a schema default makes it Ready, and
 // the run binds the default when the parent's output omits the field instead of failing.
@@ -787,14 +843,7 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := newStore(t)
-			wf := &v1.Workflow{
-				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
-				ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1"},
-				Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{step("a", ""), step("notify", "")}, OnFailure: "notify"},
-			}
-			if _, err := s.Create(ctx, wf); err != nil {
-				t.Fatalf("seed workflow: %v", err)
-			}
+			seedWorkflowSpec(t, s, "wf", v1.WorkflowSpec{Steps: []v1.WorkflowStep{step("a", ""), step("notify", "")}, OnFailure: "notify"})
 			seedRun(t, s, "big-1", "wf", big)
 			rstate, err := wbadger.New(cfg)
 			if err != nil {

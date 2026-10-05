@@ -135,8 +135,9 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 }
 
 // start starts the run's goroutine, routed as before ADR-0146: a run record ⇒ resume; else spec.replay ⇒
-// replay; else execute. A run that has not started waits while its Workflow is missing (ADR-0121) or the F65
-// gate holds it Ready=False (a WorkflowCycle, a type mismatch). It maps the error a previous goroutine of the
+// replay; else execute. A run that has not started waits while its Workflow is missing (ADR-0121) or not
+// Ready=True (ADR-0146): not reconciled yet, a step artifact not pushed, or held Ready=False by the F65 gate
+// (a WorkflowCycle, a type mismatch). It maps the error a previous goroutine of the
 // run exited with. done reports that the pass ends with res and err, without the status sync.
 func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before []byte) (res controller.Result, done bool, err error) {
 	rec, err := r.ownRecord(ctx, run)
@@ -154,8 +155,12 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 			res, err := r.wait(ctx, run, before, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
 			return res, true, err
 		}
-		if c, ok := wf.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
-			res, err := r.wait(ctx, run, before, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+		if c, ok := wf.Status.Conditions.Get(condReady); !ok || c.Status != v1.ConditionTrue {
+			msg := fmt.Sprintf("workflow %q is not Ready yet; waiting", wf.Name)
+			if ok {
+				msg = fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message)
+			}
+			res, err := r.wait(ctx, run, before, "WorkflowNotReady", msg)
 			return res, true, err
 		}
 	}

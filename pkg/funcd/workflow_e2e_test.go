@@ -31,12 +31,21 @@ func writeStep(t *testing.T, dir, name, body string) {
 }
 
 // pushStepImage pushes a step handler as an OCI artifact carrying the dev.funcd.runtime.v1
-// annotation (ADR-0094), so the workflow materializer resolves its runtime from the manifest alone.
+// annotation (ADR-0094), so the workflow materializer resolves its runtime from the manifest alone, and
+// an open I/O contract (ADR-0090), so the Workflow type-checks to Ready and its runs start (ADR-0098).
 // Returns the ref (a tag; the Function reconciler pins the digest at Revision, ADR-0035).
 func pushStepImage(t *testing.T, layoutDir, srcDir, name string) string {
 	t.Helper()
+	return pushTypedStepImage(t, layoutDir, srcDir, name, `{}`)
+}
+
+// pushTypedStepImage is pushStepImage with the output schema a when: condition on the step reads.
+func pushTypedStepImage(t *testing.T, layoutDir, srcDir, name, output string) string {
+	t.Helper()
+	blob, err := artifact.ContractBlob([]byte(`{}`), []byte(output))
+	require.NoError(t, err)
 	ref := "oci-layout://" + layoutDir + ":" + name
-	_, err := artifact.Push(context.Background(), ref, filepath.Join(srcDir, name+".mjs"), nil, "nodejs22", "")
+	_, err = artifact.Push(context.Background(), ref, filepath.Join(srcDir, name+".mjs"), blob, "nodejs22", "")
 	require.NoError(t, err)
 	return ref
 }
@@ -95,9 +104,10 @@ func TestScenarioWorkflowEndToEnd(t *testing.T) {
 	writeStep(t, src, "report", `export const handle = (ctx, e) => ({ done: true, branches: Object.keys(e.data) });`)
 
 	img := map[string]string{}
-	for _, s := range []string{"ingest", "enrich", "hi", "lo", "report"} {
+	for _, s := range []string{"ingest", "hi", "lo", "report"} {
 		img[s] = pushStepImage(t, layout, src, s)
 	}
+	img["enrich"] = pushTypedStepImage(t, layout, src, "enrich", `{"type":"object","properties":{"enriched":{"type":"number"}},"required":["enriched"]}`)
 
 	// The DAG: ingest → enrich → {hi | lo (exclusive via when)} → report (join: any).
 	wf := &v1.Workflow{
