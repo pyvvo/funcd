@@ -309,7 +309,8 @@ func (a *cli) workflowDescribeCmd() *cobra.Command {
 }
 
 // renderRunDescribe prints the ADR-0100 troubleshooting view of a run: the run phase + trace-id, a
-// readable per-step line (phase · attempts · duration · error), and the full-logs pointer.
+// readable per-step line (phase · attempts · duration · error), and the full-logs pointer. A step error and
+// a condition can carry a function's answer, so they pass through termSafe.
 func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 	if err := a.writef("RUN %s   phase: %s\n", run.GetName(), string(run.Status.Phase)); err != nil {
 		return err
@@ -320,10 +321,10 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 		}
 		line := "condition: " + string(c.Type) + "=" + string(c.Status)
 		if c.Reason != "" {
-			line += "   reason: " + c.Reason
+			line += "   reason: " + termSafe(c.Reason)
 		}
 		if c.Message != "" {
-			line += "   message: " + c.Message
+			line += "   message: " + termSafe(c.Message)
 		}
 		if err := a.writef("%s\n", line); err != nil {
 			return err
@@ -338,7 +339,7 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 			line += "   duration: " + time.Duration(s.EndedAt-s.StartedAt).String()
 		}
 		if s.Error != "" {
-			line += "   error: " + s.Error
+			line += "   error: " + termSafe(s.Error)
 		}
 		if err := a.writef("%s\n", line); err != nil {
 			return err

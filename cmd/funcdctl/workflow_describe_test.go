@@ -90,3 +90,35 @@ func TestIssue120_DescribeShowsRunFailureReason(t *testing.T) {
 		t.Fatalf("describe output missing the run failure reason\n---\n%s", out)
 	}
 }
+
+// A step's error and the Ready condition carry the start of a function's 4xx answer; describe escapes
+// them, so a function's text prints as plain text on its own line (ADR-0084, ADR-0100).
+func TestRenderRunDescribeEscapesFunctionText(t *testing.T) {
+	var buf bytes.Buffer
+	a := &cli{out: &buf}
+	run := &v1.WorkflowRun{}
+	run.Name = "run-4"
+	run.Status.Phase = v1.RunFailed
+	run.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "Step\x1b[2JFailed", Message: "m \x1b]0;title\x07\nnext"})
+	run.Status.Steps = []v1.RunStepStatus{{Name: "s1", Phase: v1.StepFailed, Error: "default/fn rejected the step (400): \x1b]0;title\x07\x1b[2J\u009b31mfake\r"}}
+	if err := a.renderRunDescribe(run); err != nil {
+		t.Fatalf("renderRunDescribe: %v", err)
+	}
+	out := buf.String()
+	for _, r := range strings.ReplaceAll(out, "\n", "") {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			t.Fatalf("raw control %U reaches the terminal\n---\n%q", r, out)
+		}
+	}
+	if n := strings.Count(out, "\n"); n != 4 {
+		t.Fatalf("want 4 lines (run, condition, step, logs pointer), got %d\n---\n%q", n, out)
+	}
+	for _, want := range []string{
+		`reason: Step\x1b[2JFailed   message: m \x1b]0;title\a\nnext`,
+		`error: default/fn rejected the step (400): \x1b]0;title\a\x1b[2J\u009b31mfake\r`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("describe output missing %q\n---\n%s", want, out)
+		}
+	}
+}
