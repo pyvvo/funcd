@@ -316,6 +316,7 @@ func TestScenarioParentCancelCancelsChild(t *testing.T) {
 	parent := spec(subwfStep("call", "child"), step("h", ""))
 	parent.OnFailure = "h"
 	seedWorkflowSpec(t, s, "p", parent)
+	seedWorkflowSpec(t, s, "child", child)
 	h := newHarness(t, s, runs, g, Config{}, fakeChildren{"child": child}, time.Second, nil)
 	seedRun(t, s, "run-p", "p", `{}`)
 	receive(t, g.entered, "k")
@@ -512,6 +513,7 @@ func TestScenarioShutdownMidChildLeavesParentResumable(t *testing.T) {
 	parent.OnFailure = "h"
 	children := fakeChildren{"child": child}
 	seedWorkflowSpec(t, s, "p", parent)
+	seedWorkflowSpec(t, s, "child", child)
 	h := newHarness(t, s, runs, g, Config{}, children, 100*time.Millisecond, nil)
 	seedRun(t, s, "run-m", "p", `{}`)
 	receive(t, g.entered, "k")

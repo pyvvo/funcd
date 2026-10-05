@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
@@ -333,5 +335,141 @@ func TestScenarioReplayChildUsesDottedName(t *testing.T) {
 	}
 	if after := getRecord(t, e.runs, "src.sub"); !reflect.DeepEqual(after, before) {
 		t.Fatalf("source child record src.sub changed:\n%+v\nwant\n%+v", after, before)
+	}
+}
+
+// replaySource seeds parent → enrich → leaf, all Ready, and runs r-1 of parent to Succeeded.
+func replaySource(t *testing.T) (store.Store, *RunReconciler, *fakeDispatcher) {
+	t.Helper()
+	s := newStore(t)
+	seedTree(t, s, wfOf("leaf", fnStep("z", "oci:l")), wfOf("enrich", fnStep("x", "oci:a"), subwfStep("l", "leaf", "x")),
+		wfOf("parent", subwfStep("e", "enrich"), fnStep("after", "oci:p", "e")))
+	f := newFake()
+	rr := treeRig(t, s, f)
+	seedRun(t, s, "r-1", "parent", `{}`)
+	if _, run := reconcileRun(t, context.Background(), rr, s, "r-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("setup: source run r-1 = %s, want Succeeded", run.Status.Phase)
+	}
+	resetFake(f)
+	return s, rr, f
+}
+
+// replayOf creates the WorkflowRun name replaying r-1 from from and settles it.
+func replayOf(t *testing.T, s store.Store, rr *RunReconciler, name, from v1.ObjectName, allowDrift bool) *v1.WorkflowRun {
+	t.Helper()
+	createRun(t, s, string(name), v1.WorkflowRunSpec{Workflow: "parent", Replay: &v1.ReplaySeed{Run: "r-1", From: from, AllowDrift: allowDrift}})
+	_, run := reconcileRun(t, context.Background(), rr, s, name)
+	return run
+}
+
+// scenario: replay-runs-the-source-pin
+func TestScenarioReplayRunsTheSourcePin(t *testing.T) {
+	s, rr, f := replaySource(t)
+	editWF(t, s, "enrich", fnStep("y", "oci:a", "x"))
+	if wf, _ := reconcileByName(t, s, treeContracts(), "enrich"); !ready(wf) {
+		t.Fatalf("setup: enrich N+1 is not Ready: %+v", wf.Status.Conditions)
+	}
+	if run := replayOf(t, s, rr, "rep", "e", false); run.Status.Phase != runSucceeded {
+		t.Fatalf("replay from e = %s (%+v), want Succeeded", run.Status.Phase, run.Status.Conditions)
+	}
+	child := getRecord(t, rr.engine.runs, "rep.e")
+	if len(child.Steps) != 2 || stepState(child, "y") != nil || f.calls["y"] != 0 || stepState(child, "x").Revision != "oci:a@sha256:oci:a" {
+		t.Fatalf("replayed child steps %+v, y calls %d; want generation N's x and l, x at the current image", child.Steps, f.calls["y"])
+	}
+	if pin := getRecord(t, rr.engine.runs, "rep").ChildPins["enrich"]; pin.Generation != 1 {
+		t.Fatalf("replay pin of enrich = generation %d, want the source's 1", pin.Generation)
+	}
+}
+
+// scenario: replay-waits-for-fresh-child
+func TestScenarioReplayWaitsForFreshChild(t *testing.T) {
+	s, rr, f := replaySource(t)
+	setImage(t, s, "enrich", "x", "oci:b")
+	waitingFor(t, replayOf(t, s, rr, "rep-e", "e", false), "WorkflowNotReady", `"enrich"`, `step "e"`)
+	if run := replayOf(t, s, rr, "rep-after", "after", false); run.Status.Phase != runSucceeded || f.calls["after"] != 1 || f.calls["x"] != 0 {
+		t.Fatalf("replay from after = %s, after calls %d, x calls %d; want Succeeded re-running only after", run.Status.Phase, f.calls["after"], f.calls["x"])
+	}
+}
+
+// scenario: replay-child-drift-gated
+func TestScenarioReplayChildDriftGated(t *testing.T) {
+	for _, tc := range []struct {
+		wf, step, image, child string
+	}{
+		{wf: "enrich", step: "x", image: "oci:b", child: "rep.e"},
+		{wf: "leaf", step: "z", image: "oci:l2", child: "rep.e.l"},
+	} {
+		t.Run(tc.wf, func(t *testing.T) {
+			s, rr, _ := replaySource(t)
+			setImage(t, s, tc.wf, v1.ObjectName(tc.step), tc.image)
+			reconcileByName(t, s, treeContracts(), tc.wf)
+			run := replayOf(t, s, rr, "rep-drift", "e", false)
+			c, _ := run.Status.Conditions.Get("ReplaySeeded")
+			if run.Status.Phase != runFailed || c.Reason != "DigestDrift" || !strings.Contains(c.Message, `"`+tc.wf+`"`) || !strings.Contains(c.Message, `step "`+tc.step+`"`) {
+				t.Fatalf("replay with %s drifted: phase=%q ReplaySeeded=%+v, want Failed/DigestDrift naming %s and %s", tc.wf, run.Status.Phase, c, tc.wf, tc.step)
+			}
+			if run := replayOf(t, s, rr, "rep", "e", true); run.Status.Phase != runSucceeded {
+				t.Fatalf("replay --allow-drift = %s, want Succeeded", run.Status.Phase)
+			}
+			want := tc.image + "@sha256:" + tc.image
+			if got := stepState(getRecord(t, rr.engine.runs, v1.ObjectName(tc.child)), tc.step).Revision; got != want {
+				t.Fatalf("child %s step %s revision %q, want N+1's %s", tc.child, tc.step, got, want)
+			}
+		})
+	}
+}
+
+// A replay re-stamps the pin of a child whose call never ran in the source with the gated current images.
+func TestReplayRestampsNeverRunChild(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	e := newTestEngine(t, f, Config{})
+	sp := spec(step("a", ""), subwfStep("e", "enrich", "a"), step("c", "", "a"))
+	src := &runstate.Record{
+		Namespace: "default", Name: "src", Workflow: "wf", Phase: runFailed, Spec: sp,
+		ChildPins: map[v1.ObjectName]runstate.ChildPin{"enrich": {Generation: 1, Spec: spec(step("x", "")), StepImages: map[v1.ObjectName]string{"x": "oci:old"}}},
+		Steps:     []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}, {Name: "e", Phase: v1.StepPending}, {Name: "c", Phase: v1.StepFailed}},
+	}
+	if err := e.runs.Put(ctx, src); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if got := freshChildren(src, "c"); !reflect.DeepEqual(got, []v1.ObjectName{"enrich"}) {
+		t.Fatalf("freshChildren(src, c) = %v, want [enrich] for the never-run call", got)
+	}
+	images := map[v1.ObjectName]map[v1.ObjectName]string{"enrich": {"x": "oci:new"}}
+	rec, err := e.replay(ctx, "default", "rep", "", "wf", v1.ReplaySeed{Run: "src", From: "c"}, nil, images)
+	if err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("replay: %v, want Succeeded", err)
+	}
+	if got := rec.ChildPins["enrich"].StepImages["x"]; got != "oci:new" {
+		t.Fatalf("replay pin of enrich x = %q, want the re-stamped oci:new", got)
+	}
+	if got := stepState(getRecord(t, e.runs, "rep.e"), "x").Revision; got != "oci:new" {
+		t.Fatalf("child x revision %q, want oci:new", got)
+	}
+}
+
+// replayTree skips a source the replay rejects or one without pins, and waits for an absent fresh child.
+func TestReplayTreeGate(t *testing.T) {
+	ctx := context.Background()
+	s, rr, _ := replaySource(t)
+	for _, seed := range []v1.ReplaySeed{{Run: "none", From: "e"}, {Run: "r-1", From: "nope"}} {
+		if imgs, tw, err := rr.replayTree(ctx, "default", seed); imgs != nil || tw != nil || err != nil {
+			t.Fatalf("replayTree(%+v) = %v %+v %v, want nothing to gate", seed, imgs, tw, err)
+		}
+	}
+	unpinned := &runstate.Record{Namespace: "default", Name: "old", Workflow: "parent", Phase: runSucceeded, Spec: spec(subwfStep("e", "enrich"))}
+	if err := rr.engine.runs.Put(ctx, unpinned); err != nil {
+		t.Fatalf("seed a record without pins: %v", err)
+	}
+	if imgs, tw, err := rr.replayTree(ctx, "default", v1.ReplaySeed{Run: "old", From: "e"}); imgs != nil || tw != nil || err != nil {
+		t.Fatalf("replayTree of a source without pins = %v %+v %v, want nothing to gate", imgs, tw, err)
+	}
+	obj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "leaf")
+	if err := s.Delete(ctx, v1.KindWorkflow.GVK(), "default", "leaf", obj.GetObjectMeta().ResourceVersion); err != nil {
+		t.Fatalf("delete leaf: %v", err)
+	}
+	if _, tw, err := rr.replayTree(ctx, "default", v1.ReplaySeed{Run: "r-1", From: "e"}); err != nil || tw == nil || tw.reason != "WorkflowNotFound" || !strings.Contains(tw.msg, `"leaf"`) {
+		t.Fatalf("replayTree with leaf deleted = %+v %v, want WorkflowNotFound naming leaf", tw, err)
 	}
 }

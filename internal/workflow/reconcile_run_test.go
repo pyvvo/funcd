@@ -1445,13 +1445,18 @@ func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
 }
 
 // Issue #444: a run that a sub-workflow step fails because its child Workflow is gone (a NotFound cause)
-// ends Failed in the same reconcile: its terminal record is mirrored, not returned as a reconcile error.
+// ends Failed in the same reconcile: its terminal record is mirrored, not returned as a reconcile error. Since
+// ADR-0189 a new run waits for an absent child, so the step resolves it live only for a record without
+// ChildPins (Temporary workarounds).
 func TestIssue444_NotFoundSubworkflowFailureMirroredInSameReconcile(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	seedWorkflow(t, s, "parent", subwfStep("sub", "gone"))
 	seedRun(t, s, "parent-1", "parent", `{}`)
 	rr := NewRunReconciler(s, childEngine(t, newFake(), fakeChildren{}, Config{}), nil, nil, 0)
+	if err := rr.engine.runs.Put(ctx, &runstate.Record{Namespace: "default", Name: "parent-1", Workflow: "parent", Phase: runRunning, Spec: spec(subwfStep("sub", "gone"))}); err != nil {
+		t.Fatalf("seed a record without ChildPins: %v", err)
+	}
 
 	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "parent-1"}); err != nil {
 		t.Fatalf("Reconcile = %v, want nil: a run failure is a terminal outcome, not a reconcile error", err)
@@ -1472,6 +1477,7 @@ func collisionStore(t *testing.T) store.Store {
 	t.Helper()
 	s := newStore(t)
 	seedWorkflow(t, s, "parent", subwfStep("sub", "childwf"))
+	seedWorkflow(t, s, "childwf", collisionChildren()["childwf"].Steps...)
 	seedWorkflow(t, s, "other", step("x", ""), step("y", "", "x"))
 	return s
 }
@@ -1683,4 +1689,282 @@ func TestIssue726_SweepCancelsRecordOfDeletedRun(t *testing.T) {
 		t.Fatalf("record of the deleted run after retention: %v, want NotFound", err)
 	}
 	keepsOpen()
+}
+
+// storeChildren resolves a child Workflow from the store, as the production resolver does (ADR-0099).
+type storeChildren struct{ s store.Store }
+
+func (c storeChildren) Child(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowSpec, map[v1.ObjectName]string, error) {
+	wf, err := c.ChildWorkflow(ctx, ns, name)
+	if err != nil {
+		return v1.WorkflowSpec{}, nil, err
+	}
+	return wf.Spec, stepImages(wf), nil
+}
+
+func (c storeChildren) ChildWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.Workflow, error) {
+	obj, err := c.s.Get(ctx, v1.KindWorkflow.GVK(), ns, name)
+	if err != nil {
+		return nil, err
+	}
+	return obj.(*v1.Workflow), nil
+}
+
+// treeContracts types every image the ADR-0189 tests use.
+func treeContracts() fakeContracts {
+	return fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}, "oci:l": {}, "oci:l2": {}, "oci:p": {}}}
+}
+
+// treeRig is a run reconciler over s whose engine resolves an unpinned child from s.
+func treeRig(t *testing.T, s store.Store, disp Dispatcher) *RunReconciler {
+	t.Helper()
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	eng, _ := New(Deps{Runs: rstate, Dispatch: disp, Children: storeChildren{s}})
+	return NewRunReconciler(s, eng, nil, nil, 0)
+}
+
+// setImage edits step of the stored Workflow name to image, which bumps its generation and keeps its status.
+func setImage(t *testing.T, s store.Store, name string, step v1.ObjectName, image string) {
+	t.Helper()
+	obj, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", v1.ObjectName(name))
+	wf := obj.(*v1.Workflow)
+	specStep(wf.Spec, step).Function.Image = image
+	if _, err := s.Update(context.Background(), wf); err != nil {
+		t.Fatalf("edit %s: %v", name, err)
+	}
+}
+
+// seedTree stores and reconciles each Workflow in order (a child before its parent), failing unless it is Ready.
+func seedTree(t *testing.T, s store.Store, wfs ...v1.Workflow) {
+	t.Helper()
+	for _, wf := range wfs {
+		seedWF(t, s, string(wf.Name), nil, wf.Spec.Steps...)
+		if got, _ := reconcileByName(t, s, treeContracts(), string(wf.Name)); !ready(got) {
+			t.Fatalf("setup: %s is not Ready: %+v", wf.Name, got.Status.Conditions)
+		}
+	}
+}
+
+func wfOf(name string, steps ...v1.WorkflowStep) v1.Workflow {
+	return v1.Workflow{ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name)}, Spec: spec(steps...)}
+}
+
+// Issue #766: a run of parent created between an edit of the child it calls and the child's next reconcile waits
+// for the child, instead of running its edited spec under the image pins of its previous generation.
+func TestIssue766_EditedChildWaitsAtParentStart(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("enrich", fnStep("x", "oci:a")), wfOf("parent", subwfStep("e", "enrich")))
+	setImage(t, s, "enrich", "x", "oci:b")
+	seedRun(t, s, "p-1", "parent", `{}`)
+	f := newFake()
+	rr := treeRig(t, s, f)
+	res, run := reconcileRun(t, ctx, rr, s, "p-1")
+	c, _ := run.Status.Conditions.Get(condReady)
+	if run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || !strings.Contains(c.Message, `"enrich"`) || res.RequeueAfter <= 0 || len(f.order) != 0 {
+		child, _ := rr.engine.runs.Get(ctx, "default", "p-1.e")
+		t.Fatalf("run of parent with enrich edited: phase=%q Ready=%+v dispatched=%v child record=%+v, want Pending, WorkflowNotReady naming enrich and nothing dispatched",
+			run.Status.Phase, c, f.order, child)
+	}
+}
+
+// readyCond is the Ready condition of the Workflow name.
+func readyCond(t *testing.T, s store.Store, name v1.ObjectName) v1.Condition {
+	t.Helper()
+	obj, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", name)
+	c, _ := obj.(*v1.Workflow).Status.Conditions.Get(condReady)
+	return c
+}
+
+// waitingFor fails the test unless run waits Pending with Ready=False/reason and a message holding each of names.
+func waitingFor(t *testing.T, run *v1.WorkflowRun, reason string, names ...string) {
+	t.Helper()
+	c, _ := run.Status.Conditions.Get(condReady)
+	if run.Status.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != reason {
+		t.Fatalf("run %s: phase=%q Ready=%+v, want Pending with Ready=False/%s", run.Name, run.Status.Phase, c, reason)
+	}
+	for _, n := range names {
+		if !strings.Contains(c.Message, n) {
+			t.Fatalf("run %s: Ready message %q does not name %s", run.Name, c.Message, n)
+		}
+	}
+}
+
+// scenario: edited-child-waits-at-parent-start
+func TestScenarioEditedChildWaitsAtParentStart(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("enrich", fnStep("x", "oci:a")), wfOf("parent", subwfStep("e", "enrich")))
+	setImage(t, s, "enrich", "x", "oci:b")
+	seedRun(t, s, "p-1", "parent", `{}`)
+	f := newFake()
+	rr := treeRig(t, s, f)
+	_, run := reconcileRun(t, ctx, rr, s, "p-1")
+	waitingFor(t, run, "WorkflowNotReady", `"enrich"`, "generation 2 is not type-checked yet")
+	if len(f.order) != 0 {
+		t.Fatalf("dispatched %v while waiting, want nothing", f.order)
+	}
+
+	reconcileByName(t, s, treeContracts(), "enrich")
+	if _, run := reconcileRun(t, ctx, rr, s, "p-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("run once enrich is Ready: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	if got := stepState(getRecord(t, rr.engine.runs, "p-1.e"), "x").Revision; got != "oci:b@sha256:oci:b" {
+		t.Fatalf("child step x revision %q, want the image of enrich's new generation", got)
+	}
+}
+
+// scenario: waiting-run-names-child-cause
+func TestScenarioWaitingRunNamesChildCause(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("enrich", fnStep("x", "oci:a")), wfOf("parent", subwfStep("e", "enrich")))
+	setImage(t, s, "enrich", "x", "oci:unpushed")
+	reconcileByName(t, s, treeContracts(), "enrich")
+	c := readyCond(t, s, "enrich")
+	if c.Status != v1.ConditionFalse || c.ObservedGeneration != 2 {
+		t.Fatalf("setup: enrich Ready=%+v, want False for generation 2", c)
+	}
+	seedRun(t, s, "p-1", "parent", `{}`)
+	_, run := reconcileRun(t, ctx, treeRig(t, s, newFake()), s, "p-1")
+	waitingFor(t, run, "WorkflowNotReady", `"enrich"`, `step "e"`, `workflow "parent"`, c.Reason, c.Message)
+}
+
+// scenario: grandchild-gates-the-tree
+func TestScenarioGrandchildGatesTheTree(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("leaf", fnStep("z", "oci:l")), wfOf("mid", subwfStep("l", "leaf")), wfOf("parent", subwfStep("m", "mid")))
+	setImage(t, s, "leaf", "z", "oci:l2")
+	seedRun(t, s, "p-1", "parent", `{}`)
+	f := newFake()
+	rr := treeRig(t, s, f)
+	_, run := reconcileRun(t, ctx, rr, s, "p-1")
+	waitingFor(t, run, "WorkflowNotReady", `"leaf"`, `step "l"`, `workflow "mid"`)
+
+	reconcileByName(t, s, treeContracts(), "leaf")
+	if _, run := reconcileRun(t, ctx, rr, s, "p-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"z"}) {
+		t.Fatalf("run once leaf is Ready: phase=%q dispatched=%v, want Succeeded with [z]", run.Status.Phase, f.order)
+	}
+	if got := stepState(getRecord(t, rr.engine.runs, "p-1.m.l"), "z").Revision; got != "oci:l2@sha256:oci:l2" {
+		t.Fatalf("grandchild step z revision %q, want leaf's new image", got)
+	}
+}
+
+// scenario: child-edit-after-start-ignored
+func TestScenarioChildEditAfterStartIgnored(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("enrich", fnStep("x", "oci:a")), wfOf("parent", fnStep("a", "oci:p"), subwfStep("e", "enrich", "a")))
+	g := newGate()
+	g.block["a"] = 1
+	rr := treeRig(t, s, g)
+	seedRun(t, s, "p-1", "parent", `{}`)
+	if _, err := rr.Reconcile(ctx, runReq("p-1")); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	receive(t, g.entered, "a")
+
+	editWF(t, s, "enrich", fnStep("y", "oci:b", "x"))
+	setImage(t, s, "enrich", "x", "oci:b")
+	if wf, _ := reconcileByName(t, s, treeContracts(), "enrich"); !ready(wf) {
+		t.Fatalf("setup: edited enrich is not Ready: %+v", wf.Status.Conditions)
+	}
+	close(g.release)
+	if _, run := reconcileRun(t, ctx, rr, s, "p-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("run p-1: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	child := getRecord(t, rr.engine.runs, "p-1.e")
+	if len(child.Steps) != 1 || stepState(child, "x").Revision != "oci:a@sha256:oci:a" || len(g.calls("y")) != 0 {
+		t.Fatalf("child of the started run: steps %+v, y calls %v; want only x at the pre-edit revision", child.Steps, g.calls("y"))
+	}
+
+	seedRun(t, s, "p-2", "parent", `{}`)
+	if _, run := reconcileRun(t, ctx, rr, s, "p-2"); run.Status.Phase != runSucceeded {
+		t.Fatalf("later run p-2: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	if later := getRecord(t, rr.engine.runs, "p-2.e"); len(later.Steps) != 2 || stepState(later, "x").Revision != "oci:b@sha256:oci:b" {
+		t.Fatalf("child of the later run: steps %+v, want x and y at the edited revision", later.Steps)
+	}
+}
+
+// scenario: child-pinned-once
+func TestScenarioChildPinnedOnce(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedTree(t, s, wfOf("enrich", fnStep("x", "oci:a")))
+	skipped := subwfStep("e3", "enrich", "e1")
+	skipped.When = &v1.StepWhen{Condition: `${{ input.x === "d" }}`}
+	seedWorkflow(t, s, "parent", subwfStep("e1", "enrich"), subwfStep("e2", "enrich", "e1"), skipped)
+	setImage(t, s, "enrich", "x", "oci:b")
+	seedRun(t, s, "p-1", "parent", `{"x":"n"}`)
+	f := newFake()
+	rr := treeRig(t, s, f)
+	_, run := reconcileRun(t, ctx, rr, s, "p-1")
+	waitingFor(t, run, "WorkflowNotReady", `"enrich"`, `step "e1"`)
+
+	reconcileByName(t, s, treeContracts(), "enrich")
+	if _, run := reconcileRun(t, ctx, rr, s, "p-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("run p-1: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	rec := getRecord(t, rr.engine.runs, "p-1")
+	pin, ok := rec.ChildPins["enrich"]
+	if len(rec.ChildPins) != 1 || !ok || pin.Generation != 2 || stepState(rec, "e3").Phase != v1.StepSkipped {
+		t.Fatalf("record pins %+v, e3 %+v; want one pin of enrich generation 2 and e3 Skipped", rec.ChildPins, stepState(rec, "e3"))
+	}
+	for _, call := range []v1.ObjectName{"p-1.e1", "p-1.e2"} {
+		if got := stepState(getRecord(t, rr.engine.runs, call), "x").Revision; got != pin.StepImages["x"] {
+			t.Fatalf("%s: x revision %q, want the pin's %q", call, got, pin.StepImages["x"])
+		}
+	}
+}
+
+// pinTree pins each child once over a diamond, waits for an absent or stale child naming it, and never pins the
+// root a cycle returns to; such a call fails at run time for want of a pin.
+func TestPinTree(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	seedWorkflow(t, s, "enrich", step("x", ""))
+	seedWorkflow(t, s, "mid", subwfStep("c", "enrich"))
+	seedWorkflow(t, s, "diamond", subwfStep("a", "enrich"), subwfStep("b", "mid"), subwfStep("d", "enrich"))
+	seedWorkflow(t, s, "absent", subwfStep("a", "gone"))
+	seedWorkflow(t, s, "back", subwfStep("r", "loop"))
+	seedWorkflow(t, s, "loop", subwfStep("b", "back"))
+	seedWorkflow(t, s, "flat", step("x", ""))
+	rr := treeRig(t, s, newFake())
+	get := func(name v1.ObjectName) *v1.Workflow {
+		obj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", name)
+		return obj.(*v1.Workflow)
+	}
+
+	if pins, tw, err := rr.pinTree(ctx, get("diamond")); err != nil || tw != nil || len(pins) != 2 || pins["enrich"].Spec.Steps[0].Name != "x" || len(pins["mid"].Spec.Steps) != 1 {
+		t.Fatalf("diamond: pins=%+v wait=%+v err=%v, want enrich and mid pinned once", pins, tw, err)
+	}
+	if _, tw, err := rr.pinTree(ctx, get("absent")); err != nil || tw == nil || tw.reason != "WorkflowNotFound" || !strings.Contains(tw.msg, `"gone"`) || !strings.Contains(tw.msg, `step "a"`) {
+		t.Fatalf("absent: wait=%+v err=%v, want WorkflowNotFound naming gone and step a", tw, err)
+	}
+	editWF(t, s, "enrich", step("y", ""))
+	if _, tw, err := rr.pinTree(ctx, get("mid")); err != nil || tw == nil || tw.reason != "WorkflowNotReady" || !strings.Contains(tw.msg, `"enrich"`) {
+		t.Fatalf("stale: wait=%+v err=%v, want WorkflowNotReady naming enrich", tw, err)
+	}
+	if pins, err := mustPins(rr.pinTree(ctx, get("flat"))); err != nil || pins != nil {
+		t.Fatalf("flat: pins=%+v err=%v, want nil pins for a workflow without workflow: steps", pins, err)
+	}
+
+	pins, err := mustPins(rr.pinTree(ctx, get("back")))
+	if _, ok := pins["back"]; err != nil || len(pins) != 1 || ok {
+		t.Fatalf("cycle: pins=%+v err=%v, want loop pinned and the root not", pins, err)
+	}
+	rec, err := rr.engine.Execute(ctx, "default", "cyc", "back", get("back").Spec, json.RawMessage(`{}`), StartOptions{ChildPins: pins})
+	if err == nil || rec.Phase != runFailed || !strings.Contains(rec.Error, `"back" has no pin`) {
+		t.Fatalf("cycle run: phase=%v err=%v, want Failed for the root's missing pin", rec.Phase, err)
+	}
+}
+
+func mustPins(pins map[v1.ObjectName]runstate.ChildPin, tw *treeWait, err error) (map[v1.ObjectName]runstate.ChildPin, error) {
+	if tw != nil {
+		return nil, fault.Internalf("test", "unexpected wait: %s", tw.msg)
+	}
+	return pins, err
 }
