@@ -157,6 +157,22 @@ func TestPassSelectsParentOutput(t *testing.T) {
 	}
 }
 
+// A pass output is a step output: one over the payload limit fails the run and is not stored, as a
+// dispatched one is (ADR-0094 payload cap).
+func TestPassOutputOverPayloadLimitFailsRun(t *testing.T) {
+	f := newFake()
+	e := newTestEngine(t, f, Config{PayloadLimit: 64})
+	rec, err := e.Execute(context.Background(), "default", "run-pass-cap", "wf",
+		spec(passStep("grow", `${{ {s: input.a.replaceAll("", input.b)} }}`)),
+		json.RawMessage(`{"a":"xxxxxxxxxxxxxxxxxxxx","b":"yyyyyyyyyy"}`), StartOptions{})
+	if err == nil || rec.Phase != runFailed {
+		t.Fatalf("an over-cap pass output must fail the run: err=%v phase=%s", err, rec.Phase)
+	}
+	if out := outputOf(rec, "grow"); out != nil {
+		t.Fatalf("an over-cap pass output was stored: %d bytes", len(out))
+	}
+}
+
 // scenario: builtin-reconcile-check-rejects-bad-expression — a pass with an expression that references
 // a non-existent root fails the run (the static check surfaces as a step failure).
 func TestBuiltinRejectsBadExpression(t *testing.T) {

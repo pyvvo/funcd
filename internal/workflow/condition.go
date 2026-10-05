@@ -175,7 +175,14 @@ func (e *Engine) evalWait(n *stepNode, rec *runstate.Record, raw string, input j
 
 // evalPass evaluates a builtin pass step's Select expression → its output (ADR-0096; no dispatch).
 func (e *Engine) evalPass(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
-	return e.evalSelect(raw, n, rec, input, outputs)
+	out, err := e.evalSelect(raw, n, rec, input, outputs)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.capOutput(n, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // evalSelect parses+checks+evaluates a ${{ }} Select expression against the run input + direct-parent
