@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/pyvvo/funcd/internal/gateway"
 )
 
 // CORS configures cross-origin response headers + preflight handling.
@@ -107,7 +109,7 @@ func (h *headerWriter) apply(code int) {
 	if h.wrote {
 		return
 	}
-	h.wrote = !interim(code)
+	h.wrote = !gateway.Interim(code)
 	for k, v := range h.cfg.Set {
 		h.Header().Set(k, v)
 	}
@@ -214,7 +216,7 @@ func weakenETag(h http.Header) {
 
 func (g *gzipWriter) WriteHeader(code int) {
 	// A 1xx is interim: httputil.ReverseProxy relays it and then clears the headers (#305).
-	if !interim(code) {
+	if !gateway.Interim(code) {
 		g.decide(code)
 	}
 	g.ResponseWriter.WriteHeader(code)
@@ -243,11 +245,6 @@ func (g *gzipWriter) Flush() {
 	flush(g.ResponseWriter)
 }
 func (g *gzipWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return hijack(g.ResponseWriter) }
-
-// interim reports whether code is a 1xx that a final status follows (101 ends the exchange).
-func interim(code int) bool {
-	return code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols
-}
 
 func flush(w http.ResponseWriter) {
 	if f, ok := w.(http.Flusher); ok {

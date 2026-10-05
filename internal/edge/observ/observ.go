@@ -153,9 +153,9 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// recorder captures the response status and FORWARDS http.Flusher + http.Hijacker so SSE streams and
-// WebSocket upgrades pass through unbroken (the invoke path streams with FlushInterval=-1 and hijacks
-// for upgrades).
+// recorder captures the final response status (a relayed 1xx is passed on, not recorded) and
+// FORWARDS http.Flusher + http.Hijacker so SSE streams and WebSocket upgrades pass through unbroken
+// (the invoke path streams with FlushInterval=-1 and hijacks for upgrades).
 type recorder struct {
 	http.ResponseWriter
 	status int
@@ -163,7 +163,7 @@ type recorder struct {
 }
 
 func (r *recorder) WriteHeader(code int) {
-	if !r.wrote {
+	if !r.wrote && !gateway.Interim(code) {
 		r.status = code
 		r.wrote = true
 	}
