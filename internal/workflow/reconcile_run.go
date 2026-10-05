@@ -214,7 +214,7 @@ func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started 
 func (r *RunReconciler) syncStatus(ctx context.Context, run *v1.WorkflowRun, before []byte, fallback v1.Phase) (controller.Result, error) {
 	rec, err := r.engine.runs.Get(ctx, run.Namespace, run.Name)
 	switch {
-	case fault.KindOf(err) == fault.NotFound || err == nil && foreignRecord(rec, run.UID):
+	case fault.KindOf(err) == fault.NotFound || err == nil && ForeignRecord(rec, run.UID):
 		rec = nil
 		if fallback != "" {
 			run.Status.Phase = fallback
@@ -285,7 +285,7 @@ func (r *RunReconciler) ownRecord(ctx context.Context, run *v1.WorkflowRun) (*ru
 		return nil, nil
 	case err != nil:
 		return nil, fault.Wrapf(err, fault.KindOf(err), runOp, "get run record %q", run.Name)
-	case foreignRecord(rec, run.UID):
+	case ForeignRecord(rec, run.UID):
 		if err := r.engine.runs.Delete(ctx, run.Namespace, run.Name); err != nil {
 			return nil, fault.Wrapf(err, fault.KindOf(err), runOp, "delete the record of an earlier run %q", run.Name)
 		}
@@ -294,9 +294,9 @@ func (r *RunReconciler) ownRecord(ctx context.Context, run *v1.WorkflowRun) (*ru
 	return rec, nil
 }
 
-// foreignRecord reports whether rec belongs to a WorkflowRun other than the one with uid: an earlier one
+// ForeignRecord reports whether rec belongs to a WorkflowRun other than the one with uid: an earlier one
 // of the same name. A record without a uid predates the stamp and is matched by name.
-func foreignRecord(rec *runstate.Record, uid v1.UID) bool {
+func ForeignRecord(rec *runstate.Record, uid v1.UID) bool {
 	return rec.RunUID != "" && rec.RunUID != uid
 }
 
@@ -511,7 +511,7 @@ func (r *RunReconciler) deleteRun(ctx context.Context, rec *runstate.Record) err
 		return err
 	}
 	meta := obj.GetObjectMeta()
-	if foreignRecord(rec, meta.UID) {
+	if ForeignRecord(rec, meta.UID) {
 		return nil
 	}
 	err = r.store.Delete(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name, meta.ResourceVersion)
