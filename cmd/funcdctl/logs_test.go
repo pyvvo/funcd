@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/require"
@@ -84,4 +85,37 @@ func TestScenarioFuncdctlLogsPrints(t *testing.T) {
 	require.NoError(t, execCLI(&js, c, "logs", "fn", "-n", "team-a", "-o", "json"))
 	require.Contains(t, js.String(), `"severityNumber":13`)
 	require.Contains(t, js.String(), `"body":"second"`)
+}
+
+// A record's text fields come from the function, so the default and wide renderings must escape what a
+// terminal would act on: one record stays one printed line (ADR-0084) and no control byte reaches the tty.
+func TestRenderLogLinesEscapesControlBytes(t *testing.T) {
+	at := time.Date(2026, 10, 2, 10, 40, 54, 0, time.UTC)
+	lines := []logread.Line{
+		{
+			Time: at, Severity: "INFO", Replica: "0\r",
+			Body:   "multi\n2026-10-02T10:40:54Z [ERROR] 0 forged\x1b]0;title\x07\x00\x9b\u009b\u2028end",
+			Source: "console\x1b[2J", Invocation: "inv\n", TraceID: "t\x07",
+			Attrs: []byte(`{"k\u001b":"a\u001b[31mb\nc","n":{` + "\n" + `"x":1}}`),
+		},
+		{Time: at, Severity: "WARN", Replica: "1", Body: `plain "quoted" \path`},
+	}
+	for _, output := range []string{"", "wide"} {
+		var buf bytes.Buffer
+		require.NoError(t, (&cli{out: &buf}).renderLogLines(lines, output))
+		got := buf.String()
+		require.Equal(t, len(lines), strings.Count(got, "\n"), "output %q: one line per record:\n%s", output, got)
+		require.True(t, utf8.ValidString(got), "output %q: invalid UTF-8 reaches the terminal", output)
+		for _, printed := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+			for _, r := range printed {
+				require.False(t, r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == 0x2028, "output %q: raw control %U in %q", output, r, printed)
+			}
+		}
+		require.Contains(t, got, `multi\n2026-10-02T10:40:54Z [ERROR] 0 forged\x1b]0;title\a\x00\x9b\u009b\u2028end`)
+		require.Contains(t, got, `[WARN] 1 plain "quoted" \path`+"\n")
+		if output == "wide" {
+			require.Contains(t, got, `source=console\x1b[2J inv=inv\n trace=t\a`)
+			require.Contains(t, got, `k\x1b=a\x1b[31mb\nc n={\n"x":1}`)
+		}
+	}
 }

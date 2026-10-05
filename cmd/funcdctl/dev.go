@@ -244,7 +244,8 @@ func (a *cli) printBanner(inst *devInstance) error {
 // devLogStyler renders a streamed function log line compactly and in color: a dim timestamp, the
 // function name in yellow, the severity in a level color (INFO blue, WARN yellow, ERROR/FATAL red,
 // DEBUG/TRACE dim), the body, then sorted structured attrs dim. Built ONCE per dev session (the
-// renderer's terminal detection isn't repeated per line); lipgloss auto-plains a non-TTY writer.
+// renderer's terminal detection isn't repeated per line); lipgloss auto-plains a non-TTY writer. Styles
+// are inline so a value wider than its column pads instead of wrapping: one record stays one line.
 type devLogStyler struct {
 	timeS, funcS, bodyS, attrS, defS lipgloss.Style
 	sev                              map[string]lipgloss.Style
@@ -252,7 +253,7 @@ type devLogStyler struct {
 
 func newDevLogStyler(w io.Writer) *devLogStyler {
 	r := lipgloss.NewRenderer(w)
-	c := func(code string) lipgloss.Style { return r.NewStyle().Foreground(lipgloss.Color(code)) }
+	c := func(code string) lipgloss.Style { return r.NewStyle().Inline(true).Foreground(lipgloss.Color(code)) }
 	return &devLogStyler{
 		timeS: c("240"),          // dim gray
 		funcS: c("11").Width(12), // yellow, padded to align bodies
@@ -272,7 +273,7 @@ func newDevLogStyler(w io.Writer) *devLogStyler {
 
 // format renders one log line (no trailing newline).
 func (s *devLogStyler) format(l funcd.LogLine) string {
-	sev := l.Severity
+	sev := termSafe(l.Severity)
 	if sev == "" {
 		sev = "INFO"
 	}
@@ -288,14 +289,14 @@ func (s *devLogStyler) format(l funcd.LogLine) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			fmt.Fprintf(&attrs, " %s=%s", k, l.Attrs[k])
+			fmt.Fprintf(&attrs, " %s=%s", termSafe(k), termSafe(l.Attrs[k]))
 		}
 	}
 	return fmt.Sprintf("  %s  %s %s  %s%s",
 		s.timeS.Render(l.Time.Format("15:04:05")),
 		s.funcS.Render(l.Function),
 		sevS.Render(sev),
-		s.bodyS.Render(l.Body),
+		s.bodyS.Render(termSafe(l.Body)),
 		s.attrS.Render(attrs.String()),
 	)
 }
