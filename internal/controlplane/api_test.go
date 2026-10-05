@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/go-chi/chi/v5"
@@ -310,5 +311,35 @@ func TestScenarioControlPlaneBodyOverCap(t *testing.T) {
 	}
 	if p.Type != "urn:funcd:problem:payload-too-large" || p.Title != "Content Too Large" || p.Status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("want funcd's payload-too-large problem, got %+v", p)
+	}
+}
+
+// scenario: spec-timeout-bounds — spec.timeout 2 h or −1 s ⇒ 422 at apply with nothing stored; 1 h accepted (ADR-0151).
+func TestScenarioSpecTimeoutBounds(t *testing.T) {
+	ta := humatest.Wrap(t, controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers()))
+	const path = "/apis/funcd.io/v1alpha1/namespaces/my-ns/functions"
+	fn := func(name string, timeout int64) map[string]interface{} {
+		return map[string]interface{}{
+			"apiVersion": "funcd.io/v1alpha1",
+			"kind":       "Function",
+			"metadata":   map[string]interface{}{"name": name, "namespace": "my-ns", "resourceGroup": "rg1"},
+			"spec":       map[string]interface{}{"runtime": "nodejs22", "timeout": timeout},
+		}
+	}
+	for name, timeout := range map[string]int64{"two-hours": int64(2 * time.Hour), "negative": -int64(time.Second)} {
+		if resp := ta.Post(path, "Content-Type: application/json", fn(name, timeout)); resp.Code != http.StatusUnprocessableEntity || !strings.Contains(resp.Body.String(), "timeout") {
+			t.Fatalf("spec.timeout %d: want a 422 naming timeout, got %d: %s", timeout, resp.Code, resp.Body.String())
+		}
+		if resp := ta.Get(path+"/"+name, "Accept: application/json"); resp.Code != http.StatusNotFound {
+			t.Fatalf("spec.timeout %d: nothing stored, got %d", timeout, resp.Code)
+		}
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", fn("one-hour", int64(v1.MaxInvokeTimeout))); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
+		t.Fatalf("spec.timeout 1h: want stored, got %d: %s", resp.Code, resp.Body.String())
+	}
+	resp := ta.Get(path+"/one-hour", "Accept: application/json")
+	var got v1.Function
+	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil || got.Spec.Timeout != time.Hour {
+		t.Fatalf("stored spec.timeout = %s (%v)", got.Spec.Timeout, err)
 	}
 }

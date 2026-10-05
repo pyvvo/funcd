@@ -164,6 +164,22 @@ func WithWorkflow(dataDir string, defaultStepTimeout, retention time.Duration, d
 	}
 }
 
+// WithDefaultInvokeTimeout sets invoke.defaultTimeout (ADR-0151): how long an external invoke waits for its
+// response to start when the Function sets no spec.timeout. 0 ⇒ v1.DefaultInvokeTimeout (60s); negative or over
+// v1.MaxInvokeTimeout (1h) ⇒ fault.Invalid from New. Links and workflow steps keep their own limits.
+func WithDefaultInvokeTimeout(d time.Duration) Option {
+	return func(c *config) error {
+		if d < 0 || d > v1.MaxInvokeTimeout {
+			return fault.Invalidf("funcd.WithDefaultInvokeTimeout", "default invoke timeout %s is outside 0..%s", d, v1.MaxInvokeTimeout)
+		}
+		c.invokeDefaultTimeout = d
+		if d == 0 {
+			c.invokeDefaultTimeout = v1.DefaultInvokeTimeout
+		}
+		return nil
+	}
+}
+
 // WithDeadLetterQueue tunes the eventing DLQ + bounded action-delivery retry (ADR-0118, F85). The DLQ is
 // always wired; without this option it runs in memory with the daemon config's defaults (720h retention, a
 // per-namespace cap of 1000, three delivery attempts). This option sets its persistence + tunables: dataDir

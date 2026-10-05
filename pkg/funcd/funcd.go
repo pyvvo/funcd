@@ -269,6 +269,10 @@ type config struct {
 	// Site reconciler (ADR-0139, F103): the index document served for "/" when a Site's spec.index is
 	// empty. "" ⇒ "index.html".
 	siteDefaultIndex string
+
+	// invokeDefaultTimeout is invoke.defaultTimeout (ADR-0151): an external invoke's response deadline when its
+	// Function sets no spec.timeout.
+	invokeDefaultTimeout time.Duration
 }
 
 // validate returns the first missing required dependency, or an invalid option combination, as a
@@ -355,6 +359,7 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowPayloadLimit: defaultWorkflowPayloadLimit,
 		deadletterRetention:  defaultDeadletterRetention,
 		deadletterMaxEntries: defaultDeadletterMaxEntries,
+		invokeDefaultTimeout: v1.DefaultInvokeTimeout,
 	}
 	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
@@ -744,7 +749,7 @@ func (p *Platform) buildControlPlane() error {
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
 		Store:            c.store,
 		Subscriber:       fanout,
-		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: &http.Client{Transport: calls.Wrap(nil), Timeout: 30 * time.Second}},
+		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 30*time.Second)},
 		DeadLetters:      dlq,
 		DeliveryAttempts: c.deliveryAttempts,
 		Logger:           p.logger,
@@ -861,7 +866,7 @@ func (p *Platform) buildControlPlane() error {
 		Grant:     storeGranter{store: c.store},
 		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
 		// (ADR-0094), and a client-wide cap would cut a longer step short.
-		Client: &http.Client{Transport: calls.Wrap(nil)},
+		Client: workerClient(calls, 0),
 		Logger: p.logger,
 	})
 	if derr != nil {
@@ -988,7 +993,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, p.logger)
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, c.invokeDefaultTimeout, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
@@ -1787,4 +1792,11 @@ func (p kvProber) HasAny(ctx context.Context, prefix string) (bool, error) {
 		return false, err
 	}
 	return len(keys) > 0, nil
+}
+
+// workerClient is the client the workflow dispatcher (timeout 0: each attempt is bounded by its step's timeout) and
+// the Sensor invoker (30 s) call workers with: counted for drain (ADR-0143), and sending the call's deadline in
+// X-Funcd-Timeout-Ms so a pool's timer follows it (ADR-0151).
+func workerClient(calls *activator.CallTracker, timeout time.Duration) *http.Client {
+	return &http.Client{Transport: activator.DeadlineTransport(calls.Wrap(nil)), Timeout: timeout}
 }

@@ -167,11 +167,12 @@ func (w warnCounter) WithGroup(name string) slog.Handler {
 }
 
 // shimFn is one function to deploy: its source, its runtime, its {input, output} contract ("" is the Json
-// form {}), its pool worker ("" runs it solo) and its links.
+// form {}), its pool worker ("" runs it solo), its spec.timeout and its links.
 type shimFn struct {
 	runtime, ext, src string
 	input, output     string
 	worker            string
+	timeout           time.Duration
 	links             []v1.FunctionLink
 }
 
@@ -179,6 +180,8 @@ func nodeFn(src string) shimFn   { return shimFn{runtime: "nodejs22", ext: ".mjs
 func pythonFn(src string) shimFn { return shimFn{runtime: "python314", ext: ".py", src: src} }
 
 func (f shimFn) pooled(worker string) shimFn { f.worker = worker; return f }
+
+func (f shimFn) withTimeout(d time.Duration) shimFn { f.timeout = d; return f }
 
 func (f shimFn) withContract(input, output string) shimFn {
 	f.input, f.output = input, output
@@ -209,6 +212,7 @@ func (h *shimRig) deploy(t *testing.T, name string, f shimFn) {
 	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 	fn.Spec.Replicas, fn.Spec.Scaling.MinReplicas = 1, 1
 	fn.Spec.Pooling.Worker = f.worker
+	fn.Spec.Timeout = f.timeout
 	fn.Spec.Links = f.links
 	_, err = h.c.Apply(context.Background(), fn)
 	require.NoError(t, err)
@@ -222,8 +226,11 @@ type reply struct {
 
 // post invokes a function over the data plane. A transport error is status -1, so it is safe off the test
 // goroutine.
-func (h *shimRig) post(name, body string) reply {
-	cl := &http.Client{Timeout: 30 * time.Second}
+func (h *shimRig) post(name, body string) reply { return h.postWithin(name, body, 30*time.Second) }
+
+// postWithin is post with a client that waits up to d.
+func (h *shimRig) postWithin(name, body string, d time.Duration) reply {
+	cl := &http.Client{Timeout: d}
 	resp, err := cl.Post(h.dp+"/function/"+name, "application/json", strings.NewReader(body))
 	if err != nil {
 		return reply{status: -1, body: err.Error()}

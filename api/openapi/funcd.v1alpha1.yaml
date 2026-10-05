@@ -698,6 +698,11 @@ components:
           type:
             - array
             - "null"
+        timeout:
+          format: int64
+          maximum: 3600000000000
+          minimum: 0
+          type: integer
       type: object
     FunctionStatus:
       additionalProperties: false

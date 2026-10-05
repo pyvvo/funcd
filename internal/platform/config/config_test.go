@@ -553,3 +553,17 @@ func TestInvokeMaxNestedInFlightConfig(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "a negative file value is rejected")
 	require.ErrorContains(t, err, "invoke.maxNestedInFlight")
 }
+
+// ADR-0151: invoke.defaultTimeout is set from the config file and from FUNCD_INVOKE_DEFAULT_TIMEOUT.
+func TestInvokeDefaultTimeoutConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("invoke:\n  defaultTimeout: 90s\n"), 0o600))
+	c, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "90s", c.Invoke.DefaultTimeout)
+
+	t.Setenv("FUNCD_INVOKE_DEFAULT_TIMEOUT", "2m")
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "2m", c.Invoke.DefaultTimeout)
+}

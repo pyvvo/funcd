@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -63,25 +64,34 @@ type Server struct {
 	static    *static.Handler
 	logger    *slog.Logger
 	transport *http.Transport // the Upstream routes' connection pool, shared by every request
+	// defaultTimeout bounds an external invoke of a Function without spec.timeout (ADR-0151).
+	defaultTimeout time.Duration
 }
 
 // Handler builds the data-plane HTTP handler. The activator is the sole serving path;
 // gateway.Handler() is not mounted here (ADR-0033). rtr is the F79 edge router (may be nil, in
 // which case only the /function/<name> path is served — implicit-only, pre-F79 behavior). enf is the
 // F77 edge authn PEP (may be nil ⇒ no enforcement for `open`; an `authenticated` stance fails closed).
-// stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s).
-func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, stat *static.Handler, logger *slog.Logger) http.Handler {
+// stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s). defaultTimeout is
+// invoke.defaultTimeout, the response deadline of an external invoke whose Function sets no spec.timeout
+// (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151).
+func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, stat *static.Handler,
+	defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if defaultTimeout <= 0 {
+		defaultTimeout = v1.DefaultInvokeTimeout
+	}
 	return &Server{
 		store: st, activator: act, router: rtr, enforcer: enf, static: stat, logger: logger.With("component", "dataplane"),
-		transport: httpx.Transport(),
+		transport: httpx.Transport(), defaultTimeout: defaultTimeout,
 	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const op = "dataplane.ServeHTTP"
+	received := time.Now() // an external invoke's response deadline counts from here (ADR-0151)
 
 	// Internal fn-to-fn invoke (ADR-0064) is addressed by name and is NEVER gated or re-routed by
 	// exposure (ADR-0110): it skips the Route front door entirely and serves the /function/<name> form.
@@ -104,7 +114,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			stance := s.authStance(r, m.Auth, m.Namespace)
-			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, op)
+			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, received, op)
 			return
 		}
 	}
@@ -125,15 +135,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stance := s.authStance(r, "", ns)
-	s.serveFunction(w, r, ns, v1.ObjectName(name), rest, stance, internal, op)
+	s.serveFunction(w, r, ns, v1.ObjectName(name), rest, stance, internal, received, op)
 }
 
 // serveFunction addresses the resolved function and hands off to the activator (the existing
 // warm-proxy / cold-wake path). remainder is the function-relative path (matched prefix already
 // stripped for a Route hit; the /function/<name> remainder for the path form). The F77 edge authn
 // PEP is enforced FIRST — before store.Get (no function-enumeration oracle) and before the activator
-// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated.
-func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string, stance v1.AuthMode, internal bool, op string) {
+// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated. An external
+// invoke gets a response deadline from received: the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151).
+func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string,
+	stance v1.AuthMode, internal bool, received time.Time, op string) {
 	if remainder == "" {
 		remainder = "/"
 	}
@@ -149,7 +161,8 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 			return
 		}
 	}
-	if _, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name); err != nil {
+	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
+	if err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 		return
 	}
@@ -184,8 +197,21 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// function's upstream carries the /function/<name> its pool worker routes by (ADR-0046), set by
 	// the reconciler, which decides whether the function is pooled.
 	out.URL.Path = remainder
+	if !internal {
+		out = activator.WithResponseDeadline(out, s.responseDeadline(obj, received))
+	}
 	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
 	s.activator.ServeHTTP(w, out)
+}
+
+// responseDeadline is an external invoke's limit, read from the Function loaded for this call so an edit applies
+// to the next one: spec.timeout, else invoke.defaultTimeout.
+func (s *Server) responseDeadline(obj v1.Object, received time.Time) activator.ResponseDeadline {
+	limit, source := s.defaultTimeout, "invoke.defaultTimeout"
+	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Timeout > 0 {
+		limit, source = fn.Spec.Timeout, "spec.timeout"
+	}
+	return activator.ResponseDeadline{At: received.Add(limit), Limit: limit, Source: source}
 }
 
 // serveStatic serves a static Bucket-prefix backend (ADR-0120, F82). It resolves the auth stance

@@ -76,7 +76,7 @@ func (h *shimHarness) invokeDataPlane(t *testing.T, name string) (int, string) {
 	act, err := activator.New(activator.Deps{Store: h.st, Endpoints: h.r.Endpoints(), Scaler: storescaler.New(h.st)})
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	dataplane.Handler(h.st, act, nil, nil, nil, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/function/"+name, strings.NewReader(`{"x":1}`)))
+	dataplane.Handler(h.st, act, nil, nil, nil, 0, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/function/"+name, strings.NewReader(`{"x":1}`)))
 	return rec.Code, rec.Body.String()
 }
 

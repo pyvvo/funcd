@@ -30,6 +30,7 @@ var kindProblem = map[Kind]struct {
 	Unavailable:       {typeURI: "urn:funcd:problem:unavailable", title: "Service Unavailable", status: http.StatusServiceUnavailable},
 	ResourceExhausted: {typeURI: "urn:funcd:problem:resource-exhausted", title: "Too Many Requests", status: http.StatusTooManyRequests},
 	PayloadTooLarge:   {typeURI: "urn:funcd:problem:payload-too-large", title: "Content Too Large", status: http.StatusRequestEntityTooLarge},
+	DeadlineExceeded:  {typeURI: "urn:funcd:problem:deadline-exceeded", title: "Gateway Timeout", status: http.StatusGatewayTimeout},
 	Internal:          {typeURI: "urn:funcd:problem:internal", title: "Internal Server Error", status: http.StatusInternalServerError},
 }
 
