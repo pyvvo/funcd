@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Decision §3: no clean 413 on the chunked branch (clean-413 half only).
+- **Superseded in part by**: [ADR-0164](0164-rate-limit-per-target.md) (2026-10-05) — rate-key-function, Decisions 1, 2, 6, Contracts, eviction: key function limits per resolved target; only refilled buckets evict.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

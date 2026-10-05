@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Decision §1: the local API error map's Invalid→422.
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Constraints, Decision 4, DoD, checklist: on a pool socket the caller is the member named in X-Funcd-Member, checked.
 - **Date**: 2026-06-22 (judged 2026-06-22 — reuses the verified worker-node local API (ADR-0064 `NewHandler`),
   the Facade's exact signatures (ADR-0019), and the ADR-0066 driver; folded the identity-granularity point —
   namespace-scoped sandbox identity for v1.1, workload-`Grant` authz deferred to V2 per ADR-0018/0019. No

@@ -1,6 +1,7 @@
 # ADR-0046: Pooling placement — per-function opt-in to a shared worker, keyed by (namespace, runtime, worker-id)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — pool key (namespace, runtime, worker-id) alone: the key gains the access hash; only the same access shares a pool.
 - **Date**: 2026-06-16 (**Implemented 2026-06-16** — review **pass** (0 Blockers/Majors, 3 Minors; only the OpenAPI-regen
   Minor was model-attributed and is folded), see docs/reviews/adr-0046-implementation-claude-opus-4-8.md; DoD 7/7, all 9
   scenarios real + passing (6 pure + 5 node-gated acceptance), solo path behavior-preserving, activator unchanged.

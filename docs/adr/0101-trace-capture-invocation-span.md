@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0165](0165-fn-to-fn-trace-propagation.md) (2026-10-05) — one SERVER span per invocation; span kind SERVER only; span name values.
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decision, Trace context: a pooled span is stored under its host-checked member (funcd.member).
 - **Date**: 2026-07-06 (Implemented 2026-07-06 after the review gate — pass, 0 blockers/0 majors, DoD 10/10.
   Accepted 2026-07-06 after the judge pass — no Blockers/Majors; folded 7 Minors:
   "byte-identical"→"schema-identical" wire wording, named the ALS carrier as net-new here, `funclog.traces`

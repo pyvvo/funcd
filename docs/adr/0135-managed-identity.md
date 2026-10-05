@@ -1,6 +1,7 @@
 # ADR-0135: Managed identity — a first-class principal + issued credential
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0170](0170-owner-garbage-collector.md) (2026-10-05) — Decision step 3, lines 298-301: a Secret controlled by a namesake with another UID is re-issued in place; SecretNotOwned.
 - **Date**: 2026-07-14 (**Implemented 2026-07-14** — review pass (claude-opus-4-8): the `Identity` CRD +
   credential-issuing reconciler (`internal/services/identity`, issue/rotate/revoke over an owned Secret) +
   store-backed `ExternalKeys` (wired into `s3gateway.Deps.External`, previously nil) + the `FUNCID` access

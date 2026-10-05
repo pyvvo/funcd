@@ -7,6 +7,8 @@
 - **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — DrainGrace/HandOutSettle defaults and Decision 4.7 min(1 s) bound become runtime keys.
 - **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — Contracts: WorkerSpec.LogPath in the revision-switch spec.
 - **Superseded in part by**: [ADR-0174](0174-never-booted-revision-is-unknown.md) (2026-10-05) — Decision 3: RevisionReady values (adds Unknown/NotStarted before first ready replica).
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decision 8 and Scope: S follows C once the member reads ready; the resolver routes by status.pool.
+- **Superseded in part by**: [ADR-0179](0179-unrevisioned-cni-ids-cannot-collide.md) (2026-10-05) — unrevisioned CNI ID row, checklist line 300, Decision 1 provider engines: the CNI ID is <ns>_<name>-r<replica>.
 - **Date**: 2026-10-02 (redrafted the same day after the judge: the old revision's workers now stop after the switch
   — a `drainingRevision` keeps the passes full until they are gone; every caller of a worker is counted, not only the
   activator; a gate failure of the new revision no longer takes the old one down; a crash of an old worker and a

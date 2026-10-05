@@ -1,6 +1,7 @@
 # ADR-0137: Per-caller `catalog::query` RBAC — a catalog PEP proxy for internal and external callers
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0153](0153-catalog-token-carries-its-owner.md) (2026-10-05) — Decision 2: the per-Identity catalog token gains a public owner prefix; its lookup decodes the owner, two Gets.
 - **Implemented**: 2026-07-14 — review **pass** ([scorecard](../reviews/adr-0137-implementation-claude-opus-4-8.md)):
   the INTERNAL per-caller `catalog::query` PEP is live + green + security-reviewed — a node-private catalog proxy
   (`internal/catalog/gateway`) fronts each engine, resolves a per-function **HS256 JWT** token (go-jose, alg-pinned;

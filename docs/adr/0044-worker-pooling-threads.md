@@ -1,6 +1,7 @@
 # ADR-0044: Worker pooling — a `worker_threads` multi-tenant shim for same-owner density (+ bench)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decisions 2 and 4, readiness row, checklist: members load and fail alone; readiness no longer waits on every worker.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** · **Implemented 2026-06-16** — judge folded: the Blocker — re-anchored the trust boundary to the
   **namespace** (resource group demoted to the placement grouping within it, per the blueprint); handed boundary
   *enforcement* to the placement follow-up ADR (the host trusts its single-namespace manifest); bounded the blast-radius
