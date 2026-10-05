@@ -345,6 +345,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithDefaultInvokeTimeout(invokeTimeout))
+	bootInitial, bootMax, err := bootBackoff(cfg)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithBootBackoff(bootInitial, bootMax))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
@@ -537,6 +542,23 @@ func kvCDC(cfg config.Config, theBus bus.Bus) (bus.Bus, kvbadger.CDCConfig, erro
 		Subject:   bus.Subject(cfg.Kvstore.Cdc.Sink),
 		Retention: retention,
 	}, nil
+}
+
+// bootBackoff parses runtime.bootBackoffInitial and runtime.bootBackoffMax (ADR-0160): positive durations, the max
+// defaulting to max(5m, initial) and, when set, at least the initial wait.
+func bootBackoff(cfg config.Config) (initial, limit time.Duration, err error) {
+	initial, err = parseDurationOr("runtime.bootBackoffInitial", cfg.Runtime.BootBackoffInitial, 10*time.Second)
+	if err != nil {
+		return 0, 0, err
+	}
+	limit, err = parseDurationOr("runtime.bootBackoffMax", cfg.Runtime.BootBackoffMax, max(5*time.Minute, initial))
+	if err != nil {
+		return 0, 0, err
+	}
+	if limit < initial {
+		return 0, 0, fault.Invalidf("buildOptions", "config key %q has value %s, below runtime.bootBackoffInitial %s", "runtime.bootBackoffMax", limit, initial)
+	}
+	return initial, limit, nil
 }
 
 // parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive

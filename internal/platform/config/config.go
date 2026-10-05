@@ -153,8 +153,12 @@ type Config struct {
 		EncryptionKeyFile string `json:"encryptionKeyFile,omitempty" env:"FUNCD_SECRETS_ENCRYPTION_KEY_FILE"`
 	} `json:"secrets,omitempty"`
 	Runtime struct {
-		Mode       string `json:"mode,omitempty" env:"FUNCD_RUNTIME" validate:"oneof=process containerd"`
-		Containerd struct {
+		Mode string `json:"mode,omitempty" env:"FUNCD_RUNTIME" validate:"oneof=process containerd"`
+		// BootBackoffInitial and BootBackoffMax bound the wait before a worker that crashed while booting is created
+		// again (ADR-0160): positive Go durations, the max at least the initial wait.
+		BootBackoffInitial string `json:"bootBackoffInitial,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_INITIAL"`
+		BootBackoffMax     string `json:"bootBackoffMax,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_MAX"`
+		Containerd         struct {
 			Socket        string            `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
 			Root          string            `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
 			Snapshotter   string            `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
@@ -293,6 +297,7 @@ func defaults() Config {
 	c.Storage.DataDir = "/var/lib/funcd"
 	c.Auth.Namespaces = []string{"default"}
 	c.Runtime.Mode = "process"
+	c.Runtime.BootBackoffInitial = "10s"
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
 	c.Controller.GCSweepInterval = "5m"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"

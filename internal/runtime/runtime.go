@@ -43,6 +43,27 @@ const (
 // Terminal reports whether an instance in this state has exited (Stopped or Failed).
 func (s State) Terminal() bool { return s == StateStopped || s == StateFailed }
 
+// ExitCause is how a worker instance ended (ADR-0160).
+type ExitCause string
+
+const (
+	// ExitUnknown means the instance has not ended, or its end could not be read.
+	ExitUnknown ExitCause = ""
+	// ExitByStop means Stop ended the instance, or ran after it ended.
+	ExitByStop ExitCause = "stop"
+	// ExitByCode means the process exited on its own with Exit.Code.
+	ExitByCode ExitCause = "code"
+	// ExitBySignal means a signal Stop did not send, Exit.Signal, ended the process.
+	ExitBySignal ExitCause = "signal"
+)
+
+// Exit is how an instance ended; zero until it ends. Code 3 is a shim that cannot load its handler (ADR-0037).
+type Exit struct {
+	Cause  ExitCause
+	Code   int
+	Signal int
+}
+
 // Limits bounds a worker's resources (0 = unlimited).
 type Limits struct {
 	MemoryBytes int64
@@ -87,6 +108,8 @@ type Instance struct {
 	IP        string // worker endpoint host: netns IP (containerd) or 127.0.0.1 (process driver, ADR-0030)
 	Port      int    // worker HTTP port: the shim's listening port (ADR-0030); 0 until resolved
 	CreatedAt time.Time
+	Listened  bool // wrote its port to FUNCD_PORTFILE since its last Start; stays true after it ends (ADR-0160)
+	Exit      Exit
 }
 
 // Runtime is the worker port: create/start/stop/observe one function replica.

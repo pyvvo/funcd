@@ -54,6 +54,11 @@ type fakeRuntime struct {
 	// ADR-0149: a Create of an image in imageErr fails with its error; attempts counts every Create call.
 	imageErr map[string]error
 	attempts int
+	// ADR-0160: how each instance ended and whether it listened, latched as the drivers do when they report its port;
+	// a Start of an instance in startExit ends it at once with that exit, before it listens.
+	exits     map[runtime.InstanceID]runtime.Exit
+	listened  map[runtime.InstanceID]bool
+	startExit map[runtime.InstanceID]runtime.Exit
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -62,11 +67,14 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		state:   map[runtime.InstanceID]runtime.State{},
 		created: map[runtime.InstanceID]time.Time{},
 		ip:      ip, port: port,
-		revPort:  map[v1.ObjectName]int{},
-		failRev:  map[v1.ObjectName]bool{},
-		held:     map[runtime.InstanceID]bool{},
-		stopped:  map[runtime.InstanceID]bool{},
-		imageErr: map[string]error{},
+		revPort:   map[v1.ObjectName]int{},
+		failRev:   map[v1.ObjectName]bool{},
+		held:      map[runtime.InstanceID]bool{},
+		stopped:   map[runtime.InstanceID]bool{},
+		exits:     map[runtime.InstanceID]runtime.Exit{},
+		listened:  map[runtime.InstanceID]bool{},
+		startExit: map[runtime.InstanceID]runtime.Exit{},
+		imageErr:  map[string]error{},
 	}
 }
 
@@ -91,6 +99,8 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	f.state[id] = runtime.StateCreated
 	f.created[id] = time.Now()
 	delete(f.stopped, id)
+	delete(f.exits, id)
+	delete(f.listened, id)
 	f.creates++
 	return f.snapshot(id), nil
 }
@@ -98,9 +108,17 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 func (f *fakeRuntime) Start(_ context.Context, id runtime.InstanceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.failed || f.failRev[f.specs[id].Revision] {
-		f.state[id] = runtime.StateFailed
-	} else {
+	delete(f.exits, id)
+	delete(f.listened, id)
+	switch ex, ends := f.startExit[id]; {
+	case ends:
+		f.state[id], f.exits[id] = runtime.StateFailed, ex
+		if ex.Cause == runtime.ExitByCode && ex.Code == 0 {
+			f.state[id] = runtime.StateStopped
+		}
+	case f.failed || f.failRev[f.specs[id].Revision]:
+		f.state[id], f.exits[id] = runtime.StateFailed, runtime.Exit{Cause: runtime.ExitByCode, Code: 3}
+	default:
 		f.state[id] = runtime.StateRunning
 	}
 	delete(f.stopped, id)
@@ -111,6 +129,7 @@ func (f *fakeRuntime) Stop(_ context.Context, id runtime.InstanceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = runtime.StateStopped
+	f.exits[id] = runtime.Exit{Cause: runtime.ExitByStop}
 	f.stopped[id] = true
 	return nil
 }
@@ -158,18 +177,23 @@ func (f *fakeRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
 	delete(f.state, id)
 	delete(f.created, id)
 	delete(f.stopped, id)
+	delete(f.exits, id)
+	delete(f.listened, id)
 	f.removed = append(f.removed, id)
 	return nil
 }
 
 func (f *fakeRuntime) Close() error { return nil }
 
-// snapshot builds an Instance; caller holds f.mu. A running instance surfaces the endpoint.
+// snapshot builds an Instance; caller holds f.mu. A running instance surfaces the endpoint, and is then Listened.
 func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	spec := f.specs[id]
+	if f.state[id] == runtime.StateRunning && !f.held[id] {
+		f.listened[id] = true
+	}
 	in := runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
-		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id],
+		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id], Listened: f.listened[id], Exit: f.exits[id],
 	}
 	if in.State == runtime.StateRunning && !f.held[id] {
 		in.IP = f.ip
@@ -197,6 +221,8 @@ func (f *fakeRuntime) forget() {
 	clear(f.created)
 	clear(f.stopped)
 	clear(f.held)
+	clear(f.exits)
+	clear(f.listened)
 }
 
 // exit marks replica 0 of name — of whichever revision runs it — as exited in state st, created age ago (a crash of a
@@ -250,6 +276,17 @@ func (f *fakeRuntime) serveRevision(t *testing.T, rev v1.ObjectName, status int)
 		cur = code
 		mu.Unlock()
 	}
+}
+
+// endStarts makes later Starts of instance id end at once with ex, before it listens (ok), or run (!ok).
+func (f *fakeRuntime) endStarts(id runtime.InstanceID, ex runtime.Exit, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ok {
+		f.startExit[id] = ex
+		return
+	}
+	delete(f.startExit, id)
 }
 
 // failRevision makes later Starts of revision rev fail (true) or succeed (false).

@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -324,6 +325,43 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.Equal(t, fault.NotFound, fault.KindOf(rt.Stop(ctx, runtime.InstanceID("nope"))))
 	})
 
+	// ADR-0160: the port reports how a worker ended and whether it wrote its port first.
+	t.Run("worker-exit-reason", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+		run := func(name string, command ...string) runtime.InstanceID {
+			inst, err := rt.Create(ctx, specOf(t, name, command))
+			require.NoError(t, err)
+			require.NoError(t, rt.Start(ctx, inst.ID))
+			return inst.ID
+		}
+
+		got := waitEnded(t, rt, run("shape", "sh", "-c", "exit 3"))
+		require.Equal(t, runtime.Exit{Cause: runtime.ExitByCode, Code: 3}, got.Exit)
+		require.False(t, got.Listened)
+
+		killed := run("killed", "sleep", "30")
+		running, err := rt.Status(ctx, killed)
+		require.NoError(t, err)
+		require.Equal(t, runtime.Exit{}, running.Exit, "Exit is zero until the instance ends")
+		require.NoError(t, syscall.Kill(running.PID, syscall.SIGKILL))
+		got = waitEnded(t, rt, killed)
+		require.Equal(t, runtime.Exit{Cause: runtime.ExitBySignal, Signal: 9}, got.Exit)
+		require.False(t, got.Listened)
+
+		got = waitEnded(t, rt, run("listened", "sh", "-c", `echo 8080 > "$FUNCD_PORTFILE"; exit 0`))
+		require.True(t, got.Listened, "Listened stays true after the worker ends")
+		require.Equal(t, runtime.Exit{Cause: runtime.ExitByCode, Code: 0}, got.Exit)
+
+		stopped := run("stopped", "sleep", "30")
+		require.NoError(t, rt.Stop(ctx, stopped))
+		got, err = rt.Status(ctx, stopped)
+		require.NoError(t, err)
+		require.Equal(t, runtime.StateStopped, got.State)
+		require.Equal(t, runtime.Exit{Cause: runtime.ExitByStop}, got.Exit)
+	})
+
 	t.Run("worker-exec", func(t *testing.T) {
 		ctx := context.Background()
 		rt := newRuntime(t)
@@ -339,6 +377,22 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 
 		require.NoError(t, rt.Stop(ctx, inst.ID))
 	})
+}
+
+// waitEnded polls Status until the instance has ended, and returns it.
+func waitEnded(t *testing.T, rt runtime.Runtime, id runtime.InstanceID) runtime.Instance {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := rt.Status(context.Background(), id)
+		require.NoError(t, err)
+		if got.State.Terminal() {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("instance %q did not end within deadline", id)
+	return runtime.Instance{}
 }
 
 // waitState polls Status until the instance reaches want or the deadline passes.

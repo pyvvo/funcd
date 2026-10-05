@@ -38,7 +38,7 @@ func TestIssue492_FailedCreateRemovesLogFile(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, rejectingContainers{},
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.Error(t, err)
@@ -77,7 +77,7 @@ func TestCreate_FailedNetworkSetupRemovesCNIAttachment(t *testing.T) {
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
 	cni := &failingSetupCNI{}
-	d := &driver{client: client, cni: cni, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: cni, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.ErrorIs(t, err, errFirewallAdd, "Create must return the Setup error")
@@ -105,7 +105,7 @@ func TestCreate_FailedNetworkSetupKillsTask(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: &failingSetupCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: &failingSetupCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.ErrorIs(t, err, errFirewallAdd, "Create must return the Setup error")

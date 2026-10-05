@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -57,6 +58,9 @@ const (
 	ociRuntimeBinary = "crun"
 )
 
+// containerBootDir is where a worker's boot dir is mounted; the shim writes its port to FUNCD_PORTFILE in it (ADR-0160).
+const containerBootDir = "/run/funcd-boot"
+
 // ownerKindLabel names the container label that keeps the kind whose reconciler created the worker (ADR-0152).
 const ownerKindLabel = "funcd/owner-kind"
 
@@ -97,6 +101,9 @@ type worker struct {
 	ownLog    bool // the driver created logPath, so Remove or a re-create deletes it
 	createdAt time.Time
 	released  bool // Stop has released the task, the CNI attachment and the container, so Remove may forget it
+	bootDir   string
+	listened  bool // the port file was seen since Create (ADR-0160)
+	stopping  bool // Stop has begun, so an ended task is ExitByStop
 
 	// Path B structured-log channel (ADR-0081): a per-instance host UDS bind-mounted into the
 	// sandbox; the shim connects and writes NDJSON, the accept loop hands each conn to the hook.
@@ -109,6 +116,7 @@ type driver struct {
 	client     *containerd.Client
 	cni        gocni.CNI
 	resolvPath string // host path to the shared worker /etc/resolv.conf (bind-mounted into every worker)
+	bootRoot   string // 0700 parent of the per-worker boot dirs (ADR-0160)
 	mu         sync.Mutex
 
 	capture   runtime.LogCaptureFunc // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
@@ -201,7 +209,58 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "provision worker resolv.conf")
 	}
-	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, instances: map[runtime.InstanceID]*worker{}}, nil
+	bootRoot, err := makeBootRoot(cfg.StateDir)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, instances: map[runtime.InstanceID]*worker{}}, nil
+}
+
+// makeBootRoot makes <stateDir>/boot, or a private temp dir when stateDir is unset, and enforces 0700 on it, so no host
+// user but root reaches a dir the sandbox writes (ADR-0160).
+func makeBootRoot(stateDir string) (string, error) {
+	const op = "runtime.containerd.New"
+	if stateDir == "" {
+		dir, err := os.MkdirTemp("", "funcd-boot-")
+		if err != nil {
+			return "", fault.Wrapf(err, fault.Internal, op, "create boot root")
+		}
+		return dir, nil
+	}
+	dir := filepath.Join(stateDir, "boot")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "create boot root %q", dir)
+	}
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return "", fault.Internalf(op, "boot root %q is not a directory", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "restrict boot root %q", dir)
+	}
+	return dir, nil
+}
+
+// makeBootDir makes worker ctrID's boot dir under 0700 parents, removing an earlier one first. Only the leaf is 0777,
+// so the sandbox's non-root uid can write its port file there.
+func (d *driver) makeBootDir(ns v1alpha1.NamespaceName, ctrID string) (string, error) {
+	const op = "runtime.containerd.Create"
+	parent := filepath.Join(d.bootRoot, nsPrefix+string(ns))
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "create boot dir parent %q", parent)
+	}
+	dir := filepath.Join(parent, ctrID)
+	if err := os.RemoveAll(dir); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "remove earlier boot dir %q", dir)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "create boot dir %q", dir)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the sandbox uid writes its port here; the 0700 parents keep host users out
+		_ = os.RemoveAll(dir)
+		return "", fault.Wrapf(err, fault.Internal, op, "open boot dir %q to the sandbox", dir)
+	}
+	return dir, nil
 }
 
 // writeWorkerResolv writes the shared /etc/resolv.conf funcd bind-mounts into every worker, pointing at
@@ -247,6 +306,9 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if spec.OwnerKind == "" {
 		return runtime.Instance{}, fault.Invalidf(op, "spec.OwnerKind must not be empty")
 	}
+	if d.bootRoot == "" {
+		return runtime.Instance{}, fault.Internalf(op, "the driver has no boot root")
+	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	d.mu.Lock()
 	held := d.instances[id]
@@ -276,13 +338,16 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		_ = f.Close()
 	}
 	var logLn net.Listener
-	var logDir string
+	var logDir, bootDir string
 	success := false
 	defer func() {
 		if !success { // the worker is never registered, so no Remove or Stop would free these
 			failed := &worker{logPath: logPath, ownLog: ownLog, logListener: logLn, logDir: logDir}
 			removeLog(failed)
 			closeLogChannel(failed)
+			if bootDir != "" {
+				_ = os.RemoveAll(bootDir)
+			}
 		}
 	}()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
@@ -324,13 +389,20 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if err := d.reclaim(nctx, op, id, ctrID, spec.OwnerKind); err != nil {
 		return runtime.Instance{}, err
 	}
+	if bootDir, err = d.makeBootDir(spec.Namespace, ctrID); err != nil {
+		return runtime.Instance{}, err
+	}
+	env := make(map[string]string, len(spec.Env)+1)
+	maps.Copy(env, spec.Env)
+	env["FUNCD_PORTFILE"] = containerBootDir + "/port"
+	spec.Env = env
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
 		containerd.WithSnapshotter(d.snapshotter()),
 		containerd.WithNewSnapshot(ctrID+"-snap", image),
 		containerd.WithRuntime(runcShim, &runcoptions.Options{BinaryName: ociRuntimeBinary}),
 		containerd.WithContainerLabels(labels),
-		containerd.WithNewSpec(ociOpts(spec, image)...),
+		containerd.WithNewSpec(ociOpts(spec, image, bootDir)...),
 	)
 	if err != nil {
 		return runtime.Instance{}, mapErr(err, op, "create container %q", ctrID)
@@ -361,7 +433,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, ownerKind: spec.OwnerKind, revision: spec.Revision,
 		replica: spec.Replica, cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
 		logPath: logPath, ownLog: ownLog, createdAt: time.Now(),
-		logListener: logLn, logDir: logDir,
+		logListener: logLn, logDir: logDir, bootDir: bootDir,
 	}
 	d.mu.Lock()
 	replaced := d.instances[id]
@@ -381,14 +453,15 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 // reclaim deletes the container and snapshot that hold a worker's name when this driver runs no worker under it.
 // containerd keeps both when funcd stops or dies, and the restarted driver starts with no instances, so without this
 // every re-create of the worker fails with "already exists". A leftover labelled with another kind is kept and refused
-// with fault.Conflict; an unlabelled one, from before ADR-0152, is reclaimed.
+// with fault.Conflict; an unlabelled one, from before ADR-0152, is reclaimed. An ID this driver still runs is
+// fault.Conflict, before Create touches its boot dir (ADR-0160).
 func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID, ctrID string, kind v1alpha1.Kind) error {
 	d.mu.Lock()
 	sb, ok := d.instances[id]
 	live := ok && !sb.released
 	d.mu.Unlock()
 	if live {
-		return nil
+		return fault.Conflictf(op, "instance %q already exists", id)
 	}
 	c, err := d.client.LoadContainer(nctx, ctrID)
 	switch {
@@ -461,6 +534,10 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	if err != nil {
 		return err
 	}
+	d.mu.Lock()
+	sb.stopping = true
+	d.mu.Unlock()
+	defer func() { _ = os.RemoveAll(sb.bootDir) }()
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
 	if errdefs.IsNotFound(err) {
 		d.markReleased(sb)
@@ -591,6 +668,9 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 			_ = d.cni.Remove(nctx, ns+"-"+name+"-r"+rep, "")
 		}
 	}
+	if ns, ok := namespaces.Namespace(nctx); ok && d.bootRoot != "" {
+		_ = os.RemoveAll(filepath.Join(d.bootRoot, ns, c.ID()))
+	}
 	return c.Delete(nctx, containerd.WithSnapshotCleanup)
 }
 
@@ -606,16 +686,42 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 	}
 	task, err := d.task(nctx, sb)
 	if err != nil {
-		inst.State = runtime.StateStopped
-		return inst, nil
+		d.ended(sb, &inst, nil)
+	} else {
+		inst.PID = int(task.Pid())
+		if st, serr := task.Status(nctx); serr == nil {
+			d.ended(sb, &inst, &st)
+		}
 	}
-	inst.PID = int(task.Pid())
-	st, err := task.Status(nctx)
-	if err != nil {
-		return inst, nil
-	}
-	inst.State = mapState(st)
+	inst.Listened = d.listened(sb)
 	return inst, nil
+}
+
+// ended fills inst's State and Exit from its task status st, nil once the task is gone. Stop sets stopping first, so a
+// task it signalled reads Stopped and ExitByStop once ended; a gone task Stop did not end is ExitUnknown (ADR-0160).
+func (d *driver) ended(sb *worker, inst *runtime.Instance, st *containerd.Status) {
+	d.mu.Lock()
+	stopping := sb.stopping
+	d.mu.Unlock()
+	switch {
+	case st != nil && st.Status != containerd.Stopped:
+		inst.State = mapState(*st)
+	case stopping:
+		inst.State, inst.Exit = runtime.StateStopped, runtime.Exit{Cause: runtime.ExitByStop}
+	case st == nil:
+		inst.State, inst.Exit = runtime.StateStopped, runtime.Exit{}
+	default:
+		inst.State, inst.Exit = mapState(*st), exitOf(*st)
+	}
+}
+
+// listened latches whether the worker's shim has written its port file (ADR-0160).
+func (d *driver) listened(sb *worker) bool {
+	wrote := portWritten(sb.bootDir)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sb.listened = sb.listened || wrote
+	return sb.listened
 }
 
 func (d *driver) Logs(ctx context.Context, id runtime.InstanceID) (io.ReadCloser, error) {
@@ -681,12 +787,15 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 		// Reflect the real task status (ADR-0032): never hardcode Running, or a
 		// crashed/exited container would mask the shim's shape failure (ADR-0030).
 		nctx := d.nsCtx(ctx, sb.namespace)
-		if task, err := d.task(nctx, sb); err == nil {
+		if task, err := d.task(nctx, sb); err != nil {
+			d.ended(sb, &inst, nil)
+		} else {
 			inst.PID = int(task.Pid())
 			if st, serr := task.Status(nctx); serr == nil {
-				inst.State = mapState(st)
+				d.ended(sb, &inst, &st)
 			}
 		}
+		inst.Listened = d.listened(sb)
 		out = append(out, inst)
 	}
 	return out, nil
@@ -827,7 +936,7 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 }
 
 // ociOpts builds the conservative OCI spec for a worker.
-func ociOpts(spec runtime.WorkerSpec, image containerd.Image) []oci.SpecOpts {
+func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []oci.SpecOpts {
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
 		oci.WithHostname(string(spec.Name)),
@@ -838,9 +947,12 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image) []oci.SpecOpts {
 	if len(spec.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(spec.Command...))
 	}
-	if len(spec.Mounts) > 0 {
-		opts = append(opts, oci.WithMounts(bindMounts(spec.Mounts)))
-	}
+	opts = append(opts, oci.WithMounts(append(bindMounts(spec.Mounts), specs.Mount{
+		Destination: containerBootDir,
+		Type:        "bind",
+		Source:      bootDir,
+		Options:     []string{"rbind", "rw", "nosuid", "nodev", "noexec"},
+	})))
 	if spec.Limits.MemoryBytes > 0 {
 		opts = append(opts, oci.WithMemoryLimit(uint64(spec.Limits.MemoryBytes)))
 	}

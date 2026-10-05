@@ -36,7 +36,7 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: engine.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, engine)
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 	_, err = d.Create(ctx, fn)
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "this driver holds the ID for a CatalogService worker")
 
-	restarted := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	restarted := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 	_, err = restarted.Create(ctx, fn)
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a leftover labelled CatalogService is not reclaimed for a Function")
 	require.Contains(t, ctrs.records, ctrID, "the other kind's leftover is kept")

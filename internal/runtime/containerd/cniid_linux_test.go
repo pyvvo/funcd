@@ -131,7 +131,7 @@ func newCNIIDFixture(t *testing.T) *cniIDFixture {
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
 	cni := &recordingCNI{}
 	return &cniIDFixture{
-		d:    &driver{client: client, cni: cni, instances: map[runtime.InstanceID]*worker{}},
+		d:    &driver{client: client, cni: cni, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}},
 		ctrs: ctrs, cni: cni, image: image,
 	}
 }

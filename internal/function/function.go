@@ -146,6 +146,10 @@ type Deps struct {
 
 	// SupervisionPeriod is the requeue of a Ready function (ADR-0142); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
+	// BootBackoffInitial and BootBackoffMax bound the wait before a replica that crashed while booting is created
+	// again (ADR-0160); 0 ⇒ 10 s and max(5 min, initial). Negative, or a set max below initial, is fault.Invalid.
+	BootBackoffInitial time.Duration
+	BootBackoffMax     time.Duration
 
 	// Calls counts the calls made to each worker (ADR-0143): the resolver records each hand-out and the drain asks
 	// whether a demoted revision's worker is idle. nil ⇒ every worker is idle.
@@ -248,6 +252,8 @@ type Reconciler struct {
 
 	// supervisionPeriod is the steady-state requeue and the replacement backoff (ADR-0142).
 	supervisionPeriod time.Duration
+	// boot counts the solo replicas' boot crashes (ADR-0160).
+	boot *bootBackoff
 
 	// calls, drainGrace, handOutSettle and clock drive the drain of a demoted revision (ADR-0143).
 	calls         *activator.CallTracker
@@ -285,6 +291,19 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "ShimCommand is required when a Materializer is set in process mode")
 	case d.Materializer != nil && d.EndpointMode == EndpointNetnsFixedPort && d.ImageFor == nil:
 		return nil, fault.Invalidf(op, "ImageFor is required when a Materializer is set in container mode")
+	case d.BootBackoffInitial < 0 || d.BootBackoffMax < 0:
+		return nil, fault.Invalidf(op, "the boot backoff must not be negative")
+	}
+	bootInitial := d.BootBackoffInitial
+	if bootInitial == 0 {
+		bootInitial = defaultBootBackoffInitial
+	}
+	bootMax := d.BootBackoffMax
+	switch {
+	case bootMax == 0:
+		bootMax = max(defaultBootBackoffMax, bootInitial)
+	case bootMax < bootInitial:
+		return nil, fault.Invalidf(op, "the boot backoff max %s is below its initial wait %s", bootMax, bootInitial)
 	}
 	logger := d.Logger
 	if logger == nil {
@@ -334,6 +353,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolLimit:           limit,
 		poolSigs:            map[pooling.PoolKey]string{},
 		supervisionPeriod:   period,
+		boot:                newBootBackoff(bootInitial, bootMax, logger.With("component", "function")),
 		calls:               d.Calls,
 		drainGrace:          drainGrace,
 		handOutSettle:       settle,
@@ -592,6 +612,11 @@ type verdict struct {
 	switched       bool      // this pass moved the calls to the current revision
 	startErr       error     // the first error starting a current-revision replica (nil if every replica started)
 	repairErr      string    // a serving pass: why it stopped a replica that never became ready (issue #309)
+	crashLoop      string    // the serving side's boot-crash message (ADR-0160), "" if none
+	// currentCrashLoop is the current revision's boot-crash message while switching; desired is the serving side's
+	// replica count M.
+	currentCrashLoop string
+	desired          int
 }
 
 // finish writes the pass's status from v and returns its requeue. Ready and the phase describe the serving side;
@@ -619,22 +644,32 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		fn.Status.Phase = v1.PhaseFailed
 	case v.ready >= 1:
 		fn.Status.Phase = v1.PhaseReady
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+		ready := v1.Condition{Type: condReady, Status: v1.ConditionTrue}
+		if v.crashLoop != "" {
+			ready.Reason, ready.Message = reasonCrashLoop, fmt.Sprintf("replicas %d ready of %d: %s", v.ready, v.desired, v.crashLoop)
+		}
+		fn.Status.Conditions.Set(ready)
 	case v.serving:
 		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
 		fn.Status.Phase = v1.PhaseDegraded
-		msg := "a replica exited and is being replaced"
+		reason, msg := "Restarting", "a replica exited and is being replaced"
 		switch {
 		case v.startErr != nil:
 			msg = "a replica exited and its replacement could not start: " + v.startErr.Error()
+		case v.crashLoop != "":
+			reason, msg = reasonCrashLoop, v.crashLoop
 		case v.repairErr != "":
 			msg = "a replica exited and its replacement was stopped: " + v.repairErr
 		}
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: msg})
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
 	case v.startErr != nil && v.running == 0:
 		// the blueprint's Deploying → Failed on a worker error; requeueFor retries it once per period
 		fn.Status.Phase = v1.PhaseFailed
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error()})
+	case v.crashLoop != "":
+		// a replica crashed while booting and waits out its backoff (ADR-0160): never Idle, never Failed
+		fn.Status.Phase = v1.PhaseDeploying
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.crashLoop})
 	case v.running >= 1 || !v.retryAt.IsZero():
 		// replicas started but the shim is not serving yet, or a replica waits out its backoff (ADR-0142) — keep
 		// polling.
@@ -649,12 +684,16 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls", ObservedGeneration: gen})
 	case v.switching && v.startErr != nil:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error(), ObservedGeneration: gen})
+	case v.switching && v.currentCrashLoop != "":
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.currentCrashLoop, ObservedGeneration: gen})
 	case v.switching:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one", ObservedGeneration: gen})
 	case v.shapeFailed:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", ObservedGeneration: gen})
 	case v.startErr != nil && fn.Status.Phase == v1.PhaseFailed:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error(), ObservedGeneration: gen})
+	case v.crashLoop != "" && fn.Status.Phase == v1.PhaseDeploying:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.crashLoop, ObservedGeneration: gen})
 	case fn.Status.Phase == v1.PhaseDeploying:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", ObservedGeneration: gen})
 	case loaded:
@@ -749,11 +788,14 @@ const probeTimeout = readinessPoll / 2
 // servingPhase reports whether a Function in this phase has served since its last deploy (ADR-0142).
 func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseDegraded }
 
-// steadyState reports whether fn is a solo Function at desired state: Ready, its generation processed, its current
-// revision serving with nothing draining (ADR-0143), and every replica's instance running. It calls only
-// runtime.Status, once per replica (ADR-0142).
+// steadyState reports whether fn is a solo Function at desired state: Ready with no reason (a crash loop beside a ready
+// replica runs the full pass, ADR-0160), its generation processed, its current revision serving with nothing draining
+// (ADR-0143), and every replica's instance running. It calls only runtime.Status, once per replica (ADR-0142).
 func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
+		return false
+	}
+	if rc, ok := fn.Status.Conditions.Get(condReady); ok && rc.Reason != "" {
 		return false
 	}
 	if _, pooled := r.poolKeyFor(fn); pooled {
@@ -833,7 +875,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		return verdict{}, err
 	}
 	running := pass.running
-	ready, failed, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout)
+	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout, serving, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -856,7 +898,8 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	}
 	return verdict{
 		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
-		serving: serving, retryAt: pass.retryAt, booting: running > ready, startErr: pass.startErr, repairErr: repairErr,
+		serving: serving, retryAt: earlier(pass.retryAt, readyRetry), booting: running > ready, startErr: pass.startErr, repairErr: repairErr,
+		crashLoop: crashLoop, desired: desired,
 	}, nil
 }
 
@@ -901,26 +944,23 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, readinessPath, bootTimeout)
+	readyC, failedC, cRetry, cCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, readinessPath, bootTimeout, false, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
 	if readyC == desired && fn.Status.DrainingRevision == "" {
 		now := r.clock.Now()
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
-		return verdict{running: cPass.running, ready: readyC, serving: true, switched: true}, nil
+		return verdict{running: cPass.running, ready: readyC, serving: true, switched: true, desired: desired}, nil
 	}
-	readyS, _, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, readinessPath, bootTimeout)
+	readyS, _, sRetry, sCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, readinessPath, bootTimeout, true, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
-	retryAt := sPass.retryAt
-	if retryAt.IsZero() || (!cPass.retryAt.IsZero() && cPass.retryAt.Before(retryAt)) {
-		retryAt = cPass.retryAt
-	}
 	return verdict{
-		running: sPass.running, ready: readyS, serving: true, retryAt: retryAt,
+		running: sPass.running, ready: readyS, serving: true, retryAt: earlier(earlier(sPass.retryAt, cPass.retryAt), earlier(cRetry, sRetry)),
 		booting: cPass.running > readyC, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: cPass.startErr,
+		crashLoop: sCrash, currentCrashLoop: cCrash, desired: len(sIdx),
 	}, nil
 }
 
@@ -1012,14 +1052,18 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 			byReplica[in.Replica] = in
 			continue
 		}
-		if opts.scaleDown && in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
+		if !opts.scaleDown {
+			continue
+		}
+		r.boot.reset(in.ID)
+		if in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
 			if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
 				return revisionPass{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
 			}
 		}
 	}
 
-	launch, replace, start, retryAt := planReplicas(byReplica, indexes, opts, time.Now(), r.supervisionPeriod)
+	launch, replace, start, retryAt := planReplicas(byReplica, indexes, opts, time.Now(), r.supervisionPeriod, r.boot, r.materializer == nil)
 
 	// materialize the artifact once (shim mode) before launching any replica. The Revision's
 	// pinned digest (ADR-0035) is applied to an in-memory copy — never written back to the
@@ -1081,34 +1125,49 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	return revisionPass{running: running, retryAt: retryAt, startErr: startErr}, nil
 }
 
-// planReplicas triages replicas `indexes` of a revision, byReplica holding their instances, by ADR-0142's per-replica
-// table: a missing replica is launched, a Created one started, and a terminal one replaced — at once for an untried
-// generation, after period for a Stopped replica or a crash in a serving revision — while a Failed replica of a tried
-// generation that does not serve is kept, so readiness reports the shape failure. retryAt is the earliest time a
-// replica waiting out period may be replaced (zero if none).
-func planReplicas(byReplica map[int]runtime.Instance, indexes []int, opts convergeOpts, now time.Time, period time.Duration) (launch []int, replace []runtime.Instance, start []runtime.InstanceID, retryAt time.Time) {
+// planReplicas triages replicas `indexes` of a revision, byReplica holding their instances: a missing replica is
+// launched, a Created one started, and a terminal one of an untried generation replaced at once. For a tried generation
+// it reads each terminal replica by how it ended (ADR-0160 Decision 3): an exit 3 before listening in a pass not
+// serving is kept, so readiness reports the shape failure; a boot crash is replaced after boot's growing wait, as is a
+// counted one Stop ran after; any other end after period. With a nil boot it neither classifies nor counts and keeps
+// ADR-0142's rule: a Stopped replica or a crash in a serving revision after period, any other Failed one kept. retryAt
+// is the earliest time a waiting replica may be replaced (zero if none).
+func planReplicas(byReplica map[int]runtime.Instance, indexes []int, opts convergeOpts, now time.Time, period time.Duration,
+	boot *bootBackoff, legacy bool) (launch []int, replace []runtime.Instance, start []runtime.InstanceID, retryAt time.Time) {
 	for _, i := range indexes {
 		in, ok := byReplica[i]
+		var due time.Time
 		switch {
 		case !ok:
 			launch = append(launch, i)
+			continue
 		case in.State == runtime.StateCreated:
 			start = append(start, in.ID)
+			continue
 		case !in.State.Terminal():
-			// running: keep
+			continue
 		case opts.untried:
 			replace, launch = append(replace, in), append(launch, i)
-		case in.State == runtime.StateStopped || opts.serving:
-			if due := in.CreatedAt.Add(period); now.Before(due) {
-				if retryAt.IsZero() || due.Before(retryAt) {
-					retryAt = due
-				}
+			continue
+		case boot == nil:
+			if in.State != runtime.StateStopped && !opts.serving {
 				continue
 			}
-			replace, launch = append(replace, in), append(launch, i)
 		default:
-			// Failed, generation tried, not serving: keep, so readiness marks the shape failure
+			class := classifyExit(in, opts.serving, legacy)
+			if class == exitShapeError {
+				continue
+			}
+			_, due = boot.observe(in, class)
 		}
+		if due.IsZero() {
+			due = in.CreatedAt.Add(period)
+		}
+		if now.Before(due) {
+			retryAt = earlier(retryAt, due)
+			continue
+		}
+		replace, launch = append(replace, in), append(launch, i)
 	}
 	return launch, replace, start, retryAt
 }
@@ -1175,9 +1234,10 @@ func (r *Reconciler) idle(fn *v1.Function, in runtime.Instance) bool {
 	return r.calls == nil || r.calls.Idle(instanceURL(fn.Namespace, fn.Name, in), r.handOutSettle)
 }
 
-// retire stops a worker and forgets it (ADR-0143).
+// retire stops a worker and forgets it (ADR-0143), with its boot-crash count (ADR-0160).
 func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
 	const op = "function.retire"
+	r.boot.reset(in.ID)
 	if err := r.runtime.Stop(ctx, in.ID); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "stop worker")
 	}
@@ -1488,35 +1548,62 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 
 // readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
 // ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
-// each running replica's health endpoint at path and treats a failed instance (the shim exited because it could not load the
-// handler), or a running one that has not become ready within bootLimit of its creation, as a shape failure; a zero
-// bootLimit sets no limit. Only replicas below `below` count (ADR-0142): a replica being scaled away is not judged.
-// A List error is returned, so the pass writes no status from a failed read (issue #353).
-func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int, path string, bootLimit time.Duration) (ready int, failed runtime.InstanceID, err error) {
+// each running replica's health endpoint at path, and a running one that has not become ready within bootLimit of its
+// creation is a shape failure; a zero bootLimit sets no limit. A terminal replica is read by how it ended (ADR-0160
+// Decision 4): only an exit 3 before listening in a pass not serving is failed, and the boot crashes it judges are
+// counted on boot, giving the earliest retry and, from the lowest replica with a count, the crash-loop message. With a
+// nil boot every Failed replica is failed, as before (the pool worker). Only replicas below `below` count (ADR-0142): a
+// replica being scaled away is not judged. A List error is returned, so the pass writes no status from a failed read
+// (issue #353).
+func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int,
+	path string, bootLimit time.Duration, serving bool, boot *bootBackoff) (ready int, failed runtime.InstanceID,
+	retryAt time.Time, crashLoop string, err error) {
 	if r.materializer == nil {
-		return running, "", nil
+		return running, "", time.Time{}, "", nil
 	}
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, "", err
 	}
+	lowest := -1
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
 			continue
 		}
-		switch in.State {
-		case runtime.StateFailed:
-			failed = lowerID(failed, in.ID)
-		case runtime.StateRunning:
+		var crash bootCrash
+		switch {
+		case in.State == runtime.StateRunning:
+			if boot != nil && in.Listened {
+				boot.reset(in.ID)
+			} else if boot != nil {
+				crash, _ = boot.crash(in.ID)
+			}
 			switch {
 			case in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
 			case bootLimit > 0 && time.Since(in.CreatedAt) >= bootLimit:
 				failed = lowerID(failed, in.ID)
 			}
+		case !in.State.Terminal():
+		case boot == nil:
+			if in.State == runtime.StateFailed {
+				failed = lowerID(failed, in.ID)
+			}
+		default:
+			class := classifyExit(in, serving, false)
+			if class == exitShapeError {
+				failed = lowerID(failed, in.ID)
+				continue
+			}
+			var due time.Time
+			crash, due = boot.observe(in, class)
+			retryAt = earlier(retryAt, due)
+		}
+		if crash.count > 0 && (lowest < 0 || in.Replica < lowest) {
+			lowest, crashLoop = in.Replica, crash.message
 		}
 	}
-	return ready, failed, nil
+	return ready, failed, retryAt, crashLoop, nil
 }
 
 // lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not

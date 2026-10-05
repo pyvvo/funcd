@@ -4,6 +4,8 @@ package containerd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
@@ -43,6 +45,30 @@ func mapState(st containerd.Status) runtime.State {
 	default:
 		return runtime.StateFailed
 	}
+}
+
+// exitSignalOffset is what a reaper adds to the number of the signal that ended a task (containerd pkg/sys/reaper).
+const exitSignalOffset = 128
+
+// exitOf reads how a task ended from its status (ADR-0160): 255 is containerd's unknown exit status, 129–192 a signal.
+func exitOf(st containerd.Status) runtime.Exit {
+	switch {
+	case st.Status != containerd.Stopped || st.ExitStatus == containerd.UnknownExitStatus:
+		return runtime.Exit{}
+	case st.ExitStatus > exitSignalOffset && st.ExitStatus <= exitSignalOffset+64:
+		return runtime.Exit{Cause: runtime.ExitBySignal, Signal: int(st.ExitStatus - exitSignalOffset)}
+	}
+	return runtime.Exit{Cause: runtime.ExitByCode, Code: int(st.ExitStatus)}
+}
+
+// portWritten reports whether a regular file sits at the port path in boot dir dir. It only calls os.Lstat: the
+// sandbox writes the dir, so the host never opens what is there (ADR-0160).
+func portWritten(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "port"))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // waitTask returns a channel that receives the task's exit code once it exits.

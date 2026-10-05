@@ -120,6 +120,8 @@ auth:
 # --- runtime: the function-execution lane (ADR-0036/0054) --------------------------------------
 runtime:
   mode: process                   # process | containerd. default: process (embedded shim; containerd = prod lane)
+  bootBackoffInitial: 10s         # wait before a worker that crashed while booting is created again (ADR-0160). default: 10s
+  bootBackoffMax: 5m              # the wait doubles per crash in a row up to this. default: 5m (or the initial wait when larger)
   # containerd:                   # used only when mode: containerd
   #   socket: ""                  # external containerd socket. default: "" (funcd manages a private one, ADR-0054)
   #   root: ""                    # containerd state root. default: <dataDir>/containerd

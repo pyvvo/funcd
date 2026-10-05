@@ -42,12 +42,19 @@ env-echo:
       to: env-echo-badtag.yaml
     - from: e2e/fixtures/env-echo-badhandler.yaml
       to: env-echo-badhandler.yaml
+    # ADR-0160: a handler that takes 30 s to load, killed while it boots
+    - from: e2e/fixtures/boot-hang.mjs
+      to: boot-hang.mjs
+    - from: e2e/fixtures/boot-hang.yaml
+      to: boot-hang.yaml
     # ADR-0149: a runtime with no image, applied last by the Venom suite
     - from: e2e/fixtures/ruby3-echo.yaml
       to: ruby3-echo.yaml
   push:
     - artifact: env-echo.mjs
       ref: env-echo
+    - artifact: boot-hang.mjs
+      ref: boot-hang
   apply:
     - configmap.yaml
     - secret.yaml
