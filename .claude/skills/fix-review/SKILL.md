@@ -58,6 +58,9 @@ Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real outp
 11. **Shape**: a conventional `fix(<scope>):` subject, `Fixes #N`, the attribution trailer, one issue per commit.
 12. **No dev-machine references** — a silent check, as in `adr-impl-review` Step 2: never write a hygiene
     section, never transcribe a path, username or grep pattern; a leak is a Blocker described generically.
+13. **Siblings and coverage**: grep for the same faulty construct in the code paths that do the same job; a
+    sibling with the same cause left unfixed and unreported → Major. Every case the issue describes has a
+    test: a fix that covers one of them and closes the issue → Major.
 
 ## The fix checklist (the Definition of Done)
 
@@ -75,6 +78,7 @@ Count the items that apply (`--dod-total`) and those that hold (`--dod-passed`):
 10. The change reuses what exists: no duplicated logic, and no new helper, type, harness or dependency where
     an existing one, or the standard library, does the job.
 11. The commit and PR shape: `fix(<scope>):`, `Fixes #N`, trailers.
+12. Every case the issue describes is fixed and tested, and no sibling with the same cause is left.
 
 ## Step 3 — Attribute
 

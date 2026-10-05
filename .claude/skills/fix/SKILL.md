@@ -48,6 +48,11 @@ Write the regression test **before** touching the code:
 - Reuse before you write: search the package, its neighbours, `internal/platform`, `api/fault`,
   `internal/testkit`, the existing test harnesses, the module's dependencies and the standard library for
   what the fix needs. Never duplicate logic or hand-roll what already exists; `/fix-review` checks this.
+- Search for siblings before you call it done: grep for the same faulty construct in the other code paths
+  that do the same job (the other commands, handlers, printers, parsers, gates or drivers). A sibling with the
+  same cause is this issue's scope: fix it in the same commit, with a regression test case for it. A
+  sibling with another cause is a new issue. The 2026-10-05 campaign found about ten defects that were
+  siblings of issues already fixed on one path only.
 - Change only what this issue needs. A second defect found on the way is a new issue: note it in the
   handoff and file it with `/issue-management` after the user's go.
 - Keep living docs true (blueprint, feat, READMEs, CLI help) if the fix changes what they describe.

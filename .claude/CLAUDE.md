@@ -274,6 +274,11 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 
 - **Where things go**: a defect or a task → an issue; an un-scoped idea → a board card; a decision → an ADR.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
+- **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
+  one group tracker per theme under it, and its issues under the group trackers (#232, #732). An issue found
+  on its own goes under the closest group tracker. Only a campaign's root tracker stands alone.
+- **Close an issue only when every case it describes is fixed and tested.** A PR that fixes one of its cases
+  leaves it open (#70 was closed on its first case and reopened).
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
   PR that implements it closes the issue (`Fixes #N` in the PR description).
 - **Every other fix** goes through [`/fix`](../.claude/skills/fix/SKILL.md) (test-first, one issue per commit) and
