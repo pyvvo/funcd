@@ -222,6 +222,13 @@ func (s *BlobSink) Close() error {
 	return firstErr
 }
 
+// The log-record attributes the wire envelope owns (ADR-0081); compact lifts them into the typed
+// Invocation and Source columns, so a user attr of the same name must never replace them.
+const (
+	attrInv    = "inv"
+	attrSource = "funcd.source"
+)
+
 // marshalOTLP builds one plog.Logs (Resource = the function identity; per-invocation fields on
 // each LogRecord) from a segment's entries and marshals it to OTLP/JSON (one document = one line).
 func marshalOTLP(res Resource, entries []Entry, now time.Time) ([]byte, error) {
@@ -250,10 +257,13 @@ func marshalOTLP(res Resource, entries []Entry, now time.Time) ([]byte, error) {
 		lr.Body().SetStr(e.Body)
 		la := lr.Attributes()
 		if e.Invocation != "" {
-			la.PutStr("inv", e.Invocation)
+			la.PutStr(attrInv, e.Invocation)
 		}
-		la.PutStr("funcd.source", string(e.Source))
+		la.PutStr(attrSource, string(e.Source))
 		for k, v := range e.Attrs {
+			if k == attrInv || k == attrSource {
+				continue
+			}
 			la.PutStr(k, v)
 		}
 		if tid, ok := parseTraceID(e.TraceID); ok {
