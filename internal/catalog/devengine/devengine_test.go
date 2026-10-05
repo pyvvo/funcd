@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv(fakeEngineEnv) == "1" {
 		os.Exit(runFakeEngine(os.Args[1:]))
 	}
+	if dir := os.Getenv(crashedRunEnv); dir != "" {
+		os.Exit(runUntilKilled(dir))
+	}
 	os.Exit(m.Run())
 }
 
@@ -77,7 +80,7 @@ func TestConvergeNotBundledReportsUnavailable(t *testing.T) {
 	if embedengine.Bundled() {
 		t.Skip("a real engine is embedded; this case asserts the placeholder path")
 	}
-	st, err := New(nil).Converge(context.Background(), testSpec())
+	st, err := mustNew(t).Converge(context.Background(), testSpec())
 	if err != nil {
 		t.Fatalf("Converge (placeholder): unexpected error %v", err)
 	}
@@ -100,7 +103,7 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	r := New(nil)
+	r := mustNew(t)
 	spec := testSpec()
 
 	st, err := r.Converge(ctx, spec)
@@ -143,7 +146,7 @@ func TestIssue105_ConvergeRelaunchesCrashedEngine(t *testing.T) {
 	t.Setenv(fakeEngineEnv, "1")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	r := New(nil)
+	r := mustNew(t)
 	r.bundled = func() bool { return true }
 	r.extract = func(dir string) (embedengine.Paths, error) {
 		return embedengine.Paths{DuckDB: exe, ExtensionDir: dir}, nil
@@ -191,7 +194,7 @@ func TestWithCatalogDirPersistsCatalog(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	durable := t.TempDir()
-	r := New(nil, WithCatalogDir(durable))
+	r := mustNew(t, WithCatalogDir(durable))
 	spec := testSpec()
 
 	if _, err := r.Converge(ctx, spec); err != nil {
@@ -249,4 +252,13 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 	if strings.Contains(noCat, "ATTACH") {
 		t.Errorf("buildInitSQL emitted ATTACH with no FUNCD_DUCKLAKE_CATALOG:\n%s", noCat)
 	}
+}
+
+func mustNew(t *testing.T, opts ...Option) *Runtime {
+	t.Helper()
+	r, err := New(nil, opts...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return r
 }

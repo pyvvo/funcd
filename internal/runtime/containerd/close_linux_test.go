@@ -145,6 +145,7 @@ type closeFixture struct {
 	client   *containerd.Client
 	ctrs     *memContainers
 	cni      *removedCNI
+	snap     *memSnapshotter
 	image    string
 }
 
@@ -156,7 +157,7 @@ func newCloseFixture(t *testing.T, namespaces ...string) *closeFixture {
 	client := fakeClient(t, cs, images.Image{Name: image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap},
 		containerd.WithNamespaceService(listedNamespaces{names: namespaces}))
-	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, image: image, bootRoot: t.TempDir()}
+	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, snap: snap, image: image, bootRoot: t.TempDir()}
 }
 
 // driver starts a driver on the fixture's containerd with no instances, as a daemon or a bench does.

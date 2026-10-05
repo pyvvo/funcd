@@ -158,7 +158,12 @@ type Config struct {
 		// again (ADR-0160): positive Go durations, the max at least the initial wait.
 		BootBackoffInitial string `json:"bootBackoffInitial,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_INITIAL"`
 		BootBackoffMax     string `json:"bootBackoffMax,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_MAX"`
-		Containerd         struct {
+		// Process tunes the process driver (ADR-0167): StopGrace is the wait after SIGTERM before SIGKILL for a stop,
+		// the shutdown close and the boot reap, a Go duration with 0 < d <= 10s.
+		Process struct {
+			StopGrace string `json:"stopGrace,omitempty" env:"FUNCD_PROCESS_STOP_GRACE"`
+		} `json:"process,omitempty"`
+		Containerd struct {
 			Socket        string            `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
 			Root          string            `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
 			Snapshotter   string            `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
@@ -298,6 +303,7 @@ func defaults() Config {
 	c.Auth.Namespaces = []string{"default"}
 	c.Runtime.Mode = "process"
 	c.Runtime.BootBackoffInitial = "10s"
+	c.Runtime.Process.StopGrace = "3s"
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
 	c.Controller.GCSweepInterval = "5m"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"

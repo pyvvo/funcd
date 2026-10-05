@@ -822,16 +822,17 @@ func (d *driver) Close() error {
 	}
 	wg.Wait()
 	if d.cfg.Private {
-		errs = append(errs, d.sweepAll(context.Background()))
+		errs = append(errs, d.SweepAll(context.Background()))
 	}
 	return errors.Join(append(errs, d.client.Close())...)
 }
 
-// sweepAll sweeps every funcd containerd namespace at once.
-func (d *driver) sweepAll(ctx context.Context) error {
+// SweepAll sweeps every funcd containerd namespace at once: Close on the private containerd, and the boot sweep before
+// any controller starts (ADR-0167).
+func (d *driver) SweepAll(ctx context.Context) error {
 	names, err := d.client.NamespaceService().List(ctx)
 	if err != nil {
-		return mapErr(err, "runtime.containerd.Close", "list namespaces")
+		return mapErr(err, "runtime.containerd.SweepAll", "list namespaces")
 	}
 	errs := make([]error, len(names))
 	var wg sync.WaitGroup

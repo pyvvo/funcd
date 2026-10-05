@@ -51,7 +51,7 @@ func devProject(t *testing.T, files map[string]string) string {
 func tryStartDev(t *testing.T, path string) (*devInstance, error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, path, "", devConfig{})
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, path, "", devConfig{cacheDir: t.TempDir()})
 	t.Cleanup(func() {
 		cancel()
 		if inst != nil {
@@ -185,7 +185,7 @@ func TestScenarioDevSecretMissingEnvFailsFast(t *testing.T) {
 		"handler.mjs": "export function handle() { return {}; }\n",
 	})
 	a := &cli{out: io.Discard}
-	_, err := a.startDev(context.Background(), dir, "", devConfig{})
+	_, err := a.startDev(context.Background(), dir, "", devConfig{cacheDir: t.TempDir()})
 	require.Error(t, err, "a missing env var referenced by a dev.secret fails fast")
 	require.Contains(t, err.Error(), "DEFINITELY_UNSET_DEV_VAR")
 }

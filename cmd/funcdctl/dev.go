@@ -36,6 +36,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -314,6 +316,8 @@ type devConfig struct {
 	printEnv  bool   // print the dev S3 creds as `export …` lines and exit (no server)
 	// pickS3Addr picks the S3-frontend address when s3port is 0; nil ⇒ freeLocalAddr. A test hands out a taken one (#627).
 	pickS3Addr func() (string, error)
+	// cacheDir holds the state dir without --persist (ADR-0167); "" ⇒ os.UserCacheDir. A test passes its own.
+	cacheDir string
 }
 
 // devInstance is a running `funcdctl dev` platform + the seams a test (or the command) drives it by.
@@ -671,8 +675,21 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 	}
 	inst.cleanup = append(inst.cleanup, shimCleanup)
 
+	// The process driver and the catalog engine save what they start in the state dir and reap what a crashed run
+	// left there before anything starts (ADR-0167).
+	stateDir, sderr := devStateDir(cfg, baseDir)
+	if sderr != nil {
+		return nil, sderr
+	}
+	rt, rerr := process.Open(ctx, stateDir, 0)
+	if rerr != nil {
+		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "open the process runtime in %s", stateDir)
+	}
+	inst.cleanup = append(inst.cleanup, func() { _ = rt.Close() })
+
 	opts := []funcd.Option{
 		funcd.InMemory(),
+		funcd.WithRuntime(rt),
 		funcd.WithMaterializer(function.NewFileMaterializer()),
 		// From-source workflow steps carry no OCI artifact, so the production F65 resolver can never
 		// inspect their file:// bundles. Inject an untyped resolver so the typed-edge gate is a no-op and
@@ -684,7 +701,11 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 		// per dev function, so the dev principal is a legit writer. Seeding a no-owner `landing` and a producer
 		// writing a binding-inferred prefix both pass the forbid; an unassigned principal is still denied.
 	}
-	opts = append(opts, devCatalogOptions(plan, pfs, inst)...)
+	catOpts, caterr := devCatalogOptions(plan, stateDir, pfs, inst)
+	if caterr != nil {
+		return nil, caterr
+	}
+	opts = append(opts, catOpts...)
 
 	// Stream function logs to the terminal in real time (Decision 6, dev UX): tee every captured log
 	// line to the printer. A mutex keeps concurrent functions' lines from interleaving.
@@ -738,20 +759,23 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 // runs the go:embed'd engine as a host subprocess (no container, no cgo). A dev binary built WITHOUT the engine
 // (the committed placeholder) reports catalog-unavailable at reconcile time, not here — so `funcdctl dev` still
 // boots. It records the served catalogs and registers each cleanup on inst; no catalog binding ⇒ no options.
-func devCatalogOptions(plan persistPlan, pfs []plannedFunc, inst *devInstance) []funcd.Option {
+func devCatalogOptions(plan persistPlan, stateDir string, pfs []plannedFunc, inst *devInstance) ([]funcd.Option, error) {
 	aliases := catalogAliases(pfs)
 	if len(aliases) == 0 {
-		return nil
+		return nil, nil
 	}
 	inst.catalogs = aliases
 	// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
 	// metastore) so a dev restart reopens it; ephemeral otherwise. resolvePersistPlan is pure, so the
 	// second call in buildPersistDrivers is harmless.
-	var catOpts []devengine.Option
+	catOpts := []devengine.Option{devengine.WithStateDir(stateDir)}
 	if plan.catalogDir != "" {
 		catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
 	}
-	catEngine := devengine.New(slog.Default(), catOpts...)
+	catEngine, err := devengine.New(slog.Default(), catOpts...)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), "funcdctl dev", "start the catalog engine runtime in %s", stateDir)
+	}
 	opts := []funcd.Option{funcd.WithCatalogProviderRuntime(catEngine)}
 	inst.cleanup = append(inst.cleanup, catEngine.StopAll)
 
@@ -771,7 +795,7 @@ func devCatalogOptions(plan persistPlan, pfs []plannedFunc, inst *devInstance) [
 			}
 		}
 	}
-	return opts
+	return opts, nil
 }
 
 // checkFixedPorts refuses two equal fixed listen ports (--gport / --s3port / --cport; 0 is the ephemeral free
@@ -914,6 +938,37 @@ type persistPlan struct {
 	kvDir      string // durable function KV (Badger); "" ⇒ memory
 	blobDir    string // durable blob (fileblob); "" ⇒ mem://
 	catalogDir string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
+}
+
+// devStateDir is where `funcdctl dev` saves the workers and catalog engines it starts (ADR-0167): <persist-to>/process
+// under --persist; otherwise there is no data dir, so a per-project dir in the user cache dir, named by the first 16
+// hex digits of the sha256 of the absolute project dir.
+func devStateDir(cfg devConfig, projectDir string) (string, error) {
+	const op = "funcdctl dev"
+	if cfg.persist {
+		root := cfg.persistTo
+		if root == "" {
+			root = devPersistDir
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return "", fault.Wrapf(err, fault.Internal, op, "resolve persist dir %q", root)
+		}
+		return filepath.Join(abs, "process"), nil
+	}
+	cache := cfg.cacheDir
+	if cache == "" {
+		var err error
+		if cache, err = os.UserCacheDir(); err != nil {
+			return "", fault.Wrapf(err, fault.Internal, op, "locate the user cache dir")
+		}
+	}
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "resolve project dir %q", projectDir)
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return filepath.Join(cache, "funcd", "dev", hex.EncodeToString(sum[:])[:16], "process"), nil
 }
 
 // resolvePersistPlan computes the durable-driver layout from the flags + `dev.backends` (Decision 4/7),

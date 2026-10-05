@@ -57,7 +57,7 @@ func TestIssue431_RequireRuntimeSkipsWhenPythonCannotLoadShim(t *testing.T) {
 	inst, err := (&cli{out: io.Discard}).startDev(ctx, devProject(t, map[string]string{
 		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
 		"handler.mjs":   "export function handle() { return {}; }\n",
-	}), "", devConfig{})
+	}), "", devConfig{cacheDir: t.TempDir()})
 	t.Cleanup(func() {
 		cancel()
 		if inst != nil {
@@ -107,7 +107,7 @@ func TestIssue432_DevFailsWhenS3PortIsTaken(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{s3port: taken.Addr().(*net.TCPAddr).Port})
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{s3port: taken.Addr().(*net.TCPAddr).Port, cacheDir: t.TempDir()})
 	if err == nil {
 		cancel()
 		_ = inst.stop()
