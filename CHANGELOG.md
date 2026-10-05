@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.1](https://github.com/pyvvo/funcd/compare/v0.6.0...v0.6.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **controlplane:** five control-plane service fixes ([#734](https://github.com/pyvvo/funcd/issues/734)) ([#746](https://github.com/pyvvo/funcd/issues/746)) ([f5542ad](https://github.com/pyvvo/funcd/commit/f5542ad707ded039e17c2c36f3b72f0e3e609415))
+* **edge:** match trailing-slash Prefix routes and keep CORS headers single ([#739](https://github.com/pyvvo/funcd/issues/739)) ([#749](https://github.com/pyvvo/funcd/issues/749)) ([2e58f64](https://github.com/pyvvo/funcd/commit/2e58f64eebb6ab97563240834cd0ae28d646406f))
+* **eventing:** keep the KV change feed and hold dead-letter replays ([#740](https://github.com/pyvvo/funcd/issues/740)) ([#752](https://github.com/pyvvo/funcd/issues/752)) ([6e77084](https://github.com/pyvvo/funcd/commit/6e77084d72cff3df8046d339f1f3459bac5c6f84))
+* **function:** bound registry stalls, retry unresolved artifacts ([#733](https://github.com/pyvvo/funcd/issues/733)) ([#754](https://github.com/pyvvo/funcd/issues/754)) ([203f4ad](https://github.com/pyvvo/funcd/commit/203f4ade76cbc9a6dbe080b011cd4e4e9964f958))
+* **observability:** final edge status, funclog Put retry, pinned log step ([#741](https://github.com/pyvvo/funcd/issues/741)) ([#753](https://github.com/pyvvo/funcd/issues/753)) ([5aaded5](https://github.com/pyvvo/funcd/commit/5aaded5cfdb3cdc252ad6e94a575776b2feca2e0))
+* **runtime:** fix containerd CNI DEL, readiness wait and reap kill ([#735](https://github.com/pyvvo/funcd/issues/735)) ([#748](https://github.com/pyvvo/funcd/issues/748)) ([720f8ef](https://github.com/pyvvo/funcd/commit/720f8efba1a7dccae3914a76e6a596f5e290f337))
+* **sdk:** validate names, keep numeric strings, stop dev on hangup ([#738](https://github.com/pyvvo/funcd/issues/738)) ([#750](https://github.com/pyvvo/funcd/issues/750)) ([e41cfed](https://github.com/pyvvo/funcd/commit/e41cfed85218cf5be8ac25b6ccd6c3978a6659a8))
+* **storage:** reclaim deleted KVStore data, keep S3 folder markers apart ([#737](https://github.com/pyvvo/funcd/issues/737)) ([#747](https://github.com/pyvvo/funcd/issues/747)) ([978c581](https://github.com/pyvvo/funcd/commit/978c581c113e832eeaca92c3e0fd3d9bb4648d8f))
+* **workflow:** harden run admission, sweep records and image step names ([#736](https://github.com/pyvvo/funcd/issues/736)) ([#751](https://github.com/pyvvo/funcd/issues/751)) ([02a27ce](https://github.com/pyvvo/funcd/commit/02a27ce53de7137d3c59c28e281d871b68af54c7))
+
 ## [0.6.0](https://github.com/pyvvo/funcd/compare/v0.5.0...v0.6.0) (2026-10-05)
 
 
