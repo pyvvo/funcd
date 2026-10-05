@@ -17,18 +17,23 @@ import (
 )
 
 // startChild starts sh in its own process group with extra argv elements; the trailing command keeps sh from
-// exec'ing sleep, so the argv stays sh's.
+// exec'ing sleep, so the argv stays sh's. cmd.Start returns once the exec closes the close-on-exec fds, before the
+// kernel fills in the new argv (#679), so startChild waits for sh's first output: from then on argv is readable.
 func startChild(t *testing.T, args ...string) (*exec.Cmd, procreg.Entry) {
 	t.Helper()
-	cmd := exec.Command("sh", append([]string{"-c", "sleep 30; true"}, args...)...)
+	cmd := exec.Command("sh", append([]string{"-c", "echo; sleep 30; true"}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.StdoutPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
+	_, err = out.Read(make([]byte, 1)) // before Wait, which closes the pipe
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
 	t.Cleanup(func() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 	})
+	require.NoError(t, err, "sh runs")
 	st, err := procreg.StartTime(cmd.Process.Pid)
 	require.NoError(t, err)
 	return cmd, procreg.Entry{PID: cmd.Process.Pid, PGID: cmd.Process.Pid, StartTime: st}
