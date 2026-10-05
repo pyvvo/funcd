@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/pyvvo/funcd/compare/v0.7.0...v0.7.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **funcd:** give each TLS server its own config ([#801](https://github.com/pyvvo/funcd/issues/801)) ([96ead37](https://github.com/pyvvo/funcd/commit/96ead37d5a2d7c381189338fd9ee32ea34235f22))
+* **function:** let a pooled scale-to-zero member sleep through a failing gate ([#802](https://github.com/pyvvo/funcd/issues/802)) ([5e2b989](https://github.com/pyvvo/funcd/commit/5e2b989553ba9f528e8c65f3ff73396e5da2051f))
+
 ## [0.7.0](https://github.com/pyvvo/funcd/compare/v0.6.2...v0.7.0) (2026-10-05)
 
 
