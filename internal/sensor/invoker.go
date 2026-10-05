@@ -20,10 +20,6 @@ const contentTypeCE = "application/cloudevents+json"
 // maxErrorBody bounds how much of a failed function's answer is read into the delivery error.
 const maxErrorBody = 1 << 10
 
-// maxDrainBody bounds the answer drained before close: a body read to EOF returns the connection to the
-// keep-alive pool, so each delivered event does not dial a new one (ADR-0041).
-const maxDrainBody = 4 << 10
-
 // Waker wakes a scaled-to-zero function and returns its ready upstream (ADR-0033; the activator provides it).
 type Waker interface {
 	Wake(ctx context.Context, fn activator.FunctionRef) (upstream string, err error)
@@ -78,10 +74,7 @@ func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	if err != nil {
 		return fault.Unavailablef(op, "POST to %s/%s upstream: %v", ns, fn, err)
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBody))
-		_ = resp.Body.Close()
-	}()
+	defer httpx.CloseBody(resp.Body)
 	if resp.StatusCode >= http.StatusBadRequest {
 		answer, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		if answer = bytes.TrimSpace(answer); len(answer) == 0 {
@@ -97,6 +90,6 @@ func (i *HTTPInvoker) client() *http.Client {
 	if i.Client != nil {
 		return i.Client
 	}
-	i.defaultOnce.Do(func() { i.defaultClient = httpx.Client(0) })
+	i.defaultOnce.Do(func() { i.defaultClient = httpx.NodeClient(0) })
 	return i.defaultClient
 }

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -105,20 +104,6 @@ type activity struct {
 	uid v1.UID
 }
 
-// newPooledTransport returns the data-plane's shared upstream transport: it reuses keep-alive
-// connections to each function worker (pool keyed by upstream host:port — a distinct, per-
-// replica address, so connections never cross function/tenant boundaries) instead of dialing
-// per request, which on http.DefaultTransport (2 idle conns/host) churns ports into TIME_WAIT
-// and exhausts the ephemeral range under load (ADR-0041, surfaced by ADR-0040).
-func newPooledTransport() *http.Transport {
-	tr := httpx.Transport()
-	tr.MaxIdleConns = 512
-	tr.MaxIdleConnsPerHost = 256 // ≫ the stdlib default of 2
-	tr.IdleConnTimeout = 90 * time.Second
-	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	return tr
-}
-
 // activation is one in-progress cold-start wake, shared by all waiters for a fn. Its
 // result fields are written once (by the driving goroutine) before done is closed; the
 // close→receive on done is the happens-before that makes them visible to waiters.
@@ -156,7 +141,7 @@ func New(d Deps) (*Activator, error) {
 	if reclaimInterval <= 0 {
 		reclaimInterval = defaultReclaimInterval
 	}
-	var transport http.RoundTripper = newPooledTransport()
+	var transport http.RoundTripper = httpx.NodeTransport()
 	if d.Calls != nil {
 		transport = d.Calls.Wrap(transport)
 	}

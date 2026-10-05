@@ -6,14 +6,12 @@ package embedded
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/gateway"
@@ -29,20 +27,14 @@ type driver struct {
 	mu        sync.RWMutex
 	routes    []gateway.Route
 	table     []compiledRoute // sorted by prefix length, longest first
-	transport *http.Transport // shared, pooled upstream transport (ADR-0041)
+	transport *http.Transport // shared, pooled upstream transport (ADR-0041, ADR-0155)
 }
 
 // New returns an embedded reverse-proxy gateway (dev/e2e/CI). Its reverse proxies share one
-// pooled upstream transport so connections to the function workers are reused across
-// requests — http.DefaultTransport keeps only 2 idle conns/host, which churns connections
-// into TIME_WAIT and exhausts ephemeral ports under load (ADR-0041, surfaced by ADR-0040).
+// node-local upstream transport, so connections to the function workers are reused across
+// requests (ADR-0041, ADR-0155).
 func New() gateway.Gateway {
-	tr := httpx.Transport()
-	tr.MaxIdleConns = 512
-	tr.MaxIdleConnsPerHost = 256 // ≫ the stdlib default of 2 — reuse upstream conns under concurrency
-	tr.IdleConnTimeout = 90 * time.Second
-	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	return &driver{transport: tr}
+	return &driver{transport: httpx.NodeTransport()}
 }
 
 func (d *driver) ProgramRoutes(_ context.Context, routes []gateway.Route) error {

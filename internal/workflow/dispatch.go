@@ -89,7 +89,7 @@ func NewHTTPDispatcher(d DispatchDeps) (*HTTPDispatcher, error) {
 	}
 	client := d.Client
 	if client == nil {
-		client = httpx.Client(0)
+		client = httpx.NodeClient(0)
 	}
 	log := d.Logger
 	if log == nil {
@@ -138,13 +138,10 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "invoke %s/%s", req.Namespace, req.Target) // retryable
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainBodyMax))
-		_ = resp.Body.Close()
-	}()
+	defer httpx.CloseBody(resp.Body)
 	// Read only what the outcome needs: an output up to one byte past its payload limit (a longer one is
 	// rejected anyway), the head of a rejection that its error keeps, and nothing of a retryable failure;
-	// the deferred drain discards at most drainBodyMax more.
+	// the deferred drain discards at most httpx.DrainLimit more.
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
 	rejected := resp.StatusCode >= 400 && resp.StatusCode < 500
 	if !ok && !rejected {
@@ -169,10 +166,6 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 
 // errBodyMax is how much of a rejection's body its error keeps.
 const errBodyMax = 256
-
-// drainBodyMax bounds the unread answer drained before close: a body read to EOF returns the connection to the
-// keep-alive pool, so a retried step does not dial a new one (ADR-0041).
-const drainBodyMax = 4 << 10
 
 // upstream resolves fn's ready upstream. With a Waker every dispatch goes through Wake, warm
 // ones too, so each step call counts as activity and idle reclaim takes a step function down

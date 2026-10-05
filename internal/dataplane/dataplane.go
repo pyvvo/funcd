@@ -88,7 +88,7 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *a
 	}
 	return &Server{
 		store: st, activator: act, router: rtr, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
-		transport: httpx.Transport(), defaultTimeout: defaultTimeout,
+		transport: httpx.NodeTransport(), defaultTimeout: defaultTimeout,
 	}
 }
 

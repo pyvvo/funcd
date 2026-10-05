@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -322,7 +321,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          httpx.Client(probeTimeout),
+		httpClient:          httpx.NodeClient(probeTimeout),
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,
@@ -1557,10 +1556,6 @@ const (
 	livenessPath  = "/health/liveness"
 )
 
-// probeBodyMax bounds the body drained before close: a body read to EOF returns the connection to
-// the keep-alive pool, so repeated probes do not churn ephemeral ports (ADR-0041).
-const probeBodyMax = 4 << 10
-
 // probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
 func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
 	host := ip
@@ -1576,10 +1571,7 @@ func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path s
 	if err != nil {
 		return false
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyMax))
-		_ = resp.Body.Close()
-	}()
+	defer httpx.CloseBody(resp.Body)
 	return resp.StatusCode == http.StatusOK
 }
 

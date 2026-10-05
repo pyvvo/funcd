@@ -40,10 +40,10 @@ func NewCallTracker(c clock.Clock) *CallTracker {
 }
 
 // Wrap returns a RoundTripper that counts each request to its URL's host:port from RoundTrip until the response body
-// is closed, or until RoundTrip fails. A nil rt wraps a new httpx.Transport.
+// is closed, or until RoundTrip fails. A nil rt wraps a new httpx.NodeTransport.
 func (t *CallTracker) Wrap(rt http.RoundTripper) http.RoundTripper {
 	if rt == nil {
-		rt = httpx.Transport()
+		rt = httpx.NodeTransport()
 	}
 	return &countingTransport{t: t, rt: rt}
 }

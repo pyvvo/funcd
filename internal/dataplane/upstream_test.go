@@ -13,6 +13,7 @@ import (
 	"net/http/httptrace"
 	"net/textproto"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -358,4 +359,64 @@ func TestUpstreamRouteNotBoundByInvokeDeadline(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "late", rec.Body.String())
+}
+
+// scenario: edge-upstream-burst-reuses-connections — 20 bursts of 32 concurrent external requests to an Upstream edge
+// route (ADR-0138) open 32 connections to the upstream, all in the first burst (ADR-0155). The upstream holds each
+// burst until all of its requests have arrived: without the barrier a call that ends while another's dial is pending
+// hands that call its connection, and the dialed one stays idle.
+func TestScenarioEdgeUpstreamBurstReusesConnections(t *testing.T) {
+	t.Parallel()
+	const bursts, wide = 20, 32
+	conns := new(atomic.Int32)
+	var mu sync.Mutex
+	arrived, release := 0, make(chan struct{})
+	up := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		burst := release
+		if arrived++; arrived == wide {
+			close(release)
+			arrived, release = 0, make(chan struct{})
+		}
+		mu.Unlock()
+		select {
+		case <-burst:
+		case <-time.After(10 * time.Second):
+			t.Errorf("a burst never reached %d requests in flight", wide)
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	up.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	up.Start()
+	t.Cleanup(up.Close)
+
+	rtr := router.New()
+	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+	}}))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+
+	for burst := range bursts {
+		var wg sync.WaitGroup
+		for range wide {
+			wg.Go(func() {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+				if rec.Code != http.StatusOK {
+					t.Errorf("status %d, want 200", rec.Code)
+				}
+			})
+		}
+		wg.Wait()
+		require.EqualValues(t, wide, conns.Load(), "connections accepted after burst %d", burst+1)
+	}
 }
