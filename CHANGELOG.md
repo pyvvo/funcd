@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/pyvvo/funcd/compare/v0.4.0...v0.5.0) (2026-10-05)
+
+
+### Features
+
+* **auth:** scope each Policy to its own namespace ([#674](https://github.com/pyvvo/funcd/issues/674)) ([6f24319](https://github.com/pyvvo/funcd/commit/6f243194a9efebfedbf2df8378f427307bbdda8a))
+* **pooling:** name the pool member on every channel and pool by access ([#677](https://github.com/pyvvo/funcd/issues/677)) ([4fe2903](https://github.com/pyvvo/funcd/commit/4fe29030940cd90cdf180e8b88a7f5f9133cb6e0))
+* **runtime:** reap the workers a crashed funcd left behind at boot (ADR-0167) ([#672](https://github.com/pyvvo/funcd/issues/672)) ([aa7090c](https://github.com/pyvvo/funcd/commit/aa7090c8835ef1576669861ef296ec0ac0db3b57))
+* **workflow:** bind a Workflow only to the KV stores it made ([#669](https://github.com/pyvvo/funcd/issues/669)) ([8108118](https://github.com/pyvvo/funcd/commit/81081188feff14c10fcbd785d297bebd6b4aba05))
+
+
+### Bug Fixes
+
+* **function:** keep a Failed Function Failed until a new spec or a started retry (ADR-0169) ([#671](https://github.com/pyvvo/funcd/issues/671)) ([c791437](https://github.com/pyvvo/funcd/commit/c791437020c378234f39cce0304409b543e0fafa))
+* **workflow:** delete the run in TestScenarioDeletedRunStops without a stale precondition ([#668](https://github.com/pyvvo/funcd/issues/668)) ([ad92960](https://github.com/pyvvo/funcd/commit/ad92960be446508d18a06106261a357c4b25a344))
+
 ## [0.4.0](https://github.com/pyvvo/funcd/compare/v0.3.0...v0.4.0) (2026-10-05)
 
 
