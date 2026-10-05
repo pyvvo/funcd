@@ -264,7 +264,8 @@ type config struct {
 	siteDefaultIndex string
 }
 
-// validate returns the first missing required dependency as a fault.Invalid.
+// validate returns the first missing required dependency, or an invalid option combination, as a
+// fault.Invalid.
 func (c *config) validate() error {
 	const op = "funcd.New"
 	switch {
@@ -280,6 +281,10 @@ func (c *config) validate() error {
 		return fault.Invalidf(op, "gateway is required")
 	case c.credentials == nil:
 		return fault.Invalidf(op, "control-plane credentials are required (use WithDevAuth or a preset)")
+	}
+	// Container execution runs every Function solo: no pool worker can run in a curated image (ADR-0173).
+	if c.imageFor != nil && (len(c.poolShim) > 0 || len(c.poolShimsByFamily) > 0) {
+		return fault.Invalidf(op, "worker pooling is not supported with container execution: WithPoolShim and WithPoolShimFor cannot be combined with WithContainerExecution")
 	}
 	return nil
 }
