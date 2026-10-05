@@ -32,8 +32,8 @@ func newS3Reconciler(t *testing.T, enabled bool) *Reconciler {
 		inj = S3GatewayInjection{
 			Enabled:    true,
 			ListenAddr: s3TestListen,
-			Derive: func(ns, fn string) (string, string) {
-				kp := s3gateway.DeriveKeypair(s3TestMaster, ns, fn)
+			Derive: func(kind v1.Kind, ns, name string) (string, string) {
+				kp := s3gateway.DeriveKeypair(s3TestMaster, kind, ns, name)
 				return kp.AccessKey, kp.SecretKey
 			},
 		}
@@ -61,7 +61,7 @@ func TestScenarioKeypairInjected(t *testing.T) {
 	r := newS3Reconciler(t, true)
 	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", nil, nil)
 
-	want := s3gateway.DeriveKeypair(s3TestMaster, "default", "echo")
+	want := s3gateway.DeriveKeypair(s3TestMaster, v1.KindFunction, "default", "echo")
 	require.Equal(t, want.AccessKey, spec.Env["AWS_ACCESS_KEY_ID"])
 	require.Equal(t, want.SecretKey, spec.Env["AWS_SECRET_ACCESS_KEY"])
 	require.Equal(t, "us-east-1", spec.Env["AWS_REGION"])
@@ -85,7 +85,7 @@ func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 			Enabled:    true,
 			ListenAddr: "127.0.0.1:9000", // bind addr — NOT what a netns'd worker can reach
 			Endpoint:   "http://10.63.0.1:9000",
-			Derive:     func(ns, fn string) (string, string) { return "a", "s" },
+			Derive:     func(v1.Kind, string, string) (string, string) { return "a", "s" },
 		},
 	})
 	require.NoError(t, err)

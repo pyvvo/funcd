@@ -489,7 +489,7 @@ func (a *cli) printDevEnv(path, entryFlag string, cfg devConfig) error {
 	if err != nil {
 		return err
 	}
-	kp := s3gateway.DeriveKeypair([]byte(devS3Master), devNamespace, string(pfs[0].name))
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, string(pfs[0].name))
 	port := cfg.s3port
 	if port == 0 {
 		port = 3006
@@ -886,7 +886,7 @@ func devS3Options(op string, opts *[]funcd.Option, fnName string, cfg devConfig,
 
 	endpoint := "http://" + addr
 	*opts = append(*opts, funcd.WithS3Gateway(addr, endpoint, 0, masterPath, ""))
-	kp := s3gateway.DeriveKeypair([]byte(devS3Master), devNamespace, fnName)
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, fnName)
 	inst.s3Endpoint = endpoint
 	inst.s3AccessKey = kp.AccessKey
 	inst.s3SecretKey = kp.SecretKey

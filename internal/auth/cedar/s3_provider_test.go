@@ -11,9 +11,13 @@ import (
 
 // providerS3Meta builds a bucket "lakehouse" with prefix "gold" OWNED by the add-on provider "lake"
 // (a CatalogService, ADR-0088) which BINDS lakehouse/gold via its spec.blob. There is NO Function
-// "lake" — the engine is a provider, not a Function (ADR-0087). The principal an S3 keypair presents
-// is Function-shaped (KindFunction, name "lake"); the EntityProvider resolves its blobBindings from
-// the CatalogService (Function-first fallback), and the prefix owner "lake" matches by name.
+// "lake" — the engine is a provider, not a Function (ADR-0087). The engine's key presents the
+// CatalogService principal (ADR-0175); its blobBindings come from the CatalogService, and the prefix
+// owner "lake" resolves to it because it binds the prefix and no Function holds the name.
+func csPrincipal(ns v1.NamespaceName, name v1.ObjectName) *auth.EntityRef {
+	return &auth.EntityRef{Type: v1.KindCatalogService, Namespace: ns, Name: name}
+}
+
 func providerS3Meta() s3Meta {
 	return s3Meta{
 		fns: map[string]*v1.Function{},
@@ -43,18 +47,18 @@ func TestScenarioS3ProviderReadsBoundPrefix(t *testing.T) {
 	t.Parallel()
 	d := s3Driver(t, providerS3Meta(), fixedPolicies{rev: "0"})
 
-	read := authorize(t, d, fnPrincipal("default", "lake"), auth.ActionS3Read, prefixResource("default", "lakehouse", "gold"))
+	read := authorize(t, d, csPrincipal("default", "lake"), auth.ActionS3Read, prefixResource("default", "lakehouse", "gold"))
 	require.True(t, read.Allowed, "provider lake reads lakehouse/gold via its CatalogService spec.blob (ADR-0088): %s", read.Reason)
 }
 
-// scenario: provider-writes-owned-prefix — the prefix owner names the provider, so principal == owner
-// (both Function:default/lake, name-based) ⇒ s3::write is granted.
+// scenario: provider-writes-owned-prefix — the prefix owner names the provider, which binds the prefix and
+// shares its name with no Function, so the CatalogService is a writer ⇒ s3::write is granted.
 func TestScenarioS3ProviderWritesOwnedPrefix(t *testing.T) {
 	t.Parallel()
 	d := s3Driver(t, providerS3Meta(), fixedPolicies{rev: "0"})
 
-	write := authorize(t, d, fnPrincipal("default", "lake"), auth.ActionS3Write, prefixResource("default", "lakehouse", "gold"))
-	require.True(t, write.Allowed, "provider lake writes its OWNED prefix lakehouse/gold (principal == owner): %s", write.Reason)
+	write := authorize(t, d, csPrincipal("default", "lake"), auth.ActionS3Write, prefixResource("default", "lakehouse", "gold"))
+	require.True(t, write.Allowed, "provider lake writes its OWNED prefix lakehouse/gold: %s", write.Reason)
 }
 
 // scenario: provider-denied-unbound — default-deny holds: the provider reads/writes a prefix it
@@ -63,21 +67,8 @@ func TestScenarioS3ProviderDeniedUnbound(t *testing.T) {
 	t.Parallel()
 	d := s3Driver(t, providerS3Meta(), fixedPolicies{rev: "0"})
 
-	read := authorize(t, d, fnPrincipal("default", "lake"), auth.ActionS3Read, prefixResource("default", "lakehouse", "silver"))
+	read := authorize(t, d, csPrincipal("default", "lake"), auth.ActionS3Read, prefixResource("default", "lakehouse", "silver"))
 	require.False(t, read.Allowed, "provider lake has no binding on lakehouse/silver ⇒ s3::read default-deny")
-	write := authorize(t, d, fnPrincipal("default", "lake"), auth.ActionS3Write, prefixResource("default", "lakehouse", "silver"))
+	write := authorize(t, d, csPrincipal("default", "lake"), auth.ActionS3Write, prefixResource("default", "lakehouse", "silver"))
 	require.False(t, write.Allowed, "lakehouse/silver is unowned ⇒ s3::write denied")
-}
-
-// scenario: function-takes-precedence — when a Function AND a CatalogService share a name, the
-// Function's bindings win (Function-first). Here a Function "lake" with NO spec.blob shadows the
-// CatalogService "lake", so the read is denied (the Function has no binding).
-func TestScenarioS3ProviderFunctionTakesPrecedence(t *testing.T) {
-	t.Parallel()
-	m := providerS3Meta()
-	m.fns["default/lake"] = &v1.Function{ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"}} // no spec.blob
-	d := s3Driver(t, m, fixedPolicies{rev: "0"})
-
-	read := authorize(t, d, fnPrincipal("default", "lake"), auth.ActionS3Read, prefixResource("default", "lakehouse", "gold"))
-	require.False(t, read.Allowed, "a same-named Function (no spec.blob) shadows the CatalogService ⇒ no blobBindings ⇒ read denied (Function-first, deterministic)")
 }

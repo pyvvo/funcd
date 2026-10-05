@@ -51,6 +51,9 @@ func estIP(s string) estNode {
 func estIsInRange(l, r estNode) estNode {
 	return map[string]estNode{"isInRange": []estNode{l, r}}
 }
+func estIs(l estNode, entityType string) estNode {
+	return map[string]estNode{"is": map[string]estNode{"left": l, "entity_type": entityType}}
+}
 func estEntity(typ, id string) estNode {
 	return map[string]estNode{"Value": map[string]estNode{"__entity": map[string]estNode{"type": typ, "id": id}}}
 }
@@ -60,7 +63,7 @@ func estEntity(typ, id string) estNode {
 // NewPolicyListFromBytes path — NOT a pre-built PolicySet (ADR-0117, M1). ONE permit per RULE (the
 // namespace-attribute collapse): a domain/wildcard matches via resource.domains.contains, a CIDR via
 // resource.ip.isInRange(ip("…")), ports as a set. The principal scope is the entity's existing
-// `namespace` attribute (`principal.namespace == "<ns>"`) for a whole-namespace policy, or a bounded
+// `namespace` attribute (`principal is Function && principal.namespace == "<ns>"`) for a whole-namespace policy, or a bounded
 // disjunction over the explicit spec.appliesTo list (`principal == Function::"<ns>/<fn>"`) — O(rules),
 // independent of the namespace Function count, using NO Cedar group entity and NO edit to the registry
 // assembly. funcs is the namespace Function-set (drives the cache revision; the compiled set does not
@@ -117,9 +120,11 @@ func CompileEgressPolicy(ns v1.NamespaceName, ep *v1.EgressPolicy, funcs []v1.Ob
 	return []v1.Policy{syn}, nil
 }
 
-// namespaceScope is the whole-namespace principal guard: principal.namespace == "<ns>".
+// namespaceScope is the whole-namespace principal guard: principal is Function && principal.namespace ==
+// "<ns>". The type test keeps every other principal of the namespace, such as a CatalogService engine,
+// out of the grant (ADR-0175).
 func namespaceScope(ns v1.NamespaceName) estNode {
-	return estEq(estAccess(estVar("principal"), "namespace"), estVal(string(ns)))
+	return estAnd(estIs(estVar("principal"), entityTypeFunction), estEq(estAccess(estVar("principal"), "namespace"), estVal(string(ns))))
 }
 
 // appliesToScope is the bounded named-appliesTo disjunction: (principal == Function::"<ns>/<fn>" || …).

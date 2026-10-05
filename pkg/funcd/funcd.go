@@ -507,7 +507,7 @@ func (p *Platform) buildControlPlane() error {
 	// (recompiled on a store-revision change). DEFAULT-DENY — a read needs a permitting Policy; the
 	// owner-write forbid is built in. rbac still decides control-plane CRUD (c.authorizer, unchanged).
 	// The capability registry (ADR-0116): the three migrated capabilities (kv, invoke, s3) + the two
-	// principal sources (Function-first, CatalogService-fallback) registered here at the composition
+	// principal sources (Function, CatalogService; each resolves its own type) registered here at the composition
 	// root. The schema vocabulary, the built-in PolicySet, and this composite EntityProvider are all
 	// assembled from the registered set — a new capability (egress next) registers with no shared edit.
 	// ADR-0136: a store-backed WriterLister feeds writer-role RolesAssignment grants into the s3/kv
@@ -633,8 +633,8 @@ func (p *Platform) buildControlPlane() error {
 			Enabled:    true,
 			ListenAddr: c.s3gwListenAddr,
 			Endpoint:   c.s3gwEndpoint,
-			Derive: func(ns, fn string) (string, string) {
-				kp := s3gateway.DeriveKeypair(master, ns, fn)
+			Derive: func(kind v1.Kind, ns, name string) (string, string) {
+				kp := s3gateway.DeriveKeypair(master, kind, ns, name)
 				return kp.AccessKey, kp.SecretKey
 			},
 		}
@@ -845,8 +845,8 @@ func (p *Platform) buildControlPlane() error {
 		Proxy:      catalogMgr, // ADR-0137: Ensure a node-private catalog PEP proxy per Ready catalog
 		Routes:     edgeAgg,    // ADR-0138: program the opt-in external edge entry to the proxy
 	}
-	// The engine's S3 keypair is derived over the PROVIDER identity (ADR-0085), the same deriver the
-	// Function reconciler uses — present only when the S3 gateway is enabled.
+	// The engine's S3 keypair is derived over its CatalogService identity (ADR-0085, ADR-0175) by the same
+	// deriver the Function reconciler uses — present only when the S3 gateway is enabled.
 	if s3Injection.Enabled {
 		catalogDeps.Derive = s3Injection.Derive
 		if catalogDeps.S3Endpoint == "" {
@@ -1677,8 +1677,8 @@ func (s egressAuditSink) Egress(ctx context.Context, rec egress.AuditRecord) {
 }
 
 // EgressWorkerIndex returns the egress WorkerIndex the containerd runtime populates at worker
-// provisioning (ADR-0117 §5): on worker-up it records the funcd0 IP → the worker's (namespace, function)
-// Ref so the gateway can authenticate the caller by source IP. nil ⇒ egress is not enabled.
+// provisioning (ADR-0117 §5): on worker-up it records the funcd0 IP → the worker's principal
+// Ref (its owner kind) so the gateway can authenticate the caller by source IP. nil ⇒ egress is not enabled.
 func (p *Platform) EgressWorkerIndex() *egress.MemoryWorkerIndex { return p.egressWorkers }
 
 // syncEgressWorkers keeps the ADR-0117 §5 WorkerIndex (src funcd0 IP → principal Ref) reconciled with the
@@ -1704,26 +1704,26 @@ func (p *Platform) syncEgressWorkers(ctx context.Context) {
 }
 
 // reconcileEgressWorkers computes the current running-worker IP→Ref set from the runtime (over the
-// namespaces that have Functions) and applies the diff against prev to the WorkerIndex, returning the new
-// snapshot. A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both the gateway
-// lookup and the DNS-forwarder correlation. A transient store error keeps the current index (returns prev).
+// namespaces that have a Function or a CatalogService) and applies the diff against prev to the WorkerIndex,
+// returning the new snapshot. Each worker is indexed as the principal of its owner kind (ADR-0175): a Function
+// worker as its Function, an engine as its CatalogService; a worker of any other kind is not indexed (an
+// unknown source, denied). A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both
+// the gateway lookup and the DNS-forwarder correlation. A transient store error keeps the current index
+// (returns prev).
 func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
-	fnRes, err := p.cfg.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
-	if err != nil {
-		return prev
+	namespaces := map[v1.NamespaceName]struct{}{}
+	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindCatalogService} {
+		res, err := p.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
+		if err != nil {
+			return prev
+		}
+		for _, o := range res.Items {
+			namespaces[o.GetNamespace()] = struct{}{}
+		}
 	}
-	seen := map[v1.NamespaceName]struct{}{}
 	live := map[netip.Addr]auth.EntityRef{}
-	for _, o := range fnRes.Items {
-		fn, ok := o.(*v1.Function)
-		if !ok {
-			continue
-		}
-		if _, done := seen[fn.Namespace]; done {
-			continue
-		}
-		seen[fn.Namespace] = struct{}{}
-		insts, lerr := p.cfg.runtime.List(ctx, fn.Namespace)
+	for ns := range namespaces {
+		insts, lerr := p.cfg.runtime.List(ctx, ns)
 		if lerr != nil {
 			continue
 		}
@@ -1731,11 +1731,14 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			if in.State != runtime.StateRunning || in.IP == "" {
 				continue
 			}
+			if in.OwnerKind != v1.KindFunction && in.OwnerKind != v1.KindCatalogService {
+				continue
+			}
 			ip, perr := netip.ParseAddr(in.IP)
 			if perr != nil {
 				continue
 			}
-			live[ip] = auth.EntityRef{Type: v1.KindFunction, Namespace: in.Namespace, Name: in.Name}
+			live[ip] = auth.EntityRef{Type: in.OwnerKind, Namespace: in.Namespace, Name: in.Name}
 		}
 	}
 	for ip, ref := range live {

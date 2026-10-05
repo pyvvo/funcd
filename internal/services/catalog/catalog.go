@@ -58,10 +58,10 @@ type ReconcilerDeps struct {
 	Store    store.Store
 	Provider provider.Runtime
 	Logger   *slog.Logger
-	// Derive returns the deterministic per-(ns, name) SigV4 keypair (ADR-0085), derived over the
-	// PROVIDER identity (ns, cs.Name). nil ⇒ no S3 keypair injected. Same shape the Function
-	// reconciler's S3GatewayInjection.Derive carries.
-	Derive func(ns, name string) (access, secret string)
+	// Derive returns the deterministic per-(kind, ns, name) SigV4 keypair (ADR-0085, ADR-0175), derived
+	// over the CatalogService identity (KindCatalogService, ns, cs.Name). nil ⇒ no S3 keypair injected.
+	// Same shape the Function reconciler's S3GatewayInjection.Derive carries.
+	Derive func(kind v1.Kind, ns, name string) (access, secret string)
 	// Secrets resolves spec.secrets → env (the Quack token, ADR-0057). nil ⇒ a service declaring
 	// spec.secrets fails closed.
 	Secrets SecretResolver
@@ -97,7 +97,7 @@ type Reconciler struct {
 	store        store.Store
 	prov         provider.Runtime
 	logger       *slog.Logger
-	derive       func(ns, name string) (access, secret string)
+	derive       func(kind v1.Kind, ns, name string) (access, secret string)
 	secrets      SecretResolver
 	developerFor func(ns v1.NamespaceName) auth.Identity
 	s3Endpoint   string

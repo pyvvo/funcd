@@ -17,7 +17,7 @@ import (
 //
 // Two orthogonal axes are kept separate (judge B1): a Capability is an {action + resource + built-in}
 // on a PRINCIPAL; *where a principal's binding attributes come from* is a PrincipalSource (below), so the
-// ADR-0088 provider fallback (Function-first, else CatalogService) is NOT a fourth capability — s3 is one
+// ADR-0088 provider principal (a CatalogService, ADR-0175) is NOT a fourth capability — s3 is one
 // capability with two principal sources.
 type Capability struct {
 	// Name is the capability's short id (e.g. "kv", "invoke", "s3", "egress") — for diagnostics/dedup.
@@ -73,8 +73,9 @@ type PrincipalBinding struct {
 type PrincipalObject = v1.PrincipalObject
 
 // PrincipalSource resolves the principal's backing object for a principal EntityRef, in order. The
-// default sources are Function-first then CatalogService-fallback (ADR-0088) — the provider case, now a
-// principal SOURCE, not a capability. A source returns ok==false to defer to the next.
+// default sources are Function and CatalogService (ADR-0088), each resolving only a principal of its own
+// type (ADR-0175) — the provider case is a principal SOURCE, not a capability. A source returns ok==false
+// to defer to the next.
 type PrincipalSource func(ctx context.Context, r MetaReader, p auth.EntityRef) (obj PrincipalObject, ok bool, err error)
 
 // Registry is a deduped set of capabilities + an ordered principal-source list. It assembles the shared

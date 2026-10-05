@@ -168,9 +168,9 @@ type S3GatewayInjection struct {
 	// Endpoint is the sandbox-facing S3 URL (ADR-0085): the node address a netns'd worker can reach —
 	// the CNI bridge gateway IP under containerd. Empty ⇒ derived as http://<ListenAddr> (loopback dev).
 	Endpoint string
-	// Derive returns the deterministic per-(ns, fn) SigV4 keypair (s3gateway.DeriveKeypair,
-	// bound to the node master secret). Required when Enabled.
-	Derive func(ns, fn string) (access, secret string)
+	// Derive returns the deterministic per-(kind, ns, name) SigV4 keypair (s3gateway.DeriveKeypair,
+	// bound to the node master secret; ADR-0175). Required when Enabled.
+	Derive func(kind v1.Kind, ns, name string) (access, secret string)
 }
 
 // EndpointMode selects how a worker is ADDRESSED (ADR-0032); it is orthogonal to the
@@ -1701,7 +1701,7 @@ func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
 	if !r.s3Gateway.Enabled || r.s3Gateway.Derive == nil || len(fn.Spec.Blob) == 0 {
 		return
 	}
-	access, secret := r.s3Gateway.Derive(string(fn.Namespace), string(fn.Name))
+	access, secret := r.s3Gateway.Derive(v1.KindFunction, string(fn.Namespace), string(fn.Name))
 	env["AWS_ACCESS_KEY_ID"] = access
 	env["AWS_SECRET_ACCESS_KEY"] = secret
 	env["AWS_REGION"] = "us-east-1"

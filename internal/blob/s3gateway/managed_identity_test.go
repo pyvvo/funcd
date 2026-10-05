@@ -26,7 +26,7 @@ func TestIdentityAccessKeyDeterministicAndDistinct(t *testing.T) {
 	require.False(t, strings.HasPrefix(a1, accessKeyPrefix), "an Identity key does not carry the Function prefix")
 
 	// It is NOT decoded as a Function key (so it falls through to external.Lookup) and round-trips.
-	_, _, fnOK := decodeAccess(a1)
+	_, _, _, fnOK := decodeAccess(a1)
 	require.False(t, fnOK)
 	ns, name, ok := DecodeIdentityAccess(a1)
 	require.True(t, ok)
@@ -34,7 +34,7 @@ func TestIdentityAccessKeyDeterministicAndDistinct(t *testing.T) {
 	require.Equal(t, "dropper", name)
 
 	// A Function key is not an Identity key.
-	fnKey := DeriveKeypair([]byte("m"), "data", "fn").AccessKey
+	fnKey := DeriveKeypair([]byte("m"), v1.KindFunction, "data", "fn").AccessKey
 	_, _, idOK := DecodeIdentityAccess(fnKey)
 	require.False(t, idOK)
 }
@@ -50,7 +50,7 @@ func TestPrincipalForMapsIdentityKey(t *testing.T) {
 	require.Equal(t, v1.ObjectName("dropper"), pr.ref.Name)
 
 	// A Function key still resolves to a Function principal (unchanged).
-	fnKey := DeriveKeypair([]byte("m"), "data", "fn").AccessKey
+	fnKey := DeriveKeypair([]byte("m"), v1.KindFunction, "data", "fn").AccessKey
 	fpr, err := principalFor(auth.Account{Access: fnKey}, fakeManagedExternal{ok: false})
 	require.NoError(t, err)
 	require.Equal(t, v1.KindFunction, fpr.ref.Type)

@@ -17,17 +17,17 @@ import (
 // re-derives the same credential (nothing stored, nothing rotated).
 func TestScenarioDeterministicAcrossRestart(t *testing.T) {
 	t.Parallel()
-	a := s3gateway.DeriveKeypair(testMaster, "default", "analytics")
-	b := s3gateway.DeriveKeypair(testMaster, "default", "analytics")
+	a := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "analytics")
+	b := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "analytics")
 	require.Equal(t, a, b, "the same (master, ns, fn) must yield the same keypair across restarts")
 
 	// A different function ⇒ a different secret (no collision).
-	other := s3gateway.DeriveKeypair(testMaster, "default", "etl-svc")
+	other := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "etl-svc")
 	require.NotEqual(t, a.SecretKey, other.SecretKey)
 	require.NotEqual(t, a.AccessKey, other.AccessKey)
 
 	// A different master ⇒ a different secret (the master is load-bearing for isolation).
-	diffMaster := s3gateway.DeriveKeypair([]byte("a-different-master-secret-value!"), "default", "analytics")
+	diffMaster := s3gateway.DeriveKeypair([]byte("a-different-master-secret-value!"), v1.KindFunction, "default", "analytics")
 	require.NotEqual(t, a.SecretKey, diffMaster.SecretKey)
 }
 
@@ -54,8 +54,8 @@ func TestScenarioCannotForgePeer(t *testing.T) {
 	g.seed(t, "default", "lakehouse", "bronze/x.parquet", []byte("owned"))
 
 	// B = etl-svc's access key, but signed with A's (analytics's) secret — a forgery.
-	bAccess := s3gateway.DeriveKeypair(testMaster, "default", "etl-svc").AccessKey
-	aSecret := s3gateway.DeriveKeypair(testMaster, "default", "analytics").SecretKey
+	bAccess := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "etl-svc").AccessKey
+	aSecret := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "analytics").SecretKey
 	forged := g.clientWithKeys(t, bAccess, aSecret)
 
 	_, err := forged.GetObject(context.Background(), &awss3.GetObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/x.parquet")})

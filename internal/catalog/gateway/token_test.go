@@ -65,7 +65,7 @@ func TestIdentityCatalogTokenRoundTrip(t *testing.T) {
 		"empty random part":      prefix + ".",
 		"random part too short":  prefix + "." + random[:randomPartLen-1],
 		"random part too long":   prefix + "." + random + "A",
-		"function access key":    s3gateway.DeriveKeypair([]byte("node-master"), "data", "analyst").AccessKey + "." + random,
+		"function access key":    s3gateway.DeriveKeypair([]byte("node-master"), v1.KindFunction, "data", "analyst").AccessKey + "." + random,
 		"bad base32":             "FUNCID!!!!" + "." + random,
 		"empty owner body":       "FUNCID." + random,
 		"non-DNS namespace":      s3gateway.IdentityAccessKey("Data", "analyst") + "." + random,

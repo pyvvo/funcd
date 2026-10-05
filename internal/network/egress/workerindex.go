@@ -8,8 +8,8 @@ import (
 )
 
 // MemoryWorkerIndex is the in-memory WorkerIndex (ADR-0117, §5) the containerd runtime populates at
-// worker provisioning: on worker-up it records the assigned funcd0 IP → the worker's (namespace,
-// function) Ref; on worker-down it removes it. The gateway reads it to authenticate the caller by source
+// worker provisioning: on worker-up it records the assigned funcd0 IP → the worker's principal Ref (its
+// owner kind); on worker-down it removes it. The gateway reads it to authenticate the caller by source
 // IP (never client-asserted). Concurrency-safe.
 type MemoryWorkerIndex struct {
 	mu sync.RWMutex

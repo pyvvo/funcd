@@ -28,11 +28,12 @@ import (
 //nolint:gochecknoglobals // a fixed test fixture shared across the suite's table tests
 var testMaster = []byte("test-node-master-secret-0123456789")
 
-// fakeMeta is an in-memory cedar MetaReader over seeded Functions + Buckets (the harness
-// mirror of the cedar package's s3Meta).
+// fakeMeta is an in-memory cedar MetaReader over seeded Functions, CatalogServices and Buckets (the
+// harness mirror of the cedar package's s3Meta).
 type fakeMeta struct {
 	fns     map[string]*v1.Function
 	buckets map[string]*v1.Bucket
+	css     map[string]*v1.CatalogService
 }
 
 func (m fakeMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
@@ -45,6 +46,10 @@ func (m fakeMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.Namespac
 	case v1.KindBucket:
 		if b, ok := m.buckets[k]; ok {
 			return b, nil
+		}
+	case v1.KindCatalogService:
+		if c, ok := m.css[k]; ok {
+			return c, nil
 		}
 	}
 	return nil, fault.NotFoundf("fakeMeta.Get", "%s %s not found", gvk.Kind, k)
@@ -161,7 +166,13 @@ func memBucket(t *testing.T) blob.Bucket {
 // = the gateway) for an in-platform function (ns, fn).
 func (g *gw) client(t *testing.T, ns, fn string) *awss3.Client {
 	t.Helper()
-	kp := s3gateway.DeriveKeypair(testMaster, ns, fn)
+	return g.clientAs(t, v1.KindFunction, ns, fn)
+}
+
+// clientAs builds a client signing with the keypair derived for (kind, ns, name).
+func (g *gw) clientAs(t *testing.T, kind v1.Kind, ns, name string) *awss3.Client {
+	t.Helper()
+	kp := s3gateway.DeriveKeypair(testMaster, kind, ns, name)
 	return g.clientWithKeys(t, kp.AccessKey, kp.SecretKey)
 }
 

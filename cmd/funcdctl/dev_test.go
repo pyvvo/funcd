@@ -380,7 +380,7 @@ func TestPrintDevEnvDerivesDeterministicKeypair(t *testing.T) {
 
 	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
 	require.NoError(t, err)
-	kp := s3gateway.DeriveKeypair([]byte(devS3Master), devNamespace, string(pfs[0].name))
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, string(pfs[0].name))
 	require.Contains(t, s, "export AWS_ACCESS_KEY_ID="+kp.AccessKey)
 	require.Contains(t, s, "export AWS_SECRET_ACCESS_KEY="+kp.SecretKey)
 	require.Contains(t, s, "export AWS_REGION="+devS3Region)

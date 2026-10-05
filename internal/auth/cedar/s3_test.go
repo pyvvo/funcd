@@ -18,11 +18,15 @@ type s3Meta struct {
 	fns     map[string]*v1.Function
 	buckets map[string]*v1.Bucket
 	css     map[string]*v1.CatalogService // add-on providers (ADR-0088)
+	fnErr   error                         // when set, every Function read fails with it
 }
 
 func (m s3Meta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
 	switch gvk.Kind {
 	case v1.KindFunction:
+		if m.fnErr != nil {
+			return nil, m.fnErr
+		}
 		if f, ok := m.fns[key(ns, name)]; ok {
 			return f, nil
 		}
