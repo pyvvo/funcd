@@ -162,7 +162,7 @@ func makeFifoDir(stateDir string) (string, bool, error) {
 
 // SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
 // set, Create gives each sandbox a bind-mounted UDS (FUNCD_LOG_SOCK) the shim writes NDJSON to; the
-// accept loop hands each connection to the hook.
+// accept loop hands each connection to the hook, up to the instance's bound (logConnBound), and closes the rest.
 func (d *driver) SetLogCapture(fn runtime.LogCaptureFunc) {
 	d.mu.Lock()
 	d.capture = fn
@@ -179,7 +179,7 @@ func setupLogChannel(ctrID string, spec runtime.WorkerSpec, capture runtime.LogC
 		return runtime.Mount{}, nil, nil, "", fault.Wrapf(err, fault.Internal, op, "create log dir")
 	}
 	sock := filepath.Join(dir, "log.sock")
-	ln, err = net.Listen("unix", sock)
+	ul, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return runtime.Mount{}, nil, nil, "", fault.Wrapf(err, fault.Internal, op, "listen on log socket")
@@ -187,22 +187,64 @@ func setupLogChannel(ctrID string, spec runtime.WorkerSpec, capture runtime.LogC
 	// The distroless sandbox runs as a non-root uid; let it connect to the node-local per-instance socket.
 	_ = os.Chmod(sock, 0o777) //nolint:gosec // node-local, per-instance ephemeral log socket (ADR-0081)
 
-	go func() {
-		for {
-			conn, aerr := ln.Accept()
-			if aerr != nil {
-				return // listener closed on teardown
-			}
-			capture(spec, conn)
-		}
-	}()
+	go acceptLogConns(ul, spec, capture)
 
 	env = map[string]string{}
 	for k, v := range spec.Env {
 		env[k] = v
 	}
 	env["FUNCD_LOG_SOCK"] = "/run/funcd-log/log.sock"
-	return runtime.Mount{Source: dir, Target: "/run/funcd-log", ReadOnly: false}, env, ln, dir, nil
+	return runtime.Mount{Source: dir, Target: "/run/funcd-log", ReadOnly: false}, env, ul, dir, nil
+}
+
+// soloLogConns bounds the live connections on a solo worker's log socket. The sandbox can dial it at will and each
+// captured connection holds a daemon-side reader of up to funclog.MaxLineBytes; a shim opens one per process, so a
+// few leave room for a forked process or a reconnect while the old connection drains.
+const soloLogConns = 4
+
+// logConnBound is the most live log connections spec's instance keeps: a pool shim opens one more per member.
+func logConnBound(spec runtime.WorkerSpec) int {
+	return soloLogConns + max(spec.Members, 0)
+}
+
+// acceptLogConns hands each connection on ln to capture until ln is closed on teardown. A connection beyond
+// logConnBound live ones is closed at once. A failed Accept (EMFILE while the daemon is out of fds) is retried after a
+// backoff, so it does not end the instance's log capture.
+func acceptLogConns(ln *net.UnixListener, spec runtime.WorkerSpec, capture runtime.LogCaptureFunc) {
+	slots := make(chan struct{}, logConnBound(spec))
+	var backoff time.Duration
+	for {
+		conn, err := ln.AcceptUnix()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if err != nil {
+			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
+			time.Sleep(backoff)
+			continue
+		}
+		backoff = 0
+		select {
+		case slots <- struct{}{}:
+			capture(spec, &logConn{UnixConn: conn, release: func() { <-slots }})
+		default:
+			_ = conn.Close()
+		}
+	}
+}
+
+// logConn frees its slot on its first Close. It embeds *net.UnixConn, so the daemon's drain can still
+// CloseRead it.
+type logConn struct {
+	*net.UnixConn
+	once    sync.Once
+	release func()
+}
+
+func (c *logConn) Close() error {
+	err := c.UnixConn.Close()
+	c.once.Do(c.release)
+	return err
 }
 
 // New connects to containerd and loads the CNI config, returning a Linux

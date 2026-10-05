@@ -523,6 +523,7 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manife
 		Name:      poolName,
 		OwnerKind: v1.KindFunction,
 		Replica:   0,
+		Members:   len(names),
 		Image:     key.Runtime,
 		Command:   r.poolHostFor(v1.RuntimeName(key.Runtime)), // node pool.mjs, or python pool.py (ADR-0050)
 		Env:       env,
