@@ -119,6 +119,27 @@ func TestPooledFunctionIsServedThroughDataPlane(t *testing.T) {
 	require.JSONEq(t, `{"served":"agent"}`, body)
 }
 
+// The pool worker's spec names how many members it hosts, so the runtime can size the log connections it accepts from
+// the worker (one per member) instead of cutting members off past a fixed count.
+func TestPoolWorkerSpecCountsItsMembers(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	h.create(t, "agent", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents" })
+	h.rt.serveCalls(t, "", true)
+	h.reconcile(t, "agent")
+
+	h.rt.mu.Lock()
+	defer h.rt.mu.Unlock()
+	var pools int
+	for _, spec := range h.rt.specs {
+		if strings.HasPrefix(string(spec.Name), "__pool__") {
+			pools++
+			require.Equal(t, 1, spec.Members, "pool worker %s", spec.Name)
+		}
+	}
+	require.Equal(t, 1, pools)
+}
+
 // A pooled Function's upstream is its pool worker, which serves a member only at /function/<name>, so a Workflow step
 // and a Sensor action reach it there, like the data plane.
 func TestIssue37_PooledFunctionReachableFromEveryInvoker(t *testing.T) {
