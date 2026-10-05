@@ -467,11 +467,11 @@ func rebase(r *http.Request, base string) *http.Request {
 	return out
 }
 
-// ReclaimIdle scales to zero every minReplicas==0 function whose last activity is older
+// ReclaimIdle scales to zero every minReplicas==0 function in a Reclaimable phase whose last activity is older
 // than its IdleTimeout, that has no call in flight and no wake in progress. Functions with recent
-// activity, MinReplicas != 0, or a zero IdleTimeout (reclaim disabled) are skipped. A function not
-// yet seen, or with a call in flight, is given a full grace window from the current time.
-// Entries for functions that no longer exist are dropped.
+// activity, MinReplicas != 0, a zero IdleTimeout (reclaim disabled), or any other phase — Failed,
+// Deploying, Terminating, Idle — are skipped. A function not yet seen, or with a call in flight, is
+// given a full grace window from the current time. Entries for functions that no longer exist are dropped.
 func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	const op = "activator.ReclaimIdle"
 	list, err := a.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
@@ -491,6 +491,9 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 		if sc.MinReplicas != 0 || sc.IdleTimeout <= 0 {
 			continue // scale-to-zero / reclaim not enabled for this function
 		}
+		if !Reclaimable(fn) {
+			continue
+		}
 		done, idle := a.claimIdle(ref, fn.UID, now, sc.IdleTimeout)
 		if !idle {
 			continue
@@ -507,6 +510,15 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	}
 	a.forgetAllBut(live)
 	return nil
+}
+
+// Reclaimable reports whether idle reclaim may move fn to Idle (ADR-0016 C2, ADR-0169).
+func Reclaimable(fn *v1.Function) bool {
+	switch fn.Status.Phase {
+	case v1.PhaseReady, v1.PhaseDegraded, v1.PhasePending, "":
+		return true
+	}
+	return false
 }
 
 // claimIdle reports whether fn has seen no activity for idleTimeout and has no call in flight to an upstream Wake

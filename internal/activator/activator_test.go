@@ -561,6 +561,45 @@ func createFunction(t *testing.T, st store.Store, name string, scaling v1.Scalin
 	require.NoError(t, err)
 }
 
+// ReclaimIdle neither claims nor scales a Function outside a Reclaimable phase, however long it has been idle
+// (ADR-0169 Decision 3).
+func TestReclaimIdleSkipsUnreclaimablePhases(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const idle = time.Minute
+	st := store.New(memory.New())
+	for name, p := range map[string]v1.Phase{
+		"failed": v1.PhaseFailed, "deploying": v1.PhaseDeploying, "terminating": v1.PhaseTerminating,
+		"idle": v1.PhaseIdle, "ready": v1.PhaseReady,
+	} {
+		createFunction(t, st, name, v1.Scaling{IdleTimeout: idle})
+		obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name))
+		require.NoError(t, err)
+		fn := obj.(*v1.Function)
+		fn.Status.Phase = p
+		_, err = st.Update(ctx, fn)
+		require.NoError(t, err)
+	}
+	var mu sync.Mutex
+	var scaled []v1.ObjectName
+	sc := &fakeScaler{hook: func(fn activator.FunctionRef, _ int) {
+		mu.Lock()
+		defer mu.Unlock()
+		scaled = append(scaled, fn.Name)
+	}}
+	clk := &stepClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{}, Scaler: sc, Clock: clk})
+
+	for range 2 {
+		require.NoError(t, a.ReclaimIdle(ctx))
+		clk.advance(2 * idle)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []v1.ObjectName{"ready"}, scaled, "only the Ready function is reclaimed")
+	require.Equal(t, 1, a.TrackedFunctions(), "a skipped function is not claimed")
+}
+
 // scenario: wake-warm-returns-upstream (ADR-0033) — Wake on a ready function returns its
 // upstream with no ScaleTo.
 func TestScenarioWakeWarmReturnsUpstream(t *testing.T) {

@@ -1,9 +1,9 @@
 // Package storescaler is the V1 store-backed activator.Scaler driver (ADR-0016): it
 // records a function's scale intent as its partitioned status Phase — the wake edge
-// Idle→Deploying for replicas>=1, the reclaim edge *→Idle for replicas==0 — via
-// store.Update. It is idempotent and edge-respecting (it never flips an off-diagram
-// transition), and it re-reads and retries on the store's RV fault.Conflict so a
-// concurrent controller (P-M) status write never drops the intent.
+// Idle→Deploying for replicas>=1, the reclaim edge Ready/Degraded/Pending/empty→Idle for
+// replicas==0 (activator.Reclaimable, ADR-0169) — via store.Update. It is idempotent and
+// edge-respecting (it never flips an off-diagram transition), and it re-reads and retries on
+// the store's RV fault.Conflict so a concurrent controller (P-M) status write never drops the intent.
 package storescaler
 
 import (
@@ -27,9 +27,9 @@ func New(st store.Store) activator.Scaler {
 	return &scaler{store: st}
 }
 
-// ScaleTo records the partitioned Phase intent for fn (Idle→Deploying on wake,
-// *→Idle on reclaim), retrying the read-modify-write on the store's RV conflict.
-// A wake of a Failed function is refused with fault.Unavailable naming its state.
+// ScaleTo records the partitioned Phase intent for fn (Idle→Deploying on wake, a
+// Reclaimable phase→Idle on reclaim), retrying the read-modify-write on the store's RV
+// conflict. A wake of a Failed function is refused with fault.Unavailable naming its state.
 func (s *scaler) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas int) error {
 	const op = "storescaler.ScaleTo"
 	gvk := v1.KindFunction.GVK()
@@ -49,7 +49,7 @@ func (s *scaler) ScaleTo(ctx context.Context, fn activator.FunctionRef, replicas
 				return ferr
 			}
 		}
-		next, change := transition(f.Status.Phase, target)
+		next, change := transition(f, target)
 		if !change {
 			return nil // idempotent / edge-respecting no-op
 		}
@@ -75,12 +75,14 @@ func targetPhase(replicas int) v1.Phase {
 	return v1.PhaseDeploying
 }
 
-// transition returns the Phase to persist and whether a write is needed, honoring the
-// activator's partition of Function.Status.Phase (ADR-0016 C2): the wake edge fires
-// only from a sleeping/initial phase (Idle/Pending/empty → Deploying) — never an
-// off-diagram Ready→Deploying; the reclaim edge fires from any live phase (→ Idle) but
-// not from Terminating (a delete in progress). P-M owns Deploying→Ready/Failed.
-func transition(cur, target v1.Phase) (v1.Phase, bool) {
+// transition returns the Phase to persist for the re-read Function f and whether a write is
+// needed, honoring the activator's partition of Function.Status.Phase (ADR-0016 C2): the wake
+// edge fires only from a sleeping/initial phase (Idle/Pending/empty → Deploying) — never an
+// off-diagram Ready→Deploying; the reclaim edge fires only from a phase activator.Reclaimable
+// admits (Ready/Degraded/Pending/empty → Idle), never from Failed, Deploying or Terminating
+// (ADR-0169). P-M owns Deploying→Ready/Failed.
+func transition(f *v1.Function, target v1.Phase) (v1.Phase, bool) {
+	cur := f.Status.Phase
 	if cur == target {
 		return cur, false
 	}
@@ -90,8 +92,8 @@ func transition(cur, target v1.Phase) (v1.Phase, bool) {
 			return v1.PhaseDeploying, true
 		}
 		return cur, false // already Deploying/Ready/… — buffering, not a Phase flip, covers a stale miss
-	case v1.PhaseIdle: // reclaim
-		if cur == v1.PhaseTerminating {
+	case v1.PhaseIdle: // reclaim (ADR-0169)
+		if !activator.Reclaimable(f) {
 			return cur, false
 		}
 		return v1.PhaseIdle, true

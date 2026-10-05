@@ -41,8 +41,16 @@ func ref(name string) activator.FunctionRef {
 	return activator.FunctionRef{Namespace: "default", Name: v1.ObjectName(name)}
 }
 
+func rvOf(t *testing.T, st store.Store, name string) string {
+	t.Helper()
+	obj, err := st.Get(context.Background(), v1.KindFunction.GVK(), "default", v1.ObjectName(name))
+	require.NoError(t, err)
+	return obj.(*v1.Function).ResourceVersion
+}
+
 // scenario: scaler-writes-phase — ScaleTo records the partitioned Phase edges
-// (Idle→Deploying wake, *→Idle reclaim), idempotently and without an off-diagram flip.
+// (Idle→Deploying wake, Ready→Idle reclaim), idempotently and without an off-diagram flip;
+// a reclaim of a Deploying function writes nothing (ADR-0169).
 func TestScenarioScalerWritesPhase(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -58,9 +66,16 @@ func TestScenarioScalerWritesPhase(t *testing.T) {
 	require.NoError(t, sc.ScaleTo(ctx, ref("f"), 1))
 	require.Equal(t, v1.PhaseDeploying, phaseOf(t, st, "f"))
 
-	// Reclaim: * → Idle.
+	// No reclaim of a woken function that has not served yet: ScaleTo(0) on Deploying writes nothing.
+	rv := rvOf(t, st, "f")
 	require.NoError(t, sc.ScaleTo(ctx, ref("f"), 0))
-	require.Equal(t, v1.PhaseIdle, phaseOf(t, st, "f"))
+	require.Equal(t, v1.PhaseDeploying, phaseOf(t, st, "f"))
+	require.Equal(t, rv, rvOf(t, st, "f"))
+
+	// Reclaim: Ready → Idle.
+	putFunction(t, st, "served", v1.PhaseReady)
+	require.NoError(t, sc.ScaleTo(ctx, ref("served"), 0))
+	require.Equal(t, v1.PhaseIdle, phaseOf(t, st, "served"))
 
 	// Edge-respecting: a wake on an already-Ready function does not flip an off-diagram edge.
 	putFunction(t, st, "ready", v1.PhaseReady)
@@ -202,12 +217,30 @@ func TestIssue142_FunctionFailedDuringActivationIsAnsweredAtOnce(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "did not become ready", "the call must not wait out the activation timeout")
 }
 
-// Issue #142 refuses only the wake: the reclaim edge (* → Idle) still scales a Failed function to zero.
-func TestIssue142_ReclaimOfAFailedFunctionStillSucceeds(t *testing.T) {
+// The reclaim edge moves only a phase activator.Reclaimable admits to Idle and writes nothing for any other: a Failed,
+// Deploying or Terminating Function is never reclaimed (ADR-0169 Decision 3).
+func TestReclaimEdgeAllowList(t *testing.T) {
 	t.Parallel()
-	st := store.New(memory.New())
-	putFunction(t, st, "broken", v1.PhaseFailed)
-
-	require.NoError(t, storescaler.New(st).ScaleTo(context.Background(), ref("broken"), 0))
-	require.Equal(t, v1.PhaseIdle, phaseOf(t, st, "broken"))
+	for name, tc := range map[string]struct{ from, to v1.Phase }{
+		"empty":       {"", v1.PhaseIdle},
+		"pending":     {v1.PhasePending, v1.PhaseIdle},
+		"ready":       {v1.PhaseReady, v1.PhaseIdle},
+		"degraded":    {v1.PhaseDegraded, v1.PhaseIdle},
+		"idle":        {v1.PhaseIdle, v1.PhaseIdle},
+		"failed":      {v1.PhaseFailed, v1.PhaseFailed},
+		"deploying":   {v1.PhaseDeploying, v1.PhaseDeploying},
+		"terminating": {v1.PhaseTerminating, v1.PhaseTerminating},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := store.New(memory.New())
+			putFunction(t, st, "f", tc.from)
+			rv := rvOf(t, st, "f")
+			require.NoError(t, storescaler.New(st).ScaleTo(context.Background(), ref("f"), 0))
+			require.Equal(t, tc.to, phaseOf(t, st, "f"))
+			if tc.to != v1.PhaseIdle || tc.from == v1.PhaseIdle {
+				require.Equal(t, rv, rvOf(t, st, "f"), "no write")
+			}
+		})
+	}
 }

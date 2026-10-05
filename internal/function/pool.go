@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -202,7 +201,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if ready >= 1 {
 		fn.Status.ServingRevision = fn.Status.CurrentRevision
 	}
-	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, retryAt: pass.retryAt, startErr: pass.startErr, repairErr: repairErr}, nil
+	return verdict{running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed), serving: serving, retryAt: pass.retryAt, startErr: pass.startErr, repairErr: repairErr, pooled: true}, nil
 }
 
 // ensurePool drives the single pool worker for key to its desired state (ADR-0046 Decisions
@@ -260,7 +259,7 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 		// the pool worker exists but is stopped or exited, and a member now wants it up with the same manifest → restart
 		// it by ADR-0142's per-replica table as a crash under repair, so one that exited is created again only once it is
 		// a period old: a pool host that cannot boot is retried once per period, as a solo replica is (issue #70).
-		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: insts[0]}, []int{0}, convergeOpts{serving: true}, time.Now(), r.supervisionPeriod, nil, false)
+		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: insts[0]}, []int{0}, convergeOpts{serving: true}, r.clock.Now(), r.supervisionPeriod, nil, false)
 		if !pass.retryAt.IsZero() {
 			break
 		}

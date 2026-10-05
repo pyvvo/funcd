@@ -2,10 +2,12 @@ package function
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,4 +85,98 @@ func countingServer(t *testing.T, respond func(http.ResponseWriter)) (*net.TCPAd
 	addr, ok := srv.Listener.Addr().(*net.TCPAddr)
 	require.True(t, ok)
 	return addr, conns
+}
+
+// holdsFailed holds only for a pass that started Failed and found nothing running, booting, ready or newly failed
+// (ADR-0169 Decision 2); each verdict field releases it.
+func TestHoldsFailed(t *testing.T) {
+	t.Parallel()
+	require.True(t, holdsFailed(v1.PhaseFailed, verdict{}))
+	require.True(t, holdsFailed(v1.PhaseFailed, verdict{retryAt: time.Now(), pooled: true}), "a pool worker waits out its backoff")
+	for _, p := range []v1.Phase{"", v1.PhasePending, v1.PhaseIdle, v1.PhaseDeploying, v1.PhaseReady, v1.PhaseDegraded} {
+		require.False(t, holdsFailed(p, verdict{}), "a pass that started %q", p)
+	}
+	for name, v := range map[string]verdict{
+		"running":          {running: 1},
+		"ready":            {ready: 1},
+		"booting":          {booting: true},
+		"shapeFailed":      {shapeFailed: true},
+		"currentFailed":    {currentFailed: true},
+		"startErr":         {startErr: errors.New("exec: node: not found")},
+		"crashLoop":        {crashLoop: "replica 0 exited with code 1 before it listened"},
+		"currentCrashLoop": {currentCrashLoop: "replica 0 exited with code 1 before it listened"},
+	} {
+		require.False(t, holdsFailed(v1.PhaseFailed, v), name)
+	}
+}
+
+// failStart records a failed worker spec for replica 0 of revision rev of Function name, as convergeRevision does: an
+// entry with no instance behind it.
+func failStart(r *Reconciler, name, rev v1.ObjectName) runtime.InstanceID {
+	id := runtime.NewInstanceID("default", name, rev, 0)
+	r.boot.startResult(id, time.Now(), errors.New("create socket dir: permission denied"))
+	return id
+}
+
+// requireEntries asserts which IDs keep a bootBackoff entry and which have none.
+func requireEntries(t *testing.T, r *Reconciler, kept, forgotten []runtime.InstanceID) {
+	t.Helper()
+	for _, id := range kept {
+		_, ok := r.boot.crash(id)
+		require.True(t, ok, "%s is kept", id)
+	}
+	for _, id := range forgotten {
+		_, ok := r.boot.crash(id)
+		require.False(t, ok, "%s is forgotten", id)
+	}
+}
+
+// Deleting a Function forgets its replicas that never got an instance, and only its own (ADR-0169 Decision 4).
+func TestTeardownForgetsReplicaWithNoInstance(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, fakeResolver{})
+	gone, other := failStart(r, "fn", "fn-1"), failStart(r, "other", "other-1")
+
+	require.NoError(t, r.teardown(context.Background(), "default", "fn"))
+	requireEntries(t, r, []runtime.InstanceID{other}, []runtime.InstanceID{gone})
+}
+
+// A replaced revision's replica that failed at its worker spec has no worker to retire; the switch's drain and the
+// scale-to-zero stopAll forget its entry all the same and keep those of the revisions still live (ADR-0169 Decision 4).
+func TestStaleRevisionRetireForgetsReplicaWithNoInstance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		retire func(*Reconciler, *v1.Function) error
+		kept   []v1.ObjectName
+	}{
+		"drain": {
+			retire: func(r *Reconciler, fn *v1.Function) error { _, err := r.drain(ctx, fn); return err },
+			kept:   []v1.ObjectName{"fn-2", "fn-3"},
+		},
+		"stopAll": {
+			retire: func(r *Reconciler, fn *v1.Function) error { return r.stopAll(ctx, fn, "fn-3") },
+			kept:   []v1.ObjectName{"fn-3"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newShimReconciler(t, fakeResolver{})
+			fn := sampleFn()
+			fn.Name = "fn"
+			fn.Status.DrainingRevision, fn.Status.ServingRevision, fn.Status.CurrentRevision = "fn-1", "fn-2", "fn-3"
+			var kept, forgotten []runtime.InstanceID
+			for _, rev := range []v1.ObjectName{"fn-1", "fn-2", "fn-3"} {
+				if id := failStart(r, "fn", rev); slices.Contains(tc.kept, rev) {
+					kept = append(kept, id)
+				} else {
+					forgotten = append(forgotten, id)
+				}
+			}
+			other := failStart(r, "other", "fn-1")
+
+			require.NoError(t, tc.retire(r, fn))
+			requireEntries(t, r, append(kept, other), forgotten)
+		})
+	}
 }
