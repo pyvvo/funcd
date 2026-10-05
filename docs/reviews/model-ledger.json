@@ -8503,5 +8503,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0169-implementation-claude-opus-5-5-3.md",
     "notes": "loop 3: loop-2 major resolved (TestIssue73 uses a manual Deps.Clock; 0/300 failures beside a full rebuild, was 1/40); production code unchanged since loop 2; build+vet+lint darwin and Linux green; 7/7 scenarios pass incl. the e2e workflow one; 3/3 new overlay mutants killed (held filter, held boundary, requeueFor(Failed))"
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "679",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-679-fix-claude-opus-5-5.md",
+    "notes": "Flake: Start returns at the exec's close-on-exec point, before the kernel sets the new argv, so cmdline reads empty; reproduced 82/2000 pre-fix vs 0/2000 with the fix (Linux container, -race, CPU load). Test-only: Owned's sole production caller is Reap at Open, which checks only a previous run's entries; a residual window would leave a worker, never kill a wrong one. No findings."
   }
 ]
