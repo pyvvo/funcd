@@ -1,6 +1,6 @@
 # ADR-0166: Workflow edge typing for skipped branches and void inputs
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, contracts, type-checking, reconcile-gate, expression

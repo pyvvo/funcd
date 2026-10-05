@@ -1,6 +1,6 @@
 # ADR-0146: WorkflowRun drive model — a short reconcile, a run goroutine the engine owns
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, orchestration, controller, reconcile, cancel, pause, shutdown, concurrency

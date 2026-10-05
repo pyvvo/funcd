@@ -1,6 +1,6 @@
 # ADR-0160: Worker exit reason — a worker that crashes while booting is retried with a growing wait, not ShapeInvalid
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, supervision, function, process, containerd, config, crash-recovery
