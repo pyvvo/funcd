@@ -48,6 +48,19 @@ func WithKVStoreQuota(maxPerNamespace int) Option {
 	return func(c *config) error { c.kvMaxStoresPerNamespace = maxPerNamespace; return nil }
 }
 
+// WithNestedInFlightCap sets the per-target cap on nested fn-to-fn calls in flight (ADR-0147,
+// invoke.maxNestedInFlight): the next call to a Function with n calls in flight is refused with 429.
+// 0 ⇒ the default (10); a negative value is fault.Invalid from New. The cap cannot be disabled.
+func WithNestedInFlightCap(n int) Option {
+	return func(c *config) error {
+		if n < 0 {
+			return fault.Invalidf("funcd.WithNestedInFlightCap", "the nested in-flight cap %d is negative", n)
+		}
+		c.nestedInFlightCap = n
+		return nil
+	}
+}
+
 // WithBlob injects the blob (storage layer) port.
 func WithBlob(b blob.Bucket) Option {
 	return func(c *config) error { c.blob = b; return nil }

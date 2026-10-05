@@ -34,6 +34,9 @@ func NewBucketQuotaAdmission(r StoreReader, maxPerNamespace int) Admission {
 func (bucketQuota) Name() string { return "bucket-count" }
 func (bucketQuota) Phase() Phase { return Validating }
 
+// ReadsNamespace: the count check reads the namespace's Buckets, only while the quota is enabled (ADR-0147).
+func (a bucketQuota) ReadsNamespace() bool { return a.maxPerNamespace > 0 }
+
 func (bucketQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindBucket.GVK() && op == Create
 }

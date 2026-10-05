@@ -22,12 +22,23 @@ type storeHandlers struct {
 	store store.Store
 	authz auth.Authorizer
 	admit *admission.Pipeline
+	locks *nsLocks // ADR-0147
 }
 
 // NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018). The admission
 // pipeline (ADR-0063) is the admit step on every write; pass admission.NewPipeline(...).
 func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline) Handlers {
-	return &storeHandlers{store: st, authz: authz, admit: admit}
+	return &storeHandlers{store: st, authz: authz, admit: admit, locks: newNSLocks()}
+}
+
+// lockFor takes ns's admission lock when an admission of (kind, op) reads the namespace (ADR-0147), so
+// the Old fetch, the admission and the store write run as one step against concurrent marked writes.
+// An unmarked write returns a no-op unlock.
+func (h *storeHandlers) lockFor(ctx context.Context, kind v1.Kind, op admission.Operation, ns v1.NamespaceName) (func(), error) {
+	if !h.admit.ReadsNamespace(kind.GVK(), op) {
+		return func() {}, nil
+	}
+	return h.locks.lock(ctx, ns)
 }
 
 // --- the six shared helpers (one authz + admission + store path) ---
@@ -79,6 +90,11 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	} else {
 		m.GenerateName = ""
 	}
+	unlock, err := h.lockFor(ctx, kind, admission.Create, obj.GetObjectMeta().Namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	id, _ := middleware.IdentityFrom(ctx)
 	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
 		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,
@@ -164,7 +180,12 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	if meta.Name != name {
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
 	}
-	stampTypeMeta(obj, kind)                           // route's kind owns TypeMeta (see createObj)
+	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
+	unlock, err := h.lockFor(ctx, kind, admission.Update, ns)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
 	if err != nil {
 		return nil, err
@@ -257,6 +278,11 @@ func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.Names
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
+	unlock, err := h.lockFor(ctx, kind, admission.Delete, ns)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// Run the admit step on Delete only when an admission handles it (e.g. ADR-0064 deletion-protection),
 	// so a build with no Delete admission does no extra store fetch.
 	if h.admit.Handles(kind.GVK(), admission.Delete) {

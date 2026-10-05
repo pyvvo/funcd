@@ -527,3 +527,29 @@ func TestIssue509_InvalidHeaderSetNameRejected(t *testing.T) {
 		require.Equal(t, map[string]string{"Cache-Control": "no-store, max-age=0"}, c.Server.Shaping.Headers.Set)
 	})
 }
+
+// invoke.maxNestedInFlight (ADR-0147) loads from the file and from FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT; 0 stays 0
+// (the facade's default 10) and a negative value is Invalid at load.
+func TestInvokeMaxNestedInFlightConfig(t *testing.T) {
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Zero(t, c.Invoke.MaxNestedInFlight, "zero-config leaves the facade default")
+
+	c, err = config.Load(writeCfg(t, "invoke:\n  maxNestedInFlight: 20\n"), config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 20, c.Invoke.MaxNestedInFlight)
+
+	t.Setenv("FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT", "7")
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 7, c.Invoke.MaxNestedInFlight)
+
+	t.Setenv("FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT", "-1")
+	_, err = config.Load("", config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a negative env value is rejected")
+
+	t.Setenv("FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT", "")
+	_, err = config.Load(writeCfg(t, "invoke:\n  maxNestedInFlight: -1\n"), config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a negative file value is rejected")
+	require.ErrorContains(t, err, "invoke.maxNestedInFlight")
+}

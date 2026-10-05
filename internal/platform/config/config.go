@@ -236,6 +236,12 @@ type Config struct {
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
 	} `json:"eventing,omitempty"`
 
+	// Invoke tunes fn-to-fn invoke (ADR-0147). MaxNestedInFlight caps the nested calls in flight to one
+	// Function; 0 ⇒ the default (10). It cannot be disabled.
+	Invoke struct {
+		MaxNestedInFlight int `json:"maxNestedInFlight,omitempty" env:"FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT" validate:"min=0"`
+	} `json:"invoke,omitempty"`
+
 	// Site tunes the declarative static web app reconciler (ADR-0139, FEAT-0003/F103). DefaultIndex is
 	// the document a Site serves for "/" — and asserts present before it reports Ready — when its
 	// spec.index is empty. A relative path (no leading '/').
