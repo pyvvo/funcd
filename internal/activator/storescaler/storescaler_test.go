@@ -217,13 +217,13 @@ func TestIssue142_FunctionFailedDuringActivationIsAnsweredAtOnce(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "did not become ready", "the call must not wait out the activation timeout")
 }
 
-// The reclaim edge moves only a phase activator.Reclaimable admits to Idle and writes nothing for any other: a Failed,
-// Deploying or Terminating Function is never reclaimed (ADR-0169 Decision 3).
+// The reclaim edge moves only a phase activator.Reclaimable admits to Idle and writes nothing for any other: a Pending,
+// Failed, Deploying or Terminating Function is never reclaimed (ADR-0169 Decision 3, ADR-0185).
 func TestReclaimEdgeAllowList(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ from, to v1.Phase }{
 		"empty":       {"", v1.PhaseIdle},
-		"pending":     {v1.PhasePending, v1.PhaseIdle},
+		"pending":     {v1.PhasePending, v1.PhasePending},
 		"ready":       {v1.PhaseReady, v1.PhaseIdle},
 		"degraded":    {v1.PhaseDegraded, v1.PhaseIdle},
 		"idle":        {v1.PhaseIdle, v1.PhaseIdle},

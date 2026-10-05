@@ -1,7 +1,7 @@
 // Package storescaler is the V1 store-backed activator.Scaler driver (ADR-0016): it
 // records a function's scale intent as its partitioned status Phase — the wake edge
-// Idle→Deploying for replicas>=1, the reclaim edge Ready/Degraded/Pending/empty→Idle for
-// replicas==0 (activator.Reclaimable, ADR-0169) — via store.Update. It is idempotent and
+// Idle→Deploying for replicas>=1, the reclaim edge Ready/Degraded/empty→Idle for
+// replicas==0 (activator.Reclaimable, ADR-0169, ADR-0185) — via store.Update. It is idempotent and
 // edge-respecting (it never flips an off-diagram transition), and it re-reads and retries on
 // the store's RV fault.Conflict so a concurrent controller (P-M) status write never drops the intent.
 package storescaler
@@ -79,8 +79,8 @@ func targetPhase(replicas int) v1.Phase {
 // needed, honoring the activator's partition of Function.Status.Phase (ADR-0016 C2): the wake
 // edge fires only from a sleeping/initial phase (Idle/Pending/empty → Deploying) — never an
 // off-diagram Ready→Deploying; the reclaim edge fires only from a phase activator.Reclaimable
-// admits (Ready/Degraded/Pending/empty → Idle), never from Failed, Deploying or Terminating
-// (ADR-0169). P-M owns Deploying→Ready/Failed.
+// admits (Ready/Degraded/empty → Idle), never from Pending, Failed, Deploying or Terminating
+// (ADR-0169, ADR-0185). P-M owns Deploying→Ready/Failed.
 func transition(f *v1.Function, target v1.Phase) (v1.Phase, bool) {
 	cur := f.Status.Phase
 	if cur == target {

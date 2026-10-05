@@ -488,7 +488,7 @@ func rootedClean(p string) string {
 
 // ReclaimIdle scales to zero every minReplicas==0 function in a Reclaimable phase whose last activity is older
 // than its IdleTimeout, that has no call in flight and no wake in progress. Functions with recent
-// activity, MinReplicas != 0, a zero IdleTimeout (reclaim disabled), or any other phase — Failed,
+// activity, MinReplicas != 0, a zero IdleTimeout (reclaim disabled), or any other phase — Pending, Failed,
 // Deploying, Terminating, Idle — are skipped. A function not yet seen, or with a call in flight, is
 // given a full grace window from the current time. Entries for functions that no longer exist are dropped.
 func (a *Activator) ReclaimIdle(ctx context.Context) error {
@@ -531,10 +531,11 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 	return nil
 }
 
-// Reclaimable reports whether idle reclaim may move fn to Idle (ADR-0016 C2, ADR-0169).
+// Reclaimable reports whether idle reclaim may move fn to Idle (ADR-0016 C2, ADR-0169, ADR-0185): a gate-held
+// Pending Function runs no worker, so it is never reclaimed.
 func Reclaimable(fn *v1.Function) bool {
 	switch fn.Status.Phase {
-	case v1.PhaseReady, v1.PhaseDegraded, v1.PhasePending, "":
+	case v1.PhaseReady, v1.PhaseDegraded, "":
 		return true
 	}
 	return false
