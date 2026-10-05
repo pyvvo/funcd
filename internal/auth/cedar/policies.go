@@ -98,9 +98,9 @@ func (c *policyCache) For(ctx context.Context, principalNS, resourceNS v1.Namesp
 // here means corruption.
 func compile(builtins string, policies []v1.Policy) (builtin *cedar.PolicySet, byNS map[v1.NamespaceName]*cedar.PolicySet, err error) {
 	const op = "cedar.compile"
-	builtin, err = cedar.NewPolicySetFromBytes("builtin", []byte(builtins))
+	builtin, err = compileBuiltins(builtins)
 	if err != nil {
-		return nil, nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
+		return nil, nil, err
 	}
 	byNS = map[v1.NamespaceName]*cedar.PolicySet{}
 	for i := range policies {
@@ -120,6 +120,28 @@ func compile(builtins string, policies []v1.Policy) (builtin *cedar.PolicySet, b
 		}
 	}
 	return builtin, byNS, nil
+}
+
+// compileBuiltins names each built-in by its @id annotation, so a deny reason names a built-in forbid
+// stably whatever its position (#675). The "builtin/" prefix keeps the ids apart from a user Policy's
+// <namespace>/<name>#<n>; a missing or duplicate @id is refused, since Add would silently replace a policy.
+func compileBuiltins(text string) (*cedar.PolicySet, error) {
+	const op = "cedar.compileBuiltins"
+	list, err := cedar.NewPolicyListFromBytes("builtin", []byte(text))
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "compile built-in policies")
+	}
+	ps := cedar.NewPolicySet()
+	for i, pol := range list {
+		name := pol.Annotations()["id"]
+		if name == "" {
+			return nil, fault.Internalf(op, "built-in policy %d has no @id annotation", i)
+		}
+		if !ps.Add(cedartypes.PolicyID("builtin/"+string(name)), pol) {
+			return nil, fault.Internalf(op, "duplicate built-in policy @id %q", name)
+		}
+	}
+	return ps, nil
 }
 
 func withBuiltins(builtin *cedar.PolicySet) *cedar.PolicySet {

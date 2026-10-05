@@ -9,5 +9,6 @@
 // here; queries on catalogs NOT in `catalogBindings` have no permitting built-in, so they stay
 // default-deny. Operator Policy `forbid`s revoke a binding's query. External Identities are granted
 // via a Catalog-scoped RolesAssignment (a compiled permit), never this built-in.
+@id("catalog-query-binding")
 permit(principal, action == Action::"catalog::query", resource)
   when { principal has catalogBindings && principal.catalogBindings.contains(resource) };
