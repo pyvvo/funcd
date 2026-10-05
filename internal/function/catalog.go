@@ -60,6 +60,13 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 		if cs.Status.Phase != v1.PhaseReady || cs.Status.Endpoint == "" {
 			return nil, true, nil
 		}
+		// A Ready status can outlive its proxy: after a daemon restart it holds the old proxy's URL until the
+		// catalog's first pass ensures a new proxy on a new port (#662). Wait for that URL.
+		if r.catalogProxies != nil {
+			if url, live := r.catalogProxies.URL(fn.Namespace, bnd.Catalog); !live || url != cs.Status.Endpoint {
+				return nil, true, nil
+			}
+		}
 		alias := strings.ToUpper(bnd.Alias)
 		out["FUNCD_CATALOG_"+alias+"_URL"] = cs.Status.Endpoint // the node-private catalog PEP proxy (ADR-0137)
 		out["FUNCD_CATALOG_"+alias+"_TOKEN"] = token            // per-function MAC token (ADR-0137), not the shared QUACK_TOKEN

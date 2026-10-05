@@ -136,6 +136,10 @@ type Deps struct {
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
 	CatalogMaster []byte
 
+	// CatalogProxies reports the catalog proxies this daemon runs (ADR-0137): a consumer starts only once its catalog's
+	// stored endpoint is the URL of a running proxy. nil ⇒ the stored endpoint of a Ready catalog is used as is.
+	CatalogProxies CatalogProxies
+
 	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
 	// catalog-consumer function's worker env (a function declaring spec.catalogs) so its handler's
 	// `LOAD quack`/`ducklake` resolves the curated DuckDB extensions from this dir. It is the dev
@@ -156,6 +160,12 @@ type Deps struct {
 	HandOutSettle time.Duration
 	// Clock times the drain from drainingSince; nil ⇒ clock.System().
 	Clock clock.Clock
+}
+
+// CatalogProxies reports the URL of the catalog proxy running for a CatalogService (ADR-0137), false when none runs.
+// Satisfied by *cataloggw.Manager.
+type CatalogProxies interface {
+	URL(ns v1.NamespaceName, name v1.ObjectName) (string, bool)
 }
 
 // S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
@@ -229,6 +239,9 @@ type Reconciler struct {
 	// catalogMaster is the node master the per-function catalog token is derived from (ADR-0137);
 	// nil/empty ⇒ catalog injection derives a token the proxy cannot verify. Never logged.
 	catalogMaster []byte
+
+	// catalogProxies reports the running catalog proxies (ADR-0137, #662); nil ⇒ no liveness check.
+	catalogProxies CatalogProxies
 
 	// catalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
 	// catalog-consumer function's worker env (dev analogue of the prod bundle's duckdb-ext, ADR-0089).
@@ -328,6 +341,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		s3Gateway:           d.S3Gateway,
 		catalogMaster:       d.CatalogMaster,
 		catalogExtensionDir: d.CatalogExtensionDir,
+		catalogProxies:      d.CatalogProxies,
 		assigner:            pooling.NewAssigner(),
 		poolShimCommand:     d.PoolShimCommand,
 		poolShimsByFamily:   d.PoolShimsByFamily,
