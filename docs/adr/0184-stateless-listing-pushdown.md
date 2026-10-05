@@ -1,6 +1,6 @@
 # ADR-0184: Stateless listing push-down — the S3 gateway seeks storage from the marker instead of re-listing
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, listing, port, performance

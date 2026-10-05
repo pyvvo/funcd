@@ -1,6 +1,6 @@
 # ADR-0188: S3 multipart memory budget — one daemon-wide bound on buffered parts and assembled copies
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: s3, blob, multipart, memory, capacity

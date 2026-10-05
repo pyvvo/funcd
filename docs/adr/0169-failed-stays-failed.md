@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0185](0185-idle-reclaim-skips-pending.md) (2026-10-05) — Decision 3 (line 120), Contracts Reclaimable and edge table (lines 157, 211), checklist line 257 and the header's Pending --> Idle edge (lines 24-25): idle reclaim no longer admits Pending.
 - **Superseded in part by**: [ADR-0192](0192-asleep-function-gate-stops-worker.md) (2026-10-05) — Decision 1 (lines 109-110, 113; Contracts 173; checklist 252) and Decision 2 line 116: an asleep minReplicas-0 Function stays at zero workers while Failed and goes Idle when its gates pass.
+- **Superseded in part by**: [ADR-0193](0193-asleep-gate-rule-for-every-placement.md) (2026-10-05) — Decision 1's maxInt(1, spec.replicas) for Failed and 'a gate that passes again brings a worker up', now also for an asleep pooled member.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, activator, scale-to-zero, status, supervision, crash-recovery

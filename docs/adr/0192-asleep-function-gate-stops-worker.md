@@ -1,6 +1,7 @@
 # ADR-0192: A gate on an asleep Function stops its worker, and the Function stays asleep until a call
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0193](0193-asleep-gate-rule-for-every-placement.md) (2026-10-05) — Decision 4 (solo only), Decision 1's solo wording, Scope Out, the asleep contract's pooled clause, plan step 4 and checklist lines 216 and 225: the asleep-gate rule holds for every placement.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: function, activator, scale-to-zero, status, quiescence, supervision
