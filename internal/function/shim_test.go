@@ -42,6 +42,7 @@ type fakeRuntime struct {
 	specs   map[runtime.InstanceID]runtime.WorkerSpec
 	state   map[runtime.InstanceID]runtime.State
 	created map[runtime.InstanceID]time.Time
+	started map[runtime.InstanceID]time.Time // the last Start, as the drivers report it (ADR-0183)
 	ip      string
 	port    int
 	failed  bool // Start marks instances Failed (the shim exited on a shape error)
@@ -72,6 +73,7 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		specs:   map[runtime.InstanceID]runtime.WorkerSpec{},
 		state:   map[runtime.InstanceID]runtime.State{},
 		created: map[runtime.InstanceID]time.Time{},
+		started: map[runtime.InstanceID]time.Time{},
 		ip:      ip, port: port,
 		revPort:   map[v1.ObjectName]int{},
 		failRev:   map[v1.ObjectName]bool{},
@@ -152,6 +154,7 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	f.specs[id] = spec
 	f.state[id] = runtime.StateCreated
 	f.created[id] = f.clk.Now()
+	delete(f.started, id)
 	delete(f.stopped, id)
 	delete(f.exits, id)
 	delete(f.listened, id)
@@ -164,6 +167,7 @@ func (f *fakeRuntime) Start(_ context.Context, id runtime.InstanceID) error {
 	defer f.mu.Unlock()
 	delete(f.exits, id)
 	delete(f.listened, id)
+	f.started[id] = f.clk.Now()
 	switch ex, ends := f.startExit[id]; {
 	case ends:
 		f.state[id], f.exits[id] = runtime.StateFailed, ex
@@ -230,6 +234,7 @@ func (f *fakeRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
 	delete(f.specs, id)
 	delete(f.state, id)
 	delete(f.created, id)
+	delete(f.started, id)
 	delete(f.stopped, id)
 	delete(f.exits, id)
 	delete(f.listened, id)
@@ -247,7 +252,8 @@ func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	}
 	in := runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
-		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id], Listened: f.listened[id], Exit: f.exits[id],
+		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id], StartedAt: f.started[id],
+		Listened: f.listened[id], Exit: f.exits[id],
 	}
 	if in.State == runtime.StateRunning && !f.held[id] {
 		in.IP = f.ip
@@ -273,14 +279,15 @@ func (f *fakeRuntime) forget() {
 	clear(f.specs)
 	clear(f.state)
 	clear(f.created)
+	clear(f.started)
 	clear(f.stopped)
 	clear(f.held)
 	clear(f.exits)
 	clear(f.listened)
 }
 
-// exit marks replica 0 of name — of whichever revision runs it — as exited in state st, created age ago (a crash of a
-// worker that ran that long).
+// exit marks replica 0 of name — of whichever revision runs it — as exited in state st, created and started age ago (a
+// crash of a worker that ran that long).
 func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -288,17 +295,19 @@ func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Durati
 		if spec.Name == name && spec.Replica == 0 && !f.state[id].Terminal() {
 			f.state[id] = st
 			f.created[id] = f.clk.Now().Add(-age)
+			f.started[id] = f.created[id]
 		}
 	}
 }
 
-// exitRevision marks replica i of revision rev of name as exited in state st, created age ago.
+// exitRevision marks replica i of revision rev of name as exited in state st, created and started age ago.
 func (f *fakeRuntime) exitRevision(name, rev v1.ObjectName, i int, st runtime.State, age time.Duration) {
 	id := runtime.NewInstanceID("default", name, rev, i)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = st
 	f.created[id] = f.clk.Now().Add(-age)
+	f.started[id] = f.created[id]
 }
 
 // serveRevision gives revision rev its own readiness endpoint, answering status (ADR-0143 tests tell the revisions'

@@ -25,12 +25,13 @@ func replicaID(name string, gen int64, i int) runtime.InstanceID {
 	return runtime.NewInstanceID("default", v1.ObjectName(name), v1.ObjectName(fmt.Sprintf("%s-%d", name, gen)), i)
 }
 
-// end marks instance id as ended on its own with ex, created age ago.
+// end marks instance id as ended on its own with ex, created and started age ago.
 func (f *fakeRuntime) end(id runtime.InstanceID, ex runtime.Exit, age time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id], f.exits[id] = runtime.StateFailed, ex
 	f.created[id] = f.clk.Now().Add(-age)
+	f.started[id] = f.created[id]
 }
 
 // processHarness runs the reconciler on the process driver, every worker running shim as its shim.

@@ -121,6 +121,29 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.NoError(t, rt.Stop(ctx, second.ID))
 	})
 
+	// ADR-0183: StartedAt is zero before the first Start, then the time of the last successful one.
+	t.Run("driver-reports-start-time", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		inst, err := rt.Create(ctx, specOf(t, "started", []string{"sleep", "30"}))
+		require.NoError(t, err)
+		got, err := rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.True(t, got.StartedAt.IsZero(), "no Start yet")
+
+		before := time.Now()
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		after := time.Now()
+		got, err = rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.False(t, got.StartedAt.Before(before), "StartedAt %v is before the Start began at %v", got.StartedAt, before)
+		require.False(t, got.StartedAt.After(after), "StartedAt %v is after the Start returned at %v", got.StartedAt, after)
+		require.False(t, got.StartedAt.Before(got.CreatedAt), "StartedAt is never before CreatedAt")
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+	})
+
 	// ADR-0142: a worker that exits with a non-zero status is Failed on every driver.
 	t.Run("worker-exit-nonzero-failed", func(t *testing.T) {
 		ctx := context.Background()

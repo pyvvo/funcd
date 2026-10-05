@@ -166,3 +166,17 @@ func TestScenarioConfiguredBackoffHonored(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "initial %s, max %s", bad.initial, bad.limit)
 	}
 }
+
+// scenario: zero-start-time-keeps-created-at (ADR-0183) — a Runtime that leaves StartedAt zero keeps the boot clock on
+// CreatedAt, so a boot crash is re-created a wait after it; a reported StartedAt moves the clock.
+func TestScenarioZeroStartTimeKeepsCreatedAt(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	in := crashed(created, runtime.Exit{Cause: runtime.ExitBySignal, Signal: 9})
+	require.Equal(t, created, lastStart(in))
+	_, due := testBootBackoff(10*time.Second, 5*time.Minute).observe(in, exitBootCrash)
+	require.Equal(t, created.Add(10*time.Second), due)
+
+	in.StartedAt = created.Add(2*time.Minute + 30*time.Second)
+	require.Equal(t, in.StartedAt, lastStart(in))
+}

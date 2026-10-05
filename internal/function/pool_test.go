@@ -777,6 +777,7 @@ func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
 	h.rt.mu.Lock()
 	h.rt.state[crashed] = runtime.StateFailed
 	h.rt.created[crashed] = time.Now().Add(-controller.SupervisionPeriod)
+	h.rt.started[crashed] = h.rt.created[crashed]
 	h.rt.mu.Unlock()
 	creates, _ := h.rt.counts()
 	reconcile("team-a")
