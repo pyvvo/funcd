@@ -366,7 +366,7 @@ func untarBundle(op string, r io.Reader, dir string) error {
 			if ferr != nil {
 				return fault.Wrapf(ferr, fault.Internal, op, "create %q", hdr.Name)
 			}
-			if _, cerr := io.Copy(f, tr); cerr != nil { //nolint:gosec // bundle is digest-verified before untar
+			if _, cerr := io.Copy(f, tr); cerr != nil { //nolint:gosec // the layer is digest-verified before its cache dir is served
 				_ = f.Close()
 				return fault.Wrapf(cerr, fault.Internal, op, "write %q", hdr.Name)
 			}
