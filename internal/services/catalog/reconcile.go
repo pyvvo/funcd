@@ -144,9 +144,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			return controller.Result{}, rerr
 		}
 	} else {
-		// Not Ready: retract any external edge entry so the edge never points at a not-ready proxy.
+		// Not Ready: retract any external edge entry and suspend the proxy, so neither forwards to an engine that is
+		// not Ready (#716); the next Ready pass's Ensure retargets the proxy on the same URL.
 		if rerr := r.syncIngressRoute(ctx, cs, ""); rerr != nil {
 			return controller.Result{}, rerr
+		}
+		if r.proxy != nil {
+			r.proxy.Suspend(cs.Namespace, cs.Name)
 		}
 		if st.Endpoint != "" {
 			cs.Status.Endpoint = st.Endpoint

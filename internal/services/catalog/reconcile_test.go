@@ -926,3 +926,83 @@ func TestMapFunctionMapsReleasedListeners(t *testing.T) {
 	require.Equal(t, []controller.Request{{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}},
 		r.MapFunction(context.Background(), fn))
 }
+
+// TestIssue716_NotReadyEngineStopsServing: a pass that finds the engine not Ready, whether it moved and is not
+// probed Ready yet or Converge failed, suspends the proxy consumers hold, so it forwards nothing (and no engine
+// token) to the previous engine until a Ready pass retargets it on the same URL.
+func TestIssue716_NotReadyEngineStopsServing(t *testing.T) {
+	cases := []struct {
+		name     string
+		notReady func(prov *fakeProvider)
+		wantErr  bool
+	}{
+		{
+			name: "engine-moved",
+			notReady: func(prov *fakeProvider) {
+				prov.status = provider.ProviderStatus{Running: 1, Ready: false, Address: "10.63.0.250:8080"}
+			},
+		},
+		{
+			name:     "converge-failed",
+			notReady: func(prov *fakeProvider) { prov.err = errors.New("create engine replica 0: pull image: not found") },
+			wantErr:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var engineHits atomic.Int32
+			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				engineHits.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(engine.Close)
+			engineReady := provider.ProviderStatus{Running: 1, Ready: true, Address: strings.TrimPrefix(engine.URL, "http://")}
+			st := store.New(storemem.New())
+			seedCatalogBucket(t, st)
+			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			t.Cleanup(mgr.Shutdown)
+			prov := &fakeProvider{status: engineReady}
+			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
+				d.Secrets = &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "shared-engine-token"}}
+				d.Proxy = mgr
+			})
+			cs := mkCatalogService("lake")
+			cs.Spec.Secrets = []v1.ObjectName{"quack"}
+			_, err := st.Create(ctx, cs)
+			require.NoError(t, err)
+			req := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
+			get := func() *v1.CatalogService {
+				obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+				require.NoError(t, gerr)
+				return obj.(*v1.CatalogService)
+			}
+			query := func(addr string) int {
+				resp, qerr := http.Get("http://" + addr + "/")
+				require.NoError(t, qerr)
+				require.NoError(t, resp.Body.Close())
+				return resp.StatusCode
+			}
+
+			reconcileOnce(t, r, "lake")
+			require.Equal(t, v1.PhaseReady, get().Status.Phase)
+			proxyURL := get().Status.Endpoint
+			require.Equal(t, http.StatusOK, query(proxyURL))
+			require.Equal(t, int32(1), engineHits.Load())
+
+			tc.notReady(prov)
+			_, err = r.Reconcile(ctx, req)
+			require.Equal(t, tc.wantErr, err != nil, "reconcile error: %v", err)
+			require.Equal(t, v1.PhasePending, get().Status.Phase)
+			require.Equal(t, http.StatusServiceUnavailable, query(proxyURL), "the proxy consumers hold no longer forwards")
+			require.Equal(t, int32(1), engineHits.Load(), "no query reached the previous engine")
+
+			prov.status, prov.err = engineReady, nil
+			reconcileOnce(t, r, "lake")
+			require.Equal(t, v1.PhaseReady, get().Status.Phase)
+			require.Equal(t, proxyURL, get().Status.Endpoint, "consumers keep the URL they were injected with")
+			require.Equal(t, http.StatusOK, query(proxyURL))
+			require.Equal(t, int32(2), engineHits.Load())
+		})
+	}
+}
