@@ -15,7 +15,7 @@ type SpanKind string
 const (
 	SpanServer   SpanKind = "SERVER"   // the auto invocation span (ADR-0101)
 	SpanInternal SpanKind = "INTERNAL" // reserved for later SDK-forwarded spans
-	SpanClient   SpanKind = "CLIENT"   // reserved (fn→fn call span, a follow-on)
+	SpanClient   SpanKind = "CLIENT"   // a context.invoke call in the caller's shim (ADR-0165)
 )
 
 // valid reports whether k is a known span kind.
@@ -54,8 +54,8 @@ type Span struct {
 	TraceID    string            // hex32; adopted from traceparent or minted (root)
 	SpanID     string            // hex16; minted per invocation
 	ParentID   string            // hex16; the traceparent span-id, empty for a root
-	Name       string            // the function name (FUNCD_FUNCTION) or "invoke"
-	Kind       SpanKind          // SERVER for the auto invocation span
+	Name       string            // the function name (FUNCD_FUNCTION) or "invoke"; "call <alias>" for a CLIENT span
+	Kind       SpanKind          // SERVER for the auto invocation span, CLIENT for a fn→fn call
 	Start      time.Time         // invocation start (epoch nanos on the wire)
 	End        time.Time         // invocation end
 	Status     SpanStatus        // OK on return, ERROR on throw/output-mismatch

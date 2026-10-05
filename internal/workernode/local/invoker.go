@@ -38,6 +38,9 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	req := httptest.NewRequest(http.MethodPost, "/function/"+string(target.Function), bytes.NewReader(dataplane.InvokeEnvelope(target.Namespace, target.Function, input))).WithContext(cctx)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(namespaceHeader, string(target.Namespace))
+	if tp := traceparentFrom(cctx); tp != "" { // the caller's CLIENT span, verbatim (ADR-0165)
+		req.Header.Set(traceparentHeader, tp)
+	}
 
 	rec := &cappedRecorder{ResponseRecorder: httptest.NewRecorder()}
 	if aborted := serve(p.dataPlane, rec, req); aborted {

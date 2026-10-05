@@ -43,7 +43,7 @@ type spanWire struct {
 func (w spanWire) toSpan() Span {
 	kind := SpanKind(w.Kind)
 	if !kind.valid() {
-		kind = SpanServer // the only emitter today is the auto invocation span
+		kind = SpanServer // an unknown kind reads as the auto invocation span
 	}
 	status := SpanStatus(w.Status)
 	if !status.valid() {
