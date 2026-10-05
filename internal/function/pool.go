@@ -480,6 +480,7 @@ func (r *Reconciler) poolSharedEnv(self *v1.Function, secretEnv, catalogEnv map[
 		}
 	}
 	r.addCatalogExtensionDir(env, self)
+	r.addRecordBound(env)
 	r.mergeSecretEnv(env, secretEnv)
 	return env
 }

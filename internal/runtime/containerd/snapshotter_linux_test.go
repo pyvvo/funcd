@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -56,7 +56,6 @@ func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 		Name:      "issue370",
 		Revision:  "issue370-1",
 		Image:     "funcd/issue370:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
 	rootfs := t.TempDir()
@@ -65,7 +64,7 @@ func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": overlay, "native": native})
-	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default(), Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.NoError(t, err, "the image layers are in the configured snapshotter, so the worker's snapshot must be prepared there")
@@ -143,7 +142,6 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 		Name:      "issue456",
 		Revision:  "issue456-1",
 		Image:     "funcd/issue456:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 	rootfs := t.TempDir()
 	overlay := &memSnapshotter{rootfs: rootfs, keys: map[string]bool{layer.Digest.String(): true}}
@@ -159,7 +157,7 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 		containerd.WithTaskClient(&createdTasks{}),
 	))
 	require.NoError(t, err)
-	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default(), Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err = d.Create(ctx, spec)
 	require.NoError(t, err, "the image is present but its layers are only in another snapshotter, so Create must unpack it first")
@@ -177,12 +175,11 @@ func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
 		Name:      "issue493",
 		Revision:  "issue493-1",
 		Image:     "funcd/runtime-nodejs22:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 	overlay := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: "docker.io/" + spec.Image, Target: manifest},
 		&memContainers{records: map[string]containers.Container{}}, map[string]snapshots.Snapshotter{"overlayfs": overlay})
-	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.NoError(t, err, "the curated image is already imported under its normalized name, so Create must use it, not import the embedded tar again")
@@ -200,7 +197,7 @@ func TestResolveImage_PullsShortRefFromDockerHub(t *testing.T) {
 		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}})
 	const prefix = "acme/runtime-"
 	mapping := ctrmanager.Config{}
-	d := &driver{cfg: Config{Pullable: mapping.Pullable(prefix)}, client: client, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default(), Pullable: mapping.Pullable(prefix)}, client: client, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err = d.resolveImage(ctx, "create", mapping.ImageFor(prefix)("deno"))
 	var uerr *url.Error
@@ -269,7 +266,7 @@ func pullDriver(t *testing.T, pullable func(string) bool) (*driver, *leaseCounte
 	client := fakeClient(t, cs, images.Image{}, &memContainers{records: map[string]containers.Container{}},
 		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}},
 		containerd.WithLeasesService(pulls))
-	return &driver{cfg: Config{Pullable: pullable}, client: client, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}, pulls
+	return &driver{cfg: Config{Logger: slog.Default(), Pullable: pullable}, client: client, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}, pulls
 }
 
 var errPullRecorded = fmt.Errorf("pull recorded, not run: %w", errdefs.ErrUnavailable)

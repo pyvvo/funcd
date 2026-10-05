@@ -27,7 +27,6 @@ func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
 		spec := runtime.WorkerSpec{
 			Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "stubborn", Replica: i,
 			Command: []string{"sh", "-c", `trap "" TERM; touch "$0"; exec sleep 60`, ready},
-			LogPath: filepath.Join(dir, fmt.Sprintf("w%d.log", i)),
 		}
 		inst, err := d.Create(ctx, spec)
 		require.NoError(t, err)

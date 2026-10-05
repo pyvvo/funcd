@@ -376,6 +376,7 @@ func TestIssue326_OutOfRangeNumbersRejected(t *testing.T) {
 		{"server.shaping.cors.maxAgeSeconds", []string{"-1"}, []string{"0"}},
 		{"kvstore.backup.chunkBytes", []string{"-1"}, []string{"0"}},
 		{"funclog.segmentMaxBytes", []string{"-1"}, []string{"0"}},
+		{"funclog.maxRecordBytes", []string{"-1"}, []string{"0"}},
 		{"s3gateway.maxUploadBytes", []string{"-1"}, []string{"0"}},
 		{"workflow.defaultRetry", []string{"-1"}, []string{"0"}},
 		{"workflow.payloadLimit", []string{"-1"}, []string{"0"}},

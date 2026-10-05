@@ -6,7 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
@@ -19,13 +20,12 @@ import (
 
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
-// Issue 492: a Create that fails after it made the worker's temp log file must delete it; the worker is never
-// registered, so no Remove ever will.
-func TestIssue492_FailedCreateRemovesLogFile(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+// Issue 492: a Create that fails leaves nothing behind: the worker is never registered, so no Remove ever would
+// delete it. Its output would have gone through FIFOs under the driver's fifoDir (ADR-0168).
+func TestIssue492_FailedCreateLeavesNoFifoDir(t *testing.T) {
 	ctx := leases.WithLease(context.Background(), "issue492")
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
@@ -38,14 +38,14 @@ func TestIssue492_FailedCreateRemovesLogFile(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, rejectingContainers{},
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	fifoDir := t.TempDir()
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: fifoDir, instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.Error(t, err)
-
-	logs, err := filepath.Glob(filepath.Join(tmp, "funcd-issue492-r0-*.log"))
+	dirs, err := os.ReadDir(fifoDir)
 	require.NoError(t, err)
-	require.Empty(t, logs, "a failed Create must remove the log file it created")
+	require.Empty(t, dirs, "a failed Create must leave no FIFO dir")
 }
 
 type rejectingContainers struct{ containers.Store }
@@ -69,7 +69,6 @@ func TestCreate_FailedNetworkSetupRemovesCNIAttachment(t *testing.T) {
 		Name:      "cnisetup",
 		Revision:  "cnisetup-1",
 		Image:     "funcd/cnisetup:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 	_, cniID := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
 	ctrs := &memContainers{records: map[string]containers.Container{}}
@@ -77,7 +76,7 @@ func TestCreate_FailedNetworkSetupRemovesCNIAttachment(t *testing.T) {
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
 	cni := &failingSetupCNI{}
-	d := &driver{client: client, cni: cni, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: cni, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.ErrorIs(t, err, errFirewallAdd, "Create must return the Setup error")
@@ -98,17 +97,23 @@ func TestCreate_FailedNetworkSetupKillsTask(t *testing.T) {
 		Name:      "killtask",
 		Revision:  "killtask-1",
 		Image:     "funcd/killtask:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: &failingSetupCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	fifoDir := t.TempDir()
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: &failingSetupCNI{}, bootRoot: t.TempDir(), fifoDir: fifoDir, instances: map[runtime.InstanceID]*worker{}}
+	hooked := false
+	d.outputs = func(runtime.WorkerSpec, *workerpipe.Output) { hooked = true }
 
 	_, err := d.Create(ctx, spec)
 	require.ErrorIs(t, err, errFirewallAdd, "Create must return the Setup error")
+	require.False(t, hooked, "a failed Create must start no Pump on its output")
+	dirs, err := os.ReadDir(fifoDir)
+	require.NoError(t, err)
+	require.Empty(t, dirs, "a failed Create must close its task IO and remove the run's FIFO dir")
 	tasks := client.TaskService().(*createdTasks)
 	require.Equal(t, []string{ctrID}, tasks.killed, "a failed Create must kill its created task")
 	require.Equal(t, []string{ctrID}, tasks.deleted, "a failed Create must delete its task")

@@ -4,6 +4,7 @@ package containerd
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -52,7 +53,7 @@ func TestExitOf(t *testing.T) {
 func TestScenarioHostilePortFileIsNotListened(t *testing.T) {
 	dir := t.TempDir()
 	port := filepath.Join(dir, "port")
-	d := &driver{bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 	sb := &worker{bootDir: dir}
 
 	require.False(t, d.listened(sb), "no port file")
@@ -85,7 +86,6 @@ func TestCreateBootDir(t *testing.T) {
 		Name:      "boot",
 		Revision:  "boot-1",
 		Image:     "funcd/boot:latest",
-		LogPath:   filepath.Join(t.TempDir(), "w.log"),
 	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	ctrID, _ := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), "0")
@@ -94,7 +94,7 @@ func TestCreateBootDir(t *testing.T) {
 		snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 		client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, rejectingContainers{},
 			map[string]snapshots.Snapshotter{"overlayfs": snap})
-		return &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+		return &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 	}
 
 	t.Run("failed-create-leaves-no-dir", func(t *testing.T) {

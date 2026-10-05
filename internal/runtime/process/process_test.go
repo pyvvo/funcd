@@ -36,7 +36,7 @@ func TestCreateRejectsLiveInstance(t *testing.T) {
 	ctx := context.Background()
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}, LogPath: filepath.Join(t.TempDir(), "w.log")}
+	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}}
 
 	inst, err := rt.Create(ctx, spec)
 	require.NoError(t, err)
@@ -81,7 +81,6 @@ func TestIssue45_WorkerEndReclaimsSubprocesses(t *testing.T) {
 				Name:      "spawner",
 				Command:   []string{"sh", "-c", `sleep 600 & echo $! > "$PIDFILE"; wait`},
 				Env:       map[string]string{"PIDFILE": pidFile},
-				LogPath:   filepath.Join(dir, "w.log"),
 			})
 			require.NoError(t, err)
 			require.NoError(t, rt.Start(ctx, inst.ID))
@@ -108,8 +107,8 @@ func TestIssue45_WorkerEndReclaimsSubprocesses(t *testing.T) {
 	}
 }
 
-// Replacing an exited instance deletes the replaced instance's driver-owned log and port files, so a crash loop or a
-// scale-to-zero wake leaves one pair per instance, not one per restart.
+// Replacing an exited instance deletes the replaced instance's driver-owned port file, so a crash loop or a scale-to-zero
+// wake leaves one file per instance, not one per restart (its output goes through pipes, ADR-0168).
 func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -133,13 +132,14 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 		}, 5*time.Second, 10*time.Millisecond)
 		require.NoError(t, rt.Stop(ctx, inst.ID))
 	}
-	require.Len(t, files(), 2, "only the current instance's log and port files remain")
+	require.Len(t, files(), 1, "only the current instance's port file remains")
+	require.Regexp(t, `funcd-worker-.*\.port$`, files()[0])
 
 	require.NoError(t, rt.Remove(ctx, runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)))
 	require.Empty(t, files(), "Remove deletes the last instance's files")
 }
 
-// A Create rejected because the instance is live (Created or Running) leaves no driver-created log file behind.
+// A Create rejected because the instance is live (Created or Running) leaves no driver-created file behind.
 func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -148,7 +148,7 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}}
 	logs := func() []string {
-		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*.log"))
+		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*.port"))
 		require.NoError(t, err)
 		return got
 	}
@@ -157,30 +157,28 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rt.Create(ctx, spec)
 	require.Equal(t, fault.Conflict, fault.KindOf(err))
-	require.Len(t, logs(), 1, "a Create rejected on a Created instance makes no log file")
+	require.Len(t, logs(), 1, "a Create rejected on a Created instance makes no port file")
 
 	require.NoError(t, rt.Start(ctx, inst.ID))
 	_, err = rt.Create(ctx, spec)
 	require.Equal(t, fault.Conflict, fault.KindOf(err))
-	require.Len(t, logs(), 1, "a Create rejected on a Running instance makes no log file")
+	require.Len(t, logs(), 1, "a Create rejected on a Running instance makes no port file")
 
 	require.NoError(t, rt.Stop(ctx, inst.ID))
 	require.NoError(t, rt.Remove(ctx, inst.ID))
 	require.Empty(t, logs())
 }
 
-// Close deletes the driver-owned log and port files of every instance it holds, as Remove does, so a daemon restart
-// leaves no pair per live worker in the temp dir; a log the caller set through LogPath stays.
+// Close deletes the driver-owned port file of every instance it holds, as Remove does, so a daemon restart leaves no
+// file per live worker in the temp dir.
 func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	ctx := context.Background()
 	rt := process.New()
-	callerLog := filepath.Join(t.TempDir(), "caller.log")
 	specs := []runtime.WorkerSpec{
 		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
 		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "exited", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}},
-		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "own-log", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}, LogPath: callerLog},
 	}
 	for _, spec := range specs {
 		inst, err := rt.Create(ctx, spec)
@@ -193,14 +191,12 @@ func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
 	}
 	driverFiles, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
 	require.NoError(t, err)
-	require.Len(t, driverFiles, 4, "the live and exited workers each have a driver-owned log and port file")
+	require.Len(t, driverFiles, 2, "the live and exited workers each have a driver-owned port file")
 
 	require.NoError(t, rt.Close())
 	driverFiles, err = filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
 	require.NoError(t, err)
 	require.Empty(t, driverFiles, "Close deletes the driver-owned files")
-	require.NoFileExists(t, callerLog+".port", "Close deletes the driver-owned port file beside a caller's log")
-	require.FileExists(t, callerLog, "Close keeps a log the caller set through LogPath")
 }
 
 // A worker's environment is what its spec carries plus the few host variables a process needs to run, never the
@@ -220,7 +216,6 @@ func TestWorkerEnvExcludesDaemonEnvironment(t *testing.T) {
 		Name:      "envdump",
 		Command:   []string{"sh", "-c", `env > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"; sleep 30`},
 		Env:       map[string]string{"OUT": out, "SPEC_VAR": "from-spec"},
-		LogPath:   filepath.Join(dir, "w.log"),
 	})
 	require.NoError(t, err)
 	require.NoError(t, rt.Start(ctx, inst.ID))

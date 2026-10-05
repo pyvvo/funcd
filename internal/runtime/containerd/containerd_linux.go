@@ -4,7 +4,7 @@
 // Linux (ADR-0011): pull a curated runtime image, run it as a runc container with
 // conservative OCI defaults (no added caps, no_new_privileges, optional limits),
 // attach a per-worker netns with default-deny lateral (go-cni bridge + firewall),
-// and harvest logs via cio.LogFile. One driver subpackage; the port stays
+// and read each task's stdout and stderr through FIFOs (ADR-0168). One driver subpackage; the port stays
 // container-lib-free. Integration-tested on the Linux lane (FUNCD_IT=1, root).
 package containerd
 
@@ -38,6 +38,7 @@ import (
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/embedimg"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
 // stopGrace is how long Stop waits after SIGTERM before sending SIGKILL.
@@ -85,7 +86,7 @@ type Config struct {
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
-// not retain (the netns path/IP and the log file).
+// not retain (the netns path/IP and the task's output).
 type worker struct {
 	ctrID     string
 	namespace v1alpha1.NamespaceName
@@ -96,9 +97,9 @@ type worker struct {
 	cniID     string
 	netnsPath string
 	ip        string
-	port      int // the fixed FUNCD_PORT the shim binds in this netns (ADR-0032); 0 if unset
-	logPath   string
-	ownLog    bool // the driver created logPath, so Remove or a re-create deletes it
+	port      int                // the fixed FUNCD_PORT the shim binds in this netns (ADR-0032); 0 if unset
+	out       *workerpipe.Output // the task's stdout and stderr, through FIFOs under the driver's fifoDir (ADR-0168)
+	taskIO    cio.IO             // the NewTask task's IO; Close removes its FIFO dir
 	createdAt time.Time
 	released  bool // Stop has released the task, the CNI attachment and the container, so Remove may forget it
 	bootDir   string
@@ -119,8 +120,43 @@ type driver struct {
 	bootRoot   string // 0700 parent of the per-worker boot dirs (ADR-0160)
 	mu         sync.Mutex
 
-	capture   runtime.LogCaptureFunc // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
+	capture   runtime.LogCaptureFunc    // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
+	outputs   runtime.OutputCaptureFunc // optional Path A hook (runtime.OutputCapturer, ADR-0168); nil = tail only
 	instances map[runtime.InstanceID]*worker
+	fifoDir   string // the parent of each task's FIFO dir (ADR-0168)
+	ownFifo   bool   // fifoDir is a private temp dir, which Close removes
+}
+
+// outputWait bounds how long Stop and a terminal worker's Logs wait for the run's last output (ADR-0168).
+const outputWait = time.Second
+
+// SetOutputCapture installs the per-run raw-output hook (runtime.OutputCapturer, ADR-0168); Create calls it after the
+// network setup, before the worker is registered and can start.
+func (d *driver) SetOutputCapture(fn runtime.OutputCaptureFunc) {
+	d.mu.Lock()
+	d.outputs = fn
+	d.mu.Unlock()
+}
+
+// makeFifoDir makes <stateDir>/fifo, emptied of a previous run's FIFOs, or a private temp dir when stateDir is unset
+// (ADR-0168).
+func makeFifoDir(stateDir string) (string, bool, error) {
+	const op = "runtime.containerd.New"
+	if stateDir == "" {
+		dir, err := os.MkdirTemp("", "funcd-fifo-")
+		if err != nil {
+			return "", false, fault.Wrapf(err, fault.Internal, op, "create fifo dir")
+		}
+		return dir, true, nil
+	}
+	dir := filepath.Join(stateDir, "fifo")
+	if err := os.RemoveAll(dir); err != nil {
+		return "", false, fault.Wrapf(err, fault.Internal, op, "empty fifo dir %q", dir)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", false, fault.Wrapf(err, fault.Internal, op, "create fifo dir %q", dir)
+	}
+	return dir, false, nil
 }
 
 // SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
@@ -214,7 +250,13 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, instances: map[runtime.InstanceID]*worker{}}, nil
+	fifoDir, ownFifo, err := makeFifoDir(cfg.StateDir)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, fifoDir: fifoDir, ownFifo: ownFifo,
+		instances: map[runtime.InstanceID]*worker{}}, nil
 }
 
 // makeBootRoot makes <stateDir>/boot, or a private temp dir when stateDir is unset, and enforces 0700 on it, so no host
@@ -324,35 +366,26 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		return runtime.Instance{}, err
 	}
 
-	// Honor the WorkerSpec contract: an empty LogPath means the driver picks a temp file. The
-	// containerd shim's cio.LogFile needs an ABSOLUTE path, so a "" (or relative) LogPath must be
-	// resolved here — otherwise the shim rejects the task with `"." must be absolute`.
-	logPath := spec.LogPath
-	ownLog := logPath == ""
-	if ownLog {
-		f, ferr := os.CreateTemp("", fmt.Sprintf("funcd-%s-r%d-*.log", spec.Name, spec.Replica))
-		if ferr != nil {
-			return runtime.Instance{}, fault.Wrapf(ferr, fault.Internal, op, "create log file")
-		}
-		logPath = f.Name()
-		_ = f.Close()
-	}
 	var logLn net.Listener
 	var logDir, bootDir string
+	var out *workerpipe.Output
+	var taskIO cio.IO
 	success := false
 	defer func() {
 		if !success { // the worker is never registered, so no Remove or Stop would free these
-			failed := &worker{logPath: logPath, ownLog: ownLog, logListener: logLn, logDir: logDir}
-			removeLog(failed)
-			closeLogChannel(failed)
+			closeLogChannel(&worker{logListener: logLn, logDir: logDir})
+			if taskIO != nil {
+				taskIO.Cancel()
+				_ = taskIO.Close()
+			}
+			if out != nil {
+				out.Close()
+			}
 			if bootDir != "" {
 				_ = os.RemoveAll(bootDir)
 			}
 		}
 	}()
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
-		return runtime.Instance{}, fault.Wrapf(err, fault.Internal, op, "create log dir")
-	}
 
 	// Path B structured-log channel (ADR-0081): when a capture hook is set, give the sandbox a
 	// bind-mounted UDS (FUNCD_LOG_SOCK) the shim writes NDJSON to. Torn down on any failure below.
@@ -408,8 +441,17 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		return runtime.Instance{}, mapErr(err, op, "create container %q", ctrID)
 	}
 
-	task, err := container.NewTask(nctx, cio.LogFile(logPath))
+	// Raw stdout and stderr (ADR-0168): two FIFOs under fifoDir that the containerd client copies into out as written.
+	out = workerpipe.New(workerpipe.Options{Logger: d.cfg.Logger.With(
+		"namespace", spec.Namespace, "name", spec.Name, "revision", spec.Revision, "replica", spec.Replica)})
+	creator := cio.NewCreator(cio.WithStreams(nil, out.Writer(workerpipe.Stdout), out.Writer(workerpipe.Stderr)), cio.WithFIFODir(d.fifoDir))
+	task, err := container.NewTask(nctx, func(id string) (cio.IO, error) {
+		created, cerr := creator(id)
+		taskIO = created
+		return created, cerr
+	})
 	if err != nil {
+		taskIO = nil // NewTask closes the IO it made when it fails
 		_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
 		return runtime.Instance{}, mapErr(err, op, "create task for %q", ctrID)
 	}
@@ -429,21 +471,30 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		return runtime.Instance{}, mapErr(err, op, "attach netns for %q", cniID)
 	}
 
+	// Path A hook (ADR-0168): after the network setup, before registration, so it runs before the task can write.
+	d.mu.Lock()
+	outputs := d.outputs
+	d.mu.Unlock()
+	if outputs != nil {
+		outputs(spec, out)
+	}
 	sb := &worker{
 		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, ownerKind: spec.OwnerKind, revision: spec.Revision,
 		replica: spec.Replica, cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
-		logPath: logPath, ownLog: ownLog, createdAt: time.Now(),
+		out: out, taskIO: taskIO, createdAt: time.Now(),
 		logListener: logLn, logDir: logDir, bootDir: bootDir,
 	}
+	// The run's output ends when the task's FIFOs close: then the last lines are queued and the FIFO dir goes.
+	go func() {
+		taskIO.Wait()
+		out.Close()
+		_ = taskIO.Close()
+	}()
 	d.mu.Lock()
-	replaced := d.instances[id]
 	d.instances[id] = sb
 	d.mu.Unlock()
-	if replaced != nil {
-		removeLog(replaced) // a re-create forgets the worker Stop released (ADR-0142) without a Remove
-	}
 
-	success = true // keep the log file and channel; Stop and Remove own their teardown now
+	success = true // keep the output and the channel; Stop and Remove own their teardown now
 	return runtime.Instance{
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
 		Replica: spec.Replica, PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
@@ -540,6 +591,7 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	defer func() { _ = os.RemoveAll(sb.bootDir) }()
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
 	if errdefs.IsNotFound(err) {
+		closeOutput(sb)
 		d.markReleased(sb)
 		return nil // already gone — idempotent
 	}
@@ -556,6 +608,12 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 			_ = task.Kill(nctx, syscall.SIGKILL)
 			<-waitTask(nctx, task)
 		}
+		if sb.out != nil {
+			select {
+			case <-sb.out.Done():
+			case <-time.After(outputWait):
+			}
+		}
 		_, _ = task.Delete(nctx)
 	case !errdefs.IsNotFound(err):
 		return mapErr(err, op, "load task %q", sb.ctrID)
@@ -565,8 +623,17 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 		return mapErr(err, op, "delete container %q", sb.ctrID)
 	}
 	closeLogChannel(sb) // close the Path B UDS listener + remove its dir (ADR-0081)
+	closeOutput(sb)
 	d.markReleased(sb)
 	return nil
+}
+
+// closeOutput closes a stopped worker's task IO, which removes its FIFO dir (ADR-0168); the waiter then closes its
+// Output. Idempotent / nil-safe.
+func closeOutput(sb *worker) {
+	if sb.taskIO != nil {
+		_ = sb.taskIO.Close()
+	}
 }
 
 func (d *driver) markReleased(sb *worker) {
@@ -575,7 +642,7 @@ func (d *driver) markReleased(sb *worker) {
 	d.mu.Unlock()
 }
 
-// Remove forgets an instance Stop has released, with its log file when the driver created it (ADR-0143).
+// Remove forgets an instance Stop has released (ADR-0143).
 func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	d.mu.Lock()
 	sb, ok := d.instances[id]
@@ -589,15 +656,7 @@ func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	}
 	delete(d.instances, id)
 	d.mu.Unlock()
-	removeLog(sb)
 	return nil
-}
-
-// removeLog deletes a forgotten worker's log file when the driver created it.
-func removeLog(sb *worker) {
-	if sb.ownLog {
-		_ = os.Remove(sb.logPath)
-	}
 }
 
 // closeLogChannel tears down a worker's Path B log channel (ADR-0081): closes the accept loop's
@@ -726,15 +785,24 @@ func (d *driver) listened(sb *worker) bool {
 
 func (d *driver) Logs(ctx context.Context, id runtime.InstanceID) (io.ReadCloser, error) {
 	const op = "runtime.containerd.Logs"
-	sb, _, err := d.lookup(ctx, id, op)
+	sb, nctx, err := d.lookup(ctx, id, op)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(sb.logPath) //nolint:gosec // logPath is driver-owned
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "open log file")
+	// A terminal worker's tail waits for the run's last line, the one a load error ends with (ADR-0168).
+	terminal := true
+	if task, terr := d.task(nctx, sb); terr == nil {
+		if st, serr := task.Status(nctx); serr == nil && st.Status != containerd.Stopped {
+			terminal = false
+		}
 	}
-	return f, nil
+	if terminal {
+		select {
+		case <-sb.out.Done():
+		case <-time.After(outputWait):
+		}
+	}
+	return sb.out.Tail(), nil
 }
 
 func (d *driver) Exec(ctx context.Context, id runtime.InstanceID, cmd []string) error {
@@ -823,6 +891,9 @@ func (d *driver) Close() error {
 	wg.Wait()
 	if d.cfg.Private {
 		errs = append(errs, d.SweepAll(context.Background()))
+	}
+	if d.ownFifo {
+		errs = append(errs, os.RemoveAll(d.fifoDir))
 	}
 	return errors.Join(append(errs, d.client.Close())...)
 }

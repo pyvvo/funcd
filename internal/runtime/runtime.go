@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
 // ErrImageUnavailable is wrapped, with kind fault.NotFound, by a driver's Create when the worker image is absent: a
@@ -92,7 +93,6 @@ type WorkerSpec struct {
 	Env       map[string]string // typed-flat; no any
 	Mounts    []Mount           // host→container bind mounts (container drivers; ADR-0032)
 	Limits    Limits
-	LogPath   string // file for captured stdout+stderr ("" → driver picks a temp file)
 }
 
 // Instance is the observed state of one worker.
@@ -126,7 +126,8 @@ type Runtime interface {
 	Stop(ctx context.Context, id InstanceID) error
 	// Status returns the observed instance; fault.NotFound if unknown.
 	Status(ctx context.Context, id InstanceID) (Instance, error)
-	// Logs returns a reader over the instance's captured stdout+stderr.
+	// Logs returns the current or last run's tail of stdout and stderr (ADR-0168), empty before the first Start, with an
+	// ended run's last line: stdout's lines, then stderr's.
 	Logs(ctx context.Context, id InstanceID) (io.ReadCloser, error)
 	// Exec runs a command in the instance's context (best-effort in V1).
 	Exec(ctx context.Context, id InstanceID, cmd []string) error
@@ -153,6 +154,16 @@ type LogCaptureFunc func(spec WorkerSpec, r io.ReadCloser)
 type LogCapturer interface {
 	// SetLogCapture installs (or clears, with nil) the per-instance log-channel hook.
 	SetLogCapture(LogCaptureFunc)
+}
+
+// OutputCaptureFunc receives one worker run's raw stdout and stderr (ADR-0168 Path A) before the worker writes. For a
+// worker funcd stores it takes both Readers and reads them on its own goroutines, else none; it must not block.
+type OutputCaptureFunc func(spec WorkerSpec, out *workerpipe.Output)
+
+// OutputCapturer is the capability both drivers implement to hand funcd each run's raw output (ADR-0168). nil clears the
+// hook; with no hook a run keeps only its tail.
+type OutputCapturer interface {
+	SetOutputCapture(OutputCaptureFunc)
 }
 
 // NewInstanceID builds the canonical id "<ns>/<name>/r<replica>", or "<ns>/<name>/<revision>/r<replica>" for a worker

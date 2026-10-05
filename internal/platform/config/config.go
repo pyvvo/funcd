@@ -212,6 +212,9 @@ type Config struct {
 		SegmentMaxAge   string `json:"segmentMaxAge,omitempty" env:"FUNCD_FUNCLOG_SEGMENT_MAX_AGE"`
 		Bucket          string `json:"bucket,omitempty" env:"FUNCD_FUNCLOG_BUCKET" validate:"omitempty,eq=funcd-system"`
 		Traces          bool   `json:"traces,omitempty" env:"FUNCD_FUNCLOG_TRACES"`
+		// MaxRecordBytes bounds one shim log or span record line (ADR-0168); 0 keeps the 65536 default, and funcd refuses
+		// a nonzero value below 1024 or above the 1 MiB reader cap.
+		MaxRecordBytes int `json:"maxRecordBytes,omitempty" env:"FUNCD_FUNCLOG_MAX_RECORD_BYTES" validate:"min=0"`
 	} `json:"funclog,omitempty"`
 	// S3Gateway is the opt-in S3-protocol frontend over the blob substrate (ADR-0080/0085).
 	// Disabled by default ⇒ no listener, no IAM, no keypair injection.

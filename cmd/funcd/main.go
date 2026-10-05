@@ -390,7 +390,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	opts = append(opts, funcd.WithFunclog(segmentMaxAge, cfg.Funclog.SegmentMaxBytes))
+	opts = append(opts, funcd.WithFunclog(segmentMaxAge, cfg.Funclog.SegmentMaxBytes),
+		funcd.WithFunclogMaxRecordBytes(cfg.Funclog.MaxRecordBytes))
 	if !cfg.Funclog.Enabled {
 		opts = append(opts, funcd.WithoutFunclog())
 	}

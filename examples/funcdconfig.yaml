@@ -166,11 +166,12 @@ log:
 
 # --- funclog: structured function-log capture (ADR-0081) + its traces signal (ADR-0101) ---------
 # funclog:
-#   enabled: true                 # capture function logs (raw stdout/stderr still flows if false). default: true
+#   enabled: true                 # capture function logs; if false, raw stdout/stderr is only tailed. default: true
 #   segmentMaxBytes: 8388608      # seal + Put a log segment at this size. default: 8388608 (8 MiB)
 #   segmentMaxAge: 10s            # ...or after this age, whichever comes first. default: 10s
 #   bucket: funcd-system          # the observability bucket; funcd-system is the only value. default: funcd-system
 #   traces: true                  # capture per-invocation spans (moot when enabled: false). default: true
+#   maxRecordBytes: 65536         # bound on one shim log record; 1024..1048576, 0 = default. default: 65536
 
 # --- s3gateway: the S3-protocol frontend over the blob substrate (ADR-0080/0085) ----------------
 # s3gateway:

@@ -12,7 +12,6 @@ package containerd_test
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,7 +65,6 @@ func TestIssue40_RestartReclaimsLeftoverWorker(t *testing.T) {
 		Revision:  "issue40-1",
 		Image:     "docker.io/library/busybox:1.36",
 		Command:   []string{"sleep", "60"},
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 
 	previous, err := containerd.New(integrationConfig())
