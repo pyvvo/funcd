@@ -1,6 +1,7 @@
 # ADR-0189: A workflow run pins its child tree at start
 
 - **Status**: Accepted (2026-10-05)
+- **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — Purpose lines 37-40, Scope 81-82, scenario child-edit-after-start-ignored 54-57 and Risks accepted 247-250: a child step runs its pinned revision.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, sub-workflow, engine, pinning, replay
