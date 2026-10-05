@@ -212,24 +212,32 @@ func TestScenarioFailedRevisionKeepsOldServing(t *testing.T) {
 	require.Equal(t, creates, after, "the failed revision is not retried")
 }
 
-// A new revision whose handler never becomes ready is judged ShapeInvalid after the boot timeout while revision 1
-// keeps serving; from then on it is checked every supervision period, not polled (issue #354).
+// A new revision whose replica never listens is stopped at the boot timeout as a boot crash while revision 1 keeps
+// serving; it is polled only on its first boot attempt, then the pass comes back at its re-create time and its boot
+// timeout, at most the supervision period (issue #354, ADR-0161 Decision 3).
 func TestIssue354_TimedOutRevisionIsNotPolled(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withSwitch)
+	clk := clock.NewManual(time.Now())
+	h := newShimHarness(t, http.StatusOK, false, withManualClock(clk, 2*time.Minute, 8*time.Minute))
 	h.deployReady(t, "echo")
 	h.rt.hold(runtime.NewInstanceID("default", "echo", "echo-2", 0), true)
 	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "hang" })
 	res := h.reconcile(t, "echo")
 	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a revision that just started is polled while it boots")
 
-	h.rt.exitRevision("echo", "echo-2", 0, runtime.StateRunning, time.Hour)
-	for range 2 {
-		res = h.reconcile(t, "echo")
-		require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
-		require.Equal(t, "ShapeInvalid", h.condition(t, "echo", "RevisionReady").Reason)
-		require.Equal(t, testPeriod, res.RequeueAfter, "a timed-out revision is checked every supervision period, not polled")
-	}
+	clk.Advance(function.BootTimeout)
+	res = h.reconcile(t, "echo")
+	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+	rr := h.condition(t, "echo", "RevisionReady")
+	require.Equal(t, v1.ConditionFalse, rr.Status)
+	require.Equal(t, "CrashLoopBackOff", rr.Reason)
+	require.Equal(t, min(testPeriod, time.Minute), res.RequeueAfter, "min(period, re-create time − now)")
+
+	clk.Advance(time.Minute)
+	res = h.reconcile(t, "echo")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("echo")["echo-2"][0], "re-created after its wait")
+	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+	require.Equal(t, min(testPeriod, function.BootTimeout), res.RequeueAfter, "min(period, pollAt − now), not polled")
 }
 
 type resolverFailing struct{ bad string }
@@ -705,26 +713,32 @@ func TestServingRevisionKeepsItsReplicasDuringASwitch(t *testing.T) {
 	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("echo")["echo-1"][2], "revision 1's replica 2 is replaced")
 }
 
-// After a daemon restart the runtime lists no worker, so the serving revision comes back with status.replicas
-// replicas (ADR-0143 Decision 4.3).
+// After a daemon restart the runtime lists no worker, so the serving revision comes back with max(status.replicas, 1)
+// replicas (ADR-0143 Decision 4.3, ADR-0161): a failed pass may have written replicas 0.
 func TestServingRevisionComesBackAfterARestart(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withSwitch)
-	h.create(t, "echo", func(fn *v1.Function) {
-		fn.Spec.Replicas = 2
-		fn.Spec.Scaling.MinReplicas = 2
-	})
-	h.reconcile(t, "echo")
-	h.rt.serveRevision(t, "echo-2", http.StatusServiceUnavailable)
-	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
-	h.reconcile(t, "echo")
-	require.Equal(t, 2, h.getFn(t, "echo").Status.Replicas)
+	for name, tc := range map[string]struct{ replicas, want int }{"two": {2, 2}, "zero": {0, 1}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withSwitch)
+			h.create(t, "echo", func(fn *v1.Function) {
+				fn.Spec.Replicas = 2
+				fn.Spec.Scaling.MinReplicas = 2
+			})
+			h.reconcile(t, "echo")
+			h.rt.serveRevision(t, "echo-2", http.StatusServiceUnavailable)
+			h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+			h.reconcile(t, "echo")
+			require.Equal(t, 2, h.getFn(t, "echo").Status.Replicas)
+			h.apply(t, "echo", func(fn *v1.Function) { fn.Status.Replicas = tc.replicas })
 
-	h.rt.forget()
-	h.reconcile(t, "echo")
-	states := h.rt.revisionStates("echo")
-	require.Len(t, states["echo-1"], 2, "revision 1 comes back with its two replicas")
-	require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+			h.rt.forget()
+			h.reconcile(t, "echo")
+			states := h.rt.revisionStates("echo")
+			require.Len(t, states["echo-1"], tc.want, "revision 1 comes back with its replicas")
+			require.Equal(t, "echo-1", h.getFn(t, "echo").Status.ServingRevision)
+		})
+	}
 }
 
 // Deleting a Function stops and removes its workers (ADR-0143).

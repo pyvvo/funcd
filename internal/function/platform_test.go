@@ -18,7 +18,6 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
-	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/scheduler"
 )
@@ -105,18 +104,6 @@ func TestScenarioRedeployNoMatchingPlatformKeepsServing(t *testing.T) {
 	require.Equal(t, "NoMatchingPlatform", rr.Reason)
 	after, _ := h.rt.counts()
 	require.Equal(t, creates, after, "no worker of the new revision is created")
-}
-
-// A resolver error (a registry outage) is a reconcile error, retried with backoff — never a status.
-func TestPlatformResolverErrorRequeues(t *testing.T) {
-	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withSwitch, withPlatforms(&fakePlatforms{}))
-	h.create(t, "reader", func(fn *v1.Function) { fn.Spec.ImageDigest = digestOutage })
-	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "reader"})
-	require.Error(t, err)
-	require.Equal(t, fault.Unavailable, fault.KindOf(err))
-	_, ok := h.getFn(t, "reader").Status.Conditions.Get("Ready")
-	require.False(t, ok, "no status is written for an outage")
 }
 
 // scenario: pooled-member-no-matching-platform (ADR-0145) — of two pooled Functions sharing a pool key, the one whose

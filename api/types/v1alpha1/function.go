@@ -172,7 +172,7 @@ type Scaling struct {
 // FunctionStatus holds the observed state. Behavioral fields appended by F11/F13.
 type FunctionStatus struct {
 	Status          `json:",inline"`
-	Replicas        int    `json:"replicas,omitempty"`        // running worker count (ADR-0020)
+	Replicas        int    `json:"replicas,omitempty"`        // workers that listened and get calls (ADR-0161)
 	CurrentRevision string `json:"currentRevision,omitempty"` // the latest stamped Revision name (ADR-0020)
 	// ServingRevision is the Revision whose workers receive the calls (ADR-0143); empty until the first deploy serves,
 	// and again once no replica is desired.

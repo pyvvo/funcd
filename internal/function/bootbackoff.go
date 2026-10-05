@@ -127,6 +127,25 @@ func (b *bootBackoff) reread(c bootCrash, now time.Time) time.Time {
 	return now.Add(w)
 }
 
+// timedOut counts running replica in, which did not listen within bootTimeout, as a boot crash, once per instance
+// (ADR-0161 Decision 3). It is re-created no sooner than bootTimeout after its last start, so the message names
+// max(wait, bootTimeout).
+func (b *bootBackoff) timedOut(in runtime.Instance) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c := b.crashes[in.ID]
+	if c.count > 0 && c.counted.Equal(in.CreatedAt) {
+		return
+	}
+	c.count++
+	c.counted = in.CreatedAt
+	c.message = fmt.Sprintf("replica %d did not listen within %s; boot crash %d in a row, retried %s after its last start",
+		in.Replica, bootTimeout, c.count, max(b.wait(c.count), bootTimeout))
+	b.crashes[in.ID] = c
+	b.logger.Warn("a worker did not listen within the boot timeout", "namespace", in.Namespace, "name", in.Name,
+		"replica", in.Replica, "count", c.count, "timeout", bootTimeout)
+}
+
 // crash is the crash record of id, if it has one.
 func (b *bootBackoff) crash(id runtime.InstanceID) (bootCrash, bool) {
 	b.mu.Lock()

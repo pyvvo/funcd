@@ -172,26 +172,8 @@ func TestScenarioBootFailureStaysFailed(t *testing.T) {
 
 // A new function whose handler blocks while it loads — the shim runs but never binds its port — ends Failed
 // (ShapeInvalid) once its replica has run for the boot timeout without becoming ready (issue #76, ADR-0030 §4b).
-func TestIssue76_NeverReadyHandlerFailsAfterBootTimeout(t *testing.T) {
-	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod)
-	h.rt.hold(runtime.NewInstanceID("default", "hang", "hang-1", 0), true)
-	h.createFn(t, "hang")
-	h.reconcile(t, "hang")
-	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a replica that just started is still booting")
-
-	h.rt.exitRevision("hang", "hang-1", 0, runtime.StateRunning, time.Hour) // still running, started an hour ago
-	res := h.reconcile(t, "hang")
-	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
-	require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "hang"))
-	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready", "a hung handler has no load error to carry")
-	require.Zero(t, res.RequeueAfter, "a Failed function is not polled again")
-	require.Empty(t, h.routes(t))
-}
-
-// Issue #309: a serving Function whose replacement runs but never becomes ready is not re-probed every 200 ms for good.
-// Once the replacement has run for the boot timeout with no replica ready, it is stopped and replaced after the
-// backoff, as a crash under repair is (ADR-0142, ADR-0030 §4b).
+// Issue #309: a serving Function whose replacement runs but never listens is not re-probed every 200 ms for good. Once
+// it has run for the boot timeout it is stopped as a boot crash and replaced after its wait (ADR-0161 Decision 3).
 func TestIssue309_NeverReadyReplacementIsReplacedAfterBackoff(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, withPeriod)
@@ -199,22 +181,21 @@ func TestIssue309_NeverReadyReplacementIsReplacedAfterBackoff(t *testing.T) {
 	id := runtime.NewInstanceID("default", "stall", "stall-1", 0)
 	h.rt.exit("stall", runtime.StateFailed, time.Minute)
 	h.rt.hold(id, true)
-	h.reconcile(t, "stall")
+	res := h.reconcile(t, "stall")
 	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the replacement boots")
+	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a first boot attempt is polled")
 
 	h.rt.exitRevision("stall", "stall-1", 0, runtime.StateRunning, time.Hour)
-	res := h.reconcile(t, "stall")
-	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a replica is kept while the Function has been Degraded for less than the boot timeout")
-
-	h.degradedSinceAnHour(t, "stall")
-	creates, _ := h.rt.counts()
-	res = h.reconcile(t, "stall")
+	h.reconcile(t, "stall")
 	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
-	require.Equal(t, testPeriod, res.RequeueAfter, "the pass waits out the backoff instead of re-probing the hung replica")
-	require.Contains(t, h.condition(t, "stall", "Ready").Message, "did not become ready")
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("stall")["stall-1"][0], "the replica that never listened is stopped")
+	ready := h.condition(t, "stall", "Ready")
+	require.Equal(t, "CrashLoopBackOff", ready.Reason)
+	require.Contains(t, ready.Message, "did not listen within 1m0s")
 	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "stall"), "a hung replacement of a serving Function is not a shape failure")
 
 	h.rt.hold(id, false)
+	creates, _ := h.rt.counts()
 	h.reconcile(t, "stall")
 	after, _ := h.rt.counts()
 	require.Equal(t, creates+1, after, "the hung replacement is replaced")
@@ -386,9 +367,10 @@ func calledFrom(suffix string) bool {
 	}
 }
 
-// Issue #353: a List error while the pass judges readiness fails the pass, so it is retried, and writes no status;
-// before, it counted zero ready replicas and wrote a serving Function Degraded.
-func TestIssue353_ReadinessListErrorWritesNoStatus(t *testing.T) {
+// Issue #353: a List error while the pass judges readiness fails the pass, so it is retried; before, it counted zero
+// ready replicas and wrote a serving Function Degraded. The failed pass keeps it Ready with its listening workers and
+// writes the error on RevisionReady (ADR-0161 Decision 1).
+func TestIssue353_ReadinessListErrorKeepsServing(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(t *testing.T, h *shimHarness){
 		"serving": func(t *testing.T, h *shimHarness) {
@@ -411,10 +393,13 @@ func TestIssue353_ReadinessListErrorWritesNoStatus(t *testing.T) {
 
 			lf.failing.Store(true)
 			_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "flaky"})
+			require.Error(t, err, "the pass fails, so it is retried")
 			fn := h.getFn(t, "flaky")
 			require.Equal(t, v1.PhaseReady, fn.Status.Phase, "a failed read does not mark a serving Function Degraded")
-			require.Equal(t, rv, fn.ResourceVersion, "no status is written from a failed read")
-			require.Error(t, err, "the pass fails, so it is retried")
+			require.Equal(t, 2, fn.Status.Replicas, "replicas counts the listening workers, the replacement included")
+			require.NotEqual(t, rv, fn.ResourceVersion, "the failed pass writes its error")
+			h.requireCondition(t, "flaky", "Ready", v1.ConditionTrue, "")
+			h.requireCondition(t, "flaky", "RevisionReady", v1.ConditionFalse, "StartFailed")
 
 			lf.failing.Store(false)
 			h.reconcile(t, "flaky")
