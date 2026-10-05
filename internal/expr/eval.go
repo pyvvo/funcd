@@ -121,7 +121,12 @@ func (e *Expr) run(docs map[string]json.RawMessage, b *Budget) (goja.Value, erro
 	globals := map[string]interface{}{}
 	c := concat{globals: globals}
 	for _, root := range e.roots {
-		val, err := docValue(docs[root], e.defaultsFor(root))
+		raw, ok := docs[root]
+		if !ok {
+			setNested(globals, splitRoot(root), goja.Undefined()) // an absent root is undefined, never null (ADR-0166)
+			continue
+		}
+		val, err := docValue(raw, e.defaultsFor(root))
 		if err != nil {
 			return nil, err
 		}

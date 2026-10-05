@@ -664,3 +664,78 @@ func FuzzParse(f *testing.F) {
 		_ = e.Check(r)
 	})
 }
+
+// ADR-0166 Decision 1: an optional root (Resolve(root, nil) not required, no default) may be probed
+// anywhere; anything longer is read only under its own `!== undefined` guard, which exempts the root alone.
+func TestCheckOptionalRoot(t *testing.T) {
+	const lo, arrRoot, req0 = "step.lo.output", "step.arr.output", "step.req.output"
+	r := fakeResolver{
+		roots: []string{lo, arrRoot, req0},
+		fields: map[string]Field{
+			lo + "|":      optional("object"),
+			lo + "|v":     req("number"),
+			lo + "|w":     optional("number"),
+			lo + "|d":     withDefault("number", "0"),
+			arrRoot + "|": {Type: "array", Items: "number"},
+			req0 + "|v":   req("number"),
+		},
+	}
+	for _, src := range []string{
+		`${{ step.lo.output !== undefined }}`,
+		`${{ step.lo.output === undefined }}`,
+		`${{ step.lo.output !== undefined && step.lo.output.v > 0 }}`,
+		`${{ step.lo.output !== undefined && (step.lo.output.v > 0 && step.lo.output.v < 10) }}`,
+		`${{ step.lo.output !== undefined && step.lo.output.d > 0 }}`,
+		`${{ step.lo.output !== undefined && (step.lo.output.w !== undefined && step.lo.output.w > 0) }}`,
+		`${{ step.lo.output !== undefined && step.lo.output.v !== undefined }}`,
+		`${{ step.arr.output !== undefined && step.arr.output[0] > 0 }}`,
+		`${{ step.arr.output !== undefined && step.arr.output.length > 0 }}`,
+		`${{ step.req.output.v > 0 }}`, // Resolve(root, nil) fails: the root stays required
+	} {
+		mustCheck(t, src, Condition, r)
+	}
+	for _, tc := range []struct{ src, want string }{
+		{`${{ step.lo.output.v > 0 }}`, "which may be absent"},
+		{`${{ step.lo.output.v !== undefined }}`, "which may be absent"},
+		{`${{ step.lo.output.d > 0 }}`, "which may be absent"},
+		{`${{ step.arr.output[0] > 0 }}`, "which may be absent"},
+		{`${{ step.lo.output !== undefined && step.lo.output.v > 0 && step.lo.output.v < 10 }}`, "which may be absent"},
+		{`${{ step.lo.output !== undefined && step.lo.output.w > 0 }}`, "must declare a default"},
+		{`${{ step.lo.output?.v > 0 }}`, ""},
+	} {
+		e, err := Parse(tc.src, Condition)
+		if err != nil {
+			continue // a parse error is a valid rejection
+		}
+		cerr := e.Check(r)
+		if cerr == nil || !strings.Contains(cerr.Error(), tc.want) {
+			t.Errorf("Check(%s) = %v, want an error containing %q", tc.src, cerr, tc.want)
+		}
+	}
+	e, _ := Parse(`${{ step.lo.output.v > 0 }}`, Condition)
+	want := "\"step.lo.output.v\" reads \"step.lo.output\", which may be absent: guard it as `step.lo.output !== undefined && (…)` (position 1)"
+	if err := e.Check(r); err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Fatalf("unguarded read message = %v, want suffix %s", err, want)
+	}
+}
+
+// ADR-0166 Decision 2: a referenced root with no document is bound as undefined, so its guard short-circuits.
+func TestEvalAbsentRootIsUndefined(t *testing.T) {
+	const hi, lo = "step.hi.output", "step.lo.output"
+	r := fakeResolver{
+		roots:  []string{hi, lo},
+		fields: map[string]Field{hi + "|": req("object"), hi + "|v": req("number"), lo + "|": {}},
+	}
+	d := docs(hi, `{"v":9}`)
+	for src, want := range map[string]bool{
+		`${{ step.lo.output === undefined }}`:                         true,
+		`${{ step.lo.output !== undefined && step.lo.output.v > 0 }}`: false,
+		`${{ (step.hi.output !== undefined && step.hi.output.v > 0) || (step.lo.output !== undefined && step.lo.output.v > 0) }}`: true,
+	} {
+		got, err := mustCheck(t, src, Condition, r).EvalBool(d)
+		if err != nil || got != want {
+			t.Errorf("EvalBool(%s) = %v, %v; want %v", src, got, err, want)
+		}
+	}
+	mustFailCheck(t, `${{ step.lo.output.v > 0 }}`, Condition, r)
+}

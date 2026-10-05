@@ -397,21 +397,13 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 				return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("params of step %q: %s", st.Name, v1.FieldDiffs(diffs))}
 			}
 		}
-		producer, has := producerSchema(rs.steps[st.Name], contracts)
-		if !has {
-			continue // a root, or all parents untyped
-		}
-		if diffs := checkEdge(producer, child.Input, paramsKeys(st)); len(diffs) > 0 {
-			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("edge into step %q: %s", st.Name, v1.FieldDiffs(diffs))}
+		if err := checkStepEdges(st, rs.steps[st.Name], child.Input, contracts); err != nil {
+			return nil, nil, err
 		}
 	}
 	// The onFailure handler's producer is the engine's FailureContext, without a params overlay (ADR-0094).
 	if hc, ok := contracts[wf.Spec.OnFailure]; ok {
-		diffs := objectIntoVoid(hc.Input)
-		if len(diffs) == 0 {
-			diffs = checkEdge(failureContextSchema(), hc.Input, nil)
-		}
-		if len(diffs) > 0 {
+		if diffs := checkEdge(failureContextSchema(), hc.Input, nil); len(diffs) > 0 {
 			return nil, nil, &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("FailureContext into onFailure handler %q: %s", wf.Spec.OnFailure, v1.FieldDiffs(diffs))}
 		}
 	}
@@ -427,7 +419,10 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 	}
 
 	// 4. Type-check when: predicates against the parents' cached output schemas + the derived input
-	//    (ADR-0095 Condition mode) — a bad path/type fails here, never at runtime.
+	//    (ADR-0095 Condition mode): a bad path or type, or a read of a join: any branch that may be skipped
+	//    without its guard (ADR-0166), fails here. Only these still fail at run time: builtin pass/wait
+	//    expressions (ADR-0096), a nested probe under an optional field, a field read under a null-typed
+	//    root, and an unguarded optional field under a guarded required root or field (ADR-0166 Scope).
 	if err := checkWhenConditions(wf.Spec, rs, contracts, wc.Input); err != nil {
 		return nil, nil, err
 	}
@@ -509,27 +504,51 @@ func (r *WorkflowReconciler) formsCycle(ctx context.Context, ns v1.NamespaceName
 	return reaches(start)
 }
 
-// producerSchema is the output schema a step's parents present to it: a single typed parent's output
-// verbatim, or the fan-in composite keyed by parent name. false ⇒ no typed parent (a root).
-func producerSchema(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract) (json.RawMessage, bool) {
-	var typed []v1.ObjectName
-	for _, p := range n.dependsOn {
-		if _, ok := contracts[p]; ok {
-			typed = append(typed, p)
-		}
-	}
-	switch len(typed) {
+// producerCase is one input a step can receive from its parents.
+type producerCase struct {
+	schema     json.RawMessage
+	onlyBranch v1.ObjectName // join: any: the one branch that ran; "" otherwise
+}
+
+// producerSchemas lists the inputs a step's parents can send it, as the engine builds them (flowingInput):
+// none for a root or a lone untyped parent; a lone typed parent's output verbatim; for two or more parents,
+// typed or not, the composite keyed by parent name — every key required for join: all, and for join: any
+// one composite per parent, since adding a branch to the survivors only adds keys (ADR-0166 Decision 3).
+func producerSchemas(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract) []producerCase {
+	switch len(n.dependsOn) {
 	case 0:
-		return nil, false
+		return nil
 	case 1:
-		return contracts[typed[0]].Output, true
-	default:
-		outs := make(map[v1.ObjectName]json.RawMessage, len(typed))
-		for _, p := range typed {
-			outs[p] = contracts[p].Output
+		c, ok := contracts[n.dependsOn[0]]
+		if !ok {
+			return nil
 		}
-		return compositeSchema(outs), true
+		return []producerCase{{schema: c.Output}}
 	}
+	if effectiveJoin(n.join) != v1.JoinAny {
+		return []producerCase{{schema: compositeSchema(n.dependsOn)}}
+	}
+	cases := make([]producerCase, 0, len(n.dependsOn))
+	for _, p := range n.dependsOn {
+		cases = append(cases, producerCase{schema: compositeSchema([]v1.ObjectName{p}), onlyBranch: p})
+	}
+	return cases
+}
+
+// checkStepEdges type-checks every input a step's parents can send it against its input schema.
+func checkStepEdges(st *v1.WorkflowStep, n *stepNode, input json.RawMessage, contracts map[v1.ObjectName]v1.WorkflowContract) error {
+	for _, pc := range producerSchemas(n, contracts) {
+		diffs := checkEdge(pc.schema, input, paramsKeys(st))
+		if len(diffs) == 0 {
+			continue
+		}
+		ran := ""
+		if pc.onlyBranch != "" {
+			ran = fmt.Sprintf(" when only %q ran (join: any)", pc.onlyBranch)
+		}
+		return &mismatchError{reason: "EdgeTypeMismatch", msg: fmt.Sprintf("edge into step %q%s: %s", st.Name, ran, v1.FieldDiffs(diffs))}
+	}
+	return nil
 }
 
 // paramsKeys is the set of top-level fields a step's spec.params supplies (not required from a parent).

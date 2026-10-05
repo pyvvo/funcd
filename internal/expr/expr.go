@@ -56,7 +56,10 @@ type Field struct {
 // Resolver answers path lookups against a consumer's JSON-Schema contracts.
 // Implementations are context-scoped: Roots reports the exposed root documents
 // (Check matches an expression's leading member segments against it, longest-first)
-// and Resolve reports the Field at a path under one of those roots.
+// and Resolve reports the Field at a path under one of those roots. Resolve(root, nil) with Required false
+// and no default marks an optional root (ADR-0166): Check admits a longer reference under it only in the
+// right operand of `root !== undefined && …`. Only a document-backed Resolver reports an absent root, as
+// the zero Field; Eval binds it as undefined.
 type Resolver interface {
 	// Roots reports the root documents this resolver exposes.
 	Roots() []string

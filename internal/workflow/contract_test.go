@@ -54,9 +54,15 @@ func TestCheckEdgeVoid(t *testing.T) {
 	if d := checkEdge(void, obj(map[string]string{"rows": "integer"}, "rows"), nil); len(d) != 1 {
 		t.Fatalf("void producer vs required consumer should mismatch, got %v", d)
 	}
-	// a void consumer requires nothing from any producer.
-	if d := checkEdge(obj(map[string]string{"rows": "integer"}, "rows"), void, nil); len(d) != 0 {
-		t.Fatalf("void consumer should require nothing, got %v", d)
+	// a void input takes only null (ADR-0166 Decision 4): an object, or a {} producer, is refused.
+	for _, producer := range []json.RawMessage{obj(map[string]string{"rows": "integer"}, "rows"), sc(`{}`)} {
+		if d := v1.FieldDiffs(checkEdge(producer, void, nil)); d != "input is object, want null" {
+			t.Fatalf("%s into a void input = %q, want input is object, want null", producer, d)
+		}
+	}
+	// a {} input requires nothing.
+	if d := checkEdge(obj(map[string]string{"rows": "integer"}, "rows"), sc(`{}`), nil); len(d) != 0 {
+		t.Fatalf("an object into a {} input should pass, got %v", d)
 	}
 }
 

@@ -38,18 +38,27 @@ func checkWhenConditions(spec v1.WorkflowSpec, rs *runState, contracts map[v1.Ob
 }
 
 // whenSchemaResolver builds the schema-backed Resolver for one step's when: the roots are `input` (the
-// derived workflow input schema) and `step.<parent>.output` for each typed direct parent.
+// derived workflow input schema) and `step.<parent>.output` for each typed direct parent. A join: any
+// step with two or more parents may run with a branch skipped, so its parent roots are optional (ADR-0166).
 func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract, inputSchema json.RawMessage) schemaResolver {
 	schemas := map[string]json.RawMessage{}
 	if len(inputSchema) > 0 {
 		schemas["input"] = inputSchema
 	}
+	var optional map[string]bool
+	if effectiveJoin(n.join) == v1.JoinAny && len(n.dependsOn) >= 2 {
+		optional = map[string]bool{}
+	}
 	for _, p := range n.dependsOn {
 		if c, ok := contracts[p]; ok && len(c.Output) > 0 {
-			schemas["step."+string(p)+".output"] = c.Output
+			root := "step." + string(p) + ".output"
+			schemas[root] = c.Output
+			if optional != nil {
+				optional[root] = true
+			}
 		}
 	}
-	return schemaResolver{schemas: schemas, decoded: map[string]*schemaNode{}}
+	return schemaResolver{schemas: schemas, decoded: map[string]*schemaNode{}, optionalRoots: optional}
 }
 
 // schemaResolver is an expr.Resolver answering path types from cached JSON-Schema documents (the
@@ -59,8 +68,9 @@ func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowCont
 // It decodes each schema once, on its first reference, so a check costs one decoding of each schema
 // however many references it resolves.
 type schemaResolver struct {
-	schemas map[string]json.RawMessage
-	decoded map[string]*schemaNode
+	schemas       map[string]json.RawMessage
+	decoded       map[string]*schemaNode
+	optionalRoots map[string]bool
 }
 
 // schemaNode is the part of a JSON Schema the resolvers read. A schema that is not an object, or a
@@ -109,6 +119,16 @@ func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) 
 	}
 	if cur == nil {
 		return expr.Field{Required: required}, nil
+	}
+	if len(path) == 0 && s.optionalRoots[root] {
+		// An optional root is never required or defaulted (a default does not stand in for a skipped
+		// branch), and its Type is never empty: an empty one reads as absent, and the root's guard would
+		// then skip checking what it guards (ADR-0166).
+		typ := cur.Type
+		if typ == "" {
+			typ = "object"
+		}
+		return expr.Field{Type: typ, Items: cur.Items.Type}, nil
 	}
 	return expr.Field{Type: cur.Type, Items: cur.Items.Type, Required: required, HasDefault: cur.Default != nil, Default: cur.Default}, nil
 }
@@ -211,44 +231,54 @@ func (e *Engine) evalSelect(src string, n *stepNode, rec *runstate.Record, input
 
 // runtimeResolver builds the runtime doc model of a step's when, wait or pass: the run input and the
 // step's direct-parent outputs, with each root's run-pinned schema so an absent field binds its default.
+// A parent with no recorded output (a skipped branch, or a void parent after a Resume) is an absent root.
 func runtimeResolver(n *stepNode, rec *runstate.Record, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) docResolver {
 	docs := map[string]json.RawMessage{"input": input}
+	var absent []string
 	for _, p := range n.dependsOn {
+		root := "step." + string(p) + ".output"
 		if out, ok := outputs[p]; ok {
-			docs["step."+string(p)+".output"] = out
+			docs[root] = out
+		} else {
+			absent = append(absent, root)
 		}
 	}
 	var inputSchema json.RawMessage
 	if rec.Contract != nil {
 		inputSchema = rec.Contract.Input
 	}
-	return docResolver{docs: docs, decoded: map[string]interface{}{}, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema)}
+	return docResolver{docs: docs, decoded: map[string]interface{}{}, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema), absentRoots: absent}
 }
 
 // docResolver is an expr.Resolver that infers field types from actual JSON documents
 // (the runtime resolver): each key is an exposed root, and a path's type comes from
 // the value found there. Present ⇒ Required (no default); missing with a default in schemas ⇒ that
 // defaulted Field, which Eval binds (ADR-0095); else a missing last segment ⇒ the absent expr.Field,
-// which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound. It decodes each
+// which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound. An absent root
+// resolves, by itself, to the zero Field and every path under it is NotFound (ADR-0166). It decodes each
 // document once, on its first reference, so a check costs one decoding of each document however many
 // references it resolves.
 type docResolver struct {
-	docs    map[string]json.RawMessage
-	decoded map[string]interface{}
-	schemas schemaResolver // per root, the run-pinned schema; none ⇒ no defaults
+	docs        map[string]json.RawMessage
+	decoded     map[string]interface{}
+	schemas     schemaResolver // per root, the run-pinned schema; none ⇒ no defaults
+	absentRoots []string
 }
 
 func (r docResolver) Roots() []string {
-	out := make([]string, 0, len(r.docs))
+	out := make([]string, 0, len(r.docs)+len(r.absentRoots))
 	for k := range r.docs {
 		out = append(out, k)
 	}
-	return out
+	return append(out, r.absentRoots...)
 }
 
 func (r docResolver) Resolve(root string, path []string) (expr.Field, error) {
 	raw, ok := r.docs[root]
 	if !ok {
+		if len(path) == 0 && slices.Contains(r.absentRoots, root) {
+			return expr.Field{}, nil
+		}
 		return expr.Field{}, fault.NotFoundf("workflow.resolve", "root %q not in scope", root)
 	}
 	cur, ok := r.decoded[root]
