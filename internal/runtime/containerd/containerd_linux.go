@@ -412,11 +412,12 @@ func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID,
 	return nil
 }
 
-// workerNames returns a worker's container ID and CNI attachment ID (ADR-0143). A revisioned worker joins its parts with
-// '.', which a DNS-1123 name cannot contain, so a revisioned name never equals an unrevisioned one.
+// workerNames returns a worker's container ID and CNI attachment ID (ADR-0143, ADR-0179). A revisioned worker joins its
+// parts with '.', which a DNS-1123 name cannot contain, so a revisioned name never equals an unrevisioned one. The CNI ID
+// is node-global: without a revision '_', which a DNS-1123 name cannot contain either, ends the namespace.
 func workerNames(ns, name, revision, replica string) (ctrID, cniID string) {
 	if revision == "" {
-		return name + "-r" + replica, ns + "-" + name + "-r" + replica
+		return name + "-r" + replica, ns + "_" + name + "-r" + replica
 	}
 	return revision + ".r" + replica, ns + "." + revision + ".r" + replica
 }
@@ -582,8 +583,13 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 		return err
 	}
 	if labels, lerr := c.Labels(nctx); lerr == nil {
-		_, cniID := workerNames(labels["funcd/namespace"], labels["funcd/name"], labels["funcd/revision"], labels["funcd/replica"])
+		ns, name, rep := labels["funcd/namespace"], labels["funcd/name"], labels["funcd/replica"]
+		_, cniID := workerNames(ns, name, labels["funcd/revision"], rep)
 		_ = d.cni.Remove(nctx, cniID, "")
+		// An unrevisioned worker created before ADR-0179 is attached under <ns>-<name>-r<replica>.
+		if labels["funcd/revision"] == "" && ns != "" && name != "" && rep != "" {
+			_ = d.cni.Remove(nctx, ns+"-"+name+"-r"+rep, "")
+		}
 	}
 	return c.Delete(nctx, containerd.WithSnapshotCleanup)
 }
