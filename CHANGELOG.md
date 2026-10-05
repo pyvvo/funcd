@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.2](https://github.com/pyvvo/funcd/compare/v0.6.1...v0.6.2) (2026-10-05)
+
+
+### Bug Fixes
+
+* **activator:** join a pooled member's path and the request remainder as a rooted path ([#774](https://github.com/pyvvo/funcd/issues/774)) ([7374fe8](https://github.com/pyvvo/funcd/commit/7374fe865ac45864ed131760880c01e9badb118b))
+* **artifact:** commit a pulled artifact to the cache only after the pull completes ([#772](https://github.com/pyvvo/funcd/issues/772)) ([9fe5682](https://github.com/pyvvo/funcd/commit/9fe56827cb7f8c5a08f638b4862b189c8ca8e7bd))
+* **edge:** match Route hosts in one canonical spelling ([#773](https://github.com/pyvvo/funcd/issues/773)) ([b597659](https://github.com/pyvvo/funcd/commit/b59765993f36dfb9064d19e48a9aa6d8fe70cac2))
+* **funcdctl:** escape function-supplied text in workflow describe, dlq list and printed errors ([#775](https://github.com/pyvvo/funcd/issues/775)) ([8fc9e29](https://github.com/pyvvo/funcd/commit/8fc9e29a5a1dc37bc15f94cdb6a5173b779c6294))
+* **runtime:** bound the containerd log socket's live connections per worker ([#771](https://github.com/pyvvo/funcd/issues/771)) ([3dfaa71](https://github.com/pyvvo/funcd/commit/3dfaa719288c7a0a7c8952da98f5c81c0f8efd87))
+
 ## [0.6.1](https://github.com/pyvvo/funcd/compare/v0.6.0...v0.6.1) (2026-10-05)
 
 
