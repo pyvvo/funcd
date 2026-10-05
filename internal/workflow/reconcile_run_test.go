@@ -1182,6 +1182,61 @@ func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
 	}
 }
 
+// Issue #711: the record the retention sweep writes for a run that closed without one belongs to that
+// run only. A WorkflowRun re-created under its name runs its own input, and the expiry of the old record
+// keeps it.
+func TestIssue711_RecreatedRunIgnoresSweepRecord(t *testing.T) {
+	for name, closeRun := range map[string]func(t *testing.T, s store.Store){
+		"cancelled before its first drive": func(t *testing.T, s store.Store) {
+			createRun(t, s, "re-1", v1.WorkflowRunSpec{Workflow: "wf", Cancel: true, Input: json.RawMessage(`{}`)})
+		},
+		"rejected replay seed": func(t *testing.T, s store.Store) {
+			seedReplay(t, s, "re-1", "absent", "a")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			base := time.Unix(1_700_000_000, 0)
+			s := newStore(t)
+			seedWorkflow(t, s, "wf", step("a", ""))
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			at := func(now time.Time) *RunReconciler {
+				eng, _ := New(Deps{Runs: rstate, Dispatch: f, Clock: clock.Fake(now)})
+				return NewRunReconciler(s, eng, nil, nil, 0)
+			}
+			req := runReq("re-1")
+
+			closeRun(t, s)
+			if _, run := reconcileRun(t, ctx, at(base), s, "re-1"); !isRunTerminal(run.Status.Phase) {
+				t.Fatalf("setup: first run phase %q, want a terminal phase", run.Status.Phase)
+			}
+			if n, err := at(base.Add(time.Hour)).SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+				t.Fatalf("setup: SweepExpired = %d, %v; want the closed run recorded, not reclaimed", n, err)
+			}
+			if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+				t.Fatalf("delete run: %v", err)
+			}
+			later := at(base.Add(2 * time.Hour))
+			if _, err := later.Reconcile(ctx, req); err != nil {
+				t.Fatalf("Reconcile the deletion: %v", err)
+			}
+
+			seedRun(t, s, "re-1", "wf", `{}`)
+			if _, run := reconcileRun(t, ctx, later, s, "re-1"); run.Status.Phase != runSucceeded || f.calls["a"] != 1 {
+				t.Errorf("re-created run: phase %q, step a dispatched %d times; want Succeeded after one dispatch", run.Status.Phase, f.calls["a"])
+			}
+			if _, err := at(base.Add(25*time.Hour+30*time.Minute)).SweepExpired(ctx, 24*time.Hour); err != nil {
+				t.Fatalf("SweepExpired past the old record's retention: %v", err)
+			}
+			if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1"); err != nil {
+				t.Errorf("the sweep must keep the re-created WorkflowRun inside its own retention: %v", err)
+			}
+		})
+	}
+}
+
 // Issue #344: a run held Pending because its Workflow is not Ready is listed in the Workflow's
 // status.runs.active (ADR-0094), once, across the wait's re-checks.
 func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {

@@ -492,7 +492,7 @@ func (r *RunReconciler) recordClosedRuns(ctx context.Context) error {
 		if fault.KindOf(gerr) != fault.NotFound {
 			return fault.Wrapf(gerr, fault.KindOf(gerr), runOp, "get record of closed run %q", run.Name)
 		}
-		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now}
+		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now, RunUID: run.UID}
 		if err := r.engine.runs.Put(ctx, rec); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), runOp, "record closed run %q", run.Name)
 		}
