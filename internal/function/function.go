@@ -526,7 +526,9 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	if err != nil {
 		switch {
 		case errors.Is(err, errArtifactUnresolved):
-			return r.gateFailed(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed}, drainAfter)
+			// a registry that comes back or a tag pushed later raises no event on the Function, so the gate is re-checked
+			// every supervision period (issue #703)
+			return r.gateFailed(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
 		case errors.Is(err, errRevisionMissing):
 			return r.gateFailed(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
 		case errors.Is(err, errRevisionStampFailed):

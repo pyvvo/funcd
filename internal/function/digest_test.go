@@ -186,6 +186,49 @@ func TestScenarioUnresolvableRefFails(t *testing.T) {
 	require.Empty(t, h.mat.digest(), "never materialized")
 }
 
+// Issue 703: a registry error at Revision stamp fails a Function that runs no worker as ArtifactUnresolved (ADR-0035),
+// and the gate is re-checked every supervision period, so the Function becomes Ready once the registry is back.
+func TestIssue703_TransientResolveErrorIsRetried(t *testing.T) {
+	t.Parallel()
+	down := fault.Unavailablef("oras.Resolve", "dial tcp registry:443: connect: connection refused")
+	t.Run("pass", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, pinning(&fakeResolver{err: down}, &pinRecorder{}))
+		h.create(t, "greeter", func(*v1.Function) {})
+		got := h.reconcile(t, "greeter")
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "greeter").Status.Phase)
+		h.requireCondition(t, "greeter", "Ready", v1.ConditionFalse, "ArtifactUnresolved")
+		require.Equal(t, testPeriod, got.RequeueAfter, "the gate is re-checked every supervision period")
+	})
+	t.Run("controller", func(t *testing.T) {
+		t.Parallel()
+		res := &fakeResolver{err: down}
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, pinning(res, &pinRecorder{}))
+		ctrl, err := controller.New(controller.Deps{Store: h.st})
+		require.NoError(t, err)
+		ctrl.Register(v1.KindFunction.GVK(), h.r)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- ctrl.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+
+		h.create(t, "greeter", func(*v1.Function) {})
+		require.Eventually(t, func() bool {
+			c, ok := h.getFn(t, "greeter").Status.Conditions.Get("Ready")
+			return ok && c.Reason == "ArtifactUnresolved"
+		}, 5*time.Second, 10*time.Millisecond)
+		res.mu.Lock()
+		res.err, res.digest = nil, "sha256:A"
+		res.mu.Unlock()
+		require.Eventually(t, func() bool {
+			return h.getFn(t, "greeter").Status.Phase == v1.PhaseReady
+		}, 5*time.Second, 10*time.Millisecond, "the Function recovers without a re-apply")
+		rev, err := h.revision(t, "greeter-1")
+		require.NoError(t, err)
+		require.Equal(t, "sha256:A", rev.Spec.ImageDigest)
+	})
+}
+
 // Issue 14: a Function deleted and then applied again under its name restarts at generation 1, the deleted Function's
 // revision 1 still in the store. The re-created Function's revision 1 pins the artifact its own manifest names.
 func TestIssue14_RecreatedFunctionRunsItsOwnArtifact(t *testing.T) {
