@@ -9538,5 +9538,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-697-fix-claude-opus-5-5-rework.md",
     "notes": "rework 1 (body stall): regression fails without the fix (3/3 subtests block 30s) and passes under -race in ~10s; mutants: error-mapping and per-Read Reset killed, total-deadline mutant survives (Minor, model: idle-not-total untested); obs (unscored): blob stall classified Invalid by untarBundle (pre-existing); containerd runtime-image pull not traced"
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "758",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-758-fix-claude-opus-5-5-w16f.md",
+    "notes": "Minor(model): TestCallTrackerFailedRoundTripEndsTheCall still dials a freed ephemeral port (dial-only, microsecond window, outside the decision's scope) and the commit does not mention it; Minor(model): the proof of the window was not committed as its own test. The regression test plus the existing holder tests prove it anyway."
   }
 ]
