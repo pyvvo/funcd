@@ -436,11 +436,18 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 
 // KeepEdgeHeaders makes rp put the headers w carries now back before the final response or the error
 // response: httputil.ReverseProxy clears the whole header map after it relays an upstream 1xx, which
-// would drop the X-Request-Id and CORS headers the edge set before proxying (#417). It sets
-// rp.ModifyResponse and wraps rp.ErrorHandler, which must be set first.
+// would drop the X-Request-Id and CORS headers the edge set before proxying (#417). ReverseProxy
+// appends the upstream's values, so the upstream's copy of an edge header is dropped and the edge's
+// value wins, like the shaping header rules; Vary is a list, so both sides' values are kept (#720). It
+// sets rp.ModifyResponse and wraps rp.ErrorHandler, which must be set first.
 func KeepEdgeHeaders(rp *httputil.ReverseProxy, w http.ResponseWriter) {
 	edge := w.Header().Clone()
-	rp.ModifyResponse = func(*http.Response) error {
+	rp.ModifyResponse = func(res *http.Response) error {
+		for k := range edge {
+			if k != "Vary" {
+				res.Header.Del(k)
+			}
+		}
 		maps.Copy(w.Header(), edge)
 		return nil
 	}

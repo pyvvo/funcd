@@ -157,6 +157,76 @@ func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
 	}
 }
 
+// TestIssue720_EdgeHeadersNotDuplicated: a header the edge sets before proxying (X-Request-Id, CORS)
+// reaches the client once, with the edge's value, when the Function or Upstream sets it too — on the
+// activator and the Upstream route, and on an upgrade (101). Vary is a list: both sides' values merge.
+func TestIssue720_EdgeHeadersNotDuplicated(t *testing.T) {
+	t.Parallel()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("fn") {
+		case "both":
+			w.Header().Set("Access-Control-Allow-Origin", "https://app.test")
+			w.Header().Set("X-Request-Id", r.Header.Get("X-Request-Id"))
+			w.Header().Set("Vary", "Accept-Encoding")
+		case "wildcard":
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		case "upgrade":
+			conn, brw, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n" +
+				"Access-Control-Allow-Origin: *\r\nX-Request-Id: " + r.Header.Get("X-Request-Id") + "\r\n\r\n")
+			_ = brw.Flush()
+		}
+	}))
+	t.Cleanup(up.Close)
+	rtr := router.New()
+	require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+	}}))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	seedFunction(t, st, "f")
+	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil),
+		gateway.RequestID, shape.Chain(shape.Config{CORS: &shape.CORS{AllowOrigins: []string{"https://app.test"}}})))
+	t.Cleanup(edge.Close)
+	client := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	for _, route := range []string{"/function/f", "/catalog/lake"} {
+		for _, fn := range []string{"both", "wildcard", "nothing", "upgrade"} {
+			t.Run(strings.TrimPrefix(route, "/")+"/"+fn, func(t *testing.T) {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, edge.URL+route+"?fn="+fn, nil)
+				require.NoError(t, err)
+				req.Header.Set("Origin", "https://app.test")
+				req.Header.Set("X-Request-Id", "rid-1")
+				if fn == "upgrade" {
+					req.Header.Set("Connection", "Upgrade")
+					req.Header.Set("Upgrade", "test")
+				}
+				resp, err := client.Do(req)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				if fn == "upgrade" {
+					require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+				}
+				require.Equal(t, map[string][]string{"ACAO": {"https://app.test"}, "X-Request-Id": {"rid-1"}}, map[string][]string{
+					"ACAO":         resp.Header.Values("Access-Control-Allow-Origin"),
+					"X-Request-Id": resp.Header.Values("X-Request-Id"),
+				})
+				if fn == "both" {
+					require.ElementsMatch(t, []string{"Origin", "Accept-Encoding"}, resp.Header.Values("Vary"))
+				}
+			})
+		}
+	}
+}
+
 // TestIssue440_UpstreamErrorsLogThroughSlog: a failed edge upstream call (ADR-0138) is logged once
 // through the data plane's slog logger, naming the upstream and the error, and ReverseProxy's own
 // errors (a failed body copy) go through the same handler, never the stdlib log package. Not parallel:
