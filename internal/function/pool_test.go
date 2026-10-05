@@ -587,6 +587,30 @@ func TestIssue70_RedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase, "the sibling keeps serving")
 }
 
+// Issue #70: only a member's load failure is judged by its revision; a serving member redeployed to a handler that loads
+// is Degraded while the new revision loads, as before (the blueprint's Ready → Degraded → Ready, ADR-0158 Decision 4).
+func TestIssue70_PooledRedeployIsDegradedWhileLoading(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+	h.create(t, "b", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "redeploy" })
+	h.reconcile(t, "b")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
+
+	update := filepath.Join(t.TempDir(), "update.mjs")
+	require.NoError(t, os.WriteFile(update, []byte("export function handle() { return {} }\n"), 0o600))
+	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = "file://" + update })
+	h.rt.setMember("b", "loading", "")
+	h.reconcile(t, "b")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "b").Status.Phase)
+	h.requireCondition(t, "b", "Ready", v1.ConditionFalse, "Restarting")
+
+	h.rt.setMember("b", "ready", "")
+	h.reconcile(t, "b")
+	b := h.getFn(t, "b")
+	require.Equal(t, v1.PhaseReady, b.Status.Phase)
+	require.Equal(t, "b-2", b.Status.ServingRevision)
+}
+
 // scenario: pooled-failed-member-never-idle (ADR-0169) — a woken scale-to-zero member whose handler cannot load in its
 // pool host is never Idle over two periods of passes and an idle reclaim past idleTimeout, and a call while it is
 // Failed is refused at once. A woken member whose pool host exits at once waits out the pool worker's backoff, never
