@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -113,6 +114,37 @@ func TestIssue432_DevFailsWhenS3PortIsTaken(t *testing.T) {
 	require.ErrorIs(t, err, syscall.EADDRINUSE, "funcdctl dev showed an S3 endpoint the gateway never bound")
 }
 
+// TestIssue627_DevRepicksTakenS3Port: funcdctl dev picks the S3 frontend's port and releases it, and the gateway binds
+// it only when the platform runs, so another process can take it in between. The boot must start again on a fresh
+// port instead of failing, reopening the --persist drivers the failed attempt released.
+func TestIssue627_DevRepicksTakenS3Port(t *testing.T) {
+	requireRuntime(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = taken.Close() })
+	picks := 0
+	cfg := devConfig{persist: true, persistTo: t.TempDir(), pickS3Addr: func() (string, error) {
+		picks++
+		if picks == 1 {
+			return taken.Addr().String(), nil
+		}
+		return freeLocalAddr()
+	}}
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", cfg)
+	require.NoError(t, err, "the boot starts again when its picked S3 port is taken")
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
+	require.Equal(t, 2, picks, "the boot picked a fresh port once the first was taken")
+	require.NotEqual(t, "http://"+taken.Addr().String(), inst.s3Endpoint)
+	_, err = devS3Client(t, inst).ListBuckets(context.Background(), &awss3.ListBucketsInput{})
+	require.NoError(t, err, "the S3 frontend serves on the fresh port")
+}
+
 // scenario: dev-inspect-blob-via-s3 — a function bound to a bucket writes an object THROUGH the dev S3
 // endpoint (it owns the prefix, so an owner-write is allowed), and the object is then readable back over
 // the same endpoint (GET + `aws s3 ls`) with the printed dev creds — the same S3 surface prod exposes.
@@ -212,9 +244,9 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 }
 
 // failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every
-// other request through, and reports whether that PUT was made. startDev builds its SDK client from
-// http.DefaultClient, so its transport is the only seam on an apply.
-func failFirstPut(t *testing.T, name string, problem error) *atomic.Bool {
+// other request through, and returns the URL that PUT went to (nil until it is made). startDev builds its SDK
+// client from http.DefaultClient, so its transport is the only seam on an apply.
+func failFirstPut(t *testing.T, name string, problem error) *atomic.Pointer[url.URL] {
 	t.Helper()
 	prev := http.DefaultClient.Transport
 	next := prev
@@ -231,11 +263,11 @@ type firstPutFault struct {
 	next    http.RoundTripper
 	path    string
 	problem error
-	hit     atomic.Bool
+	hit     atomic.Pointer[url.URL]
 }
 
 func (f *firstPutFault) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method != http.MethodPut || r.URL.Path != f.path || !f.hit.CompareAndSwap(false, true) {
+	if r.Method != http.MethodPut || r.URL.Path != f.path || !f.hit.CompareAndSwap(nil, r.URL) {
 		return f.next.RoundTrip(r)
 	}
 	rec := httptest.NewRecorder()
@@ -271,7 +303,7 @@ func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
 	inst2, err := a.startDev(ctx2, dir, "", cfg)
 	require.NoError(t, err, "a Conflict on the re-apply is retried, not fatal to the boot")
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
-	require.True(t, hit.Load(), "the re-apply met the injected Conflict")
+	require.NotNil(t, hit.Load(), "the re-apply met the injected Conflict")
 }
 
 // A boot that fails once its platform runs must stop that platform before returning, so the platform's Shutdown
@@ -287,28 +319,25 @@ func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
 	root, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	cport := ln.Addr().(*net.TCPAddr).Port
-	require.NoError(t, ln.Close())
 	a := &cli{out: io.Discard}
-	cfg := devConfig{persist: true, persistTo: root, cport: cport, name: name}
+	cfg := devConfig{persist: true, persistTo: root, name: name}
 
 	hit := failFirstPut(t, name, fault.Invalidf("admission", "Function %q rejected", name))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	_, err = a.startDev(ctx, dir, "", cfg)
 	require.Error(t, err, "a rejected apply fails the boot")
-	require.True(t, hit.Load(), "the boot failed on the injected apply rejection, after its platform started")
+	rejected := hit.Load()
+	require.NotNil(t, rejected, "the boot failed on the injected apply rejection, after its platform started")
 
-	conn, derr := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+	conn, derr := net.DialTimeout("tcp", rejected.Host, time.Second)
 	if derr == nil {
 		_ = conn.Close()
 	}
 	require.Error(t, derr, "a failed boot stops the platform it started")
 
 	inst, err := a.startDev(ctx, dir, "", cfg)
-	require.NoError(t, err, "the failed boot released the control port and the durable drivers")
+	require.NoError(t, err, "the failed boot released the durable drivers")
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 }
 

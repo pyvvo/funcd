@@ -36,6 +36,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -311,6 +312,8 @@ type devConfig struct {
 	cport     int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
 	name      string // override the single-generic-funcdctl.yaml function name; "" ⇒ the dir basename
 	printEnv  bool   // print the dev S3 creds as `export …` lines and exit (no server)
+	// pickS3Addr picks the S3-frontend address when s3port is 0; nil ⇒ freeLocalAddr. A test hands out a taken one (#627).
+	pickS3Addr func() (string, error)
 }
 
 // devInstance is a running `funcdctl dev` platform + the seams a test (or the command) drives it by.
@@ -347,10 +350,16 @@ func (d *devInstance) stop() error {
 	if d.watchDone != nil {
 		<-d.watchDone
 	}
-	for i := len(d.cleanup) - 1; i >= 0; i-- {
+	d.unwind(0)
+	return runErr
+}
+
+// unwind runs the cleanups registered from index mark on, newest first, and drops them.
+func (d *devInstance) unwind(mark int) {
+	for i := len(d.cleanup) - 1; i >= mark; i-- {
 		d.cleanup[i]()
 	}
-	return runErr
+	d.cleanup = d.cleanup[:mark]
 }
 
 // startDev is the entry seam tests drive (no signal handling, no blocking). It classifies the path arg —
@@ -539,9 +548,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	// On any error after this point, run the cleanups we accumulated so a failed boot leaves nothing behind.
 	defer func() {
 		if err != nil {
-			for i := len(inst.cleanup) - 1; i >= 0; i-- {
-				inst.cleanup[i]()
-			}
+			inst.unwind(0)
 		}
 	}()
 
@@ -549,34 +556,20 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	if herr != nil {
 		return nil, herr
 	}
-	opts, oerr := a.devPlatformOptions(ctx, op, pfs, plan, cfg, inst)
-	if oerr != nil {
-		return nil, oerr
+	cancelRun, perr := a.startPlatform(ctx, op, pfs, plan, cfg, inst)
+	if perr != nil {
+		return nil, perr
 	}
-	p, nerr := funcd.New(opts...)
-	// New owns the durable drivers from here: a failed New has closed them, a platform closes them on Shutdown.
-	if nerr != nil {
-		return nil, nerr
-	}
-	inst.platform = p
-	inst.gatewayURL = "http://" + p.DataPlaneAddr()
-	inst.controlURL = "http://" + p.Addr()
-
 	// A boot that fails once Run is up stops the platform (Run's Shutdown closes its drivers) before the
 	// cleanups run, so no controller outlives the boot on a released driver.
-	runCtx, cancelRun := context.WithCancel(ctx)
-	go func() { inst.runErr <- p.Run(runCtx) }()
 	defer func() {
 		if err != nil {
 			cancelRun()
 			<-inst.runErr
 		}
 	}()
-	if serr := p.WaitS3Gateway(runCtx); serr != nil {
-		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "serve the S3 frontend on %s", inst.s3Endpoint)
-	}
 
-	client, cerr := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	client, cerr := sdk.New(inst.controlURL, sdk.WithToken(funcd.DevToken))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -588,6 +581,44 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	inst.watchDone = make(chan struct{})
 	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
 	return inst, nil
+}
+
+// devS3PortAttempts bounds how many S3 ports startPlatform picks before it gives up (#627).
+const devS3PortAttempts = 3
+
+// startPlatform builds and runs the embedded platform and waits until its S3 frontend serves; it returns the cancel of
+// the platform's Run. The gateway binds its own listener only when the platform runs (versitygw cannot take an open
+// one), so a port picked for it (--s3port 0) can be taken by another process in between: that attempt is stopped and
+// unwound, and the platform starts again on a fresh port (#627). A fixed --s3port is never replaced.
+func (a *cli) startPlatform(ctx context.Context, op string, pfs []plannedFunc, plan persistPlan, cfg devConfig, inst *devInstance) (context.CancelFunc, error) {
+	for attempt := 1; ; attempt++ {
+		mark := len(inst.cleanup)
+		opts, oerr := a.devPlatformOptions(ctx, op, pfs, plan, cfg, inst)
+		if oerr != nil {
+			return nil, oerr
+		}
+		p, nerr := funcd.New(opts...)
+		// New owns the durable drivers from here: a failed New has closed them, a platform closes them on Shutdown.
+		if nerr != nil {
+			return nil, nerr
+		}
+		inst.platform = p
+		inst.gatewayURL = "http://" + p.DataPlaneAddr()
+		inst.controlURL = "http://" + p.Addr()
+
+		runCtx, cancelRun := context.WithCancel(ctx)
+		go func() { inst.runErr <- p.Run(runCtx) }()
+		serr := p.WaitS3Gateway(runCtx)
+		if serr == nil {
+			return cancelRun, nil
+		}
+		cancelRun()
+		<-inst.runErr
+		if cfg.s3port != 0 || attempt == devS3PortAttempts || !errors.Is(serr, syscall.EADDRINUSE) {
+			return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "serve the S3 frontend on %s", inst.s3Endpoint)
+		}
+		inst.unwind(mark)
+	}
 }
 
 // prepareHandlers delivers each function's bundle + ADR-0123 contract and synthesizes its Function (run from
@@ -691,7 +722,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 
 	// S3 frontend (ADR-0080/0085, Decision 6): expose the blob substrate over the S3 protocol on a free
 	// node-private port. The printed creds are the FIRST function's derived keypair (representative).
-	s3Cleanup, s3err := devS3Options(op, &opts, string(pfs[0].name), cfg.s3port, inst)
+	s3Cleanup, s3err := devS3Options(op, &opts, string(pfs[0].name), cfg, inst)
 	if s3err != nil {
 		if closeDurable != nil {
 			closeDurable()
@@ -824,10 +855,14 @@ func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object) ([]v1.O
 // records the dev function's derived keypair on inst for the banner + tests. The temp master is removed by
 // the returned cleanup (registered on stop). Enabled for every `funcdctl dev` run — a non-blob function
 // simply gets no keypair injected, and the listener is harmless.
-func devS3Options(op string, opts *[]funcd.Option, fnName string, s3port int, inst *devInstance) (cleanup func(), err error) {
-	addr := fmt.Sprintf("127.0.0.1:%d", s3port)
-	if s3port == 0 {
-		a, aerr := freeLocalAddr()
+func devS3Options(op string, opts *[]funcd.Option, fnName string, cfg devConfig, inst *devInstance) (cleanup func(), err error) {
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.s3port)
+	if cfg.s3port == 0 {
+		pick := cfg.pickS3Addr
+		if pick == nil {
+			pick = freeLocalAddr
+		}
+		a, aerr := pick()
 		if aerr != nil {
 			return nil, fault.Wrapf(aerr, fault.Internal, op, "reserve S3 frontend port")
 		}
@@ -861,8 +896,8 @@ func devS3Options(op string, opts *[]funcd.Option, fnName string, s3port int, in
 
 // freeLocalAddr reserves an ephemeral node-private TCP address by binding :0 and releasing it — the
 // s3gateway binds its own listener at Run and only reports the configured address, so `funcdctl dev`
-// picks a concrete free port up front. Another process can take it before the gateway binds it; bootDev
-// then fails on WaitS3Gateway instead of showing the endpoint. Loopback only.
+// picks a concrete free port up front. Another process can take it before the gateway binds it, and
+// then startPlatform starts again on a fresh port (#627). Loopback only.
 func freeLocalAddr() (string, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
