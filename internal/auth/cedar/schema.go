@@ -10,10 +10,13 @@ package cedar
 
 import (
 	"encoding/json"
+	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
+	cedartypes "github.com/cedar-policy/cedar-go/types"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
@@ -73,10 +76,40 @@ type policyScope struct {
 	Resource  scopeEntity `json:"resource"`
 }
 
+// scopeEntity is a principal or resource scope: Entity is set for `==` and `in`, In for `is … in`.
 type scopeEntity struct {
-	Entity struct {
-		Type string `json:"type"`
-	} `json:"entity"`
+	Entity scopeUID `json:"entity"`
+	In     *struct {
+		Entity scopeUID `json:"entity"`
+	} `json:"in"`
+}
+
+type scopeUID struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// named returns the entities the scope names; an unconstrained scope (`principal`, `is T`) names none.
+func (e scopeEntity) named() []scopeUID {
+	var out []scopeUID
+	if e.Entity.Type != "" {
+		out = append(out, e.Entity)
+	}
+	if e.In != nil && e.In.Entity.Type != "" {
+		out = append(out, e.In.Entity)
+	}
+	return out
+}
+
+// namespacedEntityType reports whether an entity type's id is "<ns>/…" (capabilities.go); NetDestination
+// and Action are not namespaced.
+func namespacedEntityType(t string) bool {
+	switch t {
+	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
+		entityTypeS3Identity, entityTypeIdentity, entityTypeCatalogService:
+		return true
+	}
+	return false
 }
 
 // ValidateCedar checks that text PARSES as Cedar and that every statement references only the
@@ -84,37 +117,65 @@ type scopeEntity struct {
 // error or an off-schema action/entity-type — the policy-validity admission surfaces it. cedar-go's
 // own schema validator is experimental, so this is the curated, fixed-schema check the driver owns.
 func ValidateCedar(text string) error {
+	_, err := validateCedar(text)
+	return err
+}
+
+// ValidateCedarInNamespace runs ValidateCedar, then refuses a statement whose principal or resource scope
+// (`==`, `in`, `is … in`) names a namespaced entity outside ns (ADR-0177 Decision 3). Unconstrained scopes
+// and entities inside `when`/`unless` pass: the per-namespace PolicySet contains them.
+func ValidateCedarInNamespace(ns v1.NamespaceName, text string) error {
+	const op = "cedar.ValidateCedarInNamespace"
+	scopes, err := validateCedar(text)
+	if err != nil {
+		return err
+	}
+	prefix := string(ns) + "/"
+	for i, sc := range scopes {
+		for _, e := range append(sc.Principal.named(), sc.Resource.named()...) {
+			if namespacedEntityType(e.Type) && !strings.HasPrefix(e.ID, prefix) {
+				uid := cedartypes.NewEntityUID(cedartypes.EntityType(e.Type), cedartypes.String(e.ID))
+				return fault.Invalidf(op, "cedar policy statement %d names %s outside the Policy's namespace %q", i, uid.String(), ns)
+			}
+		}
+	}
+	return nil
+}
+
+func validateCedar(text string) ([]policyScope, error) {
 	const op = "cedar.ValidateCedar"
 	list, err := cedar.NewPolicyListFromBytes("policy", []byte(text))
 	if err != nil {
-		return fault.Invalidf(op, "cedar policy does not parse: %v", err)
+		return nil, fault.Invalidf(op, "cedar policy does not parse: %v", err)
 	}
 	if len(list) == 0 {
-		return fault.Invalidf(op, "cedar policy is empty (no statements)")
+		return nil, fault.Invalidf(op, "cedar policy is empty (no statements)")
 	}
+	scopes := make([]policyScope, 0, len(list))
 	for _, pol := range list {
 		raw, merr := pol.MarshalJSON()
 		if merr != nil {
-			return fault.Invalidf(op, "cannot inspect cedar policy: %v", merr)
+			return nil, fault.Invalidf(op, "cannot inspect cedar policy: %v", merr)
 		}
 		var sc policyScope
 		if jerr := json.Unmarshal(raw, &sc); jerr != nil {
-			return fault.Invalidf(op, "cannot decode cedar policy scope: %v", jerr)
+			return nil, fault.Invalidf(op, "cannot decode cedar policy scope: %v", jerr)
 		}
 		// The action scope (op == "==") names a concrete action; "All" leaves it empty (then the
 		// statement is action-agnostic, which is allowed — but for the curated KV schema we require a
 		// named action so a Policy can't accidentally grant every action).
 		if sc.Action.Entity.ID == "" {
-			return fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
+			return nil, fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
-			return fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke, s3::read, s3::write)", sc.Action.Entity.ID)
+			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke, s3::read, s3::write)", sc.Action.Entity.ID)
 		}
 		for _, et := range []string{sc.Principal.Entity.Type, sc.Resource.Entity.Type} {
 			if et != "" && !KnownEntityType(et) {
-				return fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable, Bucket, BlobPrefix, S3Identity)", et)
+				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable, Bucket, BlobPrefix, S3Identity)", et)
 			}
 		}
+		scopes = append(scopes, sc)
 	}
-	return nil
+	return scopes, nil
 }

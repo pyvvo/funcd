@@ -45,3 +45,41 @@ func TestScenarioPolicyValidityAdmission(t *testing.T) {
 		})
 	}
 }
+
+func admitInTeamA(t *testing.T, text string) error {
+	t.Helper()
+	p := policyObj(text)
+	p.Namespace = "team-a"
+	_, err := admission.NewPolicyValidityAdmission().Admit(context.Background(),
+		admission.Request{Operation: admission.Create, GVK: v1.KindPolicy.GVK(), Object: p})
+	return err
+}
+
+func requireRefused(t *testing.T, err error, entity string) {
+	t.Helper()
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Equal(t, 400, fault.ToProblem(err).Status)
+	require.Contains(t, err.Error(), entity)
+}
+
+// scenario: policy-foreign-principal-refused — a team-a Policy naming a team-b principal is refused.
+func TestScenario_policy_foreign_principal_refused(t *testing.T) {
+	t.Parallel()
+	err := admitInTeamA(t, `permit(principal == Function::"team-b/g", action == Action::"kv::read", resource in KVStore::"team-a/orders");`)
+	requireRefused(t, err, `Function::"team-b/g"`)
+
+	require.NoError(t, admitInTeamA(t, `permit(principal, action == Action::"kv::read", resource);`),
+		"an unconstrained scope is admitted; the per-namespace PolicySet contains it")
+}
+
+// scenario: policy-foreign-resource-refused — a team-a Policy naming a team-b resource is refused.
+func TestScenario_policy_foreign_resource_refused(t *testing.T) {
+	t.Parallel()
+	err := admitInTeamA(t, `permit(principal == Function::"team-a/f", action == Action::"kv::read", resource in KVStore::"team-b/orders");`)
+	requireRefused(t, err, `KVStore::"team-b/orders"`)
+
+	err = admitInTeamA(t, `permit(principal, action == Action::"kv::read", resource is KVTable in KVStore::"team-b/orders");`)
+	requireRefused(t, err, `KVStore::"team-b/orders"`)
+
+	require.NoError(t, admitInTeamA(t, `permit(principal == Function::"team-a/f", action == Action::"kv::read", resource in KVStore::"team-a/orders");`))
+}
