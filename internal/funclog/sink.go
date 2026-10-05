@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -66,10 +67,11 @@ type BlobSink struct {
 }
 
 type segment struct {
-	mu      sync.Mutex
-	entries []Entry
-	bytes   int
-	opened  time.Time
+	mu       sync.Mutex
+	entries  []Entry
+	bytes    int
+	retained int // bytes kept from a failed Put: the size cap counts only what was appended since
+	opened   time.Time
 }
 
 // NewBlobSink builds the blob-backed sink over the funcd-system observability bucket. Bucket and
@@ -143,19 +145,10 @@ func (s *BlobSink) flushAged() {
 
 // Append adds e to res's open segment, sealing+Putting it if it crosses the size/age cap.
 func (s *BlobSink) Append(ctx context.Context, res Resource, e Entry) error {
-	s.mu.Lock()
-	seg := s.segments[res]
-	if seg == nil {
-		seg = &segment{opened: s.clock.Now()}
-		s.segments[res] = seg
-	}
-	// Lock seg before releasing the map, so a concurrent Flush cannot detach it before this append lands.
-	seg.mu.Lock()
-	s.mu.Unlock()
-
+	seg := s.lockedSegment(res)
 	seg.entries = append(seg.entries, e)
 	seg.bytes += estimateBytes(e)
-	full := seg.bytes >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge
+	full := seg.bytes-seg.retained >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge
 	seg.mu.Unlock()
 
 	if full {
@@ -163,6 +156,20 @@ func (s *BlobSink) Append(ctx context.Context, res Resource, e Entry) error {
 		return err
 	}
 	return nil
+}
+
+// lockedSegment returns res's open segment, opened if absent, locked before the map is released, so a concurrent
+// Flush cannot detach it before the caller's change lands.
+func (s *BlobSink) lockedSegment(res Resource) *segment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seg := s.segments[res]
+	if seg == nil {
+		seg = &segment{opened: s.clock.Now()}
+		s.segments[res] = seg
+	}
+	seg.mu.Lock()
+	return seg
 }
 
 // Flush seals res's current segment and Puts it as one OTLP-JSONL object; returns the blob key
@@ -196,9 +203,39 @@ func (s *BlobSink) flush(ctx context.Context, res Resource) (string, error) {
 	}
 	key := segmentKey(res, now)
 	if err := s.bucket.Put(ctx, key, data, blob.PutOptions{}); err != nil {
+		s.requeue(res, seg)
 		return "", fault.Wrapf(err, fault.KindOf(err), "funclog.BlobSink.Flush", "put segment %q", key)
 	}
 	return key, nil
+}
+
+// requeue puts the entries of a segment whose Put failed back ahead of res's open segment, so the next age flush,
+// Flush or Close retries them (ADR-0081: no loss while the process lives). The merged segment restarts its age and
+// size count, so a failing bucket is retried after maxAge or maxBytes more, not on every Append.
+func (s *BlobSink) requeue(res Resource, failed *segment) {
+	seg := s.lockedSegment(res)
+	var dropped int
+	seg.entries, seg.bytes, dropped = keepNewest(failed.entries, seg.entries, failed.bytes+seg.bytes, 2*s.maxBytes, estimateBytes)
+	seg.retained, seg.opened = seg.bytes, s.clock.Now()
+	seg.mu.Unlock()
+	if dropped > 0 {
+		s.log.Warn("funclog: segment Puts keep failing, dropped the oldest log records", "namespace", res.Namespace, "function", res.Function, "dropped", dropped)
+	}
+}
+
+// keepNewest puts the records of a segment whose Put failed ahead of the records buffered since, and drops the
+// oldest until at most limit bytes remain, so a long bucket outage cannot grow memory without bound. It returns
+// the records, their size and how many it dropped.
+func keepNewest[T Entry | Span](failed, since []T, bytes, limit int, size func(T) int) ([]T, int, int) {
+	all := append(failed, since...)
+	n := 0
+	for ; bytes > limit && n < len(all); n++ {
+		bytes -= size(all[n])
+	}
+	if n == 0 {
+		return all, bytes, 0
+	}
+	return slices.Clone(all[n:]), bytes, n
 }
 
 // Close stops the age-flusher, waits for any Flush still Putting a segment, then seals and Puts every open

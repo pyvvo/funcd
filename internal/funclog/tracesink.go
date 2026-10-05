@@ -50,10 +50,11 @@ type BlobTraceSink struct {
 }
 
 type traceSegment struct {
-	mu     sync.Mutex
-	spans  []Span
-	bytes  int
-	opened time.Time
+	mu       sync.Mutex
+	spans    []Span
+	bytes    int
+	retained int // bytes kept from a failed Put: the size cap counts only what was appended since
+	opened   time.Time
 }
 
 // NewBlobTraceSink builds the blob-backed trace sink over the funcd-system observability bucket.
@@ -126,19 +127,10 @@ func (s *BlobTraceSink) flushAged() {
 
 // AppendSpan adds sp to res's open segment, sealing+Putting it if it crosses the size/age cap.
 func (s *BlobTraceSink) AppendSpan(ctx context.Context, res Resource, sp Span) error {
-	s.mu.Lock()
-	seg := s.segments[res]
-	if seg == nil {
-		seg = &traceSegment{opened: s.clock.Now()}
-		s.segments[res] = seg
-	}
-	// Lock seg before releasing the map, so a concurrent Flush cannot detach it before this append lands.
-	seg.mu.Lock()
-	s.mu.Unlock()
-
+	seg := s.lockedSegment(res)
 	seg.spans = append(seg.spans, sp)
 	seg.bytes += estimateSpanBytes(sp)
-	full := seg.bytes >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge
+	full := seg.bytes-seg.retained >= s.maxBytes || s.clock.Now().Sub(seg.opened) >= s.maxAge
 	seg.mu.Unlock()
 
 	if full {
@@ -146,6 +138,20 @@ func (s *BlobTraceSink) AppendSpan(ctx context.Context, res Resource, sp Span) e
 		return err
 	}
 	return nil
+}
+
+// lockedSegment returns res's open segment, opened if absent, locked before the map is released, so a concurrent
+// Flush cannot detach it before the caller's change lands.
+func (s *BlobTraceSink) lockedSegment(res Resource) *traceSegment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seg := s.segments[res]
+	if seg == nil {
+		seg = &traceSegment{opened: s.clock.Now()}
+		s.segments[res] = seg
+	}
+	seg.mu.Lock()
+	return seg
 }
 
 // Flush seals res's current segment and Puts it as one OTLP-trace-JSONL object; returns the blob
@@ -179,9 +185,22 @@ func (s *BlobTraceSink) flush(ctx context.Context, res Resource) (string, error)
 	}
 	key := traceSegmentKey(res, now)
 	if err := s.bucket.Put(ctx, key, data, blob.PutOptions{}); err != nil {
+		s.requeue(res, seg)
 		return "", fault.Wrapf(err, fault.KindOf(err), "funclog.BlobTraceSink.Flush", "put trace segment %q", key)
 	}
 	return key, nil
+}
+
+// requeue is BlobSink.requeue for spans (ADR-0101).
+func (s *BlobTraceSink) requeue(res Resource, failed *traceSegment) {
+	seg := s.lockedSegment(res)
+	var dropped int
+	seg.spans, seg.bytes, dropped = keepNewest(failed.spans, seg.spans, failed.bytes+seg.bytes, 2*s.maxBytes, estimateSpanBytes)
+	seg.retained, seg.opened = seg.bytes, s.clock.Now()
+	seg.mu.Unlock()
+	if dropped > 0 {
+		s.log.Warn("funclog: trace segment Puts keep failing, dropped the oldest spans", "namespace", res.Namespace, "function", res.Function, "dropped", dropped)
+	}
 }
 
 // Close stops the age-flusher, waits for any Flush still Putting a segment, then seals and Puts every open
