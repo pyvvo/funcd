@@ -1,0 +1,35 @@
+# ADR-0110: an explicit Namespace, applied with the admin token (ADR-0171), and a Function in it exposed only by a
+# host Route. The env-echo artifact with no bindings answers empty values.
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: team-explicit
+spec:
+  defaultExposure: explicit
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: explicit-echo
+  namespace: team-explicit
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1
+---
+apiVersion: funcd.io/v1alpha1
+kind: Route
+metadata:
+  name: explicit-echo
+  namespace: team-explicit
+  resourceGroup: rg1
+spec:
+  host: explicit.example.com
+  rules:
+    - path: /hello
+      backend:
+        function: explicit-echo
