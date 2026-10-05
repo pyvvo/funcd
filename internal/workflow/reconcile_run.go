@@ -153,9 +153,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 			return res, true, err
 		}
 	}
-	if c, ok := run.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
-		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue}) // the wait is over
-	}
+	endWait(run)
 	if rec != nil && rec.Terminal() {
 		return controller.Result{}, false, nil
 	}
@@ -349,7 +347,16 @@ func stepContracts(wf *v1.Workflow) map[v1.ObjectName]v1.WorkflowContract {
 	return m
 }
 
-// mirror copies the engine record's coarse state into the WorkflowRun status; nil leaves it unchanged.
+// endWait clears the Ready=False of a run that waited for its Workflow: the run has started.
+func endWait(run *v1.WorkflowRun) {
+	if c, ok := run.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
+		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+	}
+}
+
+// mirror copies the engine record's coarse state into the WorkflowRun status; nil leaves it unchanged. A
+// record of its own means the run started, so its wait is over even on a pass that found the goroutine
+// live and skipped start (#658).
 func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	if rec == nil {
 		return
@@ -358,6 +365,8 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	run.Status.TraceID = rec.TraceID // ADR-0100: mirror the run trace so describe + workflow logs (ADR-0106) find it
 	if rec.Phase == runFailed && rec.Error != "" {
 		run.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: failureReason(rec.Error), Message: rec.Error})
+	} else {
+		endWait(run)
 	}
 	steps := make([]v1.RunStepStatus, 0, len(rec.Steps))
 	for _, s := range rec.Steps {

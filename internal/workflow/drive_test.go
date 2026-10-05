@@ -742,3 +742,54 @@ func TestWaitedRunEndsReadyAfterFastExit(t *testing.T) {
 		t.Fatalf("status = %s with Ready %+v, want Succeeded with the wait over", run.Status.Phase, c)
 	}
 }
+
+// Issue #658: a pass that finds a waited run's goroutine live skips start, which ended the wait; when the
+// goroutine exits before the pass checks it again, the pass writes the terminal status, and the run must not
+// keep the stale Ready=False/WorkflowNotFound (a terminal run is never reconciled again).
+func TestIssue658_WaitedRunEndsReadyWhenGoroutineExitsMidPass(t *testing.T) {
+	ctx := context.Background()
+	s, runs := newStore(t), newHoldRuns(t, false)
+	seedRun(t, s, "run-w", "wf", `{}`)
+	exited := make(chan struct{})
+	closeExited := sync.OnceFunc(func() { close(exited) })
+	var eng *Engine
+	eng, err := New(Deps{Runs: runs, Dispatch: newFake(), Notify: func(ns v1.NamespaceName, name v1.ObjectName) {
+		if _, live := eng.live(ns, name); !live {
+			closeExited()
+		}
+	}})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	runs.gate = func() bool { _, live := eng.live("default", "run-w"); return live }
+	rr, req := NewRunReconciler(s, eng, nil, nil), runReq("run-w")
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("wait pass: %v", err)
+	}
+	seedWorkflow(t, s, "wf", step("a", ""))
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("start pass: %v", err)
+	}
+	if c, _ := getRunObj(t, s, "run-w").Status.Conditions.Get(condReady); c.Reason != "WorkflowNotFound" {
+		t.Fatalf("setup: Ready = %+v after the start pass met the live terminal record, want the wait unwritten", c)
+	}
+	runs.gate = func() bool {
+		runs.release()
+		select {
+		case <-exited:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for the run goroutine to exit")
+		}
+		return false
+	}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("pass that found the goroutine live: %v", err)
+	}
+	if _, err := settleRun(ctx, rr, req); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	run := getRunObj(t, s, "run-w")
+	if c, ok := run.Status.Conditions.Get(condReady); run.Status.Phase != runSucceeded || ok && c.Status == v1.ConditionFalse {
+		t.Fatalf("status = %s with Ready %+v, want Succeeded with the wait over", run.Status.Phase, c)
+	}
+}

@@ -8248,5 +8248,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0155-implementation-claude-opus-5-5.md",
     "notes": "Contracts verbatim; all Decision 3 members on NodeTransport/NodeClient, step-6 grep only artifact/provision/bench, 4 drains -> httpx.CloseBody; build+vet+lint darwin and Linux green, touched pkgs -race ok, 5/5 scenarios pass (burst tests stable at -count=5); 3/3 overlay mutants killed (Proxy nil, Wrap(nil), dataplane pool); barrier burstWorker copied 3x across test packages (model); dialer values untestable, Refs vs Fixes #573 left to the PR (notes)"
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "658",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-658-fix-claude-opus-5-5.md",
+    "notes": "endWait in mirror closes the live-goroutine window; old test 1337/3000 fails on main, 0 with fix; minor (model): start's endWait call uncovered (mutant M2 survives)"
   }
 ]
