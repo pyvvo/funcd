@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -438,18 +437,10 @@ func TestIssue373_RemovesStoppedEngine(t *testing.T) {
 		insts, err := rt.List(ctx, spec.Ref.Namespace)
 		require.NoError(t, err)
 		require.Len(t, insts, 1)
-		logs, err := rt.Logs(ctx, insts[0].ID)
-		require.NoError(t, err)
-		logFile, ok := logs.(*os.File)
-		require.True(t, ok)
-		logPath := logFile.Name()
-		require.NoError(t, logs.Close())
-
 		require.NoError(t, pr.Teardown(ctx, spec.Ref))
 		insts, err = rt.List(ctx, spec.Ref.Namespace)
 		require.NoError(t, err)
 		require.Empty(t, insts, "a torn-down provider leaves no stopped engine instance")
-		require.NoFileExists(t, logPath, "the stopped engine's log file is removed")
 	})
 
 	t.Run("recreate", func(t *testing.T) {

@@ -82,7 +82,15 @@ func WithFunclog(segmentMaxAge time.Duration, segmentMaxBytes int) Option {
 	}
 }
 
-// WithoutFunclog disables structured function-log capture (Path B); raw stdout/stderr still flows.
+// WithFunclogMaxRecordBytes bounds one shim log or span record line (ADR-0168), passed to every shim and pool host as
+// FUNCD_FUNCLOG_MAX_RECORD_BYTES. 0 keeps the default (funclog.DefaultMaxRecordBytes); New refuses a nonzero value below
+// 1024 or above funclog.MaxLineBytes, the reader's cap.
+func WithFunclogMaxRecordBytes(n int) Option {
+	return func(c *config) error { c.funclogMaxRecordBytes = n; return nil }
+}
+
+// WithoutFunclog disables function-log capture: no structured records (Path B) and no stored raw stdout/stderr (Path
+// A); the runtime keeps only each worker's tail (ADR-0168).
 func WithoutFunclog() Option {
 	return func(c *config) error { c.funclogDisabled = true; return nil }
 }

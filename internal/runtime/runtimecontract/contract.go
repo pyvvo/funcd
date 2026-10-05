@@ -8,7 +8,7 @@ package runtimecontract
 import (
 	"context"
 	"io"
-	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
 // defaultImage is the runtime image the containerd lane runs the Command in; the
@@ -37,7 +38,6 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 			Replica:   0,
 			Image:     defaultImage,
 			Command:   command,
-			LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 		}
 	}
 
@@ -313,6 +313,75 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.NoError(t, err, "the same kind replaces its exited worker")
 		require.Equal(t, inst.ID, again.ID)
 		require.Equal(t, v1alpha1.KindFunction, again.OwnerKind)
+	})
+
+	t.Run("worker-logs-split-streams", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+		oc, ok := rt.(runtime.OutputCapturer)
+		require.True(t, ok, "the driver hands funcd its raw output (ADR-0168)")
+		got := make(chan [2]string, 1)
+		oc.SetOutputCapture(func(_ runtime.WorkerSpec, out *workerpipe.Output) {
+			stdout, stderr := out.Reader(workerpipe.Stdout), out.Reader(workerpipe.Stderr)
+			go func() {
+				var lines [2]string
+				var wg sync.WaitGroup
+				for i, r := range []io.Reader{stdout, stderr} {
+					wg.Go(func() {
+						b, _ := io.ReadAll(r)
+						lines[i] = string(b)
+					})
+				}
+				wg.Wait()
+				got <- lines
+			}()
+		})
+
+		inst, err := rt.Create(ctx, specOf(t, "split", []string{"sh", "-c", "echo err-line >&2; echo out-line"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		waitState(t, rt, inst.ID, runtime.StateStopped)
+		select {
+		case lines := <-got:
+			require.Equal(t, [2]string{"out-line\n", "err-line\n"}, lines)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the Readers did not end with the run")
+		}
+		rc, err := rt.Logs(ctx, inst.ID)
+		require.NoError(t, err)
+		tail, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		require.NoError(t, rc.Close())
+		require.Equal(t, "out-line\nerr-line\n", string(tail), "the tail holds stdout's lines, then stderr's")
+	})
+
+	t.Run("raw-output-never-blocks", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+		oc, ok := rt.(runtime.OutputCapturer)
+		require.True(t, ok)
+		outs := make(chan *workerpipe.Output, 1)
+		oc.SetOutputCapture(func(_ runtime.WorkerSpec, out *workerpipe.Output) {
+			_, _ = out.Reader(workerpipe.Stdout), out.Reader(workerpipe.Stderr) // taken, never read
+			outs <- out
+		})
+
+		inst, err := rt.Create(ctx, specOf(t, "flood", []string{"sh", "-c", "yes funcd-raw-output | head -c 8388608"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			got, err := rt.Status(ctx, inst.ID)
+			require.NoError(t, err)
+			if got.State == runtime.StateStopped {
+				break
+			}
+			require.True(t, time.Now().Before(deadline), "a worker whose output nobody reads must still end (state %s)", got.State)
+			time.Sleep(20 * time.Millisecond)
+		}
+		require.Positive(t, (<-outs).Dropped(), "the lines the queue could not hold are counted")
 	})
 
 	t.Run("instance-not-found", func(t *testing.T) {

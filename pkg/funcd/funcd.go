@@ -6,6 +6,7 @@
 package funcd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,6 +67,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/route"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/sensor"
@@ -133,6 +135,8 @@ type config struct {
 	funclogDisabled bool
 	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
 	funclogMaxBytes int           // segment seal size; 0 ⇒ sink default (8 MiB)
+	// funclogMaxRecordBytes bounds one shim record line (ADR-0168); 0 ⇒ funclog.DefaultMaxRecordBytes.
+	funclogMaxRecordBytes int
 	// funclog traces signal (ADR-0101): per-invocation spans on the same channel; on by default,
 	// subordinate to the funclog channel (no channel ⇒ moot). WithoutFunclogTraces disables it.
 	funclogTracesDisabled bool
@@ -290,6 +294,9 @@ type config struct {
 	invokeDefaultTimeout time.Duration
 }
 
+// minRecordBytes is the smallest funclog.maxRecordBytes: a record's envelope and cut marker always fit (ADR-0168).
+const minRecordBytes = 1024
+
 // validate returns the first missing required dependency, or an invalid option combination, as a
 // fault.Invalid.
 func (c *config) validate() error {
@@ -307,6 +314,10 @@ func (c *config) validate() error {
 		return fault.Invalidf(op, "gateway is required")
 	case c.credentials == nil:
 		return fault.Invalidf(op, "control-plane credentials are required (use WithCredentials, WithDevAuth or a preset)")
+	}
+	if n := c.funclogMaxRecordBytes; n != 0 && (n < minRecordBytes || n > funclog.MaxLineBytes) {
+		return fault.Invalidf(op, "funclog.maxRecordBytes %d is outside [%d, %d]: the reader drops a line over %d bytes",
+			n, minRecordBytes, funclog.MaxLineBytes, funclog.MaxLineBytes)
 	}
 	// Container execution runs every Function solo: no pool worker can run in a curated image (ADR-0173).
 	if c.imageFor != nil && (len(c.poolShim) > 0 || len(c.poolShimsByFamily) > 0) {
@@ -673,6 +684,7 @@ func (p *Platform) buildControlPlane() error {
 	calls := activator.NewCallTracker(clock.System())
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
+		LogMaxRecordBytes:    cmp.Or(c.funclogMaxRecordBytes, funclog.DefaultMaxRecordBytes),
 		Calls:                calls,
 		InvokeSockets:        p.invokeMgr,
 		Runtime:              c.runtime,
@@ -1087,8 +1099,8 @@ func (p *Platform) buildControlPlane() error {
 
 	// ADR-0081: structured function-log capture (Path B). If the runtime driver implements the
 	// LogCapturer capability and a blob substrate is present, build the funclog sink and install the
-	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink.
-	// (Path A, raw stdout/stderr, stays the runtime's own log file.)
+	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink. Path A, the raw
+	// stdout/stderr, is installed beside it on the same gate (ADR-0168).
 	if lc, ok := c.runtime.(runtime.LogCapturer); ok && c.blob != nil && !c.funclogDisabled {
 		sink, serr := funclog.NewBlobSink(funclog.Deps{
 			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
@@ -1123,6 +1135,31 @@ func (p *Platform) buildControlPlane() error {
 			_, isMember, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
 			p.logRoutes.start(r, func() { _ = funclog.RoutePool(context.Background(), r, sinks, res, isMember, p.logger) })
 		})
+		// ADR-0168 Path A: a Function worker's raw stdout (INFO) and stderr (ERROR) go to the same logs sink, dev's tee
+		// included. An engine's worker keeps only its tail.
+		if oc, ok := c.runtime.(runtime.OutputCapturer); ok {
+			oc.SetOutputCapture(func(spec runtime.WorkerSpec, out *workerpipe.Output) {
+				if spec.OwnerKind != v1.KindFunction {
+					return
+				}
+				res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
+				dst := logs
+				if strings.HasPrefix(string(spec.Name), "__pool__") {
+					// A raw line names no member, so it is stored under each member the pool runs now.
+					members, _, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
+					dst = newMemberSink(logs, res, members)
+				}
+				for _, src := range []struct {
+					stream workerpipe.Stream
+					source funclog.Source
+				}{{workerpipe.Stdout, funclog.SourceStdout}, {workerpipe.Stderr, funclog.SourceStderr}} {
+					r := out.Reader(src.stream)
+					p.logRoutes.start(r, func() {
+						_ = funclog.Pump(context.Background(), funclog.NewRawReader(r, src.source), dst, res, p.logger)
+					})
+				}
+			})
+		}
 	}
 
 	// ADR-0083: funclog compacted compaction. When a blob substrate is present and compaction is not disabled,

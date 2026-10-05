@@ -89,6 +89,8 @@ type Deps struct {
 	Gateway   gateway.Gateway
 	Validator ShapeValidator
 	Logger    *slog.Logger
+	// LogMaxRecordBytes is FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none.
+	LogMaxRecordBytes int
 	// Materializer + ShimCommand enable real function execution (ADR-0030): the
 	// reconciler materializes the artifact and launches the runtime shim, and gates
 	// readiness on the shim's /health/readiness. When Materializer is nil the reconciler
@@ -232,20 +234,21 @@ const (
 
 // Reconciler is the one controller.Reconciler for KindFunction.
 type Reconciler struct {
-	store        store.Store
-	runtime      runtime.Runtime
-	scheduler    scheduler.Scheduler
-	gateway      gateway.Gateway
-	validator    ShapeValidator
-	logger       *slog.Logger
-	materializer Materializer // nil → legacy placeholder mode (no real execution)
-	shimCommand  []string
-	shimByFamily map[string][]string // runtime-family prefix → shim command (ADR-0049)
-	endpointMode EndpointMode
-	imageFor     func(string) string
-	resolver     ArtifactResolver // nil → no digest resolution (ADR-0035)
-	platformsOf  PlatformResolver // nil → no platform gate (ADR-0145)
-	httpClient   *http.Client
+	logMaxRecordBytes int // FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none
+	store             store.Store
+	runtime           runtime.Runtime
+	scheduler         scheduler.Scheduler
+	gateway           gateway.Gateway
+	validator         ShapeValidator
+	logger            *slog.Logger
+	materializer      Materializer // nil → legacy placeholder mode (no real execution)
+	shimCommand       []string
+	shimByFamily      map[string][]string // runtime-family prefix → shim command (ADR-0049)
+	endpointMode      EndpointMode
+	imageFor          func(string) string
+	resolver          ArtifactResolver // nil → no digest resolution (ADR-0035)
+	platformsOf       PlatformResolver // nil → no platform gate (ADR-0145)
+	httpClient        *http.Client
 
 	// secrets (ADR-0057) resolves a function's bound Secret names → env vars; nil → injection
 	// disabled (a function declaring spec.secrets fails closed). developerFor supplies the PDP
@@ -382,7 +385,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	return &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
-		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
+		logMaxRecordBytes: d.LogMaxRecordBytes,
+		materializer:      d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
 		httpClient:          httpx.NodeClient(probeTimeout),
 		secrets:             d.Secrets,
@@ -2382,6 +2386,13 @@ func shimEnv(fn *v1.Function, artifact string) map[string]string {
 	}
 }
 
+// addRecordBound passes funclog.maxRecordBytes to a shim or a pool host, which bounds each record line by it (ADR-0168).
+func (r *Reconciler) addRecordBound(env map[string]string) {
+	if r.logMaxRecordBytes > 0 {
+		env["FUNCD_FUNCLOG_MAX_RECORD_BYTES"] = strconv.Itoa(r.logMaxRecordBytes)
+	}
+}
+
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
@@ -2392,6 +2403,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
 		env := shimEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)))
+		r.addRecordBound(env)
 		env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
 		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		// FUNCD_CONTRACT_PATH (ADR-0123): the schema is delivered into the host bundle root
@@ -2428,6 +2440,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 	if r.materializer != nil {
 		// Process mode (ADR-0030): ShimCommand launches the shim; loopback + portfile.
 		env := shimEnv(fn, artifactPath)
+		r.addRecordBound(env)
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
 		// reads directly in process mode, so host root == worker root.

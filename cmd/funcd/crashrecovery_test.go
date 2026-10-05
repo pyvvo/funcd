@@ -248,7 +248,7 @@ func TestScenarioStopGraceFromConfig(t *testing.T) {
 	t.Cleanup(func() { _ = rt.Close() })
 	inst, err := rt.Create(ctx, fnruntime.WorkerSpec{
 		Namespace: "default", Name: "stubborn", OwnerKind: v1.KindFunction,
-		Command: []string{"sh", "-c", `trap "" TERM; sleep 30; true`}, LogPath: filepath.Join(dir, "w.log"),
+		Command: []string{"sh", "-c", `trap "" TERM; sleep 30; true`},
 	})
 	require.NoError(t, err)
 	require.NoError(t, rt.Start(ctx, inst.ID))

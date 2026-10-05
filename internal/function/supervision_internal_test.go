@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -26,7 +25,7 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 	ctx := context.Background()
 	inst, err := r.runtime.Create(ctx, runtime.WorkerSpec{
 		Namespace: "default", OwnerKind: v1.KindFunction, Name: "gone", Revision: "gone-1", Replica: 1,
-		Command: []string{"sh", "-c", "exit 3"}, LogPath: filepath.Join(t.TempDir(), "w.log"),
+		Command: []string{"sh", "-c", "exit 3"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, r.runtime.Start(ctx, inst.ID))

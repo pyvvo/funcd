@@ -4,7 +4,7 @@ package containerd
 
 import (
 	"context"
-	"path/filepath"
+	"log/slog"
 	"sync"
 	"syscall"
 	"testing"
@@ -115,14 +115,13 @@ func TestStop_KeepsWorkerOnLoadError(t *testing.T) {
 		Name:      "stop",
 		Revision:  "stop-1",
 		Image:     "funcd/stop:latest",
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 		OwnerKind: v1alpha1.KindFunction,
 	}
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, spec)
 	require.NoError(t, err)
@@ -142,6 +141,7 @@ func requireNoneReleased(t *testing.T, d *driver) {
 // closeFixture is a fake containerd holding one image and the funcd namespaces it lists.
 type closeFixture struct {
 	bootRoot string
+	fifoDir  string
 	client   *containerd.Client
 	ctrs     *memContainers
 	cni      *removedCNI
@@ -157,12 +157,12 @@ func newCloseFixture(t *testing.T, namespaces ...string) *closeFixture {
 	client := fakeClient(t, cs, images.Image{Name: image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap},
 		containerd.WithNamespaceService(listedNamespaces{names: namespaces}))
-	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, snap: snap, image: image, bootRoot: t.TempDir()}
+	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, snap: snap, image: image, bootRoot: t.TempDir(), fifoDir: t.TempDir()}
 }
 
 // driver starts a driver on the fixture's containerd with no instances, as a daemon or a bench does.
 func (f *closeFixture) driver(private bool) *driver {
-	return &driver{cfg: Config{Private: private}, client: f.client, cni: f.cni, bootRoot: f.bootRoot, instances: map[runtime.InstanceID]*worker{}}
+	return &driver{cfg: Config{Logger: slog.Default(), Private: private}, client: f.client, cni: f.cni, bootRoot: f.bootRoot, fifoDir: f.fifoDir, instances: map[runtime.InstanceID]*worker{}}
 }
 
 // create runs a worker through d and returns its container and network attachment ids.
@@ -172,7 +172,6 @@ func (f *closeFixture) create(t *testing.T, d *driver, ns v1alpha1.NamespaceName
 		Name:      name,
 		Revision:  name + "-1",
 		Image:     f.image,
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 		OwnerKind: v1alpha1.KindFunction,
 	}
 	_, err := d.Create(leases.WithLease(context.Background(), "close"), spec)

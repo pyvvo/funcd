@@ -15,6 +15,9 @@
 #      the SAME UDS channel (demuxed by "funcd.signal"), persisted as OTLP-trace-JSONL under
 #      <dataDir>/blob/traces/<ns>/<fn>/. The span ADOPTS the incoming trace (its traceId + parentSpanId),
 #      and the invocation's logs carry the SAME traceId (logs↔trace correlation), for both languages.
+#   5. ADR-0168 raw output and record bound, for both languages: a worker's stdout line is read back at INFO
+#      (source=stdout) and its stderr line at ERROR (source=stderr); a log call with a 3.5 MB value is stored as one
+#      record cut at the default 64 KiB bound (attrs truncated=true, keptBytes <= 65536), body and severity intact.
 name: funclog capture + read + traces (ADR-0081/0084/0101, containerd lane)
 
 vars:
@@ -185,3 +188,94 @@ testcases:
         assertions:
           - "result.code ShouldEqual 0"
           - "result.systemout ShouldContainSubstring PYSPANOK"
+
+  # ── ADR-0168: raw stdout/stderr reach the logs at INFO/ERROR; one log record is cut at the bound.
+  - name: "scenario raw-output-severity: js log-burst stdout is INFO and stderr is ERROR"
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/log-burst"
+        headers:
+          content-type: application/json
+        body: '{"data":{"batch":"rawsev"}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; l=$(funcdctl logs log-burst -n default -o wide --limit 1000 2>/dev/null); o=$(echo "$l" | grep -F "[INFO]" | grep -F "burst stdout rawsev" | grep -cF "source=stdout"); e=$(echo "$l" | grep -F "[ERROR]" | grep -F "burst stderr rawsev" | grep -cF "source=stderr"); [ "$o" -ge 1 ] && [ "$e" -ge 1 ] && echo "JSRAWOK o=$o e=$e" || echo "JSRAWBAD o=$o e=$e"'
+        retry: 15
+        delay: 2
+        info: "JS raw output → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSRAWOK"
+
+  - name: "scenario raw-output-severity: python pylog-burst stdout is INFO and stderr is ERROR"
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pylog-burst"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; l=$(funcdctl logs pylog-burst -n default -o wide --limit 1000 2>/dev/null); o=$(echo "$l" | grep -F "[INFO]" | grep -F "burst stdout" | grep -cF "source=stdout"); e=$(echo "$l" | grep -F "[ERROR]" | grep -F "burst stderr" | grep -cF "source=stderr"); [ "$o" -ge 1 ] && [ "$e" -ge 1 ] && echo "PYRAWOK o=$o e=$e" || echo "PYRAWBAD o=$o e=$e"'
+        retry: 15
+        delay: 2
+        info: "Python raw output → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring PYRAWOK"
+
+  - name: "scenario record-cut-at-bound: js log-burst logs a 3.5 MB value as one cut record"
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/log-burst"
+        headers:
+          content-type: application/json
+        body: '{"data":{"big":3500000}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 100
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; l=$(funcdctl logs log-burst -n default -o wide --limit 1000 2>/dev/null | grep -F "[INFO]" | grep -F " big value " | grep -F " truncated=true"); n=$(echo "$l" | grep -c .); k=$(echo "$l" | grep -o " keptBytes=[0-9]*" | head -1 | cut -d= -f2); [ "$n" -ge 1 ] && [ -n "$k" ] && [ "$k" -le 65536 ] && echo "JSCUTOK n=$n kept=$k" || echo "JSCUTBAD n=$n kept=$k"'
+        retry: 15
+        delay: 2
+        info: "JS record cut → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring JSCUTOK"
+
+  - name: "scenario record-cut-at-bound: python pylog-burst logs a 3.5 MB value as one cut record"
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pylog-burst"
+        headers:
+          content-type: application/json
+        body: '{"data":{"big":3500000}}'
+        retry: 15
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.emitted ShouldBeGreaterThan 100
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- bash -c 'export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token; l=$(funcdctl logs pylog-burst -n default -o wide --limit 1000 2>/dev/null | grep -F "[INFO]" | grep -F " big value " | grep -F " truncated=true"); n=$(echo "$l" | grep -c .); k=$(echo "$l" | grep -o " keptBytes=[0-9]*" | head -1 | cut -d= -f2); [ "$n" -ge 1 ] && [ -n "$k" ] && [ "$k" -le 65536 ] && echo "PYCUTOK n=$n kept=$k" || echo "PYCUTBAD n=$n kept=$k"'
+        retry: 15
+        delay: 2
+        info: "Python record cut → {{.result.systemout}}"
+        assertions:
+          - "result.code ShouldEqual 0"
+          - "result.systemout ShouldContainSubstring PYCUTOK"

@@ -6,14 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// maxLineBytes caps one channel line; a longer line is dropped, never buffered past the cap.
-const maxLineBytes = 1024 * 1024
+// MaxLineBytes caps one channel line; a longer line is dropped, never buffered past the cap. It is the ceiling of
+// funclog.maxRecordBytes (ADR-0168).
+const MaxLineBytes = 1024 * 1024
 
-// errLineTooLong reports a line over maxLineBytes that was read through its newline and dropped.
+// DefaultMaxRecordBytes bounds one shim record line when funclog.maxRecordBytes is 0 (ADR-0168).
+const DefaultMaxRecordBytes = 64 << 10
+
+// errLineTooLong reports a line over MaxLineBytes that was read through its newline and dropped.
 var errLineTooLong = errors.New("line exceeds the 1 MiB cap")
 
 // lineReader splits a channel into lines like bufio.ScanLines, but drops an over-long line and keeps
@@ -38,7 +43,7 @@ func (l *lineReader) next() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(l.line)+len(frag) > maxLineBytes {
+		if len(l.line)+len(frag) > MaxLineBytes {
 			tooLong = true
 		}
 		if !tooLong {
@@ -154,5 +159,6 @@ func (r *rawReader) Read(_ context.Context) (Entry, error) {
 	if r.src == SourceStderr {
 		sev = SevError
 	}
-	return Entry{Severity: sev, Body: string(line), Source: r.src}, nil
+	// A raw line carries no time of its own: it is stamped when read (ADR-0168).
+	return Entry{Time: time.Now(), Severity: sev, Body: string(line), Source: r.src}, nil
 }

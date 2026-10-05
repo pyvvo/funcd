@@ -4,7 +4,7 @@ package containerd
 
 import (
 	"context"
-	"path/filepath"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -131,7 +131,7 @@ func newCNIIDFixture(t *testing.T) *cniIDFixture {
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
 	cni := &recordingCNI{}
 	return &cniIDFixture{
-		d:    &driver{client: client, cni: cni, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}},
+		d:    &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: cni, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}},
 		ctrs: ctrs, cni: cni, image: image,
 	}
 }
@@ -143,7 +143,6 @@ func (f *cniIDFixture) engine(t *testing.T, ns v1alpha1.NamespaceName, name v1al
 		Name:      name,
 		OwnerKind: v1alpha1.KindCatalogService,
 		Image:     f.image,
-		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
 	}
 }
 

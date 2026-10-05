@@ -61,29 +61,22 @@ func TestStartSavesAWorkerThatExitsAtOnce(t *testing.T) {
 	require.Empty(t, saved(t, state), "the exited worker is deleted from the registry")
 }
 
-// Start saves the files the driver owns with the worker, so the reap after a crash deletes them (issue #44): the
-// port file always, the log file only when the driver created it.
+// Start saves the file the driver owns with the worker, so the reap after a crash deletes it (issue #44): the port
+// file, the only file a worker has once its output goes through pipes (ADR-0168).
 func TestStartSavesTheDriverOwnedFiles(t *testing.T) {
-	for name, logPath := range map[string]string{"driver log": "", "given log": filepath.Join(t.TempDir(), "w.log")} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			d, state := openSaving(t)
-			inst, err := d.Create(ctx, runtime.WorkerSpec{
-				Namespace: "default", Name: "files", OwnerKind: v1alpha1.KindFunction, LogPath: logPath,
-				Command: []string{"sh", "-c", "exec sleep 30"},
-			})
-			require.NoError(t, err)
-			require.NoError(t, d.Start(ctx, inst.ID))
-			d.mu.Lock()
-			w := d.instances[inst.ID]
-			want := []string{w.portFile}
-			if logPath == "" {
-				want = append(want, w.logPath)
-			}
-			d.mu.Unlock()
-			entries := saved(t, state)
-			require.Len(t, entries, 1)
-			require.Equal(t, want, entries[0].Files)
-		})
-	}
+	ctx := context.Background()
+	d, state := openSaving(t)
+	inst, err := d.Create(ctx, runtime.WorkerSpec{
+		Namespace: "default", Name: "files", OwnerKind: v1alpha1.KindFunction,
+		Command: []string{"sh", "-c", "exec sleep 30"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.Start(ctx, inst.ID))
+	d.mu.Lock()
+	want := []string{d.instances[inst.ID].portFile}
+	d.mu.Unlock()
+	require.Regexp(t, `funcd-worker-.*\.port$`, want[0])
+	entries := saved(t, state)
+	require.Len(t, entries, 1)
+	require.Equal(t, want, entries[0].Files)
 }

@@ -4,7 +4,7 @@ package containerd
 
 import (
 	"context"
-	"path/filepath"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -29,14 +29,13 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 		Name:      "lake",
 		OwnerKind: v1alpha1.KindCatalogService,
 		Image:     "funcd/ownerkind:latest",
-		LogPath:   filepath.Join(t.TempDir(), "engine.log"),
 	}
 	ctrID, _ := workerNames(string(engine.Namespace), string(engine.Name), "", "0")
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: engine.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, engine)
 	require.NoError(t, err)
@@ -50,11 +49,10 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 
 	fn := engine
 	fn.OwnerKind = v1alpha1.KindFunction
-	fn.LogPath = filepath.Join(t.TempDir(), "fn.log")
 	_, err = d.Create(ctx, fn)
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "this driver holds the ID for a CatalogService worker")
 
-	restarted := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	restarted := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 	_, err = restarted.Create(ctx, fn)
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "a leftover labelled CatalogService is not reclaimed for a Function")
 	require.Contains(t, ctrs.records, ctrID, "the other kind's leftover is kept")

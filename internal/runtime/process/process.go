@@ -7,9 +7,9 @@ package process
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,7 +21,11 @@ import (
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
+	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
+
+// outputWait bounds how long an ended run waits for its last output before it reports a terminal state (ADR-0168).
+const outputWait = time.Second
 
 // defaultStopGrace is how long Stop waits after SIGTERM before sending SIGKILL unless runtime.process.stopGrace sets
 // it (ADR-0167).
@@ -34,8 +38,8 @@ const instanceFlag = "--funcd-instance="
 type instance struct {
 	id        runtime.InstanceID
 	spec      runtime.WorkerSpec
-	logPath   string
-	portFile  string // the shim writes its OS-assigned port here once listening (ADR-0030)
+	portFile  string             // the shim writes its OS-assigned port here once listening (ADR-0030)
+	out       *workerpipe.Output // the current or last run's stdout and stderr (ADR-0168); nil before the first Start
 	cmd       *exec.Cmd
 	pid       int
 	state     runtime.State
@@ -51,7 +55,8 @@ type instance struct {
 type driver struct {
 	mu        sync.Mutex
 	instances map[runtime.InstanceID]*instance
-	capture   runtime.LogCaptureFunc // optional Path B log-channel hook (ADR-0081); nil = disabled
+	capture   runtime.LogCaptureFunc    // optional Path B log-channel hook (ADR-0081); nil = disabled
+	outputs   runtime.OutputCaptureFunc // optional Path A raw-output hook (ADR-0168); nil = tail only
 	grace     time.Duration
 	reg       *procreg.Registry             // the saved worker registry (ADR-0167); nil = in-memory only
 	startTime func(pid int) (uint64, error) // procreg.StartTime; a test delays it to widen the exit-before-save window
@@ -89,6 +94,14 @@ func (d *driver) SetLogCapture(fn runtime.LogCaptureFunc) {
 	d.mu.Unlock()
 }
 
+// SetOutputCapture installs the per-run raw-output hook (runtime.OutputCapturer, ADR-0168); Start calls it just before
+// the worker starts.
+func (d *driver) SetOutputCapture(fn runtime.OutputCaptureFunc) {
+	d.mu.Lock()
+	d.outputs = fn
+	d.mu.Unlock()
+}
+
 func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
 	const op = "runtime.process.Create"
 	if len(spec.Command) == 0 {
@@ -111,23 +124,20 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 		return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
 	}
 
-	logPath := spec.LogPath
-	if logPath == "" {
-		f, err := os.CreateTemp("", "funcd-worker-*.log")
-		if err != nil {
-			return runtime.Instance{}, fault.Wrapf(err, fault.Internal, op, "create log file")
-		}
-		logPath = f.Name()
-		_ = f.Close()
+	// The port file reserves its own name; the shim writes its bound port into it (ADR-0030, ADR-0168).
+	f, err := os.CreateTemp("", "funcd-worker-*.port")
+	if err != nil {
+		return runtime.Instance{}, fault.Wrapf(err, fault.Internal, op, "create port file")
 	}
+	portFile := f.Name()
+	_ = f.Close()
 	if replace {
 		removeFiles(old)
 	}
 	inst := &instance{
 		id:        id,
 		spec:      spec,
-		logPath:   logPath,
-		portFile:  logPath + ".port", // driver-owned; the shim writes its bound port here
+		portFile:  portFile,
 		state:     runtime.StateCreated,
 		done:      make(chan struct{}),
 		createdAt: time.Now(),
@@ -149,22 +159,39 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	}
 	inst.released = false // a restarted instance runs again, so Remove must wait for its next Stop (ADR-0143)
 
-	if err := os.MkdirAll(filepath.Dir(inst.logPath), 0o750); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "create log dir")
+	// Truncated, not removed, so the name stays reserved and an empty file reads as not listened.
+	if err := os.WriteFile(inst.portFile, nil, 0o600); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "reset port file")
 	}
-	logFile, err := os.OpenFile(inst.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	// Raw stdout and stderr (ADR-0168): two pipes funcd reads; the parent's write ends close once the child has them.
+	out := workerpipe.New(workerpipe.Options{Logger: slog.Default().With(
+		"namespace", inst.spec.Namespace, "name", inst.spec.Name, "revision", inst.spec.Revision, "replica", inst.spec.Replica)})
+	var pipes []*os.File // every pipe end made so far: an error return closes them
+	fail := func(err error, msg string) error {
+		for _, f := range pipes {
+			_ = f.Close()
+		}
+		out.Close()
+		return fault.Wrapf(err, fault.Internal, op, "%s", msg)
+	}
+	outR, outW, err := os.Pipe()
 	if err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "open log file")
+		return fail(err, "create stdout pipe")
 	}
+	pipes = append(pipes, outR, outW)
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		return fail(err, "create stderr pipe")
+	}
+	pipes = append(pipes, errR, errW)
 
-	_ = os.Remove(inst.portFile) // clear any stale port from a prior start
 	args := inst.spec.Command[1:]
 	if d.reg != nil {
 		args = append(slices.Clone(args), instanceFlag+string(id))
 	}
 	cmd := exec.Command(inst.spec.Command[0], args...) //nolint:gosec // command is platform-internal, from the controller-built spec
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = outW
+	cmd.Stderr = errW
 	// Its own process group, so Stop, Close and the worker's exit reach everything it starts.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// FUNCD_PORTFILE is the driver↔shim port handshake (ADR-0030): the shim binds
@@ -177,23 +204,27 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	if d.capture != nil {
 		pr, pw, perr := os.Pipe()
 		if perr != nil {
-			_ = logFile.Close()
-			return fault.Wrapf(perr, fault.Internal, op, "create log pipe")
+			return fail(perr, "create log pipe")
 		}
+		pipes = append(pipes, pr, pw)
 		cmd.ExtraFiles = []*os.File{pw}
 		cmd.Env = append(cmd.Env, "FUNCD_LOG_FD=3")
 		logRead = pr
 	}
 
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		if logRead != nil {
-			_ = logRead.Close()
-			_ = cmd.ExtraFiles[0].Close()
-		}
-		// no process ran, so the instance keeps its state (Created for a new one) and is started again (ADR-0142)
-		return fault.Wrapf(err, fault.Internal, op, "start process")
+	// Path A hook (ADR-0168), last before the worker starts: a Pump it starts ends when out is closed.
+	if d.outputs != nil {
+		d.outputs(inst.spec, out)
 	}
+	if err := cmd.Start(); err != nil {
+		// no process ran, so the instance keeps its state (Created for a new one) and is started again (ADR-0142)
+		return fail(err, "start process")
+	}
+	// The parent's write ends close, so each Drain sees EOF once the worker and what it started have exited.
+	_ = outW.Close()
+	_ = errW.Close()
+	out.Drain(workerpipe.Stdout, outR)
+	out.Drain(workerpipe.Stderr, errR)
 
 	if logRead != nil {
 		_ = cmd.ExtraFiles[0].Close() // close the parent's copy of the write end so EOF propagates on child exit
@@ -201,6 +232,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	}
 
 	inst.cmd = cmd
+	inst.out = out
 	inst.pid = cmd.Process.Pid
 	inst.state = runtime.StateRunning
 	inst.stopping = false
@@ -212,7 +244,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	if serr != nil {
 		_ = syscall.Kill(-inst.pid, syscall.SIGKILL)
 	}
-	go d.wait(inst, logFile)
+	go d.wait(inst, out)
 	if serr != nil {
 		return fault.Wrapf(serr, fault.KindOf(serr), op, "save worker %q", id)
 	}
@@ -228,22 +260,25 @@ func (d *driver) saveLocked(inst *instance) error {
 	if err != nil {
 		return err
 	}
-	files := []string{inst.portFile}
-	if inst.spec.LogPath == "" {
-		files = append(files, inst.logPath)
-	}
 	return d.reg.Put(procreg.Entry{
-		ID: string(inst.id), PID: inst.pid, PGID: inst.pid, StartTime: st, Token: instanceFlag + string(inst.id), Files: files,
+		ID: string(inst.id), PID: inst.pid, PGID: inst.pid, StartTime: st, Token: instanceFlag + string(inst.id),
+		Files: []string{inst.portFile},
 	})
 }
 
 // wait reaps the child and records its terminal state. It is the sole caller of
 // cmd.Wait (Stop never calls Wait — it waits on inst.done instead).
-func (d *driver) wait(inst *instance, logFile *os.File) {
+func (d *driver) wait(inst *instance, out *workerpipe.Output) {
 	err := inst.cmd.Wait()
 	// The worker's exit reclaims what it started, as a container's exit tears down its PID namespace (ADR-0011 C4).
 	_ = syscall.Kill(-inst.pid, syscall.SIGKILL)
-	_ = logFile.Close()
+	// The terminal state waits for the run's last output, so Logs has the line a load error ends with (ADR-0168); a
+	// descendant that still holds the pipes costs at most outputWait.
+	out.Close()
+	select {
+	case <-out.Done():
+	case <-time.After(outputWait):
+	}
 	_, wrote := readPortFile(inst.portFile)
 
 	d.mu.Lock()
@@ -309,19 +344,18 @@ func (d *driver) Logs(_ context.Context, id runtime.InstanceID) (io.ReadCloser, 
 	const op = "runtime.process.Logs"
 	d.mu.Lock()
 	inst, ok := d.instances[id]
-	logPath := ""
+	var out *workerpipe.Output
 	if ok {
-		logPath = inst.logPath
+		out = inst.out
 	}
 	d.mu.Unlock()
 	if !ok {
 		return nil, fault.NotFoundf(op, "instance %q not found", id)
 	}
-	f, err := os.Open(logPath) //nolint:gosec // logPath is driver-owned
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "open log file")
+	if out == nil {
+		return io.NopCloser(strings.NewReader("")), nil
 	}
-	return f, nil
+	return out.Tail(), nil
 }
 
 func (d *driver) Exec(ctx context.Context, id runtime.InstanceID, cmd []string) error {
@@ -355,8 +389,7 @@ func (d *driver) List(_ context.Context, ns v1alpha1.NamespaceName) ([]runtime.I
 	return out, nil
 }
 
-// Remove forgets an instance Stop has released, with the driver-owned port file and, when the driver created it, the
-// log file (ADR-0143).
+// Remove forgets an instance Stop has released, with its driver-owned port file (ADR-0143).
 func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	d.mu.Lock()
 	inst, ok := d.instances[id]
@@ -374,12 +407,9 @@ func (d *driver) Remove(_ context.Context, id runtime.InstanceID) error {
 	return nil
 }
 
-// removeFiles deletes an instance's driver-owned port file and, when the driver created it, its log file.
+// removeFiles deletes an instance's driver-owned port file.
 func removeFiles(inst *instance) {
 	_ = os.Remove(inst.portFile)
-	if inst.spec.LogPath == "" {
-		_ = os.Remove(inst.logPath)
-	}
 }
 
 // Close stops every running instance at once, so shutdown takes one stop grace however many ignore SIGTERM, then deletes

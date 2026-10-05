@@ -4,7 +4,8 @@ package containerd
 
 import (
 	"context"
-	"path/filepath"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
@@ -17,11 +18,9 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
-// Issue 424: Create re-creates a worker that Stop has released (ADR-0142), so it must delete the replaced worker's
-// driver-owned log file, as Remove does, or every replacement leaves one behind.
-func TestIssue424_RecreateRemovesReplacedLogFile(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+// Issue 424: Create re-creates a worker that Stop has released (ADR-0142), so nothing of the replaced worker may stay
+// behind: its output went through FIFOs under the driver's fifoDir (ADR-0168), and Stop removes their dir.
+func TestIssue424_RecreateLeavesNoFifoDir(t *testing.T) {
 	ctx := leases.WithLease(context.Background(), "issue424")
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
@@ -36,7 +35,8 @@ func TestIssue424_RecreateRemovesReplacedLogFile(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
+	fifoDir := t.TempDir()
+	d := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: fifoDir, instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, spec)
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestIssue424_RecreateRemovesReplacedLogFile(t *testing.T) {
 	_, err = d.Create(ctx, spec)
 	require.NoError(t, err)
 
-	logs, err := filepath.Glob(filepath.Join(tmp, "funcd-issue424-r0-*.log"))
+	dirs, err := os.ReadDir(fifoDir)
 	require.NoError(t, err)
-	require.Equal(t, []string{d.instances[inst.ID].logPath}, logs, "only the new worker's log file may remain")
+	require.Len(t, dirs, 1, "only the new worker's FIFO dir may remain")
 }
