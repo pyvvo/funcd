@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // goldenToken is the token embedded in testdata/handshake_golden.bin (a captured Quack handshake frame).
@@ -54,6 +56,18 @@ func TestSwapHandshakeToken(t *testing.T) {
 	_, gotLong, ok := swapHandshakeToken(longFrame, "x")
 	require.True(t, ok, "a handshake with a >=128-byte (2-byte-varint) token parses")
 	require.Equal(t, longTok, gotLong, "the >=128-byte token decodes exactly via the varint length, not a fixed width")
+
+	// the longest Identity catalog token (a 63/63 owner) round-trips both ways.
+	maxTok := IdentityCatalogToken(v1.NamespaceName(strings.Repeat("n", 63)), v1.ObjectName(strings.Repeat("o", 63)), strings.Repeat("r", randomPartLen))
+	require.Len(t, maxTok, 255)
+	_, gotMax, ok := swapHandshakeToken(makeHandshake(maxTok), "x")
+	require.True(t, ok, "a handshake with a 255-byte token parses")
+	require.Equal(t, maxTok, gotMax)
+	swappedMax, _, ok := swapHandshakeToken(golden, maxTok)
+	require.True(t, ok)
+	_, backMax, ok := swapHandshakeToken(swappedMax, "x")
+	require.True(t, ok)
+	require.Equal(t, maxTok, backMax, "a 255-byte token swapped in is what the engine sees")
 
 	// a non-handshake body ⇒ ok=false, body returned unchanged (fail-closed).
 	notHandshake := []byte("not-a-handshake")

@@ -1,7 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,6 +15,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/cedar"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -215,11 +222,11 @@ func TestScenarioForgedFunctionTokenDenied(t *testing.T) {
 }
 
 // TestCatalogKeysResolvesMintedIdentityToken confirms the store-lookup half: a minted catalogToken in an
-// Identity's credential Secret resolves to the Identity principal (the ADR-0088 IdentityAccessKey analog).
+// Identity's credential Secret resolves to the Identity principal.
 func TestCatalogKeysResolvesMintedIdentityToken(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
-	minted := "MINTED-RANDOM-IDENTITY-CATALOG-TOKEN"
+	minted := IdentityCatalogToken("data", "analyst", testRandomPart(t))
 	createObj(t, st, &v1.Identity{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
 		ObjectMeta: v1.ObjectMeta{Name: "analyst", Namespace: "data", ResourceGroup: "rg1"},
@@ -236,4 +243,150 @@ func TestCatalogKeysResolvesMintedIdentityToken(t *testing.T) {
 	require.True(t, ok, "a minted catalogToken in the Identity's Secret resolves to the Identity")
 	require.Equal(t, v1.KindIdentity, ref.Type)
 	require.Equal(t, v1.ObjectName("analyst"), ref.Name)
+}
+
+// countingStore counts the metastore reads the catalog token resolver makes.
+type countingStore struct {
+	store.Store
+	gets  atomic.Int64
+	lists atomic.Int64
+}
+
+func (c *countingStore) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	c.gets.Add(1)
+	return c.Store.Get(ctx, gvk, ns, name)
+}
+
+func (c *countingStore) List(ctx context.Context, gvk v1.GroupVersionKind, opts store.ListOptions) (store.List, error) {
+	c.lists.Add(1)
+	return c.Store.List(ctx, gvk, opts)
+}
+
+func (c *countingStore) reset() {
+	c.gets.Store(0)
+	c.lists.Store(0)
+}
+
+// issueIdentity seeds an Identity and its owned credential Secret holding a minted catalog token, as the
+// identity reconciler issues them, and returns the token.
+func issueIdentity(t *testing.T, st store.Store, ns v1.NamespaceName, name v1.ObjectName) string {
+	t.Helper()
+	token := IdentityCatalogToken(ns, name, testRandomPart(t))
+	createObj(t, st, &v1.Identity{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"},
+		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal},
+	})
+	createObj(t, st, &v1.Secret{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"},
+		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(token)}},
+	})
+	return token
+}
+
+// proxyStatus posts a handshake carrying token through the catalog proxy fronting data/lake and reports
+// the status and whether the engine was reached.
+func proxyStatus(t *testing.T, keys CatalogKeys, pdp auth.Authorizer, token string) (int, bool) {
+	t.Helper()
+	stub := &engineStub{}
+	up := httptest.NewServer(stub.handler())
+	defer up.Close()
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}))
+	defer front.Close()
+	resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	return resp.StatusCode, stub.hit
+}
+
+// scenario: identity-token-lookup-cost-constant — the last-created Identity's token resolves with exactly
+// two store reads and no List, at 1 and at 500 Identities.
+func TestScenarioIdentityTokenLookupCostConstant(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{1, 500} {
+		t.Run(fmt.Sprintf("identities=%d", n), func(t *testing.T) {
+			t.Parallel()
+			cs := &countingStore{Store: store.New(memory.New())}
+			var last string
+			var lastName v1.ObjectName
+			for i := range n {
+				lastName = v1.ObjectName(fmt.Sprintf("id-%d", i))
+				last = issueIdentity(t, cs, v1.NamespaceName(fmt.Sprintf("ns-%d", i%7)), lastName)
+			}
+			lastNS := v1.NamespaceName(fmt.Sprintf("ns-%d", (n-1)%7))
+			keys := NewCatalogKeys([]byte("node-master"), cs)
+			cs.reset()
+
+			ref, ok := keys.PrincipalFor(last)
+			require.True(t, ok)
+			require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: lastNS, Name: lastName}, ref)
+			require.Equal(t, int64(2), cs.gets.Load(), "the Identity and its credential Secret")
+			require.Zero(t, cs.lists.Load(), "no List, whatever the number of Identities")
+		})
+	}
+}
+
+// scenario: garbage-token-refused-without-reads — a token that is neither a funcd JWT nor prefixed by a
+// canonical owner resolves to no principal, the proxy answers 403, and the store is not read.
+func TestScenarioGarbageTokenRefusedWithoutReads(t *testing.T) {
+	t.Parallel()
+	inner := store.New(memory.New())
+	cs := &countingStore{Store: inner}
+	for i := range 500 {
+		issueIdentity(t, cs, "data", v1.ObjectName(fmt.Sprintf("id-%d", i)))
+	}
+	keys := NewCatalogKeys([]byte("node-master"), cs)
+	pdp := buildPDP(t, inner)
+
+	garbage := map[string]string{
+		"unstructured":                           "garbage-unresolvable-token",
+		"old 44-character format":                testRandomPart(t),
+		"bare access key id":                     s3gateway.IdentityAccessKey("data", "id-0"),
+		"FUNCID prefix over a non-DNS name":      s3gateway.IdentityAccessKey("Data", "id_0") + "." + testRandomPart(t),
+		"non-canonical encoding of a real owner": nonCanonicalPrefix(t, "data", "id-0") + "." + testRandomPart(t),
+	}
+	for label, token := range garbage {
+		cs.reset()
+		_, ok := keys.PrincipalFor(token)
+		require.False(t, ok, label)
+		code, hit := proxyStatus(t, keys, pdp, token)
+		require.Equal(t, http.StatusForbidden, code, label)
+		require.False(t, hit, label)
+		require.Zero(t, cs.gets.Load(), "%s: no Get", label)
+		require.Zero(t, cs.lists.Load(), "%s: no List", label)
+	}
+}
+
+// scenario: forged-owner-prefix-denied — a prefix naming ops/admin over analyst's own random part, or a
+// guessed one, resolves to no principal; a prefix grants nothing without the owner's random part.
+func TestScenarioForgedOwnerPrefixDenied(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	analyst := issueIdentity(t, st, "data", "analyst")
+	admin := issueIdentity(t, st, "ops", "admin")
+	keys := NewCatalogKeys([]byte("node-master"), st)
+	pdp := buildPDP(t, st)
+
+	_, analystRandom, found := strings.Cut(analyst, ".")
+	require.True(t, found)
+	forged := map[string]string{
+		"analyst's own random part": IdentityCatalogToken("ops", "admin", analystRandom),
+		"a guessed random part":     IdentityCatalogToken("ops", "admin", testRandomPart(t)),
+	}
+	for label, token := range forged {
+		_, ok := keys.PrincipalFor(token)
+		require.False(t, ok, label)
+		code, hit := proxyStatus(t, keys, pdp, token)
+		require.Equal(t, http.StatusForbidden, code, label)
+		require.False(t, hit, label)
+	}
+
+	ref, ok := keys.PrincipalFor(admin)
+	require.True(t, ok)
+	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "ops", Name: "admin"}, ref)
+	ref, ok = keys.PrincipalFor(analyst)
+	require.True(t, ok)
+	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "data", Name: "analyst"}, ref)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -28,9 +29,9 @@ const condReady = "Ready"
 const (
 	secretKeyAccessKeyID     = "accessKeyId"
 	secretKeySecretAccessKey = "secretAccessKey"
-	// secretKeyCatalogToken is the minted per-Identity catalog bearer token (ADR-0137): a random,
-	// rotatable value the catalog PEP proxy resolves back to this Identity by store lookup (the query-path
-	// analog of the SigV4 secret). Rotated on the same trigger as the keypair secret.
+	// secretKeyCatalogToken is the minted per-Identity catalog bearer token (ADR-0137, ADR-0153): the
+	// access key id, ".", and a random, rotatable part; the catalog PEP proxy resolves it to this Identity
+	// by its owner prefix in two store reads. Rotated on the same trigger as the keypair secret.
 	secretKeyCatalogToken = "catalogToken"
 )
 
@@ -116,12 +117,12 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 	if err != nil {
 		return err
 	}
-	// ADR-0137: mint a fresh per-Identity catalog token alongside the SigV4 secret — a bearer credential
-	// the catalog PEP proxy resolves to this Identity. Rotated together with the secret (same trigger).
-	catalogToken, err := randomSecret()
+	// ADR-0137/0153: a fresh random part under the Identity's owner prefix, rotated with the SigV4 secret.
+	random, err := randomSecret()
 	if err != nil {
 		return err
 	}
+	catalogToken := cataloggw.IdentityCatalogToken(id.Namespace, id.Name, random)
 	data := map[string][]byte{
 		secretKeyAccessKeyID:     []byte(access),
 		secretKeySecretAccessKey: []byte(secret),

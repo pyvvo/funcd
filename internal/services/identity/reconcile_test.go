@@ -2,12 +2,15 @@ package identity
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -73,6 +76,8 @@ func TestScenarioIdentityIssuesCredential(t *testing.T) {
 	id := getIdentity(t, st, "data", "releve-dropper")
 	require.Equal(t, v1.PhaseReady, id.Status.Phase)
 	require.Equal(t, s3gateway.IdentityAccessKey("data", "releve-dropper"), id.Status.AccessKeyID)
+	require.True(t, strings.HasPrefix(string(sec.Spec.Data[secretKeyCatalogToken]), id.Status.AccessKeyID+"."),
+		"the catalog token carries the Identity's access key id as its owner prefix")
 
 	ext := NewExternalKeys(st)
 	secret, ns, ok := ext.Lookup(id.Status.AccessKeyID)
@@ -121,4 +126,54 @@ func TestScenarioIdentityDeletedRevokes(t *testing.T) {
 
 	_, _, ok = ext.Lookup(access)
 	require.False(t, ok, "a deleted Identity's key stops authenticating")
+}
+
+func catalogToken(t *testing.T, st store.Store, ns, name string) string {
+	t.Helper()
+	return string(getSecret(t, st, ns, name).Spec.Data[secretKeyCatalogToken])
+}
+
+// scenario: identity-token-resolves — the catalogToken the reconciler mints into the owned Secret resolves
+// to the Identity at the catalog PEP proxy.
+func TestScenarioIdentityTokenResolves(t *testing.T) {
+	t.Parallel()
+	st, r := setup(t)
+	newIdentity(t, st, "data", "analyst")
+	reconcile(t, r, "data", "analyst")
+
+	ref, ok := cataloggw.NewCatalogKeys([]byte("node-master"), st).PrincipalFor(catalogToken(t, st, "data", "analyst"))
+	require.True(t, ok)
+	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "data", Name: "analyst"}, ref)
+}
+
+// scenario: identity-token-rotation — a spec.rotate bump re-issues the token under the same prefix with a
+// new random part; the new token resolves and the old one is refused.
+func TestScenarioIdentityTokenRotation(t *testing.T) {
+	t.Parallel()
+	st, r := setup(t)
+	newIdentity(t, st, "data", "rot")
+	reconcile(t, r, "data", "rot")
+	t1 := catalogToken(t, st, "data", "rot")
+
+	id := getIdentity(t, st, "data", "rot")
+	id.Spec.Rotate = 1
+	_, err := st.Update(context.Background(), id)
+	require.NoError(t, err)
+	reconcile(t, r, "data", "rot")
+	t2 := catalogToken(t, st, "data", "rot")
+
+	prefix1, random1, found1 := strings.Cut(t1, ".")
+	prefix2, random2, found2 := strings.Cut(t2, ".")
+	require.True(t, found1)
+	require.True(t, found2)
+	require.Equal(t, prefix1, prefix2, "rotation keeps the owner prefix")
+	require.Equal(t, getIdentity(t, st, "data", "rot").Status.AccessKeyID, prefix2)
+	require.NotEqual(t, random1, random2, "rotation mints a new random part")
+
+	keys := cataloggw.NewCatalogKeys([]byte("node-master"), st)
+	ref, ok := keys.PrincipalFor(t2)
+	require.True(t, ok, "the re-issued token resolves")
+	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "data", Name: "rot"}, ref)
+	_, ok = keys.PrincipalFor(t1)
+	require.False(t, ok, "the rotated-out token is refused")
 }
