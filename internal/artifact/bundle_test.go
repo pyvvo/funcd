@@ -256,6 +256,91 @@ func TestScenarioPullRejectsPathTraversal(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(filepath.Dir(out), "escape.txt"))
 }
 
+// pushSingleBlobTitled pushes a single-file artifact whose bundle layer carries title as its file
+// name, as a third-party OCI client can; funcd's own Push always writes a base name there.
+func pushSingleBlobTitled(t *testing.T, ref, title, body string) string {
+	t.Helper()
+	dir, _, ok := parseLayoutRef(ref)
+	require.True(t, ok)
+	store, err := oci.New(dir)
+	require.NoError(t, err)
+	ctx := context.Background()
+	layer := content.NewDescriptorFromBytes("application/vnd.funcd.function.bundle", []byte(body))
+	layer.Annotations = map[string]string{ocispec.AnnotationTitle: title}
+	require.NoError(t, store.Push(ctx, layer, bytes.NewReader([]byte(body))))
+	manifest, err := oras.PackManifest(ctx, store, oras.PackManifestVersion1_1,
+		"application/vnd.funcd.function.artifact.v1",
+		oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}})
+	require.NoError(t, err)
+	return manifest.Digest.String()
+}
+
+// A single-file artifact's title annotation names the file Pull writes; a title that is a path or
+// a dotfile must be refused, never written outside the pull dir or the materializer's per-digest
+// cache dir, and never over a cache sidecar whose content the cache-hit path resolves.
+func TestPullRefusesSingleFileTitleOutsideDir(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	materialize := func(cache, ref, digest string) (string, error) {
+		return artifact.NewOrasMaterializer(cache, "").Materialize(ctx, mkFunction(t, ref, digest))
+	}
+
+	// "sub/..." and "/abs.txt" do not start with ".": only the path check refuses them.
+	root := t.TempDir()
+	dir := filepath.Join(root, "a", "b")
+	for _, title := range []string{"../../escaped.txt", "sub/../../escaped.txt", "/abs.txt"} {
+		ref := layoutRef(t, "v1")
+		digest := pushSingleBlobTitled(t, ref, title, "pwned\n")
+		_, err := artifact.Pull(ctx, ref, digest, dir, "")
+		require.NoFileExists(t, filepath.Join(root, "escaped.txt"))
+		require.NoFileExists(t, filepath.Join(root, "a", "escaped.txt"))
+		require.Error(t, err, "title %q must be refused", title)
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.NoDirExists(t, dir, "a refused title must write nothing")
+	}
+
+	ref := layoutRef(t, "v1")
+	digest := pushSingleBlobTitled(t, ref, "../escaped.txt", "pwned\n")
+	cache := t.TempDir()
+	_, err := materialize(cache, ref, digest)
+	require.NoFileExists(t, filepath.Join(cache, "escaped.txt"))
+	require.Error(t, err, "a traversal title must be refused by the materializer")
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+
+	// A ".funcd-entry" title would write the publisher's bytes as the entry sidecar, which the
+	// next (cache-hit) Materialize joins onto the cache dir. Both calls must be refused.
+	ref = layoutRef(t, "v1")
+	digest = pushSingleBlobTitled(t, ref, ".funcd-entry", "../outside/handler.mjs")
+	cache = t.TempDir()
+	for range 2 {
+		path, merr := materialize(cache, ref, digest)
+		require.Error(t, merr, "a dotfile title must be refused, got path %q", path)
+		require.Equal(t, fault.Invalid, fault.KindOf(merr))
+	}
+
+	// A cache filled before titles were checked may already hold such a sidecar: the cache-hit
+	// path must refuse an entry that leaves the cache dir.
+	ref = layoutRef(t, "v1")
+	digest = pushSingleBlobTitled(t, ref, "handler.mjs", "export default () => ({})\n")
+	cache = t.TempDir()
+	path, err := materialize(cache, ref, digest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), ".funcd-entry"), []byte("../outside/handler.mjs"), 0o600))
+	path, err = materialize(cache, ref, digest)
+	require.Error(t, err, "a cached entry outside the cache dir must be refused, got path %q", path)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}
+
+// Push refuses a dotfile bundle name, so it never publishes an artifact that Pull refuses.
+func TestPushRefusesDotfileBundleName(t *testing.T) {
+	t.Parallel()
+	file := filepath.Join(t.TempDir(), ".handler.mjs")
+	require.NoError(t, os.WriteFile(file, []byte("export default () => ({})\n"), 0o600))
+	_, err := artifact.Push(context.Background(), layoutRef(t, "v1"), file, nil, "", "")
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}
+
 // scenario: pull-single-file-unchanged — a single-blob Pull is unchanged (covered broadly by the
 // existing roundtrip test; this pins the bundle path does not regress the single-file path).
 func TestScenarioPullSingleFileUnchanged(t *testing.T) {

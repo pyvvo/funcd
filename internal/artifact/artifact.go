@@ -120,12 +120,17 @@ func reproducible(opts oras.PackManifestOptions) oras.PackManifestOptions {
 
 // Push packages file as the §1 OCI artifact and pushes it to ref's target (a local OCI
 // layout or a registry), returning the manifest descriptor digest. A light pre-flight
-// rejects an empty bundle; the authoritative shape-gate is the shim (ADR-0030). When
+// rejects an empty bundle and a dotfile name (Pull refuses it as a title); the authoritative
+// shape-gate is the shim (ADR-0030). When
 // contract is non-nil (ADR-0059), it adds a content-addressed contract blob layer +
 // the dev.funcd.contract.v1 manifest annotation; nil ⇒ the unchanged ADR-0031 artifact. A non-empty
 // platform records PlatformAnnotation (ADR-0145); "" records none.
 func Push(ctx context.Context, ref, file string, contract []byte, runtime string, platform v1.OCIPlatform) (digest string, err error) {
 	const op = "artifact.Push"
+	name := filepath.Base(file)
+	if !plainFileName(name) {
+		return "", fault.Invalidf(op, "bundle %q: a file name starting with \".\" is reserved for cache metadata", file)
+	}
 	data, rerr := os.ReadFile(file) //nolint:gosec // file is a user-supplied CLI argument
 	if rerr != nil {
 		return "", fault.Invalidf(op, "read bundle %q: %v", file, rerr)
@@ -139,7 +144,7 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 	}
 
 	layer := content.NewDescriptorFromBytes(bundleMediaType, data)
-	layer.Annotations = map[string]string{ocispec.AnnotationTitle: filepath.Base(file)}
+	layer.Annotations = map[string]string{ocispec.AnnotationTitle: name}
 	if perr := target.Push(ctx, layer, bytes.NewReader(data)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
 		return "", fault.Wrapf(perr, fault.Internal, op, "push bundle blob")
 	}
@@ -174,6 +179,14 @@ func Push(ctx context.Context, ref, file string, contract []byte, runtime string
 		}
 	}
 	return manifest.Digest.String(), nil
+}
+
+// plainFileName reports whether name, a single-file artifact's title, is a bare file name: not a
+// path, which would leave the destination dir, and not a dotfile, which would land on a cache
+// metadata sidecar (.funcd-entry, .funcd-contract.json) the resolver trusts.
+func plainFileName(name string) bool {
+	slash := filepath.ToSlash(name)
+	return !strings.Contains(slash, "/") && !strings.HasPrefix(slash, ".")
 }
 
 // Pull fetches the artifact named by ref, verifies it against digest (the authority —
@@ -223,6 +236,10 @@ func Pull(ctx context.Context, ref, digest, dir string, node v1.OCIPlatform) (pa
 	name := layer.Annotations[ocispec.AnnotationTitle]
 	if name == "" {
 		name = "artifact.bin"
+	}
+	// The title is publisher-controlled: the digest authenticates the bytes, not the name.
+	if !plainFileName(name) {
+		return "", fault.Invalidf(op, "bundle title annotation %q is not a plain file name", name)
 	}
 	// Container-readable (0755 dir / 0644 file): in container mode (ADR-0032) the artifact is
 	// bind-mounted read-only into a curated image that runs as an unprivileged, non-root user
@@ -596,7 +613,13 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 		// resolver skips them; the delivered contract sidecar can never displace the handler. A
 		// directory is never the handler either: Python writes __pycache__/ beside it on import.
 		if entry := bundleEntryFromCache(cacheDir); entry != "" {
-			return filepath.Join(cacheDir, filepath.FromSlash(entry)), nil
+			root, aerr := filepath.Abs(cacheDir)
+			if aerr != nil {
+				return "", fault.Wrapf(aerr, fault.Internal, op, "resolve cache dir")
+			}
+			// The sidecar is cache content: a cache filled before titles were checked may hold one
+			// that leaves the cache dir.
+			return safeJoin(op, root, entry)
 		}
 		for _, e := range entries {
 			if !strings.HasPrefix(e.Name(), ".") && e.Type().IsRegular() {
