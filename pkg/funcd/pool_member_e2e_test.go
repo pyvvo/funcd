@@ -279,6 +279,30 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 	})
 }
 
+// Issue #70: of pooled a and b, b redeployed to a handler that cannot load is Failed with ShapeInvalid for its new
+// revision, and a answers in the rebuilt pool.
+func TestIssue70_PooledRedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
+	forPoolLangs(t, func(t *testing.T, l poolLang) {
+		h := newShimRig(t, l.python)
+		h.deploy(t, "a", l.fn(l.quiet).pooled("redeploy"))
+		h.deploy(t, "b", l.fn(l.quiet).pooled("redeploy"))
+		waitReady(t, h.c, "a", "b")
+
+		h.deploy(t, "b", l.fn(l.noHandle).pooled("redeploy"))
+		require.Eventually(t, func() bool { return h.function(t, "b").Status.Phase == v1.PhaseFailed },
+			30*time.Second, 100*time.Millisecond, "b's new revision cannot load")
+		b := h.function(t, "b")
+		for _, typ := range []v1.ConditionType{"Ready", "ShapeValid", "RevisionReady"} {
+			c, ok := b.Status.Conditions.Get(typ)
+			require.True(t, ok, "b has condition %s", typ)
+			require.Equal(t, v1.ConditionFalse, c.Status, typ)
+			require.Equal(t, "ShapeInvalid", c.Reason, typ)
+		}
+		require.Eventually(t, func() bool { return h.post("a", `{}`).status == http.StatusOK },
+			30*time.Second, 200*time.Millisecond, "a answers in the rebuilt pool")
+	})
+}
+
 // manifestHolds reports whether a pool manifest in dir names every member.
 func manifestHolds(dir string, members ...string) bool {
 	files, err := os.ReadDir(dir)
