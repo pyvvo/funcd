@@ -471,3 +471,21 @@ func TestIssue701_TrailingSlashPrefixClaimsSamePath(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, v1.ObjectName("x"), m.Function)
 }
+
+// TestAggregator_HostSpellingsAreOneClaim: a host written with a port, in another letter case or with a trailing
+// dot is the same claim as its plain spelling, so another namespace cannot take the host by respelling it.
+func TestAggregator_HostSpellingsAreOneClaim(t *testing.T) {
+	t.Parallel()
+	for _, spelling := range []string{"shop.test:8081", "SHOP.TEST", "shop.test."} {
+		t.Run(spelling, func(t *testing.T) {
+			t.Parallel()
+			rtr := router.New()
+			a := router.NewAggregator(rtr, modesOf(map[v1.NamespaceName]v1.ExposureMode{"a": v1.ExposureExplicit, "b": v1.ExposureExplicit}), nil, nil)
+
+			v := set(t, a, "routes", withHost(fnEntry("a", "shop", "/"), "shop.test"), withHost(fnEntry("b", "evil", "/"), spelling))
+			require.Empty(t, v[0].Reason, "the owner keeps its claim")
+			require.Equal(t, "RouteConflict", v[1].Reason, "%q is the owner's host in another spelling", spelling)
+			require.Equal(t, []string{"shop.test"}, rtr.Hosts())
+		})
+	}
+}

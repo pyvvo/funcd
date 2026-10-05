@@ -116,10 +116,13 @@ func (a *Aggregator) Set(ctx context.Context, source string, entries []Entry) ([
 	if source == "" {
 		return nil, fault.Invalidf(op, "route source key must not be empty")
 	}
-	for i := range entries {
-		if err := validOwner(entries[i]); err != nil {
+	stored := make([]Entry, len(entries))
+	for i, e := range entries {
+		if err := validOwner(e); err != nil {
 			return nil, fault.Invalidf(op, "source %q entry %d: %s", source, i, err)
 		}
+		e.Host = canonicalHost(e.Host)
+		stored[i] = e
 	}
 
 	a.mu.Lock()
@@ -127,7 +130,7 @@ func (a *Aggregator) Set(ctx context.Context, source string, entries []Entry) ([
 	if len(entries) == 0 {
 		delete(sources, source)
 	} else {
-		sources[source] = append([]Entry(nil), entries...)
+		sources[source] = stored
 	}
 	routesSet := a.routesSet || source == routeSource
 	slots, verdicts, programmed, err := a.arbitrate(ctx, sources, routesSet)

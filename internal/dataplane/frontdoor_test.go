@@ -182,3 +182,21 @@ func TestScenarioInternalInvokeUnaffected(t *testing.T) {
 }
 
 // scenario: solo-route-strips-prefix already asserted in TestScenarioExplicitServesRouted (/orders/42 → /42).
+
+// scenario: a Route's host matches the Host header whatever port, letter case or trailing dot the client sends.
+func TestScenarioRouteHostMatchesHostHeaderSpellings(t *testing.T) {
+	warm := map[v1.ObjectName]string{"orders-fn": "u"}
+	entries := []router.Entry{{Namespace: "team", Host: "team.example.com", Rules: []router.CompiledRule{
+		{Path: "/orders", Function: "orders-fn"},
+	}}}
+	h, st, _, _ := frontDoor(t, warm, entries)
+	seedNS(t, st, "team", v1.ExposureExplicit)
+	seedFn(t, st, "team", "orders-fn")
+
+	for _, host := range []string{"team.example.com:8081", "TEAM.Example.com", "team.example.com.", "team.example.com:80"} {
+		t.Run(host, func(t *testing.T) {
+			resp := do(t, h, "GET", host, "/orders/42", "")
+			require.Equal(t, http.StatusOK, resp.StatusCode, "Host %q names the Route's host", host)
+		})
+	}
+}
