@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.4.0](https://github.com/pyvvo/funcd/compare/v0.3.0...v0.4.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **catalog:** resolve an Identity catalog token by its owner in two store reads ([#640](https://github.com/pyvvo/funcd/issues/640))
+* **edge:** an external invoke whose response does not start within 60 s now gets 504 Gateway Timeout. Raise the limit per Function with `spec.timeout` (up to 1h), or for the whole daemon with `invoke.defaultTimeout`.
+
+### Features
+
+* atomic admission and a nested-call in-flight cap (ADR-0147) ([#637](https://github.com/pyvvo/funcd/issues/637)) ([aa55933](https://github.com/pyvvo/funcd/commit/aa55933deb5e76a993dbab8f82d89f0ead8a952f))
+* **auth:** give catalog engines their own S3 keys and principal ([#655](https://github.com/pyvvo/funcd/issues/655)) ([f94ab85](https://github.com/pyvvo/funcd/commit/f94ab85a9a7ced407761d15e42701111ddf6116c))
+* **auth:** static admin, developer and viewer tokens from auth.credentials (ADR-0171) ([#653](https://github.com/pyvvo/funcd/issues/653)) ([f6d6b39](https://github.com/pyvvo/funcd/commit/f6d6b3952540b16f43221479e8f959b2ffe597db))
+* **blob:** one content ETag on every S3 read, and ETag conditional requests (ADR-0159) ([#645](https://github.com/pyvvo/funcd/issues/645)) ([0c88ed2](https://github.com/pyvvo/funcd/commit/0c88ed249a1efbd8699fa9b416f4c07b5b2e5263))
+* **catalog:** resolve an Identity catalog token by its owner in two store reads ([#640](https://github.com/pyvvo/funcd/issues/640)) ([720f60d](https://github.com/pyvvo/funcd/commit/720f60d7135658972011478314be29865f164dba))
+* **edge:** apply one claim rule set to Routes and catalog ingress ([#641](https://github.com/pyvvo/funcd/issues/641)) ([15ef7a5](https://github.com/pyvvo/funcd/commit/15ef7a552e8f57251ed450270935cf0ca8f73bce))
+* **edge:** bound every external invoke with a response deadline (ADR-0151) ([#638](https://github.com/pyvvo/funcd/issues/638)) ([8487e94](https://github.com/pyvvo/funcd/commit/8487e945374be30ecc172e0a8b1b96d5a301116a))
+* **edge:** rate-limit each resolved function and keep drained buckets ([#646](https://github.com/pyvvo/funcd/issues/646)) ([59cd4e0](https://github.com/pyvvo/funcd/commit/59cd4e0415575b2f523469048384d9585524a399))
+* **eventing:** fire every listed blob object via a pruned, located seen list (ADR-0157) ([#661](https://github.com/pyvvo/funcd/issues/661)) ([d80f02c](https://github.com/pyvvo/funcd/commit/d80f02c1fb562cac5ca6648631e6b62ad4f10a52))
+* **function:** report a runtime the node cannot serve as RuntimeUnavailable ([#642](https://github.com/pyvvo/funcd/issues/642)) ([082f3f7](https://github.com/pyvvo/funcd/commit/082f3f77ac26cb9d8963a22af85e16fe258f13a1))
+* **function:** retry a worker that crashes while booting with a growing wait (ADR-0160) ([#648](https://github.com/pyvvo/funcd/issues/648)) ([54b65b3](https://github.com/pyvvo/funcd/commit/54b65b363dfa21aac59902fd18c7ca1179ae26b8))
+* **gc:** collect the children of deleted owners and guard ResourceGroup deletes ([#657](https://github.com/pyvvo/funcd/issues/657)) ([46befe0](https://github.com/pyvvo/funcd/commit/46befe0682a5a53418f449b0981dbf5da776b26d))
+* **httpx:** reuse connections and skip the proxy on every node-local pool (ADR-0155) ([#647](https://github.com/pyvvo/funcd/issues/647)) ([2aea7a1](https://github.com/pyvvo/funcd/commit/2aea7a1174eb6ed6c97e2c8fe66807cfc509a1c2))
+* **runtime:** workers carry their owner kind, so each reconciler manages only its own workers ([#639](https://github.com/pyvvo/funcd/issues/639)) ([06359d0](https://github.com/pyvvo/funcd/commit/06359d08b5fb9a7503e1852d03689a1ae08b58b4))
+* **sensor:** run every Sensor delivery on a bounded worker queue (ADR-0156) ([#651](https://github.com/pyvvo/funcd/issues/651)) ([7e864a0](https://github.com/pyvvo/funcd/commit/7e864a0541c6e8fab2f95c5c63fa6ae7dfb256ec))
+* **workflow:** drive each WorkflowRun on an engine-owned goroutine with a short reconcile (ADR-0146) ([#656](https://github.com/pyvvo/funcd/issues/656)) ([cdd2103](https://github.com/pyvvo/funcd/commit/cdd2103344cbbd7d0f03402840d43ca39bdf5983))
+* **workflow:** type skipped join-any branches and void inputs at reconcile (ADR-0166) ([#652](https://github.com/pyvvo/funcd/issues/652)) ([b9bd346](https://github.com/pyvvo/funcd/commit/b9bd34607271199391e9ae53529f7a1ee7602bec))
+
+
+### Bug Fixes
+
+* **catalog:** resend a query that a dead parked engine connection never sent ([#635](https://github.com/pyvvo/funcd/issues/635)) ([3cdc902](https://github.com/pyvvo/funcd/commit/3cdc90223f3b9731791ad8706b99b952bbadee9f))
+* **catalog:** start a catalog consumer only on its live proxy URL ([#665](https://github.com/pyvvo/funcd/issues/665)) ([9d243b9](https://github.com/pyvvo/funcd/commit/9d243b9a89d757f1716f650c59e8fd0e713bf230))
+* **containerd:** change the CNI attachment ID of unrevisioned workers ([#654](https://github.com/pyvvo/funcd/issues/654)) ([8242f10](https://github.com/pyvvo/funcd/commit/8242f10a4de95738a8df2bcb814b00c60746f7e4))
+* **expr:** bound string searches and every stored step output ([#643](https://github.com/pyvvo/funcd/issues/643)) ([0cfd414](https://github.com/pyvvo/funcd/commit/0cfd414eb6ac92f5aad8aece4089bd9cc28322ca))
+* **function:** report a never-booted revision Unknown, not Ready (ADR-0174) ([#644](https://github.com/pyvvo/funcd/issues/644)) ([3e3af59](https://github.com/pyvvo/funcd/commit/3e3af599b7a2853436cbeae6ccbc253dd1602653))
+* **identity:** resolve Identity credentials only through the Secret the Identity controls ([#664](https://github.com/pyvvo/funcd/issues/664)) ([b6de96b](https://github.com/pyvvo/funcd/commit/b6de96b01904bd8d1e4006134bc0c8dcf40ff293))
+* **runtime:** keep the private containerd running until Close when the Ensure context is cancelled ([#633](https://github.com/pyvvo/funcd/issues/633)) ([6c0aeda](https://github.com/pyvvo/funcd/commit/6c0aedaef0c9a862d6b5eb5a0594571987fd2a16))
+* **runtime:** stop containerd workers on shutdown before the egress fence comes down ([#625](https://github.com/pyvvo/funcd/issues/625)) ([d0aa10d](https://github.com/pyvvo/funcd/commit/d0aa10db392737ae374918f97356566da25fc586))
+* **workflow:** end a waited run's Ready=False wait when its record is mirrored ([#663](https://github.com/pyvvo/funcd/issues/663)) ([a07762c](https://github.com/pyvvo/funcd/commit/a07762c15593c5a303035fac4b4055dbeaaef972))
+* **workflow:** record an inline child run as &lt;parentRun&gt;.&lt;step&gt; (ADR-0154) ([#659](https://github.com/pyvvo/funcd/issues/659)) ([86cb940](https://github.com/pyvvo/funcd/commit/86cb940b0914be0dbc4cfc79e6133e72669d5daf))
+
 ## [0.3.0](https://github.com/pyvvo/funcd/compare/v0.2.5...v0.3.0) (2026-10-05)
 
 
