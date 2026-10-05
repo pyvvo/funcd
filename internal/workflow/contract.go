@@ -24,10 +24,18 @@ func edgeCompatible(got, want string) bool {
 // honoring void rules and the params-provided set. Empty ⇒ the edge type-checks. O(required).
 func checkEdge(producer, consumer json.RawMessage, providedByParams map[string]bool) []v1.FieldDiff {
 	c := v1.ParseSchemaView(consumer)
-	if c.IsVoid() {
-		return nil // a void consumer requires nothing
-	}
 	p := v1.ParseSchemaView(producer)
+	if c.Type == "null" {
+		// A void input takes only null (ADR-0090): a null-typed or schema-less producer (ADR-0166 Decision 4).
+		if len(producer) == 0 || p.Type == "null" {
+			return nil
+		}
+		got := p.Type
+		if got == "" {
+			got = "object"
+		}
+		return []v1.FieldDiff{{Want: "null", Got: got}}
+	}
 	var diffs []v1.FieldDiff
 	for _, field := range c.Required {
 		if providedByParams[field] {
@@ -46,9 +54,8 @@ func checkEdge(producer, consumer json.RawMessage, providedByParams map[string]b
 	return diffs
 }
 
-// objectIntoVoid reports a void input ({"type":"null"}, ADR-0090), which takes only null, for the objects
-// the engine itself sends whatever the edge carries: an onFailure handler's FailureContext and a step's
-// spec.params overlay (ADR-0094). checkEdge's void consumer requires nothing, so it never catches them.
+// objectIntoVoid reports a void input ({"type":"null"}, ADR-0090), which takes only null, for the object
+// the engine sends whatever the edge carries: a step's spec.params overlay (ADR-0094).
 func objectIntoVoid(input json.RawMessage) []v1.FieldDiff {
 	if v1.ParseSchemaView(input).Type != "null" {
 		return nil
@@ -57,11 +64,11 @@ func objectIntoVoid(input json.RawMessage) []v1.FieldDiff {
 }
 
 // compositeSchema builds the fan-in producer schema {properties: {<parent>: <object>}} keyed by parent
-// name (the ADR-0094 fan-in input model), each parent value typed "object".
-func compositeSchema(parentOutputs map[v1.ObjectName]json.RawMessage) json.RawMessage {
+// name (the ADR-0094 fan-in input model), each parent value typed "object" and required.
+func compositeSchema(parents []v1.ObjectName) json.RawMessage {
 	props := map[string]map[string]string{}
-	req := make([]string, 0, len(parentOutputs))
-	for name := range parentOutputs {
+	req := make([]string, 0, len(parents))
+	for _, name := range parents {
 		props[string(name)] = map[string]string{"type": "object"}
 		req = append(req, string(name))
 	}

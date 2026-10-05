@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/dop251/goja/ast"
@@ -48,13 +49,26 @@ func (c checkCtx) withGuard(path []string) checkCtx {
 	return c
 }
 
-func (c checkCtx) exempt(path []string) bool {
+// exempt reports whether an enclosing guard exempts path from the defaults rule: a guard on path or on a
+// prefix of it, except that a guard on optionalRoot exempts only the root itself (ADR-0166 Decision 1.3).
+func (c checkCtx) exempt(path, optionalRoot []string) bool {
 	for _, g := range c.guards {
+		if optionalRoot != nil && slices.Equal(g, optionalRoot) {
+			if slices.Equal(path, g) {
+				return true
+			}
+			continue
+		}
 		if isPrefix(g, path) {
 			return true
 		}
 	}
 	return false
+}
+
+// guarded reports whether path is exactly the X of an enclosing `X !== undefined && …`.
+func (c checkCtx) guarded(path []string) bool {
+	return slices.ContainsFunc(c.guards, func(g []string) bool { return slices.Equal(g, path) })
 }
 
 // Check statically validates the expression against the resolver: every reference
@@ -415,6 +429,10 @@ func resolveRefExpr(node ast.Expression, ctx checkCtx, existenceProbe bool) (typ
 		return typ{}, fault.Invalidf(checkOp, "reference %q is not rooted in this context (position %d)", segString(segs), pos(node))
 	}
 	root := strings.Join(identsOf(segs[:rootLen]), ".")
+	optionalRoot, err := guardedOptionalRoot(node, segs, rootLen, ctx)
+	if err != nil {
+		return typ{}, err
+	}
 	var path []string
 	idx := rootLen
 	for ; idx < len(segs) && !segs[idx].isIndex; idx++ {
@@ -460,10 +478,27 @@ func resolveRefExpr(node ast.Expression, ctx checkCtx, existenceProbe bool) (typ
 		}
 	}
 	// Defaults rule (skipped for an existence probe or a guarded reference).
-	if !existenceProbe && !field.Required && !field.HasDefault && !ctx.exempt(identsOf(segs)) {
+	if !existenceProbe && !field.Required && !field.HasDefault && !ctx.exempt(identsOf(segs), optionalRoot) {
 		return typ{}, fault.Invalidf(checkOp, "optional field %q must declare a default or be guarded with `!== undefined` (position %d)", segString(segs), pos(node))
 	}
 	return typ{k: k, items: items}, nil
+}
+
+// guardedOptionalRoot returns the root of a reference longer than it when the resolver reports that root
+// optional (ADR-0166): such a root may be absent, so the reference is read only under its guard.
+func guardedOptionalRoot(node ast.Expression, segs []refSeg, rootLen int, ctx checkCtx) ([]string, error) {
+	if rootLen == len(segs) {
+		return nil, nil
+	}
+	root := identsOf(segs[:rootLen])
+	name := strings.Join(root, ".")
+	if f, err := ctx.r.Resolve(name, nil); err != nil || f.Required || f.HasDefault {
+		return nil, nil
+	}
+	if !ctx.guarded(root) {
+		return nil, fault.Invalidf(checkOp, "%q reads %q, which may be absent: guard it as `%s !== undefined && (…)` (position %d)", segString(segs), name, name, pos(node))
+	}
+	return root, nil
 }
 
 // --- reference flattening ---
