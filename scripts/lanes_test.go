@@ -38,6 +38,32 @@ func TestLaneRegistryListsItsVenomLanes(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+// A lane with static credentials (tokens) runs a daemon that refuses the built-in dev token (ADR-0171), so its Venom
+// suite must call funcdctl with a lane token. Two PRs merged in parallel once left one env-echo case on the dev token:
+// each PR's own lane run had passed, and the lane failed on main.
+func TestCredentialLanesNeverUseTheDevToken(t *testing.T) {
+	raw, err := os.ReadFile("lanes.yaml")
+	require.NoError(t, err)
+	var registry map[string]struct {
+		Venom  string            `yaml:"venom"`
+		Tokens map[string]string `yaml:"tokens"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &registry))
+	checked := 0
+	for name, spec := range registry {
+		if spec.Venom == "" || len(spec.Tokens) == 0 {
+			continue
+		}
+		suite, err := os.ReadFile(filepath.Join("..", spec.Venom))
+		require.NoError(t, err, "lane %s", name)
+		for i, line := range strings.Split(string(suite), "\n") {
+			require.NotContains(t, line, "funcd-dev-token", "lane %s: %s:%d uses the built-in dev token", name, spec.Venom, i+1)
+		}
+		checked++
+	}
+	require.NotZero(t, checked, "a lane runs with static credentials")
+}
+
 // lanes.sh checked out every spec at .claude/worktrees/lane-<lane> and first removed whatever was there, so a second
 // run for another branch and the same lane deleted the first run's checkout under its running lane ("failed to get
 // current directory"). Here the first run's lane starts the second run, then checks that its own checkout survived.
