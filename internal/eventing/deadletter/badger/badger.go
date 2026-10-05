@@ -83,6 +83,30 @@ func (s *store) Put(_ context.Context, dl deadletter.DeadLetter) error {
 	return nil
 }
 
+// Update reads and writes the key in one transaction: a delete committed in between fails it with ErrConflict.
+func (s *store) Update(_ context.Context, dl deadletter.DeadLetter) error {
+	b, err := json.Marshal(dl)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "marshalling dead letter %q", dl.ID)
+	}
+	key := recordKey(dl.Namespace, dl.ID)
+	err = s.db.Update(func(txn *badger.Txn) error {
+		if _, gerr := txn.Get(key); gerr != nil {
+			return gerr
+		}
+		return txn.Set(key, b)
+	})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, badger.ErrKeyNotFound):
+		return fault.NotFoundf(op, "dead letter %q/%q not found", dl.Namespace, dl.ID)
+	case errors.Is(err, badger.ErrConflict):
+		return fault.Wrapf(err, fault.Conflict, op, "updating dead letter %q/%q", dl.Namespace, dl.ID)
+	}
+	return fault.Wrapf(err, fault.Internal, op, "updating dead letter %q/%q", dl.Namespace, dl.ID)
+}
+
 func (s *store) Get(_ context.Context, ns v1.NamespaceName, id string) (deadletter.DeadLetter, error) {
 	var dl deadletter.DeadLetter
 	err := s.db.View(func(txn *badger.Txn) error {

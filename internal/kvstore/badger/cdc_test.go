@@ -15,6 +15,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/bus"
+	natsbus "github.com/pyvvo/funcd/internal/bus/nats"
 )
 
 // fakeBus is an in-memory bus.Bus recording published change records, able to simulate a consumer outage
@@ -25,6 +26,7 @@ type fakeBus struct {
 	pubs      []changeRecord
 	failAfter int // 0 ⇒ never fail
 	failFirst int
+	ensureErr error
 }
 
 func (b *fakeBus) Publish(_ context.Context, _ bus.Subject, data []byte) error {
@@ -48,7 +50,7 @@ func (b *fakeBus) Publish(_ context.Context, _ bus.Subject, data []byte) error {
 func (b *fakeBus) Subscribe(context.Context, bus.Subject) (bus.Subscription, error) {
 	return nil, fault.Invalidf("fakeBus.Subscribe", "unsupported")
 }
-func (b *fakeBus) EnsureStream(context.Context, bus.StreamConfig) error { return nil }
+func (b *fakeBus) EnsureStream(context.Context, bus.StreamConfig) error { return b.ensureErr }
 func (b *fakeBus) Consume(context.Context, bus.ConsumeConfig) (bus.Consumer, error) {
 	return nil, fault.Invalidf("fakeBus.Consume", "unsupported")
 }
@@ -275,4 +277,72 @@ func TestIssue99_TailerResumesAfterTransientPublishError(t *testing.T) {
 	default:
 	}
 	require.Equal(t, []uint64{1, 2, 3, 4, 5}, fb.seqs(), "every change delivered once, in order, after the retry")
+}
+
+// Issue #702: on the real bus, a change the tailer counts as delivered — and whose outbox entry gc then
+// reclaims — must still reach a consumer that attaches later, not vanish as a core publish to nobody.
+func TestIssue702_LateConsumerReceivesEveryChange(t *testing.T) {
+	for _, st := range []natsbus.Storage{natsbus.MemoryStorage, natsbus.FileStorage} {
+		t.Run(fmt.Sprintf("storage=%d", st), func(t *testing.T) {
+			ctx := context.Background()
+			b, err := natsbus.Open(ctx, natsbus.Options{Storage: st, StoreDir: t.TempDir()})
+			require.NoError(t, err)
+			defer func() { _ = b.Close() }()
+			const subject bus.Subject = "kv.changes"
+			kv, seams, err := OpenWithSeamsFor(t.TempDir(), nil, BackupConfig{}, b, CDCConfig{Subject: subject})
+			require.NoError(t, err)
+			d := kv.(*driver)
+			defer func() { _ = d.Close() }()
+			cc := seams.CDC.(*cdc)
+
+			const total = 5
+			putN(t, kv, total)
+			runCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			go func() {
+				RunCDC(runCtx, seams.CDC, slog.New(slog.NewTextHandler(io.Discard, nil)))
+				close(done)
+			}()
+			require.Eventually(t, func() bool {
+				cur, err := cc.cursor(ctx)
+				return err == nil && cur == total
+			}, 10*time.Second, 10*time.Millisecond, "the tailer delivers every change")
+			cancel()
+			<-done
+			require.NoError(t, cc.gc(ctx))
+			require.Equal(t, 0, countPrefix(t, d.db, cdcLogPrefix), "delivered changes leave the outbox")
+
+			cons, err := b.Consume(ctx, bus.ConsumeConfig{Stream: "KV_CDC", Durable: "late", Subject: subject})
+			require.NoError(t, err, "no stream holds the %d changes the tailer delivered and reclaimed", total)
+			defer func() { _ = cons.Close() }()
+			for want := uint64(1); want <= total; want++ {
+				select {
+				case m := <-cons.C():
+					var rec changeRecord
+					require.NoError(t, json.Unmarshal(m.Data, &rec))
+					require.Equal(t, want, rec.Seq)
+					require.NoError(t, m.Ack())
+				case <-time.After(10 * time.Second):
+					t.Fatalf("the late consumer got %d of %d changes", want-1, total)
+				}
+			}
+		})
+	}
+}
+
+// Issue #702: the tailer never publishes to a subject no stream covers — when it cannot declare the
+// stream it stops with the outbox intact, so RunCDC retries instead of losing the changes.
+func TestIssue702_TailerStopsWhenTheStreamCannotBeDeclared(t *testing.T) {
+	fb := &fakeBus{ensureErr: fault.Unavailablef("fakeBus", "stream unavailable")}
+	kv, seams, err := OpenWithSeamsFor(t.TempDir(), nil, BackupConfig{}, fb, CDCConfig{Subject: "kv.changes"})
+	require.NoError(t, err)
+	defer func() { _ = kv.(*driver).Close() }()
+	putN(t, kv, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = seams.CDC.Tail(ctx)
+	require.Empty(t, fb.seqs(), "nothing is published before a stream covers the subject")
+	require.ErrorIs(t, err, fb.ensureErr)
+	require.Equal(t, 3, countPrefix(t, kv.(*driver).db, cdcLogPrefix), "the outbox keeps every change")
 }

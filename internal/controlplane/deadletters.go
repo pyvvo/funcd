@@ -149,7 +149,8 @@ func RegisterStubDeadLetters(api huma.API) {
 // stubDeadLetterStore is the inert deadletter.Store for spec generation (shape only, never called).
 type stubDeadLetterStore struct{}
 
-func (stubDeadLetterStore) Put(context.Context, deadletter.DeadLetter) error { return nil }
+func (stubDeadLetterStore) Put(context.Context, deadletter.DeadLetter) error    { return nil }
+func (stubDeadLetterStore) Update(context.Context, deadletter.DeadLetter) error { return nil }
 func (stubDeadLetterStore) List(context.Context, v1.NamespaceName) ([]deadletter.DeadLetter, error) {
 	return nil, nil
 }

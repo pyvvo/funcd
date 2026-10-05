@@ -252,6 +252,7 @@ func (e *embedded) EnsureStream(ctx context.Context, cfg bus.StreamConfig) error
 		Name:     cfg.Name,
 		Subjects: subjects,
 		Storage:  e.streamStorage(),
+		MaxAge:   cfg.MaxAge,
 	}); err != nil {
 		return mapErr("bus.EnsureStream", err)
 	}

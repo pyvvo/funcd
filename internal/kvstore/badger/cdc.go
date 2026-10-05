@@ -31,13 +31,14 @@ const (
 	cdcSeqKey       = Reserved + "cdc_seq"            // GetSequence lease counter (reserved, never listed)
 	cdcLogPrefix    = Reserved + "cdc/"               // _cdc/<020d seq> outbox entries, seq-ordered
 	cdcCursorKey    = Reserved + "cdc_cursor/default" // the single-consumer durable cursor
+	cdcStream       = "KV_CDC"                        // the bus stream that keeps the feed for the retention window
 	cdcSeqBandwidth = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
 	cdcPollInterval = 200 * time.Millisecond          // tail wake cadence when the log is drained
 	cdcRetryDelay   = time.Second                     // RunCDC's wait before re-tailing after a failed pass
 )
 
 // CDCConfig configures the opt-in change-feed (ADR-0068). Subject is the bus subject to publish to (the
-// configured sink); zero Retention ⇒ 24h.
+// configured sink); Retention is how long the feed's stream keeps a change, zero ⇒ 24h.
 type CDCConfig struct {
 	Subject   bus.Subject
 	Retention time.Duration
@@ -86,8 +87,16 @@ func (c *cdc) OnWrite(txn *badger.Txn, key string, op Op) error {
 
 // Tail drains the outbox to the bus from the durable cursor until ctx is cancelled or a pass fails,
 // reclaiming delivered entries on each pass (retention). It resumes from the persisted cursor on restart —
-// zero loss.
+// zero loss. It first declares the feed's stream over the subject: on an uncovered subject the bus takes a
+// core publish, which returns nil with no one listening, so the cursor would pass changes nothing kept.
 func (c *cdc) Tail(ctx context.Context) error {
+	if err := c.sink.EnsureStream(ctx, bus.StreamConfig{
+		Name:     cdcStream,
+		Subjects: []bus.Subject{c.subject},
+		MaxAge:   c.retention,
+	}); err != nil {
+		return err
+	}
 	for {
 		n, err := c.drain(ctx)
 		if err != nil {
