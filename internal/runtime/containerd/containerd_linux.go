@@ -102,7 +102,8 @@ type worker struct {
 	out       *workerpipe.Output // the task's stdout and stderr, through FIFOs under the driver's fifoDir (ADR-0168)
 	taskIO    cio.IO             // the NewTask task's IO; Close removes its FIFO dir
 	createdAt time.Time
-	released  bool // Stop has released the task, the CNI attachment and the container, so Remove may forget it
+	startedAt time.Time // the last successful Start, under d.mu (ADR-0183)
+	released  bool      // Stop has released the task, the CNI attachment and the container, so Remove may forget it
 	bootDir   string
 	listened  bool // the port file was seen since Create (ADR-0160)
 	stopping  bool // Stop has begun, so an ended task is ExitByStop
@@ -623,6 +624,9 @@ func (d *driver) Start(ctx context.Context, id runtime.InstanceID) error {
 	if err := task.Start(nctx); err != nil {
 		return mapErr(err, op, "start task %q", sb.ctrID)
 	}
+	d.mu.Lock()
+	sb.startedAt = time.Now()
+	d.mu.Unlock()
 	return nil
 }
 
@@ -810,6 +814,7 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 	inst := runtime.Instance{
 		ID: id, Namespace: sb.namespace, Name: sb.name, OwnerKind: sb.ownerKind, Revision: sb.revision,
 		Replica: sb.replica, IP: sb.ip, Port: sb.port, State: runtime.StateCreated, CreatedAt: sb.createdAt,
+		StartedAt: d.startedAt(sb),
 	}
 	task, err := d.task(nctx, sb)
 	if err != nil {
@@ -840,6 +845,13 @@ func (d *driver) ended(sb *worker, inst *runtime.Instance, st *containerd.Status
 	default:
 		inst.State, inst.Exit = mapState(*st), exitOf(*st)
 	}
+}
+
+// startedAt is when sb's task last started (ADR-0183).
+func (d *driver) startedAt(sb *worker) time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return sb.startedAt
 }
 
 // listened latches whether the worker's shim has written its port file (ADR-0160).
@@ -919,6 +931,7 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 		inst := runtime.Instance{
 			ID: ids[i], Namespace: sb.namespace, Name: sb.name, OwnerKind: sb.ownerKind, Revision: sb.revision,
 			Replica: sb.replica, IP: sb.ip, Port: sb.port, State: runtime.StateStopped, CreatedAt: sb.createdAt,
+			StartedAt: d.startedAt(sb),
 		}
 		// Reflect the real task status (ADR-0032): never hardcode Running, or a
 		// crashed/exited container would mask the shim's shape failure (ADR-0030).

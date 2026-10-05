@@ -186,7 +186,8 @@ type Deps struct {
 	HandOutSettle time.Duration
 	// DrainPollInterval is the longest gap between drain passes (runtime.drainPollInterval, ADR-0163); 0 ⇒ 1 s.
 	DrainPollInterval time.Duration
-	// BootTimeout stops a replica not ready this long after creation (runtime.bootTimeout, ADR-0163); 0 ⇒ 1 min.
+	// BootTimeout stops a replica not ready this long after its last successful Start (runtime.bootTimeout, ADR-0163,
+	// ADR-0183); 0 ⇒ 1 min.
 	BootTimeout time.Duration
 	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
 	// bounded by the supervision period (ADR-0142 Decision 9); 0 ⇒ 2 s.
@@ -1259,7 +1260,7 @@ type unlistened struct {
 }
 
 // stopUnlistened stops each running replica of solo revision rev below `below` that has not listened within bootTimeout
-// of its creation and counts it as a boot crash, so convergeRevision re-creates it after the growing wait (ADR-0161
+// of its last start and counts it as a boot crash, so convergeRevision re-creates it after the growing wait (ADR-0161
 // Decision 3). A booting replica is one that runs and has not listened: the pinned shims write their port file only
 // once ready. The legacy placeholder never listens, so it is never stopped here.
 func (r *Reconciler) stopUnlistened(ctx context.Context, fn *v1.Function, rev v1.ObjectName, below int) (unlistened, error) {
@@ -1278,7 +1279,7 @@ func (r *Reconciler) stopUnlistened(ctx context.Context, fn *v1.Function, rev v1
 			continue
 		}
 		if in.State == runtime.StateRunning && !r.listening(in) {
-			deadline := in.CreatedAt.Add(r.bootTimeout)
+			deadline := lastStart(in).Add(r.bootTimeout)
 			if now.Before(deadline) {
 				if c, ok := r.boot.crash(in.ID); ok && c.count > 0 {
 					u.pollAt = earlier(u.pollAt, deadline)
@@ -1586,7 +1587,7 @@ func planReplicas(byReplica map[int]runtime.Instance, indexes []int, opts conver
 			_, due = boot.observe(in, class)
 		}
 		if due.IsZero() {
-			due = in.CreatedAt.Add(period)
+			due = lastStart(in).Add(period)
 		}
 		if now.Before(due) {
 			retryAt = earlier(retryAt, due)
@@ -2068,7 +2069,7 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 // readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
 // ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
 // each listening replica's health endpoint at path (ADR-0161), and a listening solo replica, or a running pool worker,
-// that has not become ready within bootLimit of its creation is a shape failure; a zero bootLimit sets no limit. A solo
+// that has not become ready within bootLimit of its last start is a shape failure; a zero bootLimit sets no limit. A solo
 // replica that never listens is stopUnlistened's. A terminal replica is read by how it ended (ADR-0160 Decision 4): only an exit 3 before listening in a pass not serving is failed, and the boot crashes it judges are
 // counted on boot, giving the earliest retry and, from the lowest replica with a count, the crash-loop message. With a
 // nil boot every Failed replica is failed, as before (the pool worker). Only replicas below `below` count (ADR-0142): a
@@ -2102,7 +2103,7 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 			switch {
 			case listening && r.probeReady(ctx, in.IP, in.Port, path):
 				ready++
-			case bootLimit > 0 && (listening || boot == nil) && now.Sub(in.CreatedAt) >= bootLimit:
+			case bootLimit > 0 && (listening || boot == nil) && now.Sub(lastStart(in)) >= bootLimit:
 				failed = lowerID(failed, in.ID)
 			}
 		case !in.State.Terminal():

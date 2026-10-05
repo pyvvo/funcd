@@ -109,7 +109,8 @@ type Instance struct {
 	IP        string // worker endpoint host: netns IP (containerd) or 127.0.0.1 (process driver, ADR-0030)
 	Port      int    // worker HTTP port: the shim's listening port (ADR-0030); 0 until resolved
 	CreatedAt time.Time
-	Listened  bool // wrote its port to FUNCD_PORTFILE since its last Start; stays true after it ends (ADR-0160)
+	StartedAt time.Time // the last successful Start; zero before the first (ADR-0183)
+	Listened  bool      // wrote its port to FUNCD_PORTFILE since its last Start; stays true after it ends (ADR-0160)
 	Exit      Exit
 }
 

@@ -85,7 +85,7 @@ func (b *bootBackoff) observe(in runtime.Instance, class exitClass) (bootCrash, 
 		delete(b.crashes, in.ID)
 	case exitStopped:
 		if ok && c.counted.Equal(in.CreatedAt) {
-			return c, in.CreatedAt.Add(b.wait(c.count))
+			return c, lastStart(in).Add(b.wait(c.count))
 		}
 	case exitBootCrash:
 		if !ok || !c.counted.Equal(in.CreatedAt) {
@@ -97,9 +97,17 @@ func (b *bootBackoff) observe(in runtime.Instance, class exitClass) (bootCrash, 
 			b.logger.Warn("a worker ended before it listened", "namespace", in.Namespace, "name", in.Name,
 				"replica", in.Replica, "count", c.count, "exit", describeExit(in.Exit))
 		}
-		return c, in.CreatedAt.Add(b.wait(c.count))
+		return c, lastStart(in).Add(b.wait(c.count))
 	}
 	return bootCrash{}, time.Time{}
+}
+
+// lastStart is when replica in last started: its StartedAt, else its CreatedAt (ADR-0183).
+func lastStart(in runtime.Instance) time.Time {
+	if in.StartedAt.IsZero() {
+		return in.CreatedAt
+	}
+	return in.StartedAt
 }
 
 // count counts one boot crash of id that happened in the start at `at`, once per start, with message, and returns its

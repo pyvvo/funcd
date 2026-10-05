@@ -49,6 +49,7 @@ type instance struct {
 	exit      runtime.Exit
 	done      chan struct{}
 	createdAt time.Time
+	startedAt time.Time // the last successful Start (ADR-0183)
 }
 
 // driver is the process-based runtime.Runtime.
@@ -248,6 +249,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	if serr != nil {
 		return fault.Wrapf(serr, fault.KindOf(serr), op, "save worker %q", id)
 	}
+	inst.startedAt = time.Now()
 	return nil
 }
 
@@ -474,6 +476,7 @@ func (d *driver) snapshotLocked(id runtime.InstanceID, inst *instance) runtime.I
 		PID:       inst.pid,
 		State:     inst.state,
 		CreatedAt: inst.createdAt,
+		StartedAt: inst.startedAt,
 		Listened:  inst.listened,
 		Exit:      inst.exit,
 	}

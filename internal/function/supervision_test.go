@@ -861,3 +861,170 @@ func TestScenarioSleepingFunctionGateFires(t *testing.T) {
 	clk := clock.NewManual(time.Now())
 	h.reclaimRounds(t, h.activator(t, clk), clk, "sleepy")
 }
+
+// lateStartHarness is ADR-0183's setup: a manual clock, the default boot backoff (10 s, 5 m) and a startFailer in front
+// of the fake runtime.
+func lateStartHarness(t *testing.T, readyStatus int, opts ...func(*function.Deps)) (*shimHarness, *clock.Manual, *startFailer) {
+	t.Helper()
+	clk := clock.NewManual(time.Now())
+	sf := &startFailer{}
+	opts = append([]func(*function.Deps){withManualClock(clk, 10*time.Second, 5*time.Minute), sf.wrap}, opts...)
+	return newShimHarness(t, readyStatus, false, opts...), clk, sf
+}
+
+// startLate creates name and fails its first `failures` Starts, each retried once its growing wait (10 s, 20 s, 40 s,
+// 80 s) ends; the pass after the last failure is the late Start, whose result it returns. Four failures put the late
+// Start at +2m30s.
+func startLate(t *testing.T, h *shimHarness, clk *clock.Manual, sf *startFailer, name string, failures int) controller.Result {
+	t.Helper()
+	sf.failing.Store(true)
+	h.createFn(t, name)
+	wait := 10 * time.Second
+	for i := range failures {
+		if i > 0 {
+			clk.Advance(wait)
+			wait *= 2
+		}
+		h.reconcile(t, name)
+		require.EqualValues(t, i+1, sf.starts.Load(), "Start %d fails on schedule", i+1)
+	}
+	sf.failing.Store(false)
+	clk.Advance(wait)
+	res := h.reconcile(t, name)
+	require.EqualValues(t, failures+1, sf.starts.Load(), "the late Start")
+	return res
+}
+
+// scenario: late-start-gets-full-boot-timeout (ADR-0183, issue #714) — a worker whose Start succeeds only after its
+// Starts failed for longer than bootTimeout runs on after the pass that started it and is Ready once it listens, as one
+// started after two failures is.
+func TestScenarioLateStartGetsFullBootTimeout(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		failures    int
+		bootTimeout time.Duration
+	}{
+		"two-failures":             {failures: 2},
+		"four-failures":            {failures: 4},
+		"boot-timeout-2s-one-fail": {failures: 1, bootTimeout: 2 * time.Second},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, clk, sf := lateStartHarness(t, http.StatusOK, func(d *function.Deps) { d.BootTimeout = tc.bootTimeout })
+			id := replicaID("late", 1, 0)
+			h.rt.hold(id, true)
+			startLate(t, h, clk, sf, "late", tc.failures)
+			require.Equal(t, runtime.StateRunning, h.rt.revisionStates("late")["late-1"][0], "the late-started worker runs on")
+
+			clk.Advance(time.Second)
+			h.rt.hold(id, false)
+			h.reconcile(t, "late")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "late").Status.Phase)
+		})
+	}
+}
+
+// scenario: late-start-unready-fails-after-boot-timeout (ADR-0183) — a late-started worker that listens but answers 503
+// keeps the Function Deploying/ShimNotReady until its start + bootTimeout, and Failed/ShapeInvalid only then.
+func TestScenarioLateStartUnreadyFailsAfterBootTimeout(t *testing.T) {
+	t.Parallel()
+	h, clk, sf := lateStartHarness(t, http.StatusServiceUnavailable)
+	startLate(t, h, clk, sf, "late", 4)
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "late").Status.Phase, "+2m30s")
+	h.requireCondition(t, "late", "Ready", v1.ConditionFalse, "ShimNotReady")
+
+	clk.Advance(time.Minute - time.Millisecond)
+	h.reconcile(t, "late")
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "late").Status.Phase, "+3m29.999s")
+	h.requireCondition(t, "late", "Ready", v1.ConditionFalse, "ShimNotReady")
+
+	clk.Advance(time.Millisecond)
+	h.reconcile(t, "late")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "late").Status.Phase, "+3m30s")
+	h.requireCondition(t, "late", "Ready", v1.ConditionFalse, "ShapeInvalid")
+}
+
+// scenario: late-start-hang-stopped-at-boot-timeout (ADR-0183) — a late-started worker that never listens runs until its
+// start + bootTimeout, the pass coming back by then, and is stopped then as the fifth boot crash in a row.
+func TestScenarioLateStartHangStoppedAtBootTimeout(t *testing.T) {
+	t.Parallel()
+	h, clk, sf := lateStartHarness(t, http.StatusOK)
+	h.rt.hold(replicaID("late", 1, 0), true)
+	res := startLate(t, h, clk, sf, "late", 4)
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("late")["late-1"][0], "+2m30s")
+	require.Positive(t, res.RequeueAfter)
+	require.LessOrEqual(t, res.RequeueAfter, time.Minute, "+2m30s")
+
+	clk.Advance(time.Minute - time.Millisecond)
+	res = h.reconcile(t, "late")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("late")["late-1"][0], "+3m29.999s")
+	require.Positive(t, res.RequeueAfter)
+	require.LessOrEqual(t, res.RequeueAfter, time.Millisecond, "the pass comes back by +3m30s")
+
+	clk.Advance(time.Millisecond)
+	h.reconcile(t, "late")
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("late")["late-1"][0], "+3m30s")
+	ready := h.requireCondition(t, "late", "Ready", v1.ConditionFalse, "CrashLoopBackOff")
+	require.Equal(t, "replica 0 did not listen within 1m0s; boot crash 5 in a row, retried 2m40s after its last start", ready.Message)
+}
+
+// scenario: late-start-crash-waits-from-start (ADR-0183) — a late-started worker that exits 1 before it listens is
+// re-created at its start + 2m40s (+5m10s), as its message says, not at its creation + 2m40s.
+func TestScenarioLateStartCrashWaitsFromStart(t *testing.T) {
+	t.Parallel()
+	h, clk, sf := lateStartHarness(t, http.StatusOK)
+	id := replicaID("late", 1, 0)
+	h.rt.endStarts(id, runtime.Exit{Cause: runtime.ExitByCode, Code: 1}, true)
+	res := startLate(t, h, clk, sf, "late", 4)
+	ready := h.requireCondition(t, "late", "Ready", v1.ConditionFalse, "CrashLoopBackOff")
+	require.Equal(t, "replica 0 exited with code 1 before it listened; boot crash 5 in a row, retried 2m40s after its last start", ready.Message)
+	require.Equal(t, 2*time.Minute+40*time.Second, res.RequeueAfter, "the pass comes back at +5m10s")
+	creates, _ := h.rt.counts()
+	h.rt.endStarts(id, runtime.Exit{}, false)
+
+	clk.Advance(10 * time.Second)
+	h.reconcile(t, "late")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates, after, "not re-created at +2m40s")
+
+	clk.Advance(2*time.Minute + 30*time.Second - time.Millisecond)
+	h.reconcile(t, "late")
+	after, _ = h.rt.counts()
+	require.Equal(t, creates, after, "not re-created at +5m09.999s")
+
+	clk.Advance(time.Millisecond)
+	h.reconcile(t, "late")
+	after, _ = h.rt.counts()
+	require.Equal(t, creates+1, after, "re-created at +5m10s")
+}
+
+// scenario: late-start-replaced-a-period-after-start (ADR-0183) — a late-started worker that listened, served and exited
+// 0 a second after it started is replaced one supervision period after its start, not at once.
+func TestScenarioLateStartReplacedAPeriodAfterStart(t *testing.T) {
+	t.Parallel()
+	const period = 10 * time.Second
+	h, clk, sf := lateStartHarness(t, http.StatusOK, func(d *function.Deps) { d.SupervisionPeriod = period })
+	startLate(t, h, clk, sf, "late", 4)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "late").Status.Phase, "+2m30s")
+	creates, _ := h.rt.counts()
+
+	clk.Advance(time.Second)
+	id := replicaID("late", 1, 0)
+	h.rt.mu.Lock()
+	h.rt.state[id], h.rt.exits[id] = runtime.StateStopped, exitZero()
+	h.rt.mu.Unlock()
+	h.reconcile(t, "late")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates, after, "not replaced at once (+2m31s)")
+
+	clk.Advance(period - time.Second - time.Millisecond)
+	h.reconcile(t, "late")
+	after, _ = h.rt.counts()
+	require.Equal(t, creates, after, "not replaced before +2m40s")
+
+	clk.Advance(time.Millisecond)
+	h.reconcile(t, "late")
+	after, _ = h.rt.counts()
+	require.Equal(t, creates+1, after, "replaced at +2m40s, a period after its start")
+}
