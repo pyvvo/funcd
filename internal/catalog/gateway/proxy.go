@@ -16,15 +16,14 @@ import (
 )
 
 // EngineTarget is the single CatalogService this proxy endpoint fronts (ADR-0137): its Cedar resource
-// ref (the catalog::query resource — its NAME fixes the target catalog; the namespace is taken from the
-// resolved principal), its netns engine URL, and the shared engine token the caller token is swapped for
-// on allow. One EngineTarget per listener endpoint, so the target catalog is fixed by the endpoint (never
-// parsed from the opaque Quack body).
+// ref (the catalog::query resource, namespace and name both fixed by the endpoint), its netns engine URL,
+// and the shared engine token the caller token is swapped for on allow. One EngineTarget per listener
+// endpoint, so the target catalog is fixed by the endpoint (never parsed from the opaque Quack body).
 //
 // The ADR Contracts sketch typed Catalog as `v1.EntityRef`; there is no such type — the PDP resource is
 // auth.EntityRef (a CatalogService ref), which is what this carries.
 type EngineTarget struct {
-	Catalog     auth.EntityRef // Type=KindCatalogService, Name=<catalog>; namespace overridden per-principal
+	Catalog     auth.EntityRef // Type=KindCatalogService, Namespace/Name = the fronted CatalogService
 	Upstream    string         // the netns engine endpoint (an http URL)
 	EngineToken string         // the shared engine token, never exposed to callers
 }
@@ -75,10 +74,10 @@ func (p *catalogProxy) engineFailed(w http.ResponseWriter, r *http.Request, err 
 }
 
 // ServeHTTP is the per-request PEP (ADR-0137). On the token-bearing handshake it resolves the caller
-// token → principal, runs catalog::query on this endpoint's CatalogService (namespace from the
-// principal), and on allow swaps the caller token → the shared engine token before forwarding. A
-// non-handshake (session-id-keyed) request forwards opaquely (fail-closed: an un-swapped body carries the
-// caller token, which the engine rejects). Deny/unresolved ⇒ 403 with the upstream never called.
+// token → principal, denies a principal outside this endpoint's namespace, runs catalog::query on this
+// endpoint's CatalogService, and on allow swaps the caller token → the shared engine token before
+// forwarding. A non-handshake (session-id-keyed) request forwards opaquely (fail-closed: an un-swapped
+// body carries the caller token, which the engine rejects). Deny/unresolved ⇒ 403 with the upstream never called.
 func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.rp == nil {
 		fault.WriteProblem(w, fault.Internalf(proxyOp, "catalog engine upstream is not a valid URL"))
@@ -102,8 +101,12 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fault.WriteProblem(w, fault.Forbiddenf(proxyOp, "catalog query denied"))
 			return
 		}
+		if principal.Namespace != p.engine.Catalog.Namespace {
+			p.log.Debug("catalog PEP denied: principal outside the catalog's namespace", "catalog", p.engine.Catalog.Name, "principal", principal.Name)
+			fault.WriteProblem(w, fault.Forbiddenf(proxyOp, "catalog query denied"))
+			return
+		}
 		resource := p.engine.Catalog
-		resource.Namespace = principal.Namespace // ns fixed by the principal, catalog by the endpoint
 		dec, aerr := p.pdp.Authorize(r.Context(), auth.Request{
 			Action:   auth.ActionCatalogQuery,
 			Resource: &resource,

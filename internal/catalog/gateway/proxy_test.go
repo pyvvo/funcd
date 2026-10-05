@@ -337,3 +337,69 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
 	require.Equal(t, 2, strings.Count(logs.String(), "level=WARN"), "each engine failure is logged once through slog")
 }
+
+// TestCatalogProxy_DeniesCrossNamespaceCaller pins the PEP to the endpoint's own CatalogService: a
+// principal from another namespace that holds a grant on a same-named catalog in ITS namespace is 403'd
+// and never reaches this endpoint's engine; the owner namespace's bound Function is still forwarded.
+func TestCatalogProxy_DeniesCrossNamespaceCaller(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	fn := func(ns v1.NamespaceName, name v1.ObjectName) *v1.Function {
+		return &v1.Function{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"},
+			Spec:       v1.FunctionSpec{Catalogs: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}},
+		}
+	}
+	createObj(t, st, fn("victim", "reader"))
+	createObj(t, st, fn("attacker", "thief"))
+	const minted = "MINTED-ATTACKER-IDENTITY-CATALOG-TOKEN"
+	createObj(t, st, &v1.Identity{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
+		ObjectMeta: v1.ObjectMeta{Name: "mallory", Namespace: "attacker", ResourceGroup: "rg1"},
+		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal, CredentialSecretName: "mallory-cred"},
+	})
+	createObj(t, st, &v1.Secret{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
+		ObjectMeta: v1.ObjectMeta{Name: "mallory-cred", Namespace: "attacker", ResourceGroup: "rg1"},
+		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(minted)}},
+	})
+	createObj(t, st, &v1.RolesAssignment{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindRolesAssignment.GVK().APIVersion(), Kind: v1.KindRolesAssignment},
+		ObjectMeta: v1.ObjectMeta{Name: "mallory-can-query-lake", Namespace: "attacker", ResourceGroup: "rg1"},
+		Spec: v1.RolesAssignmentSpec{
+			Principal:   &v1.PrincipalRef{Kind: v1.PrincipalKindIdentity, Name: "mallory"},
+			Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: "Catalog Query Reader"}, Scope: &v1.ScopeRef{Kind: v1.ScopeKindCatalog, Name: "lake"}}},
+		},
+	})
+	master := []byte("proxy-test-node-master")
+	keys := NewCatalogKeys(master, st)
+	pdp := buildPDP(t, st)
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "victim", Name: "lake"}
+
+	query := func(token string) (int, *engineStub) {
+		stub := &engineStub{}
+		up := httptest.NewServer(stub.handler())
+		defer up.Close()
+		front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}))
+		defer front.Close()
+		resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode, stub
+	}
+
+	owner, err := DeriveCatalogToken(master, "victim", "reader")
+	require.NoError(t, err)
+	code, stub := query(owner)
+	require.Equal(t, http.StatusOK, code, "the owner namespace's bound Function is forwarded")
+	require.True(t, stub.hit)
+
+	thief, err := DeriveCatalogToken(master, "attacker", "thief")
+	require.NoError(t, err)
+	for name, token := range map[string]string{"Function bound to attacker/lake": thief, "Identity granted on attacker/lake": minted} {
+		code, stub := query(token)
+		require.Equal(t, http.StatusForbidden, code, "%s must not query victim/lake", name)
+		require.False(t, stub.hit, "%s must never reach victim/lake's engine", name)
+	}
+}
