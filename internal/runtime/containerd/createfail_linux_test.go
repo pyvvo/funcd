@@ -17,6 +17,7 @@ import (
 	gocni "github.com/containerd/go-cni"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -29,6 +30,7 @@ func TestIssue492_FailedCreateRemovesLogFile(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue492",
 		Revision:  "issue492-1",
 		Image:     "funcd/issue492:latest",
@@ -63,6 +65,7 @@ func TestCreate_FailedNetworkSetupRemovesCNIAttachment(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "cnisetup",
 		Revision:  "cnisetup-1",
 		Image:     "funcd/cnisetup:latest",
@@ -91,6 +94,7 @@ func TestCreate_FailedNetworkSetupKillsTask(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "killtask",
 		Revision:  "killtask-1",
 		Image:     "funcd/killtask:latest",

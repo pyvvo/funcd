@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
@@ -31,6 +32,9 @@ type Deps struct {
 	// Runtime is the existing container port (internal/runtime, ADR-0032/0054): Create/Start/
 	// Status/Stop/Remove/List. Required.
 	Runtime containerrt.Runtime
+	// OwnerKind is the kind whose engines this runtime runs (ADR-0152): every engine it creates carries it, and
+	// Converge and Teardown act only on workers of this kind. Required.
+	OwnerKind v1.Kind
 	// Gateway is the ingress reverse-proxy (ADR-0013) — ProgramRoutes is replace-all; used only
 	// when a Route is set. Optional: a nil gateway means an internal-only deployment (a provider
 	// that declares a Route then is reported Ready but unexposed, with a logged warning).
@@ -43,6 +47,7 @@ type Deps struct {
 // engineRuntime is the in-process driver of the provider Runtime port.
 type engineRuntime struct {
 	rt         containerrt.Runtime
+	ownerKind  v1.Kind
 	gateway    gateway.Gateway // may be nil (internal-only deployment)
 	logger     *slog.Logger
 	httpClient *http.Client
@@ -55,6 +60,9 @@ func NewRuntime(d Deps) (Runtime, error) {
 	if d.Runtime == nil {
 		return nil, fault.Invalidf(op, "runtime is required")
 	}
+	if d.OwnerKind == "" {
+		return nil, fault.Invalidf(op, "owner kind is required")
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -65,6 +73,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,
+		ownerKind:  d.OwnerKind,
 		gateway:    d.Gateway,
 		logger:     logger.With("component", "provider.runtime"),
 		httpClient: client,
@@ -200,6 +209,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 	return containerrt.WorkerSpec{
 		Namespace: spec.Ref.Namespace,
 		Name:      spec.Ref.Name,
+		OwnerKind: r.ownerKind,
 		Replica:   replica,
 		Image:     spec.Image,
 		Command:   nil, // the curated image entrypoint is the engine — no artifact, no shape gate
@@ -208,8 +218,9 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 	}
 }
 
-// namedInstances returns the runtime instances belonging to the provider (matched by Name in its
-// namespace), the same lookup pattern the Function reconciler uses (internal/function).
+// namedInstances returns the runtime instances belonging to the provider (matched by its owner kind and Name in its
+// namespace), the same lookup pattern the Function reconciler uses (internal/function); a Function's worker of the
+// same name is never one of them (ADR-0152).
 func (r *engineRuntime) namedInstances(ctx context.Context, ref ProviderRef) ([]containerrt.Instance, error) {
 	all, err := r.rt.List(ctx, ref.Namespace)
 	if err != nil {
@@ -217,7 +228,7 @@ func (r *engineRuntime) namedInstances(ctx context.Context, ref ProviderRef) ([]
 	}
 	out := make([]containerrt.Instance, 0, len(all))
 	for _, in := range all {
-		if in.Name == ref.Name {
+		if in.OwnerKind == r.ownerKind && in.Name == ref.Name {
 			out = append(out, in)
 		}
 	}

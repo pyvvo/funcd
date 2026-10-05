@@ -13,6 +13,7 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -25,6 +26,7 @@ func TestIssue424_RecreateRemovesReplacedLogFile(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue424",
 		Revision:  "issue424-1",
 		Image:     "funcd/issue424:latest",

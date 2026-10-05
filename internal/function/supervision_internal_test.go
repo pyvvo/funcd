@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -22,7 +23,7 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 	r := newShimReconciler(t, fakeResolver{})
 	ctx := context.Background()
 	inst, err := r.runtime.Create(ctx, runtime.WorkerSpec{
-		Namespace: "default", Name: "gone", Revision: "gone-1", Replica: 1,
+		Namespace: "default", OwnerKind: v1.KindFunction, Name: "gone", Revision: "gone-1", Replica: 1,
 		Command: []string{"sh", "-c", "exit 3"}, LogPath: filepath.Join(t.TempDir(), "w.log"),
 	})
 	require.NoError(t, err)

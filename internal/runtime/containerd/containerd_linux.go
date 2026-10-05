@@ -57,6 +57,9 @@ const (
 	ociRuntimeBinary = "crun"
 )
 
+// ownerKindLabel names the container label that keeps the kind whose reconciler created the worker (ADR-0152).
+const ownerKindLabel = "funcd/owner-kind"
+
 // Config configures the containerd driver (the composition root supplies it).
 type Config struct {
 	Socket      string       // /run/containerd/containerd.sock
@@ -83,6 +86,7 @@ type worker struct {
 	ctrID     string
 	namespace v1alpha1.NamespaceName
 	name      v1alpha1.ObjectName
+	ownerKind v1alpha1.Kind
 	revision  v1alpha1.ObjectName
 	replica   int
 	cniID     string
@@ -240,7 +244,16 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	if spec.Image == "" {
 		return runtime.Instance{}, fault.Invalidf(op, "spec.Image must not be empty for the containerd driver")
 	}
+	if spec.OwnerKind == "" {
+		return runtime.Instance{}, fault.Invalidf(op, "spec.OwnerKind must not be empty")
+	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
+	d.mu.Lock()
+	held := d.instances[id]
+	d.mu.Unlock()
+	if held != nil && held.ownerKind != spec.OwnerKind {
+		return runtime.Instance{}, fault.Conflictf(op, "instance %q is held by a %s worker", id, held.ownerKind)
+	}
 	ctrID, cniID := workerNames(string(spec.Namespace), string(spec.Name), string(spec.Revision), strconv.Itoa(spec.Replica))
 	nctx := d.nsCtx(ctx, spec.Namespace)
 
@@ -303,11 +316,12 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		"funcd/namespace": string(spec.Namespace),
 		"funcd/name":      string(spec.Name),
 		"funcd/replica":   fmt.Sprintf("%d", spec.Replica),
+		ownerKindLabel:    string(spec.OwnerKind),
 	}
 	if spec.Revision != "" {
 		labels["funcd/revision"] = string(spec.Revision)
 	}
-	if err := d.reclaim(nctx, op, id, ctrID); err != nil {
+	if err := d.reclaim(nctx, op, id, ctrID, spec.OwnerKind); err != nil {
 		return runtime.Instance{}, err
 	}
 	container, err := d.client.NewContainer(nctx, ctrID,
@@ -344,8 +358,8 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	}
 
 	sb := &worker{
-		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, revision: spec.Revision, replica: spec.Replica,
-		cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
+		ctrID: ctrID, namespace: spec.Namespace, name: spec.Name, ownerKind: spec.OwnerKind, revision: spec.Revision,
+		replica: spec.Replica, cniID: cniID, netnsPath: netnsPath, ip: extractIP(result), port: fixedPort(spec),
 		logPath: logPath, ownLog: ownLog, createdAt: time.Now(),
 		logListener: logLn, logDir: logDir,
 	}
@@ -359,15 +373,16 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 
 	success = true // keep the log file and channel; Stop and Remove own their teardown now
 	return runtime.Instance{
-		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
-		PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
+		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
+		Replica: spec.Replica, PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
 	}, nil
 }
 
 // reclaim deletes the container and snapshot that hold a worker's name when this driver runs no worker under it.
 // containerd keeps both when funcd stops or dies, and the restarted driver starts with no instances, so without this
-// every re-create of the worker fails with "already exists".
-func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID, ctrID string) error {
+// every re-create of the worker fails with "already exists". A leftover labelled with another kind is kept and refused
+// with fault.Conflict; an unlabelled one, from before ADR-0152, is reclaimed.
+func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID, ctrID string, kind v1alpha1.Kind) error {
 	d.mu.Lock()
 	sb, ok := d.instances[id]
 	live := ok && !sb.released
@@ -378,6 +393,13 @@ func (d *driver) reclaim(nctx context.Context, op string, id runtime.InstanceID,
 	c, err := d.client.LoadContainer(nctx, ctrID)
 	switch {
 	case err == nil:
+		labels, lerr := c.Labels(nctx)
+		if lerr != nil {
+			return mapErr(lerr, op, "read leftover container %q labels", ctrID)
+		}
+		if owner := labels[ownerKindLabel]; owner != "" && owner != string(kind) {
+			return fault.Conflictf(op, "leftover container %q belongs to a %s worker", ctrID, owner)
+		}
 		if derr := d.discard(nctx, c); derr != nil {
 			return mapErr(derr, op, "delete leftover container %q", ctrID)
 		}
@@ -573,8 +595,8 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 		return runtime.Instance{}, err
 	}
 	inst := runtime.Instance{
-		ID: id, Namespace: sb.namespace, Name: sb.name, Revision: sb.revision, Replica: sb.replica,
-		IP: sb.ip, Port: sb.port, State: runtime.StateCreated, CreatedAt: sb.createdAt,
+		ID: id, Namespace: sb.namespace, Name: sb.name, OwnerKind: sb.ownerKind, Revision: sb.revision,
+		Replica: sb.replica, IP: sb.ip, Port: sb.port, State: runtime.StateCreated, CreatedAt: sb.createdAt,
 	}
 	task, err := d.task(nctx, sb)
 	if err != nil {
@@ -647,8 +669,8 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 	out := make([]runtime.Instance, 0, len(sbs))
 	for i, sb := range sbs {
 		inst := runtime.Instance{
-			ID: ids[i], Namespace: sb.namespace, Name: sb.name, Revision: sb.revision, Replica: sb.replica,
-			IP: sb.ip, Port: sb.port, State: runtime.StateStopped, CreatedAt: sb.createdAt,
+			ID: ids[i], Namespace: sb.namespace, Name: sb.name, OwnerKind: sb.ownerKind, Revision: sb.revision,
+			Replica: sb.replica, IP: sb.ip, Port: sb.port, State: runtime.StateStopped, CreatedAt: sb.createdAt,
 		}
 		// Reflect the real task status (ADR-0032): never hardcode Running, or a
 		// crashed/exited container would mask the shim's shape failure (ADR-0030).

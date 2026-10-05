@@ -466,8 +466,8 @@ func (r *recordingRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (r
 	defer r.mu.Unlock()
 	in := runtime.Instance{
 		ID:        runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica),
-		Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
-		State: runtime.StateCreated, CreatedAt: time.Now(),
+		Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
+		Replica: spec.Replica, State: runtime.StateCreated, CreatedAt: time.Now(),
 	}
 	r.specs = append(r.specs, spec)
 	r.insts[in.ID] = in

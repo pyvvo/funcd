@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -24,7 +25,7 @@ func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
 	for i := range workers {
 		ready := filepath.Join(dir, fmt.Sprintf("ready-%d", i))
 		spec := runtime.WorkerSpec{
-			Namespace: "default", Name: "stubborn", Replica: i,
+			Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "stubborn", Replica: i,
 			Command: []string{"sh", "-c", `trap "" TERM; touch "$0"; exec sleep 60`, ready},
 			LogPath: filepath.Join(dir, fmt.Sprintf("w%d.log", i)),
 		}

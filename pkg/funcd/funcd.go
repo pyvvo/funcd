@@ -814,7 +814,9 @@ func (p *Platform) buildControlPlane() error {
 	providerRuntime := c.catalogProvider
 	if providerRuntime == nil {
 		var perr error
-		providerRuntime, perr = provider.NewRuntime(provider.Deps{Runtime: c.runtime, Gateway: c.gateway, Logger: p.logger})
+		providerRuntime, perr = provider.NewRuntime(provider.Deps{
+			Runtime: c.runtime, OwnerKind: v1.KindCatalogService, Gateway: c.gateway, Logger: p.logger,
+		})
 		if perr != nil {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")
 		}

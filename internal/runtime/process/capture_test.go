@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 )
@@ -32,6 +33,7 @@ func TestSetLogCaptureDeliversFd3(t *testing.T) {
 
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "logger",
 		Replica:   0,
 		// write one NDJSON line to fd 3, then exit (closing fd 3 → the host reader sees EOF).
@@ -57,7 +59,7 @@ func TestSetLogCaptureDeliversFd3(t *testing.T) {
 func TestNoCaptureWhenHookUnset(t *testing.T) {
 	d := process.New()
 	spec := runtime.WorkerSpec{
-		Namespace: "default", Name: "quiet", Replica: 0,
+		Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "quiet", Replica: 0,
 		Command: []string{"sh", "-c", "exit 0"},
 		LogPath: filepath.Join(t.TempDir(), "w.log"),
 	}
