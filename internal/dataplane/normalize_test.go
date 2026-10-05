@@ -2,6 +2,9 @@ package dataplane
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,4 +86,39 @@ func TestNonJSONBodyNotNormalized(t *testing.T) {
 	env, ok := normalizeInvokeBody("default", "fn", []byte(`abc{`), fixedID)
 	require.False(t, ok)
 	require.Nil(t, env)
+}
+
+// ADR-0181 Contracts: only an upgrade by httputil.ReverseProxy's rule with no body skips normalization.
+func TestBodilessUpgrade(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		method     string
+		body       string
+		cl         int64
+		connection string
+		upgrade    string
+		want       bool
+	}{
+		{"websocket handshake", http.MethodGet, "", 0, "Upgrade", "websocket", true},
+		{"token in a list, any case", http.MethodGet, "", 0, "Keep-Alive, UPGRADE", "websocket", true},
+		{"lower-case token", http.MethodGet, "", 0, "keep-alive, upgrade", "websocket", true},
+		{"sized body", http.MethodPost, "{}", 2, "Upgrade", "x", false},
+		{"chunked body", http.MethodPost, "{}", -1, "Upgrade", "x", false},
+		{"no upgrade token", http.MethodGet, "", 0, "keep-alive", "websocket", false},
+		{"empty Upgrade", http.MethodGet, "", 0, "Upgrade", "", false},
+		{"plain GET", http.MethodGet, "", 0, "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, "/function/f", strings.NewReader(tc.body))
+			r.ContentLength = tc.cl
+			if tc.connection != "" {
+				r.Header.Set("Connection", tc.connection)
+			}
+			if tc.upgrade != "" {
+				r.Header.Set("Upgrade", tc.upgrade)
+			}
+			require.Equal(t, tc.want, bodilessUpgrade(r))
+		})
+	}
 }

@@ -189,8 +189,10 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
 	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
 	// (fn-to-fn/workflow/sensor) already emit a v1.0 envelope and bypass this — leave them streamed.
-	// The read is independently bounded (maxNormalizeBytes) because normalization buffers.
-	if !internal {
+	// The read is independently bounded (maxNormalizeBytes) because normalization buffers. A bodiless upgrade
+	// (a WebSocket handshake) is the one external exception: it is streamed untouched, so the tunnel after the
+	// 101 carries no envelope bytes (ADR-0181).
+	if !internal && !bodilessUpgrade(r) {
 		body, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNormalizeBytes))
 		if rerr != nil {
 			var tooLarge *http.MaxBytesError

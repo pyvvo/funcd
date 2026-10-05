@@ -147,6 +147,7 @@ func New(d Deps) (*Activator, error) {
 		transport = d.Calls.Wrap(transport)
 	}
 	transport = DeadlineTransport(transport)
+	transport = idleTunnel(transport, tunnelIdleTimeout)
 	life, cancel := context.WithCancel(context.Background())
 	return &Activator{
 		store:             d.Store,
