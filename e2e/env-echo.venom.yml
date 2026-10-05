@@ -424,7 +424,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl apply -f /opt/lane/boot-hang.yaml'
         assertions:
           - result.code ShouldEqual 0
@@ -445,7 +445,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get function boot-hang -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];c={x[\"type\"]:x for x in s.get(\"conditions\",[])};r=c.get(\"Ready\",{});v=c.get(\"ShapeValid\",{});print(\"PHASE=\"+s.get(\"phase\",\"\")+\",READY=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\")+\",SHAPE=\"+v.get(\"status\",\"\")+\"/\"+v.get(\"reason\",\"\")+\",MESSAGE=\"+r.get(\"message\",\"\"))"'
         retry: 15
         delay: 2
@@ -458,7 +458,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get function boot-hang -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",READY=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\"))"'
         retry: 40
         delay: 3
