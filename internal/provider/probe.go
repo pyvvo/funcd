@@ -3,13 +3,10 @@ package provider
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-)
 
-// probeBodyMax bounds the body drained before close: a body read to EOF returns the connection to
-// the keep-alive pool, so repeated probes do not churn ephemeral ports (ADR-0041).
-const probeBodyMax = 4 << 10
+	"github.com/pyvvo/funcd/internal/platform/httpx"
+)
 
 // probeReady issues GET http://<ip>:<port><path> and reports whether the engine answered the
 // expected status (ADR-0087). It is the engine's OWN HTTP readiness probe — a provider serves its
@@ -34,9 +31,6 @@ func (r *engineRuntime) probeReady(ctx context.Context, ip string, port int, pro
 	if err != nil {
 		return false
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyMax))
-		_ = resp.Body.Close()
-	}()
+	defer httpx.CloseBody(resp.Body)
 	return resp.StatusCode == probe.ExpectStatus
 }

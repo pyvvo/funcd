@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -216,7 +217,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // TestIssue126_DispatchReadsOnlyWhatTheStepNeeds: the payload limit bounds the daemon's memory, not
 // only the stored output — the dispatcher reads an answer up to one byte past the limit, only the
 // head of a 4xx that the error keeps, and none of a 5xx it throws away; past that it discards at
-// most drainBodyMax before close.
+// most httpx.DrainLimit before close.
 func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 	const limit = 1 << 20
 	answering := func(t *testing.T, status int) (*HTTPDispatcher, *streamedBody) {
@@ -241,7 +242,7 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if err == nil || rec.Phase != runFailed {
 			t.Fatalf("an over-limit output must fail the run: phase=%s err=%v", rec.Phase, err)
 		}
-		if body.read > limit+1+drainBodyMax {
+		if body.read > limit+1+httpx.DrainLimit {
 			t.Fatalf("read %d bytes of the answer under a %d-byte payload limit", body.read, limit)
 		}
 	})
@@ -252,7 +253,7 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if _, err := d.Dispatch(context.Background(), req); !isPermanent(err) {
 			t.Fatalf("4xx should be permanent, got %v", err)
 		}
-		if body.read > errBodyMax+1+drainBodyMax {
+		if body.read > errBodyMax+1+httpx.DrainLimit {
 			t.Fatalf("read %d bytes of a rejection whose error keeps %d", body.read, errBodyMax)
 		}
 	})
@@ -263,16 +264,16 @@ func TestIssue126_DispatchReadsOnlyWhatTheStepNeeds(t *testing.T) {
 		if _, err := d.Dispatch(context.Background(), req); err == nil || isPermanent(err) {
 			t.Fatalf("5xx should be retryable, got %v", err)
 		}
-		if body.read > drainBodyMax {
+		if body.read > httpx.DrainLimit {
 			t.Fatalf("read %d bytes of a 5xx answer that is thrown away", body.read)
 		}
 	})
 }
 
-// TestDispatch_ReusesConnectionAfterUnreadBody: an answer the dispatcher does not keep in full (a retryable 5xx,
-// the tail of an over-limit output or of a rejection) is drained before close, so the next dispatch — a retry of
-// a failing step — reuses the keep-alive connection instead of dialing a new one (ADR-0041).
-func TestDispatch_ReusesConnectionAfterUnreadBody(t *testing.T) {
+// scenario: retried-step-reuses-connection — an answer the dispatcher does not keep in full (a retryable 5xx, the
+// tail of an over-limit output or of a rejection) is drained before close, so the next dispatch — a retry of a
+// failing step — reuses the keep-alive connection instead of dialing a new one (ADR-0041, ADR-0155).
+func TestScenarioRetriedStepReusesConnection(t *testing.T) {
 	const dispatches, maxOutput = 5, 64
 	answer := strings.Repeat("x", 1<<10)
 	for _, tc := range []struct {
@@ -354,5 +355,66 @@ func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
 	}
 	if len(sc.reclaimed()) != 0 {
 		t.Fatalf("a function dispatched every 40s with a 1m idle timeout was scaled to %v", sc.reclaimed())
+	}
+}
+
+// burstWorker is a step function that holds each wave of calls until all wide of them have arrived, so every call of
+// a wave is in flight at once, and counts the connections it accepts. Without the barrier a call that ends while
+// another's dial is pending hands that call its connection, and the dialed one stays idle.
+func burstWorker(t *testing.T, wide int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	conns := new(atomic.Int32)
+	var mu sync.Mutex
+	arrived, release := 0, make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		wave := release
+		if arrived++; arrived == wide {
+			close(release)
+			arrived, release = 0, make(chan struct{})
+		}
+		mu.Unlock()
+		select {
+		case <-wave:
+		case <-time.After(10 * time.Second):
+			t.Errorf("a wave never reached %d calls in flight", wide)
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv, conns
+}
+
+// scenario: workflow-burst-reuses-connections — 15 waves of 32 steps dispatched at once to one worker, through the
+// client pkg/funcd builds, open 32 connections, all in the first wave (ADR-0155).
+func TestScenarioWorkflowBurstReusesConnections(t *testing.T) {
+	const waves, wide = 15, 32
+	srv, conns := burstWorker(t, wide)
+	d, err := NewHTTPDispatcher(DispatchDeps{
+		Endpoints: fakeEndpoints{upstream: srv.URL, ready: true}, Grant: fakeGrant{allow: true},
+		Client: &http.Client{Transport: activator.DeadlineTransport(activator.NewCallTracker(nil).Wrap(nil))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for wave := range waves {
+		var wg sync.WaitGroup
+		for range wide {
+			wg.Go(func() {
+				if _, err := d.Dispatch(context.Background(), dispatchReq("s")); err != nil {
+					t.Errorf("dispatch: %v", err)
+				}
+			})
+		}
+		wg.Wait()
+		if n := conns.Load(); n != wide {
+			t.Fatalf("after wave %d the worker accepted %d connections, want %d", wave+1, n, wide)
+		}
 	}
 }

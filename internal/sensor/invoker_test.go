@@ -2,9 +2,11 @@ package sensor_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,4 +165,58 @@ func TestIssue564_SensorInvokerReusesItsDefaultClient(t *testing.T) {
 		require.NoError(t, invoke())
 	}
 	require.LessOrEqual(t, conns.Load(), int32(concurrency), "the deliveries after the concurrent ones reuse its connections")
+}
+
+// burstWorker is a Function worker that holds each round of deliveries until all wide of them have arrived, so every
+// delivery of a round is in flight at once, and counts the connections it accepts. Without the barrier a call that
+// ends while another's dial is pending hands that call its connection, and the dialed one stays idle.
+func burstWorker(t *testing.T, wide int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	conns := new(atomic.Int32)
+	var mu sync.Mutex
+	arrived, release := 0, make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		round := release
+		if arrived++; arrived == wide {
+			close(release)
+			arrived, release = 0, make(chan struct{})
+		}
+		mu.Unlock()
+		select {
+		case <-round:
+		case <-time.After(10 * time.Second):
+			t.Errorf("a round never reached %d deliveries in flight", wide)
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv, conns
+}
+
+// scenario: sensor-burst-reuses-connections — 25 rounds of four deliveries in flight at once to one Function, through
+// the client pkg/funcd builds, open 4 connections, all in the first round (ADR-0155).
+func TestScenarioSensorBurstReusesConnections(t *testing.T) {
+	const rounds, wide = 25, 4
+	srv, conns := burstWorker(t, wide)
+	client := &http.Client{Transport: activator.DeadlineTransport(activator.NewCallTracker(nil).Wrap(nil)), Timeout: 30 * time.Second}
+	inv := &sensor.HTTPInvoker{Endpoints: readyEndpoints{upstream: srv.URL}, Client: client}
+	for round := range rounds {
+		var wg sync.WaitGroup
+		for range wide {
+			wg.Go(func() {
+				if err := inv.Invoke(context.Background(), "default", "target", eventing.CloudEvent{SpecVersion: "1.0", ID: "e1"}); err != nil {
+					t.Errorf("invoke: %v", err)
+				}
+			})
+		}
+		wg.Wait()
+		require.EqualValues(t, wide, conns.Load(), "connections accepted after round %d", round+1)
+	}
 }

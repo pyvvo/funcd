@@ -92,7 +92,7 @@ func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authori
 		pdp:         pdp,
 		log:         log.With("component", "catalog.gateway.manager"),
 		proxyLog:    log.With("component", "catalog.gateway"),
-		engines:     httpx.Transport(),
+		engines:     httpx.NodeTransport(),
 		bindHost:    bindHost,
 		publishHost: publishHost,
 		servers:     make(map[string]*managedProxy),

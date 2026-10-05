@@ -69,7 +69,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	client := d.HTTPClient
 	if client == nil {
-		client = httpx.Client(2 * time.Second)
+		client = httpx.NodeClient(2 * time.Second)
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,

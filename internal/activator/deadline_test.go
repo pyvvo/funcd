@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -143,7 +144,7 @@ func TestDeadlineTransportDoesNotCutStartedBody(t *testing.T) {
 	req := deadlineReq(t, context.Background(), &ResponseDeadline{At: time.Now().Add(200 * time.Millisecond), Limit: 200 * time.Millisecond, Source: "spec.timeout"})
 	req.URL = mustURL(t, srv.URL)
 	req.RequestURI = ""
-	resp, err := DeadlineTransport(newPooledTransport()).RoundTrip(req)
+	resp, err := DeadlineTransport(httpx.NodeTransport()).RoundTrip(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
