@@ -182,7 +182,7 @@ func (k *macKeys) identityFor(token string) (auth.EntityRef, bool) {
 		return auth.EntityRef{}, false
 	}
 	sec, isSecret := secObj.(*v1.Secret)
-	if !isSecret {
+	if !isSecret || !v1.ControlledBy(sec.OwnerReferences, v1.KindIdentity, id.UID) {
 		return auth.EntityRef{}, false
 	}
 	stored := sec.Spec.Data[catalogTokenSecretKey]

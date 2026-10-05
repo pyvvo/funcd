@@ -242,6 +242,12 @@ func ControllerOf(refs []OwnerReference) (OwnerReference, bool) {
 	return OwnerReference{}, false
 }
 
+// ControlledBy reports whether refs' controller reference is the object of kind with uid.
+func ControlledBy(refs []OwnerReference, kind Kind, uid UID) bool {
+	r, ok := ControllerOf(refs)
+	return ok && r.Kind == kind && r.UID == uid
+}
+
 // Object is the generic interface satisfied by every resource kind. The store
 // persists and the controller watches through this interface — no per-kind switch.
 type Object interface {

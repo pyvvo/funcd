@@ -228,3 +228,26 @@ func TestControllerOf(t *testing.T) {
 		t.Fatalf("ControllerOf = %+v, %v; want %+v, true", got, ok, ctrl)
 	}
 }
+
+func TestControlledBy(t *testing.T) {
+	ref := func(kind Kind, uid UID, controller bool) OwnerReference {
+		return OwnerReference{ObjectRef: ObjectRef{Kind: kind, Name: "x"}, UID: uid, Controller: controller}
+	}
+	for _, tc := range []struct {
+		name string
+		refs []OwnerReference
+		want bool
+	}{
+		{"controller of that kind and uid", []OwnerReference{ref(KindIdentity, "u1", true)}, true},
+		{"another uid", []OwnerReference{ref(KindIdentity, "u2", true)}, false},
+		{"another kind", []OwnerReference{ref(KindWorkflow, "u1", true)}, false},
+		{"not a controller", []OwnerReference{ref(KindIdentity, "u1", false)}, false},
+		{"no refs", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ControlledBy(tc.refs, KindIdentity, "u1"); got != tc.want {
+				t.Errorf("ControlledBy = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

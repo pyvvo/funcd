@@ -10,7 +10,8 @@ import (
 
 // storeExternalKeys is the production s3gateway.ExternalKeys implementation (ADR-0135): it resolves an
 // Identity-issued access key ("FUNCID…") back to its stored secret by decoding it to (ns, name),
-// reading the Identity and its owned credential Secret from the metastore. Restart-safe and
+// reading the Identity and its owned credential Secret from the metastore: a Secret this Identity (by UID) does not
+// control resolves nothing, so a key never authenticates with another Identity's or a user's Secret. Restart-safe and
 // index-free (the access key encodes the identity), so a deleted Identity/Secret naturally stops
 // authenticating (Lookup returns ok=false). A non-Identity access key returns ok=false (the gateway
 // then falls back to its other resolvers / Forbidden).
@@ -49,6 +50,9 @@ func (e *storeExternalKeys) Lookup(access string) (secret, namespace string, ok 
 	}
 	sec, isSecret := secObj.(*v1.Secret)
 	if !isSecret {
+		return "", "", false
+	}
+	if !v1.ControlledBy(sec.OwnerReferences, v1.KindIdentity, id.UID) {
 		return "", "", false
 	}
 	raw, has := sec.Spec.Data[secretKeySecretAccessKey]
