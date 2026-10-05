@@ -397,7 +397,7 @@ func TestScenarioWakeOfServedGeneration(t *testing.T) {
 	h.reconcile(t, "agent")
 	fn := h.getFn(t, "agent")
 	require.Equal(t, v1.PhaseDeploying, fn.Status.Phase)
-	require.Equal(t, 1, fn.Status.Replicas, "the woken replica boots")
+	require.Zero(t, fn.Status.Replicas, "the woken replica boots and gets no call yet (ADR-0161)")
 	require.Equal(t, v1.ConditionTrue, h.condition(t, "agent", "ShapeValid").Status, "the generation has served")
 	rr := h.condition(t, "agent", "RevisionReady")
 	require.Equal(t, v1.ConditionFalse, rr.Status)

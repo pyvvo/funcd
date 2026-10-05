@@ -183,7 +183,7 @@ func TestADR0149_PublishedImageRecovers(t *testing.T) {
 }
 
 // scenario: registry-outage-stays-retryable — a pull that fails for any reason but absence is returned from Reconcile
-// for the controller's backoff, and the stored status is unchanged.
+// for the controller's backoff, never RuntimeUnavailable, shown as StartFailed and written once (ADR-0161).
 func TestADR0149_RegistryOutageStaysRetryable(t *testing.T) {
 	t.Parallel()
 	h := newContainerHarness(t, http.StatusOK, withPeriod)
@@ -200,8 +200,8 @@ func TestADR0149_RegistryOutageStaysRetryable(t *testing.T) {
 	require.False(t, errors.Is(err, runtime.ErrImageUnavailable))
 	before := h.getFn(t, "rb").Status
 	require.NotEqual(t, v1.PhaseFailed, before.Phase)
-	_, hasReady := before.Conditions.Get("Ready")
-	require.False(t, hasReady, "no outcome is written for an outage")
+	h.requireCondition(t, "rb", "Ready", v1.ConditionFalse, "StartFailed")
+	h.requireCondition(t, "rb", "RevisionReady", v1.ConditionFalse, "StartFailed")
 
 	require.Error(t, pass())
 	require.Equal(t, before, h.getFn(t, "rb").Status, "the stored status is unchanged")

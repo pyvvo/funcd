@@ -212,6 +212,11 @@ func (r *Reconciler) memberState(ctx context.Context, key pooling.PoolKey, membe
 	if err != nil {
 		return runtime.Instance{}, memberHealth{}, false
 	}
+	return r.memberIn(ctx, key, insts, member)
+}
+
+// memberIn reads member's entry from the running pool worker among insts, key's pool workers, as memberState does.
+func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (runtime.Instance, memberHealth, bool) {
 	for _, in := range insts {
 		if in.State != runtime.StateRunning || in.Port <= 0 {
 			continue

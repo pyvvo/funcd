@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/store"
@@ -61,6 +62,7 @@ type fakeRuntime struct {
 	exits     map[runtime.InstanceID]runtime.Exit
 	listened  map[runtime.InstanceID]bool
 	startExit map[runtime.InstanceID]runtime.Exit
+	clk       clock.Clock // ages instances, as Deps.Clock does the reconciler's reads (ADR-0161)
 	// memberStates overrides a pool member's /health/members entry (state, error); every other member reads ready.
 	memberStates map[string][2]string
 }
@@ -79,6 +81,7 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		listened:  map[runtime.InstanceID]bool{},
 		startExit: map[runtime.InstanceID]runtime.Exit{},
 		imageErr:  map[string]error{},
+		clk:       clock.System(),
 
 		memberStates: map[string][2]string{},
 	}
@@ -148,7 +151,7 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	}
 	f.specs[id] = spec
 	f.state[id] = runtime.StateCreated
-	f.created[id] = time.Now()
+	f.created[id] = f.clk.Now()
 	delete(f.stopped, id)
 	delete(f.exits, id)
 	delete(f.listened, id)
@@ -284,7 +287,7 @@ func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Durati
 	for id, spec := range f.specs {
 		if spec.Name == name && spec.Replica == 0 && !f.state[id].Terminal() {
 			f.state[id] = st
-			f.created[id] = time.Now().Add(-age)
+			f.created[id] = f.clk.Now().Add(-age)
 		}
 	}
 }
@@ -295,7 +298,7 @@ func (f *fakeRuntime) exitRevision(name, rev v1.ObjectName, i int, st runtime.St
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = st
-	f.created[id] = time.Now().Add(-age)
+	f.created[id] = f.clk.Now().Add(-age)
 }
 
 // serveRevision gives revision rev its own readiness endpoint, answering status (ADR-0143 tests tell the revisions'
@@ -440,6 +443,9 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	for _, opt := range opts {
 		opt(&deps)
 	}
+	if deps.Clock != nil {
+		rt.clk = deps.Clock
+	}
 	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
 	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact}
@@ -532,6 +538,9 @@ func newContainerHarness(t *testing.T, readyStatus int, opts ...func(*function.D
 	}
 	for _, opt := range opts {
 		opt(&deps)
+	}
+	if deps.Clock != nil {
+		rt.clk = deps.Clock
 	}
 	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)

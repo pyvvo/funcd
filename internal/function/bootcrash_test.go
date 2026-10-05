@@ -30,7 +30,7 @@ func (f *fakeRuntime) end(id runtime.InstanceID, ex runtime.Exit, age time.Durat
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id], f.exits[id] = runtime.StateFailed, ex
-	f.created[id] = time.Now().Add(-age)
+	f.created[id] = f.clk.Now().Add(-age)
 }
 
 // processHarness runs the reconciler on the process driver, every worker running shim as its shim.
