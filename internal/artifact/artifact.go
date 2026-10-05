@@ -18,6 +18,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -442,21 +443,33 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	return repo, repo.Reference.Reference, nil
 }
 
-// registryResponseTimeout bounds one wait for a registry's response headers. A registry that accepts a request and
-// never answers then fails the call, after oras-go's retries, instead of holding the reconcile that made it, and the
-// controller's only worker, forever (#697).
+// registryResponseTimeout bounds one wait for a registry's response headers.
 const registryResponseTimeout = 10 * time.Second
 
 // registryClient is oras-go's retrying auth client over a transport of its own: its default client, also used when
-// a repository's Client is nil, sends through http.DefaultTransport (#571).
+// a repository's Client is nil, sends through http.DefaultTransport (#571). A registry that accepts a request and
+// never answers fails the call after one registryResponseTimeout, instead of holding the reconcile that made it, and
+// the controller's only worker, forever (#697).
 func registryClient(cred auth.CredentialFunc) *auth.Client {
 	tr := httpx.Transport()
 	tr.ResponseHeaderTimeout = registryResponseTimeout
 	return &auth.Client{
-		Client:     &http.Client{Transport: retry.NewTransport(tr)},
+		Client:     &http.Client{Transport: &retry.Transport{Base: tr, Policy: func() retry.Policy { return registryRetry{} }}},
 		Cache:      auth.NewCache(),
 		Credential: cred,
 	}
+}
+
+// registryRetry is oras-go's default retry policy, except that a request that timed out is not retried: each retry
+// would wait as long again, six waits in all, and the reconcile that made the call requeues with backoff anyway (#697).
+type registryRetry struct{}
+
+func (registryRetry) Retry(attempt int, resp *http.Response, err error) (time.Duration, error) {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return -1, nil
+	}
+	return retry.DefaultPolicy.Retry(attempt, resp, err)
 }
 
 // layoutTarget is a local OCI layout. oras-go's oci.Store reads index.json once, when it opens, and rewrites the whole
