@@ -125,6 +125,7 @@ const isTask = (it) => it.k === 'task'
 
 const FIX_STEPS = (it) => `1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
 2. Make the smallest root-cause fix. Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
+   Then search for siblings: grep for the same faulty construct in the code paths that do the same job (the other commands, handlers, printers, parsers, gates or drivers). Fix each sibling with the same cause in this commit, with a test case for it; report a sibling with another cause in new_defects. Every case the issue describes must be fixed and tested.
 3. Revert check: write \`git show origin/main:<file>\` of each non-test file you changed to a scratch file outside the worktree and run the test with \`go test -overlay\` mapping the file to it: it must fail.
 4. Checks on the touched packages only: the regression test with -race, the packages' tests, \`go build ./...\`, and \`go vet\` and \`go tool golangci-lint run\` on the touched packages.
 5. One commit: subject \`fix(<scope>): <what is fixed>\`, a body with the cause, the fix and the test name, a line \`Fixes #${it.n}\`, then the line \`${TRAILER}\`.

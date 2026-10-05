@@ -93,6 +93,12 @@ python3 .claude/skills/issue-management/driver.py create --kind bug \
 EOF
 ```
 
+3. Attach it to its tracker (no issue without a parent; a campaign files a root tracker, then one group
+tracker per theme, then the issues): `gh api -X POST repos/pyvvo/funcd/issues/<tracker>/sub_issues -F
+sub_issue_id=$(gh api repos/pyvvo/funcd/issues/<N> --jq .id)`. After a batch, list the open issues with no
+parent (`gh api graphql` on `issues(states: OPEN) { nodes { number parent { number } } }`): only root
+trackers may remain.
+
 `create` refuses a body whose sections differ from the shape, an empty required section, a title over 80
 characters or with a `[tag]`/`type:` prefix or a trailing period, an unknown label, an open issue with the same
 title, and a local absolute path.
