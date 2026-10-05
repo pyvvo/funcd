@@ -49,3 +49,23 @@ func TestCuratedSchemaVocabulary(t *testing.T) {
 	require.True(t, cedar.KnownEntityType("KVTable"))
 	require.False(t, cedar.KnownEntityType("Secret"))
 }
+
+// The entity of an `is … in` scope is type-checked like an `==` or `in` scope's entity.
+func TestIssue676_IsInScopeUnknownEntityTypeRejected(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, cedar.ValidateCedar(`permit(principal, action == Action::"kv::read", resource is KVTable in KVStore::"team-b/x");`))
+
+	cases := map[string]string{
+		"resource":  `permit(principal, action == Action::"kv::read", resource is KVTable in Foo::"team-b/x");`,
+		"principal": `permit(principal is Function in Foo::"team-b/x", action == Action::"kv::read", resource);`,
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := cedar.ValidateCedar(text)
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, `unknown entity type "Foo"`)
+		})
+	}
+}
