@@ -39,7 +39,8 @@ func BinDir() string { return filepath.Join(FuncdRoot, "bin") }
 type Manager interface {
 	// Ensure returns the containerd socket the driver should dial: it starts + supervises a
 	// private containerd (default) and imports the embedded images, OR returns ExternalSocket
-	// as-is when --containerd is set. crun is laid down so the runc-v2 shim finds it.
+	// as-is when --containerd is set. crun is laid down so the runc-v2 shim finds it. ctx bounds the
+	// start-up only: a private containerd runs until Close.
 	Ensure(ctx context.Context) (socket string, err error)
 	// Close stops a supervised private containerd; a no-op for the external-socket path.
 	Close() error
