@@ -282,10 +282,10 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 			return "", "", fault.Wrapf(rerr, fault.Internal, op, "read %q", rel)
 		}
 		if perr := view.Put(ctx, sp+rel, data); perr != nil {
-			// An object over the Bucket's maxObjectBytes (blob.Capped: Forbidden, or the size kind
-			// PayloadTooLarge), or a key the substrate cannot store (Invalid), fails every retry until the
-			// spec or the Bucket changes (MapBucket).
-			if k := fault.KindOf(perr); k == fault.Forbidden || k == fault.PayloadTooLarge || k == fault.Invalid {
+			// An object over the Bucket's maxObjectBytes (blob.Capped: PayloadTooLarge), or a key the
+			// substrate cannot store (Invalid), fails every retry until the spec or the Bucket changes
+			// (MapBucket).
+			if k := fault.KindOf(perr); k == fault.PayloadTooLarge || k == fault.Invalid {
 				return "MaterializeFailed", perr.Error(), nil
 			}
 			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", sp+rel)

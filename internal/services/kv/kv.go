@@ -110,6 +110,9 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if err != nil {
 		return nil, false, err
 	}
+	if err := checkKeyLimit("services.kv.get", key); err != nil {
+		return nil, false, err
+	}
 	return f.kv.Get(ctx, tableKey(ns, b, key))
 }
 
@@ -121,10 +124,10 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 		return err
 	}
 	if int64(len(value)) > b.MaxValueBytes {
-		return fault.Invalidf("services.kv.put", "value (%d bytes) exceeds the store cap (%d bytes)", len(value), b.MaxValueBytes)
+		return fault.PayloadTooLargef("services.kv.put", "value (%d bytes) exceeds the store cap (%d bytes)", len(value), b.MaxValueBytes)
 	}
 	if len(key) > b.MaxKeyBytes {
-		return fault.Invalidf("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
+		return fault.PayloadTooLargef("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
 	}
 	return f.kv.Put(ctx, tableKey(ns, b, key), value)
 }
@@ -135,7 +138,19 @@ func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 	if err != nil {
 		return err
 	}
+	if err := checkKeyLimit("services.kv.delete", key); err != nil {
+		return err
+	}
 	return f.kv.Delete(ctx, tableKey(ns, b, key))
+}
+
+// checkKeyLimit refuses a key no store can hold (ADR-0148). Get and Delete check this limit, not the
+// store's maxKeyBytes, so lowering that cap never strands a stored key.
+func checkKeyLimit(op, key string) error {
+	if len(key) > v1.MaxKeyBytesLimit {
+		return fault.PayloadTooLargef(op, "key (%d bytes) exceeds the largest storable key (%d bytes)", len(key), v1.MaxKeyBytesLimit)
+	}
+	return nil
 }
 
 // List returns the alias's keys under prefix. Like Get, listing is DEFAULT-DENY: the PDP must permit

@@ -43,7 +43,7 @@ type Config struct {
 	RatePerMin   int   // token-bucket refill (requests per minute); 0 ⇒ rate limit off
 	Burst        int   // bucket depth; 0 ⇒ = RatePerMin
 	Key          Key   // clientIP (default) | function
-	MaxBodyBytes int64 // 413 over this (Content-Length); 0 ⇒ size cap off
+	MaxBodyBytes int64 // 413 over this (Content-Length, or a chunked body unless the upstream already answered); 0 ⇒ size cap off
 	MaxInFlight  int   // 503 over this many concurrent; 0 ⇒ concurrency cap off
 	MaxKeys      int   // LRU cap on the rate-limiter key map; 0 ⇒ defaultMaxKeys
 }
@@ -74,7 +74,8 @@ func Chain(cfg Config) func(http.Handler) http.Handler {
 					fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", cfg.MaxBodyBytes))
 					return
 				}
-				// Defense-in-depth for a lying/chunked length (best-effort; may trip downstream).
+				// A lying or chunked length: the read past the cap answers 413 downstream, unless the
+				// upstream already answered.
 				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodyBytes)
 			}
 			if sem != nil {

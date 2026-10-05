@@ -286,10 +286,12 @@ func TestIssue497_RunFailsWhenS3GatewayCannotBind(t *testing.T) {
 	}
 }
 
-// TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite: a Bucket's spec.maxObjectBytes caps every write into
-// it (ADR-0080). Through the real S3 gateway the owner's PutObject past the cap is 403 and stores nothing, and
-// one at the cap lands; the Bucket view context.blob and the site reconciler write through refuses it too.
-func TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite(t *testing.T) {
+// scenario: s3-over-cap-is-entity-too-large (ADR-0148)
+// TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite: a Bucket's spec.maxObjectBytes caps every write into
+// it (ADR-0080). Through the real S3 gateway the owner's PutObject past the cap is S3 EntityTooLarge (400, as
+// AWS S3), not AccessDenied, and stores nothing, and one at the cap lands; the Bucket view context.blob and
+// the site reconciler write through refuses it as PayloadTooLarge.
+func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	p, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
@@ -336,8 +338,13 @@ func TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite(t *testing.T) {
 	}
 
 	var re interface{ HTTPStatusCode() int }
-	if perr := put("raw/big.parquet", 20); !errors.As(perr, &re) || re.HTTPStatusCode() != http.StatusForbidden {
-		t.Fatalf("a 20-byte PutObject into a Bucket with maxObjectBytes=16 must be 403, got %v", perr)
+	var coded interface{ ErrorCode() string }
+	perr := put("raw/big.parquet", 17)
+	if !errors.As(perr, &re) || re.HTTPStatusCode() != http.StatusBadRequest {
+		t.Fatalf("a 17-byte PutObject into a Bucket with maxObjectBytes=16 must be 400, got %v", perr)
+	}
+	if !errors.As(perr, &coded) || coded.ErrorCode() != "EntityTooLarge" {
+		t.Fatalf("an over-cap PutObject must be EntityTooLarge, got %v", perr)
 	}
 	view, ok := s3BucketFor(p.cfg.blob, st)("default", "lake")
 	if !ok {
@@ -349,7 +356,7 @@ func TestIssue109_BucketMaxObjectBytesForbidsOversizeWrite(t *testing.T) {
 	if perr := put("raw/ok.parquet", 16); perr != nil {
 		t.Fatalf("an object at the cap must land: %v", perr)
 	}
-	if perr := view.Put(ctx, "raw/direct.parquet", make([]byte, 20)); fault.KindOf(perr) != fault.Forbidden {
-		t.Fatalf("the Bucket view must refuse an over-cap Put as Forbidden, got %v", perr)
+	if perr := view.Put(ctx, "raw/direct.parquet", make([]byte, 17)); fault.KindOf(perr) != fault.PayloadTooLarge {
+		t.Fatalf("the Bucket view must refuse an over-cap Put as PayloadTooLarge, got %v", perr)
 	}
 }

@@ -6,9 +6,10 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// Capped returns a view of inner whose Put refuses an object larger than maxBytes with fault.Forbidden:
-// the Bucket.spec.maxObjectBytes per-object policy (ADR-0080). It also refuses to sign a PUT URL, since the
-// upload then bypasses Put and SignOptions carries no size limit to bind it. maxBytes <= 0 returns inner
+// Capped returns a view of inner whose Put refuses an object larger than maxBytes with
+// fault.PayloadTooLarge: the Bucket.spec.maxObjectBytes per-object policy (ADR-0080, ADR-0148). It also
+// refuses to sign a PUT URL with fault.Forbidden, since the upload then bypasses Put and SignOptions
+// carries no size limit to bind it. maxBytes <= 0 returns inner
 // unchanged. It forwards the optional RangeReader capability when inner implements it.
 func Capped(inner Bucket, maxBytes int64) Bucket {
 	if maxBytes <= 0 {
@@ -28,7 +29,7 @@ type cappedBucket struct {
 
 func (c *cappedBucket) Put(ctx context.Context, key string, data []byte) error {
 	if int64(len(data)) > c.max {
-		return fault.Forbiddenf("blob.Capped.Put", "object %q is %d bytes, over the bucket's maxObjectBytes (%d)", key, len(data), c.max)
+		return fault.PayloadTooLargef("blob.Capped.Put", "object %q is %d bytes, over the bucket's maxObjectBytes (%d)", key, len(data), c.max)
 	}
 	return c.Bucket.Put(ctx, key, data)
 }

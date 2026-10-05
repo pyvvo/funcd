@@ -29,7 +29,8 @@ const (
 	Unavailable Kind = "unavailable"
 	// ResourceExhausted means a rate/quota limit was exceeded (429 Too Many Requests).
 	ResourceExhausted Kind = "resource_exhausted"
-	// PayloadTooLarge means the request body exceeds the allowed size (413 Content Too Large).
+	// PayloadTooLarge means a payload, key, object or record is over a size cap funcd enforces (413
+	// Content Too Large when it answers HTTP).
 	PayloadTooLarge Kind = "payload_too_large"
 	// Internal means an unexpected internal error occurred.
 	Internal Kind = "internal"

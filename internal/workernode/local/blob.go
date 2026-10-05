@@ -33,7 +33,7 @@ type Blob interface {
 // registerBlob adds the blob verbs to mux — GET/PUT/DELETE /blob/{binding}/{key...}, GET /blob/{binding}
 // (list, ?prefix=…), and GET /blob/{binding}/{key...}?sign=1 (a presigned URL; ?method=GET|PUT|DELETE,
 // ?expiry=<dur>) — routed to b with the sandbox's fixed namespace + function (ADR-0127/0073). Errors are
-// RFC 9457 (binding/owner denial → 403, missing object → 404, over-cap/bad input → 413/422, engine → 500).
+// RFC 9457 (binding/owner denial → 403, missing object → 404, over a cap → 413, bad input → 400, engine → 500).
 func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function

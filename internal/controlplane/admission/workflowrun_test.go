@@ -3,6 +3,7 @@ package admission_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -23,8 +24,9 @@ func runObj(input string) *v1.WorkflowRun {
 	return r
 }
 
-// scenario core: workflowrun-payload — a run whose spec.input exceeds the cap is rejected (Invalid);
-// one within the cap is admitted; limit ≤ 0 disables the check.
+// scenario core: workflowrun-payload — a run whose spec.input exceeds the cap is rejected; one within the
+// cap is admitted; limit ≤ 0 disables the check.
+// scenario: workflowrun-payload-over-cap (ADR-0148) — the denial is PayloadTooLarge, rendered 413.
 func TestWorkflowRunPayloadAdmission(t *testing.T) {
 	t.Parallel()
 	a := admission.NewWorkflowRunPayloadAdmission(64)
@@ -38,7 +40,10 @@ func TestWorkflowRunPayloadAdmission(t *testing.T) {
 
 	big := `{"data":"` + strings.Repeat("x", 200) + `"}`
 	_, err = a.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindWorkflowRun.GVK(), Object: runObj(big)})
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "an over-cap input ⇒ Invalid")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(err), "an over-cap input ⇒ PayloadTooLarge")
+	p := fault.ToProblem(err)
+	require.Equal(t, http.StatusRequestEntityTooLarge, p.Status)
+	require.Equal(t, "urn:funcd:problem:payload-too-large", p.Type)
 
 	off := admission.NewWorkflowRunPayloadAdmission(0)
 	_, err = off.Admit(ctx, admission.Request{Operation: admission.Create, GVK: v1.KindWorkflowRun.GVK(), Object: runObj(big)})

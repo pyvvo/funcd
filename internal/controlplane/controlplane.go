@@ -312,9 +312,13 @@ func installFaultErrors() {
 	faultErrorsOnce.Do(func() { huma.NewError = newFaultError })
 }
 
-// newFaultError builds huma's own errors. No fault Kind decided them, so the type is RFC 9457's
-// about:blank, and each validation detail joins the detail that clients show.
+// newFaultError builds huma's own errors. A body over MaxBodyBytes is funcd's PayloadTooLarge problem
+// (ADR-0148); no fault Kind decided the others, so their type is RFC 9457's about:blank, and each
+// validation detail joins the detail that clients show.
 func newFaultError(status int, msg string, errs ...error) huma.StatusError {
+	if status == http.StatusRequestEntityTooLarge {
+		return &faultError{Problem: fault.ToProblem(fault.PayloadTooLargef("controlplane.body", "%s", msg))}
+	}
 	var details []string
 	for _, err := range errs {
 		var d huma.ErrorDetailer

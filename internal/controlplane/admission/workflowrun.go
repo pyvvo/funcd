@@ -38,7 +38,7 @@ func (a workflowRunPayload) Admit(_ context.Context, req Request) (v1.Object, er
 		return req.Object, nil
 	}
 	if n := int64(len(run.Spec.Input)); n > a.limit {
-		return nil, fault.Invalidf(op, "run input %d bytes exceeds the payload limit %d — pass large data by reference on the blob substrate", n, a.limit)
+		return nil, fault.PayloadTooLargef(op, "run input %d bytes exceeds the payload limit %d — pass large data by reference on the blob substrate", n, a.limit)
 	}
 	return req.Object, nil
 }
