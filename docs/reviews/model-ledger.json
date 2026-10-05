@@ -9718,5 +9718,50 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0192-implementation-claude-opus-5-5.md",
     "notes": "pass: asleep row, desiredReplicas and finish match the Contracts exactly; 5 overlay mutants all killed (main's function.go reproduces the #769 Idle/Degraded loop); Minor(model): dependency-returns 'pending' subtest snapshots creates() after the decisive pass, so a reconciler boot (m5) survives it; Linux lint via go tool is env-blocked (exec format), rerun with a host binary: 0 issues"
+  },
+  {
+    "date": "2026-10-05",
+    "adr": "0191",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0191-implementation-claude-opus-5-5.md",
+    "notes": "loop 1 (a492b15a); all Contracts + Decisions 1-6 hold; WriteStall outermost on the listener chain, internal chain untouched; build/vet/lint clean also Linux; gateway+dataplane+pkg/funcd -race ok, scenario tests -count=3 ok; 5/5 scenario tests pass (e2e compiled, not run); mutants 4/4 killed (no-op WriteStall gives the 503 prove-first reason, hijacked flag, per-piece arm, deferred arm). n1 [adr] the 550 B/s slowest-client figure and the plan's 32 KiB per S/2 live-client test do not hold (cut 5/5); the model's 128 KiB per S/4 departure is justified; n2 [model] TestWriteStallLiveClientNotCut's 1 MiB body ends within one S, so the per-piece mutant survives it (still killed by ArmSequence)."
+  },
+  {
+    "date": "2026-10-05",
+    "adr": "0191",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0191-implementation-claude-opus-5-5-2.md",
+    "notes": "loop 2 (c783491e, set-then-clear rework); build/vet/lint clean also Linux; gateway+dataplane+pkg/funcd -race ok, scenarios -count=3 ok; e2e RealChain passes (62.5 s) and fails on the unfixed chain with the 503 ceiling detail; mutants 3/3 killed (left-armed -> h2 quiet stream INTERNAL_ERROR, per-call arm -> LiveClientNotCut, write-after-clear -> ArmSequence/Cuts/503). M1 [model] on HTTP/2 the post-handler arm can land after closeStream once a clear has nil'd the timer: 51-66 of 200 flushing responses got a stray RST_STREAM INTERNAL_ERROR on the closed stream after S (0 with loop 1's no-clear behavior), contradicting the amended Decision 2; n1 [adr] 550 B/s figure in Consequences (carried)."
+  },
+  {
+    "date": "2026-10-05",
+    "adr": "0191",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0191-implementation-claude-opus-5-5-3.md",
+    "notes": "loop 3 (8956e244, clear = 100 y ahead, request starts cleared); loop 2 M1 fixed; build/vet/lint clean also Linux; gateway+dataplane+pkg/funcd -race ok, scenarios + 6 unit tests -count=3 ok; e2e RealChain PASS 66.8 s; mutants 3/3 killed (left-armed -> h2 quiet stream INTERNAL_ERROR; zero-time clear -> EndedStreamNotReset 3/3 + ArmSequence; no initial clear -> ArmSequence); probe 0 stray RST in 12,000 h2 streams under CPU load (zero-time mutant fails within 2 s). n1 [adr] 550 B/s figure in Consequences (carried); note [adr, unscored] the initial clear is also async, so 'timer from the start' holds in practice, not by net/http contract."
   }
 ]

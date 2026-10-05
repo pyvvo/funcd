@@ -1,6 +1,7 @@
 # ADR-0151: External invoke deadline — a per-Function limit on the response start, 504 on expiry
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0191](0191-response-write-stall-timeout.md) (2026-10-05) — Decision 2 ("After headers nothing is cut.") and Scope *Out* (bounds after the response starts): a response write that the client does not accept for 60 s ends the connection.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, invoke, timeout, activator, errors, rfc9457, shim, pool
