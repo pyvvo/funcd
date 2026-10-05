@@ -190,7 +190,7 @@ func (g *gw) seed(t *testing.T, ns, bucket, key string, data []byte) {
 	t.Helper()
 	b, ok := g.buckets[ns+"/"+bucket]
 	require.True(t, ok, "no substrate bucket %s/%s", ns, bucket)
-	require.NoError(t, b.Put(context.Background(), key, data))
+	require.NoError(t, b.Put(context.Background(), key, data, blob.PutOptions{}))
 }
 
 func freeAddr(t *testing.T) string {

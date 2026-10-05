@@ -159,11 +159,10 @@ func mapBlobErr(err error) error {
 // --- Reads -----------------------------------------------------------------------
 
 // GetObject serves a GET (ADR-0080), honoring a byte-range via GetObjectInput.Range.
-// Last-Modified is the object's ModTime from blob.Stat, the value HEAD and the listing report.
-// A driver implementing blob.RangeReader serves the range directly; otherwise the
-// gateway falls back to a full Get + slice (rangereader-fallback scenario). A ranged GET
-// sends no ETag, like HEAD: the object's MD5 needs the whole body, and an MD5 of the range
-// would change from range to range.
+// Last-Modified, the ETag, Content-Type and the user metadata come from blob.Stat, the values HEAD and the
+// listing report (ADR-0159): the ETag is the stored digest, so a ranged GET carries the object's ETag and
+// still reads only its range. A driver implementing blob.RangeReader serves the range directly; otherwise
+// the gateway falls back to a full Get + slice (rangereader-fallback scenario).
 func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.GetObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -181,7 +180,7 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 	if !found {
 		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
 	}
-	if cerr := datePreconditions(attrs.ModTime, backend.PreConditions{
+	if cerr := readPreconditions(attrs, backend.PreConditions{
 		IfMatch: in.IfMatch, IfNoneMatch: in.IfNoneMatch, IfModSince: in.IfModifiedSince, IfUnmodeSince: in.IfUnmodifiedSince,
 	}); cerr != nil {
 		return nil, cerr
@@ -198,17 +197,16 @@ func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.Ge
 		return nil, err
 	}
 
-	out := &awss3.GetObjectOutput{
+	return &awss3.GetObjectOutput{
 		Body:          io.NopCloser(bytes.NewReader(data)),
 		ContentLength: ptr(int64(len(data))),
 		ContentRange:  contentRange,
 		LastModified:  ptr(attrs.ModTime.UTC()),
 		AcceptRanges:  ptr("bytes"),
-	}
-	if contentRange == nil {
-		out.ETag = ptr(etag(data))
-	}
-	return out, nil
+		ETag:          backend.GetPtrFromString(objectETag(attrs.MD5)),
+		ContentType:   backend.GetPtrFromString(attrs.ContentType),
+		Metadata:      attrs.Metadata,
+	}, nil
 }
 
 // getRange serves a Range header the way S3 does (RFC 9110 §14): the object size bounds
@@ -250,8 +248,8 @@ func getRange(ctx context.Context, sub blob.Bucket, key, header string, size int
 }
 
 // HeadObject serves a HEAD (ADR-0080): a read-authorized metadata probe answered from the object's
-// attributes, never its body. It reports no ETag, like the listing: the MD5 needs the whole body, and a HEAD
-// ETag that differs from a ranged GET's fails DuckDB's per-read ETag check.
+// attributes, never its body. Its ETag is the stored digest a GET and the listing report (ADR-0159), so
+// DuckDB's per-read ETag check holds from the first HEAD.
 func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.HeadObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -268,7 +266,7 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	if !found {
 		return nil, s3err.GetAPIError(s3err.ErrNoSuchKey)
 	}
-	if cerr := datePreconditions(attrs.ModTime, backend.PreConditions{
+	if cerr := readPreconditions(attrs, backend.PreConditions{
 		IfMatch: in.IfMatch, IfNoneMatch: in.IfNoneMatch, IfModSince: in.IfModifiedSince, IfUnmodeSince: in.IfUnmodifiedSince,
 	}); cerr != nil {
 		return nil, cerr
@@ -276,6 +274,9 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	return &awss3.HeadObjectOutput{
 		ContentLength: ptr(attrs.Size),
 		LastModified:  ptr(attrs.ModTime.UTC()),
+		ETag:          backend.GetPtrFromString(objectETag(attrs.MD5)),
+		ContentType:   backend.GetPtrFromString(attrs.ContentType),
+		Metadata:      attrs.Metadata,
 	}, nil
 }
 
@@ -304,7 +305,7 @@ func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix
 			Key:          ptr(k),
 			Size:         ptr(it.Size),
 			LastModified: ptr(it.ModTime),
-			ETag:         ptr(""),
+			ETag:         backend.GetPtrFromString(objectETag(it.MD5)),
 			StorageClass: awstypes.ObjectStorageClassStandard,
 		})
 	}
@@ -451,8 +452,9 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 // --- Writes ----------------------------------------------------------------------
 
 // PutObject writes an object (ADR-0080): s3::write, single-writer (owner). The body is
-// buffered (bounded by maxUpload) then Put once — the blob port has no streaming seam.
-// If-None-Match: * makes the write create-only (createOnly).
+// buffered (bounded by maxUpload) then Put once with its Content-Type and user metadata — the blob
+// port has no streaming seam. If-Match and If-None-Match are evaluated by writePreconditions after
+// buffering, immediately before the Put (ADR-0159).
 func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -463,14 +465,14 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 		return s3response.PutObjectOutput{}, err
 	}
 	key := blobKey(prefix, object)
-	if cerr := createOnly(ctx, sub, key, in.IfNoneMatch); cerr != nil {
-		return s3response.PutObjectOutput{}, cerr
-	}
 	data, rerr := b.readCapped(in.Body)
 	if rerr != nil {
 		return s3response.PutObjectOutput{}, rerr
 	}
-	if perr := sub.Put(ctx, key, data); perr != nil {
+	if cerr := writeConditions(ctx, sub, key, in.IfMatch, in.IfNoneMatch); cerr != nil {
+		return s3response.PutObjectOutput{}, cerr
+	}
+	if perr := sub.Put(ctx, key, data, blob.PutOptions{ContentType: deref(in.ContentType), Metadata: in.Metadata}); perr != nil {
 		return s3response.PutObjectOutput{}, mapBlobErr(perr)
 	}
 	return s3response.PutObjectOutput{ETag: etag(data)}, nil
@@ -662,9 +664,10 @@ func (b *be) GetBucketVersioning(context.Context, string) (s3response.GetBucketV
 
 // datePreconditions evaluates If-Unmodified-Since (412) and If-Modified-Since (304) against modTime
 // at the one-second precision of the Last-Modified header, in RFC 9110 §13.2.2 order. A date condition
-// is skipped when the ETag condition that takes precedence over it is present: evaluating that one
-// needs the object's ETag (issue 111). versitygw's EvaluatePreconditions is not used because it fails an
-// If-Unmodified-Since equal to Last-Modified.
+// is skipped when the ETag condition that takes precedence over it under §13.2.2 is present
+// (If-Match over If-Unmodified-Since, If-None-Match over If-Modified-Since); readPreconditions evaluates
+// that one. versitygw's EvaluatePreconditions is not used because it fails an If-Unmodified-Since equal
+// to Last-Modified.
 func datePreconditions(modTime time.Time, pc backend.PreConditions) error {
 	modTime = modTime.Truncate(time.Second)
 	if pc.IfMatch == nil && pc.IfUnmodeSince != nil && modTime.After(*pc.IfUnmodeSince) {
@@ -676,18 +679,18 @@ func datePreconditions(modTime time.Time, pc backend.PreConditions) error {
 	return nil
 }
 
-// createOnly refuses a write under If-None-Match: * when key exists (412 PreconditionFailed). The
-// check and the Put are not atomic, as the blob port has no conditional Put. If-Match and an ETag
-// If-None-Match stay unevaluated: they need the object's ETag (issue 111).
-func createOnly(ctx context.Context, sub blob.Bucket, key string, ifNoneMatch *string) error {
-	if deref(ifNoneMatch) != "*" {
+// writeConditions answers a write's If-Match and If-None-Match from the attributes of the object at key
+// (writePreconditions), reading them only when one is set. The check and the Put are not atomic, as the
+// blob port has no conditional Put (ADR-0159).
+func writeConditions(ctx context.Context, sub blob.Bucket, key string, ifMatch, ifNoneMatch *string) error {
+	if ifMatch == nil && ifNoneMatch == nil {
 		return nil
 	}
-	_, found, err := blob.Stat(ctx, sub, key)
+	attrs, found, err := blob.Stat(ctx, sub, key)
 	if err != nil {
 		return mapBlobErr(err)
 	}
-	return backend.EvaluateObjectPutPreconditions("", nil, ifNoneMatch, found)
+	return writePreconditions(attrs, found, ifMatch, ifNoneMatch)
 }
 
 // readCapped reads r into memory bounded by maxUpload (fail-closed: a body past the

@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -34,18 +35,18 @@ func TestIssue30_AbandonedMultipartUploadExpires(t *testing.T) {
 	m.clock = clk
 	at := uploadTarget{ns: "default", bucket: "lakehouse", key: "bronze/a.parquet"}
 
-	abandoned := m.create(at)
+	abandoned := m.create(at, blob.PutOptions{})
 	require.NoError(t, m.putPart(abandoned, at, 1, []byte("held"), 1024))
-	live := m.create(at)
+	live := m.create(at, blob.PutOptions{})
 
 	clk.t = clk.t.Add(multipartIdleExpiry / 2)
-	idle := m.create(at)
+	idle := m.create(at, blob.PutOptions{})
 
 	clk.t = clk.t.Add(multipartIdleExpiry/2 - time.Second)
 	require.NoError(t, m.putPart(live, at, 1, []byte("fresh"), 1024))
 
 	clk.t = clk.t.Add(2 * time.Second)
-	m.create(at)
+	m.create(at, blob.PutOptions{})
 
 	_, ok := m.parts(abandoned, at)
 	require.False(t, ok, "an upload idle past multipartIdleExpiry must be dropped")
@@ -100,4 +101,13 @@ func TestIssue381_NoBlankVarKeepsImportAlive(t *testing.T) {
 			return true
 		})
 	}
+}
+
+// ADR-0159: an object without a digest has no ETag, and a digest's ETag is the form etag gives its bytes.
+func TestObjectETagEmptyWithoutDigest(t *testing.T) {
+	t.Parallel()
+	require.Empty(t, objectETag(nil))
+	require.Empty(t, objectETag([]byte{}))
+	require.Equal(t, `"00ff"`, objectETag([]byte{0x00, 0xff}))
+	require.Equal(t, `"5d41402abc4b2a76b9719d911017c592"`, etag([]byte("hello")))
 }

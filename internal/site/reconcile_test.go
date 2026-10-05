@@ -34,11 +34,11 @@ type recorder struct {
 	puts []string
 }
 
-func (r *recorder) Put(ctx context.Context, key string, data []byte) error {
+func (r *recorder) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	r.mu.Lock()
 	r.puts = append(r.puts, key)
 	r.mu.Unlock()
-	return r.Bucket.Put(ctx, key, data)
+	return r.Bucket.Put(ctx, key, data, opts)
 }
 
 func (r *recorder) reset() { r.mu.Lock(); r.puts = nil; r.mu.Unlock() }
@@ -342,7 +342,7 @@ func TestScenarioPartialUnpackRecovers(t *testing.T) {
 	h.deploy("bi")
 	// The crash: app.js landed (with stale bytes) but index.html never did.
 	partial := "s3/" + string(ns) + "/" + bucket + "/bi/" + slug(b) + "/app.js"
-	require.NoError(t, h.shared.Put(h.ctx, partial, []byte("stale")))
+	require.NoError(t, h.shared.Put(h.ctx, partial, []byte("stale"), blob.PutOptions{}))
 	h.shared.reset()
 
 	h.apply("bi", func(s *v1.Site) { s.Spec.Image = h.ref("v2") })
@@ -628,7 +628,7 @@ func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
 	require.NoError(t, err)
 	view, ok := h.resolve(ns, bucket)
 	require.True(t, ok)
-	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(view.Put(h.ctx, "probe", make([]byte, 65))), "blob.Capped refuses with PayloadTooLarge")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(view.Put(h.ctx, "probe", make([]byte, 65), blob.PutOptions{})), "blob.Capped refuses with PayloadTooLarge")
 	h.seedSite("bi", "v1", nil)
 	h.seedSite("other", "v1", func(s *v1.Site) { s.Spec.Bucket.Name = "elsewhere"; s.Spec.Prefix = "other" })
 

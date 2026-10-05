@@ -23,6 +23,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus/nats"
@@ -227,7 +228,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 		st = store.New(memory.New())
 		// Written straight into the substrate: the per-namespace view the S3 frontend, the static handler, and the
 		// Site reconciler share.
-		require.NoError(t, bucket.Put(ctx, "s3/"+siteNS+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows")))
+		require.NoError(t, bucket.Put(ctx, "s3/"+siteNS+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows"), blob.PutOptions{}))
 
 		siteObj := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
 		siteObj.Name, siteObj.Namespace, siteObj.ResourceGroup = "bi", siteNS, "rg1"
@@ -324,7 +325,7 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 
 	const ns = "openteam"
 	st := store.New(memory.New())
-	require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows")))
+	require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows"), blob.PutOptions{}))
 
 	mkSite := func(name, ref string, mutate func(*v1.Site)) {
 		s := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}

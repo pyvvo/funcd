@@ -28,7 +28,7 @@ func (b *mapBucket) Get(_ context.Context, key string) ([]byte, error) {
 	}
 	return v, nil
 }
-func (b *mapBucket) Put(_ context.Context, key string, data []byte) error {
+func (b *mapBucket) Put(_ context.Context, key string, data []byte, _ iblob.PutOptions) error {
 	b.m[key] = data
 	return nil
 }
@@ -46,6 +46,13 @@ func (b *mapBucket) List(_ context.Context, prefix string) ([]iblob.Attributes, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
+}
+func (b *mapBucket) Attributes(_ context.Context, key string) (iblob.Attributes, error) {
+	v, ok := b.m[key]
+	if !ok {
+		return iblob.Attributes{}, fault.NotFoundf("mapBucket.Attributes", "key %q", key)
+	}
+	return iblob.Attributes{Key: key, Size: int64(len(v))}, nil
 }
 func (b *mapBucket) SignedURL(_ context.Context, key string, opts iblob.SignOptions) (string, error) {
 	return "https://signed.example/" + key + "?method=" + string(opts.Method), nil

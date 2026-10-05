@@ -33,7 +33,7 @@ func TestIssue108_StaticPathDecodedOnce(t *testing.T) {
 		"web/index.html":  "INDEX",
 		"secret-file.txt": "TOP-SECRET",
 	} {
-		require.NoError(t, b.Put(context.Background(), k, []byte(v)))
+		require.NoError(t, b.Put(context.Background(), k, []byte(v), blob.PutOptions{}))
 	}
 	sh, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
 		return b, ns == "default" && bucket == "site"

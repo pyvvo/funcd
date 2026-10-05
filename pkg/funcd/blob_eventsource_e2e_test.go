@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -94,7 +95,7 @@ func TestScenarioBlobEventSourceEndToEnd(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond, "the Sensor becomes Ready (subscribed to the Fanout)")
 
 	// Write an object into the SAME substrate view external S3 writes land in (s3/<ns>/<bucket>/<key>).
-	require.NoError(t, p.cfg.blob.Put(ctx, "s3/default/raw/drop/a.parquet", []byte("parquet-bytes")))
+	require.NoError(t, p.cfg.blob.Put(ctx, "s3/default/raw/drop/a.parquet", []byte("parquet-bytes"), blob.PutOptions{}))
 
 	// The poll detects it → publishes → the Sensor starts a WorkflowRun of `ingest` with the projected key,
 	// which the engine drives to Succeeded.

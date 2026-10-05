@@ -362,7 +362,7 @@ func (c *Compactor) writeCompacted(ctx context.Context, key string, rows []Row, 
 	if err := pw.Close(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "close parquet writer")
 	}
-	if err := c.bucket.Put(ctx, key, buf.Bytes()); err != nil {
+	if err := c.bucket.Put(ctx, key, buf.Bytes(), blob.PutOptions{}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "put compacted %q", key)
 	}
 	return nil

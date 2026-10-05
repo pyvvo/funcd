@@ -56,7 +56,7 @@ type closeOrderBucket struct {
 	before, after int
 }
 
-func (b *closeOrderBucket) Put(ctx context.Context, key string, data []byte) error {
+func (b *closeOrderBucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	if strings.HasPrefix(key, "logs/") {
 		var u plog.JSONUnmarshaler
 		if logs, err := u.UnmarshalLogs(bytes.TrimSpace(data)); err == nil {
@@ -69,7 +69,7 @@ func (b *closeOrderBucket) Put(ctx context.Context, key string, data []byte) err
 			b.mu.Unlock()
 		}
 	}
-	return b.Bucket.Put(ctx, key, data)
+	return b.Bucket.Put(ctx, key, data, opts)
 }
 
 func (b *closeOrderBucket) Close() error {

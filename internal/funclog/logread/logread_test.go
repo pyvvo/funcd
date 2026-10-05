@@ -44,7 +44,7 @@ func seedCompacted(t *testing.T, b blob.Bucket, ns, fn string, windowStart int64
 	}
 	date := time.Unix(0, windowStart).UTC().Format("2006-01-02")
 	key := fmt.Sprintf("logs/%s/%s/%s/%d.parquet", ns, fn, date, windowStart)
-	if err := b.Put(context.Background(), key, buf.Bytes()); err != nil {
+	if err := b.Put(context.Background(), key, buf.Bytes(), blob.PutOptions{}); err != nil {
 		t.Fatalf("put compacted: %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func seedRaw(t *testing.T, b blob.Bucket, ns, fn, replica string, sealNano int64
 	data = append(data, '\n')
 	date := time.Unix(0, sealNano).UTC().Format("2006-01-02")
 	key := fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl", ns, fn, date, sealNano, replica)
-	if err := b.Put(context.Background(), key, data); err != nil {
+	if err := b.Put(context.Background(), key, data, blob.PutOptions{}); err != nil {
 		t.Fatalf("put raw: %v", err)
 	}
 }
@@ -243,7 +243,7 @@ func TestIssue84_UndecodableRawObjectDoesNotFailReads(t *testing.T) {
 	seedRaw(t, b, "default", "mmm", "0", base, []compact.Row{row(base, "INFO", 9, "good")})
 	date := time.Unix(0, base).UTC().Format("2006-01-02")
 	badKey := fmt.Sprintf("logs/default/mmm/%s/%d-1.otlp.jsonl", date, base+1)
-	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`)); err != nil {
+	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`), blob.PutOptions{}); err != nil {
 		t.Fatalf("put truncated raw: %v", err)
 	}
 	seedCompacted(t, b, "default", "step", base, []compact.Row{rowTrace(base, "run-A line", "step", traceA)})

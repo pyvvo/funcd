@@ -8,6 +8,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -40,7 +41,7 @@ func TestIssue58_BucketWithObjectsIsDeletionProtected(t *testing.T) {
 	require.NoError(t, err)
 
 	const key = "s3/default/lake/web/index.html"
-	require.NoError(t, p.cfg.blob.Put(ctx, key, []byte("<title>v1</title>")))
+	require.NoError(t, p.cfg.blob.Put(ctx, key, []byte("<title>v1</title>"), blob.PutOptions{}))
 
 	err = c.Delete(ctx, v1.KindBucket, "default", "lake")
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "deleting a Bucket whose prefix still holds objects ⇒ Conflict, got %v", err)

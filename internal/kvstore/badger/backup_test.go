@@ -26,7 +26,7 @@ type fakeBucket struct {
 
 func newFakeBucket() *fakeBucket { return &fakeBucket{objs: map[string][]byte{}} }
 
-func (f *fakeBucket) Put(_ context.Context, key string, data []byte) error {
+func (f *fakeBucket) Put(_ context.Context, key string, data []byte, _ blob.PutOptions) error {
 	if f.failPut != nil {
 		if err := f.failPut(key); err != nil {
 			return err
@@ -61,6 +61,16 @@ func (f *fakeBucket) Exists(_ context.Context, key string) (bool, error) {
 	defer f.mu.Unlock()
 	_, ok := f.objs[key]
 	return ok, nil
+}
+
+func (f *fakeBucket) Attributes(_ context.Context, key string) (blob.Attributes, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.objs[key]
+	if !ok {
+		return blob.Attributes{}, fault.NotFoundf("fakeBucket.Attributes", "%q not found", key)
+	}
+	return blob.Attributes{Key: key, Size: int64(len(v))}, nil
 }
 
 func (f *fakeBucket) List(_ context.Context, prefix string) ([]blob.Attributes, error) {

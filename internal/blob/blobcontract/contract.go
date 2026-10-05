@@ -6,6 +6,7 @@ package blobcontract
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // the port's content digest is MD5 (ADR-0159), not a security primitive
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -24,6 +25,59 @@ func RunContract(t *testing.T, newBucket func(t *testing.T) blob.Bucket) {
 	// Additive (ADR-0080): RangeReader is an OPTIONAL capability — skipped for a driver
 	// that does not implement it, so existing backends keep passing unchanged.
 	t.Run("range-reader-optional", func(t *testing.T) { testRangeReader(t, newBucket(t)) })
+	t.Run("attributes-digest", func(t *testing.T) { testAttributesDigest(t, newBucket(t)) })
+	t.Run("put-options-roundtrip", func(t *testing.T) { testPutOptionsRoundtrip(t, newBucket(t)) })
+	t.Run("attributes-not-found", func(t *testing.T) { testAttributesNotFound(t, newBucket(t)) })
+}
+
+// testAttributesDigest: Attributes and every List entry carry the MD5 of the written bytes (ADR-0159). It
+// SKIPS a driver that has no digest for the object (s3://), whose MD5 stays empty.
+func testAttributesDigest(t *testing.T, b blob.Bucket) {
+	ctx := context.Background()
+	val := []byte("digest me")
+	want := md5.Sum(val) //nolint:gosec // content digest, not security
+	if err := b.Put(ctx, "dg/k", val, blob.PutOptions{}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	a, err := b.Attributes(ctx, "dg/k")
+	if err != nil {
+		t.Fatalf("Attributes: %v", err)
+	}
+	if len(a.MD5) == 0 {
+		t.Skip("driver has no content digest for the object")
+	}
+	if !bytes.Equal(a.MD5, want[:]) || a.Key != "dg/k" || a.Size != int64(len(val)) {
+		t.Fatalf("Attributes: got (key %q, size %d, md5 %x) want (dg/k, %d, %x)", a.Key, a.Size, a.MD5, len(val), want)
+	}
+	items, err := b.List(ctx, "dg/")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 || !bytes.Equal(items[0].MD5, want[:]) {
+		t.Fatalf("List(dg/): got %+v want one entry with md5 %x", items, want)
+	}
+}
+
+// testPutOptionsRoundtrip: the content type and user metadata given to Put come back from Attributes.
+func testPutOptionsRoundtrip(t *testing.T, b blob.Bucket) {
+	ctx := context.Background()
+	opts := blob.PutOptions{ContentType: "application/json", Metadata: map[string]string{"owner": "etl"}}
+	if err := b.Put(ctx, "po", []byte(`{"a":1}`), opts); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	a, err := b.Attributes(ctx, "po")
+	if err != nil {
+		t.Fatalf("Attributes: %v", err)
+	}
+	if a.ContentType != "application/json" || a.Metadata["owner"] != "etl" || len(a.Metadata) != 1 {
+		t.Fatalf("Attributes: got (%q, %v) want (application/json, map[owner:etl])", a.ContentType, a.Metadata)
+	}
+}
+
+func testAttributesNotFound(t *testing.T, b blob.Bucket) {
+	if _, err := b.Attributes(context.Background(), "nope"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("Attributes(absent): kind=%v want not_found", fault.KindOf(err))
+	}
 }
 
 // testRangeReader exercises the optional blob.RangeReader capability (ADR-0080): a
@@ -37,7 +91,7 @@ func testRangeReader(t *testing.T, b blob.Bucket) {
 	}
 	ctx := context.Background()
 	val := []byte("0123456789")
-	if err := b.Put(ctx, "r", val); err != nil {
+	if err := b.Put(ctx, "r", val, blob.PutOptions{}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, err := rr.GetRange(ctx, "r", 2, 4)
@@ -62,7 +116,7 @@ func testRangeReader(t *testing.T, b blob.Bucket) {
 func testRoundtrip(t *testing.T, b blob.Bucket) {
 	ctx := context.Background()
 	val := []byte("hello funcd")
-	if err := b.Put(ctx, "k1", val); err != nil {
+	if err := b.Put(ctx, "k1", val, blob.PutOptions{}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, err := b.Get(ctx, "k1")
@@ -94,7 +148,7 @@ func testNotFound(t *testing.T, b blob.Bucket) {
 
 func testDeleteRemoves(t *testing.T, b blob.Bucket) {
 	ctx := context.Background()
-	if err := b.Put(ctx, "d", []byte("x")); err != nil {
+	if err := b.Put(ctx, "d", []byte("x"), blob.PutOptions{}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := b.Delete(ctx, "d"); err != nil {
@@ -112,7 +166,7 @@ func testListByPrefix(t *testing.T, b blob.Bucket) {
 	ctx := context.Background()
 	// insert out of lexical order so the asserted [a/1 a/2] order proves the adapter sorts.
 	for _, k := range []string{"a/2", "b/1", "a/1"} {
-		if err := b.Put(ctx, k, []byte("v")); err != nil {
+		if err := b.Put(ctx, k, []byte("v"), blob.PutOptions{}); err != nil {
 			t.Fatalf("Put(%s): %v", k, err)
 		}
 	}
@@ -134,7 +188,7 @@ func testListByPrefix(t *testing.T, b blob.Bucket) {
 
 func testSignedURLUnsupported(t *testing.T, b blob.Bucket) {
 	ctx := context.Background()
-	if err := b.Put(ctx, "s", []byte("x")); err != nil {
+	if err := b.Put(ctx, "s", []byte("x"), blob.PutOptions{}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	// memory/file backends have no signer → fault.Unavailable (ADR-0007 §3).

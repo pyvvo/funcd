@@ -18,6 +18,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/bus"
 	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
 	"github.com/pyvvo/funcd/internal/function"
@@ -69,7 +70,7 @@ func TestScenarioInMemoryPortsRoundtrip(t *testing.T) {
 	require.Equal(t, v1.ObjectName("harness"), got.GetObjectMeta().Name)
 
 	// blob: Put + Get bytes.
-	require.NoError(t, p.cfg.blob.Put(ctx, "k", []byte("v")))
+	require.NoError(t, p.cfg.blob.Put(ctx, "k", []byte("v"), blob.PutOptions{}))
 	data, err := p.cfg.blob.Get(ctx, "k")
 	require.NoError(t, err)
 	require.Equal(t, []byte("v"), data)

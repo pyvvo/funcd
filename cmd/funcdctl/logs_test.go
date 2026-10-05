@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
@@ -45,7 +46,7 @@ func TestScenarioFuncdctlLogsPrints(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
 	date := time.Unix(0, base).UTC().Format("2006-01-02")
-	require.NoError(t, bucket.Put(ctx, fmt.Sprintf("logs/team-a/fn/%s/%d.parquet", date, base), buf.Bytes()))
+	require.NoError(t, bucket.Put(ctx, fmt.Sprintf("logs/team-a/fn/%s/%d.parquet", date, base), buf.Bytes(), blob.PutOptions{}))
 
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},

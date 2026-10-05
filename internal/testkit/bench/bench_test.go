@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
@@ -83,7 +84,7 @@ func TestIssue434_FileBlobDirWithURLSyntaxOpens(t *testing.T) {
 			b, err := openFileBlob(ctx, dir)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = b.Close() })
-			require.NoError(t, b.Put(ctx, "k", []byte("v")))
+			require.NoError(t, b.Put(ctx, "k", []byte("v"), blob.PutOptions{}))
 			got, err := os.ReadFile(filepath.Join(dir, "k"))
 			require.NoError(t, err)
 			require.Equal(t, "v", string(got))

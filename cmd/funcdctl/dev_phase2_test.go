@@ -26,6 +26,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -218,7 +219,7 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.NotNil(t, inst1.kv, "--persist composes a durable KV driver")
 	require.NotNil(t, inst1.blob, "--persist composes a durable blob driver")
 	require.NoError(t, inst1.kv.Put(ctx, kvKey, kvVal))
-	require.NoError(t, inst1.blob.Put(ctx, blobKey, blobVal))
+	require.NoError(t, inst1.blob.Put(ctx, blobKey, blobVal, blob.PutOptions{}))
 	cancel1()
 	require.NoError(t, inst1.stop())
 
@@ -541,7 +542,7 @@ func TestIssue434_DurableBlobDirWithURLSyntaxOpens(t *testing.T) {
 			_, _, bkt, closeAll, err := buildPersistDrivers("t", devConfig{}, m)
 			require.NoError(t, err)
 			t.Cleanup(closeAll)
-			require.NoError(t, bkt.Put(ctx, "k", []byte("v")))
+			require.NoError(t, bkt.Put(ctx, "k", []byte("v"), blob.PutOptions{}))
 			got, err := os.ReadFile(filepath.Join(dir, "k"))
 			require.NoError(t, err)
 			require.Equal(t, "v", string(got))
