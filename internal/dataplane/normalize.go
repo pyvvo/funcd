@@ -5,6 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+
+	"golang.org/x/net/http/httpguts"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
@@ -14,6 +17,15 @@ import (
 // the optional edge body cap (internal/edge/limit) may be off, so this is an independent ceiling —
 // invoke `data` is small JSON; a body over this is rejected 413 by the caller.
 const maxNormalizeBytes = 1 << 20 // 1 MiB
+
+// bodilessUpgrade reports whether r is an HTTP/1.1 upgrade by httputil.ReverseProxy's rule (Connection
+// carries the "upgrade" token and Upgrade is non-empty) that carries no body (ContentLength 0; chunked is -1).
+// Such a request skips ADR-0134 normalization (ADR-0181).
+func bodilessUpgrade(r *http.Request) bool {
+	return r.ContentLength == 0 &&
+		httpguts.HeaderValuesContainsToken(r.Header["Connection"], "upgrade") &&
+		r.Header.Get("Upgrade") != ""
+}
 
 // cloudEventEnvelope is the CloudEvents v1.0 envelope the edge builds around a plain invoke body so
 // the shim always receives a well-formed envelope for an external JSON invoke.
