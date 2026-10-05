@@ -185,6 +185,38 @@ func (r *Reconciler) MapAccess(ctx context.Context, obj v1.Object) []controller.
 	return out
 }
 
+// MapPoolDisplaced maps a pooled Function whose spec no pass has seen yet (a create, or a change that can move it into
+// a pool key) to the asleep members of its key it pushes past the first PoolLimit names and that do not show PoolFull
+// yet. An asleep member's pass sets no requeue, so without this event it would learn it is displaced only at a call
+// (ADR-0193 Decision 4).
+func (r *Reconciler) MapPoolDisplaced(ctx context.Context, obj v1.Object) []controller.Request {
+	fn, ok := obj.(*v1.Function)
+	if !ok || fn.Spec.Pooling.Worker == "" || fn.Status.ObservedGeneration >= fn.Generation {
+		return nil
+	}
+	idx, err := r.accessIn(ctx, fn.Namespace)
+	if err != nil {
+		r.logger.Warn("could not read the access a new pool member is keyed by", "namespace", fn.Namespace, "err", err)
+		return nil
+	}
+	key, ok := r.poolKeyFor(fn, idx)
+	if !ok {
+		return nil
+	}
+	all, err := r.rankedMembers(ctx, key, idx)
+	if err != nil {
+		r.logger.Warn("could not list the members a new pool member can displace", "namespace", fn.Namespace, "err", err)
+		return nil
+	}
+	var out []controller.Request
+	for _, m := range all[min(len(all), r.poolLimit):] {
+		if c, held := m.Status.Conditions.Get(condPoolFull); r.asleep(m) && (!held || c.Status != v1.ConditionTrue) {
+			out = append(out, controller.Request{GVK: v1.KindFunction.GVK(), Namespace: m.Namespace, Name: m.Name})
+		}
+	}
+	return out
+}
+
 // poolSetKey names a pool worker's member set.
 func poolSetKey(ns v1.NamespaceName, worker v1.ObjectName) string {
 	return string(ns) + "/" + string(worker)

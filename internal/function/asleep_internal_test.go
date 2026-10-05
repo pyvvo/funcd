@@ -8,8 +8,8 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// TestAsleepDesiredReplicas is ADR-0192's contract: an asleep solo scale-to-zero Function wants no worker; ADR-0169's
-// max(1, replicas) and the static floor hold otherwise, and minReplicas: 1 and a pooled member are unchanged.
+// TestAsleepDesiredReplicas is ADR-0192's contract: an asleep scale-to-zero Function wants no worker, whatever its
+// placement (ADR-0193); ADR-0169's max(1, replicas) and the static floor hold otherwise, and minReplicas: 1 is unchanged.
 func TestAsleepDesiredReplicas(t *testing.T) {
 	t.Parallel()
 	r := &Reconciler{poolShimCommand: []string{"node", "pool.mjs"}}
@@ -38,9 +38,9 @@ func TestAsleepDesiredReplicas(t *testing.T) {
 		{"deploying-asleep", fnWith(v1.PhaseDeploying, true, 0, ""), false, 2},
 		{"min-replicas-one-failed-asleep", fnWith(v1.PhaseFailed, true, 1, ""), false, 2},
 		{"min-replicas-one-idle", fnWith(v1.PhaseIdle, false, 1, ""), false, 2},
-		{"pooled-failed-asleep", fnWith(v1.PhaseFailed, true, 0, "shared"), false, 2},
-		{"pooled-pending-asleep", fnWith(v1.PhasePending, true, 0, "shared"), false, 2},
-		{"pooled-idle", fnWith(v1.PhaseIdle, false, 0, "shared"), false, 0},
+		{"pooled-failed-asleep", fnWith(v1.PhaseFailed, true, 0, "shared"), true, 0},
+		{"pooled-pending-asleep", fnWith(v1.PhasePending, true, 0, "shared"), true, 0},
+		{"pooled-idle", fnWith(v1.PhaseIdle, false, 0, "shared"), true, 0},
 	} {
 		require.Equal(t, tc.asleep, r.asleep(tc.fn), "%s: asleep", tc.name)
 		require.Equal(t, tc.want, r.desiredReplicas(tc.fn), "%s: desiredReplicas", tc.name)

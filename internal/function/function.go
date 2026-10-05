@@ -552,13 +552,13 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		case errors.Is(err, errArtifactUnresolved):
 			// a registry that comes back or a tag pushed later raises no event on the Function, so the gate is re-checked
 			// every supervision period (issue #703)
-			return r.heldThenGate(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, idx, drainAfter, nil)
 		case errors.Is(err, errRevisionMissing):
-			return r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, idx, drainAfter, nil)
 		case errors.Is(err, errRevisionStampFailed):
 			// the status write first, then the error as a routeError, so failPass keeps the gate's status and controller
 			// backoff retries the stamp (ADR-0015; ADR-0161 Decision 1; ADR-0172 Decision 6)
-			if _, gerr := r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionStampFailed", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter, nil); gerr != nil {
+			if _, gerr := r.heldThenGate(ctx, fn, gateFailure{reason: "RevisionStampFailed", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, idx, drainAfter, nil); gerr != nil {
 				return controller.Result{}, gerr
 			}
 			return controller.Result{}, routeError{err}
@@ -580,20 +580,20 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	if perr := r.placeable(ctx, fn, fn.Spec.Image, pinned); perr != nil {
 		if errors.Is(perr, scheduler.ErrNoMatchingPlatform) {
 			msg := placementMessage(perr)
-			return r.heldThenGate(ctx, fn, gateFailure{reason: "NoMatchingPlatform", message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter, nil)
+			return r.heldThenGate(ctx, fn, gateFailure{reason: "NoMatchingPlatform", message: msg, readyMessage: msg, phase: v1.PhaseFailed}, idx, drainAfter, nil)
 		}
 		return controller.Result{}, perr
 	}
 
 	// 3. shape gate (materialization): a failure blocks Ready + programs no route.
 	if verr := r.validator.Validate(ctx, fn); verr != nil {
-		return r.heldThenGate(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter, nil)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, idx, drainAfter, nil)
 	}
 
 	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the CatalogService
 	// engine image, fails here, before pooling's assign. An absent containerd image fails at Create instead (step 4).
 	if msg, missing := r.runtimeUnavailable(fn); missing {
-		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, drainAfter, nil)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, idx, drainAfter, nil)
 	}
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
@@ -605,7 +605,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return controller.Result{}, err
 	}
 	if assign.Rejected {
-		return r.heldThenGate(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, requeue: r.supervisionPeriod}, drainAfter, nil)
+		return r.heldThenGate(ctx, fn, gateFailure{reason: "PoolFull", message: assign.Reason, readyMessage: assign.Reason, phase: v1.PhasePending, poolFull: true, requeue: r.supervisionPeriod}, idx, drainAfter, nil)
 	}
 	// Clear a stale PoolFull from a prior reconcile (e.g. the pool shrank and this member was
 	// admitted): the condition reflects current placement, never a leftover.
@@ -620,7 +620,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return controller.Result{}, err
 	}
 	if env.gate != nil {
-		return r.heldThenGate(ctx, fn, *env.gate, drainAfter, &env)
+		return r.heldThenGate(ctx, fn, *env.gate, idx, drainAfter, &env)
 	}
 
 	// 3e. held revisions (ADR-0190 Decision 6): a revision a pinned call woke boots solo beside the current one. Their
@@ -642,7 +642,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
 			// periodic pass tries the Create again, so an image that appears recovers the Function.
 			msg := withoutOp(err)
-			res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
+			res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, idx, drainAfter)
 			return afterHeld(res, gerr, herr)
 		}
 	}
@@ -715,9 +715,9 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 // heldThenGate converges fn's held revisions, then records the gate g that stopped its current revision, so that gate
 // never strands a woken held revision (ADR-0190 Decision 6). env is the bindings the pass resolved, nil when g stopped
 // it before them. A held revision's error is returned after the gate's status write.
-func (r *Reconciler) heldThenGate(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration, env *boundEnv) (controller.Result, error) {
+func (r *Reconciler) heldThenGate(ctx context.Context, fn *v1.Function, g gateFailure, idx accessIndex, drainAfter time.Duration, env *boundEnv) (controller.Result, error) {
 	heldAfter, herr := r.convergeHeld(ctx, fn, env)
-	res, err := r.gateFailed(ctx, fn, g, earliest(drainAfter, heldAfter))
+	res, err := r.gateFailed(ctx, fn, g, idx, earliest(drainAfter, heldAfter))
 	return afterHeld(res, err, herr)
 }
 
@@ -838,13 +838,14 @@ type gateFailure struct {
 	requeue         time.Duration // the gate's requeue when nothing serves (0 = none)
 }
 
-// gateFailed records a gate failure. On an asleep Function (ADR-0192) it first stops the serving and the current
-// revision's workers and marks it Asleep, then the gate's own writes apply. Otherwise it judges by the serving revision's
-// workers, a pooled member's pool worker (ADR-0161 Decision 2): while one listens and the Function was Ready it stays
-// Ready with their count; while one runs it is Degraded; otherwise the gate's own writes apply. While a worker of the
-// serving revision runs, a solo Function's current revision's workers stop if it is not the serving one (ADR-0143
-// Decision 4.6) and the pass returns after the period.
-func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration) (controller.Result, error) {
+// gateFailed records a gate failure. On an asleep Function, whatever its placement (ADR-0192, ADR-0193), it first
+// releases its workers: the serving and the current revision's workers stop, and a pooled member's pool worker stops
+// once no admitted member of its key wants one (idx is the pass's access index); it marks it Asleep, then the gate's own
+// writes apply. Otherwise it judges by the serving revision's workers, a pooled member's pool worker (ADR-0161 Decision
+// 2): while one listens and the Function was Ready it stays Ready with their count; while one runs it is Degraded;
+// otherwise the gate's own writes apply. While a worker of the serving revision runs, a solo Function's current
+// revision's workers stop if it is not the serving one (ADR-0143 Decision 4.6) and the pass returns after the period.
+func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, idx accessIndex, drainAfter time.Duration) (controller.Result, error) {
 	const op = "function.Reconcile"
 	gen := fn.Generation
 	fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.message, ObservedGeneration: gen})
@@ -864,6 +865,9 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 	var running, listening int
 	if r.asleep(fn) {
 		if err := r.stopAsleep(ctx, fn); err != nil {
+			return controller.Result{}, err
+		}
+		if err := r.releasePool(ctx, fn, idx); err != nil {
 			return controller.Result{}, err
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condAsleep, Status: v1.ConditionTrue, Reason: "ScaledToZero", Message: "no worker runs; a call wakes the Function"})
@@ -903,10 +907,11 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 	return controller.Result{RequeueAfter: earliest(requeue, drainAfter)}, nil
 }
 
-// asleep reports whether fn is a solo scale-to-zero Function that is asleep: its read phase is Idle, or a gate held it
-// Pending or Failed while asleep (ADR-0192). Its pass wants 0 workers, and only the activator's wake ends it.
+// asleep reports whether fn is a scale-to-zero Function that is asleep, whatever its placement: its read phase is
+// Idle, or a gate held it Pending or Failed while asleep (ADR-0192, ADR-0193). Its pass wants 0 workers, and only
+// the activator's wake ends it.
 func (r *Reconciler) asleep(fn *v1.Function) bool {
-	if fn.Spec.Scaling.MinReplicas != 0 || r.pooled(fn) {
+	if fn.Spec.Scaling.MinReplicas != 0 {
 		return false
 	}
 	switch fn.Status.Phase {
