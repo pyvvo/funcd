@@ -812,6 +812,7 @@ func (p *Platform) buildControlPlane() error {
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
 	}
+	ctrl.Watches(v1.KindFunction.GVK(), fnReconciler.MapPoolDisplaced) // an asleep member a newcomer displaces (ADR-0193)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
 	// ADR-0118 (F85): the eventing DLQ — a dedicated Badger store (in-memory when deadletterDataDir is

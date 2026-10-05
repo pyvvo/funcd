@@ -173,3 +173,53 @@ permit (principal == Function::"default/a", action, resource);`
 	require.Equal(t, []controller.Request{{GVK: v1.KindFunction.GVK(), Namespace: "other", Name: "a"}}, h.r.MapAccess(context.Background(), pol),
 		"a Policy change queues only its namespace's pooled Functions")
 }
+
+// A pooled Function whose spec no pass has seen maps to each asleep member of its key past the first PoolLimit names
+// that does not show PoolFull yet, and to nothing else (ADR-0193 Decision 4). Members rank by name: "a" (awake), the
+// newcomer "n", the member "s".
+func TestMapPoolDisplaced(t *testing.T) {
+	t.Parallel()
+	asleep := func(fn *v1.Function) {
+		fn.Spec.Scaling.MinReplicas = 0
+		fn.Status.Phase = v1.PhaseIdle
+	}
+	cases := []struct {
+		name     string
+		limit    int
+		newcomer func(*v1.Function)
+		member   func(*v1.Function)
+		want     []v1.ObjectName
+	}{
+		{name: "asleep-member-past-the-limit", limit: 1, newcomer: func(*v1.Function) {}, member: asleep, want: []v1.ObjectName{"s"}},
+		{name: "newcomer-already-observed", limit: 1, newcomer: func(fn *v1.Function) { fn.Status.ObservedGeneration = fn.Generation }, member: asleep},
+		{name: "member-awake", limit: 1, newcomer: func(*v1.Function) {}, member: func(fn *v1.Function) { fn.Status.Phase = v1.PhaseReady }},
+		{name: "member-already-pool-full", limit: 1, newcomer: func(*v1.Function) {}, member: func(fn *v1.Function) {
+			asleep(fn)
+			fn.Status.Conditions.Set(v1.Condition{Type: "PoolFull", Status: v1.ConditionTrue, Reason: "PoolFull"})
+		}},
+		{name: "member-admitted", limit: 3, newcomer: func(*v1.Function) {}, member: asleep},
+		{name: "newcomer-not-pooled", limit: 1, newcomer: func(fn *v1.Function) { fn.Spec.Pooling.Worker = "" }, member: asleep},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.PoolLimit = tc.limit })
+			for _, n := range []string{"a", "n", "s"} {
+				h.create(t, n, func(fn *v1.Function) {
+					fn.Spec.Pooling.Worker = "agents"
+					fn.Spec.Scaling.MinReplicas = 1
+				})
+			}
+			h.apply(t, "a", func(fn *v1.Function) { fn.Status.Phase = v1.PhaseReady })
+			h.apply(t, "s", tc.member)
+			newcomer := h.getFn(t, "n")
+			tc.newcomer(newcomer)
+
+			var got []v1.ObjectName
+			for _, req := range h.r.MapPoolDisplaced(context.Background(), newcomer) {
+				got = append(got, req.Name)
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

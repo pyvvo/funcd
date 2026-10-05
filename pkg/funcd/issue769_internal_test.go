@@ -49,7 +49,15 @@ type asleepRig struct {
 
 const asleepIdle = 400 * time.Millisecond
 
-func newAsleepRig(t *testing.T, referentPoll time.Duration) *asleepRig {
+func asleepPacing(referentPoll time.Duration) Pacing {
+	return Pacing{
+		ReclaimInterval: 50 * time.Millisecond, HandOutSettle: 50 * time.Millisecond, ReferentPollInterval: referentPoll,
+		EnginePollInterval: 50 * time.Millisecond, SupervisionPeriod: 100 * time.Millisecond,
+	}
+}
+
+// newAsleepRig builds the rig; opts come after its own, so a later WithRuntime or WithPacing replaces them.
+func newAsleepRig(t *testing.T, referentPoll time.Duration, opts ...Option) *asleepRig {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(srv.Close)
@@ -57,11 +65,8 @@ func newAsleepRig(t *testing.T, referentPoll time.Duration) *asleepRig {
 		rt:     &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}},
 		engine: &toggleEngine{addr: strings.TrimPrefix(srv.URL, "http://")},
 	}
-	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntime(r.rt), WithCatalogProviderRuntime(r.engine),
-		WithPacing(Pacing{
-			ReclaimInterval: 50 * time.Millisecond, HandOutSettle: 50 * time.Millisecond, ReferentPollInterval: referentPoll,
-			EnginePollInterval: 50 * time.Millisecond, SupervisionPeriod: 100 * time.Millisecond,
-		}))
+	p, err := New(append([]Option{InMemory(), WithoutLogCompaction(), WithRuntime(r.rt), WithCatalogProviderRuntime(r.engine),
+		WithPacing(asleepPacing(referentPoll))}, opts...)...)
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

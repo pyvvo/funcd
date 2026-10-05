@@ -202,6 +202,10 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if err != nil {
 		return verdict{}, 0, err
 	}
+	// the pool serves the siblings; an asleep member counts none of it, so only a call wakes it (ADR-0193)
+	if r.asleep(fn) {
+		return verdict{pooled: true}, pass.drainAfter, nil
+	}
 	v := verdict{running: pass.running, serving: servingPhase(fn.Status.Phase), retryAt: pass.retryAt, startErr: pass.startErr, pooled: true}
 	if pass.running == 0 {
 		return v, pass.drainAfter, nil
@@ -339,18 +343,7 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 	switch {
 	case desired == 0:
 		// all members idle → reclaim the pool workers (RSS→0); next request wakes the current one.
-		if runningCount(cur) > 0 {
-			if err := r.stopPool(ctx, cur); err != nil {
-				return poolPass{}, err
-			}
-		}
-		for _, in := range old {
-			if err := r.retire(ctx, in); err != nil {
-				return poolPass{}, err
-			}
-		}
-		r.endPoolDrain(key)
-		return poolPass{}, nil
+		return poolPass{}, r.reclaimPool(ctx, key, cur, old)
 	case len(cur) == 0:
 		// first bring-up, or membership/artifact changed → a worker of the current manifest beside the old ones (the host
 		// reads its manifest at boot only, ADR-0046 workaround)
@@ -483,17 +476,72 @@ func manifestNames(manifest []poolManifestEntry) []v1.ObjectName {
 	return names
 }
 
+// reclaimPool stops key's current pool workers cur, retires its old ones and ends their drain: ensurePool's desired == 0
+// branch, shared with releasePool.
+func (r *Reconciler) reclaimPool(ctx context.Context, key pooling.PoolKey, cur, old []runtime.Instance) error {
+	if runningCount(cur) > 0 {
+		if err := r.stopPool(ctx, cur); err != nil {
+			return err
+		}
+	}
+	for _, in := range old {
+		if err := r.retire(ctx, in); err != nil {
+			return err
+		}
+	}
+	r.endPoolDrain(key)
+	return nil
+}
+
+// releasePool stops fn's pool workers when no admitted member of its key wants one: the max of desiredReplicas over
+// admittedMembers is 0 (ADR-0046 Decision 6, ADR-0193). A solo Function stops nothing. The members are the stored
+// records, so the gated member counts as its read phase. The current workers are those of the manifest last built for
+// the key; before any was built, every worker counts as current, so none is removed.
+func (r *Reconciler) releasePool(ctx context.Context, fn *v1.Function, idx accessIndex) error {
+	key, ok := r.poolKeyFor(fn, idx)
+	if !ok {
+		return nil
+	}
+	members, err := r.admittedMembers(ctx, key, idx)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		if r.desiredReplicas(m) > 0 {
+			return nil
+		}
+	}
+	insts, err := r.namedInstances(ctx, key.Namespace, poolInstanceName(key))
+	if err != nil {
+		return err
+	}
+	r.poolMu.Lock()
+	hold, held := r.poolHolds[key]
+	r.poolMu.Unlock()
+	cur, old := insts, []runtime.Instance(nil)
+	if held {
+		cur, old = splitPool(insts, hold.sig)
+	}
+	return r.reclaimPool(ctx, key, cur, old)
+}
+
 // admittedMembers returns the key's admitted members (the first PoolLimit by name), the set
 // the manifest and the pool's desired replica are computed over (rejected members excluded).
 func (r *Reconciler) admittedMembers(ctx context.Context, key pooling.PoolKey, idx accessIndex) ([]*v1.Function, error) {
+	all, err := r.rankedMembers(ctx, key, idx)
+	if err != nil {
+		return nil, err
+	}
+	return all[:min(len(all), r.poolLimit)], nil
+}
+
+// rankedMembers returns every function of key in admission order (by name, ADR-0046 Decision 3).
+func (r *Reconciler) rankedMembers(ctx context.Context, key pooling.PoolKey, idx accessIndex) ([]*v1.Function, error) {
 	all, err := r.sameKeyFunctions(ctx, key, idx)
 	if err != nil {
 		return nil, err
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
-	if len(all) > r.poolLimit {
-		all = all[:r.poolLimit]
-	}
 	return all, nil
 }
 
