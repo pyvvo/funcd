@@ -566,14 +566,6 @@ func (h *storeHandlers) GetRevision(ctx context.Context, ns v1.NamespaceName, na
 	return *o.(*v1.Revision), nil
 }
 
-func (h *storeHandlers) CreateRevision(ctx context.Context, rev v1.Revision) (v1.Revision, error) {
-	o, err := h.createObj(ctx, v1.KindRevision, &rev)
-	if err != nil {
-		return v1.Revision{}, err
-	}
-	return *o.(*v1.Revision), nil
-}
-
 func (h *storeHandlers) ListRevisions(ctx context.Context, ns v1.NamespaceName) ([]v1.Revision, error) {
 	objs, err := h.listObj(ctx, v1.KindRevision, ns)
 	if err != nil {
@@ -584,18 +576,6 @@ func (h *storeHandlers) ListRevisions(ctx context.Context, ns v1.NamespaceName) 
 		out[i] = *o.(*v1.Revision)
 	}
 	return out, nil
-}
-
-func (h *storeHandlers) ReplaceRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rev v1.Revision) (v1.Revision, error) {
-	o, err := h.replaceObj(ctx, v1.KindRevision, ns, name, &rev)
-	if err != nil {
-		return v1.Revision{}, err
-	}
-	return *o.(*v1.Revision), nil
-}
-
-func (h *storeHandlers) DeleteRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindRevision, ns, name)
 }
 
 // --- Route (namespaced) ---

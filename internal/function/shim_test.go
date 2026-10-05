@@ -404,6 +404,7 @@ type shimHarness struct {
 	rt       *fakeRuntime
 	gw       gateway.Gateway
 	artifact string
+	deps     function.Deps
 }
 
 func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...func(*function.Deps)) *shimHarness {
@@ -448,7 +449,7 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	}
 	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
-	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact}
+	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact, deps: deps}
 }
 
 func (h *shimHarness) createFn(t *testing.T, name string) {
@@ -544,7 +545,7 @@ func newContainerHarness(t *testing.T, readyStatus int, opts ...func(*function.D
 	}
 	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
-	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact}
+	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact, deps: deps}
 }
 
 // scenario: spec-mounts-artifact (ADR-0032) — container mode builds the curated-image spec:

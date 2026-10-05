@@ -33,6 +33,7 @@ const gcWithin = 5 * time.Second
 type gcEnv struct {
 	ctx    context.Context
 	c      *sdk.Client
+	api    string
 	dp     string
 	kv     kvstore.KV
 	blob   blob.Bucket
@@ -72,7 +73,7 @@ func startGC(t *testing.T, opts ...funcd.Option) *gcEnv {
 	t.Cleanup(stop)
 	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
 	require.NoError(t, err)
-	e := &gcEnv{ctx: ctx, c: c, dp: "http://" + p.DataPlaneAddr(), kv: kv, blob: bucket, layout: t.TempDir(), src: t.TempDir(), stop: stop}
+	e := &gcEnv{ctx: ctx, c: c, api: "http://" + p.Addr(), dp: "http://" + p.DataPlaneAddr(), kv: kv, blob: bucket, layout: t.TempDir(), src: t.TempDir(), stop: stop}
 	writeStep(t, e.src, "echo", `export async function handle(event) { return event; }`)
 	return e
 }

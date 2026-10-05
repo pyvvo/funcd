@@ -4872,69 +4872,7 @@ paths:
           description: Error
       tags:
         - Revision
-    post:
-      operationId: createRevision
-      parameters:
-        - in: path
-          name: namespace
-          required: true
-          schema:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Revision"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Revision"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/FaultError"
-          description: Error
-      tags:
-        - Revision
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/revisions/{name}:
-    delete:
-      operationId: deleteRevision
-      parameters:
-        - in: path
-          name: namespace
-          required: true
-          schema:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-        - in: path
-          name: name
-          required: true
-          schema:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-      responses:
-        "204":
-          description: No Content
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/FaultError"
-          description: Error
-      tags:
-        - Revision
     get:
       operationId: getRevision
       parameters:
@@ -4954,46 +4892,6 @@ paths:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Revision"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/FaultError"
-          description: Error
-      tags:
-        - Revision
-    put:
-      operationId: replaceRevision
-      parameters:
-        - in: path
-          name: namespace
-          required: true
-          schema:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-        - in: path
-          name: name
-          required: true
-          schema:
-            maxLength: 63
-            minLength: 1
-            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
-            type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Revision"
-        required: true
       responses:
         "200":
           content:

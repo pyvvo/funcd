@@ -455,3 +455,28 @@ func TestScenarioForceOnlyOnResourceGroup(t *testing.T) {
 	err = execCLI(io.Discard, c, "delete", "rg", "rg1", "-n", "team-a", "--force")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err), "the force query reached the route")
 }
+
+// ADR-0172 Decision 2: funcdctl refuses a Revision write before any request. apply -f checks every document offline
+// first, so a file with a Revision applies none of its documents.
+func TestCLIRevisionIsReadOnly(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+	const readOnly = "Revision is read-only: the Function reconciler writes it"
+	manifest := `{"apiVersion":"funcd.io/v1alpha1","kind":"ConfigMap",` +
+		`"metadata":{"name":"cm1","namespace":"team-a","resourceGroup":"rg1"}}` + "\n---\n" +
+		`{"apiVersion":"funcd.io/v1alpha1","kind":"Revision",` +
+		`"metadata":{"name":"greeter-1","namespace":"team-a","resourceGroup":"rg1"}}`
+
+	var out bytes.Buffer
+	err := execCLI(&out, c, "apply", "-f", writeManifest(t, manifest))
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+	_, gerr := c.Get(context.Background(), v1.KindConfigMap, "team-a", "cm1")
+	require.Equal(t, fault.NotFound, fault.KindOf(gerr), "the ConfigMap before the Revision is not applied")
+
+	err = execCLI(&out, c, "delete", "revision", "x", "-n", "team-a")
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+}

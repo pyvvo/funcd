@@ -152,6 +152,10 @@ func (a *cli) applyCmd() *cobra.Command {
 			// Pre-flight: the shared api/types validator, offline, on every document before any network call.
 			for _, doc := range docs {
 				obj := doc.Object
+				if k := obj.GroupVersionKind().Kind; sdk.ReadOnlyKind(k) {
+					return fault.Invalidf("funcdctl apply", "document %d (%s %q): %s is read-only: the Function reconciler writes it",
+						doc.Number, k, obj.GetName(), k)
+				}
 				if verr := obj.Validate(); verr != nil {
 					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
 						obj.GroupVersionKind().Kind, obj.GetName())

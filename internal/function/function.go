@@ -10,6 +10,8 @@ package function
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,6 +54,14 @@ const (
 // errArtifactUnresolved marks a Function whose artifact ref could not be resolved to a
 // digest (ADR-0035) — the reconciler maps it to Phase=Failed + reason ArtifactUnresolved.
 var errArtifactUnresolved = errors.New("artifact ref could not be resolved to a digest")
+
+// errRevisionMissing marks a generation whose stamped Revision is gone, and errRevisionStampFailed one whose Revision
+// cannot be stamped: the reconciler maps them to Phase=Failed + reasons RevisionMissing and RevisionStampFailed
+// (ADR-0172).
+var (
+	errRevisionMissing     = errors.New("the stamped revision of this generation is missing")
+	errRevisionStampFailed = errors.New("revision could not be stamped")
+)
 
 // ShapeValidator validates a Function's artifact conforms to its runtime shape.
 type ShapeValidator interface {
@@ -480,8 +490,18 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	prevRevision := fn.Status.CurrentRevision
 	pinned, err := r.ensureRevision(ctx, fn)
 	if err != nil {
-		if errors.Is(err, errArtifactUnresolved) {
+		switch {
+		case errors.Is(err, errArtifactUnresolved):
 			return r.gateFailed(ctx, fn, gateFailure{reason: "ArtifactUnresolved", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed}, drainAfter)
+		case errors.Is(err, errRevisionMissing):
+			return r.gateFailed(ctx, fn, gateFailure{reason: "RevisionMissing", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter)
+		case errors.Is(err, errRevisionStampFailed):
+			// the status write first, then the error as a routeError, so failPass keeps the gate's status and controller
+			// backoff retries the stamp (ADR-0015; ADR-0161 Decision 1; ADR-0172 Decision 6)
+			if _, gerr := r.gateFailed(ctx, fn, gateFailure{reason: "RevisionStampFailed", message: err.Error(), readyMessage: err.Error(), phase: v1.PhaseFailed, requeue: r.supervisionPeriod}, drainAfter); gerr != nil {
+				return controller.Result{}, gerr
+			}
+			return controller.Result{}, routeError{err}
 		}
 		return controller.Result{}, err
 	}
@@ -609,7 +629,8 @@ type convergeError struct{ err error }
 func (e convergeError) Error() string { return e.err.Error() }
 func (e convergeError) Unwrap() error { return e.err }
 
-// routeError is an error programming the routes after the pass's status write succeeded; it is returned as is.
+// routeError is an error returned as is after the pass's status write succeeded: programming the routes, or the
+// RevisionStampFailed gate's stamp error (ADR-0172 Decision 6), which failPass must not overwrite.
 type routeError struct{ err error }
 
 func (e routeError) Error() string { return e.err.Error() }
@@ -1305,13 +1326,16 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 // revisionTemplate is fn as revision rev runs it — the runtime, handler and image of rev's snapshot (ADR-0020) with the
 // Function's current bindings — and rev's pinned digest.
 func (r *Reconciler) revisionTemplate(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (*v1.Function, string, error) {
-	obj, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, rev)
+	const op = "function.revisionTemplate"
+	snap, err := r.getRevision(ctx, fn.Namespace, rev)
 	if err != nil {
-		return nil, "", fault.Wrapf(err, fault.KindOf(err), "function.revisionTemplate", "get revision %q", rev)
+		return nil, "", fault.Wrapf(err, fault.KindOf(err), op, "get revision %q", rev)
 	}
-	snap, ok := obj.(*v1.Revision)
-	if !ok {
-		return nil, "", fault.Internalf("function.revisionTemplate", "object %q is not a Revision", rev)
+	switch revisionOf(snap, fn) {
+	case revOther:
+		return nil, "", fault.Wrapf(stampTaken(snap), fault.Conflict, op, "read revision")
+	case revNamesake:
+		return nil, "", fault.NotFoundf(op, "revision %q is a deleted namesake's", rev)
 	}
 	tmpl := *fn
 	tmpl.Spec.Runtime, tmpl.Spec.Handler, tmpl.Spec.Image = snap.Spec.Runtime, snap.Spec.Handler, snap.Spec.Image
@@ -1688,30 +1712,31 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // does not already exist (the store bumps generation only on spec change; the activator's
 // status-only Phase writes do not, so a wake never stamps a spurious Revision).
 // It returns the Revision's authoritative artifact digest (ADR-0035): on the create path the
-// digest is the explicit spec digest, else the resolved-and-pinned one; on the early-return
-// path it is the EXISTING Revision's digest — a stamped Revision is NEVER re-resolved, so a
-// moved tag cannot drift it (the immutability guarantee). A Revision of the name that a since-deleted Function stamped
-// is dropped, and the generation is stamped afresh. The create path first retires every worker labelled with the
-// Revision's name: the owner garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
+// digest is the explicit spec digest, else the resolved-and-pinned one; otherwise it is the
+// stored Revision's digest — a stamped Revision is NEVER re-resolved, so a moved tag cannot
+// drift it. It follows ADR-0172's table: a deleted namesake's Revision is dropped and the generation stamped afresh,
+// another Function's is never touched (errRevisionStampFailed), and a stamped Revision that is gone fails closed
+// (errRevisionMissing). The create path first retires every worker labelled with the Revision's name: the owner
+// garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
 	revName := revisionName(fn)
-	existing, err := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName))
+	existing, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revName))
 	switch {
 	case err == nil:
-		rev, ok := existing.(*v1.Revision)
-		if !ok || !ownedByAnother(rev, fn) {
-			fn.Status.CurrentRevision = revName
-			if ok {
-				return rev.Spec.ImageDigest, nil // never re-resolved
-			}
-			return fn.Spec.ImageDigest, nil
+		switch revisionOf(existing, fn) {
+		case revSelf:
+			return r.adoptRevision(ctx, fn, existing)
+		case revOther:
+			return "", stampTaken(existing)
 		}
-		if derr := r.dropRevision(ctx, rev); derr != nil {
+		if derr := r.dropRevision(ctx, existing); derr != nil {
 			return "", derr
 		}
 	case fault.KindOf(err) != fault.NotFound:
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision")
+	case fn.Status.CurrentRevision == revName:
+		return "", fmt.Errorf("%w: %s", errRevisionMissing, revName)
 	}
 	// create path: pin the digest — explicit if set, else resolve the ref (ADR-0035).
 	pinned := fn.Spec.ImageDigest
@@ -1727,10 +1752,10 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 	rev.Name = v1.ObjectName(revName)
 	rev.Namespace = fn.Namespace
 	rev.ResourceGroup = fn.ResourceGroup
-	fnRef := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
-	rev.OwnerReferences = []v1.OwnerReference{{ObjectRef: fnRef, UID: fn.UID, Controller: true}}
+	owner := controllerRef(fn)
+	rev.OwnerReferences = []v1.OwnerReference{owner}
 	rev.Spec = v1.RevisionSpec{
-		Function: fnRef,
+		Function: owner.ObjectRef,
 		Number:   fn.Generation,
 		Runtime:  fn.Spec.Runtime,
 		Handler:  fn.Spec.Handler,
@@ -1740,28 +1765,122 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		return "", err
 	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
-		if fault.KindOf(cerr) != fault.Conflict {
-			return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
+		switch fault.KindOf(cerr) {
+		case fault.Conflict:
+			return r.settleCreateConflict(ctx, fn, cerr)
+		case fault.Invalid:
+			return "", fmt.Errorf("%w: %w", errRevisionStampFailed, cerr)
 		}
-		// concurrent create — adopt the stored Revision's pinned digest (idempotent).
-		if cur, gerr := r.store.Get(ctx, v1.KindRevision.GVK(), fn.Namespace, v1.ObjectName(revName)); gerr == nil {
-			if rev2, ok := cur.(*v1.Revision); ok {
-				pinned = rev2.Spec.ImageDigest
-			}
-		}
+		return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
 	}
 	fn.Status.CurrentRevision = revName
 	return pinned, nil
 }
 
-// revisionName is the Revision a Function's generation stamps (ADR-0020): <name>-<generation>.
-func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name, fn.Generation) }
+// settleCreateConflict reads the Revision a concurrent create stored under fn's name: fn's own is adopted, another
+// Function's fails the stamp, and a deleted namesake's returns the Conflict, so the next pass drops it (ADR-0172).
+func (r *Reconciler) settleCreateConflict(ctx context.Context, fn *v1.Function, conflict error) (string, error) {
+	const op = "function.ensureRevision"
+	cur, err := r.getRevision(ctx, fn.Namespace, v1.ObjectName(revisionName(fn)))
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "get revision after a create conflict")
+	}
+	switch revisionOf(cur, fn) {
+	case revSelf:
+		return r.adoptRevision(ctx, fn, cur)
+	case revOther:
+		return "", stampTaken(cur)
+	}
+	return "", fault.Wrapf(conflict, fault.Conflict, op, "create revision")
+}
 
-// ownedByAnother reports whether rev was stamped for another Function of fn's name, one since deleted. A Revision that
-// names no owner is taken as fn's.
-func ownedByAnother(rev *v1.Revision, fn *v1.Function) bool {
-	o, ok := v1.ControllerOf(rev.OwnerReferences)
-	return ok && o.Kind == v1.KindFunction && o.UID != fn.UID
+// adoptRevision makes rev, fn's own, the current revision. A ref-less one (stamped before 2dc9d26) first gets fn as
+// its controller: the reconciler's one metadata write to a Revision (ADR-0172 Decision 5).
+func (r *Reconciler) adoptRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) (string, error) {
+	if _, owned := v1.ControllerOf(rev.OwnerReferences); !owned {
+		rev.OwnerReferences = append(rev.OwnerReferences, controllerRef(fn))
+		if _, err := r.store.Update(ctx, rev); err != nil {
+			return "", fault.Wrapf(err, fault.KindOf(err), "function.adoptRevision", "adopt revision %q", rev.Name)
+		}
+	}
+	fn.Status.CurrentRevision = string(rev.Name)
+	return rev.Spec.ImageDigest, nil
+}
+
+// getRevision reads Revision name of namespace ns.
+func (r *Reconciler) getRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.Revision, error) {
+	obj, err := r.store.Get(ctx, v1.KindRevision.GVK(), ns, name)
+	if err != nil {
+		return nil, err
+	}
+	rev, ok := obj.(*v1.Revision)
+	if !ok {
+		return nil, fault.Internalf("function.getRevision", "object %q is not a Revision", name)
+	}
+	return rev, nil
+}
+
+func controllerRef(fn *v1.Function) v1.OwnerReference {
+	ref := v1.ObjectRef{Kind: v1.KindFunction, Namespace: fn.Namespace, Name: fn.Name}
+	return v1.OwnerReference{ObjectRef: ref, UID: fn.UID, Controller: true}
+}
+
+const (
+	maxRevisionName = 63 // a DNS-1123 label, validated by store.Create
+	revisionHashLen = 8  // hex digits of SHA-256(Function name) in a shortened name
+)
+
+// revisionName is the Revision a Function's generation stamps (ADR-0020, ADR-0172): <name>-<generation> while that
+// fits a label, else the name cut to fit, the first hex digits of its SHA-256 and the generation.
+func revisionName(fn *v1.Function) string {
+	gen := strconv.FormatInt(fn.Generation, 10)
+	name := string(fn.Name)
+	if len(name)+1+len(gen) <= maxRevisionName {
+		return name + "-" + gen
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := "-" + hex.EncodeToString(sum[:])[:revisionHashLen] + "-" + gen
+	return name[:maxRevisionName-len(suffix)] + suffix
+}
+
+// revisionOwner is whose a stored Revision is, judged against the Function that would stamp it (ADR-0172 Decision 5).
+type revisionOwner int
+
+const (
+	revSelf     revisionOwner = iota // this Function's
+	revNamesake                      // a deleted Function's of the same name
+	revOther                         // another Function's
+)
+
+// revisionOf follows ADR-0172 Decision 5: a controller ref decides first (this UID revSelf, another UID of this name
+// revNamesake, another Function revOther); ref-less, spec.function naming another Function is revOther, then
+// revSelf if the status names it, else revNamesake.
+func revisionOf(rev *v1.Revision, fn *v1.Function) revisionOwner {
+	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
+		switch {
+		case o.Kind != v1.KindFunction || o.Name != fn.Name:
+			return revOther
+		case o.UID == fn.UID:
+			return revSelf
+		}
+		return revNamesake
+	}
+	if f := rev.Spec.Function.Name; f != "" && f != fn.Name {
+		return revOther
+	}
+	if name := string(rev.Name); fn.Status.CurrentRevision == name || fn.Status.ServingRevision == name {
+		return revSelf
+	}
+	return revNamesake
+}
+
+// stampTaken is the error of a Revision name another Function's Revision holds.
+func stampTaken(rev *v1.Revision) error {
+	ref := rev.Spec.Function
+	if o, ok := v1.ControllerOf(rev.OwnerReferences); ok {
+		ref = o.ObjectRef
+	}
+	return fmt.Errorf("%w: %s is %s %q's", errRevisionStampFailed, rev.Name, ref.Kind, ref.Name)
 }
 
 // retireStale retires every worker of fn's name labelled with Revision rev before that Revision is created: no worker

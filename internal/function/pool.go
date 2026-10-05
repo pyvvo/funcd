@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -97,8 +98,21 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey, 
 			continue
 		}
 		if k, isPooled := r.poolKeyFor(fn, idx); isPooled && k == key {
-			if fn, err = r.pinnedMember(ctx, fn); err != nil {
-				return nil, err
+			pinned, perr := r.pinnedMember(ctx, fn)
+			switch {
+			case perr == nil:
+				fn = pinned
+			case errors.Is(perr, errRevisionMissing) || fault.KindOf(perr) == fault.Conflict:
+				// no stamped member enters the manifest without its digest: it keeps the revision it serves, or is
+				// left out, and its own reconcile reports it (ADR-0172 Decision 7)
+				s := r.servingMember(ctx, fn)
+				if s == nil {
+					r.logger.Warn("pool member left out: its revision is missing or another's", "function", fn.Name, "err", perr)
+					continue
+				}
+				fn = s
+			default:
+				return nil, perr
 			}
 			// A member whose artifact no node can run is neither ranked, counted nor materialized (ADR-0145): its
 			// own reconcile reports NoMatchingPlatform, and the pool serves its peers. One whose platforms cannot be
@@ -123,14 +137,20 @@ func (r *Reconciler) sameKeyFunctions(ctx context.Context, key pooling.PoolKey, 
 
 // pinnedMember is m at its current generation's Revision digest (ADR-0035), the digest the pool
 // gates and materializes it at, as the solo path does: a Function deployed from a tag alone has no
-// spec.imageDigest. A member whose Revision is not stamped yet is returned as stored.
+// spec.imageDigest. A member whose Revision is not stamped yet (none stored, or a deleted namesake's) is returned as
+// stored; a stamped member whose Revision is gone is errRevisionMissing, and another Function's Revision a Conflict
+// (ADR-0172 Decision 7).
 func (r *Reconciler) pinnedMember(ctx context.Context, m *v1.Function) (*v1.Function, error) {
-	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(revisionName(m)))
-	if err != nil {
-		if fault.KindOf(err) == fault.NotFound {
-			return m, nil
-		}
+	name := revisionName(m)
+	tmpl, digest, err := r.revisionTemplate(ctx, m, v1.ObjectName(name))
+	switch {
+	case err == nil:
+	case fault.KindOf(err) != fault.NotFound:
 		return nil, err
+	case m.Status.CurrentRevision == name:
+		return nil, fmt.Errorf("%w: %s", errRevisionMissing, name)
+	default:
+		return m, nil
 	}
 	tmpl.Spec.ImageDigest = digest
 	return tmpl, nil
