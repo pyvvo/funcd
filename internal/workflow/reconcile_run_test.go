@@ -1438,3 +1438,121 @@ func TestScenarioChildExpiryKeepsUserRun(t *testing.T) {
 		t.Fatalf("record p-sub holds workflow %s, want other", rec.Workflow)
 	}
 }
+
+// Issue #726: deleting a paused WorkflowRun, which has no live goroutine, ends its open run record Cancelled
+// (ADR-0146 Decision 3), so the retention sweep reclaims it as it does the record of a run deleted mid-step.
+func TestIssue726_DeletedPausedRunRecordIsSwept(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""), step("b", ""))
+	seedRun(t, s, "run-p", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	gate := &stepGate{fakeDispatcher: newFake(), step: "a", entered: make(chan struct{}), release: make(chan struct{})}
+	eng, _ := New(Deps{Runs: rstate, Dispatch: gate, Clock: clock.Fake(base)})
+	rr := NewRunReconciler(s, eng, nil, nil, 0)
+	req := runReq("run-p")
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	<-gate.entered
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-p")
+	run := obj.(*v1.WorkflowRun)
+	run.Spec.Paused = true
+	if _, err := s.Update(ctx, run); err != nil {
+		t.Fatalf("pause run: %v", err)
+	}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	close(gate.release)
+	if _, err := settleRun(ctx, rr, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if rec, err := rstate.Get(ctx, "default", "run-p"); err != nil || rec.Phase != runPaused {
+		t.Fatalf("setup: run record = %+v, %v; want Paused", rec, err)
+	}
+
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "run-p", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the deletion: %v", err)
+	}
+	rec, err := rstate.Get(ctx, "default", "run-p")
+	if err != nil {
+		t.Fatalf("record of the deleted paused run: %v", err)
+	}
+	if rec.Phase != runCancelled || len(rec.Steps) != 2 || rec.Steps[1].Phase != v1.StepCancelled {
+		t.Fatalf("record of the deleted paused run: phase %s, steps %+v; want Cancelled with step b Cancelled", rec.Phase, rec.Steps)
+	}
+	sweeper, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base.Add(2 * time.Hour))})
+	if n, err := NewRunReconciler(s, sweeper, nil, nil, 0).SweepExpired(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := rstate.Get(ctx, "default", "run-p"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("record of the deleted paused run after the sweep: %v, want NotFound", err)
+	}
+}
+
+// Issue #726: a deletion the reconcile never saw, because the daemon stopped first, leaves an open run record
+// with no WorkflowRun and no goroutine. The retention sweep ends it Cancelled and reclaims it after retention;
+// it keeps the open record of a run that still exists and of an inline child run, which has no WorkflowRun.
+func TestIssue726_SweepCancelsRecordOfDeletedRun(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "kept", "wf", `{}`)
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "kept")
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	open := func(name v1.ObjectName, uid v1.UID, phase v1.RunPhase, depth int) *runstate.Record {
+		return &runstate.Record{
+			Namespace: "default", Name: name, RunUID: uid, Workflow: "wf", Phase: phase, Paused: phase == runPaused, Depth: depth,
+			Spec: spec(step("a", "")), Steps: []runstate.StepState{{Name: "a", Phase: v1.StepRunning, Attempts: 1, StartedAt: base.UnixNano()}},
+			StartedAt: base.UnixNano(), UpdatedAt: base.UnixNano(),
+		}
+	}
+	for _, rec := range []*runstate.Record{
+		open("gone", "uid-1", runRunning, 0),
+		open("kept", obj.GetObjectMeta().UID, runPaused, 0),
+		open("p.sub", "", runRunning, 1),
+	} {
+		if err := rstate.Put(ctx, rec); err != nil {
+			t.Fatalf("seed record %s: %v", rec.Name, err)
+		}
+	}
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil, 0)
+	}
+	keepsOpen := func() {
+		t.Helper()
+		for name, phase := range map[v1.ObjectName]v1.RunPhase{"kept": runPaused, "p.sub": runRunning} {
+			if rec, err := rstate.Get(ctx, "default", name); err != nil || rec.Phase != phase {
+				t.Fatalf("record %s = %+v, %v; want it kept %s", name, rec, err, phase)
+			}
+		}
+	}
+
+	if n, err := at(base.Add(30*time.Minute)).SweepExpired(ctx, time.Hour); err != nil || n != 0 {
+		t.Fatalf("SweepExpired inside retention = %d, %v; want 0 runs reclaimed", n, err)
+	}
+	rec, err := rstate.Get(ctx, "default", "gone")
+	if err != nil {
+		t.Fatalf("open record of the deleted run after the sweep: %v", err)
+	}
+	if rec.Phase != runCancelled || rec.Steps[0].Phase != v1.StepCancelled || rec.Steps[0].Error != cancelledStepError {
+		t.Fatalf("open record of the deleted run after the sweep: phase %s, steps %+v; want it Cancelled with step a Cancelled", rec.Phase, rec.Steps)
+	}
+	keepsOpen()
+	if n, err := at(base.Add(2*time.Hour)).SweepExpired(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired past retention = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := rstate.Get(ctx, "default", "gone"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("record of the deleted run after retention: %v, want NotFound", err)
+	}
+	keepsOpen()
+}
