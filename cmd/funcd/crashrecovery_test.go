@@ -128,7 +128,7 @@ func (d *crashDaemon) workers(t *testing.T, name string) []procreg.Entry {
 	require.NoError(t, json.Unmarshal(b, &all))
 	var out []procreg.Entry
 	for _, e := range all {
-		if strings.HasPrefix(e.ID, "default/"+name+"/") && procreg.Owned(e) {
+		if strings.HasPrefix(e.ID, "default/"+name+"/") && procreg.Alive(e) {
 			out = append(out, e)
 		}
 	}
@@ -190,7 +190,7 @@ func TestScenarioCrashRestartLeavesDesiredWorkers(t *testing.T) {
 		}
 	}, 30*time.Second, 50*time.Millisecond)
 	for _, e := range old {
-		require.False(t, procreg.Owned(e), "worker %d of the first run still runs", e.PID)
+		require.False(t, procreg.Alive(e), "worker %d of the first run still runs", e.PID)
 		require.NotEmpty(t, e.Files, "worker %d was saved without its files", e.PID)
 		for _, f := range e.Files {
 			require.NoFileExists(t, f, "a file of worker %d of the first run", e.PID)
@@ -227,7 +227,7 @@ func TestScenarioDeletedWhileDownReaped(t *testing.T) {
 	require.NoError(t, st.Close())
 
 	_, c = d.start(t)
-	require.False(t, procreg.Owned(old[0]), "the deleted Function's worker was reaped at open")
+	require.False(t, procreg.Alive(old[0]), "the deleted Function's worker was reaped at open")
 	d.apply(t, c, "marker", 1)
 	require.Eventually(t, func() bool { return len(d.workers(t, "marker")) == 1 }, 30*time.Second, 50*time.Millisecond,
 		"the restarted daemon reconciles")

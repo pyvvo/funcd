@@ -62,7 +62,7 @@ func savedWorkers(t *testing.T, stateDir string) []procreg.Entry {
 	require.NoError(t, json.Unmarshal(b, &all))
 	var live []procreg.Entry
 	for _, e := range all {
-		if procreg.Owned(e) {
+		if procreg.Alive(e) {
 			live = append(live, e)
 		}
 	}
@@ -101,13 +101,13 @@ func devRestartReaps(t *testing.T, mode, root string) string {
 		"the first run starts its worker")
 	require.NoError(t, first.Process.Kill())
 	_ = first.Wait()
-	require.True(t, procreg.Owned(old[0]), "the killed run left its worker running")
+	require.True(t, procreg.Alive(old[0]), "the killed run left its worker running")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
-	require.False(t, procreg.Owned(old[0]), "the first run's worker survived the restart")
+	require.False(t, procreg.Alive(old[0]), "the first run's worker survived the restart")
 
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		resp, perr := http.Post(inst.gatewayURL+"/function/"+inst.functions[0], "application/json", strings.NewReader(`{}`))
@@ -239,7 +239,7 @@ func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("dev did not stop on a hangup")
 	}
-	assert.Eventually(t, func() bool { return !procreg.Owned(workers[0]) }, 5*time.Second, 50*time.Millisecond,
+	assert.Eventually(t, func() bool { return !procreg.Alive(workers[0]) }, 5*time.Second, 50*time.Millisecond,
 		"the hangup left the worker running")
 	assert.NoError(t, waitErr, "dev did not stop gracefully on a hangup")
 	assert.NoDirExists(t, shimDir, "the hangup left the dev shim temp dir")

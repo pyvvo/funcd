@@ -1,6 +1,6 @@
 // Package procreg is the saved worker registry (ADR-0167): the process driver and the dev catalog engine record every
 // process they start, so the next open reaps what a crashed run left behind. An entry is reaped only when the live
-// pid's start time and argv both match it, so a reused pid is never signalled.
+// pid's start time and boot match it (ADR-0187), so a reused pid is never signalled.
 package procreg
 
 import (
@@ -26,9 +26,10 @@ type Entry struct {
 	ID        string   `json:"id"`
 	PID       int      `json:"pid"`
 	PGID      int      `json:"pgid"`
-	StartTime uint64   `json:"startTime"` // OS-native: clock ticks since boot (Linux), µs since epoch (macOS)
-	Token     string   `json:"token"`     // substring of one argv element: "--funcd-instance=<id>" or "funcd-engine-<id>"
-	Files     []string `json:"files"`     // driver-owned temp files deleted at reap
+	StartTime uint64   `json:"startTime"`        // OS-native: clock ticks since boot (Linux), µs since epoch (macOS)
+	BootID    string   `json:"bootID,omitempty"` // Linux boot_id at save; "" on macOS and in entries of earlier releases
+	Token     string   `json:"token"`            // still in argv; checked only for a Linux entry without BootID
+	Files     []string `json:"files"`            // driver-owned temp files deleted at reap
 }
 
 // Registry is the saved set of entries in <dir>/<name>.json, owned by one process through the lock on
@@ -93,9 +94,10 @@ func (r *Registry) Delete(id string) error {
 }
 
 // Reap ends every saved process that is still ours: SIGTERM to each owned process group, up to grace for all of them
-// together, then SIGKILL to the ones still alive. A group whose leader exits gets SIGKILL at once, as a worker's exit
-// does (ADR-0011 C4): its other members outlive the leader, and its pgid is not reused while one lives. It deletes
-// every entry's files, owned or not, and empties the registry. killed counts the process groups it signalled.
+// together, then SIGKILL to the ones still owned. A group whose leader exits, or is a zombie, gets SIGKILL at once, as
+// a worker's exit does (ADR-0011 C4): its other members outlive the leader, and its pgid is not reused while one
+// lives. It deletes every entry's files, owned or not, and empties the registry. killed counts the process groups it
+// signalled.
 func (r *Registry) Reap(ctx context.Context, grace time.Duration) (killed int, err error) {
 	var owned []Entry
 	for _, e := range r.entries {
@@ -114,7 +116,7 @@ func (r *Registry) Reap(ctx context.Context, grace time.Duration) (killed int, e
 		case <-deadline.C:
 		case <-tick.C:
 			alive = slices.DeleteFunc(alive, func(e Entry) bool {
-				if Owned(e) {
+				if Alive(e) {
 					return false
 				}
 				_ = unix.Kill(-e.PGID, unix.SIGKILL)
@@ -197,13 +199,23 @@ func StartTime(pid int) (uint64, error) {
 	return startTime(pid)
 }
 
-// Owned reports whether e's pid still names the process its owner started: the start time matches and some argv
-// element contains the token. Any read error means "not ours".
+// BootID reads the boot ID an owner records next to the start time: Linux boot_id, read once; "" on macOS.
+func BootID() (string, error) {
+	return bootID()
+}
+
+// Owned reports whether e's pid still names the process its owner started, from facts the process cannot rewrite:
+// the start time and the boot match (ADR-0187). Any read error means "not ours".
 func Owned(e Entry) bool {
 	st, err := startTime(e.PID)
 	if err != nil || st != e.StartTime {
 		return false
 	}
-	ok, err := argvContains(e.PID, e.Token)
+	ok, err := bootMatches(e)
 	return err == nil && ok
+}
+
+// Alive reports whether e's process is ours and still runs: a zombie counts as gone.
+func Alive(e Entry) bool {
+	return Owned(e) && !zombie(e.PID)
 }

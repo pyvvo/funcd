@@ -188,7 +188,13 @@ func (r *Runtime) save(p *engineProc, token string) error {
 	if err != nil {
 		return err
 	}
-	return r.reg.Put(procreg.Entry{ID: p.id, PID: pid, PGID: pid, StartTime: st, Token: token, Files: []string{p.dir}})
+	boot, err := procreg.BootID()
+	if err != nil {
+		return err
+	}
+	return r.reg.Put(procreg.Entry{
+		ID: p.id, PID: pid, PGID: pid, StartTime: st, BootID: boot, Token: token, Files: []string{p.dir},
+	})
 }
 
 // engineProc is one running duckdb+quack subprocess.
