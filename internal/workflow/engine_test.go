@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -334,6 +335,32 @@ func TestIssue308_GuardOnAbsentFieldIsFalse(t *testing.T) {
 		whenStep("b", "${{ step.a.output.x > 1 }}", "a"),
 	), json.RawMessage(`{}`), StartOptions{}); err == nil {
 		t.Fatal("an unguarded read of the absent field must still fail the run")
+	}
+}
+
+// A condition is checked against the run's documents and their run-pinned schemas before it is
+// evaluated: each document and schema is decoded once per check, however many references the condition
+// makes, so a long condition over a large document costs about one decoding of it.
+func TestConditionCheckDecodesEachDocumentOnce(t *testing.T) {
+	e := newTestEngine(t, newFake(), Config{})
+	in := json.RawMessage(`{"pad":"` + strings.Repeat("z", 250<<10) + `","n":1}`)
+	schema := json.RawMessage(`{"type":"object","description":"` + strings.Repeat("d", 250<<10) +
+		`","properties":{"n":{"type":"number"},"m":{"type":"number","default":2}}}`)
+	rec := &runstate.Record{Contract: &v1.WorkflowContract{Input: schema}}
+	for _, ref := range []string{"input.n === 1", "input.m === 2"} {
+		cond := "${{ " + strings.Repeat(ref+" && ", 800) + "true }}"
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		start := time.Now()
+		ok, err := e.evalWhen(cond, &stepNode{name: "b"}, rec, in, nil)
+		took := time.Since(start)
+		runtime.ReadMemStats(&after)
+		if err != nil || !ok {
+			t.Fatalf("%s × 800: ok=%v err=%v, want true", ref, ok, err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 || took > 500*time.Millisecond {
+			t.Errorf("%s × 800 over a 250 KiB document: allocated %d MiB in %v, want one decoding of it", ref, n>>20, took)
+		}
 	}
 }
 

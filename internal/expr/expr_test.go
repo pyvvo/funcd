@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dop251/goja"
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -371,7 +372,8 @@ func TestEvaluationIsInterruptedAtTheDeadline(t *testing.T) {
 
 // An array or object literal can repeat a large document reference any number of times at almost no
 // evaluation cost: Eval fails once the result passes its documents' size plus a margin, before it is
-// exported and marshalled, and returns a result within that bound unchanged.
+// exported and marshalled, and returns a result within that bound unchanged. An array literal's strings
+// are charged to the string length before it runs, so it fails there first.
 func TestSelectResultSizeIsBounded(t *testing.T) {
 	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|": req("object"), "input|s": req("string")}}
 	in := docs("input", `{"s":"`+strings.Repeat("z", 64<<10)+`"}`)
@@ -379,21 +381,21 @@ func TestSelectResultSizeIsBounded(t *testing.T) {
 	for i := range members {
 		members[i] = fmt.Sprintf("k%d: input", i)
 	}
-	for _, src := range []string{
-		"${{ [" + strings.Repeat("input.s, ", 1000) + `""] }}`,
-		"${{ {" + strings.Join(members, ", ") + "} }}",
+	for _, c := range []struct{ src, want string }{
+		{"${{ [" + strings.Repeat("input.s, ", 1000) + `""] }}`, "characters"},
+		{"${{ {" + strings.Join(members, ", ") + "} }}", "larger than their documents"},
 	} {
-		x := mustCheck(t, src, Select, r)
+		x := mustCheck(t, c.src, Select, r)
 		x.timeout = time.Minute
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		out, err := x.Eval(in)
 		runtime.ReadMemStats(&after)
-		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "larger than their documents") {
-			t.Errorf("%.40s: got %d bytes err=%v, want a fault.Invalid over the result bound", src, len(out), err)
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%.40s: got %d bytes err=%v, want a fault.Invalid (%s)", c.src, len(out), err, c.want)
 		}
 		if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
-			t.Errorf("%.40s: allocated %d MiB, want the result rejected before it is built", src, n>>20)
+			t.Errorf("%.40s: allocated %d MiB, want the result rejected before it is built", c.src, n>>20)
 		}
 	}
 	out, err := mustCheck(t, "${{ [input.s, input.s] }}", Select, r).Eval(in)
@@ -401,7 +403,9 @@ func TestSelectResultSizeIsBounded(t *testing.T) {
 		t.Fatalf("two references: got %d bytes err=%v, want the result", len(out), err)
 	}
 	big := `{"s":"` + strings.Repeat("z", 3<<20) + `"}`
-	out, err = mustCheck(t, "${{ input.s }}", Select, r).Eval(docs("input", big))
+	one := mustCheck(t, "${{ input.s }}", Select, r)
+	one.timeout = time.Minute // binding the document is charged to the deadline; this case checks the margin
+	out, err = one.Eval(docs("input", big))
 	if err != nil || len(out) != 3<<20+2 {
 		t.Fatalf("a document larger than the margin: got %d bytes err=%v, want the result", len(out), err)
 	}
@@ -437,7 +441,7 @@ func TestBudgetIsSharedAcrossEvaluations(t *testing.T) {
 			t.Errorf("%.40s: %d evaluations within one budget: err=%v, want a fault.Invalid (%s)", c.src, c.n, err, c.want)
 		}
 	}
-	slow := mustCheck(t, "${{ ["+strings.Repeat("input.s + ", 400)+`""] }}`, Select, r)
+	slow := mustCheck(t, "${{ ["+strings.Repeat(`input.s.includes("y"), `, 400)+"true] }}", Select, r)
 	b := NewBudget()
 	b.time = time.Millisecond
 	_, err := slow.EvalWithin(b, in)
@@ -447,6 +451,198 @@ func TestBudgetIsSharedAcrossEvaluations(t *testing.T) {
 	_, err = mustCheck(t, "${{ input.t }}", Select, r).EvalWithin(b, in)
 	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "time limit") {
 		t.Fatalf("an evaluation after the budget's time is spent: err=%v, want a fault.Invalid at the time limit", err)
+	}
+}
+
+// goja's own search on a non-ASCII string compares the whole pattern at every position, and the
+// deadline cannot stop a native call: includes and replaceAll search in time linear in their operands,
+// and keep their JavaScript results, also for a pattern that overlaps itself after a partial match.
+func TestStringSearchIsLinear(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{
+		"input|s": req("string"), "input|p": req("string"), "input|r": req("string"),
+	}}
+	in := docs("input", `{"s":"é`+strings.Repeat("a", 160000)+`","p":"`+strings.Repeat("a", 80000)+`b","r":""}`)
+	for _, src := range []string{
+		"${{ !input.s.includes(input.p) }}",
+		"${{ input.s.replaceAll(input.p, input.r) === input.s }}",
+	} {
+		x := mustCheck(t, src, Condition, r)
+		x.timeout = time.Minute
+		start := time.Now()
+		ok, err := x.EvalBool(in)
+		if d := time.Since(start); err != nil || !ok || d > 250*time.Millisecond {
+			t.Errorf("%s over a non-ASCII document: ok=%v err=%v in %s, want true well within the deadline", src, ok, err, d)
+		}
+	}
+	includes := mustCheck(t, "${{ input.s.includes(input.p) }}", Select, r)
+	replaceAll := mustCheck(t, "${{ input.s.replaceAll(input.p, input.r) }}", Select, r)
+	vm := goja.New()
+	for _, c := range [][3]string{
+		{"aaa", "aa", "b"},
+		{"ab", "", "-$&-"},
+		{"é😀é😀", "😀", "[$`|$'|$&|$$|$1|$<x>|$0$]"},
+		{"abcabc", "bc", "$'"},
+		{"", "", "$&x$"},
+		{"xyz", "q", "$`"},
+		{"aXbX", "X", "$$$&$"},
+		{"abaabababaabab", "abab", "<$&>"},
+		{"aaab", "aab", "<$&>"},
+		{"abababc", "ababc", "$`"},
+		{"aabaaabaaaa", "aabaaaa", "$'"},
+		{"😀😀😀a", "😀😀a", "[$&]"},
+	} {
+		vals := map[string]string{"s": c[0], "p": c[1], "r": c[2]}
+		doc, err := json.Marshal(vals)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range vals {
+			if err := vm.Set(k, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for x, js := range map[*Expr]string{includes: "s.includes(p)", replaceAll: "s.replaceAll(p, r)"} {
+			want, err := vm.RunString(js)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantJSON, _ := json.Marshal(want.Export())
+			got, err := x.Eval(docs("input", string(doc)))
+			if err != nil || string(got) != string(wantJSON) {
+				t.Errorf("%s with %q: got %s err=%v, want %s", js, c, got, err, wantJSON)
+			}
+		}
+	}
+}
+
+// A '+' result is never longer than its two operands together: a concatenation that repeats a large
+// document is refused against the Budget's string length before it runs, and one within it keeps its
+// result.
+func TestConcatenationIsBoundedBeforeItRuns(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{
+		"input|s": req("string"), "input|t": req("string"), "input|u": req("string"),
+	}}
+	in := docs("input", `{"s":"`+strings.Repeat("z", 64<<10)+`","t":"abc","u":"x1-ΐ"}`)
+	tree := "input.s"
+	for range 6 {
+		tree = "(" + tree + " + " + tree + ")"
+	}
+	x := mustCheck(t, "${{ "+tree+".length > 0 }}", Condition, r)
+	x.timeout = time.Minute
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	ok, err := x.EvalBool(in)
+	runtime.ReadMemStats(&after)
+	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "characters") {
+		t.Errorf("a concatenation of 64 references: ok=%v err=%v, want a fault.Invalid over the string length limit", ok, err)
+	}
+	if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
+		t.Errorf("allocated %d MiB, want the concatenation refused before it runs", n>>20)
+	}
+	out, err := mustCheck(t, `${{ input.t + "-" + input.t.toUpperCase() }}`, Select, r).Eval(in)
+	if err != nil || string(out) != `"abc-ABC"` {
+		t.Fatalf("a concatenation within the limit: got %s err=%v, want \"abc-ABC\"", out, err)
+	}
+	// A case change can return more code units than its receiver has UTF-8 bytes: "x1-ΐ" is 5 bytes,
+	// and upper case it is 6 code units.
+	up := mustCheck(t, `${{ input.u.toUpperCase() + "" }}`, Select, r)
+	b := NewBudget()
+	b.strings = 5
+	if out, err := up.EvalWithin(b, in); err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "characters") {
+		t.Errorf("a 6-unit case change within a 5-unit budget: got %s err=%v, want a fault.Invalid over the string length limit", out, err)
+	}
+	if out, err := up.Eval(in); err != nil || string(out) != `"X1-`+"\u0399\u0308\u0301"+`"` {
+		t.Errorf("a case change within the limit: got %s err=%v, want its upper case", out, err)
+	}
+}
+
+// An array or object literal keeps every string it holds until the evaluation ends, and goja copies a
+// non-ASCII string that it slices or case-changes, or that Array.prototype.includes compares, which the
+// deadline cannot stop: the string elements of a literal are charged to the Budget's string length
+// before it runs. An array or object a literal reads is the bound document, and is not charged.
+func TestLiteralStringsAreBoundedBeforeTheyRun(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{
+		"input|s": req("string"), "input|t": req("string"), "input|list": arr("string"),
+	}}
+	in := docs("input", `{"s":"`+strings.Repeat("é", 32<<10)+`"}`)
+	keys := make([]string, 512)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%d: input.s.toLowerCase()", i)
+	}
+	for _, c := range []struct {
+		src  string
+		mode Mode
+	}{
+		{"${{ [" + strings.Repeat("input.s.slice(0, 30000), ", 512) + `""].length > 0 }}`, Condition},
+		{"${{ [" + strings.Repeat("input.s, ", 512) + `""].includes("é") }}`, Condition},
+		{"${{ {" + strings.Join(keys, ", ") + "} }}", Select},
+		{"${{ [" + strings.Repeat(`input.s === "" ? "" : input.s.slice(0, 30000), `, 512) + `""].length > 0 }}`, Condition},
+	} {
+		x := mustCheck(t, c.src, c.mode, r)
+		x.timeout = time.Minute
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		var err error
+		if c.mode == Condition {
+			_, err = x.EvalBool(in)
+		} else {
+			_, err = x.Eval(in)
+		}
+		runtime.ReadMemStats(&after)
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "characters") {
+			t.Errorf("%.40s: err=%v, want a fault.Invalid over the string length limit", c.src, err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
+			t.Errorf("%.40s: allocated %d MiB, want the literal refused before it runs", c.src, n>>20)
+		}
+	}
+	list := strings.TrimSuffix(strings.Repeat(`"x",`, 40000), ",")
+	big := docs("input", `{"s":"é","t":"abc","list":[`+list+`]}`)
+	out, err := mustCheck(t, `${{ {up: input.t.toUpperCase(), parts: [input.t, input.t.slice(0, 1), input.s], all: input.list} }}`, Select, r).Eval(big)
+	if want := `{"all":[` + list + `],"parts":["abc","a","é"],"up":"ABC"}`; err != nil || string(out) != want {
+		t.Fatalf("a literal within the limit that reads a large array: got %.60s err=%v, want %.60s", out, err, want)
+	}
+	out, err = mustCheck(t, `${{ {all: input.t === "abc" ? input.list : input.list} }}`, Select, r).Eval(big)
+	if want := `{"all":[` + list + `]}`; err != nil || string(out) != want {
+		t.Fatalf("a literal whose ternary reads a large array: got %.60s err=%v, want %.60s", out, err, want)
+	}
+}
+
+// Every evaluation binds its documents again, which takes time that grows with them: the Budget's time
+// runs from the binding, so evaluations of a short expression over a large document within one Budget
+// fail once together they pass it.
+func TestBudgetTimeCoversDocumentBinding(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|t": req("string")}}
+	in := docs("input", `{"s":"`+strings.Repeat("z", 2<<20)+`","t":"abc"}`)
+	x := mustCheck(t, "${{ input.t }}", Select, r)
+	b := NewBudget()
+	b.time = 50 * time.Millisecond
+	var err error
+	for i := 0; i < 50 && err == nil; i++ {
+		_, err = x.EvalWithin(b, in)
+	}
+	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "time limit") {
+		t.Fatalf("50 evaluations over a 2 MiB document within 50 ms: err=%v, want a fault.Invalid at the time limit", err)
+	}
+}
+
+// A defaulted field is bound once per evaluation, however many references read it: Check records each
+// defaulted path once, so binding the documents decodes each default once.
+func TestDefaultIsBoundOncePerPath(t *testing.T) {
+	def := json.RawMessage(`{"s":"` + strings.Repeat("z", 250<<10) + `"}`)
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|big": {Type: "object", HasDefault: true, Default: def}}}
+	x := mustCheck(t, "${{ "+strings.Repeat("input.big !== undefined && ", 800)+"true }}", Condition, r)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	ok, err := x.EvalBool(docs("input", `{}`))
+	took := time.Since(start)
+	runtime.ReadMemStats(&after)
+	if err != nil || !ok {
+		t.Fatalf("800 references to a defaulted field: ok=%v err=%v, want true", ok, err)
+	}
+	if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 || took > 500*time.Millisecond {
+		t.Errorf("800 references to a 250 KiB default: allocated %d MiB in %v, want one decoding of it", n>>20, took)
 	}
 }
 

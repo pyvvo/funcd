@@ -173,6 +173,40 @@ func TestPassOutputOverPayloadLimitFailsRun(t *testing.T) {
 	}
 }
 
+// A wait passes its flowing input through as its output, and a fan-in step's flowing input is the
+// composite of its parents' outputs: every step output, whatever the step's kind, fails the run over the
+// payload limit and is not stored.
+func TestFanInWaitOutputOverPayloadLimitFailsRun(t *testing.T) {
+	f := newFake()
+	e := newTestEngine(t, f, Config{PayloadLimit: 64})
+	rec, err := e.Execute(context.Background(), "default", "run-wait-cap", "wf",
+		spec(waitStep("a", "0s"), waitStep("b", "0s"), waitStep("join", "0s", "a", "b")),
+		json.RawMessage(`{"s":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`), StartOptions{})
+	if err == nil || rec.Phase != runFailed {
+		t.Fatalf("an over-cap fan-in wait output must fail the run: err=%v phase=%s", err, rec.Phase)
+	}
+	if out := outputOf(rec, "join"); out != nil {
+		t.Fatalf("an over-cap wait output was stored: %d bytes", len(out))
+	}
+}
+
+// A sub-workflow step's output is the composite of the child run's leaf outputs: over the payload limit
+// it fails the run and is not stored, though each leaf output fits.
+func TestSubworkflowOutputOverPayloadLimitFailsRun(t *testing.T) {
+	f := newFake()
+	f.outputs["c1"] = json.RawMessage(`{"s":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`)
+	f.outputs["c2"] = f.outputs["c1"]
+	e := childEngine(t, f, fakeChildren{"pair": spec(step("c0", ""), step("c1", "", "c0"), step("c2", "", "c0"))}, Config{PayloadLimit: 64})
+	rec, err := e.Execute(context.Background(), "default", "run-sub-cap", "wf", spec(subwfStep("sub", "pair")),
+		json.RawMessage(`{}`), StartOptions{})
+	if err == nil || rec.Phase != runFailed {
+		t.Fatalf("an over-cap sub-workflow output must fail the run: err=%v phase=%s", err, rec.Phase)
+	}
+	if out := outputOf(rec, "sub"); out != nil {
+		t.Fatalf("an over-cap sub-workflow output was stored: %d bytes", len(out))
+	}
+}
+
 // scenario: builtin-reconcile-check-rejects-bad-expression — a pass with an expression that references
 // a non-existent root fails the run (the static check surfaces as a step failure).
 func TestBuiltinRejectsBadExpression(t *testing.T) {

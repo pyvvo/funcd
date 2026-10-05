@@ -669,7 +669,8 @@ func (e *Engine) capOutput(n *stepNode, out json.RawMessage) error {
 
 // runStep runs one started step: a builtin in-engine, a sub-workflow inline, or a function by dispatch.
 // It builds its input from parents (its parents' outputs); the shared outputs are only persisted. The step
-// runs on stepCtx; a sub-workflow child also gets the run's ctx for its own record and handler.
+// runs on stepCtx; a sub-workflow child also gets the run's ctx for its own record and handler. Whatever
+// its kind, the step's output passes the payload-limit check here, before settle stores it.
 func (e *Engine) runStep(ctx, stepCtx context.Context, run *activeRun, n *stepNode, parents map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	st := specStep(run.spec, n.name)
 	if functionOf(st) == nil { // a builtin or sub-workflow step; dispatchStep records each attempt itself
@@ -677,16 +678,25 @@ func (e *Engine) runStep(ctx, stepCtx context.Context, run *activeRun, n *stepNo
 			return nil, &writeAheadError{err: err}
 		}
 	}
+	var out json.RawMessage
+	var err error
 	switch {
 	case st != nil && st.Builtin != nil:
 		// A builtin is a normal step run in-engine: a wait blocks (on ctx), a pass transforms;
 		// then it Succeeds. No dispatch, no special state (ADR-0096).
-		return e.runBuiltin(stepCtx, run.rec, st, n, run.input, parents)
+		out, err = e.runBuiltin(stepCtx, run.rec, st, n, run.input, parents)
 	case st != nil && st.Workflow != nil: // a sub-workflow step runs a child workflow inline (ADR-0099)
-		return e.runChild(ctx, stepCtx, run.rec, st.Workflow.Ref, n, run.input, parents)
+		out, err = e.runChild(ctx, stepCtx, run.rec, st.Workflow.Ref, n, run.input, parents)
 	default:
-		return e.dispatchStep(stepCtx, run, n, e.stepInput(n, run.input, parents, st))
+		out, err = e.dispatchStep(stepCtx, run, n, e.stepInput(n, run.input, parents, st))
 	}
+	if err != nil {
+		return nil, err
+	}
+	if err := e.capOutput(n, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // parentOutputs copies the outputs of n's parents for its running step, which never reads the shared map.
@@ -837,9 +847,6 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 			cancel()
 		}
 		if err == nil {
-			if cerr := e.capOutput(n, out); cerr != nil {
-				return nil, cerr
-			}
 			return out, nil
 		}
 		lastErr = err
