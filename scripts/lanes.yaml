@@ -124,9 +124,17 @@ duckdb:
     - secret.yaml
     - bucket.yaml
     - catalogservice.yaml
-    - funcdconfig.yaml
     - consumer.yaml
     - dist/catalog-quack
+    # ADR-0171: the example's daemon config with auth.credentials in place of auth.token
+    - from: e2e/fixtures/duckdb-funcdconfig.yaml
+      to: funcdconfig.yaml
+    # ADR-0179: the engines in namespaces a-b and a the Venom suite applies with the admin token
+    - from: e2e/fixtures/cni-engines.yaml
+      to: cni-engines.yaml
+  tokens:
+    admin: duckdb-lane-admin
+    developer: duckdb-lane-developer
   push:
     - artifact: dist/catalog-quack
       ref: catalog-reader

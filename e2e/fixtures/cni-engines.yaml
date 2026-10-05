@@ -1,0 +1,79 @@
+# ADR-0179: engine c in namespace a-b and engine b-c in namespace a. Before ADR-0179 both were attached under the
+# CNI ID a-b-c-r0 (<ns>-<name>-r<replica>). The duckdb Venom suite applies this with the admin token.
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: quack-token
+  namespace: a-b
+  resourceGroup: rg1
+spec:
+  type: Opaque
+  data:
+    QUACK_TOKEN: ZnVuY2QtY2F0YWxvZy10b2tlbg==
+---
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cni-ab
+  namespace: a-b
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold
+      owner: c
+---
+apiVersion: funcd.io/v1alpha1
+kind: CatalogService
+metadata:
+  name: c
+  namespace: a-b
+  resourceGroup: rg1
+spec:
+  blob:
+    - alias: gold
+      bucket: cni-ab
+      prefix: gold
+  catalog:
+    bucket: cni-ab
+    prefix: gold
+  secrets:
+    - quack-token
+---
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: quack-token
+  namespace: a
+  resourceGroup: rg1
+spec:
+  type: Opaque
+  data:
+    QUACK_TOKEN: ZnVuY2QtY2F0YWxvZy10b2tlbg==
+---
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cni-a
+  namespace: a
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold
+      owner: b-c
+---
+apiVersion: funcd.io/v1alpha1
+kind: CatalogService
+metadata:
+  name: b-c
+  namespace: a
+  resourceGroup: rg1
+spec:
+  blob:
+    - alias: gold
+      bucket: cni-a
+      prefix: gold
+  catalog:
+    bucket: cni-a
+    prefix: gold
+  secrets:
+    - quack-token
