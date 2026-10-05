@@ -348,6 +348,7 @@ type Platform struct {
 	addr        string
 
 	routeReconciler *route.Reconciler // Sets the full Route table once before the controller runs (ADR-0176)
+	kvReconciler    *kvsvc.Reconciler // reclaims deleted stores' data once before the controller runs (issue #708)
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
@@ -871,6 +872,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
+	p.kvReconciler = kvReconciler
 	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.kv
 	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
 	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
@@ -1274,6 +1276,12 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
 			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"))
 		}
+	}
+
+	// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
+	// ran, before the controller or the control plane can create a store of the same name.
+	if err := p.kvReconciler.ReclaimDeleted(ctx); err != nil && ctx.Err() == nil {
+		p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every catalog entry until "routes" has Set once, and no
