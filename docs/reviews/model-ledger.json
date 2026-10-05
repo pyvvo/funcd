@@ -8413,5 +8413,20 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0171-implementation-claude-opus-5-5.md",
     "notes": "all contracts and Decisions 1-9 match; 12/12 scenario tests and every named DoD test pass under -race; darwin and Linux build, vet and lint green; 3/4 mutants killed (edge header drop, env:\"-\", credentials-before-Badger); the 0o077 mask has no exec-bit test case (M4 survived) (model); lane issue and PR Fixes line not yet done (wave pipeline, env)"
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "667",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-667-fix-claude-opus-5-5.md",
+    "notes": "test-only flake: reconciler status write between read and preconditioned delete; old 25/300 fail under CPU load, new 0/300; forget mutant fails the test; no findings"
   }
 ]
