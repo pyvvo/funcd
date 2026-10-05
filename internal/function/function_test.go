@@ -2,6 +2,7 @@ package function_test
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -295,4 +296,174 @@ func TestIssue448_ListFailureSaysListWorkers(t *testing.T) {
 	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "gone"})
 	require.ErrorContains(t, err, "function.instances: list workers: test.List: runtime down")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+}
+
+// ADR-0174 tests: RevisionReady and ShapeValid report no True before a replica of the latest generation has been ready.
+
+func scaleToZero(fn *v1.Function) { fn.Spec.Replicas = 0 }
+
+// requireRevisionStatus asserts name's RevisionReady and ShapeValid status and reason, observed at its generation.
+func (h *shimHarness) requireRevisionStatus(t *testing.T, name string, status v1.ConditionStatus, reason string) {
+	t.Helper()
+	fn := h.getFn(t, name)
+	for _, typ := range []v1.ConditionType{"RevisionReady", "ShapeValid"} {
+		c, ok := fn.Status.Conditions.Get(typ)
+		require.True(t, ok, "%s is set", typ)
+		require.Equal(t, status, c.Status, typ)
+		require.Equal(t, reason, c.Reason, typ)
+		require.Equal(t, fn.Generation, c.ObservedGeneration, typ)
+	}
+}
+
+// wakeToReady creates name scale-to-zero, wakes it as the activator does and reconciles it to Ready.
+func (h *shimHarness) wakeToReady(t *testing.T, name string) {
+	t.Helper()
+	h.create(t, name, scaleToZero)
+	h.reconcile(t, name)
+	h.setPhase(t, name, v1.PhaseDeploying)
+	h.reconcile(t, name)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, name).Status.Phase)
+}
+
+// scenario: never-booted-idle-is-unknown (ADR-0174).
+func TestScenarioNeverBootedIdleIsUnknown(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusServiceUnavailable, false)
+	h.create(t, "agent", scaleToZero)
+	h.reconcile(t, "agent")
+
+	fn := h.getFn(t, "agent")
+	require.Equal(t, v1.PhaseIdle, fn.Status.Phase)
+	require.Empty(t, fn.Status.ServingRevision)
+	creates, _ := h.rt.counts()
+	require.Zero(t, creates, "no worker is created")
+	h.requireRevisionStatus(t, "agent", v1.ConditionUnknown, "NotStarted")
+	require.Equal(t, "no replica of this generation has been ready yet", h.condition(t, "agent", "ShapeValid").Message)
+}
+
+// scenario: first-ready-replica-turns-true (ADR-0174).
+func TestScenarioFirstReadyReplicaTurnsTrue(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false)
+	_, setReady := h.rt.serveRevision(t, "agent-1", http.StatusServiceUnavailable)
+	h.create(t, "agent", scaleToZero)
+	h.reconcile(t, "agent")
+
+	h.setPhase(t, "agent", v1.PhaseDeploying)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "agent").Status.Phase, "the woken replica boots")
+	sv := h.condition(t, "agent", "ShapeValid")
+	require.Equal(t, v1.ConditionUnknown, sv.Status)
+	require.Equal(t, "NotStarted", sv.Reason)
+	rr := h.condition(t, "agent", "RevisionReady")
+	require.Equal(t, v1.ConditionFalse, rr.Status)
+	require.Equal(t, "Progressing", rr.Reason)
+
+	setReady(http.StatusOK)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "agent").Status.Phase)
+	h.requireRevisionStatus(t, "agent", v1.ConditionTrue, "")
+}
+
+// scenario: reclaim-keeps-true (ADR-0174).
+func TestScenarioReclaimKeepsTrue(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false)
+	h.wakeToReady(t, "agent")
+	h.setPhase(t, "agent", v1.PhaseIdle)
+	h.reconcile(t, "agent")
+	creates, _ := h.rt.counts()
+
+	h.reconcile(t, "agent")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates, after, "no worker boots")
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "agent").Status.Phase)
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("agent")["agent-1"][0])
+	h.requireRevisionStatus(t, "agent", v1.ConditionTrue, "")
+}
+
+// scenario: wake-of-served-generation (ADR-0174).
+func TestScenarioWakeOfServedGeneration(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	_, setReady := h.rt.serveRevision(t, "agent-1", http.StatusOK)
+	h.wakeToReady(t, "agent")
+	h.setPhase(t, "agent", v1.PhaseIdle)
+	h.reconcile(t, "agent")
+
+	time.Sleep(testPeriod) // past the reclaimed replica's restart backoff (ADR-0142)
+	setReady(http.StatusServiceUnavailable)
+	h.setPhase(t, "agent", v1.PhaseDeploying)
+	h.reconcile(t, "agent")
+	fn := h.getFn(t, "agent")
+	require.Equal(t, v1.PhaseDeploying, fn.Status.Phase)
+	require.Equal(t, 1, fn.Status.Replicas, "the woken replica boots")
+	require.Equal(t, v1.ConditionTrue, h.condition(t, "agent", "ShapeValid").Status, "the generation has served")
+	rr := h.condition(t, "agent", "RevisionReady")
+	require.Equal(t, v1.ConditionFalse, rr.Status)
+	require.Equal(t, "Progressing", rr.Reason)
+
+	setReady(http.StatusOK)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "agent").Status.Phase)
+	h.requireRevisionStatus(t, "agent", v1.ConditionTrue, "")
+}
+
+// scenario: redeploy-while-idle-is-unknown (ADR-0174).
+func TestScenarioRedeployWhileIdleIsUnknown(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false)
+	h.wakeToReady(t, "agent")
+	h.setPhase(t, "agent", v1.PhaseIdle)
+	h.reconcile(t, "agent")
+	creates, _ := h.rt.counts()
+
+	h.apply(t, "agent", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+	h.reconcile(t, "agent")
+	fn := h.getFn(t, "agent")
+	require.Equal(t, "agent-2", fn.Status.CurrentRevision)
+	require.Equal(t, v1.PhaseIdle, fn.Status.Phase)
+	after, _ := h.rt.counts()
+	require.Equal(t, creates, after, "no worker boots")
+	h.requireRevisionStatus(t, "agent", v1.ConditionUnknown, "NotStarted")
+
+	h.setPhase(t, "agent", v1.PhaseDeploying)
+	h.reconcile(t, "agent")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "agent").Status.Phase)
+	h.requireRevisionStatus(t, "agent", v1.ConditionTrue, "")
+}
+
+// scenario: switch-in-progress-shape-unknown (ADR-0174).
+func TestScenarioSwitchInProgressShapeUnknown(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch)
+	h.deployReady(t, "echo")
+	_, setReady2 := h.rt.serveRevision(t, "echo-2", http.StatusServiceUnavailable)
+	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+	h.reconcile(t, "echo")
+
+	fn := h.getFn(t, "echo")
+	require.Equal(t, "echo-1", fn.Status.ServingRevision, "revision 1 serves while revision 2 boots")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase)
+	sv := h.condition(t, "echo", "ShapeValid")
+	require.Equal(t, v1.ConditionUnknown, sv.Status)
+	require.Equal(t, "NotStarted", sv.Reason)
+	require.Equal(t, fn.Generation, sv.ObservedGeneration)
+	require.Equal(t, "Progressing", h.condition(t, "echo", "RevisionReady").Reason)
+
+	setReady2(http.StatusOK)
+	h.reconcile(t, "echo")
+	require.Equal(t, "echo-2", h.getFn(t, "echo").Status.ServingRevision)
+	h.requireRevisionStatus(t, "echo", v1.ConditionTrue, "")
+}
+
+// scenario: failed-generation-keeps-false (ADR-0174).
+func TestScenarioFailedGenerationKeepsFalse(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, true)
+	h.createFn(t, "broken")
+	h.reconcile(t, "broken")
+
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "broken").Status.Phase)
+	h.requireRevisionStatus(t, "broken", v1.ConditionFalse, "ShapeInvalid")
 }
