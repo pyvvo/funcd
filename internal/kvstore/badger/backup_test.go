@@ -129,6 +129,20 @@ func writeKeys(t *testing.T, db *badger.DB, prefix string, n int, valLen int) {
 	}))
 }
 
+func countKeys(db *badger.DB, prefix string) int {
+	n := 0
+	_ = db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		p := []byte(prefix)
+		for it.Seek(p); it.ValidForPrefix(p); it.Next() {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
 // scenario: backup-default-off — no DR config ⇒ no seam constructed, no object-storage writes.
 func TestScenarioBackupDefaultOff(t *testing.T) {
 	kv, seams, err := OpenWithSeams(t.TempDir(), nil, nil)
@@ -227,21 +241,8 @@ func TestScenarioRestoreReconstructsStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rb.Restore(ctx))
 
-	count := func(db *badger.DB, prefix string) int {
-		n := 0
-		_ = db.View(func(txn *badger.Txn) error {
-			it := txn.NewIterator(badger.DefaultIteratorOptions)
-			defer it.Close()
-			p := []byte(prefix)
-			for it.Seek(p); it.ValidForPrefix(p); it.Next() {
-				n++
-			}
-			return nil
-		})
-		return n
-	}
-	require.Equal(t, 100, count(dst, "base/"), "base keys restored")
-	require.Equal(t, 20, count(dst, "inc/"), "incremental keys restored")
+	require.Equal(t, 100, countKeys(dst, "base/"), "base keys restored")
+	require.Equal(t, 20, countKeys(dst, "inc/"), "incremental keys restored")
 
 	// value parity on a sampled key
 	require.NoError(t, dst.View(func(txn *badger.Txn) error {
@@ -252,4 +253,48 @@ func TestScenarioRestoreReconstructsStore(t *testing.T) {
 			return nil
 		})
 	}))
+}
+
+// The backup's own cursor write is not a change: an idle tick uploads nothing, and a restored instance
+// resumes from the chain's head, so a later ship and restore still carry every key.
+func TestIssue790_IdleShipUploadsNothing(t *testing.T) {
+	ctx := context.Background()
+	src := openRawDB(t, t.TempDir())
+	bucket := newFakeBucket()
+	b, err := NewBackup(src, bucket, BackupConfig{})
+	require.NoError(t, err)
+	bk := b.(*backup)
+
+	writeKeys(t, src, "k/", 10, 16)
+	to, err := bk.Ship(ctx)
+	require.NoError(t, err)
+	puts := bucket.puts
+	for i := 0; i < 20; i++ {
+		_, err = bk.Ship(ctx)
+		require.NoError(t, err)
+	}
+	require.Equal(t, puts, bucket.puts, "an idle tick uploads nothing")
+	cur, err := bk.cursor(ctx)
+	require.NoError(t, err)
+	require.Equal(t, to, cur, "an idle tick leaves the cursor where it was")
+
+	dst := openRawDB(t, t.TempDir())
+	rb, err := NewBackup(dst, bucket, BackupConfig{})
+	require.NoError(t, err)
+	rbk := rb.(*backup)
+	require.NoError(t, rbk.Restore(ctx))
+	require.Equal(t, 10, countKeys(dst, "k/"), "every data key restored")
+	cur, err = rbk.cursor(ctx)
+	require.NoError(t, err)
+	require.Equal(t, to, cur, "the restored instance resumes from the chain's head")
+
+	writeKeys(t, dst, "more/", 5, 16)
+	_, err = rbk.Ship(ctx)
+	require.NoError(t, err)
+	again := openRawDB(t, t.TempDir())
+	ab, err := NewBackup(again, bucket, BackupConfig{})
+	require.NoError(t, err)
+	require.NoError(t, ab.Restore(ctx))
+	require.Equal(t, 10, countKeys(again, "k/"))
+	require.Equal(t, 5, countKeys(again, "more/"), "a ship after a restore continues the chain")
 }
