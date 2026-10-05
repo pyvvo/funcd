@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — §5 and scaler `* -> Idle` reclaim edge; idle-reclaim of every minReplicas:0 Function.
+- **Superseded in part by**: [ADR-0185](0185-idle-reclaim-skips-pending.md) (2026-10-05) — C2 reclaim edge (lines 138-139): becomes Ready/Degraded/— → Idle.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** — review **pass** (zero findings), see
   docs/reviews/adr-0016-implementation-claude-opus-4-8.md; 7 scenarios pass under `-race`, DoD 8/8, no new
   deps. **Reviewing 2026-06-14** — implemented via `adr-impl`: `internal/activator`

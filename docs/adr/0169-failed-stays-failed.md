@@ -1,6 +1,7 @@
 # ADR-0169: Failed stays Failed — a Function leaves Failed only by a new spec or a retry that starts a worker
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0185](0185-idle-reclaim-skips-pending.md) (2026-10-05) — Decision 3 (line 120), Contracts Reclaimable and edge table (lines 157, 211), checklist line 257 and the header's Pending --> Idle edge (lines 24-25): idle reclaim no longer admits Pending.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, activator, scale-to-zero, status, supervision, crash-recovery

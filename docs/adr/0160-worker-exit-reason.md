@@ -1,6 +1,7 @@
 # ADR-0160: Worker exit reason — a worker that crashes while booting is retried with a growing wait, not ShapeInvalid
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 3 rows (lines 131-132, 135) and Decision 5 (lines 146-147): re-create waits count from the last successful Start.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, supervision, function, process, containerd, config, crash-recovery
