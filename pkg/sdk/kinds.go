@@ -8,8 +8,18 @@ package sdk
 import (
 	"strings"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
+
+// ReadOnlyKind reports whether the API serves only get and list for k: the Function reconciler writes every
+// Revision (ADR-0172).
+func ReadOnlyKind(k v1.Kind) bool { return k == v1.KindRevision }
+
+// errReadOnly is the refusal of a write to a read-only kind, made before any request (ADR-0172).
+func errReadOnly(op string, k v1.Kind) error {
+	return fault.Invalidf(op, "%s is read-only: the Function reconciler writes it", k)
+}
 
 // kindDescriptor is the client's knowledge of one kind's REST path shape.
 type kindDescriptor struct {

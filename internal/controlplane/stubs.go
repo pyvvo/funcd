@@ -256,17 +256,6 @@ func (s *StubHandlers) GetRevision(_ context.Context, ns v1.NamespaceName, name 
 	return v1.Revision{}, fault.NotFoundf("StubHandlers.GetRevision", "Revision %s/%s not found", ns, name)
 }
 
-func (s *StubHandlers) CreateRevision(_ context.Context, rev v1.Revision) (v1.Revision, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := nsKey(rev.Namespace, rev.Name)
-	if _, exists := s.revisions[key]; exists {
-		return v1.Revision{}, fault.Conflictf("StubHandlers.CreateRevision", "Revision %s already exists", key)
-	}
-	s.revisions[key] = rev
-	return rev, nil
-}
-
 func (s *StubHandlers) ListRevisions(_ context.Context, ns v1.NamespaceName) ([]v1.Revision, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -277,28 +266,6 @@ func (s *StubHandlers) ListRevisions(_ context.Context, ns v1.NamespaceName) ([]
 		}
 	}
 	return out, nil
-}
-
-func (s *StubHandlers) ReplaceRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, rev v1.Revision) (v1.Revision, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := nsKey(ns, name)
-	if _, exists := s.revisions[key]; !exists {
-		return v1.Revision{}, fault.NotFoundf("StubHandlers.ReplaceRevision", "Revision %s not found", key)
-	}
-	s.revisions[key] = rev
-	return rev, nil
-}
-
-func (s *StubHandlers) DeleteRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := nsKey(ns, name)
-	if _, exists := s.revisions[key]; !exists {
-		return fault.NotFoundf("StubHandlers.DeleteRevision", "Revision %s not found", key)
-	}
-	delete(s.revisions, key)
-	return nil
 }
 
 // ---- Route ----

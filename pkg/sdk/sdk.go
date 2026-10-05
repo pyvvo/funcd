@@ -86,6 +86,9 @@ func refuseMethodChange(req *http.Request, via []*http.Request) error {
 // yet exist) POST the collection path to create it. Returns the stored object.
 func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	kind := obj.GroupVersionKind().Kind
+	if ReadOnlyKind(kind) {
+		return nil, errReadOnly("sdk.Apply", kind)
+	}
 	ns := obj.GetNamespace()
 	name := obj.GetName()
 	body, err := toWireBody(obj)
@@ -118,6 +121,9 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 // Create creates obj by POSTing the collection path, never replacing an existing object: a taken
 // name is a fault.Conflict. An empty name with GenerateName set lets the server assign one.
 func (c *Client) Create(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	if k := obj.GroupVersionKind().Kind; ReadOnlyKind(k) {
+		return nil, errReadOnly("sdk.Create", k)
+	}
 	body, err := toWireBody(obj)
 	if err != nil {
 		return nil, err
@@ -179,6 +185,9 @@ func (c *Client) List(ctx context.Context, kind v1.Kind, ns v1.NamespaceName) ([
 
 // Delete removes one object.
 func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, opts ...DeleteOption) error {
+	if ReadOnlyKind(kind) {
+		return errReadOnly("sdk.Delete", kind)
+	}
 	var o deleteOptions
 	for _, opt := range opts {
 		opt(&o)

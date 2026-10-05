@@ -47,10 +47,7 @@ type Handlers interface {
 
 	// Revision (namespaced)
 	GetRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Revision, error)
-	CreateRevision(ctx context.Context, rev v1.Revision) (v1.Revision, error)
 	ListRevisions(ctx context.Context, ns v1.NamespaceName) ([]v1.Revision, error)
-	ReplaceRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rev v1.Revision) (v1.Revision, error)
-	DeleteRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
 	// Route (namespaced)
 	GetRoute(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Route, error)

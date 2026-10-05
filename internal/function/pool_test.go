@@ -733,3 +733,32 @@ func TestScenarioPooledMemberNeverBootedIsUnknown(t *testing.T) {
 		h.requireRevisionStatus(t, "p2", v1.ConditionTrue, "")
 	})
 }
+
+// scenario: pooled-missing-revision-left-out (ADR-0172).
+func TestScenarioPooledMissingRevisionLeftOut(t *testing.T) {
+	t.Parallel()
+	res, rec := &fakeResolver{digest: "sha256:A"}, &pinRecorder{}
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, pinning(res, rec))
+	for _, name := range []string{"a", "b"} {
+		h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w" })
+	}
+	h.reconcile(t, "a")
+	h.reconcile(t, "b")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
+	require.Contains(t, h.poolManifest(t, poolOf("w")), `"a"`)
+
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindRevision.GVK(), "default", "a-1", ""))
+	res.moveTo("sha256:B")
+	h.rt.exit(poolOf("w"), runtime.StateFailed, time.Hour)
+	h.reconcile(t, "b")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates(poolOf("w"))[""][0], "b's reconcile restarts the pool")
+	require.NotContains(t, h.poolManifest(t, poolOf("w")), `"a"`, "a is left out of the pool")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
+
+	h.reconcile(t, "a")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "a").Status.Phase)
+	require.Equal(t, "RevisionMissing", h.condition(t, "a", "Ready").Reason)
+	require.NotContains(t, rec.digests(), "sha256:B", "nothing runs at B")
+	require.Equal(t, 2, res.count(), "nothing is resolved after the deploy")
+}

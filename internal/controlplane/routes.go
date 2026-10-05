@@ -295,10 +295,6 @@ func registerFunction(api huma.API, h Handlers) {
 
 // ===== Revision (namespaced) =====
 
-type createRevisionInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	Body      v1.Revision
-}
 type revisionOutput struct {
 	Body v1.Revision
 }
@@ -321,20 +317,6 @@ func registerRevision(api huma.API, h Handlers) {
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "createRevision", Method: http.MethodPost, Path: base,
-		Tags: []string{"Revision"},
-	}, func(ctx context.Context, in *createRevisionInput) (*revisionOutput, error) {
-		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
-			return nil, wrapFaultError(err)
-		}
-		rev, err := h.CreateRevision(ctx, in.Body)
-		if err != nil {
-			return nil, wrapFaultError(err)
-		}
-		return &revisionOutput{Body: rev}, nil
-	})
-
-	huma.Register(api, huma.Operation{
 		OperationID: "getRevision", Method: http.MethodGet, Path: base + "/{name}",
 		Tags: []string{"Revision"},
 	}, func(ctx context.Context, in *namespacedGet) (*revisionOutput, error) {
@@ -343,28 +325,6 @@ func registerRevision(api huma.API, h Handlers) {
 			return nil, wrapFaultError(err)
 		}
 		return &revisionOutput{Body: rev}, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "replaceRevision", Method: http.MethodPut, Path: base + "/{name}",
-		Tags: []string{"Revision"},
-	}, func(ctx context.Context, in *struct {
-		Namespace v1.NamespaceName `path:"namespace"`
-		Name      v1.ObjectName    `path:"name"`
-		Body      v1.Revision
-	}) (*revisionOutput, error) {
-		rev, err := h.ReplaceRevision(ctx, in.Namespace, in.Name, in.Body)
-		if err != nil {
-			return nil, wrapFaultError(err)
-		}
-		return &revisionOutput{Body: rev}, nil
-	})
-
-	huma.Register(api, huma.Operation{
-		OperationID: "deleteRevision", Method: http.MethodDelete, Path: base + "/{name}",
-		Tags: []string{"Revision"},
-	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteRevision(ctx, in.Namespace, in.Name))
 	})
 }
 
