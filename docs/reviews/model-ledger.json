@@ -8743,5 +8743,35 @@
     "dod_total": 5,
     "report": "docs/reviews/adr-0158-implementation-claude-opus-5-5-4.md",
     "notes": "loop 4 (loop-3 findings on merged 4fe29030, PR #677): M1 resolved (on main after #674/#678; token test retries POST to 200 via assert.Eventually, token/workers.json asserts kept, test-only change; non-member mutant killed 404; -race -count=3 ok, all 3 cases run); m1 resolved (requeueFor uses v.retryAt.Sub(now)); m2 open [model] (host-exit subtest unchanged: no period crossed, no reclaim; ADR-0169 then-clause still covered by handler-cannot-load). internal/function -race ok, vet+lint clean, CI ci+e2e SUCCESS."
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "675",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-675-fix-claude-opus-5-5-w12c.md",
+    "notes": "No findings. With the origin/main code overlaid, the regression test fails on 'policy2'. It passes under -race with the fix, and 4 of 4 mutants are killed. The fix uses @id annotations, as the person decided, and leaves the deny decision unchanged."
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "676",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-676-fix-claude-opus-5-5-w12c.md",
+    "notes": "No findings. The fix reuses scopeEntity.named() to type-check the entity of an is-in scope. The revert overlay fails for the reported reason, the test passes under -race, 3 of 3 mutants were killed, and vet and lint are clean. Observation, not scored: the type after `is` is still unchecked, which is outside this issue's scope."
   }
 ]
