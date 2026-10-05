@@ -141,7 +141,7 @@ func TestScenarioWarmPassthrough(t *testing.T) {
 }
 
 // An upstream with a path (a pool worker's /function/<name>, ADR-0046) serves the function's root at that path itself,
-// and a sub-path below it.
+// and a sub-path below it; a dot segment never leaves that path for a sibling member.
 func TestForwardUnderUpstreamPath(t *testing.T) {
 	t.Parallel()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +151,14 @@ func TestForwardUnderUpstreamPath(t *testing.T) {
 	a := newActivator(t, activator.Deps{Endpoints: &fakeEndpoints{upstream: backend.URL + "/function/svc", ready: true}, Scaler: &fakeScaler{}})
 	fn := activator.FunctionRef{Namespace: "default", Name: "svc"}
 
-	for path, want := range map[string]string{"/": "/function/svc", "/a/b": "/function/svc/a/b"} {
+	for path, want := range map[string]string{
+		"/":             "/function/svc",
+		"/a/b":          "/function/svc/a/b",
+		"/a/b/":         "/function/svc/a/b/",
+		"/../svc-admin": "/function/svc/svc-admin",
+		"/a/./../../x/": "/function/svc/x/",
+		"/a/..":         "/function/svc",
+	} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, activator.WithFunction(httptest.NewRequest(http.MethodPost, path, nil), fn))
 		require.Equal(t, want, rec.Body.String(), "request path %s", path)
