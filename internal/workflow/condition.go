@@ -1,10 +1,12 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,15 +49,30 @@ func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowCont
 			schemas["step."+string(p)+".output"] = c.Output
 		}
 	}
-	return schemaResolver{schemas: schemas}
+	return schemaResolver{schemas: schemas, decoded: map[string]*schemaNode{}}
 }
 
 // schemaResolver is an expr.Resolver answering path types from cached JSON-Schema documents (the
 // reconcile-time twin of the runtime docResolver): it descends `properties`, strict where the schema is
 // precise (a declared-properties object with a missing key ⇒ NotFound, catching a misspelling) and
 // permissive where the schema is silent about nesting (V1 primitive-only — structural typing is deferred).
+// It decodes each schema once, on its first reference, so a check costs one decoding of each schema
+// however many references it resolves.
 type schemaResolver struct {
 	schemas map[string]json.RawMessage
+	decoded map[string]*schemaNode
+}
+
+// schemaNode is the part of a JSON Schema the resolvers read. A schema that is not an object, or a
+// keyword of the wrong type, decodes to its zero value, which reads as a schema silent about the keyword.
+type schemaNode struct {
+	Properties map[string]*schemaNode `json:"properties"`
+	Required   []string               `json:"required"`
+	Type       string                 `json:"type"`
+	Items      struct {
+		Type string `json:"type"`
+	} `json:"items"`
+	Default json.RawMessage `json:"default"`
 }
 
 func (s schemaResolver) Roots() []string {
@@ -67,37 +84,33 @@ func (s schemaResolver) Roots() []string {
 }
 
 func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) {
-	cur, ok := s.schemas[root]
+	raw, ok := s.schemas[root]
 	if !ok {
 		return expr.Field{}, fault.NotFoundf("workflow.when", "root %q not in scope", root)
 	}
+	cur, ok := s.decoded[root]
+	if !ok {
+		cur = &schemaNode{}
+		_ = json.Unmarshal(raw, cur)
+		s.decoded[root] = cur
+	}
 	required := true // ADR-0095: a path is required only if every segment is in its parent's `required`
 	for _, seg := range path {
-		var view struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-			Required   []string                   `json:"required"`
-		}
-		_ = json.Unmarshal(cur, &view)
-		if view.Properties == nil {
+		if cur == nil || cur.Properties == nil {
 			// The schema is silent about nesting — V1 can't type deeper; accept permissively.
 			return expr.Field{Type: "string", Required: required}, nil
 		}
-		next, found := view.Properties[seg]
+		next, found := cur.Properties[seg]
 		if !found {
 			return expr.Field{}, fault.NotFoundf("workflow.when", "field %q not in the schema", seg)
 		}
-		required = required && slices.Contains(view.Required, seg)
+		required = required && slices.Contains(cur.Required, seg)
 		cur = next
 	}
-	var t struct {
-		Type  string `json:"type"`
-		Items struct {
-			Type string `json:"type"`
-		} `json:"items"`
-		Default json.RawMessage `json:"default"`
+	if cur == nil {
+		return expr.Field{Required: required}, nil
 	}
-	_ = json.Unmarshal(cur, &t)
-	return expr.Field{Type: t.Type, Items: t.Items.Type, Required: required, HasDefault: t.Default != nil, Default: t.Default}, nil
+	return expr.Field{Type: cur.Type, Items: cur.Items.Type, Required: required, HasDefault: cur.Default != nil, Default: cur.Default}, nil
 }
 
 // evalWhen evaluates a step's when.condition (ADR-0095 native-JS boolean) against
@@ -175,14 +188,7 @@ func (e *Engine) evalWait(n *stepNode, rec *runstate.Record, raw string, input j
 
 // evalPass evaluates a builtin pass step's Select expression → its output (ADR-0096; no dispatch).
 func (e *Engine) evalPass(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
-	out, err := e.evalSelect(raw, n, rec, input, outputs)
-	if err != nil {
-		return nil, err
-	}
-	if err := e.capOutput(n, out); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return e.evalSelect(raw, n, rec, input, outputs)
 }
 
 // evalSelect parses+checks+evaluates a ${{ }} Select expression against the run input + direct-parent
@@ -216,17 +222,20 @@ func runtimeResolver(n *stepNode, rec *runstate.Record, input json.RawMessage, o
 	if rec.Contract != nil {
 		inputSchema = rec.Contract.Input
 	}
-	return docResolver{docs: docs, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema).schemas}
+	return docResolver{docs: docs, decoded: map[string]interface{}{}, schemas: whenSchemaResolver(n, rec.StepContracts, inputSchema)}
 }
 
 // docResolver is an expr.Resolver that infers field types from actual JSON documents
 // (the runtime resolver): each key is an exposed root, and a path's type comes from
 // the value found there. Present ⇒ Required (no default); missing with a default in schemas ⇒ that
 // defaulted Field, which Eval binds (ADR-0095); else a missing last segment ⇒ the absent expr.Field,
-// which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound.
+// which only an ADR-0095 `!== undefined` guard may probe; a missing parent ⇒ NotFound. It decodes each
+// document once, on its first reference, so a check costs one decoding of each document however many
+// references it resolves.
 type docResolver struct {
 	docs    map[string]json.RawMessage
-	schemas map[string]json.RawMessage // per root, the run-pinned schema; nil ⇒ no defaults
+	decoded map[string]interface{}
+	schemas schemaResolver // per root, the run-pinned schema; none ⇒ no defaults
 }
 
 func (r docResolver) Roots() []string {
@@ -242,15 +251,19 @@ func (r docResolver) Resolve(root string, path []string) (expr.Field, error) {
 	if !ok {
 		return expr.Field{}, fault.NotFoundf("workflow.resolve", "root %q not in scope", root)
 	}
-	cur := raw
+	cur, ok := r.decoded[root]
+	if !ok {
+		cur = decodeDoc(raw)
+		r.decoded[root] = cur
+	}
 	for i, seg := range path {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(cur, &obj); err != nil {
+		obj, isObj := fieldsOf(cur)
+		if !isObj {
 			return expr.Field{}, fault.NotFoundf("workflow.resolve", "%q is not an object", seg)
 		}
 		next, ok := obj[seg]
 		if !ok {
-			if f, err := (schemaResolver{r.schemas}).Resolve(root, path); err == nil && f.HasDefault {
+			if f, err := r.schemas.Resolve(root, path); err == nil && f.HasDefault {
 				return f, nil
 			}
 			if i == len(path)-1 {
@@ -263,12 +276,75 @@ func (r docResolver) Resolve(root string, path []string) (expr.Field, error) {
 	return inferField(cur)
 }
 
-// inferField reports the JSON-Schema-style type of a value.
-func inferField(raw json.RawMessage) (expr.Field, error) {
+// unreadable stands, in a decoded document, for a value that holds a number beyond the range of a
+// float64, which an evaluation cannot bind: the value has no type, though the fields of an object
+// holding one (fields) can still be read.
+type unreadable struct {
+	fields map[string]interface{}
+}
+
+// decodeDoc decodes a document for docResolver: numbers become float64 values and a value that holds
+// an out-of-range number becomes unreadable. An invalid document is unreadable as a whole.
+func decodeDoc(raw json.RawMessage) interface{} {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
 	var v interface{}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return expr.Field{}, fault.NotFoundf("workflow.resolve", "unreadable value")
+	if !json.Valid(raw) || d.Decode(&v) != nil {
+		return unreadable{}
 	}
+	v, _ = readable(v)
+	return v
+}
+
+// readable converts the numbers within v to float64 values, in place, and reports whether all of them
+// are in range; a value holding one that is not is returned as unreadable.
+func readable(v interface{}) (interface{}, bool) {
+	all := true
+	switch t := v.(type) {
+	case json.Number:
+		f, err := strconv.ParseFloat(string(t), 64)
+		if err != nil {
+			return unreadable{}, false
+		}
+		return f, true
+	case []interface{}:
+		for i := range t {
+			var ok bool
+			t[i], ok = readable(t[i])
+			all = all && ok
+		}
+		if !all {
+			return unreadable{}, false
+		}
+	case map[string]interface{}:
+		for k, x := range t {
+			var ok bool
+			t[k], ok = readable(x)
+			all = all && ok
+		}
+		if !all {
+			return unreadable{fields: t}, false
+		}
+	}
+	return v, true
+}
+
+// fieldsOf returns the fields of a decoded object, and reports whether v is one; null reads as an
+// object without fields.
+func fieldsOf(v interface{}) (map[string]interface{}, bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, true
+	case map[string]interface{}:
+		return t, true
+	case unreadable:
+		return t.fields, t.fields != nil
+	}
+	return nil, false
+}
+
+// inferField reports the JSON-Schema-style type of a decoded value.
+func inferField(v interface{}) (expr.Field, error) {
 	f := expr.Field{Required: true}
 	switch t := v.(type) {
 	case string:
@@ -280,8 +356,7 @@ func inferField(raw json.RawMessage) (expr.Field, error) {
 	case []interface{}:
 		f.Type = "array"
 		if len(t) > 0 {
-			b, _ := json.Marshal(t[0])
-			if el, err := inferField(b); err == nil {
+			if el, err := inferField(t[0]); err == nil {
 				f.Items = el.Type
 			}
 		}

@@ -3,10 +3,13 @@ package expr
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/dop251/goja/ast"
+	"github.com/dop251/goja/token"
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -63,13 +66,14 @@ func (e *Expr) EvalBool(docs map[string]json.RawMessage) (bool, error) {
 	return v.ToBoolean(), nil
 }
 
-// Budget is what evaluations spend together: the length of the strings their replaceAll calls build,
-// their running time, and how much larger than their documents their results are. Eval and EvalBool
-// spend a fresh Budget per call. A consumer that builds one value from several expressions over the
-// same documents (a Sensor action input, ADR-0109) evaluates them within one Budget, so splitting an
-// expression into many does not multiply what it may cost. A Budget is not safe for concurrent use.
+// Budget is what evaluations spend together: the length of the strings their concatenations, literals and
+// replaceAll calls build or hold, their running time, and how much larger than their documents their results
+// are. Eval and EvalBool spend a fresh Budget per call. A consumer that builds one value from several
+// expressions over the same documents (a Sensor action input, ADR-0109) evaluates them within one
+// Budget, so splitting an expression into many does not multiply what it may cost. A Budget is not
+// safe for concurrent use.
 type Budget struct {
-	strings float64         // replaceAll code units left
+	strings float64         // code units left for concatenations, literals and replaceAll calls
 	time    time.Duration   // running time left
 	result  int64           // result bytes left
 	counted map[string]bool // roots whose documents result already allows for
@@ -90,10 +94,11 @@ func (e *Expr) budget() *Budget {
 }
 
 // run compiles the program once (cached), binds the root documents (with defaults
-// injected) as globals plus the whitelisted helpers, and evaluates.
+// injected) as globals plus the whitelisted helpers, and evaluates. The Budget's time runs from the
+// binding, which every evaluation does again.
 func (e *Expr) run(docs map[string]json.RawMessage, b *Budget) (goja.Value, error) {
 	if b.time <= 0 {
-		return nil, fault.Invalidf(evalOp, "evaluating expression: %s", timeLimit)
+		return nil, errTimeLimit()
 	}
 	if e.compiled == nil {
 		prog, err := goja.Compile("expr", e.inner, true)
@@ -106,38 +111,57 @@ func (e *Expr) run(docs map[string]json.RawMessage, b *Budget) (goja.Value, erro
 	if err := vm.Set("sum", sumHelper); err != nil {
 		return nil, fault.Internalf(evalOp, "binding helper: %v", err)
 	}
-	if err := boundReplaceAll(vm, &b.strings); err != nil {
-		return nil, fault.Internalf(evalOp, "binding replaceAll: %v", err)
+	if err := bindSearches(vm, &b.strings); err != nil {
+		return nil, fault.Internalf(evalOp, "binding string methods: %v", err)
 	}
+	start := time.Now()
+	defer func() { b.time -= time.Since(start) }()
 	// A root like "step.stats.output" is member access in JS, so build one nested
 	// global per top-level segment (roots sharing a prefix merge).
 	globals := map[string]interface{}{}
+	c := concat{globals: globals}
 	for _, root := range e.roots {
 		val, err := docValue(docs[root], e.defaultsFor(root))
 		if err != nil {
 			return nil, err
 		}
 		setNested(globals, splitRoot(root), val)
+		c.docs += float64(len(docs[root]))
+	}
+	for _, d := range e.defs {
+		c.docs += float64(len(d.val))
 	}
 	for name, val := range globals {
 		if err := vm.Set(name, val); err != nil {
 			return nil, fault.Internalf(evalOp, "binding root %q: %v", name, err)
 		}
 	}
-	start := time.Now()
-	timer := time.AfterFunc(b.time, func() { vm.Interrupt(timeLimit) })
+	c.sub(e.rootExpr())
+	if c.built > b.strings {
+		return nil, fault.Invalidf(evalOp, "evaluating expression: its concatenations and literals could hold more than %d characters in total", maxStringLen)
+	}
+	b.strings -= c.built
+	left := b.time - time.Since(start)
+	if left <= 0 {
+		return nil, errTimeLimit()
+	}
+	timer := time.AfterFunc(left, func() { vm.Interrupt(timeLimit) })
 	v, err := vm.RunProgram(e.compiled)
 	timer.Stop()
-	b.time -= time.Since(start)
 	if err != nil {
 		return nil, fault.Invalidf(evalOp, "evaluating expression: %s", oneLine(err.Error()))
 	}
 	return v, nil
 }
 
-// maxStringLen bounds, in UTF-16 code units, the total length of the strings that the replaceAll
-// calls within one Budget build. Chained or concatenated calls multiply a string's length, so without a
-// bound a short expression exhausts the daemon's memory; the total also bounds the calls' CPU time.
+func errTimeLimit() error {
+	return fault.Invalidf(evalOp, "evaluating expression: %s", timeLimit)
+}
+
+// maxStringLen bounds, in UTF-16 code units, the total length of the strings that the concatenations,
+// the array and object literals and the replaceAll calls within one Budget build or hold. Concatenated
+// or chained calls multiply a string's length, and a literal keeps a copy per element, so without a
+// bound a short expression exhausts the daemon's memory.
 const maxStringLen = 1 << 20
 
 // resultMargin bounds, in bytes, how much larger than their documents the Select results within one
@@ -145,94 +169,309 @@ const maxStringLen = 1 << 20
 // almost no evaluation cost.
 const resultMargin = 1 << 20
 
-// evalTimeout bounds the running time within one Budget: the subset has no loops, but an operator such
-// as string '+' copies its operands, so cost still grows with the data an expression repeats
-// (ADR-0095's Runtime.Interrupt backstop).
+// evalTimeout bounds the running time within one Budget: the subset has no loops, but every operator
+// and method copies or searches its operands, so cost still grows with the data an expression repeats
+// (ADR-0095's Runtime.Interrupt backstop). Interrupt acts between instructions, so each native call the
+// subset admits runs in time linear in its operands and result.
 const evalTimeout = 100 * time.Millisecond
 
 const timeLimit = "evaluation exceeded its time limit"
 
-// boundReplaceAll wraps String.prototype.replaceAll so that a call checks its result length against
-// what is left of the Budget's string length and throws when it does not fit, before goja allocates
-// the string.
-func boundReplaceAll(vm *goja.Runtime, left *float64) error {
-	proto := vm.Get("String").ToObject(vm).Get("prototype").ToObject(vm)
-	replaceAll, ok := goja.AssertFunction(proto.Get("replaceAll"))
-	if !ok {
-		return fault.Internalf(evalOp, "String.prototype.replaceAll is not a function")
+// concat bounds, before an evaluation runs, the strings its '+' operators build and its array and object
+// literals hold over the bound documents: a '+' result is never longer than its two operands together.
+type concat struct {
+	globals map[string]interface{}
+	docs    float64 // the JSON size of the bound documents and defaults
+	built   float64 // the bound of every concatenation's result
+}
+
+// scalarLen bounds String(v) for a number, a boolean, null or undefined: "-1.7976931348623157e+308".
+const scalarLen = 24
+
+// sub bounds x where no '+' concatenates it, so a concatenation there is one of its own: its result
+// bound is charged.
+func (c *concat) sub(x ast.Expression) (float64, bool) {
+	n, str := c.len(x)
+	if b, ok := x.(*ast.BinaryExpression); ok && b.Operator == token.PLUS && str {
+		c.built += n
 	}
-	indexOf, ok := goja.AssertFunction(proto.Get("indexOf"))
+	return n, str
+}
+
+// len bounds the length of String(v) for the value v that x evaluates to, and reports whether v may be
+// a string, an array or an object, which '+' concatenates rather than adds. A replaceAll result counts
+// as empty, since its calls spend the same budget when they run; a case change at most triples a string.
+func (c *concat) len(x ast.Expression) (float64, bool) {
+	switch n := x.(type) {
+	case *ast.StringLiteral:
+		return float64(len(n.Value)), true
+	case *ast.BinaryExpression:
+		if n.Operator == token.PLUS {
+			l, ls := c.len(n.Left)
+			r, rs := c.len(n.Right)
+			if ls || rs {
+				return l + r, true
+			}
+			break
+		}
+		c.sub(n.Left)
+		c.sub(n.Right)
+	case *ast.UnaryExpression:
+		c.sub(n.Operand)
+	case *ast.ConditionalExpression:
+		c.sub(n.Test)
+		a, as := c.sub(n.Consequent)
+		b, bs := c.sub(n.Alternate)
+		return max(a, b), as || bs
+	case *ast.ArrayLiteral:
+		for _, v := range n.Value {
+			c.keep(v)
+		}
+	case *ast.ObjectLiteral:
+		for _, p := range n.Value {
+			if pk, ok := p.(*ast.PropertyKeyed); ok {
+				c.keep(pk.Value)
+			}
+		}
+	case *ast.CallExpression:
+		for _, a := range n.ArgumentList {
+			c.sub(a)
+		}
+		if dot, ok := n.Callee.(*ast.DotExpression); ok {
+			recv, _ := c.sub(dot.Left)
+			switch dot.Identifier.Name.String() {
+			case "slice", "trim":
+				return recv, true
+			case "toUpperCase", "toLowerCase":
+				return 3 * recv, true
+			case "replaceAll":
+				return 0, true
+			}
+		}
+	case *ast.DotExpression:
+		if _, ok := flattenRef(n); !ok { // the length of a computed string
+			c.sub(n.Left)
+			break
+		}
+		return c.ref(n)
+	case *ast.BracketExpression, *ast.Identifier:
+		return c.ref(n)
+	}
+	return scalarLen, false
+}
+
+// keep bounds an element of an array or object literal and charges a string it holds, as a '+' result is
+// charged: the literal keeps it until the evaluation ends, and goja copies a non-ASCII string when it
+// slices or case-changes it, or when Array.prototype.includes compares a document string it read. An
+// array or object that the element reads is the bound document, not a copy.
+func (c *concat) keep(x ast.Expression) {
+	if t, ok := x.(*ast.ConditionalExpression); ok {
+		c.sub(t.Test)
+		c.keep(t.Consequent)
+		c.keep(t.Alternate)
+		return
+	}
+	n, str := c.len(x)
+	if segs, ok := flattenRef(x); ok {
+		_, str = lookup(c.globals, segs).(string)
+	}
+	if str {
+		c.built += n
+	}
+}
+
+// ref bounds String(v) for the bound value v that a reference reads. Array.prototype.toString joins
+// the elements, at most 8 times as long as their JSON ("{}" becomes "[object Object]").
+func (c *concat) ref(x ast.Expression) (float64, bool) {
+	segs, ok := flattenRef(x)
 	if !ok {
-		return fault.Internalf(evalOp, "String.prototype.indexOf is not a function")
+		return scalarLen, false
+	}
+	switch v := lookup(c.globals, segs).(type) {
+	case string:
+		return float64(len(v)), true
+	case []interface{}:
+		return 8 * c.docs, true
+	case map[string]interface{}:
+		return float64(len("[object Object]")), true
+	}
+	return scalarLen, false
+}
+
+// lookup returns the bound value that a reference reads, or nil when it reads none.
+func lookup(globals map[string]interface{}, segs []refSeg) interface{} {
+	var v interface{} = globals
+	for _, s := range segs {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			key := s.ident
+			if s.isIndex {
+				key = strconv.Itoa(s.index)
+			}
+			v = x[key]
+		case []interface{}:
+			if !s.isIndex || s.index >= len(x) {
+				return nil
+			}
+			v = x[s.index]
+		case string:
+			if !s.isIndex || s.index >= len(x) {
+				return nil
+			}
+			v = x[:1] // one code unit
+		default:
+			return nil
+		}
+	}
+	return v
+}
+
+// bindSearches replaces String.prototype.includes and replaceAll, the admitted methods that search a
+// string, with searches in linear time: goja's own search on a non-ASCII string compares the whole
+// pattern at every position, and the deadline cannot stop a native call. replaceAll also throws, before
+// it builds its result, when the result does not fit what is left of the Budget's string length.
+func bindSearches(vm *goja.Runtime, left *float64) error {
+	proto := vm.Get("String").ToObject(vm).Get("prototype").ToObject(vm)
+	if err := proto.Set("includes", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(newSearch(jsString(vm, call.Argument(0))).index(jsString(vm, call.This), 0) >= 0)
+	}); err != nil {
+		return err
 	}
 	return proto.Set("replaceAll", func(call goja.FunctionCall) goja.Value {
-		fits, err := replaceAllFits(vm, indexOf, call.This, call.Argument(0), call.Argument(1), *left)
-		if err != nil {
-			panic(err)
-		}
-		if !fits {
-			panic(vm.NewTypeError("replaceAll calls would build more than %d characters in total", maxStringLen))
-		}
-		v, err := replaceAll(call.This, call.Arguments...)
-		if err != nil {
-			panic(err)
-		}
-		*left -= float64(jsString(vm, v).Length())
-		return v
+		return replaceAll(vm, jsString(vm, call.This), jsString(vm, call.Argument(0)), jsString(vm, call.Argument(1)), left)
 	})
 }
 
-// replaceAllFits reports whether s.replaceAll(pat, repl) builds at most limit code units, for string
-// arguments, the only ones Check admits. It follows GetSubstitution with no capture groups: $$ writes
-// "$", $& the match, $` the text before it and $' the text after it; any other character is written as is.
-func replaceAllFits(vm *goja.Runtime, indexOf goja.Callable, s, pat, repl goja.Value, limit float64) (bool, error) {
-	r := jsString(vm, repl)
-	l, pl := float64(jsString(vm, s).Length()), float64(jsString(vm, pat).Length())
-	var fixed, match, before, after float64
-	for i := 0; i < r.Length(); i++ {
-		if r.CharAt(i) == '$' && i+1 < r.Length() {
-			i++
-			switch r.CharAt(i) {
-			case '$':
-				fixed++
-			case '&':
-				match++
-			case '`':
-				before++
-			case '\'':
-				after++
-			default:
-				fixed++
-				i--
+// replaceAll is s.replaceAll(pat, repl) for string arguments, the only ones Check admits. It follows
+// GetSubstitution with no capture groups: $$ writes "$", $& the match, $` the text before it and $' the
+// text after it; any other character is written as is. It spends the result length from left, and
+// throws, before it builds the result, when it does not fit.
+func replaceAll(vm *goja.Runtime, s, pat, repl goja.String, left *float64) goja.Value {
+	m, pieces := newSearch(pat), substitution(repl, pat.Length() == 0)
+	l, pl := s.Length(), pat.Length()
+	// each passes the parts of the result to part in order, and stops when part returns false.
+	each := func(part func(src goja.String, from, to int) bool) bool {
+		last := 0
+		for p := m.index(s, 0); p >= 0; p = m.index(s, p+max(pl, 1)) {
+			if !part(s, last, p) {
+				return false
 			}
+			for _, pc := range pieces {
+				var ok bool
+				switch pc.kind {
+				case '&':
+					ok = part(s, p, p+pl)
+				case '`':
+					ok = part(s, 0, p)
+				case '\'':
+					ok = part(s, min(p+pl, l), l)
+				default:
+					ok = part(repl, pc.from, pc.to)
+				}
+				if !ok {
+					return false
+				}
+			}
+			last = p + pl
+		}
+		return part(s, last, l)
+	}
+	var n float64
+	if !each(func(_ goja.String, from, to int) bool { n += float64(to - from); return n <= *left }) {
+		panic(vm.NewTypeError("replaceAll calls would build more than %d characters in total", maxStringLen))
+	}
+	var out goja.StringBuilder
+	out.Grow(int(n))
+	each(func(src goja.String, from, to int) bool { out.WriteSubstring(src, from, to); return true })
+	*left -= n
+	return out.String()
+}
+
+// piece is one part of a replacement: a literal run of it (kind 0, from:to), or $&, $` or $', whose
+// kind is the character after the $.
+type piece struct {
+	kind     uint16
+	from, to int
+}
+
+// substitution splits a replacement into its pieces. An empty pattern matches empty text, so its $&
+// pieces, which would write nothing at every match, are dropped.
+func substitution(r goja.String, emptyPattern bool) []piece {
+	var out []piece
+	lit, rl := 0, r.Length()
+	flush := func(to int) {
+		if to > lit {
+			out = append(out, piece{from: lit, to: to})
+		}
+	}
+	for i := 0; i+1 < rl; i++ {
+		if r.CharAt(i) != '$' {
 			continue
 		}
-		fixed++
-	}
-	if pl == 0 { // a match before every code unit and at the end; the text before and after each sum to l(l+1)/2
-		return l+(l+1)*fixed+(before+after)*l*(l+1)/2 <= limit, nil
-	}
-	// At most l/pl matches, each adding at most inc: when that fits, no scan is needed.
-	inc := fixed + (match-1)*pl + (before+after)*(l-pl)
-	if l+math.Floor(l/pl)*math.Max(inc, 0) <= limit {
-		return true, nil
-	}
-	n := l
-	for from := 0.0; ; {
-		v, err := indexOf(s, pat, vm.ToValue(from))
-		if err != nil {
-			return false, err
+		switch c := r.CharAt(i + 1); c {
+		case '$':
+			flush(i + 1)
+		case '&', '`', '\'':
+			flush(i)
+			if c != '&' || !emptyPattern {
+				out = append(out, piece{kind: c})
+			}
+		default:
+			continue
 		}
-		pos := float64(v.ToInteger())
-		if pos < 0 {
-			return n <= limit, nil
+		lit = i + 2
+		i++
+	}
+	flush(rl)
+	return out
+}
+
+// search finds a pattern in strings in time linear in their lengths (Knuth-Morris-Pratt over UTF-16
+// code units).
+type search struct {
+	pat  []uint16
+	fail []int // fail[i] is the length of the longest proper prefix of pat[:i+1] that is also its suffix
+}
+
+func newSearch(p goja.String) search {
+	m := search{pat: make([]uint16, p.Length()), fail: make([]int, p.Length())}
+	for i := range m.pat {
+		m.pat[i] = p.CharAt(i)
+	}
+	for i, k := 1, 0; i < len(m.pat); i++ {
+		for k > 0 && m.pat[i] != m.pat[k] {
+			k = m.fail[k-1]
 		}
-		n += fixed + (match-1)*pl + before*pos + after*(l-pos-pl)
-		from = pos + pl
-		if n-(l-from) > limit { // each of the at most (l-from)/pl matches left removes at most pl
-			return false, nil
+		if m.pat[i] == m.pat[k] {
+			k++
+		}
+		m.fail[i] = k
+	}
+	return m
+}
+
+// index returns the first position at or after from where the pattern occurs in s, or -1.
+func (m search) index(s goja.String, from int) int {
+	l := s.Length()
+	if len(m.pat) == 0 {
+		if from <= l {
+			return from
+		}
+		return -1
+	}
+	for i, k := from, 0; i < l; i++ {
+		c := s.CharAt(i)
+		for k > 0 && c != m.pat[k] {
+			k = m.fail[k-1]
+		}
+		if c == m.pat[k] {
+			k++
+		}
+		if k == len(m.pat) {
+			return i - k + 1
 		}
 	}
+	return -1
 }
 
 // resultFits spends the JSON size of a Select result from left and reports whether it fits, before
@@ -267,7 +506,7 @@ func resultFits(v goja.Value, left *int64) bool {
 func jsString(vm *goja.Runtime, v goja.Value) goja.String {
 	s, ok := v.ToString().(goja.String)
 	if !ok {
-		panic(vm.NewTypeError("replaceAll needs string arguments"))
+		panic(vm.NewTypeError("string methods need string arguments"))
 	}
 	return s
 }

@@ -34,10 +34,11 @@ type typ struct {
 // checkCtx carries the resolver and the active guard paths (references made exempt
 // from the defaults rule by an enclosing `X !== undefined && …`).
 type checkCtx struct {
-	r      Resolver
-	roots  []string
-	guards [][]string
-	e      *Expr
+	r         Resolver
+	roots     []string
+	guards    [][]string
+	e         *Expr
+	defaulted map[string]bool // the references whose default binding is recorded on e
 }
 
 func (c checkCtx) withGuard(path []string) checkCtx {
@@ -63,7 +64,7 @@ func (c checkCtx) exempt(path []string) bool {
 // whole expression is boolean. It records the referenced roots and defaulted
 // references so Eval needs no resolver.
 func (e *Expr) Check(r Resolver) error {
-	ctx := checkCtx{r: r, roots: r.Roots(), e: e}
+	ctx := checkCtx{r: r, roots: r.Roots(), e: e, defaulted: map[string]bool{}}
 	root := e.rootExpr()
 	if e.mode == Condition {
 		if _, isRef := flattenRef(root); isRef {
@@ -450,10 +451,13 @@ func resolveRefExpr(node ast.Expression, ctx checkCtx, existenceProbe bool) (typ
 		}
 		k, items = items, kindUnknown
 	}
-	// Record the root (dedup) and any default binding.
+	// Record the root and the default binding, each once: Eval decodes the default of every binding.
 	addRoot(ctx.e, root)
 	if field.HasDefault {
-		ctx.e.defs = append(ctx.e.defs, defaultBinding{root: root, path: path, val: field.Default})
+		if ref := segString(segs[:rootLen+len(path)]); !ctx.defaulted[ref] {
+			ctx.defaulted[ref] = true
+			ctx.e.defs = append(ctx.e.defs, defaultBinding{root: root, path: path, val: field.Default})
+		}
 	}
 	// Defaults rule (skipped for an existence probe or a guarded reference).
 	if !existenceProbe && !field.Required && !field.HasDefault && !ctx.exempt(identsOf(segs)) {
