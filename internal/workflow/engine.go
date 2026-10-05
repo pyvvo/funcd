@@ -658,6 +658,15 @@ func (e *Engine) startReady(ctx, stepCtx, runCtx context.Context, run *activeRun
 	}
 }
 
+// capOutput fails a step output over the payload limit. The failure is permanent: a retry cannot
+// shrink it (ADR-0094 payload cap).
+func (e *Engine) capOutput(n *stepNode, out json.RawMessage) error {
+	if e.cfg.PayloadLimit > 0 && int64(len(out)) > e.cfg.PayloadLimit {
+		return Permanent(fault.Invalidf(engineOp, "step %q output exceeds payload limit %d", n.name, e.cfg.PayloadLimit))
+	}
+	return nil
+}
+
 // runStep runs one started step: a builtin in-engine, a sub-workflow inline, or a function by dispatch.
 // It builds its input from parents (its parents' outputs); the shared outputs are only persisted. The step
 // runs on stepCtx; a sub-workflow child also gets the run's ctx for its own record and handler.
@@ -828,9 +837,8 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 			cancel()
 		}
 		if err == nil {
-			if e.cfg.PayloadLimit > 0 && int64(len(out)) > e.cfg.PayloadLimit {
-				// An over-cap output is permanent — a retry cannot shrink it (ADR-0094 payload cap).
-				return nil, Permanent(fault.Invalidf(engineOp, "step %q output exceeds payload limit %d", n.name, e.cfg.PayloadLimit))
+			if cerr := e.capOutput(n, out); cerr != nil {
+				return nil, cerr
 			}
 			return out, nil
 		}

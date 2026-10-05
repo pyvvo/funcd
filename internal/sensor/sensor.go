@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -442,7 +444,8 @@ func (r *Reconciler) staticCheck(se *v1.Sensor) (reason, msg string, ok bool) {
 
 // buildInput projects an action's input over a fired CloudEvent (ADR-0109): absent ⇒ the event data
 // verbatim; else each field is a literal (passed through) or a `${{ event.* }}` Select expression
-// evaluated against {"event": <the CloudEvent JSON>}.
+// evaluated against {"event": <the CloudEvent JSON>}. The expressions share one expr.Budget, so an input
+// split into many fields costs no more than one expression may.
 func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, error) {
 	if inputAbsent(raw) {
 		if len(ev.Data) == 0 {
@@ -459,8 +462,11 @@ func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, e
 		return nil, fault.Internalf(op, "marshal cloudevent: %v", err)
 	}
 	docs := map[string]json.RawMessage{"event": evJSON}
+	budget := expr.NewBudget()
 	out := make(map[string]json.RawMessage, len(fields))
-	for field, val := range fields {
+	// In a fixed order, so the same field spends the budget on every firing.
+	for _, field := range slices.Sorted(maps.Keys(fields)) {
+		val := fields[field]
 		src, isExpr := asExprString(val)
 		if !isExpr {
 			out[field] = val // literal
@@ -473,7 +479,7 @@ func buildInput(raw json.RawMessage, ev eventing.CloudEvent) (json.RawMessage, e
 		if cerr := e.Check(eventResolver{}); cerr != nil {
 			return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "input field %q", field)
 		}
-		res, eerr := e.Eval(docs)
+		res, eerr := e.EvalWithin(budget, docs)
 		if eerr != nil {
 			return nil, fault.Wrapf(eerr, fault.KindOf(eerr), op, "eval input field %q", field)
 		}

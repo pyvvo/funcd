@@ -2,7 +2,11 @@ package expr
 
 import (
 	"encoding/json"
+	"fmt"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -323,6 +327,127 @@ func TestRootsAreContextScoped(t *testing.T) {
 		t.Fatalf("Roots() = %v, want [step.stats.output]", got)
 	}
 	mustFailCheck(t, "${{ event.data.x !== undefined }}", Condition, r) // event not a root
+}
+
+// Chained replaceAll multiplies a string's length (each .replaceAll("", t) by about len(t)+1), a
+// replacement's $` and $' insert the text around every match, and concatenated or length-preserving
+// calls add up: evaluation fails once the strings the calls of one evaluation build pass the limit,
+// before they are allocated, and keeps JavaScript semantics below it.
+func TestReplaceAllResultLengthIsBounded(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|s": req("string")}}
+	in := docs("input", `{"s":"`+strings.Repeat("z", 2000)+`"}`)
+	chain := `"xxxxxxxxxx"` + strings.Repeat(`.replaceAll("", "yyyyyyyyyy")`, 5)
+	for _, src := range []string{
+		"${{ " + chain + ".length > 0 }}",
+		`${{ input.s.replaceAll("", "$'").length > 0 }}`,
+		`${{ input.s.replaceAll("z", "$'").length > 0 }}`,
+		"${{ " + strings.Repeat(`input.s.replaceAll("z", "zzzzzzzzzz") + `, 60) + `"" !== "" }}`,
+		`${{ input.s.replaceAll("z", "zzzzzzzzzz")` + strings.Repeat(`.replaceAll("x", "x")`, 60) + ` !== "" }}`,
+	} {
+		x := mustCheck(t, src, Condition, r)
+		x.timeout = time.Minute // under load the deadline could fire first; this test checks the budget alone
+		ok, err := x.EvalBool(in)
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "characters") {
+			t.Errorf("%.70s: got ok=%v err=%v, want a fault.Invalid over the replaceAll length limit", src, ok, err)
+		}
+	}
+	ok, err := mustCheck(t, `${{ "a-b".replaceAll("-", "[$&$$]") === "a[-$]b" && "abc".replaceAll("b", "[$`+"`"+`$']") === "a[ac]c" && "ab".replaceAll("", "-") === "-a-b-" && input.s.replaceAll("z", "") === "" }}`, Condition, r).EvalBool(in)
+	if err != nil || !ok {
+		t.Fatalf("replaceAll within the limit: ok=%v err=%v, want true", ok, err)
+	}
+}
+
+// String '+' copies its operands, so many concatenations of a document cost time and memory that grow
+// with the expression's length: evaluation is interrupted once it passes its deadline.
+func TestEvaluationIsInterruptedAtTheDeadline(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|s": req("string")}}
+	x := mustCheck(t, "${{ "+strings.Repeat("input.s + ", 400)+`"" !== "" }}`, Condition, r)
+	x.timeout = time.Millisecond
+	ok, err := x.EvalBool(docs("input", `{"s":"`+strings.Repeat("z", 2000)+`"}`))
+	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "time limit") {
+		t.Fatalf("got ok=%v err=%v, want a fault.Invalid at the time limit", ok, err)
+	}
+}
+
+// An array or object literal can repeat a large document reference any number of times at almost no
+// evaluation cost: Eval fails once the result passes its documents' size plus a margin, before it is
+// exported and marshalled, and returns a result within that bound unchanged.
+func TestSelectResultSizeIsBounded(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|": req("object"), "input|s": req("string")}}
+	in := docs("input", `{"s":"`+strings.Repeat("z", 64<<10)+`"}`)
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("k%d: input", i)
+	}
+	for _, src := range []string{
+		"${{ [" + strings.Repeat("input.s, ", 1000) + `""] }}`,
+		"${{ {" + strings.Join(members, ", ") + "} }}",
+	} {
+		x := mustCheck(t, src, Select, r)
+		x.timeout = time.Minute
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		out, err := x.Eval(in)
+		runtime.ReadMemStats(&after)
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "larger than their documents") {
+			t.Errorf("%.40s: got %d bytes err=%v, want a fault.Invalid over the result bound", src, len(out), err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
+			t.Errorf("%.40s: allocated %d MiB, want the result rejected before it is built", src, n>>20)
+		}
+	}
+	out, err := mustCheck(t, "${{ [input.s, input.s] }}", Select, r).Eval(in)
+	if err != nil || len(out) != 2*(64<<10+2)+3 {
+		t.Fatalf("two references: got %d bytes err=%v, want the result", len(out), err)
+	}
+	big := `{"s":"` + strings.Repeat("z", 3<<20) + `"}`
+	out, err = mustCheck(t, "${{ input.s }}", Select, r).Eval(docs("input", big))
+	if err != nil || len(out) != 3<<20+2 {
+		t.Fatalf("a document larger than the margin: got %d bytes err=%v, want the result", len(out), err)
+	}
+}
+
+// Evaluations within one Budget share its replaceAll length, its running time and its result margin,
+// so expressions that each fit alone fail once together they pass the bound; a document's size is
+// allowed for once, however many evaluations reference it.
+func TestBudgetIsSharedAcrossEvaluations(t *testing.T) {
+	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|s": req("string"), "input|t": req("string")}}
+	in := docs("input", `{"s":"`+strings.Repeat("z", 256<<10)+`","t":"abc"}`)
+	for _, c := range []struct {
+		src, want string
+		n         int
+	}{
+		{"${{ input.t" + strings.Repeat(`.replaceAll("", "yyyyyyyyyy")`, 5) + " }}", "characters", 2},
+		{"${{ input.s }}", "larger than their documents", 8},
+	} {
+		x := mustCheck(t, c.src, Select, r)
+		x.timeout = time.Minute
+		for i := 0; i < c.n; i++ {
+			if _, err := x.Eval(in); err != nil {
+				t.Fatalf("%.40s: evaluation %d alone: %v", c.src, i, err)
+			}
+		}
+		b := NewBudget()
+		b.time = time.Minute
+		var err error
+		for i := 0; i < c.n && err == nil; i++ {
+			_, err = x.EvalWithin(b, in)
+		}
+		if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%.40s: %d evaluations within one budget: err=%v, want a fault.Invalid (%s)", c.src, c.n, err, c.want)
+		}
+	}
+	slow := mustCheck(t, "${{ ["+strings.Repeat("input.s + ", 400)+`""] }}`, Select, r)
+	b := NewBudget()
+	b.time = time.Millisecond
+	_, err := slow.EvalWithin(b, in)
+	if err == nil || !strings.Contains(err.Error(), "time limit") {
+		t.Fatalf("slow evaluation: err=%v, want the time limit", err)
+	}
+	_, err = mustCheck(t, "${{ input.t }}", Select, r).EvalWithin(b, in)
+	if err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "time limit") {
+		t.Fatalf("an evaluation after the budget's time is spent: err=%v, want a fault.Invalid at the time limit", err)
+	}
 }
 
 // FuzzParse asserts Parse+Check never panic on arbitrary input.

@@ -17,6 +17,7 @@ package expr
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja/ast"
@@ -74,6 +75,7 @@ type Expr struct {
 	checked  bool
 	roots    []string
 	defs     []defaultBinding // defaulted references collected at Check
+	timeout  time.Duration    // evaluation deadline; zero means evalTimeout (a test shortens it)
 }
 
 // absent reports a field a document-backed Resolver found missing (see Field.Type).

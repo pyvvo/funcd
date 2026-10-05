@@ -3,6 +3,9 @@ package sensor_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -149,6 +152,51 @@ func TestInputProjection(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rs[0].Spec.Input, &got))
 	require.Equal(t, "acme/x", got["repo"], "projected from event.data.repository")
 	require.Equal(t, "push", got["kind"], "literal passed through")
+}
+
+// An action input is bounded as a whole, not per field: its expressions share one evaluation budget, so
+// many fields that each fit the bound of one expression fail together, before their results add up, and
+// nothing is delivered. Fields that fit together are delivered.
+func TestActionInputIsBoundedAcrossFields(t *testing.T) {
+	big := `{"s":"` + strings.Repeat("z", 64<<10) + `"}`
+	for _, c := range []struct {
+		name, field, data string
+		n                 int
+		delivered         bool
+	}{
+		{"chained replaceAll", "${{ event.type" + strings.Repeat(`.replaceAll("", "yyyyyyyyyy")`, 5) + " }}", "", 20, false},
+		{"repeated reference", "${{ event.data.s }}", big, 200, false},
+		{"within the bound", "${{ event.data.s }}", big, 4, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st, fan, inv, r := harness(t)
+			fields := make(map[string]string, c.n)
+			for i := range c.n {
+				fields[fmt.Sprintf("f%03d", i)] = c.field
+			}
+			input, err := json.Marshal(fields)
+			require.NoError(t, err)
+			createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+				[]v1.Action{{Name: "notify", On: "d", Function: "hook", Input: input}})
+			_, _ = r.Reconcile(context.Background(), reqOf("s"))
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			fire(t, fan, "git", "push", c.data)
+			runtime.ReadMemStats(&after)
+			if !c.delivered {
+				require.Zero(t, inv.count(), "an input over the bound must not be delivered")
+				list, err := st.List(context.Background(), v1.KindInvocation.GVK(), store.ListOptions{})
+				require.NoError(t, err)
+				require.Len(t, list.Items, 1)
+				require.Contains(t, list.Items[0].(*v1.Invocation).Status.Error, "eval input field")
+				n := after.TotalAlloc - before.TotalAlloc
+				require.Less(t, n, uint64(32<<20), "allocated %d MiB, want the input rejected before its fields add up", n>>20)
+				return
+			}
+			require.Equal(t, 1, inv.count())
+			require.Len(t, inv.delivered()[0].Data, c.n*(len(`"f000":""`)+64<<10+1)+1)
+		})
+	}
 }
 
 // scenario: input-absent-passes-event-data — no input ⇒ the target gets the event data verbatim.
