@@ -145,9 +145,13 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 }
 
 // resolveKey cleans the decoded remainder, rejects traversal, and computes the object key. bad=true
-// on a `..` segment or a key that would escape the prefix (B1). "/" or a directory ("…/") resolves
-// to <prefix><dir>index.
+// on a `..` segment, a key that would escape the prefix (B1), or a prefix not ending in "/" (a byte
+// prefix of its sibling prefixes, which admission rejects but a stored Route may still carry). "/" or
+// a directory ("…/") resolves to <prefix><dir>index.
 func resolveKey(prefix, index, dec string) (key string, bad bool) {
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		return "", true
+	}
 	if dec == "" {
 		dec = "/"
 	}

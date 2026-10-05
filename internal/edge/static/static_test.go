@@ -126,6 +126,19 @@ func TestScenarioTraversalRejected(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "TOP-SECRET")
 }
 
+// TestPrefixWithoutSlashNeverServesSiblingPrefix: a stored prefix "bi" must not resolve "/-private/x"
+// to the sibling key "bi-private/x" — containment is checked at a "/" boundary, not as a byte prefix.
+func TestPrefixWithoutSlashNeverServesSiblingPrefix(t *testing.T) {
+	h := site(t, map[string][]byte{"bi-private/creds.json": []byte("PRIVATE-CREDS")})
+	for _, spa := range []bool{false, true} {
+		for _, rem := range []string{"/-private/creds.json", "/", "/index.html"} {
+			w := serve(h, http.MethodGet, rem, backend("bi", spa), nil)
+			require.NotEqual(t, http.StatusOK, w.Code, "prefix %q, remainder %q, spa=%v", "bi", rem, spa)
+			require.NotContains(t, w.Body.String(), "PRIVATE-CREDS", "remainder %q escaped the prefix", rem)
+		}
+	}
+}
+
 // scenario: method-not-allowed
 func TestScenarioMethodNotAllowed(t *testing.T) {
 	h := site(t, nil)

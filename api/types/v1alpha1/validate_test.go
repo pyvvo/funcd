@@ -374,6 +374,24 @@ func TestRouteStaticBackendValidate(t *testing.T) {
 	})
 }
 
+// TestRouteStaticPrefixMustEndWithSlash: a static prefix without a trailing "/" ("site") is a byte
+// prefix of sibling Bucket prefixes ("site-private/"), so admission rejects it (ADR-0120 §1).
+func TestRouteStaticPrefixMustEndWithSlash(t *testing.T) {
+	mk := func(prefix string) *Route {
+		r := &Route{}
+		r.TypeMeta = TypeMeta{APIVersion: KindRoute.GVK().APIVersion(), Kind: KindRoute}
+		r.Name, r.Namespace, r.ResourceGroup = "r", "default", "rg1"
+		r.Spec = RouteSpec{Rules: []RouteRule{{Path: "/", Backend: RouteBackend{Static: &StaticBackend{Bucket: "lake", Prefix: prefix}}}}}
+		return r
+	}
+	for _, p := range []string{"site", "web/site", "a/b"} {
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(p).Validate()), "prefix %q must be rejected", p)
+	}
+	for _, p := range []string{"", "site/", "web/site/"} {
+		require.NoError(t, mk(p).Validate(), "prefix %q must be accepted", p)
+	}
+}
+
 // TestNamespaceExposureValidate covers the F79 exposure enum incl. the absent/empty case.
 func TestNamespaceExposureValidate(t *testing.T) {
 	ns := func(mode ExposureMode) *Namespace {
