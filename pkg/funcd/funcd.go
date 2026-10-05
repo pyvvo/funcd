@@ -1413,8 +1413,9 @@ func (p *Platform) Run(ctx context.Context) error {
 		if terr != nil {
 			return abort(fault.Wrapf(terr, fault.KindOf(terr), top, "build tls config"))
 		}
+		// ServeTLS writes its server's config (the HTTP/2 setup), so the two servers, served at once, never share one
 		p.httpServer.TLSConfig = cfg
-		p.dataPlaneServer.TLSConfig = cfg
+		p.dataPlaneServer.TLSConfig = cfg.Clone()
 		serve = func(srv *http.Server, ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
 		p.logger.InfoContext(ctx, "TLS enabled", "mode", string(spec.Mode), "hosts", hosts)
 	}

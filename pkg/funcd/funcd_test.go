@@ -2,6 +2,8 @@ package funcd
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -317,6 +319,40 @@ func TestRunRefusesTLSWithoutStorageDir(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, "storage dir")
 	require.NoDirExists(t, filepath.Join(tmp, "funcd-tls"))
+}
+
+// The control and data planes serve TLS from one provider, but each server holds its own *tls.Config: ServeTLS writes
+// its server's config (the HTTP/2 setup), so a shared one was written by both serving goroutines at once.
+func TestRunGivesEachTLSServerItsOwnConfig(t *testing.T) {
+	tmp, err := os.MkdirTemp("", "ftls")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	dir := filepath.Join(tmp, "tls")
+	p, err := New(InMemory(), WithoutLogCompaction(), WithInvokeSocketDir(tmp), WithListenAddr("127.0.0.1:0"),
+		WithDataPlaneAddr("127.0.0.1:0"), WithTLS(edgetls.Spec{Mode: edgetls.ModeSelfSigned, Hosts: []string{"127.0.0.1"}, StorageDir: dir}))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	pool := x509.NewCertPool()
+	require.Eventually(t, func() bool {
+		pem, err := os.ReadFile(filepath.Join(dir, "cert.pem"))
+		return err == nil && pool.AppendCertsFromPEM(pem)
+	}, 10*time.Second, 50*time.Millisecond, "selfsigned cert persisted")
+	for _, addr := range []string{p.Addr(), p.DataPlaneAddr()} {
+		require.Eventually(t, func() bool {
+			c, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: pool, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12})
+			if err != nil {
+				return false
+			}
+			_ = c.Close()
+			return true
+		}, 10*time.Second, 50*time.Millisecond, "%s serves TLS", addr)
+	}
+	cancel()
+	<-done
+	require.False(t, p.httpServer.TLSConfig == p.dataPlaneServer.TLSConfig, "the two servers share one *tls.Config")
 }
 
 // WithNodePlatform (ADR-0145) sets the platform the scheduler and the materializer share; the default is the
