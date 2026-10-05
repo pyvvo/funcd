@@ -27,6 +27,7 @@ import (
 	runcoptions "github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -996,6 +997,57 @@ func (d *driver) SweepAll(ctx context.Context) error {
 	// and its unpin.
 	for _, cniID := range d.netns.unheld(held) {
 		d.release(ctx, cniID)
+	}
+	return nil
+}
+
+// BootSweep is the boot sweep (ADR-0167 Decision 8, ADR-0186): it runs SweepAll and, on the private containerd only,
+// deletes every image in each funcd-<ns> namespace with a synchronous delete, then the namespace and its boot-dir
+// parent. Close does not call it.
+func (d *driver) BootSweep(ctx context.Context) error {
+	const op = "runtime.containerd.BootSweep"
+	if err := d.SweepAll(ctx); err != nil || !d.cfg.Private {
+		return err
+	}
+	names, err := d.client.NamespaceService().List(ctx)
+	if err != nil {
+		return mapErr(err, op, "list namespaces")
+	}
+	var errs []error
+	for _, name := range names {
+		if strings.HasPrefix(name, nsPrefix) {
+			errs = append(errs, d.clearNamespace(ctx, op, name))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// clearNamespace deletes every image in containerd namespace name, then the namespace, then its boot-dir parent, each
+// step only when the one before succeeded. containerd deletes only an empty namespace, so each image delete waits for
+// the GC to drop its layers.
+func (d *driver) clearNamespace(ctx context.Context, op, name string) error {
+	nctx := namespaces.WithNamespace(ctx, name)
+	imgs, err := d.client.ImageService().List(nctx)
+	if err != nil {
+		return mapErr(err, op, "list images in namespace %q", name)
+	}
+	var errs []error
+	for _, img := range imgs {
+		if err := d.client.ImageService().Delete(nctx, img.Name, images.SynchronousDelete()); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, mapErr(err, op, "delete image %q in namespace %q", img.Name, name))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if err := d.client.NamespaceService().Delete(ctx, name); err != nil {
+		return mapErr(err, op, "delete namespace %q", name)
+	}
+	if d.bootRoot == "" {
+		return nil
+	}
+	if err := os.RemoveAll(filepath.Join(d.bootRoot, name)); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "remove the boot dirs of namespace %q", name)
 	}
 	return nil
 }

@@ -776,9 +776,10 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", bucket, messaging, nil
 }
 
-// bootSweeper is the containerd driver's sweep of every funcd namespace (ADR-0167); off Linux the driver is a stub.
+// bootSweeper is the containerd driver's boot sweep of every funcd namespace (ADR-0167, ADR-0186); off Linux the driver
+// is a stub.
 type bootSweeper interface {
-	SweepAll(ctx context.Context) error
+	BootSweep(ctx context.Context) error
 }
 
 // noopClose is the execution closer for the process lane (nothing to tear down).
@@ -862,11 +863,11 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		_ = mgr.Close()
 		return nil, noopClose, fmt.Errorf("containerd runtime (runtime.mode: containerd is Linux-only): %w", err)
 	}
-	// A container left in a funcd namespace is a leftover of an earlier run: this driver runs none yet, so the sweep
-	// removes it before any controller starts (ADR-0167).
+	// What a funcd namespace holds is a leftover of an earlier run: this driver runs none yet, so the sweep removes it
+	// before any controller starts (ADR-0167, ADR-0186).
 	if sw, ok := cd.(bootSweeper); ok {
-		if serr := sw.SweepAll(ctx); serr != nil {
-			logger.WarnContext(ctx, "funcd: could not remove every container an earlier run left", "error", serr)
+		if serr := sw.BootSweep(ctx); serr != nil {
+			logger.WarnContext(ctx, "funcd: could not clear everything an earlier run left in containerd", "error", serr)
 		}
 	}
 	return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix))}, mgr.Close, nil
