@@ -227,16 +227,7 @@ func TestCatalogKeysResolvesMintedIdentityToken(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
 	minted := IdentityCatalogToken("data", "analyst", testRandomPart(t))
-	createObj(t, st, &v1.Identity{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
-		ObjectMeta: v1.ObjectMeta{Name: "analyst", Namespace: "data", ResourceGroup: "rg1"},
-		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal, CredentialSecretName: "analyst-cred"},
-	})
-	createObj(t, st, &v1.Secret{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
-		ObjectMeta: v1.ObjectMeta{Name: "analyst-cred", Namespace: "data", ResourceGroup: "rg1"},
-		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(minted)}},
-	})
+	seedIdentityCredential(t, st, "data", "analyst", "analyst-cred", minted)
 	keys := NewCatalogKeys([]byte("node-master"), st)
 
 	ref, ok := keys.PrincipalFor(minted)
@@ -272,17 +263,60 @@ func (c *countingStore) reset() {
 func issueIdentity(t *testing.T, st store.Store, ns v1.NamespaceName, name v1.ObjectName) string {
 	t.Helper()
 	token := IdentityCatalogToken(ns, name, testRandomPart(t))
-	createObj(t, st, &v1.Identity{
+	seedIdentityCredential(t, st, ns, name, name, token)
+	return token
+}
+
+// seedIdentityCredential seeds Identity ns/name naming credential Secret secretName, and that Secret holding token
+// under the Identity's controller ref, as the identity reconciler writes it.
+func seedIdentityCredential(t *testing.T, st store.Store, ns v1.NamespaceName, name, secretName v1.ObjectName, token string) {
+	t.Helper()
+	id, err := st.Create(context.Background(), &v1.Identity{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
 		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"},
-		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal},
+		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal, CredentialSecretName: secretName},
+	})
+	require.NoError(t, err)
+	createObj(t, st, &v1.Secret{
+		TypeMeta: v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
+		ObjectMeta: v1.ObjectMeta{Name: secretName, Namespace: ns, ResourceGroup: "rg1", OwnerReferences: []v1.OwnerReference{{
+			ObjectRef: v1.ObjectRef{Kind: v1.KindIdentity, Namespace: ns, Name: name}, UID: id.GetObjectMeta().UID, Controller: true,
+		}}},
+		Spec: v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(token)}},
+	})
+}
+
+// A catalog token resolves only through a Secret its Identity controls: an Identity naming an API Secret that holds a
+// token with its own prefix, and an Identity re-created before its Secret is re-issued, resolve to no principal.
+func TestIdentityTokenResolvesOnlyThroughItsOwnSecret(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	keys := NewCatalogKeys([]byte("node-master"), st)
+	planted := IdentityCatalogToken("data", "x2", testRandomPart(t))
+	createObj(t, st, &v1.Identity{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
+		ObjectMeta: v1.ObjectMeta{Name: "x2", Namespace: "data", ResourceGroup: "rg1"},
+		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal, CredentialSecretName: "u"},
 	})
 	createObj(t, st, &v1.Secret{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
-		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"},
-		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(token)}},
+		ObjectMeta: v1.ObjectMeta{Name: "u", Namespace: "data", ResourceGroup: "rg1"},
+		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(planted)}},
 	})
-	return token
+	_, ok := keys.PrincipalFor(planted)
+	require.False(t, ok, "x2 resolves through an API Secret it does not control")
+
+	old := issueIdentity(t, st, "data", "analyst")
+	_, ok = keys.PrincipalFor(old)
+	require.True(t, ok)
+	require.NoError(t, st.Delete(context.Background(), v1.KindIdentity.GVK(), "data", "analyst", ""))
+	createObj(t, st, &v1.Identity{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
+		ObjectMeta: v1.ObjectMeta{Name: "analyst", Namespace: "data", ResourceGroup: "rg1"},
+		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal},
+	})
+	_, ok = keys.PrincipalFor(old)
+	require.False(t, ok, "a re-created analyst resolves through the Secret of the deleted analyst")
 }
 
 // proxyStatus posts a handshake carrying token through the catalog proxy fronting data/lake and reports

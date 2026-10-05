@@ -358,16 +358,7 @@ func TestCatalogProxy_DeniesCrossNamespaceCaller(t *testing.T) {
 	createObj(t, st, fn("victim", "reader"))
 	createObj(t, st, fn("attacker", "thief"))
 	minted := IdentityCatalogToken("attacker", "mallory", testRandomPart(t))
-	createObj(t, st, &v1.Identity{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
-		ObjectMeta: v1.ObjectMeta{Name: "mallory", Namespace: "attacker", ResourceGroup: "rg1"},
-		Spec:       v1.IdentitySpec{Type: v1.IdentityTypeExternal, CredentialSecretName: "mallory-cred"},
-	})
-	createObj(t, st, &v1.Secret{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSecret.GVK().APIVersion(), Kind: v1.KindSecret},
-		ObjectMeta: v1.ObjectMeta{Name: "mallory-cred", Namespace: "attacker", ResourceGroup: "rg1"},
-		Spec:       v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{catalogTokenSecretKey: []byte(minted)}},
-	})
+	seedIdentityCredential(t, st, "attacker", "mallory", "mallory-cred", minted)
 	createObj(t, st, &v1.RolesAssignment{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindRolesAssignment.GVK().APIVersion(), Kind: v1.KindRolesAssignment},
 		ObjectMeta: v1.ObjectMeta{Name: "mallory-can-query-lake", Namespace: "attacker", ResourceGroup: "rg1"},
