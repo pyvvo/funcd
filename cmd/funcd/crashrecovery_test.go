@@ -284,7 +284,7 @@ type sweptRuntime struct {
 	err    error
 }
 
-func (r *sweptRuntime) SweepAll(context.Context) error {
+func (r *sweptRuntime) BootSweep(context.Context) error {
 	r.sweeps++
 	return r.err
 }
@@ -305,7 +305,7 @@ func TestContainerdModeSweepsLeftoversAtBoot(t *testing.T) {
 			t.Cleanup(func() { _ = closeExec() })
 			require.NotEmpty(t, opts)
 			require.Equal(t, 1, rt.sweeps, "the boot sweep runs once")
-			require.Equal(t, sweepErr != nil, strings.Contains(logs.String(), "could not remove every container"), "%s", logs.String())
+			require.Equal(t, sweepErr != nil, strings.Contains(logs.String(), "could not clear everything an earlier run left in containerd"), "%s", logs.String())
 		})
 	}
 }

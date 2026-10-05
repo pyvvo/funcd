@@ -16,6 +16,7 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/errdefs"
 	gocni "github.com/containerd/go-cni"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -147,17 +148,22 @@ type closeFixture struct {
 	cni      *removedCNI
 	snap     *memSnapshotter
 	image    string
+	manifest ocispec.Descriptor
 }
 
 func newCloseFixture(t *testing.T, namespaces ...string) *closeFixture {
+	return closeFixtureWith(t, containerd.WithNamespaceService(listedNamespaces{names: namespaces}))
+}
+
+// closeFixtureWith builds the fixture's fake containerd with extra in place of fakeClient's matching defaults.
+func closeFixtureWith(t *testing.T, extra ...containerd.ServicesOpt) *closeFixture {
 	cs, layer, manifest := fakeImage(t)
 	const image = "funcd/close:latest"
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: image, Target: manifest}, ctrs,
-		map[string]snapshots.Snapshotter{"overlayfs": snap},
-		containerd.WithNamespaceService(listedNamespaces{names: namespaces}))
-	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, snap: snap, image: image, bootRoot: t.TempDir(), fifoDir: t.TempDir()}
+		map[string]snapshots.Snapshotter{"overlayfs": snap}, extra...)
+	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, snap: snap, image: image, manifest: manifest, bootRoot: t.TempDir(), fifoDir: t.TempDir()}
 }
 
 // driver starts a driver on the fixture's containerd with no instances, as a daemon or a bench does.
