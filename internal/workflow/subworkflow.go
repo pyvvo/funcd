@@ -47,7 +47,7 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
 	childInput := e.stepInput(n, input, outputs, specStep(parent.Spec, n.name))
-	childRun := parent.Name + "-" + n.name // deterministic nested run name (observability + stable recovery)
+	childRun := childRunName(parent.Name, n.name)
 	// ADR-0104: the child inherits the parent's trace (one composition = one trace) and nests its run-root
 	// span under the parent run's span. The child runs inline (never through the reconciler), so the ENGINE
 	// emits its run-root span here — before the error check, so a FAILED child still gets its span.
@@ -61,6 +61,14 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 		return nil, fault.Invalidf(engineOp, "sub-workflow %q ended %s", child, rec.Phase)
 	}
 	return runOutput(childSpec, rec), nil
+}
+
+// childRunName names the record of the inline child run that step of parent runs (ADR-0154): the parent record's
+// name, ".", the step name. A WorkflowRun name and a step name are DNS labels, which hold no ".", so the result is
+// never a WorkflowRun's name, and the step after the last "." makes it unique per (parent, step). It is a run-record
+// name, not an API object name: it may exceed 63 bytes and is never validated as an ObjectName.
+func childRunName(parent, step v1.ObjectName) v1.ObjectName {
+	return parent + "." + step
 }
 
 // resolveChild reads a child's spec and the start options its ADR-0098 status cache pins on the inline run.

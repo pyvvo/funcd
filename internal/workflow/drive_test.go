@@ -322,7 +322,7 @@ func TestScenarioParentCancelCancelsChild(t *testing.T) {
 	updateRun(t, s, "run-p", func(r *v1.WorkflowRun) { r.Spec.Cancel = true })
 	receive(t, g.ended, "k")
 	waitFor(t, "the parent is Cancelled", runPhaseIs(t, s, "run-p", runCancelled))
-	if rec := getRecord(t, h.runs, "run-p-call"); rec.Phase != runCancelled || stepState(rec, "k").Phase != v1.StepCancelled {
+	if rec := getRecord(t, h.runs, "run-p.call"); rec.Phase != runCancelled || stepState(rec, "k").Phase != v1.StepCancelled {
 		t.Fatalf("child run = %s steps %+v, want Cancelled", rec.Phase, rec.Steps)
 	}
 	if st := stepState(getRecord(t, h.runs, "run-p"), "call"); st.Phase != v1.StepCancelled {
@@ -520,7 +520,7 @@ func TestScenarioShutdownMidChildLeavesParentResumable(t *testing.T) {
 	if call := stepState(rec, "call"); rec.Phase != runRunning || call.Phase != v1.StepPending {
 		t.Fatalf("after the drain: parent %s step call %+v, want Running with call Pending", rec.Phase, call)
 	}
-	if c := getRecord(t, runs, "run-m-call"); c.Phase == runFailed || c.Phase == runCancelled {
+	if c := getRecord(t, runs, "run-m.call"); c.Phase == runFailed || c.Phase == runCancelled {
 		t.Fatalf("child run ended %s, want it left resumable", c.Phase)
 	}
 	if len(g.calls("h")) != 0 || len(g.calls("ch")) != 0 {

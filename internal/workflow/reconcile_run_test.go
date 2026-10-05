@@ -1234,3 +1234,103 @@ func TestIssue444_NotFoundSubworkflowFailureMirroredInSameReconcile(t *testing.T
 		t.Fatalf("status.runs = %+v, want Failed=1 Active=0", links)
 	}
 }
+
+// collisionStore seeds the parent workflow, whose step sub runs childwf, and other, whose steps run x then y.
+func collisionStore(t *testing.T) store.Store {
+	t.Helper()
+	s := newStore(t)
+	seedWorkflow(t, s, "parent", subwfStep("sub", "childwf"))
+	seedWorkflow(t, s, "other", step("x", ""), step("y", "", "x"))
+	return s
+}
+
+// collisionChildren resolves childwf, the child workflow parent's step sub runs.
+func collisionChildren() fakeChildren { return fakeChildren{"childwf": spec(step("c", ""))} }
+
+// scenario: user-run-keeps-its-own-record
+func TestScenarioUserRunKeepsItsOwnRecord(t *testing.T) {
+	ctx := context.Background()
+	s, f := collisionStore(t), newFake()
+	eng := childEngine(t, f, collisionChildren(), Config{})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	seedRun(t, s, "p", "parent", `{}`)
+	if _, run := reconcileRun(t, ctx, rr, s, "p"); run.Status.Phase != runSucceeded {
+		t.Fatalf("setup: parent run p = %s, want Succeeded", run.Status.Phase)
+	}
+
+	seedRun(t, s, "p-sub", "other", `{}`)
+	_, run := reconcileRun(t, ctx, rr, s, "p-sub")
+	var steps []v1.ObjectName
+	for _, st := range run.Status.Steps {
+		steps = append(steps, st.Name)
+	}
+	if run.Status.Phase != runSucceeded || f.calls["x"] != 1 || f.calls["y"] != 1 || !slices.Equal(steps, []v1.ObjectName{"x", "y"}) {
+		t.Fatalf("run p-sub = %s with steps %v, x dispatched %d times, y %d; want Succeeded with [x y], each once", run.Status.Phase, steps, f.calls["x"], f.calls["y"])
+	}
+	if rec := getRecord(t, eng.runs, "p.sub"); rec.Workflow != "childwf" {
+		t.Fatalf("record p.sub holds workflow %s, want childwf", rec.Workflow)
+	}
+	if rec := getRecord(t, eng.runs, "p-sub"); rec.Workflow != "other" {
+		t.Fatalf("record p-sub holds workflow %s, want other", rec.Workflow)
+	}
+}
+
+// scenario: parent-never-overwrites-a-user-record
+func TestScenarioParentNeverOverwritesAUserRecord(t *testing.T) {
+	ctx := context.Background()
+	s := collisionStore(t)
+	eng := childEngine(t, newFake(), collisionChildren(), Config{})
+	rr := NewRunReconciler(s, eng, nil, nil)
+	seedRun(t, s, "p-sub", "other", `{}`)
+	_, user := reconcileRun(t, ctx, rr, s, "p-sub")
+	if user.Status.Phase != runSucceeded {
+		t.Fatalf("setup: run p-sub = %s, want Succeeded", user.Status.Phase)
+	}
+	seedRun(t, s, "p", "parent", `{}`)
+	if _, run := reconcileRun(t, ctx, rr, s, "p"); run.Status.Phase != runSucceeded {
+		t.Fatalf("parent run p = %s, want Succeeded", run.Status.Phase)
+	}
+
+	if rec := getRecord(t, eng.runs, "p-sub"); rec.Workflow != "other" || rec.RunUID != user.UID {
+		t.Fatalf("record p-sub holds workflow %s with uid %q, want other with %q", rec.Workflow, rec.RunUID, user.UID)
+	}
+	createRun(t, s, "rep", v1.WorkflowRunSpec{Workflow: "other", Replay: &v1.ReplaySeed{Run: "p-sub", From: "y"}})
+	if _, rep := reconcileRun(t, ctx, rr, s, "rep"); rep.Status.Phase != runSucceeded {
+		t.Fatalf("replay of p-sub from y = %s (%+v), want Succeeded", rep.Status.Phase, rep.Status.Conditions)
+	}
+}
+
+// scenario: child-expiry-keeps-user-run
+func TestScenarioChildExpiryKeepsUserRun(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := collisionStore(t)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Children: collisionChildren(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil)
+	}
+	seedRun(t, s, "p", "parent", `{}`)
+	if _, run := reconcileRun(t, ctx, at(base), s, "p"); run.Status.Phase != runSucceeded {
+		t.Fatalf("setup: parent run p = %s, want Succeeded", run.Status.Phase)
+	}
+	seedRun(t, s, "p-sub", "other", `{}`)
+	if _, run := reconcileRun(t, ctx, at(base.Add(20*time.Hour)), s, "p-sub"); run.Status.Phase != runSucceeded {
+		t.Fatalf("setup: run p-sub = %s, want Succeeded", run.Status.Phase)
+	}
+
+	getRecord(t, rstate, "p.sub")
+	if _, err := at(base.Add(26*time.Hour)).SweepExpired(ctx, 24*time.Hour); err != nil {
+		t.Fatalf("SweepExpired: %v", err)
+	}
+	if _, err := rstate.Get(ctx, "default", "p.sub"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("expired child record p.sub: %v, want NotFound", err)
+	}
+	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "p-sub"); err != nil {
+		t.Fatalf("the sweep must keep WorkflowRun p-sub: %v", err)
+	}
+	if rec := getRecord(t, rstate, "p-sub"); rec.Workflow != "other" {
+		t.Fatalf("record p-sub holds workflow %s, want other", rec.Workflow)
+	}
+}
