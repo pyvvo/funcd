@@ -9,6 +9,7 @@
 - **Superseded in part by**: [ADR-0174](0174-never-booted-revision-is-unknown.md) (2026-10-05) — Decision 3: RevisionReady values (adds Unknown/NotStarted before first ready replica).
 - **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decision 8 and Scope: S follows C once the member reads ready; the resolver routes by status.pool.
 - **Superseded in part by**: [ADR-0179](0179-unrevisioned-cni-ids-cannot-collide.md) (2026-10-05) — unrevisioned CNI ID row, checklist line 300, Decision 1 provider engines: the CNI ID is <ns>_<name>-r<replica>.
+- **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — Decisions 4.1, 6 and 8: revisions pinned by open runs are spared, a pinned call gets its revision, a pool rebuild drains.
 - **Date**: 2026-10-02 (redrafted the same day after the judge: the old revision's workers now stop after the switch
   — a `drainingRevision` keeps the passes full until they are gone; every caller of a worker is counted, not only the
   activator; a gate failure of the new revision no longer takes the old one down; a crash of an old worker and a

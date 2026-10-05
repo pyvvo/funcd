@@ -334,7 +334,7 @@ So we could use the same approach for the other resources, and define their desi
 
 > Additional steps may occur between 7 and n (e.g., warm-up, canary rollout). A redeploy of a Function switches
 > revisions (ADR-0143): the new revision's workers boot beside the old ones, the calls move once every new replica is
-> ready, and the old workers stop after they drain; a new revision that fails leaves the old one serving.
+> ready, and the old workers stop after they drain; a new revision that fails leaves the old one serving. A workflow run stays on the revision it started with: its calls go to that revision, whose workers are spared, and woken solo from zero, until the run ends (ADR-0190).
 
 The same lifecycle as a sequence diagram:
 
@@ -396,7 +396,7 @@ Events are the triggers that cause functions to be executed. Events can come fro
 
 The controller is responsible for managing the lifecycle of the functions and services, including deployment, scaling, and monitoring. The controller will reconcile the desired state of the functions and services with the actual state, and will take corrective actions as needed. The controller will also be responsible for managing events and triggers, and for ensuring that functions are executed in response to events.
 
-Owned objects follow their owner: a platform **garbage collector** (ADR-0170) runs beside the control loops and deletes every object whose controller owner reference names an owner that no longer exists at that UID (a Workflow's step Functions and the `delete` KVStores it made, an Identity's credential Secret, a Site's Route, a Function's Revisions). It acts on the owner's delete event and on a periodic sweep, one at start included, so a crash loses no collection; a live owner's child is never collected.
+Owned objects follow their owner: a platform **garbage collector** (ADR-0170) runs beside the control loops and deletes every object whose controller owner reference names an owner that no longer exists at that UID (a Workflow's step Functions and the `delete` KVStores it made, an Identity's credential Secret, a Site's Route, a Function's Revisions). It acts on the owner's delete event and on a periodic sweep, one at start included, so a crash loses no collection; a live owner's child is never collected. A step Function or Revision that an open workflow run pins is collected only after that run ends, and deleting a Workflow cancels its started runs (ADR-0190).
 
 Each resource kind gets its own control loop, following the Kubernetes controller pattern:
 
@@ -690,7 +690,7 @@ stateDiagram-v2
 A few important things intentionally left open at this stage:
 
 - **Build pipeline**: largely resolved by the curated-runtime decision — functions arrive as source artifacts (JS bundle, Python wheel) layered onto platform-owned runtime images. **Dependency resolution is resolved (ADR-0089): deps are bundled *in* the artifact, not resolved at deploy** — a function artifact may be a **deployment-package bundle** (a directory: handler + vendored non-stdlib deps + the mandatory I/O contract) pushed as a tar+gzip OCI layer, so a native dependency (e.g. a `duckdb` wheel) runs on the stock curated runtime (`PYTHONPATH`/`FUNCD_BUNDLE_DIR`); a single-file artifact stays the common case. **Bundling lives in the language toolchains (ADR-0144)**: `@funcd-dev/vite-plugin` writes one self-contained `.mjs` per TypeScript function, and `funcd-bundle` (`uv run`) installs a Python function's locked closure for the runtime's Linux platform from any host and import-checks it (a hermetic in-container build stays an option); `funcdctl` runs no language toolchain and `funcdctl.yaml` stays the only contract source. **One function ref may carry a bundle per CPU (ADR-0145)**: an OCI image index of per-platform manifests (`funcdctl push --platform`, `funcdctl index`); each node pulls its own platform's bundle, and placement refuses a function whose artifact has no bundle for the node (`NoMatchingPlatform`). Still open: an optional in-platform builder later.
-- **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation, and a redeploy already switches all calls to the new revision once it is ready (ADR-0143, the Container Apps single-revision model); splitting traffic between revisions is not yet specified.
+- **Versioning & rollout**: traffic splitting and canary / blue-green strategies. The immutable `Revision` resource (see [Resource model](#resource-model)) gives the foundation, and a redeploy already switches all calls to the new revision once it is ready (ADR-0143, the Container Apps single-revision model), except a workflow run's calls, which stay on the revision the run started with (ADR-0190); splitting traffic between revisions is not yet specified.
 - **Multi-node path**: worker nodes registering to the control plane over NATS, node heartbeats, and scheduler placement across nodes.
 - **Quotas & limits**: per-namespace resource quotas and admission-time enforcement (per-account JetStream limits already cover the bus dimension — see [Internal IAM](#internal-iam)).
 - **Backup & disaster recovery**: metastore snapshot/restore and JetStream stream backups; declarative resources keep namespaces re-applyable from manifests (GitOps-style) as a coarse-grained fallback.
@@ -975,7 +975,7 @@ Challenged list — kept, renamed, or removed with reasons:
 | `Namespace` | cluster | tenancy boundary (quotas, RBAC, isolation) |
 | `ResourceGroup` | namespaced | management/lifecycle unit *within* a namespace (Azure-style); referenced by the **required** `metadata.resourceGroup` on every other resource; deleting a non-empty group is refused (409 naming its members) and a forced delete deletes the members first (ADR-0170). Not a tenancy/auth boundary |
 | `Function` | namespaced | desired state; every spec change stamps a new immutable `Revision` |
-| `Revision` | namespaced, read-only | **replaces draft's `Deployment`** — immutable snapshot of a Function (image + config), enabling rollback and canary; "deployment" is an action, not a state; written only by the Function reconciler (the API serves get and list — ADR-0172) |
+| `Revision` | namespaced, read-only | **replaces draft's `Deployment`** — immutable snapshot of a Function (image + config), enabling rollback and canary; "deployment" is an action, not a state; written only in-process: by the Function reconciler, and by the scaler for the Idle→Deploying wake intent of a revision a workflow run holds (ADR-0190); the API serves get and list (ADR-0172) |
 | `Route` | namespaced | HTTP exposure: domains, paths, traffic split across Revisions; auto-derived from `Function.triggers`, standalone for advanced cases |
 | `Service` | namespaced | **was missing from the draft** although central to the blueprint — declares an instance/binding of an augmenting service (kv, blob, vector, …) |
 | `EventSource` | namespaced | declarative event source/binding (the blueprint's "Event" renamed: an event is a runtime occurrence, not a declarative resource) |

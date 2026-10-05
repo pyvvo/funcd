@@ -1,6 +1,7 @@
 # ADR-0158: Pool member identity — the pool host names the member on every channel, and same access shares a pool
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — lines 164-165 (the restart window): a manifest rebuild drains.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: pooling, shim, identity, local-api, logs, traces, security

@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — pool key (namespace, runtime, worker-id) alone: the key gains the access hash; only the same access shares a pool.
+- **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — scenario membership-rebuild (lines 58-59) and line 140: a manifest rebuild drains instead of restarting the pool worker.
 - **Date**: 2026-06-16 (**Implemented 2026-06-16** — review **pass** (0 Blockers/Majors, 3 Minors; only the OpenAPI-regen
   Minor was model-attributed and is folded), see docs/reviews/adr-0046-implementation-claude-opus-4-8.md; DoD 7/7, all 9
   scenarios real + passing (6 pure + 5 node-gated acceptance), solo path behavior-preserving, activator unchanged.
