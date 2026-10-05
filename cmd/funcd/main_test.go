@@ -29,6 +29,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/edge/limit"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -851,6 +852,16 @@ func cfgProcess(dataDir string) config.Config {
 	c.Storage.DataDir = dataDir
 	c.Runtime.Mode = "process"
 	return c
+}
+
+// server.limits.maxKeys reaches the limiter's Config with every other limit (ADR-0164).
+func TestLimitsConfigCarriesMaxKeys(t *testing.T) {
+	var c config.Config
+	c.Server.Limits.RatePerMin, c.Server.Limits.Burst, c.Server.Limits.Key = 60, 5, "function"
+	c.Server.Limits.MaxBodyBytes, c.Server.Limits.MaxInFlight, c.Server.Limits.MaxKeys = 1024, 8, 2
+	require.Equal(t, limit.Config{
+		RatePerMin: 60, Burst: 5, Key: limit.KeyFunction, MaxBodyBytes: 1024, MaxInFlight: 8, MaxKeys: 2,
+	}, limitsConfig(c))
 }
 
 // the shipped example funcdconfig.yaml loads + resolves cleanly (guards it against drifting).

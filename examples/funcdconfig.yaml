@@ -33,6 +33,7 @@ server:
   #   key: clientIP               # clientIP | function. default: clientIP
   #   maxBodyBytes: 0             # request body cap. default: 0 (off)
   #   maxInFlight: 0              # concurrent request cap. default: 0 (off)
+  #   maxKeys: 4096               # rate-limit buckets kept. default: 4096
   # auth:
   #   edge: false                 # enforce each target's auth stance on the data plane (ADR-0113). default: false
   # observability:                # edge observability (ADR-0114)

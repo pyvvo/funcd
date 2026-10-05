@@ -56,7 +56,7 @@ func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -78,7 +78,7 @@ func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
@@ -111,7 +111,7 @@ func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, 0, nil),
+	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil),
 		gateway.RequestID, shape.Chain(shape.Config{CORS: &shape.CORS{AllowOrigins: []string{"*"}}})))
 	t.Cleanup(edge.Close)
 	client := &http.Client{Transport: &http.Transport{}}
@@ -197,7 +197,7 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			h := dataplane.Handler(st, act, rtr, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
+			h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
 
@@ -235,7 +235,7 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
 	get := func() {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -278,7 +278,7 @@ func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			h := dataplane.Handler(st, act, rtr, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
+			h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -311,7 +311,7 @@ func TestScenarioEdgeChunkedBodyOverCap(t *testing.T) {
 	seedFunction(t, st, "echo")
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := limit.Chain(limit.Config{MaxBodyBytes: 1024})(dataplane.Handler(st, act, rtr, nil, nil, 0, nil))
+	h := limit.Chain(limit.Config{MaxBodyBytes: 1024})(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil))
 
 	for _, tc := range []struct {
 		name, path string
@@ -352,7 +352,7 @@ func TestUpstreamRouteNotBoundByInvokeDeadline(t *testing.T) {
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, time.Second, nil)
+	h := dataplane.Handler(st, act, rtr, nil, nil, nil, time.Second, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))

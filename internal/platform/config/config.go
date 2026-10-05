@@ -52,13 +52,15 @@ type Config struct {
 			Email    string   `json:"email,omitempty" env:"FUNCD_TLS_EMAIL"`
 			CADir    string   `json:"caDir,omitempty" env:"FUNCD_TLS_CA_DIR"`
 		} `json:"tls,omitempty"`
-		// Ingress protection limits (ADR-0112, F75). Absent/zero ⇒ off (pass-through).
+		// Ingress protection limits (ADR-0112, F75). The rate, size and in-flight limits are off at 0; maxKeys is
+		// a table size (min 1, default 4096) with no off switch (ADR-0164).
 		Limits struct {
 			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN" validate:"min=0"`
 			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST" validate:"min=0"`
 			Key          string `json:"key,omitempty" env:"FUNCD_LIMITS_KEY" validate:"omitempty,oneof=clientIP function"`
 			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES" validate:"min=0"`
 			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT" validate:"min=0"`
+			MaxKeys      int    `json:"maxKeys,omitempty" env:"FUNCD_LIMITS_MAX_KEYS" validate:"min=1"`
 		} `json:"limits,omitempty"`
 		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
 		Auth struct {
@@ -268,6 +270,7 @@ func defaults() Config {
 	var c Config
 	c.Server.ListenAddr = "0.0.0.0:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
+	c.Server.Limits.MaxKeys = 4096
 	c.Storage.Mode = "file"
 	c.Storage.DataDir = "/var/lib/funcd"
 	c.Auth.Namespaces = []string{"default"}

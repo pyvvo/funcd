@@ -9,10 +9,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/edge/limit"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
 // counter is a next-handler that records how many times it was called (200 OK).
@@ -80,15 +83,18 @@ func TestScenarioRateKeyClientIP(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "2.2.2.2:1", 0).Code, "a different IP has its own bucket")
 }
 
-// scenario: rate-key-function — a rest-varying flood at one function shares ONE bucket.
-func TestScenarioRateKeyFunction(t *testing.T) {
+// Under key: function the rate step is not Chain's (ADR-0164): Chain passes every call, and only a
+// function-keyed config builds a TargetLimiter; a nil one checks nothing.
+func TestChainSkipsRateUnderFunctionKey(t *testing.T) {
 	next := &counter{}
-	h := limit.Chain(limit.Config{RatePerMin: 60, Burst: 2, Key: limit.KeyFunction})(next)
-	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x/AAA", "1.1.1.1:1", 0).Code)
-	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x/BBB", "1.1.1.1:1", 0).Code)
-	require.Equal(t, http.StatusTooManyRequests, do(h, "GET", "/function/x/CCC", "1.1.1.1:1", 0).Code,
-		"rest-varying paths at /function/x share one bucket — no per-request bucket")
-	require.Equal(t, http.StatusOK, do(h, "GET", "/function/y", "1.1.1.1:1", 0).Code, "a different function has its own bucket")
+	h := limit.Chain(limit.Config{RatePerMin: 60, Burst: 1, Key: limit.KeyFunction})(next)
+	for i := 0; i < 5; i++ {
+		require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "1.1.1.1:1", 0).Code)
+	}
+	require.Nil(t, limit.NewTargetLimiter(limit.Config{RatePerMin: 60, Key: limit.KeyClientIP}))
+	require.Nil(t, limit.NewTargetLimiter(limit.Config{Key: limit.KeyFunction}))
+	var none *limit.TargetLimiter
+	require.False(t, none.Throttle(httptest.NewRecorder(), "default", "x"))
 }
 
 // scenario: over-size-413 — Content-Length over the cap is rejected before next.
@@ -129,40 +135,123 @@ func TestScenarioOverConcurrency503(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "1.1.1.1:1", 0).Code)
 }
 
-// LRU eviction bound: the key map never exceeds MaxKeys, and a hot key survives eviction.
-func TestRateLimiterLRUBound(t *testing.T) {
+// scenario: full-map-refuses-new-key
+func TestScenarioFullMapRefusesNewKey(t *testing.T) {
+	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
 	next := &counter{}
-	h := limit.Chain(limit.Config{RatePerMin: 60, Burst: 1, Key: limit.KeyClientIP, MaxKeys: 4})(next)
-	// Keep "hot" busy, then push 8 cold keys through — hot must not be evicted.
-	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "hot:1", 0).Code)
-	for i := 0; i < 8; i++ {
-		do(h, "GET", "/function/x", "cold"+strings.Repeat("z", i)+":1", 0)
-		do(h, "GET", "/function/x", "hot:1", 0) // touch hot each round → stays MRU
-	}
-	// hot has already spent its burst and stayed hot ⇒ still limited (bucket preserved, not reset by eviction).
-	require.Equal(t, http.StatusTooManyRequests, do(h, "GET", "/function/x", "hot:1", 0).Code)
+	h := limit.ChainAt(limit.Config{RatePerMin: 60, Burst: 1, Key: limit.KeyClientIP, MaxKeys: 2}, clk)(next)
+	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "10.0.0.1:1", 0).Code, "client A")
+	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "10.0.0.2:1", 0).Code, "client B")
+
+	clk.Advance(500 * time.Millisecond)
+	rec := do(h, "GET", "/function/x", "10.0.0.3:1", 0)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code, "client C finds no free bucket")
+	require.Equal(t, "1", rec.Header().Get("Retry-After"))
+	require.Contains(t, rec.Body.String(), "rate limit: no free bucket for a new key")
+	require.Contains(t, rec.Body.String(), "urn:funcd:problem:resource-exhausted")
+
+	clk.Advance(time.Second)
+	require.Equal(t, http.StatusOK, do(h, "GET", "/function/x", "10.0.0.3:1", 0).Code, "a refilled bucket frees its slot")
+	require.Equal(t, int64(3), next.n.Load())
 }
 
-// Issue #89: under key: function a flood of distinct, very long path heads must not make the limiter
-// retain MaxKeys × path length — the key map is bounded by MaxKeys alone, whatever the path size.
+// scenario: client-ip-drained-bucket-survives-ip-flood
+func TestScenarioClientIPDrainedBucketSurvivesIPFlood(t *testing.T) {
+	const maxKeys = 4096
+	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
+	next := &counter{}
+	h := limit.ChainAt(limit.Config{RatePerMin: 1, Burst: 5, Key: limit.KeyClientIP, MaxKeys: maxKeys}, clk)(next)
+	served := func(remote string, n int) (ok, refused int) {
+		for i := 0; i < n; i++ {
+			switch do(h, "GET", "/function/x", remote, 0).Code {
+			case http.StatusOK:
+				ok++
+			case http.StatusTooManyRequests:
+				refused++
+			}
+		}
+		return ok, refused
+	}
+	ok, _ := served("192.0.2.1:1", 10)
+	floodOK, floodRefused := 0, 0
+	for i := 0; i < maxKeys; i++ {
+		o, r := served(fmt.Sprintf("10.%d.%d.1:1", i/256, i%256), 1)
+		floodOK, floodRefused = floodOK+o, floodRefused+r
+	}
+	again, refused := served("192.0.2.1:1", 5)
+	require.Equal(t, 5, ok+again, "X is served its burst once, never again after the flood")
+	require.Equal(t, 5, refused, "X's last 5 calls get 429")
+	require.Equal(t, maxKeys-1, floodOK, "the flood fills the free buckets")
+	require.Equal(t, 1, floodRefused, "the flood IP beyond the free buckets gets 429")
+}
+
+// No bucket that has not refilled to burst is evicted for a new key; a refilled one is.
+func TestBucketTableEvictsOnlyRefilledBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		elapsed    time.Duration
+		victimGets int
+		newKeyOK   bool
+	}{
+		{name: "drained", elapsed: 0, victimGets: 0, newKeyOK: false},
+		{name: "partly-refilled", elapsed: 2 * time.Minute, victimGets: 2, newKeyOK: false},
+		{name: "refilled", elapsed: 3 * time.Minute, victimGets: 3, newKeyOK: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := clock.NewManual(time.Unix(1_700_000_000, 0))
+			l := limit.NewTargetLimiterAt(limit.Config{RatePerMin: 1, Burst: 3, Key: limit.KeyFunction, MaxKeys: 1}, clk)
+			for i := 0; i < 3; i++ {
+				require.False(t, l.Throttle(httptest.NewRecorder(), "ns", "victim"))
+			}
+			clk.Advance(tc.elapsed)
+			require.Equal(t, !tc.newKeyOK, l.Throttle(httptest.NewRecorder(), "ns", "other"))
+			require.Equal(t, 1, l.Buckets(), "the table never exceeds maxKeys")
+			if tc.newKeyOK {
+				return
+			}
+			got := 0
+			for i := 0; i < 5; i++ {
+				if !l.Throttle(httptest.NewRecorder(), "ns", "victim") {
+					got++
+				}
+			}
+			require.Equal(t, tc.victimGets, got, "the victim keeps its own tokens, never a fresh bucket")
+		})
+	}
+}
+
+// A take moves its bucket's refill time later, so the table reorders: after A's second take B refills first,
+// and a new key takes B's place.
+func TestBucketTableReordersOnTake(t *testing.T) {
+	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
+	l := limit.NewTargetLimiterAt(limit.Config{RatePerMin: 60, Burst: 2, Key: limit.KeyFunction, MaxKeys: 2}, clk)
+	require.False(t, l.Throttle(httptest.NewRecorder(), "ns", "a"))
+	clk.Advance(500 * time.Millisecond)
+	require.False(t, l.Throttle(httptest.NewRecorder(), "ns", "b"))
+	clk.Advance(100 * time.Millisecond)
+	require.False(t, l.Throttle(httptest.NewRecorder(), "ns", "a"))
+	clk.Advance(time.Second)
+	require.False(t, l.Throttle(httptest.NewRecorder(), "ns", "c"), "b is full again, so the new key takes its place")
+	require.Equal(t, 2, l.Buckets())
+}
+
+// Issue #89: under key: function a flood of distinct, very long names must not make the limiter retain
+// MaxKeys × name length — the table is bounded by MaxKeys alone, whatever the key size.
 func TestIssue89_FunctionKeyMemoryBounded(t *testing.T) {
 	const (
 		maxKeys = 64
 		segLen  = 64 << 10
 	)
-	for name, shape := range map[string]string{"single-segment": "/%s", "function-name": "/function/%s/x"} {
-		t.Run(name, func(t *testing.T) {
-			h := limit.Chain(limit.Config{RatePerMin: 60, Key: limit.KeyFunction, MaxKeys: maxKeys})(&counter{})
-			before := liveHeap()
-			for i := 0; i < maxKeys; i++ {
-				do(h, "GET", fmt.Sprintf(shape, strconv.Itoa(i)+strings.Repeat("a", segLen)), "1.1.1.1:1", 0)
-			}
-			grown := liveHeap() - before
-			runtime.KeepAlive(h)
-			require.Less(t, grown, int64(maxKeys*segLen/8),
-				"%d long-path keys left %d live heap bytes: the limiter holds the path itself as its key", maxKeys, grown)
-		})
+	l := limit.NewTargetLimiter(limit.Config{RatePerMin: 60, Key: limit.KeyFunction, MaxKeys: maxKeys})
+	before := liveHeap()
+	for i := 0; i < maxKeys; i++ {
+		name := v1.ObjectName(strconv.Itoa(i) + strings.Repeat("a", segLen))
+		require.False(t, l.Throttle(httptest.NewRecorder(), "default", name))
 	}
+	grown := liveHeap() - before
+	runtime.KeepAlive(l)
+	require.Less(t, grown, int64(maxKeys*segLen/8),
+		"%d long-name keys left %d live heap bytes: the limiter holds the name itself as its key", maxKeys, grown)
 }
 
 func liveHeap() int64 {

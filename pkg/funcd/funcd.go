@@ -994,7 +994,8 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0112 (F75): the ingress-protection limiter is the INNERMOST middleware (last vararg) so
 	// runtime order is Recover → RequestID → limit → dataplane.Handler — rejects (429/413/503) precede
 	// the activator (zero wake) yet stay panic-guarded + X-Request-Id-correlated. A zero Config is a
-	// pass-through (limits off by default).
+	// pass-through (limits off by default). ADR-0164: under key: function the rate step runs inside
+	// dataplane.Handler instead (limit.NewTargetLimiter), once the target Function is resolved.
 	// ADR-0113 (F77): the edge authn PEP runs INSIDE dataplane.Handler (after the target resolves,
 	// before store.Get + the activator). Built from the control-plane credentials + authorizer; nil
 	// unless enabled (an authenticated stance then fails closed).
@@ -1015,7 +1016,8 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
 	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, staticHandler, c.invokeDefaultTimeout, p.logger)
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
+		c.invokeDefaultTimeout, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress

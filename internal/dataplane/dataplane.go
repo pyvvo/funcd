@@ -29,6 +29,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/edge/authn"
+	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
@@ -61,6 +62,7 @@ type Server struct {
 	activator *activator.Activator
 	router    router.Router
 	enforcer  *authn.Enforcer
+	limiter   *limit.TargetLimiter
 	static    *static.Handler
 	logger    *slog.Logger
 	transport *http.Transport // the Upstream routes' connection pool, shared by every request
@@ -72,11 +74,12 @@ type Server struct {
 // gateway.Handler() is not mounted here (ADR-0033). rtr is the F79 edge router (may be nil, in
 // which case only the /function/<name> path is served — implicit-only, pre-F79 behavior). enf is the
 // F77 edge authn PEP (may be nil ⇒ no enforcement for `open`; an `authenticated` stance fails closed).
+// lim is the key: function rate step (may be nil ⇒ no per-target check, ADR-0164).
 // stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s). defaultTimeout is
 // invoke.defaultTimeout, the response deadline of an external invoke whose Function sets no spec.timeout
 // (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151).
-func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, stat *static.Handler,
-	defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
+func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, lim *limit.TargetLimiter,
+	stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -84,7 +87,7 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *a
 		defaultTimeout = v1.DefaultInvokeTimeout
 	}
 	return &Server{
-		store: st, activator: act, router: rtr, enforcer: enf, static: stat, logger: logger.With("component", "dataplane"),
+		store: st, activator: act, router: rtr, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
 		transport: httpx.Transport(), defaultTimeout: defaultTimeout,
 	}
 }
@@ -142,8 +145,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // warm-proxy / cold-wake path). remainder is the function-relative path (matched prefix already
 // stripped for a Route hit; the /function/<name> remainder for the path form). The F77 edge authn
 // PEP is enforced FIRST — before store.Get (no function-enumeration oracle) and before the activator
-// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated. An external
-// invoke gets a response deadline from received: the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151).
+// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated. Under key: function
+// an external call then takes a token from the Function's bucket, so a name that does not resolve creates no
+// bucket and a 429 never wakes a sandbox (ADR-0164). An external invoke gets a response deadline from received:
+// the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151).
 func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string,
 	stance v1.AuthMode, internal bool, received time.Time, op string) {
 	if remainder == "" {
@@ -171,6 +176,9 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	// name never becomes a metric series (ADR-0114 §1).
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(ns), string(name)
+	}
+	if !internal && s.limiter.Throttle(w, ns, name) {
+		return
 	}
 	out := r.Clone(r.Context())
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a

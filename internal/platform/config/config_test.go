@@ -262,6 +262,37 @@ func TestIssue164_NegativeLimitsRejected(t *testing.T) {
 	}
 }
 
+// scenario: max-keys-from-config
+func TestScenarioMaxKeysFromConfig(t *testing.T) {
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 4096, c.Server.Limits.MaxKeys, "unset gives the default table size")
+
+	c, err = config.Load(writeCfg(t, "server:\n  limits:\n    maxKeys: 2\n"), config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 2, c.Server.Limits.MaxKeys, "from the file")
+
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_LIMITS_MAX_KEYS", "2")
+		c, err := config.Load("", config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, 2, c.Server.Limits.MaxKeys)
+	})
+	for _, v := range []string{"0", "-1"} {
+		t.Run("file/"+v, func(t *testing.T) {
+			_, err := config.Load(writeCfg(t, "server:\n  limits:\n    maxKeys: "+v+"\n"), config.Flags{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, "server.limits.maxKeys")
+		})
+		t.Run("env/"+v, func(t *testing.T) {
+			t.Setenv("FUNCD_LIMITS_MAX_KEYS", v)
+			_, err := config.Load("", config.Flags{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, "server.limits.maxKeys")
+		})
+	}
+}
+
 // The zero-config workflow.payloadLimit is ADR-0094's 256 KiB; an explicit value still overrides it.
 func TestIssue343_WorkflowPayloadLimitDefault256KiB(t *testing.T) {
 	c, err := config.Load("", config.Flags{})
