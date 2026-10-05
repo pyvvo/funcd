@@ -443,18 +443,22 @@ func resolveTarget(_ context.Context, ref string) (oras.Target, string, error) {
 	return repo, repo.Reference.Reference, nil
 }
 
-// registryResponseTimeout bounds one wait for a registry's response headers.
+// registryResponseTimeout bounds one wait for a registry: for its response headers, and for the next bytes of a
+// response body. Each body read restarts it, so a large blob that keeps arriving is never cut.
 const registryResponseTimeout = 10 * time.Second
+
+// errRegistryStalled ends a response body read that waited registryResponseTimeout for bytes.
+var errRegistryStalled = errors.New("the registry sent no response bytes for " + registryResponseTimeout.String())
 
 // registryClient is oras-go's retrying auth client over a transport of its own: its default client, also used when
 // a repository's Client is nil, sends through http.DefaultTransport (#571). A registry that accepts a request and
-// never answers fails the call after one registryResponseTimeout, instead of holding the reconcile that made it, and
-// the controller's only worker, forever (#697).
+// never answers, or stops sending a response body, fails the call after one registryResponseTimeout, instead of
+// holding the reconcile that made it, and the controller's only worker, forever (#697).
 func registryClient(cred auth.CredentialFunc) *auth.Client {
 	tr := httpx.Transport()
 	tr.ResponseHeaderTimeout = registryResponseTimeout
 	return &auth.Client{
-		Client:     &http.Client{Transport: &retry.Transport{Base: tr, Policy: func() retry.Policy { return registryRetry{} }}},
+		Client:     &http.Client{Transport: &retry.Transport{Base: idleBodyTransport{base: tr}, Policy: func() retry.Policy { return registryRetry{} }}},
 		Cache:      auth.NewCache(),
 		Credential: cred,
 	}
@@ -470,6 +474,37 @@ func (registryRetry) Retry(attempt int, resp *http.Response, err error) (time.Du
 		return -1, nil
 	}
 	return retry.DefaultPolicy.Retry(attempt, resp, err)
+}
+
+// idleBodyTransport gives each response an idleBody.
+type idleBodyTransport struct{ base http.RoundTripper }
+
+func (t idleBodyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil {
+		resp.Body = &idleBody{ReadCloser: resp.Body}
+	}
+	return resp, err
+}
+
+// idleBody closes the body under a Read that waits registryResponseTimeout for bytes, which ends that Read with
+// errRegistryStalled.
+type idleBody struct {
+	io.ReadCloser
+	timer *time.Timer
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	if b.timer == nil {
+		b.timer = time.AfterFunc(registryResponseTimeout, func() { _ = b.Close() })
+	} else {
+		b.timer.Reset(registryResponseTimeout)
+	}
+	n, err := b.ReadCloser.Read(p)
+	if !b.timer.Stop() {
+		return n, errRegistryStalled
+	}
+	return n, err
 }
 
 // layoutTarget is a local OCI layout. oras-go's oci.Store reads index.json once, when it opens, and rewrites the whole
