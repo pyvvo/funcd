@@ -8,10 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 
@@ -390,14 +388,22 @@ type memContainers struct {
 	containers.Store
 	mu        sync.Mutex
 	records   map[string]containers.Container
-	getErr    error // when set, every Get fails with it
-	deleteErr error // when set, every Delete fails with it
+	ns        map[string]string // container id → the namespace it was created in; List returns only the ctx's
+	getErr    error             // when set, every Get fails with it
+	deleteErr error             // when set, every Delete fails with it
 }
 
-func (s *memContainers) List(context.Context, ...string) ([]containers.Container, error) {
+func (s *memContainers) List(ctx context.Context, _ ...string) ([]containers.Container, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Collect(maps.Values(s.records)), nil
+	want, _ := namespaces.Namespace(ctx)
+	var out []containers.Container
+	for id, c := range s.records {
+		if ns := s.ns[id]; ns == "" || want == "" || ns == want {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 func (s *memContainers) Get(_ context.Context, id string) (containers.Container, error) {
@@ -413,10 +419,14 @@ func (s *memContainers) Get(_ context.Context, id string) (containers.Container,
 	return c, nil
 }
 
-func (s *memContainers) Create(_ context.Context, c containers.Container) (containers.Container, error) {
+func (s *memContainers) Create(ctx context.Context, c containers.Container) (containers.Container, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records[c.ID] = c
+	if s.ns == nil {
+		s.ns = map[string]string{}
+	}
+	s.ns[c.ID], _ = namespaces.Namespace(ctx)
 	return c, nil
 }
 

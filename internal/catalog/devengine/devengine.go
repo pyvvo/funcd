@@ -19,6 +19,8 @@ package devengine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,12 +31,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/catalog/embedengine"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/runtime/procreg"
 )
+
+// reapGrace is how long the reap at New waits after SIGTERM before SIGKILL: the process driver's default stop grace,
+// which `funcdctl dev` uses (ADR-0167).
+const reapGrace = 3 * time.Second
 
 // DevQuackToken is the fixed local Quack auth token the dev engine serves with when spec.Env carries
 // none. `funcdctl dev` writes it into the synthesized catalog's QUACK_TOKEN Secret so the consumer
@@ -51,6 +59,10 @@ type Runtime struct {
 	// catalog metadata survives a restart (the Parquet DATA already persists in blob). Empty ⇒ the
 	// catalog lives in the engine's ephemeral temp dir (fresh each boot), the default.
 	catalogDir string
+	// stateDir, when non-empty, holds engines.json, the saved registry of the engines this runtime started, so New
+	// reaps the engines a crashed run left behind (ADR-0167). reg is that registry; nil saves nothing.
+	stateDir string
+	reg      *procreg.Registry
 	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
 	bundled func() bool
 	extract func(dir string) (embedengine.Paths, error)
@@ -64,8 +76,13 @@ type Option func(*Runtime)
 // dev` under --persist, mirroring the durable metastore.
 func WithCatalogDir(dir string) Option { return func(r *Runtime) { r.catalogDir = dir } }
 
-// New builds the dev catalog engine runtime.
-func New(logger *slog.Logger, opts ...Option) *Runtime {
+// WithStateDir saves the engines this runtime starts in <dir>/engines.json, so New reaps the engines a crashed run
+// left there (ADR-0167).
+func WithStateDir(dir string) Option { return func(r *Runtime) { r.stateDir = dir } }
+
+// New builds the dev catalog engine runtime. With a state dir it first reaps the engines an earlier run saved there,
+// and fails with fault.Conflict while another process holds that registry.
+func New(logger *slog.Logger, opts ...Option) (*Runtime, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -78,7 +95,19 @@ func New(logger *slog.Logger, opts ...Option) *Runtime {
 	for _, o := range opts {
 		o(r)
 	}
-	return r
+	if r.stateDir == "" {
+		return r, nil
+	}
+	reg, err := procreg.Open(r.stateDir, "engines")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := reg.Reap(context.Background(), reapGrace); err != nil {
+		_ = reg.Close()
+		return nil, err
+	}
+	r.reg = reg
+	return r, nil
 }
 
 // Converge idempotently brings up the engine for spec.Ref and reports readiness. When the dev binary
@@ -101,7 +130,7 @@ func (r *Runtime) Converge(ctx context.Context, spec provider.ProviderSpec) (pro
 	// A dead/absent engine is (re)launched — this re-convergence IS the supervision, matching the
 	// prod provider runtime.
 	if p, ok := r.procs[spec.Ref]; ok {
-		p.stop()
+		r.stopLocked(p)
 		delete(r.procs, spec.Ref)
 	}
 
@@ -122,23 +151,49 @@ func (r *Runtime) Teardown(_ context.Context, ref provider.ProviderRef) error {
 	if !ok {
 		return nil
 	}
-	p.stop()
+	r.stopLocked(p)
 	delete(r.procs, ref)
 	return nil
 }
 
-// StopAll tears down every running engine — the dev command calls it on shutdown.
+// StopAll tears down every running engine and releases the registry — the dev command calls it on shutdown.
 func (r *Runtime) StopAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ref, p := range r.procs {
-		p.stop()
+		r.stopLocked(p)
 		delete(r.procs, ref)
 	}
+	if r.reg != nil {
+		_ = r.reg.Close()
+		r.reg = nil
+	}
+}
+
+// stopLocked stops an engine and forgets its registry entry; caller holds r.mu.
+func (r *Runtime) stopLocked(p *engineProc) {
+	p.stop()
+	if r.reg != nil {
+		_ = r.reg.Delete(p.id)
+	}
+}
+
+// save records a started engine in the registry; caller holds r.mu.
+func (r *Runtime) save(p *engineProc, token string) error {
+	if r.reg == nil {
+		return nil
+	}
+	pid := p.cmd.Process.Pid
+	st, err := procreg.StartTime(pid)
+	if err != nil {
+		return err
+	}
+	return r.reg.Put(procreg.Entry{ID: p.id, PID: pid, PGID: pid, StartTime: st, Token: token, Files: []string{p.dir}})
 }
 
 // engineProc is one running duckdb+quack subprocess.
 type engineProc struct {
+	id    string // the instance ID drawn per engine start; its dir name and -init argv carry it (ADR-0167)
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 	dir   string
@@ -182,7 +237,11 @@ func (p *engineProc) stop() {
 // port, and blocks until the port accepts (or times out).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	const op = "devengine.launch"
-	dir, err := os.MkdirTemp("", "funcd-dev-catalog-*")
+	var raw [8]byte
+	_, _ = rand.Read(raw[:])
+	id := hex.EncodeToString(raw[:])
+	token := "funcd-engine-" + id
+	dir, err := os.MkdirTemp("", token+"-*")
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "engine temp dir")
 	}
@@ -223,6 +282,8 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", initFile, ":memory:") //nolint:gosec // paths from our own embedded engine
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name)}
+	// Its own process group, so the reap after a crash reaches everything the engine started (ADR-0167).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, perr := cmd.StdinPipe()
 	if perr != nil {
 		_ = os.RemoveAll(dir)
@@ -234,13 +295,17 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		return nil, fault.Wrapf(serr, fault.Internal, op, "start duckdb engine")
 	}
 
-	p := &engineProc{cmd: cmd, stdin: stdin, dir: dir, addr: addr, done: make(chan struct{})}
+	p := &engineProc{id: id, cmd: cmd, stdin: stdin, dir: dir, addr: addr, done: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
 		close(p.done)
 	}()
-	if rerr := waitReady(ctx, addr, 20*time.Second); rerr != nil {
+	if serr := r.save(p, token); serr != nil {
 		p.stop()
+		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "save engine %s", id)
+	}
+	if rerr := waitReady(ctx, addr, 20*time.Second); rerr != nil {
+		r.stopLocked(p)
 		return nil, fault.Wrapf(rerr, fault.Unavailable, op, "engine did not become ready at %s", addr)
 	}
 	return p, nil

@@ -41,6 +41,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -561,6 +562,21 @@ func bootBackoff(cfg config.Config) (initial, limit time.Duration, err error) {
 	return initial, limit, nil
 }
 
+// maxStopGrace bounds runtime.process.stopGrace by the containerd driver's stop grace (ADR-0167).
+const maxStopGrace = 10 * time.Second
+
+// processStopGrace parses runtime.process.stopGrace (ADR-0167): a Go duration with 0 < d <= 10s, default 3s.
+func processStopGrace(cfg config.Config) (time.Duration, error) {
+	grace, err := parseDurationOr("runtime.process.stopGrace", cfg.Runtime.Process.StopGrace, 3*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	if grace > maxStopGrace {
+		return 0, fault.Invalidf("buildOptions", "config key %q has value %s, above %s", "runtime.process.stopGrace", grace, maxStopGrace)
+	}
+	return grace, nil
+}
+
 // parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
 // value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
 func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
@@ -703,6 +719,11 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", bucket, messaging, nil
 }
 
+// bootSweeper is the containerd driver's sweep of every funcd namespace (ADR-0167); off Linux the driver is a stub.
+type bootSweeper interface {
+	SweepAll(ctx context.Context) error
+}
+
 // noopClose is the execution closer for the process lane (nothing to tear down).
 func noopClose() error { return nil }
 
@@ -725,46 +746,79 @@ func (c telemetryCloser) Close() error {
 // Node shim. It returns a closer the caller must defer — for containerd mode it stops the
 // ctrmanager-supervised private containerd (ADR-0054); for process mode it is a no-op.
 func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logger) ([]funcd.Option, func() error, error) {
+	grace, err := processStopGrace(cfg)
+	if err != nil {
+		return nil, noopClose, err
+	}
 	if cfg.Runtime.Mode == "containerd" {
-		c := cfg.Runtime.Containerd
-		// ADR-0054: bring the container runtime up through the Manager. By default it starts +
-		// supervises a PRIVATE containerd and imports the embedded curated images; with an external
-		// socket set it returns that socket and starts no child. The driver dials whatever Ensure yields.
-		mgrCfg := ctrmanager.Config{
-			ExternalSocket: c.Socket,
-			DataRoot:       c.Root,
-			ImageOverride:  c.ImageOverride,
-		}
-		mgr, err := ctrmanager.New(mgrCfg)
-		if err != nil {
-			return nil, noopClose, fmt.Errorf("build container manager: %w", err)
-		}
-		socket, err := mgr.Ensure(ctx)
-		if err != nil {
-			_ = mgr.Close()
-			return nil, noopClose, fmt.Errorf("ensure container runtime (private containerd is Linux+root; set runtime.containerd.socket otherwise): %w", err)
-		}
-		cd, err := containerd.New(containerd.Config{
-			Socket:      socket,
-			Snapshotter: c.Snapshotter,
-			CNIBinDir:   c.CNIBinDir,
-			CNIConfDir:  c.CNIConfDir,
-			StateDir:    c.StateDir,
-			SubnetCIDR:  c.SubnetCIDR,
-			Logger:      logger,
-			Pullable:    mgrCfg.Pullable(c.ImagePrefix),
-			Private:     c.Socket == "",
-		})
-		if err != nil {
-			_ = mgr.Close()
-			return nil, noopClose, fmt.Errorf("containerd runtime (runtime.mode: containerd is Linux-only): %w", err)
-		}
-		return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix))}, mgr.Close, nil
+		return containerdOptions(ctx, cfg, logger, containerd.New)
 	}
 
-	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver.
+	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver, which
+	// reaps the workers a crashed run left in <dataDir>/process before the controllers start (ADR-0167).
 	logger.WarnContext(ctx, "funcd: runtime.mode process — functions run as the daemon's OS user with no isolation (dev/test only, ADR-0011); set runtime.mode: containerd for untrusted functions")
-	opts := []funcd.Option{funcd.WithRuntime(process.New())}
+	rt, err := process.Open(ctx, filepath.Join(cfg.Storage.DataDir, "process"), grace)
+	if err != nil {
+		return nil, noopClose, fmt.Errorf("process runtime: %w", err)
+	}
+	opts, err := processShimOptions(ctx, cfg, logger)
+	if err != nil {
+		_ = rt.Close()
+		return nil, noopClose, err
+	}
+	return append([]funcd.Option{funcd.WithRuntime(rt)}, opts...), rt.Close, nil
+}
+
+// containerdOptions brings the containerd driver up through newRuntime (containerd.New; a test passes a fake) and
+// sweeps the funcd namespaces before any controller starts.
+func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, newRuntime func(containerd.Config) (fnruntime.Runtime, error)) ([]funcd.Option, func() error, error) {
+	c := cfg.Runtime.Containerd
+	// ADR-0054: bring the container runtime up through the Manager. By default it starts +
+	// supervises a PRIVATE containerd and imports the embedded curated images; with an external
+	// socket set it returns that socket and starts no child. The driver dials whatever Ensure yields.
+	mgrCfg := ctrmanager.Config{
+		ExternalSocket: c.Socket,
+		DataRoot:       c.Root,
+		ImageOverride:  c.ImageOverride,
+	}
+	mgr, err := ctrmanager.New(mgrCfg)
+	if err != nil {
+		return nil, noopClose, fmt.Errorf("build container manager: %w", err)
+	}
+	socket, err := mgr.Ensure(ctx)
+	if err != nil {
+		_ = mgr.Close()
+		return nil, noopClose, fmt.Errorf("ensure container runtime (private containerd is Linux+root; set runtime.containerd.socket otherwise): %w", err)
+	}
+	cd, err := newRuntime(containerd.Config{
+		Socket:      socket,
+		Snapshotter: c.Snapshotter,
+		CNIBinDir:   c.CNIBinDir,
+		CNIConfDir:  c.CNIConfDir,
+		StateDir:    c.StateDir,
+		SubnetCIDR:  c.SubnetCIDR,
+		Logger:      logger,
+		Pullable:    mgrCfg.Pullable(c.ImagePrefix),
+		Private:     c.Socket == "",
+	})
+	if err != nil {
+		_ = mgr.Close()
+		return nil, noopClose, fmt.Errorf("containerd runtime (runtime.mode: containerd is Linux-only): %w", err)
+	}
+	// A container left in a funcd namespace is a leftover of an earlier run: this driver runs none yet, so the sweep
+	// removes it before any controller starts (ADR-0167).
+	if sw, ok := cd.(bootSweeper); ok {
+		if serr := sw.SweepAll(ctx); serr != nil {
+			logger.WarnContext(ctx, "funcd: could not remove every container an earlier run left", "error", serr)
+		}
+	}
+	return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix))}, mgr.Close, nil
+}
+
+// processShimOptions extracts the embedded Node shim and pool host, and the Python shim when a usable python3 is
+// present, for the process driver.
+func processShimOptions(ctx context.Context, cfg config.Config, logger *slog.Logger) ([]funcd.Option, error) {
+	var opts []funcd.Option
 	node := envOr("FUNCD_NODE", "")
 	if node == "" {
 		if p, lerr := exec.LookPath("node"); lerr == nil {
@@ -773,16 +827,16 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	if node == "" {
 		logger.WarnContext(ctx, "funcd: node not found — functions will NOT execute (control plane only); set FUNCD_NODE or FUNCD_RUNTIME=containerd")
-		return opts, noopClose, nil
+		return opts, nil
 	}
 	shimPath := filepath.Join(cfg.Storage.DataDir, "shim.mjs")
 	if werr := os.WriteFile(shimPath, shimnode.Shim, 0o600); werr != nil {
-		return nil, noopClose, fmt.Errorf("extract runtime shim to %s: %w", shimPath, werr)
+		return nil, fmt.Errorf("extract runtime shim to %s: %w", shimPath, werr)
 	}
 	// The node pool host (ADR-0046): node functions that name one spec.pooling.worker share it.
 	poolPath := filepath.Join(cfg.Storage.DataDir, "pool.mjs")
 	if werr := os.WriteFile(poolPath, shimnode.Pool, 0o600); werr != nil {
-		return nil, noopClose, fmt.Errorf("extract pool shim to %s: %w", poolPath, werr)
+		return nil, fmt.Errorf("extract pool shim to %s: %w", poolPath, werr)
 	}
 	opts = append(opts, funcd.WithRuntimeShim(node, shimPath), funcd.WithPoolShim(node, poolPath))
 
@@ -797,16 +851,16 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	if python == "" {
 		logger.InfoContext(ctx, "funcd: python3 not found — python functions will not execute in process mode (set FUNCD_PYTHON); node functions unaffected")
-		return opts, noopClose, nil
+		return opts, nil
 	}
 	shimEntry, poolEntry, perr := shimpython.Extract(filepath.Join(cfg.Storage.DataDir, "shim-python"))
 	if perr != nil {
-		return nil, noopClose, fmt.Errorf("extract python runtime shim: %w", perr)
+		return nil, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
 	if reason := process.PythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
 		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
 			"python", python, "reason", reason)
-		return opts, noopClose, nil
+		return opts, nil
 	}
 	opts = append(opts, funcd.WithRuntimeShimFor("python", python, shimEntry))
 
@@ -818,7 +872,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	} else {
 		logger.InfoContext(ctx, "funcd: python < 3.14 — python worker pooling disabled (needs concurrent.interpreters); python functions run solo")
 	}
-	return opts, noopClose, nil
+	return opts, nil
 }
 
 // pythonAtLeast314 reports whether the interpreter at path is Python ≥3.14 (the floor for the

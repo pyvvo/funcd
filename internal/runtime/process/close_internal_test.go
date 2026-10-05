@@ -14,7 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
-// Close stops the running instances at once: each one that ignores SIGTERM holds its full stopGrace, so stopping
+// Close stops the running instances at once: each one that ignores SIGTERM holds its full stop grace, so stopping
 // them one after another made a daemon with N such workers exit N stop graces after SIGTERM, past the 15 s
 // shutdown bound (issue #143).
 func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
@@ -39,5 +39,5 @@ func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, d.Close())
 	elapsed := time.Since(start)
-	require.Less(t, elapsed, 2*stopGrace, "Close took %s for %d workers that ignore SIGTERM: it stops them one at a time", elapsed, workers)
+	require.Less(t, elapsed, 2*defaultStopGrace, "Close took %s for %d workers that ignore SIGTERM: it stops them one at a time", elapsed, workers)
 }

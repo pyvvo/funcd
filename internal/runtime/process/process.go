@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,13 +20,19 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/procreg"
 )
 
-// stopGrace is how long Stop waits after SIGTERM before sending SIGKILL.
-const stopGrace = 3 * time.Second
+// defaultStopGrace is how long Stop waits after SIGTERM before sending SIGKILL unless runtime.process.stopGrace sets
+// it (ADR-0167).
+const defaultStopGrace = 3 * time.Second
+
+// instanceFlag prefixes the identity token appended to a worker's argv, which the reap matches (ADR-0167).
+const instanceFlag = "--funcd-instance="
 
 // instance tracks one supervised child process.
 type instance struct {
+	id        runtime.InstanceID
 	spec      runtime.WorkerSpec
 	logPath   string
 	portFile  string // the shim writes its OS-assigned port here once listening (ADR-0030)
@@ -45,11 +52,33 @@ type driver struct {
 	mu        sync.Mutex
 	instances map[runtime.InstanceID]*instance
 	capture   runtime.LogCaptureFunc // optional Path B log-channel hook (ADR-0081); nil = disabled
+	grace     time.Duration
+	reg       *procreg.Registry             // the saved worker registry (ADR-0167); nil = in-memory only
+	startTime func(pid int) (uint64, error) // procreg.StartTime; a test delays it to widen the exit-before-save window
 }
 
-// New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI).
+// New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI) that saves nothing.
 func New() runtime.Runtime {
-	return &driver{instances: map[runtime.InstanceID]*instance{}}
+	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: defaultStopGrace}
+}
+
+// Open returns a process driver that saves its workers in <stateDir>/workers.json (ADR-0167). Before it returns it
+// reaps the workers a crashed run left there; the reconciler then re-creates the replicas. A stopGrace <= 0 is the
+// 3 s default.
+func Open(ctx context.Context, stateDir string, stopGrace time.Duration) (runtime.Runtime, error) {
+	const op = "runtime.process.Open"
+	if stopGrace <= 0 {
+		stopGrace = defaultStopGrace
+	}
+	reg, err := procreg.Open(stateDir, "workers")
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "open worker registry")
+	}
+	if _, err := reg.Reap(ctx, stopGrace); err != nil {
+		_ = reg.Close()
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "reap workers of a previous run")
+	}
+	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: stopGrace, reg: reg, startTime: procreg.StartTime}, nil
 }
 
 // SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
@@ -95,6 +124,7 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 		removeFiles(old)
 	}
 	inst := &instance{
+		id:        id,
 		spec:      spec,
 		logPath:   logPath,
 		portFile:  logPath + ".port", // driver-owned; the shim writes its bound port here
@@ -127,8 +157,12 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 		return fault.Wrapf(err, fault.Internal, op, "open log file")
 	}
 
-	_ = os.Remove(inst.portFile)                                        // clear any stale port from a prior start
-	cmd := exec.Command(inst.spec.Command[0], inst.spec.Command[1:]...) //nolint:gosec // command is platform-internal, from the controller-built spec
+	_ = os.Remove(inst.portFile) // clear any stale port from a prior start
+	args := inst.spec.Command[1:]
+	if d.reg != nil {
+		args = append(slices.Clone(args), instanceFlag+string(id))
+	}
+	cmd := exec.Command(inst.spec.Command[0], args...) //nolint:gosec // command is platform-internal, from the controller-built spec
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	// Its own process group, so Stop, Close and the worker's exit reach everything it starts.
@@ -173,8 +207,34 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	inst.listened = false
 	inst.exit = runtime.Exit{}
 	inst.done = make(chan struct{})
+	// Saved before wait can reap the worker: an exited but unreaped worker still has the start time the entry needs.
+	serr := d.saveLocked(inst)
+	if serr != nil {
+		_ = syscall.Kill(-inst.pid, syscall.SIGKILL)
+	}
 	go d.wait(inst, logFile)
+	if serr != nil {
+		return fault.Wrapf(serr, fault.KindOf(serr), op, "save worker %q", id)
+	}
 	return nil
+}
+
+// saveLocked records a started worker in the registry; caller holds d.mu.
+func (d *driver) saveLocked(inst *instance) error {
+	if d.reg == nil {
+		return nil
+	}
+	st, err := d.startTime(inst.pid)
+	if err != nil {
+		return err
+	}
+	files := []string{inst.portFile}
+	if inst.spec.LogPath == "" {
+		files = append(files, inst.logPath)
+	}
+	return d.reg.Put(procreg.Entry{
+		ID: string(inst.id), PID: inst.pid, PGID: inst.pid, StartTime: st, Token: instanceFlag + string(inst.id), Files: files,
+	})
 }
 
 // wait reaps the child and records its terminal state. It is the sole caller of
@@ -187,6 +247,9 @@ func (d *driver) wait(inst *instance, logFile *os.File) {
 	_, wrote := readPortFile(inst.portFile)
 
 	d.mu.Lock()
+	if d.reg != nil {
+		_ = d.reg.Delete(string(inst.id))
+	}
 	inst.listened = inst.listened || wrote
 	inst.exit = exitOf(inst.cmd.ProcessState)
 	switch {
@@ -225,7 +288,7 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 	done := inst.done
 	d.mu.Unlock()
 
-	terminate(pid, done)
+	terminate(pid, done, d.grace)
 	d.mu.Lock()
 	inst.released = true
 	d.mu.Unlock()
@@ -319,7 +382,7 @@ func removeFiles(inst *instance) {
 	}
 }
 
-// Close stops every running instance at once, so shutdown takes one stopGrace however many ignore SIGTERM, then deletes
+// Close stops every running instance at once, so shutdown takes one stop grace however many ignore SIGTERM, then deletes
 // every instance's driver-owned files, which no later driver knows to remove.
 func (d *driver) Close() error {
 	d.mu.Lock()
@@ -336,20 +399,23 @@ func (d *driver) Close() error {
 	}
 	wg.Wait()
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	for _, inst := range d.instances {
 		removeFiles(inst)
 	}
-	d.mu.Unlock()
+	if d.reg != nil {
+		return d.reg.Close()
+	}
 	return nil
 }
 
-// terminate sends the worker's process group SIGTERM, then SIGKILL after stopGrace, and returns once the worker
+// terminate sends the worker's process group SIGTERM, then SIGKILL after grace, and returns once the worker
 // has exited (done closed).
-func terminate(pid int, done <-chan struct{}) {
+func terminate(pid int, done <-chan struct{}, grace time.Duration) {
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	select {
 	case <-done:
-	case <-time.After(stopGrace):
+	case <-time.After(grace):
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		<-done
 	}
