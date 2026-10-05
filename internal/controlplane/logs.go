@@ -12,6 +12,8 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
+	"github.com/pyvvo/funcd/internal/workflow"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
 // LogQuerier is the control-plane's view of the function-log reader (logread.Reader, ADR-0084). An
@@ -77,9 +79,15 @@ func RegisterLogs(api huma.API, q LogQuerier, authz auth.Authorizer) {
 }
 
 // RunLogGetter is the minimal metastore view the run-log querier needs (ADR-0106): Get a WorkflowRun
-// (for its status.traceId) and its Workflow (for --step→function resolution). store.Store satisfies it.
+// (for its status.traceId) and, for a run with no pinned spec, its Workflow. store.Store satisfies it.
 type RunLogGetter interface {
 	Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error)
+}
+
+// RunRecordGetter is the engine's run-state view the run-log querier resolves --step against: the spec a
+// run pinned at start (ADR-0094). runstate.Store satisfies it.
+type RunRecordGetter interface {
+	Get(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*runstate.Record, error)
 }
 
 // WorkflowRunLogQuerier resolves a run's status.traceId and returns its namespace-wide, trace-filtered
@@ -93,15 +101,17 @@ type WorkflowRunLogQuerier interface {
 	RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName, q logread.Query) ([]logread.Line, error)
 }
 
-// runLogQuerier is the metastore+reader-backed WorkflowRunLogQuerier (ADR-0106).
+// runLogQuerier is the metastore+run-state+reader-backed WorkflowRunLogQuerier (ADR-0106).
 type runLogQuerier struct {
 	store  RunLogGetter
+	runs   RunRecordGetter
 	reader LogQuerier
 }
 
-// NewWorkflowRunLogQuerier builds the run-scoped log querier over the metastore + the funclog reader.
-func NewWorkflowRunLogQuerier(s RunLogGetter, reader LogQuerier) WorkflowRunLogQuerier {
-	return &runLogQuerier{store: s, reader: reader}
+// NewWorkflowRunLogQuerier builds the run-scoped log querier over the metastore, the engine's run records
+// and the funclog reader.
+func NewWorkflowRunLogQuerier(s RunLogGetter, runs RunRecordGetter, reader LogQuerier) WorkflowRunLogQuerier {
+	return &runLogQuerier{store: s, runs: runs, reader: reader}
 }
 
 func (r *runLogQuerier) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.ObjectName, q logread.Query) ([]logread.Line, error) {
@@ -122,7 +132,11 @@ func (r *runLogQuerier) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1
 	// --step drill-down: a non-empty Function arrives as the step NAME; resolve it to the step's function
 	// via the run's pinned workflow. Keeps the trace filter (so it's this run's lines for that function).
 	if q.Function != "" {
-		fn, rerr := r.resolveStepFunction(ctx, ns, wr.Spec.Workflow, v1.ObjectName(q.Function))
+		spec, rerr := r.runSpec(ctx, wr)
+		if rerr != nil {
+			return nil, rerr
+		}
+		fn, rerr := resolveStepFunction(wr.Spec.Workflow, spec, v1.ObjectName(q.Function))
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -131,21 +145,36 @@ func (r *runLogQuerier) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1
 	return r.reader.Read(ctx, q)
 }
 
-// resolveStepFunction maps a step name to its function (ADR-0106): a FunctionStep with Ref ⇒ that
-// function; with Image ⇒ the materialized <workflow>-<step>. A builtin/sub-workflow/unknown step has no
-// single function to read — an Invalid error names why.
-func (r *runLogQuerier) resolveStepFunction(ctx context.Context, ns v1.NamespaceName, workflow, step v1.ObjectName) (string, error) {
+// runSpec returns the spec run executes: the one its engine record pinned at start (ADR-0094), so an
+// edited or deleted Workflow does not move a --step read. A run with no record of its own (not started
+// yet, or a record that closed without a spec) falls back to the live Workflow.
+func (r *runLogQuerier) runSpec(ctx context.Context, run *v1.WorkflowRun) (*v1.WorkflowSpec, error) {
 	const op = "controlplane.runlogs"
-	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, workflow)
+	rec, err := r.runs.Get(ctx, run.Namespace, run.Name)
+	switch {
+	case err == nil && !workflow.ForeignRecord(rec, run.UID) && len(rec.Spec.Steps) > 0:
+		return &rec.Spec, nil
+	case err != nil && fault.KindOf(err) != fault.NotFound:
+		return nil, err
+	}
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	wf, ok := obj.(*v1.Workflow)
 	if !ok {
-		return "", fault.Internalf(op, "object %q is not a Workflow", workflow)
+		return nil, fault.Internalf(op, "object %q is not a Workflow", run.Spec.Workflow)
 	}
-	for i := range wf.Spec.Steps {
-		s := &wf.Spec.Steps[i]
+	return &wf.Spec, nil
+}
+
+// resolveStepFunction maps a step name to its function in spec (ADR-0106): a FunctionStep with Ref ⇒ that
+// function; with Image ⇒ the materialized <workflow>-<step>. A builtin/sub-workflow/unknown step has no
+// single function to read — an Invalid error names why.
+func resolveStepFunction(workflow v1.ObjectName, spec *v1.WorkflowSpec, step v1.ObjectName) (string, error) {
+	const op = "controlplane.runlogs"
+	for i := range spec.Steps {
+		s := &spec.Steps[i]
 		if s.Name != step {
 			continue
 		}

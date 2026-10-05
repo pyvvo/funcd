@@ -1007,13 +1007,14 @@ func (p *Platform) buildControlPlane() error {
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
 	// whenever a blob substrate is — nil leaves the route unregistered. ADR-0106: the run-scoped querier
-	// (GET …/workflowruns/{name}/logs) reuses the same reader + the metastore (to resolve status.traceId).
+	// (GET …/workflowruns/{name}/logs) reuses the same reader + the metastore (to resolve status.traceId) + the
+	// run records (--step resolves against the run's pinned spec).
 	var logReader controlplane.LogQuerier
 	var runLogQuerier controlplane.WorkflowRunLogQuerier
 	if c.blob != nil {
 		reader := logread.NewBlobReader(c.blob)
 		logReader = reader
-		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, reader)
+		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, runs, reader)
 	}
 	handler, err := controlplane.NewServer(controlplane.Deps{
 		Store:       c.store,

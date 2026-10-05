@@ -3,9 +3,14 @@ package observ_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/http/httputil"
+	"net/textproto"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -18,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/pyvvo/funcd/internal/edge/observ"
+	"github.com/pyvvo/funcd/internal/edge/shape"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 )
@@ -268,6 +274,94 @@ func TestIssue311_PanicStillCountedLoggedAndSpanEnded(t *testing.T) {
 
 			require.Equal(t, 1, strings.Count(buf.String(), `"msg":"edge request"`), "one access-log line")
 			require.Contains(t, buf.String(), `"status":500`)
+		})
+	}
+}
+
+// Issue #704: httputil.ReverseProxy relays an upstream 1xx through the edge writers, so the access log,
+// the RED metrics and the edge span must record the final status the client got, not the interim code.
+func TestIssue704_InterimStatusNotRecordedAsFinal(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = io.ReadAll(r.Body) // the first body read answers Expect with 100 Continue
+		} else {
+			w.Header().Set("Link", "</a.css>; rel=preload")
+			w.WriteHeader(http.StatusEarlyHints)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name    string
+		method  string
+		body    io.Reader
+		interim int
+	}{
+		{name: "early-hints", method: http.MethodGet, interim: http.StatusEarlyHints},
+		{name: "expect-continue", method: http.MethodPost, body: bytes.NewReader(make([]byte, 4096)), interim: http.StatusContinue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := metric.NewManualReader()
+			sr := tracetest.NewSpanRecorder()
+			tel := observability.NewFromProviders(
+				metric.NewMeterProvider(metric.WithReader(reader)),
+				sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)),
+			)
+			var buf bytes.Buffer
+			proxy := httputil.NewSingleHostReverseProxy(target)
+			proxy.FlushInterval = -1
+			h := gateway.Chain(proxy,
+				gateway.Recover(slog.New(slog.DiscardHandler)),
+				gateway.RequestID,
+				observ.Chain(observ.Config{Metrics: true, AccessLog: true, Trace: true}, tel, slog.New(slog.NewJSONHandler(&buf, nil))),
+				shape.Chain(shape.Config{Compression: true}))
+			served := make(chan struct{})
+			edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(served) // observ records after the response may already have reached the client
+				h.ServeHTTP(w, r)
+			}))
+			defer edge.Close()
+			client := &http.Client{Transport: &http.Transport{}}
+			defer client.CloseIdleConnections()
+
+			var codes []int
+			trace := &httptrace.ClientTrace{Got1xxResponse: func(code int, _ textproto.MIMEHeader) error {
+				codes = append(codes, code)
+				return nil
+			}}
+			req, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), tc.method, edge.URL+"/fn", tc.body)
+			require.NoError(t, err)
+			if tc.body != nil {
+				req.Header.Set("Expect", "100-continue")
+			}
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+			<-served
+			require.Contains(t, codes, tc.interim, "the upstream 1xx is relayed")
+			require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+			var rm metricdata.ResourceMetrics
+			require.NoError(t, reader.Collect(context.Background(), &rm))
+			var classes []string
+			for _, sm := range rm.ScopeMetrics {
+				for _, m := range sm.Metrics {
+					if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == "funcd.edge.requests" {
+						for _, dp := range sum.DataPoints {
+							v, _ := dp.Attributes.Value("status_class")
+							classes = append(classes, v.AsString())
+						}
+					}
+				}
+			}
+			require.Equal(t, []string{"5xx"}, classes, "the metric carries the final status class")
+			spans := sr.Ended()
+			require.Len(t, spans, 1)
+			require.Contains(t, spans[0].Attributes(), attribute.String("status_class", "5xx"), "the span carries the final status class")
+			require.Contains(t, buf.String(), `"status":500`, "the access log carries the final status")
 		})
 	}
 }

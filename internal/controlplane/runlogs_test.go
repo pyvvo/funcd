@@ -17,6 +17,8 @@ import (
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
+	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
 // captureReader records the last Query it was asked and echoes one line back (so a test can assert what
@@ -30,12 +32,23 @@ func (c *captureReader) Read(_ context.Context, q logread.Query) ([]logread.Line
 
 func newRunLogsServer(t *testing.T, seed func(store.Store)) (http.Handler, *logread.Query) {
 	t.Helper()
+	return newRunLogsServerWithRuns(t, func(s store.Store, _ runstate.Store) {
+		if seed != nil {
+			seed(s)
+		}
+	})
+}
+
+// newRunLogsServerWithRuns is newRunLogsServer whose seed also writes the engine's run records.
+func newRunLogsServerWithRuns(t *testing.T, seed func(store.Store, runstate.Store)) (http.Handler, *logread.Query) {
+	t.Helper()
 	s := store.New(memory.New())
-	if seed != nil {
-		seed(s)
-	}
+	runs, err := badger.New(badger.Config{InMemory: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = runs.Close() })
+	seed(s, runs)
 	last := &logread.Query{}
-	q := controlplane.NewWorkflowRunLogQuerier(s, &captureReader{last: last})
+	q := controlplane.NewWorkflowRunLogQuerier(s, runs, &captureReader{last: last})
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken:   {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 		adminToken: {Subject: "ops", Role: auth.RoleAdmin},
@@ -127,4 +140,47 @@ func TestRunLogsRouteAbsentWhenUnset(t *testing.T) {
 	srv := newLogsServer(t, nil) // no RunLogs dep
 	rec := do(t, srv, http.MethodGet, runLogsPath("team-a", "run-1"), adminToken, nil)
 	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+}
+
+// TestIssue723_StepResolvesFromPinnedSpec: --step resolves against the spec the run pinned at start
+// (ADR-0106, ADR-0094), not the live Workflow, so an edited or deleted Workflow does not move the read.
+// A record left by an earlier run of the same name is not this run's pin.
+func TestIssue723_StepResolvesFromPinnedSpec(t *testing.T) {
+	cases := []struct {
+		name   string
+		pinned v1.FunctionStep
+		recUID v1.UID
+		live   *v1.FunctionStep // the live Workflow's step; nil ⇒ the Workflow is deleted
+		want   string
+	}{
+		{name: "ref step, workflow edited", pinned: v1.FunctionStep{Ref: "f1"}, live: &v1.FunctionStep{Ref: "f2"}, want: "f1"},
+		{name: "image step, workflow edited to a ref", pinned: v1.FunctionStep{Image: "registry.example.com/img:v1"}, live: &v1.FunctionStep{Ref: "f2"}, want: "wf-s1"},
+		{name: "ref step, workflow deleted", pinned: v1.FunctionStep{Ref: "f1"}, want: "f1"},
+		{name: "record of an earlier run", pinned: v1.FunctionStep{Ref: "f1"}, recUID: "earlier-run", live: &v1.FunctionStep{Ref: "f2"}, want: "f2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			srv, last := newRunLogsServerWithRuns(t, func(s store.Store, runs runstate.Store) {
+				seedRun(t, s, "team-a", "run-s", "wf", "trace-step")
+				require.NoError(t, runs.Put(ctx, &runstate.Record{
+					Namespace: "team-a", Name: "run-s", Workflow: "wf", RunUID: tc.recUID, TraceID: "trace-step",
+					Spec: v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "s1", Function: &tc.pinned}}},
+				}))
+				if tc.live == nil {
+					return
+				}
+				_, err := s.Create(ctx, &v1.Workflow{
+					TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+					ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "team-a", ResourceGroup: "rg"},
+					Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "s1", Function: tc.live}}},
+				})
+				require.NoError(t, err)
+			})
+			rec := do(t, srv, http.MethodGet, runLogsPath("team-a", "run-s")+"?step=s1", devToken, nil)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, tc.want, last.Function)
+			require.Equal(t, "trace-step", last.TraceID)
+		})
+	}
 }

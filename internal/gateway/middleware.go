@@ -76,9 +76,15 @@ type commitWriter struct {
 
 func (c *commitWriter) WriteHeader(code int) {
 	c.ResponseWriter.WriteHeader(code)
-	if code >= 200 || code == http.StatusSwitchingProtocols {
+	if !Interim(code) {
 		c.committed = true
 	}
+}
+
+// Interim reports whether code is a 1xx that a final status follows (101 ends the exchange).
+// httputil.ReverseProxy relays an upstream 1xx through the edge writers before the final status.
+func Interim(code int) bool {
+	return code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols
 }
 
 func (c *commitWriter) Write(b []byte) (int, error) {
