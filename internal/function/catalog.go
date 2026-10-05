@@ -7,6 +7,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/store"
 )
 
 // resolveCatalogEnv resolves each spec.catalogs binding into the FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env
@@ -21,8 +23,9 @@ import (
 // env — the caller holds the function Ready=False/CatalogNotReady and requeues. Readiness is the
 // catalog's Phase, not a non-empty status.endpoint: while the engine starts, the catalog reconciler
 // publishes the raw engine address there, and injecting it would bypass the PEP proxy (the engine
-// then rejects the per-function token). Only a Ready catalog publishes the proxy URL, and with
-// catalogProxies set it must also be the URL of the proxy this daemon runs now (#662). Returns (nil,
+// then rejects the per-function token). With catalogProxies set the URL is the catalog's listener bound
+// in this daemon run, never the stored status.endpoint, and a catalog with none bound yet waits like a
+// not-Ready one (ADR-0162 Decision 3), so no worker starts on a previous run's port (#662). Returns (nil,
 // false, nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through
@@ -56,23 +59,67 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 		if !ok {
 			return nil, false, fault.Internalf(op, "object %s/%s is not a CatalogService", fn.Namespace, bnd.Catalog)
 		}
-		// Fail-closed on readiness: only a Ready catalog's endpoint is the proxy URL. Before that it is
-		// empty, or the raw engine address while the engine starts. Requeue in both cases.
-		if cs.Status.Phase != v1.PhaseReady || cs.Status.Endpoint == "" {
+		// Fail-closed on readiness: before Ready the endpoint is empty, or the raw engine address while the
+		// engine starts. Requeue in both cases.
+		if cs.Status.Phase != v1.PhaseReady {
 			return nil, true, nil
 		}
-		// A Ready status can outlive its proxy: after a daemon restart it holds the old proxy's URL until the
-		// catalog's first pass ensures a new proxy on a new port (#662). Wait for that URL.
+		url := cs.Status.Endpoint
 		if r.catalogProxies != nil {
-			if url, live := r.catalogProxies.URL(fn.Namespace, bnd.Catalog); !live || url != cs.Status.Endpoint {
+			var bound bool
+			if url, bound = r.catalogProxies.ProxyURL(fn.Namespace, bnd.Catalog); !bound {
 				return nil, true, nil
 			}
 		}
+		if url == "" {
+			return nil, true, nil
+		}
 		alias := strings.ToUpper(bnd.Alias)
-		out["FUNCD_CATALOG_"+alias+"_URL"] = cs.Status.Endpoint // the node-private catalog PEP proxy (ADR-0137)
-		out["FUNCD_CATALOG_"+alias+"_TOKEN"] = token            // per-function MAC token (ADR-0137), not the shared QUACK_TOKEN
+		out["FUNCD_CATALOG_"+alias+"_URL"] = url     // the node-private catalog PEP proxy (ADR-0137)
+		out["FUNCD_CATALOG_"+alias+"_TOKEN"] = token // per-function MAC token (ADR-0137), not the shared QUACK_TOKEN
 	}
 	return out, false, nil
+}
+
+// catalogsReady reports whether every CatalogService fn binds exists with phase Ready (ADR-0162 Decision 5): one store
+// Get per binding, no write; true with no spec.catalogs and no read.
+func (r *Reconciler) catalogsReady(ctx context.Context, fn *v1.Function) bool {
+	for _, bnd := range fn.Spec.Catalogs {
+		obj, err := r.store.Get(ctx, v1.KindCatalogService.GVK(), fn.Namespace, bnd.Catalog)
+		if err != nil {
+			return false
+		}
+		if cs, ok := obj.(*v1.CatalogService); !ok || cs.Status.Phase != v1.PhaseReady {
+			return false
+		}
+	}
+	return true
+}
+
+// MapCatalogService maps a changed or deleted CatalogService to every Function of its namespace whose spec.catalogs
+// names it, so a consumer's RevisionReady follows its catalog within one pass (ADR-0162 Decision 5). A List error
+// logs and maps nothing.
+func (r *Reconciler) MapCatalogService(ctx context.Context, obj v1.Object) []controller.Request {
+	meta := obj.GetObjectMeta()
+	res, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: meta.Namespace})
+	if err != nil {
+		r.logger.Warn("could not list the Functions a catalog change affects", "namespace", meta.Namespace, "catalog", meta.Name, "err", err)
+		return nil
+	}
+	var out []controller.Request
+	for _, o := range res.Items {
+		fn, ok := o.(*v1.Function)
+		if !ok {
+			continue
+		}
+		for _, b := range fn.Spec.Catalogs {
+			if b.Catalog == meta.Name {
+				out = append(out, controller.Request{GVK: v1.KindFunction.GVK(), Namespace: fn.Namespace, Name: fn.Name})
+				break
+			}
+		}
+	}
+	return out
 }
 
 // addCatalogEnv writes the already-resolved catalog env pairs DIRECTLY into a worker's env (ADR-0091).

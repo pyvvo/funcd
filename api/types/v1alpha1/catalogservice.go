@@ -98,6 +98,9 @@ type CatalogServiceStatus struct {
 	Function ObjectName `json:"function,omitempty"`
 	// Endpoint is the published Quack URL — the backing function's ingress path (computed).
 	Endpoint string `json:"endpoint,omitempty"`
+	// ProxyPort is the port of the catalog's PEP proxy listener (ADR-0162), recorded so a restarted daemon binds the
+	// same port again and the URL consumers hold keeps reaching this catalog (computed).
+	ProxyPort int `json:"proxyPort,omitempty"`
 }
 
 // GroupVersionKind returns the constant GVK for CatalogService.

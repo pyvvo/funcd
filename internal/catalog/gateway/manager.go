@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,9 +17,10 @@ import (
 
 // Manager owns the per-CatalogService catalog PEP proxies (ADR-0137): it runs ONE node-private
 // http.Server per catalog, each fronting that catalog's engine. The CatalogService reconciler calls
-// Ensure on its Ready branch to (re)bind a node-private listener for the catalog and learn the proxy
-// URL that internal functions are injected with (FUNCD_CATALOG_<ALIAS>_URL), Suspend while it is not Ready,
-// and Remove on teardown.
+// Listen on every pass to bind the catalog's listener on its recorded port (ADR-0162), Ensure on its Ready
+// branch to target the engine, Suspend while it is not Ready, and Release on delete; it calls Remove only once
+// no Function binds a deleted catalog, so the URL internal functions are injected with
+// (FUNCD_CATALOG_<ALIAS>_URL) never changes within a daemon run.
 // One listener endpoint per catalog fixes the PEP's target catalog by the endpoint (the proxy takes
 // the namespace from the resolved principal — see NewCatalogProxy).
 type Manager struct {
@@ -40,19 +43,22 @@ type Manager struct {
 	servers map[string]*managedProxy // key = "ns/name"
 }
 
-// managedProxy is one running node-private proxy: its listener, its serving http.Server, its handler
+// managedProxy is one running node-private proxy: its catalog, its listener, its serving http.Server, its handler
 // slot, and the (upstream, engineToken) it targets — so Ensure can detect a change and retarget it.
 type managedProxy struct {
+	ns          v1.NamespaceName
+	name        v1.ObjectName
 	listener    net.Listener
 	server      *http.Server
 	handler     *retargetable
 	upstream    string
 	engineToken string
+	released    bool // the CatalogService is deleted; the listener is kept for the Functions that bind it (ADR-0162)
 }
 
-// retargetable is a proxy's handler slot. Ensure swaps in a proxy for the new engine target when the
-// engine moves or its shared token rotates, and keeps the listener, so the URL already injected into
-// consumers stays valid: nothing re-provisions a consumer when a catalog's endpoint changes.
+// retargetable is a proxy's handler slot. Listen installs a 503 handler; Ensure swaps in a proxy for the engine
+// target, and again when the engine moves or its shared token rotates, keeping the listener, so the URL already
+// injected into consumers stays valid: nothing re-provisions a consumer when a catalog's engine changes.
 type retargetable struct {
 	mu sync.RWMutex
 	h  http.Handler
@@ -118,11 +124,15 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	target := func() http.Handler {
+		return newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog)
+	}
 	if existing, ok := m.servers[key]; ok {
+		existing.released = false
 		if existing.upstream != upstream || existing.engineToken != engineToken {
 			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
 			// consumers already hold keeps working.
-			existing.handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog))
+			existing.handler.set(target())
 			existing.upstream, existing.engineToken = upstream, engineToken
 			m.log.Debug("catalog proxy retargeted", "catalog", key, "upstream", upstream)
 		}
@@ -133,26 +143,91 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	if err != nil {
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
-	handler := &retargetable{}
-	handler.set(newCatalogProxy(m.keys, m.pdp, EngineTarget{Catalog: catalog, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog))
-	srv := newProxyServer(handler, m.proxyLog)
-	mp := &managedProxy{listener: ln, server: srv, handler: handler, upstream: upstream, engineToken: engineToken}
-	m.servers[key] = mp
-
-	go func() {
-		if serr := srv.Serve(ln); serr != nil && serr != http.ErrServerClosed {
-			m.log.Error("catalog proxy serve stopped", "catalog", key, "err", serr)
-		}
-	}()
+	mp := m.serve(catalog.Namespace, catalog.Name, ln, target())
+	mp.upstream, mp.engineToken = upstream, engineToken
 
 	url := m.publishURL(ln.Addr())
 	m.log.Debug("catalog proxy ensured", "catalog", key, "url", url, "upstream", upstream)
 	return url, nil
 }
 
-// URL returns the published URL of the proxy running for a catalog, and false when none runs: a restarted daemon
-// runs none until Ensure binds one on a new port, so a URL stored before the restart is dead (#662).
-func (m *Manager) URL(ns v1.NamespaceName, name v1.ObjectName) (string, bool) {
+// Listen binds the catalog's listener on port, its recorded status.proxyPort, unless one is bound in this daemon run
+// (ADR-0162). When port is 0 or that bind fails it binds a new port; moved reports a failed non-zero bind. A new
+// listener answers 503 until Ensure targets the engine; a bound one stops being released. A failed last bind is
+// fault.Unavailable.
+func (m *Manager) Listen(ns v1.NamespaceName, name v1.ObjectName, port int) (bound int, moved bool, err error) {
+	const op = "catalog.gateway.Manager.Listen"
+	key := managerKey(ns, name)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.servers[key]; ok {
+		existing.released = false
+		return listenerPort(existing.listener.Addr()), false, nil
+	}
+	var ln net.Listener
+	if port > 0 {
+		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port))); err != nil {
+			moved = true
+		}
+	}
+	if ln == nil {
+		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, "0")); err != nil {
+			return 0, false, fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
+		}
+	}
+	m.serve(ns, name, ln, http.HandlerFunc(catalogNotReady))
+	m.log.Debug("catalog proxy listening", "catalog", key, "url", m.publishURL(ln.Addr()))
+	return listenerPort(ln.Addr()), moved, nil
+}
+
+// serve starts a proxy server on ln behind a retargetable slot holding h and records it. The caller must hold m.mu.
+func (m *Manager) serve(ns v1.NamespaceName, name v1.ObjectName, ln net.Listener, h http.Handler) *managedProxy {
+	key := managerKey(ns, name)
+	handler := &retargetable{}
+	handler.set(h)
+	srv := newProxyServer(handler, m.proxyLog)
+	mp := &managedProxy{ns: ns, name: name, listener: ln, server: srv, handler: handler}
+	m.servers[key] = mp
+	go func() {
+		if serr := srv.Serve(ln); serr != nil && serr != http.ErrServerClosed {
+			m.log.Error("catalog proxy serve stopped", "catalog", key, "err", serr)
+		}
+	}()
+	return mp
+}
+
+// Release suspends a deleted catalog's listener as Suspend does and marks it released: its URL stays bound for the
+// Functions that bind the catalog until Remove closes it (ADR-0162). Releasing an unknown catalog is a no-op.
+func (m *Manager) Release(ns v1.NamespaceName, name v1.ObjectName) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mp, ok := m.servers[managerKey(ns, name)]; ok {
+		mp.handler.set(http.HandlerFunc(catalogNotReady))
+		mp.upstream, mp.engineToken = "", ""
+		mp.released = true
+	}
+}
+
+// Released returns the catalogs of ns whose listener is released, sorted.
+func (m *Manager) Released(ns v1.NamespaceName) []v1.ObjectName {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []v1.ObjectName
+	for _, mp := range m.servers {
+		if mp.released && mp.ns == ns {
+			out = append(out, mp.name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// ProxyURL returns the bare "<publishHost>:<port>" of the catalog's listener when one is bound in this daemon run,
+// and false when none is: a restarted daemon binds none until the catalog's first pass, so a URL stored before the
+// restart may be dead (#662, ADR-0162).
+func (m *Manager) ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	mp, ok := m.servers[managerKey(ns, name)]
@@ -199,10 +274,12 @@ func (m *Manager) Shutdown() {
 	m.engines.CloseIdleConnections()
 }
 
-// closeProxy stops one proxy and deletes it from the map. The caller must hold m.mu. Closing the
-// http.Server also closes its listener; the errors are best-effort (a shutting-down proxy).
+// closeProxy stops one proxy and deletes it from the map. The caller must hold m.mu. The listener is closed here too:
+// http.Server.Close closes only the listeners its Serve goroutine already tracks, so a port could otherwise stay bound
+// after Remove returns. The errors are best-effort (a shutting-down proxy).
 func (m *Manager) closeProxy(key string, mp *managedProxy) {
 	_ = mp.server.Close()
+	_ = mp.listener.Close()
 	delete(m.servers, key)
 	m.log.Debug("catalog proxy removed", "catalog", key)
 }
@@ -215,6 +292,14 @@ func (m *Manager) closeProxy(key string, mp *managedProxy) {
 func newProxyServer(h http.Handler, log *slog.Logger) *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+}
+
+// listenerPort is the TCP port a listener bound.
+func listenerPort(addr net.Addr) int {
+	if tcp, ok := addr.(*net.TCPAddr); ok {
+		return tcp.Port
+	}
+	return 0
 }
 
 // publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral

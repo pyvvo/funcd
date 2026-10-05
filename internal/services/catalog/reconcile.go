@@ -38,28 +38,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			// delete path: retract the external ingress edge entry (ADR-0138), stop the node-private
-			// catalog PEP proxy (ADR-0137), then tear the engine down via the provider-runtime (all
-			// idempotent).
-			if r.routes != nil {
-				if _, rerr := r.routes.Set(ctx, catalogRouteSource(req.Namespace, req.Name), nil); rerr != nil {
-					return controller.Result{}, fault.Wrapf(rerr, fault.KindOf(rerr), op, "retract catalog ingress route %s/%s", req.Namespace, req.Name)
-				}
-			}
-			if r.proxy != nil {
-				r.proxy.Remove(req.Namespace, req.Name)
-			}
-			ref := provider.ProviderRef{Namespace: req.Namespace, Name: req.Name}
-			if terr := r.prov.Teardown(ctx, ref); terr != nil {
-				return controller.Result{}, fault.Wrapf(terr, fault.KindOf(terr), op, "teardown provider engine %s/%s", req.Namespace, req.Name)
-			}
-			return controller.Result{}, nil
+			return controller.Result{}, r.deleted(ctx, req.Namespace, req.Name)
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get catalogservice")
 	}
 	cs, ok := obj.(*v1.CatalogService)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a CatalogService", req.Namespace, req.Name)
+	}
+
+	// ADR-0162: bind the listener on the recorded port before any branch writes the status, so every write records it.
+	if r.proxy != nil {
+		bound, moved, lerr := r.proxy.Listen(cs.Namespace, cs.Name, cs.Status.ProxyPort)
+		if lerr != nil {
+			return controller.Result{}, fault.Wrapf(lerr, fault.KindOf(lerr), op, "bind catalog proxy listener %s/%s", cs.Namespace, cs.Name)
+		}
+		if moved {
+			r.logger.WarnContext(ctx, "catalog proxy port is taken; bound a new one, so its consumers' URL changes",
+				"catalog", string(cs.Namespace)+"/"+string(cs.Name), "recorded", cs.Status.ProxyPort, "bound", bound)
+		}
+		cs.Status.ProxyPort = bound
 	}
 
 	// ADR-0121: spec.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService
@@ -179,6 +177,80 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	// ADR-0142: come back after the supervision period, so Converge recreates an engine that died with no write.
 	return controller.Result{RequeueAfter: r.period}, nil
+}
+
+// deleted is the delete path: it retracts the external ingress edge entry (ADR-0138), releases the catalog's PEP proxy
+// listener (503, URL kept), tears the engine down, and closes the listener only once no Function binds the catalog
+// (ADR-0162 Decision 4). Every step is idempotent; a failed check keeps the listener and fails the pass.
+func (r *Reconciler) deleted(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	const op = "services.catalog.Reconcile"
+	if r.routes != nil {
+		if _, rerr := r.routes.Set(ctx, catalogRouteSource(ns, name), nil); rerr != nil {
+			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "retract catalog ingress route %s/%s", ns, name)
+		}
+	}
+	bound := false
+	if r.proxy != nil {
+		if _, bound = r.proxy.ProxyURL(ns, name); bound {
+			r.proxy.Release(ns, name)
+		}
+	}
+	if terr := r.prov.Teardown(ctx, provider.ProviderRef{Namespace: ns, Name: name}); terr != nil {
+		return fault.Wrapf(terr, fault.KindOf(terr), op, "teardown provider engine %s/%s", ns, name)
+	}
+	if !bound {
+		return nil
+	}
+	binds, berr := anyFunctionBinds(ctx, r.store, ns, name)
+	if berr != nil {
+		return berr
+	}
+	if !binds {
+		r.proxy.Remove(ns, name)
+	}
+	return nil
+}
+
+// anyFunctionBinds reports whether a stored Function of ns binds catalog name (ADR-0162 Decision 4): its spec.catalogs
+// names it, or a worker of an earlier spec may still run, because its spec is unprocessed or it switches revisions.
+// It reads the store on every call, uncached.
+func anyFunctionBinds(ctx context.Context, st store.Store, ns v1.NamespaceName, name v1.ObjectName) (bool, error) {
+	const op = "services.catalog.anyFunctionBinds"
+	list, err := st.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), op, "list functions in %q", ns)
+	}
+	for _, o := range list.Items {
+		fn, ok := o.(*v1.Function)
+		if !ok {
+			continue
+		}
+		if fn.Status.ObservedGeneration != fn.Generation || fn.Status.DrainingRevision != "" ||
+			(fn.Status.ServingRevision != "" && fn.Status.ServingRevision != fn.Status.CurrentRevision) {
+			return true, nil
+		}
+		for _, b := range fn.Spec.Catalogs {
+			if b.Catalog == name {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// MapFunction re-runs the reconcile of every released catalog listener in a changed Function's namespace, so the
+// delete path closes it once the last Function that binds it goes (ADR-0162). It reads only the Manager; with no
+// proxy wired it maps nothing.
+func (r *Reconciler) MapFunction(_ context.Context, obj v1.Object) []controller.Request {
+	if r.proxy == nil {
+		return nil
+	}
+	ns := obj.GetObjectMeta().Namespace
+	var reqs []controller.Request
+	for _, name := range r.proxy.Released(ns) {
+		reqs = append(reqs, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: ns, Name: name})
+	}
+	return reqs
 }
 
 // holdNotReady fails a gated CatalogService closed, as the Function gate stops its worker (ADR-0057): it retracts the

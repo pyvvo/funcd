@@ -155,8 +155,9 @@ type Deps struct {
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
 	CatalogMaster []byte
 
-	// CatalogProxies reports the catalog proxies this daemon runs (ADR-0137): a consumer starts only once its catalog's
-	// stored endpoint is the URL of a running proxy. nil ⇒ the stored endpoint of a Ready catalog is used as is.
+	// CatalogProxies reports the catalog listeners bound in this daemon run (ADR-0137, ADR-0162): a consumer is
+	// injected its catalog's bound listener URL, and waits while none is bound. nil ⇒ the catalog's status.endpoint,
+	// for harnesses without a Manager.
 	CatalogProxies CatalogProxies
 
 	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
@@ -185,10 +186,10 @@ type Deps struct {
 	Clock clock.Clock
 }
 
-// CatalogProxies reports the URL of the catalog proxy running for a CatalogService (ADR-0137), false when none runs.
-// Satisfied by *cataloggw.Manager.
+// CatalogProxies reports the URL of a CatalogService's PEP proxy listener bound in this daemon run (ADR-0137,
+// ADR-0162), false when none is bound. Satisfied by *cataloggw.Manager.
 type CatalogProxies interface {
-	URL(ns v1.NamespaceName, name v1.ObjectName) (string, bool)
+	ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool)
 }
 
 // S3GatewayInjection configures the worker-env S3 keypair injection (ADR-0085). Derive computes
@@ -263,7 +264,7 @@ type Reconciler struct {
 	// nil/empty ⇒ catalog injection derives a token the proxy cannot verify. Never logged.
 	catalogMaster []byte
 
-	// catalogProxies reports the running catalog proxies (ADR-0137, #662); nil ⇒ no liveness check.
+	// catalogProxies reports the catalog listeners bound in this daemon run (ADR-0137, ADR-0162); nil ⇒ status.endpoint.
 	catalogProxies CatalogProxies
 
 	// catalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
@@ -1011,8 +1012,9 @@ func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseD
 
 // steadyState reports whether fn is a solo Function at desired state: Ready with no reason (a crash loop beside a ready
 // replica runs the full pass, ADR-0160), its generation processed, its current revision serving with nothing draining
-// (ADR-0143), status.replicas at desired and every replica listening (ADR-0161). It calls only runtime.Status, once per
-// replica (ADR-0142).
+// (ADR-0143), status.replicas at desired, every bound catalog Ready (ADR-0162) and every replica listening (ADR-0161).
+// It calls runtime.Status once per replica (ADR-0142) and, for a catalog consumer, one store Get per binding; it writes
+// nothing.
 func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
 		return false
@@ -1032,6 +1034,9 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	}
 	desired := r.desiredReplicas(fn)
 	if fn.Status.Replicas != desired {
+		return false
+	}
+	if !r.catalogsReady(ctx, fn) {
 		return false
 	}
 	for i := range desired {
