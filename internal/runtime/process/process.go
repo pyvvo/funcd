@@ -260,9 +260,13 @@ func (d *driver) saveLocked(inst *instance) error {
 	if err != nil {
 		return err
 	}
+	boot, err := procreg.BootID()
+	if err != nil {
+		return err
+	}
 	return d.reg.Put(procreg.Entry{
-		ID: string(inst.id), PID: inst.pid, PGID: inst.pid, StartTime: st, Token: instanceFlag + string(inst.id),
-		Files: []string{inst.portFile},
+		ID: string(inst.id), PID: inst.pid, PGID: inst.pid, StartTime: st, BootID: boot,
+		Token: instanceFlag + string(inst.id), Files: []string{inst.portFile},
 	})
 }
 

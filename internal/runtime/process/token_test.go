@@ -110,7 +110,10 @@ func TestOpenWorkersServeWithTheInstanceToken(t *testing.T) {
 			require.NoError(t, json.Unmarshal(b, &saved))
 			require.Len(t, saved, 1)
 			require.Equal(t, "--funcd-instance="+string(inst.ID), saved[0].Token)
-			require.True(t, procreg.Owned(saved[0]), "the worker's argv carries the token")
+			argv, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(saved[0].PID)).Output()
+			require.NoError(t, err)
+			require.Contains(t, string(argv), saved[0].Token, "the worker's argv carries the token")
+			require.True(t, procreg.Owned(saved[0]), "the saved entry names the worker")
 		})
 	}
 }

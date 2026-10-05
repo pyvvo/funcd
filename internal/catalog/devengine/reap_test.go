@@ -62,7 +62,7 @@ func TestStateDirReapsEnginesOfACrashedRun(t *testing.T) {
 	}
 	var saved []procreg.Entry
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if saved = savedEngines(t, dir); len(saved) == 1 && procreg.Owned(saved[0]) {
+		if saved = savedEngines(t, dir); len(saved) == 1 && procreg.Alive(saved[0]) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -78,7 +78,7 @@ func TestStateDirReapsEnginesOfACrashedRun(t *testing.T) {
 
 	r := mustNew(t, WithStateDir(dir))
 	t.Cleanup(r.StopAll)
-	if procreg.Owned(engine) {
+	if procreg.Alive(engine) {
 		t.Fatalf("engine %d of the killed run still runs", engine.PID)
 	}
 	if _, err := os.Stat(engine.Files[0]); !os.IsNotExist(err) {
