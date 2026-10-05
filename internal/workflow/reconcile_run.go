@@ -145,6 +145,8 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 		return controller.Result{}, true, err
 	}
 	var wf *v1.Workflow
+	var pins map[v1.ObjectName]runstate.ChildPin
+	var childImages map[v1.ObjectName]map[v1.ObjectName]string
 	if rec == nil {
 		wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
 		if err != nil && fault.KindOf(err) != fault.NotFound {
@@ -156,15 +158,20 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 			return res, true, err
 		}
 		if !ready(wf) {
-			c, ok := wf.Status.Conditions.Get(condReady)
-			msg := fmt.Sprintf("workflow %q is not Ready yet; waiting", wf.Name)
-			switch {
-			case stale(wf):
-				msg = fmt.Sprintf("workflow %q generation %d is not type-checked yet; waiting", wf.Name, wf.Generation)
-			case ok:
-				msg = fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message)
-			}
-			res, err := r.wait(ctx, run, before, "WorkflowNotReady", msg)
+			res, err := r.wait(ctx, run, before, "WorkflowNotReady", fmt.Sprintf("workflow %q %s; waiting", wf.Name, notReadyCause(wf)))
+			return res, true, err
+		}
+		var tw *treeWait
+		if run.Spec.Replay == nil {
+			pins, tw, err = r.pinTree(ctx, wf)
+		} else {
+			childImages, tw, err = r.replayTree(ctx, run.Namespace, *run.Spec.Replay)
+		}
+		if err != nil {
+			return controller.Result{}, true, err
+		}
+		if tw != nil {
+			res, err := r.wait(ctx, run, before, tw.reason, tw.msg)
 			return res, true, err
 		}
 	}
@@ -172,7 +179,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 	if rec != nil && rec.Terminal() {
 		return controller.Result{}, false, nil
 	}
-	prev, err := r.engine.start(run.UID, run.Namespace, run.Name, r.driveFunc(run, wf, rec != nil))
+	prev, err := r.engine.start(run.UID, run.Namespace, run.Name, r.driveFunc(run, wf, rec != nil, pins, childImages))
 	if errors.Is(err, errDraining) || err == nil {
 		return controller.Result{}, false, nil
 	}
@@ -195,9 +202,10 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 
 // driveFunc is the run's drive on its engine-owned goroutine: resume from the record's PINNED spec and
 // contract when started (the live wf.Spec/status is not passed; an in-flight run is immune to a mid-run edit
-// or re-push; covers replay recovery too), else a replay seeded from a source run, else a fresh execute
-// pinning the ADR-0098 contract for the run-start input gate.
-func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started bool) func(context.Context) (*runstate.Record, error) {
+// or re-push; covers replay recovery too), else a replay seeded from a source run with the current images of
+// the children it runs fresh, else a fresh execute pinning the ADR-0098 contract for the run-start input gate
+// and the child tree (ADR-0189).
+func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started bool, pins map[v1.ObjectName]runstate.ChildPin, childImages map[v1.ObjectName]map[v1.ObjectName]string) func(context.Context) (*runstate.Record, error) {
 	ns, name, uid, replay, input := run.Namespace, run.Name, run.UID, run.Spec.Replay, run.Spec.Input
 	return func(ctx context.Context) (*runstate.Record, error) {
 		if started {
@@ -207,14 +215,115 @@ func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started 
 		if replay != nil {
 			// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
 			// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
-			rec, err := r.engine.replay(ctx, ns, name, uid, wf.Name, *replay, images)
+			rec, err := r.engine.replay(ctx, ns, name, uid, wf.Name, *replay, images, childImages)
 			if fault.KindOf(err) == fault.NotFound {
 				err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", replay.Run)
 			}
 			return rec, err
 		}
-		return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: uid})
+		return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: uid, ChildPins: pins})
 	}
+}
+
+// treeWait is why a run waits for a child Workflow of its tree (ADR-0189): reason WorkflowNotFound or
+// WorkflowNotReady, and a message naming the child.
+type treeWait struct{ reason, msg string }
+
+// pinTree pins each child Workflow wf reaches through workflow: steps, in spec step order and depth first, once
+// per child: its spec, step images and step contracts of its current generation (ADR-0189). The walk starts with
+// wf seen, so wf is never pinned and a cycle ends it. A child that is absent or not Ready for its current
+// generation makes the run wait. The pins are nil when wf has no workflow: step.
+func (r *RunReconciler) pinTree(ctx context.Context, wf *v1.Workflow) (map[v1.ObjectName]runstate.ChildPin, *treeWait, error) {
+	if !slices.ContainsFunc(wf.Spec.Steps, func(st v1.WorkflowStep) bool { return st.Workflow != nil }) {
+		return nil, nil, nil
+	}
+	pins := map[v1.ObjectName]runstate.ChildPin{}
+	seen := map[v1.ObjectName]bool{wf.Name: true}
+	var walk func(parent *v1.Workflow) (*treeWait, error)
+	walk = func(parent *v1.Workflow) (*treeWait, error) {
+		for i := range parent.Spec.Steps {
+			st := &parent.Spec.Steps[i]
+			if st.Workflow == nil || seen[st.Workflow.Ref] {
+				continue
+			}
+			seen[st.Workflow.Ref] = true
+			child, tw, err := r.readyChild(ctx, wf.Namespace, childRef{child: st.Workflow.Ref, step: st.Name, workflow: parent.Name})
+			if tw != nil || err != nil {
+				return tw, err
+			}
+			pins[child.Name] = runstate.ChildPin{Generation: child.Generation, Spec: child.Spec, StepImages: stepImages(child), StepContracts: stepContracts(child)}
+			if tw, err := walk(child); tw != nil || err != nil {
+				return tw, err
+			}
+		}
+		return nil, nil
+	}
+	if tw, err := walk(wf); tw != nil || err != nil {
+		return nil, tw, err
+	}
+	return pins, nil, nil
+}
+
+// replayTree waits until every pinned child the replay seeded by seed runs fresh is Ready, then captures their
+// current step images (ADR-0189). A source the replay rejects, or one with no pins, has nothing to gate.
+func (r *RunReconciler) replayTree(ctx context.Context, ns v1.NamespaceName, seed v1.ReplaySeed) (map[v1.ObjectName]map[v1.ObjectName]string, *treeWait, error) {
+	src, err := r.engine.runs.Get(ctx, ns, seed.Run)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.KindOf(err), runOp, "get replay source run %q", seed.Run)
+	}
+	if !src.Terminal() || src.ChildPins == nil {
+		return nil, nil, nil
+	}
+	refs := freshRefs(src, seed.From)
+	children := make([]*v1.Workflow, 0, len(refs))
+	for _, ref := range refs {
+		child, tw, err := r.readyChild(ctx, ns, ref)
+		if tw != nil || err != nil {
+			return nil, tw, err
+		}
+		children = append(children, child)
+	}
+	if len(children) == 0 {
+		return nil, nil, nil
+	}
+	images := make(map[v1.ObjectName]map[v1.ObjectName]string, len(children))
+	for _, child := range children {
+		images[child.Name] = stepImages(child)
+	}
+	return images, nil, nil
+}
+
+// readyChild reads the child ref names, or says why the run waits for it: it is absent, or not Ready for its
+// current generation. pinTree and replayTree share this check.
+func (r *RunReconciler) readyChild(ctx context.Context, ns v1.NamespaceName, ref childRef) (*v1.Workflow, *treeWait, error) {
+	who := fmt.Sprintf("child workflow %q, called by step %q of workflow %q,", ref.child, ref.step, ref.workflow)
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, ref.child)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, &treeWait{reason: "WorkflowNotFound", msg: who + " not found; waiting"}, nil
+	}
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.KindOf(err), runOp, "get child workflow %q", ref.child)
+	}
+	child := obj.(*v1.Workflow)
+	if !ready(child) {
+		return nil, &treeWait{reason: "WorkflowNotReady", msg: fmt.Sprintf("%s %s; waiting", who, notReadyCause(child))}, nil
+	}
+	return child, nil, nil
+}
+
+// notReadyCause says why wf is not Ready for its current generation.
+func notReadyCause(wf *v1.Workflow) string {
+	c, ok := wf.Status.Conditions.Get(condReady)
+	switch {
+	case stale(wf):
+		return fmt.Sprintf("generation %d is not type-checked yet", wf.Generation)
+	case ok:
+		return fmt.Sprintf("is not Ready (%s): %s", c.Reason, c.Message)
+	}
+	return "is not Ready yet"
 }
 
 // syncStatus mirrors the run record into WorkflowRun.status (ADR-0146 Decision 4: the only status writer).

@@ -523,3 +523,62 @@ func TestScenarioRestartRerunsChildUnderItsDottedName(t *testing.T) {
 		t.Fatalf("run records %v, want %v", got, want)
 	}
 }
+
+// scenario: resume-runs-the-pin
+func TestScenarioResumeRunsThePin(t *testing.T) {
+	ctx := context.Background()
+	pins := map[v1.ObjectName]runstate.ChildPin{"kid": {Generation: 1, Spec: spec(step("c1", ""), step("c2", "", "c1"))}}
+	edited := fakeChildren{"kid": spec(step("c1", ""), step("c2", "", "c1"), step("c3", "", "c2"))}
+	first, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = first.Close() })
+	crash := &crashAt{capturingDispatcher: &capturingDispatcher{}, runs: first, run: "p", child: "p.sub", at: "c1", n: 1, captured: make(chan struct{})}
+	e1, _ := New(Deps{Runs: first, Dispatch: crash})
+	_, _ = e1.Execute(ctx, "default", "p", "top", spec(subwfStep("sub", "kid")), json.RawMessage(`{}`), StartOptions{ChildPins: pins})
+	if crash.left == nil || stepState(crash.left, "sub").Phase != v1.StepRunning {
+		t.Fatalf("setup: the parent record at the child's first dispatch = %+v, want sub Running", crash.left)
+	}
+
+	restarted, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = restarted.Close() })
+	if err := restarted.Put(ctx, crash.left); err != nil {
+		t.Fatalf("seed the crashed record: %v", err)
+	}
+	again := &capturingDispatcher{}
+	e2, _ := New(Deps{Runs: restarted, Dispatch: again, Children: edited})
+	if rec, err := e2.Resume(ctx, "default", "p"); err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("Resume p: %v, want Succeeded", err)
+	}
+	var dispatched []v1.ObjectName
+	for _, r := range again.reqs {
+		dispatched = append(dispatched, r.Step)
+	}
+	if !slices.Equal(dispatched, []v1.ObjectName{"c1", "c2"}) {
+		t.Fatalf("resumed child dispatched %v, want the pinned [c1 c2], not the edited spec", dispatched)
+	}
+}
+
+// subtree returns the pins a spec reaches, transitively, and nil for a spec without workflow: steps; childOptions
+// refuses a child with no pin and hands a child its subtree.
+func TestSubtreeAndChildOptions(t *testing.T) {
+	pins := map[v1.ObjectName]runstate.ChildPin{
+		"a": {Spec: spec(subwfStep("s", "b"))},
+		"b": {Spec: spec(step("x", "")), StepImages: map[v1.ObjectName]string{"x": "oci:x@d"}},
+		"c": {Spec: spec(step("y", ""))},
+	}
+	if got := subtree(pins, spec(subwfStep("s", "a"))); len(got) != 2 || got["b"].StepImages["x"] != "oci:x@d" {
+		t.Fatalf("subtree of a call to a = %+v, want a and b", got)
+	}
+	if got := subtree(pins, spec(step("x", ""))); got != nil {
+		t.Fatalf("subtree of a spec without workflow: steps = %+v, want nil", got)
+	}
+	if got := subtree(pins, spec(subwfStep("s", "root"))); got == nil || len(got) != 0 {
+		t.Fatalf("subtree of a call to an unpinned workflow = %+v, want empty and non-nil", got)
+	}
+	sp, opts, err := childOptions(pins, "a")
+	if err != nil || len(sp.Steps) != 1 || len(opts.ChildPins) != 1 || opts.ChildPins["b"].StepImages["x"] != "oci:x@d" {
+		t.Fatalf("childOptions(a) = %+v %+v %v, want a's spec with b's pin", sp, opts, err)
+	}
+	if _, _, err := childOptions(pins, "root"); fault.KindOf(err) != fault.Invalid {
+		t.Fatalf("childOptions of a missing pin: %v, want Invalid", err)
+	}
+}

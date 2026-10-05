@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -239,7 +240,8 @@ type StartOptions struct {
 	// StepContracts is the ADR-0098 cache's per-step I/O contract, pinned on the record: a when: binds an
 	// absent parent-output field to its schema default (ADR-0095). Nil ⇒ no defaults are bound.
 	StepContracts map[v1.ObjectName]v1.WorkflowContract
-	RunUID        v1.UID // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
+	RunUID        v1.UID                              // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
+	ChildPins     map[v1.ObjectName]runstate.ChildPin // the run's child tree; execute copies it onto the record
 }
 
 // Execute runs a workflow synchronously until it is terminal, paused or halted, and returns the record. The
@@ -277,6 +279,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 		Spec:          spec,   // pin the spec at run start — Resume/recovery rebuild from this, not the live Workflow
 		Contract:      pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
 		StepContracts: opts.StepContracts,
+		ChildPins:     opts.ChildPins,
 		Depth:         depth, // sub-workflow nesting depth (ADR-0099)
 		TraceID:       traceID,
 		RootSpanID:    rootSpanID,
@@ -353,12 +356,13 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 // Faults: NotFound (source absent); Invalid whose message leads with reason token SeedInvalid or
 // DigestDrift (naming the offending step). The source record is never mutated.
 func (e *Engine) Replay(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
-	return e.replay(ctx, ns, runName, "", workflow, seed, current)
+	return e.replay(ctx, ns, runName, "", workflow, seed, current, nil)
 }
 
 // replay is Replay stamping the starting WorkflowRun's uid on the new record, as StartOptions.RunUID does
-// for Execute.
-func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, runUID v1.UID, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
+// for Execute. childImages are the current step images of the pinned children the replay runs fresh,
+// captured once each is Ready (ADR-0189); nil ⇒ no gated child.
+func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, runUID v1.UID, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string, childImages map[v1.ObjectName]map[v1.ObjectName]string) (*runstate.Record, error) {
 	src, err := e.runs.Get(ctx, ns, seed.Run)
 	if err != nil {
 		return nil, err // NotFound (source absent) propagates
@@ -397,6 +401,9 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 					return nil, fault.Invalidf(engineOp, "DigestDrift: step %q artifact changed since the source run (source %q, current %q) — pass --allow-drift to re-run against current code", name, srcStep[name].Revision, cur)
 				}
 			}
+			if err := childDrift(src.ChildPins, spec, name, childImages, seed.AllowDrift); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		switch srcStep[name].Phase {
@@ -415,6 +422,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 		SourceRun: seed.Run, SourceFrom: seed.From,
 		StartedAt: e.clock.Now().UnixNano(),
 	}
+	rec.ChildPins = restamp(src.ChildPins, freshChildren(src, seed.From), childImages) // ADR-0189: the source's pins
 	// Fresh span-ids for every DAG step (re-run/Pending steps use them); copied steps clear theirs below.
 	for _, name := range rs.dagSteps() {
 		rs.steps[name].spanID = mintSpanID()
@@ -444,6 +452,100 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 		return nil, err
 	}
 	return e.drive(context.WithoutCancel(ctx), ctx, run)
+}
+
+// childRef is a child Workflow of a run's tree with the first step and Workflow that reference it in walk order.
+type childRef struct{ child, step, workflow v1.ObjectName }
+
+// pinnedRefs walks the pinned children that spec's steps accepted by run reach through workflow: steps, in
+// spec step order and depth first, once per child: seen holds the children already walked.
+func pinnedRefs(pins map[v1.ObjectName]runstate.ChildPin, workflow v1.ObjectName, spec v1.WorkflowSpec, run func(v1.ObjectName) bool, seen map[v1.ObjectName]bool) []childRef {
+	var refs []childRef
+	for i := range spec.Steps {
+		st := &spec.Steps[i]
+		if st.Workflow == nil || !run(st.Name) || seen[st.Workflow.Ref] {
+			continue
+		}
+		pin, ok := pins[st.Workflow.Ref]
+		if !ok {
+			continue
+		}
+		seen[st.Workflow.Ref] = true
+		refs = append(refs, childRef{child: st.Workflow.Ref, step: st.Name, workflow: workflow})
+		refs = append(refs, pinnedRefs(pins, st.Workflow.Ref, pin.Spec, func(v1.ObjectName) bool { return true }, seen)...)
+	}
+	return refs
+}
+
+// freshRefs are the pinned children, subtrees included, of the workflow: steps a replay of src from from runs
+// fresh: the replay set, the steps that never ran and the onFailure handler. An unknown from has none.
+func freshRefs(src *runstate.Record, from v1.ObjectName) []childRef {
+	rs := newRunState(src.Spec)
+	if _, ok := rs.steps[from]; !ok || from == rs.onFailure || len(src.ChildPins) == 0 {
+		return nil
+	}
+	replaySet := map[v1.ObjectName]bool{from: true}
+	for _, d := range rs.descendants(from) {
+		replaySet[d] = true
+	}
+	phase := make(map[v1.ObjectName]v1.StepPhase, len(src.Steps))
+	for _, s := range src.Steps {
+		phase[s.Name] = s.Phase
+	}
+	fresh := func(n v1.ObjectName) bool { return n == rs.onFailure || replaySet[n] || !isCopied(phase[n]) }
+	return pinnedRefs(src.ChildPins, src.Workflow, src.Spec, fresh, map[v1.ObjectName]bool{src.Workflow: true})
+}
+
+// freshChildren names the children freshRefs walks; replay and replayTree share it, so the gate covers exactly
+// the children the replay runs fresh (ADR-0189).
+func freshChildren(src *runstate.Record, from v1.ObjectName) []v1.ObjectName {
+	refs := freshRefs(src, from)
+	names := make([]v1.ObjectName, 0, len(refs))
+	for _, r := range refs {
+		names = append(names, r.child)
+	}
+	return names
+}
+
+// restamp copies a replay source's pins, each fresh child with the current step images it was gated on.
+func restamp(pins map[v1.ObjectName]runstate.ChildPin, fresh []v1.ObjectName, childImages map[v1.ObjectName]map[v1.ObjectName]string) map[v1.ObjectName]runstate.ChildPin {
+	if pins == nil {
+		return nil
+	}
+	out := make(map[v1.ObjectName]runstate.ChildPin, len(pins))
+	maps.Copy(out, pins)
+	for _, name := range fresh {
+		if imgs, ok := childImages[name]; ok {
+			pin := out[name]
+			pin.StepImages = imgs
+			out[name] = pin
+		}
+	}
+	return out
+}
+
+// childDrift fails a replay whose replay-set step name calls a child whose subtree holds an image function step
+// whose current image differs from the pinned one, unless allowDrift (ADR-0189). A step with no current image is
+// not gated, as at the top level.
+func childDrift(pins map[v1.ObjectName]runstate.ChildPin, spec v1.WorkflowSpec, name v1.ObjectName, childImages map[v1.ObjectName]map[v1.ObjectName]string, allowDrift bool) error {
+	st := specStep(spec, name)
+	if allowDrift || st == nil || st.Workflow == nil {
+		return nil
+	}
+	only := func(n v1.ObjectName) bool { return n == name }
+	for _, ref := range pinnedRefs(pins, "", spec, only, map[v1.ObjectName]bool{}) {
+		pin := pins[ref.child]
+		for i := range pin.Spec.Steps {
+			step := pin.Spec.Steps[i].Name
+			fn := functionOf(&pin.Spec.Steps[i])
+			cur, ok := childImages[ref.child][step]
+			if fn == nil || fn.Image == "" || !ok || pin.StepImages[step] == "" || cur == pin.StepImages[step] {
+				continue
+			}
+			return fault.Invalidf(engineOp, "DigestDrift: step %q of child workflow %q (called by step %q) artifact changed since the source run (source %q, current %q) — pass --allow-drift to re-run against current code", step, ref.child, name, pin.StepImages[step], cur)
+		}
+	}
+	return nil
 }
 
 // isCopied reports whether a source step's phase means "reuse it verbatim" in a replay (a terminal

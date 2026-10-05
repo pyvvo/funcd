@@ -33,6 +33,9 @@ type Record struct {
 	// StepContracts are the per-step I/O contracts pinned at run start (the ADR-0098 cache): a when:
 	// binds an absent parent-output field to its schema default from them (ADR-0095).
 	StepContracts map[v1.ObjectName]v1.WorkflowContract `json:"stepContracts,omitempty"`
+	// ChildPins pins every child Workflow reachable from Spec through workflow: steps, keyed by name in
+	// Namespace (ADR-0189). Nil: the record predates ADR-0189 or has no children.
+	ChildPins map[v1.ObjectName]ChildPin `json:"childPins,omitempty"`
 	// Depth is the sub-workflow nesting depth (ADR-0099): 0 for a top-level run, +1 per child. The
 	// engine caps it (Config.MaxSubworkflowDepth) so a reference cycle fails cleanly, not by overflow.
 	Depth int `json:"depth,omitempty"`
@@ -66,6 +69,14 @@ type Record struct {
 	// under the same name has a new uid, so it never adopts this record. Empty for an inline sub-workflow
 	// child run and for a record written before the uid was stamped (such a record is matched by name).
 	RunUID v1.UID `json:"runUid,omitempty"`
+}
+
+// ChildPin is one child Workflow of a run's tree, pinned when the top-level run starts (ADR-0189).
+type ChildPin struct {
+	Generation    int64                                 `json:"generation"`
+	Spec          v1.WorkflowSpec                       `json:"spec"`
+	StepImages    map[v1.ObjectName]string              `json:"stepImages,omitempty"`
+	StepContracts map[v1.ObjectName]v1.WorkflowContract `json:"stepContracts,omitempty"`
 }
 
 // StepState is one step's persisted execution state.

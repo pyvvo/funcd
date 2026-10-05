@@ -7,6 +7,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -36,13 +37,20 @@ type ChildWorkflowResolver interface {
 // A parent cancel reaches the child through stop and ends it Cancelled; the drain halts it without a terminal
 // record and the parent's step returns to Pending (ADR-0146).
 func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, child v1.ObjectName, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
-	if e.children == nil {
+	if parent.ChildPins == nil && e.children == nil {
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: no child resolver configured", n.name)
 	}
 	if parent.Depth+1 > e.cfg.MaxSubworkflowDepth { // backstop for a cycle that slipped the reconcile check
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: max nesting depth %d exceeded (SubworkflowDepthExceeded)", n.name, e.cfg.MaxSubworkflowDepth)
 	}
-	childSpec, childOpts, err := e.resolveChild(stop, parent.Namespace, child)
+	var childSpec v1.WorkflowSpec
+	var childOpts StartOptions
+	var err error
+	if parent.ChildPins != nil { // ADR-0189: the child runs from the pin taken at the top-level run's start
+		childSpec, childOpts, err = childOptions(parent.ChildPins, child)
+	} else { // a record that predates ADR-0189 (Temporary workarounds)
+		childSpec, childOpts, err = e.resolveChild(stop, parent.Namespace, child)
+	}
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
@@ -69,6 +77,29 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 // name, not an API object name: it may exceed 63 bytes and is never validated as an ObjectName.
 func childRunName(parent, step v1.ObjectName) v1.ObjectName {
 	return parent + "." + step
+}
+
+// childOptions returns the pinned spec of child and the start options of its inline run: its pinned step images and
+// contracts, and the pins of its own subtree (ADR-0189). A child with no pin ⇒ fault.Invalid.
+func childOptions(pins map[v1.ObjectName]runstate.ChildPin, name v1.ObjectName) (v1.WorkflowSpec, StartOptions, error) {
+	pin, ok := pins[name]
+	if !ok {
+		return v1.WorkflowSpec{}, StartOptions{}, fault.Invalidf(engineOp, "child workflow %q has no pin in the run record", name)
+	}
+	return pin.Spec, StartOptions{StepImages: pin.StepImages, StepContracts: pin.StepContracts, ChildPins: subtree(pins, pin.Spec)}, nil
+}
+
+// subtree returns the pins of every child reachable from spec through workflow: steps, an empty map when spec has
+// a workflow: step but none of its children is pinned, and nil when spec has no workflow: step.
+func subtree(pins map[v1.ObjectName]runstate.ChildPin, spec v1.WorkflowSpec) map[v1.ObjectName]runstate.ChildPin {
+	if !slices.ContainsFunc(spec.Steps, func(st v1.WorkflowStep) bool { return st.Workflow != nil }) {
+		return nil
+	}
+	out := map[v1.ObjectName]runstate.ChildPin{}
+	for _, r := range pinnedRefs(pins, "", spec, func(v1.ObjectName) bool { return true }, map[v1.ObjectName]bool{}) {
+		out[r.child] = pins[r.child]
+	}
+	return out
 }
 
 // resolveChild reads a child's spec and the start options its ADR-0098 status cache pins on the inline run.
