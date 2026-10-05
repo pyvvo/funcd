@@ -733,6 +733,8 @@ components:
             - Failed
             - Terminating
           type: string
+        pool:
+          type: string
         replicas:
           format: int64
           type: integer

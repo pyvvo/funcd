@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -211,6 +212,7 @@ type config struct {
 	// co-locates with same-key peers in one pool worker. Empty ⇒ pooling off (all solo).
 	poolShim          []string
 	poolShimsByFamily map[string][]string // runtime-family prefix → pool-host cmd (ADR-0050)
+	poolManifestDir   string              // the pool manifests' dir (WithPoolManifestDir); "" ⇒ a private temp dir
 	poolLimit         int
 	// bootBackoffInitial and bootBackoffMax bound a crash-looping worker's wait (ADR-0160); 0 ⇒ the defaults.
 	bootBackoffInitial time.Duration
@@ -315,9 +317,10 @@ func (c *config) validate() error {
 
 // Platform is the assembled funcd runtime — the composition root built by New.
 type Platform struct {
-	cfg       *config
-	logger    *slog.Logger
-	providers *provider.Catalog // the platform provider catalog (ADR-0082)
+	cfg          *config
+	fnReconciler *function.Reconciler // the Function reconciler; Shutdown removes its private pool manifest dir
+	logger       *slog.Logger
+	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller  *controller.Controller
 	collector   *gc.Collector // ADR-0170: the owner garbage collector, run beside the controller
@@ -687,6 +690,7 @@ func (p *Platform) buildControlPlane() error {
 		BootBackoffMax:       c.bootBackoffMax,
 		PoolShimCommand:      c.poolShim,
 		PoolShimsByFamily:    c.poolShimsByFamily,
+		PoolManifestDir:      c.poolManifestDir,
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            s3Injection,
 		CatalogMaster:        master, // ADR-0137: per-function catalog token derivation (same master as S3)
@@ -773,6 +777,11 @@ func (p *Platform) buildControlPlane() error {
 		},
 		p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
+	p.fnReconciler = fnReconciler
+	// a change to what a namespace grants its Functions can move a pooled one to another pool
+	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
+		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
+	}
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
 	// ADR-0118 (F85): the eventing DLQ — a dedicated Badger store (in-memory when deadletterDataDir is
@@ -1100,7 +1109,14 @@ func (p *Platform) buildControlPlane() error {
 				Function:  string(spec.Name),
 				Replica:   strconv.Itoa(spec.Replica),
 			}
-			p.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, p.logger) })
+			if !strings.HasPrefix(string(spec.Name), "__pool__") {
+				p.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, p.logger) })
+				return
+			}
+			// A pool worker's records are stored under the member each names. The set is taken once per
+			// process, here at its start, so a member removed later still has its drained records kept.
+			_, isMember, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
+			p.logRoutes.start(r, func() { _ = funclog.RoutePool(context.Background(), r, sinks, res, isMember, p.logger) })
 		})
 	}
 
@@ -1390,6 +1406,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.egressGateway != nil {
 			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
+		}
+		if p.fnReconciler != nil {
+			_ = p.fnReconciler.Close() // the pool workers are stopped, so their manifests can go
 		}
 		p.logRoutes.drain(ctx)
 		var logSinkErr, traceSinkErr error

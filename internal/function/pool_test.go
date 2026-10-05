@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/sensor"
@@ -41,6 +42,8 @@ func (f *fakeRuntime) serveCalls(t *testing.T, rev v1.ObjectName, pooled bool) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name, routed := strings.CutPrefix(r.URL.Path, "/function/")
 		switch {
+		case r.URL.Path == "/health/members":
+			f.serveMembers(w)
 		case r.URL.Path == "/health/readiness" || r.URL.Path == "/health/liveness":
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && pooled && routed && name != "" && !strings.Contains(name, "/"):
@@ -59,6 +62,12 @@ func (f *fakeRuntime) serveCalls(t *testing.T, rev v1.ObjectName, pooled bool) {
 	f.mu.Lock()
 	f.revPort[rev] = port
 	f.mu.Unlock()
+}
+
+// poolOf is the pool worker name of worker id w on nodejs22 for the harness's members with no bindings, all in
+// resource group rg1.
+func poolOf(w string) v1.ObjectName {
+	return v1.ObjectName("__pool__nodejs22__" + w + "__" + pooling.AccessHashOf(v1.FunctionSpec{}, nil, []string{"group/rg1"}))
 }
 
 // poolManifest reads the manifest file of the pool worker named pool.
@@ -149,9 +158,9 @@ func TestIssue38_UnmaterializableMemberFailsAlone(t *testing.T) {
 	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "c"})
 	require.Error(t, err, "the broken member's own reconcile fails")
 
-	h.rt.exit("__pool__nodejs22__w", runtime.StateFailed, time.Hour)
+	h.rt.exit(poolOf("w"), runtime.StateFailed, time.Hour)
 	h.reconcile(t, "a")
-	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "a's reconcile restarts the dead pool")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates(poolOf("w"))[""][0], "a's reconcile restarts the dead pool")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase)
 }
 
@@ -168,9 +177,9 @@ func TestIssue38_PlatformOutageMemberFailsAlone(t *testing.T) {
 	_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "a-outage"})
 	require.Error(t, err, "the member with the outage retries")
 
-	h.rt.exit("__pool__nodejs22__w", runtime.StateFailed, time.Hour)
+	h.rt.exit(poolOf("w"), runtime.StateFailed, time.Hour)
 	h.reconcile(t, "b-here")
-	require.Equal(t, runtime.StateRunning, h.rt.revisionStates("__pool__nodejs22__w")[""][0], "b-here's reconcile restarts the dead pool")
+	require.Equal(t, runtime.StateRunning, h.rt.revisionStates(poolOf("w"))[""][0], "b-here's reconcile restarts the dead pool")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "b-here").Status.Phase)
 }
 
@@ -189,7 +198,7 @@ func TestIssue38_ServingMemberKeepsItsRevisionOnBrokenUpdate(t *testing.T) {
 		t.Run(tc.worker, func(t *testing.T) {
 			t.Parallel()
 			h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, withPlatforms(&fakePlatforms{}))
-			pool := v1.ObjectName("__pool__nodejs22__" + tc.worker)
+			pool := poolOf(tc.worker)
 			for _, name := range []string{"a", "c"} {
 				h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = tc.worker; fn.Spec.ImageDigest = digestHere })
 			}
@@ -221,12 +230,12 @@ func TestIssue38_IdleMemberWithBrokenUpdateLeftOut(t *testing.T) {
 	}
 	h.reconcile(t, "a")
 	h.reconcile(t, "c")
-	require.Contains(t, h.poolManifest(t, "__pool__nodejs22__idle"), `"c"`)
+	require.Contains(t, h.poolManifest(t, poolOf("idle")), `"c"`)
 
 	h.setPhase(t, "c", v1.PhaseIdle)
 	h.apply(t, "c", func(fn *v1.Function) { fn.Spec.Image = "file://" + filepath.Join(t.TempDir(), "missing.mjs") })
 	h.reconcile(t, "a")
-	require.NotContains(t, h.poolManifest(t, "__pool__nodejs22__idle"), `"c"`)
+	require.NotContains(t, h.poolManifest(t, poolOf("idle")), `"c"`)
 }
 
 // A member left out of its pool keeps no pool replica up: once its siblings are idle, the pool is reclaimed (ADR-0046
@@ -244,7 +253,7 @@ func TestIssue38_LeftOutMemberKeepsNoPoolUp(t *testing.T) {
 
 	h.setPhase(t, "a", v1.PhaseIdle)
 	h.reconcile(t, "a")
-	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("__pool__nodejs22__reclaim")[""][0], "only the left-out c wants a replica")
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates(poolOf("reclaim"))[""][0], "only the left-out c wants a replica")
 }
 
 // refResolver resolves each artifact ref to its own digest (ADR-0035).
@@ -278,7 +287,7 @@ func TestIssue43_TagOnlyPooledFunctionDeploys(t *testing.T) {
 	require.Equal(t, "NoMatchingPlatform", h.condition(t, "a-elsewhere", "Ready").Reason)
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "hello-pooled").Status.Phase)
 	require.Empty(t, h.getFn(t, "hello-pooled").Spec.ImageDigest, "the spec keeps the user's tag-only input")
-	pool, ok := h.rt.specFor("__pool__nodejs22__agents")
+	pool, ok := h.rt.specFor(poolOf("agents"))
 	require.True(t, ok, "the pool worker runs")
 	manifest, err := os.ReadFile(pool.Env["FUNCD_POOL_MANIFEST"])
 	require.NoError(t, err)
@@ -301,10 +310,10 @@ func TestIssue68_PoolReclaimedWithItsLastMember(t *testing.T) {
 
 		require.NoError(t, h.st.Delete(ctx, v1.KindFunction.GVK(), "default", "m1", ""))
 		h.reconcile(t, "m1")
-		require.NotEmpty(t, h.rt.revisionStates("__pool__nodejs22__pair"), "m2 still needs its pool")
+		require.NotEmpty(t, h.rt.revisionStates(poolOf("pair")), "m2 still needs its pool")
 		require.NoError(t, h.st.Delete(ctx, v1.KindFunction.GVK(), "default", "m2", ""))
 		h.reconcile(t, "m2")
-		require.Empty(t, h.rt.revisionStates("__pool__nodejs22__pair"), "the pool is removed with its last member")
+		require.Empty(t, h.rt.revisionStates(poolOf("pair")), "the pool is removed with its last member")
 	})
 	t.Run("left the key", func(t *testing.T) {
 		t.Parallel()
@@ -315,13 +324,13 @@ func TestIssue68_PoolReclaimedWithItsLastMember(t *testing.T) {
 
 		h.apply(t, "lonely", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "" })
 		h.reconcile(t, "lonely")
-		require.Empty(t, h.rt.revisionStates("__pool__nodejs22__lonely"), "the pool is removed when its last member runs solo")
+		require.Empty(t, h.rt.revisionStates(poolOf("lonely")), "the pool is removed when its last member runs solo")
 		require.Equal(t, runtime.StateRunning, h.rt.revisionStates("lonely")["lonely-2"][0], "the former member runs solo")
 	})
 }
 
-// A pooled member that declares a Secret or a ConfigMap fails closed (ADR-0057, ADR-0093 Decision 3), so no pool worker
-// loads its code: a sibling's reconcile leaves it out of the pool manifest.
+// A pooled member that declares a Secret or a ConfigMap resolves it like a solo one and fails its own gate when it
+// cannot; its other access puts it in another pool, so the pool of a member with neither never loads its code.
 func TestIssue69_GatedMemberNotLoadedIntoPool(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
@@ -331,17 +340,17 @@ func TestIssue69_GatedMemberNotLoadedIntoPool(t *testing.T) {
 	for _, name := range []string{"b-secret", "c-config", "a-ok"} {
 		h.reconcile(t, name)
 	}
-	require.Equal(t, "SecretResolveFailed", h.condition(t, "b-secret", "Ready").Reason)
-	require.Equal(t, "SecretResolveFailed", h.condition(t, "c-config", "Ready").Reason)
+	require.Equal(t, "SecretResolveFailed", h.condition(t, "b-secret", "Ready").Reason, "no secret resolver is wired, as for a solo Function")
+	require.Equal(t, "ConfigResolveFailed", h.condition(t, "c-config", "Ready").Reason, "the ConfigMap is missing, as for a solo Function")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "a-ok").Status.Phase)
+	a, b, c := h.getFn(t, "a-ok").Status.Pool, h.getFn(t, "b-secret").Status.Pool, h.getFn(t, "c-config").Status.Pool
+	require.NotEqual(t, a, b, "secrets are access: another pool")
+	require.NotEqual(t, a, c, "config is access: another pool")
 
-	pool, ok := h.rt.specFor("__pool__nodejs22__gated")
-	require.True(t, ok, "the pool worker runs")
-	manifest, err := os.ReadFile(pool.Env["FUNCD_POOL_MANIFEST"])
-	require.NoError(t, err)
-	require.Contains(t, string(manifest), `"a-ok"`)
-	require.NotContains(t, string(manifest), "b-secret", "the member gated on its Secret gets no worker")
-	require.NotContains(t, string(manifest), "c-config", "the member gated on its ConfigMap gets no worker")
+	manifest := h.poolManifest(t, poolOf("gated"))
+	require.Contains(t, manifest, `"a-ok"`)
+	require.NotContains(t, manifest, "b-secret")
+	require.NotContains(t, manifest, "c-config")
 }
 
 // A member held PoolFull comes back on the supervision period, so it is admitted, Ready and routed once a slot frees
@@ -372,85 +381,133 @@ func TestIssue71_PoolFullMemberReadmittedWhenSlotFrees(t *testing.T) {
 	require.True(t, ready, "p3 is reachable")
 }
 
-// A pool host fails its readiness while any one handler's worker thread respawns after a fault, and keeps serving the
-// others (ADR-0044 Decision 4), so a sibling's fault leaves the healthy members Ready and routed.
+// A sibling restarting after a fault reads restarting on /health/members, so it is not ready while the pool worker and
+// the healthy members keep serving (ADR-0044 Decision 4).
 func TestIssue72_SiblingThreadFaultKeepsMembersReady(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
-	_, setReadiness := h.rt.serveRevision(t, "", http.StatusOK)
 	h.create(t, "crasher", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "faults" })
 	h.create(t, "good", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "faults" })
 	h.reconcile(t, "crasher")
 	h.reconcile(t, "good")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "good").Status.Phase)
+	creates, _ := h.rt.counts()
 
-	setReadiness(http.StatusServiceUnavailable)
+	h.rt.setMember("crasher", "restarting", "")
 	h.reconcile(t, "good")
+	h.reconcile(t, "crasher")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "good").Status.Phase, "a sibling's thread fault is not good's")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "crasher").Status.Phase, "the restarting member is not ready")
 	_, ready := h.upstream(t, "good")
 	require.True(t, ready, "good stays reachable")
 	require.NotEmpty(t, h.routes(t), "good keeps its route")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates, after, "a member's state never restarts the pool worker")
 }
 
-// A pooled member whose pool host runs but never serves (a member's handler blocks while the pool loads it) ends Failed
-// (ShapeInvalid) once the pool worker has run for the boot timeout since its last (re)start, as a solo replica does
-// (issue #76): a pool worker restarted after a crash is timed from its restart.
+// A member whose first load fails in its pool host is a shape failure, retried after the supervision period, and is
+// Ready once a later pool start loads it; one whose load timed out is a boot crash loop, never Failed.
 func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withNodePool)
-	pool := v1.ObjectName("__pool__nodejs22__hang")
-	h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), true)
-	h.create(t, "hang", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hang" })
-	h.reconcile(t, "hang")
-	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a pool worker that just started is still booting")
+	t.Run("load error", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+		h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hang" })
+		h.rt.setMember("m", "failed", "SyntaxError: unexpected token")
+		res := h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase)
+		require.Equal(t, "ShapeInvalid", h.condition(t, "m", "Ready").Reason)
+		sv := h.condition(t, "m", "ShapeValid")
+		require.Equal(t, v1.ConditionFalse, sv.Status)
+		require.Contains(t, sv.Message, "SyntaxError")
+		require.Equal(t, "ShapeInvalid", h.condition(t, "m", "RevisionReady").Reason)
+		require.Equal(t, testPeriod, res.RequeueAfter, "a pooled shape failure comes back after the supervision period")
 
-	h.rt.exitRevision(pool, "", 0, runtime.StateFailed, time.Hour)
-	h.reconcile(t, "hang")
-	require.Equal(t, runtime.StateRunning, h.rt.revisionStates(pool)[""][0], "the dead pool worker is restarted")
-	require.Equal(t, v1.PhaseDeploying, h.getFn(t, "hang").Status.Phase, "a restarted pool worker is timed from its restart")
-
-	h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
-	res := h.reconcile(t, "hang")
-	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
-	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready")
-	require.Equal(t, controller.SupervisionPeriod, res.RequeueAfter, "a pooled shape failure is judged again after the period (ADR-0169)")
+		h.rt.setMember("m", "ready", "")
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "m").Status.Phase, "a later load makes it Ready with no spec change")
+	})
+	t.Run("load timed out", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+		h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hang" })
+		h.rt.setMember("m", "failed", "load timed out")
+		h.reconcile(t, "m")
+		ready := h.condition(t, "m", "Ready")
+		require.Equal(t, "CrashLoopBackOff", ready.Reason)
+		require.Contains(t, ready.Message, "did not load within")
+		require.NotEqual(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase)
+	})
 }
 
-// Issue #422: a serving pooled member whose new pool worker runs but never becomes ready is not re-probed every 200 ms
-// for good. Once the pool worker has run for the boot timeout and the member has been Degraded as long, the pool worker
-// is stopped and created again on a later pass, as a solo replica is (#309, ADR-0142, ADR-0030 §4b).
+// A member whose load timed out is read again at its backoff deadline, a wait after the pool start that was counted,
+// not every readiness poll; once that deadline has passed, a wait after the pass. A pass over the same pool start
+// counts no further crash, while serving included.
+func TestPooledLoadTimeoutRereadsAtBackoffDeadline(t *testing.T) {
+	t.Parallel()
+	const initial = time.Minute
+	h := newShimHarness(t, http.StatusOK, false, withNodePool, func(d *function.Deps) {
+		d.BootBackoffInitial, d.BootBackoffMax = initial, 10*initial
+	})
+	h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hang" })
+	h.rt.setMember("m", "failed", "load timed out")
+
+	res := h.reconcile(t, "m")
+	require.Equal(t, "CrashLoopBackOff", h.condition(t, "m", "Ready").Reason)
+	require.Greater(t, res.RequeueAfter, initial-10*time.Second, "the deadline of a fresh pool start")
+	require.LessOrEqual(t, res.RequeueAfter, initial)
+
+	h.rt.exitRevision(poolOf("hang"), "", 0, runtime.StateRunning, time.Hour)
+	for range 2 {
+		res = h.reconcile(t, "m")
+		ready := h.condition(t, "m", "Ready")
+		require.Contains(t, ready.Message, "boot crash 2 in a row", "one crash per pool start")
+		require.Greater(t, res.RequeueAfter, 2*initial-10*time.Second, "a passed deadline: a wait after the pass")
+		require.LessOrEqual(t, res.RequeueAfter, 2*initial)
+	}
+
+	h.setPhase(t, "m", v1.PhaseReady)
+	res = h.reconcile(t, "m")
+	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "m").Status.Phase)
+	require.Equal(t, "CrashLoopBackOff", h.condition(t, "m", "Ready").Reason)
+	require.Greater(t, res.RequeueAfter, 2*initial-10*time.Second, "serving, the member is read at the deadline too")
+}
+
+// Issue #422: a running pool worker silent on /health/liveness for the boot timeout since its last answer, else since
+// it was created, is created again; one that answered within that time is kept.
 func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
-	pool := v1.ObjectName("__pool__nodejs22__stall")
-	id := runtime.NewInstanceID("default", pool, "", 0)
-	h.create(t, "stall", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "stall" })
-	h.reconcile(t, "stall")
-	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+	t.Run("never answered", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+		pool := poolOf("stall")
+		h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), true)
+		h.create(t, "stall", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "stall" })
+		h.reconcile(t, "stall")
+		require.Equal(t, v1.PhaseDeploying, h.getFn(t, "stall").Status.Phase)
 
-	h.rt.exitRevision(pool, "", 0, runtime.StateFailed, time.Minute)
-	h.rt.hold(id, true)
-	h.reconcile(t, "stall")
-	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the restarted pool worker boots")
+		h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
+		creates, _ := h.rt.counts()
+		h.reconcile(t, "stall")
+		after, _ := h.rt.counts()
+		require.Equal(t, creates+1, after, "the silent pool worker is created again")
+	})
+	t.Run("answered recently", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
+		pool := poolOf("stall")
+		h.create(t, "stall", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "stall" })
+		h.reconcile(t, "stall")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
 
-	h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
-	res := h.reconcile(t, "stall")
-	require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "the pool worker is kept while the member has been Degraded for less than the boot timeout")
-
-	h.degradedSinceAnHour(t, "stall")
-	creates, _ := h.rt.counts()
-	res = h.reconcile(t, "stall")
-	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
-	require.Equal(t, testPeriod, res.RequeueAfter, "the pass waits out the period instead of re-probing the hung pool worker")
-	require.Equal(t, runtime.StateStopped, h.rt.revisionStates(pool)[""][0], "the hung pool worker is stopped")
-	require.Contains(t, h.condition(t, "stall", "Ready").Message, "did not become ready")
-	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "stall"), "a hung pool worker of a serving member is not a shape failure")
-
-	h.rt.hold(id, false)
-	h.reconcile(t, "stall")
-	after, _ := h.rt.counts()
-	require.Equal(t, creates+1, after, "the hung pool worker is created again")
-	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
+		h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), true)
+		h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
+		creates, _ := h.rt.counts()
+		h.reconcile(t, "stall")
+		after, _ := h.rt.counts()
+		require.Equal(t, creates, after, "a pool worker that answered within the boot timeout is kept")
+		require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase)
+	})
 }
 
 // Issue #70: a pool host that exits at boot (a member's handler cannot load) is created again on ADR-0142's backoff, as
@@ -470,7 +527,7 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 		t.Run(tc.worker, func(t *testing.T) {
 			t.Parallel()
 			h := newShimHarness(t, http.StatusOK, false, withNodePool)
-			pool := v1.ObjectName("__pool__nodejs22__" + tc.worker)
+			pool := poolOf(tc.worker)
 			h.rt.hold(runtime.NewInstanceID("default", pool, "", 0), tc.held)
 			h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = tc.worker })
 			h.reconcile(t, "m")
@@ -493,38 +550,57 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 	}
 }
 
-// scenario: pooled-failed-member-never-idle (ADR-0169) — a woken scale-to-zero member whose pool worker cannot load is
-// never Idle over two periods of passes and an idle reclaim past idleTimeout, and a call while it is Failed is refused
-// at once.
+// scenario: pooled-failed-member-never-idle (ADR-0169) — a woken scale-to-zero member whose handler cannot load in its
+// pool host is never Idle over two periods of passes and an idle reclaim past idleTimeout, and a call while it is
+// Failed is refused at once. A woken member whose pool host exits at once waits out the pool worker's backoff, never
+// Idle either.
 func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
 	t.Parallel()
 	const idle = time.Minute
-	h := newShimHarness(t, http.StatusOK, true, withNodePool, withPeriod)
-	h.create(t, "m", func(fn *v1.Function) {
-		fn.Spec.Pooling.Worker = "adr0169"
-		fn.Spec.Replicas = 0
-		fn.Spec.Scaling.IdleTimeout = idle
-	})
-	h.reconcile(t, "m")
-	require.Equal(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase)
-	h.setPhase(t, "m", v1.PhaseDeploying)
-	h.reconcile(t, "m")
-	require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "the pool worker cannot load")
-
-	for i := range 2 {
-		res := h.reconcile(t, "m")
-		require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "period %d", i)
-		require.Positive(t, res.RequeueAfter, "the pool worker is tried again (period %d)", i)
-		require.LessOrEqual(t, res.RequeueAfter, testPeriod)
-		time.Sleep(testPeriod)
+	woken := func(t *testing.T, runtimeFailed bool) *shimHarness {
+		h := newShimHarness(t, http.StatusOK, runtimeFailed, withNodePool, withPeriod)
+		h.create(t, "m", func(fn *v1.Function) {
+			fn.Spec.Pooling.Worker = "adr0169"
+			fn.Spec.Replicas = 0
+			fn.Spec.Scaling.IdleTimeout = idle
+		})
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase)
+		h.setPhase(t, "m", v1.PhaseDeploying)
+		return h
 	}
-	clk := clock.NewManual(time.Now())
-	a := h.activator(t, clk)
-	reclaimPastIdle(t, a, clk, idle)
-	h.reconcile(t, "m")
-	require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "never Idle")
-	require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "m"))
-	refusedAtOnce(t, a, "m", "ShapeInvalid")
+	t.Run("handler cannot load", func(t *testing.T) {
+		t.Parallel()
+		h := woken(t, false)
+		h.rt.setMember("m", "failed", "SyntaxError: unexpected token")
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "the handler cannot load")
+
+		for i := range 2 {
+			res := h.reconcile(t, "m")
+			require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "period %d", i)
+			require.Positive(t, res.RequeueAfter, "the member is read again (period %d)", i)
+			require.LessOrEqual(t, res.RequeueAfter, testPeriod)
+			time.Sleep(testPeriod)
+		}
+		clk := clock.NewManual(time.Now())
+		a := h.activator(t, clk)
+		reclaimPastIdle(t, a, clk, idle)
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "never Idle")
+		require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "m"))
+		refusedAtOnce(t, a, "m", "ShapeInvalid")
+	})
+	t.Run("pool host exits at once", func(t *testing.T) {
+		t.Parallel()
+		h := woken(t, true)
+		for i := range 2 {
+			res := h.reconcile(t, "m")
+			require.Equal(t, v1.PhaseDeploying, h.getFn(t, "m").Status.Phase, "pass %d", i)
+			require.Positive(t, res.RequeueAfter, "the pool worker is tried again (pass %d)", i)
+			require.LessOrEqual(t, res.RequeueAfter, testPeriod)
+		}
+	})
 }
 
 // Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
@@ -570,7 +646,7 @@ func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
 	ctx := context.Background()
 	h := newShimHarness(t, http.StatusOK, false, withNodePool)
 	const worker = "tenancy-shared"
-	pool := v1.ObjectName("__pool__nodejs22__" + worker)
+	pool := poolOf(worker)
 	members := map[v1.NamespaceName]string{"team-a": "a1", "team-b": "b1"}
 	reconcile := func(ns v1.NamespaceName) {
 		_, err := h.r.Reconcile(ctx, controller.Request{GVK: v1.KindFunction.GVK(), Namespace: ns, Name: v1.ObjectName(members[ns])})

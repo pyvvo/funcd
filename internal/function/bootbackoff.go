@@ -101,6 +101,32 @@ func (b *bootBackoff) observe(in runtime.Instance, class exitClass) (bootCrash, 
 	return bootCrash{}, time.Time{}
 }
 
+// count counts one boot crash of id that happened in the start at `at`, once per start, with message, and returns its
+// record: a pooled member whose load timed out, judged on its pool host's /health/members rather than an exit.
+func (b *bootBackoff) count(id runtime.InstanceID, at time.Time, message string) bootCrash {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c := b.crashes[id]
+	if c.count == 0 || !c.counted.Equal(at) {
+		c.count++
+		c.counted = at
+		c.message = fmt.Sprintf("%s; boot crash %d in a row", message, c.count)
+		b.crashes[id] = c
+	}
+	return c
+}
+
+// reread is when a pass reads again the pooled member whose load timed out, with crash record c: at its backoff
+// deadline, a wait after the pool start counted; once that has passed, a wait from now, as the pool host does not
+// reload the member before its next start.
+func (b *bootBackoff) reread(c bootCrash, now time.Time) time.Time {
+	w := b.wait(c.count)
+	if due := c.counted.Add(w); due.After(now) {
+		return due
+	}
+	return now.Add(w)
+}
+
 // crash is the crash record of id, if it has one.
 func (b *bootBackoff) crash(id runtime.InstanceID) (bootCrash, bool) {
 	b.mu.Lock()

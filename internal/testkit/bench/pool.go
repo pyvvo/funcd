@@ -3,6 +3,8 @@ package bench
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
 // poolEntry is one manifest row the pooled shim (ADR-0044) hosts.
@@ -56,6 +59,65 @@ func startNodeShim(ctx context.Context, shimPath string, env []string, portFile 
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 	return nil, "", fault.Unavailablef(op, "shim %q did not become ready", filepath.Base(shimPath))
+}
+
+// waitPoolMembers waits until the pool host on port reports ready, then fails when a member failed to
+// load: RSS sampled over a pool missing a member understates the per-function cost.
+func waitPoolMembers(ctx context.Context, port string) error {
+	const op = "bench.waitPoolMembers"
+	base := "http://127.0.0.1:" + port + "/health/"
+	client := httpx.NodeClient(5 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if status, _, err := httpGet(ctx, client, base+"readiness"); err == nil && status == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fault.Unavailablef(op, "the pool host did not report ready")
+		}
+		select {
+		case <-ctx.Done():
+			return fault.Wrapf(ctx.Err(), fault.Unavailable, op, "wait for the pool host")
+		case <-tick.C:
+		}
+	}
+	status, body, err := httpGet(ctx, client, base+"members")
+	if err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "read the pool members")
+	}
+	if status != http.StatusOK {
+		return fault.Unavailablef(op, "the pool members answered %d", status)
+	}
+	var members []struct {
+		Name  string `json:"name"`
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &members); err != nil {
+		return fault.Wrapf(err, fault.Unavailable, op, "decode the pool members")
+	}
+	for _, m := range members {
+		if m.State == "failed" {
+			return fault.Unavailablef(op, "pool member %q failed to load: %s", m.Name, m.Error)
+		}
+	}
+	return nil
+}
+
+func httpGet(ctx context.Context, client *http.Client, url string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer httpx.CloseBody(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, err
 }
 
 func stopShim(cmd *exec.Cmd) {
@@ -105,6 +167,10 @@ func measurePool(ctx context.Context, shimPath, poolShimPath string, k, concurre
 	poolCmd, poolPort, err := startNodeShim(ctx, poolShimPath,
 		[]string{"FUNCD_POOL_MANIFEST=" + manifestPath, "FUNCD_PORTFILE=" + poolPortFile}, poolPortFile)
 	if err != nil {
+		return poolMeasurement{}, err
+	}
+	if err := waitPoolMembers(ctx, poolPort); err != nil {
+		stopShim(poolCmd)
 		return poolMeasurement{}, err
 	}
 	time.Sleep(250 * time.Millisecond) // let the worker heaps settle before sampling

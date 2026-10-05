@@ -24,10 +24,10 @@ func TestPoolKeyForGatesOnPoolHost(t *testing.T) {
 
 	// Both hosts registered: node and python both pool, each via its own host.
 	both := &Reconciler{poolShimCommand: nodeHost, poolShimsByFamily: map[string][]string{"python": pyHost}}
-	if _, ok := both.poolKeyFor(poolFn("nodejs22")); !ok {
+	if _, ok := both.poolKeyFor(poolFn("nodejs22"), accessIndex{}); !ok {
 		t.Error("nodejs22 must pool when a node pool host is configured")
 	}
-	if _, ok := both.poolKeyFor(poolFn("python312")); !ok {
+	if _, ok := both.poolKeyFor(poolFn("python312"), accessIndex{}); !ok {
 		t.Error("python312 must pool when a python pool host is configured")
 	}
 	if got := both.poolHostFor("nodejs22"); !slices.Equal(got, nodeHost) {
@@ -44,13 +44,13 @@ func TestPoolKeyForGatesOnPoolHost(t *testing.T) {
 		poolShimCommand: nodeHost,
 		shimByFamily:    map[string][]string{"python": {"python3", "/opt/funcd/shim.py"}},
 	}
-	if _, ok := nodeOnly.poolKeyFor(poolFn("nodejs22")); !ok {
+	if _, ok := nodeOnly.poolKeyFor(poolFn("nodejs22"), accessIndex{}); !ok {
 		t.Error("nodejs22 must pool with the node host")
 	}
 	if got := nodeOnly.poolHostFor("python312"); got != nil {
 		t.Errorf("python312 must NOT fall into the node pool host, got %v", got)
 	}
-	if _, ok := nodeOnly.poolKeyFor(poolFn("python312")); ok {
+	if _, ok := nodeOnly.poolKeyFor(poolFn("python312"), accessIndex{}); ok {
 		t.Error("python312 must run SOLO when no python pool host is configured")
 	}
 
@@ -61,23 +61,23 @@ func TestPoolKeyForGatesOnPoolHost(t *testing.T) {
 		poolShimsByFamily: map[string][]string{"python": pyHost},
 		shimByFamily:      map[string][]string{"python": {"python3", "/opt/funcd/shim.py"}},
 	}
-	if _, ok := pyOnly.poolKeyFor(poolFn("python312")); !ok {
+	if _, ok := pyOnly.poolKeyFor(poolFn("python312"), accessIndex{}); !ok {
 		t.Error("python312 must pool with a python-only pool host (no node host configured)")
 	}
-	if _, ok := pyOnly.poolKeyFor(poolFn("nodejs22")); ok {
+	if _, ok := pyOnly.poolKeyFor(poolFn("nodejs22"), accessIndex{}); ok {
 		t.Error("nodejs22 must be solo when only a python pool host is configured")
 	}
 
 	// No pool host at all: everything solo.
 	none := &Reconciler{}
-	if _, ok := none.poolKeyFor(poolFn("nodejs22")); ok {
+	if _, ok := none.poolKeyFor(poolFn("nodejs22"), accessIndex{}); ok {
 		t.Error("no pool host → every function solo")
 	}
 
 	// Opt-out (no worker id) is solo regardless of hosts.
 	noWorker := poolFn("nodejs22")
 	noWorker.Spec.Pooling.Worker = ""
-	if _, ok := both.poolKeyFor(noWorker); ok {
+	if _, ok := both.poolKeyFor(noWorker, accessIndex{}); ok {
 		t.Error("no worker id → solo")
 	}
 }

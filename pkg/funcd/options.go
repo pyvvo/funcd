@@ -311,6 +311,12 @@ func WithPoolShim(cmd ...string) Option {
 	return func(c *config) error { c.poolShim = cmd; return nil }
 }
 
+// WithPoolManifestDir sets the dir pool manifests are written to: a 0700 dir funcd owns, created when absent and emptied
+// at start, since the manifests carry each member's credentials. Unset ⇒ a private temp dir removed at Shutdown.
+func WithPoolManifestDir(dir string) Option {
+	return func(c *config) error { c.poolManifestDir = dir; return nil }
+}
+
 // WithPoolShimFor registers a pooled-host launch prefix for one runtime family (ADR-0050): a
 // python* function that opts into spec.pooling.worker co-pools via this host (the subinterpreter
 // pool.py) instead of staying solo. WithPoolShim remains the node default. A runtime family with no

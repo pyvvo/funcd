@@ -579,14 +579,19 @@ func applySharedWorker(t *testing.T, opts ...Option) *recordingRuntime {
 func TestScenarioProcessModePoolingUnchanged(t *testing.T) {
 	t.Parallel()
 	rt := applySharedWorker(t, WithRuntimeShim("node", "shim.mjs"), WithPoolShim("node", "pool.mjs"))
-	const pool = v1.ObjectName("__pool__nodejs22__shared")
+	var pool v1.ObjectName
 	require.Eventually(t, func() bool {
-		specs := rt.created()[pool]
-		if len(specs) == 0 {
-			return false
+		for name, specs := range rt.created() {
+			if !strings.HasPrefix(string(name), "__pool__nodejs22__shared__") || len(specs) == 0 {
+				continue
+			}
+			manifest, err := os.ReadFile(specs[len(specs)-1].Env["FUNCD_POOL_MANIFEST"])
+			if err == nil && strings.Contains(string(manifest), `"alpha"`) && strings.Contains(string(manifest), `"beta"`) {
+				pool = name
+				return true
+			}
 		}
-		manifest, err := os.ReadFile(specs[len(specs)-1].Env["FUNCD_POOL_MANIFEST"])
-		return err == nil && strings.Contains(string(manifest), `"alpha"`) && strings.Contains(string(manifest), `"beta"`)
+		return false
 	}, 10*time.Second, 20*time.Millisecond, "one pool worker hosts alpha and beta; created %v", rt.created())
 	created := rt.created()
 	require.Len(t, created, 1, "only the pool worker is created")
