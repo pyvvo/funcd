@@ -4,7 +4,11 @@ package containerd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -53,6 +57,120 @@ func TestIssue706_StopSendsCNIDelBeforeTaskStops(t *testing.T) {
 	require.Equal(t, [][2]string{{"a_b-r0", "/proc/1/ns/net"}}, f.cni.removed)
 	require.Equal(t, [][2]bool{{false, false}}, cni.killedDeleted, "Stop must send the CNI DEL before it kills and deletes the task")
 	require.Equal(t, []string{"b-r0"}, tasks.deleted)
+}
+
+// Issue 706: a task that exits on its own takes its /proc netns with it, so Stop's DEL must name the netns pinned at
+// Create.
+func TestIssue706_ExitedWorkerCNIDelRunsInItsPinnedNetns(t *testing.T) {
+	f := newCNIIDFixture(t)
+	mounts := fakePins(t, f.d)
+	cni := &netnsCNI{recordingCNI: f.cni}
+	f.d.cni = cni
+	initProc := exec.Command("sleep", "60")
+	require.NoError(t, initProc.Start())
+	t.Cleanup(func() { _ = initProc.Process.Kill() })
+	tasks, ok := f.d.client.TaskService().(*createdTasks)
+	require.True(t, ok)
+	tasks.pid = uint32(initProc.Process.Pid)
+	ctx := leases.WithLease(context.Background(), "issue706")
+	inst, err := f.d.Create(ctx, f.engine(t, "a", "b"))
+	require.NoError(t, err)
+
+	require.NoError(t, initProc.Process.Kill())
+	_ = initProc.Wait()
+	require.NoError(t, f.d.Stop(ctx, inst.ID))
+	require.Len(t, cni.delNetns, 1)
+	require.NoError(t, cni.delNetns[0], "Stop's CNI DEL must name a netns that outlives the exited task")
+	pin := filepath.Join(f.d.netns.dir, "a_b-r0")
+	require.Equal(t, []string{"a_b-r0"}, f.cni.setups)
+	require.Equal(t, [][2]string{{"a_b-r0", pin}}, f.cni.removed)
+	require.Equal(t, []string{fmt.Sprintf("/proc/%d/ns/net on %s", initProc.Process.Pid, pin), "unmount " + pin}, *mounts,
+		"Create pins the task's netns and Stop unpins it after the DEL")
+	require.NoFileExists(t, pin)
+}
+
+// Issue 706: the boot sweep sends a leftover worker's DEL in the netns the earlier run pinned, and the DEL of a worker
+// whose container went without one in the pin it left.
+func TestIssue706_BootSweepReleasesLeftoverPins(t *testing.T) {
+	f := newCloseFixture(t, "funcd-default")
+	earlier := f.driver(false)
+	mounts := fakePins(t, earlier)
+	_, cniID := f.create(t, earlier, "default", "left")
+	orphan, err := earlier.netns.pin("default.gone-1.r0", 1)
+	require.NoError(t, err)
+
+	booted := f.driver(false)
+	booted.netns = earlier.netns
+	cni := &recordingCNI{}
+	booted.cni = cni
+	require.NoError(t, booted.SweepAll(context.Background()))
+	pin := filepath.Join(earlier.netns.dir, cniID)
+	require.Equal(t, [][2]string{{cniID, pin}, {"default.gone-1.r0", orphan}}, cni.removed,
+		"each leftover's DEL runs in its pinned netns")
+	require.Equal(t, []string{"/proc/1/ns/net on " + pin, "/proc/1/ns/net on " + orphan, "unmount " + pin, "unmount " + orphan}, *mounts)
+	left, err := os.ReadDir(earlier.netns.dir)
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
+// Issue 706: a reboot drops the pins' mounts but keeps their files, and the bridge plugin fails a DEL in a path that is
+// not a netns before it frees the IP, so the boot sweep sends such a worker's DEL with no netns.
+func TestIssue706_BootSweepAfterRebootSendsNoStalePin(t *testing.T) {
+	f := newCloseFixture(t, "funcd-default")
+	earlier := f.driver(false)
+	mounts := fakePins(t, earlier)
+	_, cniID := f.create(t, earlier, "default", "left")
+	require.NoError(t, os.WriteFile(filepath.Join(earlier.netns.dir, "default.gone-1.r0"), nil, 0o400))
+
+	booted := f.driver(false)
+	booted.netns = earlier.netns
+	booted.netns.isNetns = func(string) bool { return false }
+	cni := &recordingCNI{}
+	booted.cni = cni
+	require.NoError(t, booted.SweepAll(context.Background()))
+	require.Equal(t, [][2]string{{cniID, ""}, {"default.gone-1.r0", ""}}, cni.removed)
+	require.Equal(t, []string{"/proc/1/ns/net on " + filepath.Join(earlier.netns.dir, cniID)}, *mounts)
+	left, err := os.ReadDir(earlier.netns.dir)
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
+// Issue 706: Stop of a worker whose container is already gone still sends its DEL in the pin and drops the pin, which
+// would otherwise keep the netns and its masquerade rules.
+func TestIssue706_StopOfGoneContainerReleasesItsPin(t *testing.T) {
+	f := newCNIIDFixture(t)
+	mounts := fakePins(t, f.d)
+	ctx := leases.WithLease(context.Background(), "issue706")
+	inst, err := f.d.Create(ctx, f.engine(t, "a", "b"))
+	require.NoError(t, err)
+	delete(f.ctrs.records, "b-r0")
+
+	require.NoError(t, f.d.Stop(ctx, inst.ID))
+	pin := filepath.Join(f.d.netns.dir, "a_b-r0")
+	require.Equal(t, [][2]string{{"a_b-r0", pin}}, f.cni.removed)
+	require.Equal(t, []string{"/proc/1/ns/net on " + pin, "unmount " + pin}, *mounts)
+	require.NoFileExists(t, pin)
+}
+
+// fakePins gives d netns pins whose bind mounts it records instead of making them, which needs root.
+func fakePins(t *testing.T, d *driver) *[]string {
+	var mounts []string
+	live := map[string]bool{}
+	d.netns = netnsPins{
+		dir: t.TempDir(),
+		mount: func(src, dst string) error {
+			mounts = append(mounts, src+" on "+dst)
+			live[dst] = true
+			return nil
+		},
+		unmount: func(path string) error {
+			mounts = append(mounts, "unmount "+path)
+			delete(live, path)
+			return nil
+		},
+		isNetns: func(path string) bool { return live[path] },
+	}
+	return &mounts
 }
 
 // scenario: leftover-old-form-attachment-released (ADR-0179)
@@ -200,5 +318,19 @@ func (c *taskStateCNI) Remove(ctx context.Context, id, path string, opts ...gocn
 	c.tasks.mu.Lock()
 	c.killedDeleted = append(c.killedDeleted, [2]bool{len(c.tasks.killed) > 0, len(c.tasks.deleted) > 0})
 	c.tasks.mu.Unlock()
+	return c.recordingCNI.Remove(ctx, id, path, opts...)
+}
+
+// netnsCNI records, at each Remove, whether the netns it names exists.
+type netnsCNI struct {
+	*recordingCNI
+	delNetns []error
+}
+
+func (c *netnsCNI) Remove(ctx context.Context, id, path string, opts ...gocni.NamespaceOpts) error {
+	_, err := os.Stat(path)
+	c.mu.Lock()
+	c.delNetns = append(c.delNetns, err)
+	c.mu.Unlock()
 	return c.recordingCNI.Remove(ctx, id, path, opts...)
 }

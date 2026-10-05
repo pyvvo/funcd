@@ -118,6 +118,7 @@ type driver struct {
 	cni        gocni.CNI
 	resolvPath string // host path to the shared worker /etc/resolv.conf (bind-mounted into every worker)
 	bootRoot   string // 0700 parent of the per-worker boot dirs (ADR-0160)
+	netns      netnsPins
 	mu         sync.Mutex
 
 	capture   runtime.LogCaptureFunc    // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
@@ -245,7 +246,12 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "provision worker resolv.conf")
 	}
-	bootRoot, err := makeBootRoot(cfg.StateDir)
+	bootRoot, err := makeStateDir(cfg.StateDir, "boot")
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	netnsDir, err := makeStateDir(cfg.StateDir, "netns")
 	if err != nil {
 		_ = client.Close()
 		return nil, err
@@ -255,30 +261,30 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, fifoDir: fifoDir, ownFifo: ownFifo,
-		instances: map[runtime.InstanceID]*worker{}}, nil
+	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, netns: newNetnsPins(netnsDir),
+		fifoDir: fifoDir, ownFifo: ownFifo, instances: map[runtime.InstanceID]*worker{}}, nil
 }
 
-// makeBootRoot makes <stateDir>/boot, or a private temp dir when stateDir is unset, and enforces 0700 on it, so no host
-// user but root reaches a dir the sandbox writes (ADR-0160).
-func makeBootRoot(stateDir string) (string, error) {
+// makeStateDir makes <stateDir>/<name>, or a private temp dir when stateDir is unset, and enforces 0700 on it, so no
+// host user but root reaches a dir the sandbox writes (ADR-0160) or a worker's netns pin.
+func makeStateDir(stateDir, name string) (string, error) {
 	const op = "runtime.containerd.New"
 	if stateDir == "" {
-		dir, err := os.MkdirTemp("", "funcd-boot-")
+		dir, err := os.MkdirTemp("", "funcd-"+name+"-")
 		if err != nil {
-			return "", fault.Wrapf(err, fault.Internal, op, "create boot root")
+			return "", fault.Wrapf(err, fault.Internal, op, "create %s dir", name)
 		}
 		return dir, nil
 	}
-	dir := filepath.Join(stateDir, "boot")
+	dir := filepath.Join(stateDir, name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "create boot root %q", dir)
+		return "", fault.Wrapf(err, fault.Internal, op, "create %s dir %q", name, dir)
 	}
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
-		return "", fault.Internalf(op, "boot root %q is not a directory", dir)
+		return "", fault.Internalf(op, "%s dir %q is not a directory", name, dir)
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
-		return "", fault.Wrapf(err, fault.Internal, op, "restrict boot root %q", dir)
+		return "", fault.Wrapf(err, fault.Internal, op, "restrict %s dir %q", name, dir)
 	}
 	return dir, nil
 }
@@ -456,15 +462,20 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		return runtime.Instance{}, mapErr(err, op, "create task for %q", ctrID)
 	}
 
-	netnsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
-	result, err := d.cni.Setup(nctx, cniID, netnsPath)
-	if err != nil {
-		// Setup does not undo the plugins that succeeded and the CNI spec leaves that DEL to the runtime, so without it
-		// the host-local lease and the masquerade rules outlive the failed Create.
-		if rerr := d.cni.Remove(nctx, cniID, netnsPath); rerr != nil {
-			d.cfg.Logger.Warn("could not release the CNI attachment of a failed network setup",
-				"op", op, "attachment", cniID, "error", rerr)
+	netnsPath, err := d.netns.pin(cniID, task.Pid())
+	var result *gocni.Result
+	if err == nil {
+		if result, err = d.cni.Setup(nctx, cniID, netnsPath); err != nil {
+			// Setup does not undo the plugins that succeeded and the CNI spec leaves that DEL to the runtime, so without
+			// it the host-local lease and the masquerade rules outlive the failed Create.
+			if rerr := d.cni.Remove(nctx, cniID, netnsPath); rerr != nil {
+				d.cfg.Logger.Warn("could not release the CNI attachment of a failed network setup",
+					"op", op, "attachment", cniID, "error", rerr)
+			}
+			d.netns.unpin(netnsPath)
 		}
+	}
+	if err != nil {
 		// containerd deletes neither a created task that has a pid nor its container until the task is killed.
 		_, _ = task.Delete(nctx, containerd.WithProcessKill)
 		_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
@@ -591,6 +602,9 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	defer func() { _ = os.RemoveAll(sb.bootDir) }()
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
 	if errdefs.IsNotFound(err) {
+		if d.netns.pinned(sb.cniID) != "" {
+			d.release(nctx, sb.cniID)
+		}
 		closeOutput(sb)
 		d.markReleased(sb)
 		return nil // already gone — idempotent
@@ -602,9 +616,10 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	if err != nil && !errdefs.IsNotFound(err) {
 		return mapErr(err, op, "load task %q", sb.ctrID)
 	}
-	// The netns goes when the task exits, and without it the bridge plugin's DEL frees the IP but not the masquerade
-	// rules.
+	// Without the worker's netns the bridge plugin's DEL frees the IP but not the masquerade rules. A /proc netns goes
+	// when the task exits; the pin keeps it for a task that already exited until the DEL is sent.
 	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
+	d.netns.unpin(sb.netnsPath)
 	if err == nil {
 		_ = task.Kill(nctx, syscall.SIGTERM)
 		select {
@@ -705,8 +720,8 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 	return len(cs), errors.Join(errs...)
 }
 
-// discard kills a container's task, tears its CNI attachment down from its labels (the netns died with its task) and
-// deletes it with its snapshot. It keeps a container whose task it cannot load, since that task may still run.
+// discard kills a container's task, tears its CNI attachment down from its labels, in its pinned netns when a pin is
+// left, and deletes it with its snapshot. It keeps a container whose task it cannot load, since that task may still run.
 func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 	task, err := c.Task(nctx, nil)
 	switch {
@@ -723,7 +738,7 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 	if labels, lerr := c.Labels(nctx); lerr == nil {
 		ns, name, rep := labels["funcd/namespace"], labels["funcd/name"], labels["funcd/replica"]
 		_, cniID := workerNames(ns, name, labels["funcd/revision"], rep)
-		_ = d.cni.Remove(nctx, cniID, "")
+		d.release(nctx, cniID)
 		// An unrevisioned worker created before ADR-0179 is attached under <ns>-<name>-r<replica>.
 		if labels["funcd/revision"] == "" && ns != "" && name != "" && rep != "" {
 			_ = d.cni.Remove(nctx, ns+"-"+name+"-r"+rep, "")
@@ -733,6 +748,14 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 		_ = os.RemoveAll(filepath.Join(d.bootRoot, ns, c.ID()))
 	}
 	return c.Delete(nctx, containerd.WithSnapshotCleanup)
+}
+
+// release sends the DEL of an attachment whose container is gone in its pinned netns, or with no netns when no pin is
+// left, and drops the pin.
+func (d *driver) release(ctx context.Context, cniID string) {
+	pin := d.netns.pinned(cniID)
+	_ = d.cni.Remove(ctx, cniID, pin)
+	d.netns.unpin(pin)
 }
 
 func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Instance, error) {
@@ -900,8 +923,8 @@ func (d *driver) Close() error {
 	return errors.Join(append(errs, d.client.Close())...)
 }
 
-// SweepAll sweeps every funcd containerd namespace at once: Close on the private containerd, and the boot sweep before
-// any controller starts (ADR-0167).
+// SweepAll sweeps every funcd containerd namespace at once, then releases the netns pins no worker holds: Close on the
+// private containerd, and the boot sweep before any controller starts (ADR-0167).
 func (d *driver) SweepAll(ctx context.Context) error {
 	names, err := d.client.NamespaceService().List(ctx)
 	if err != nil {
@@ -915,7 +938,24 @@ func (d *driver) SweepAll(ctx context.Context) error {
 		}
 	}
 	wg.Wait()
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		// A container discard kept may still run in its pinned netns.
+		return err
+	}
+	held := map[string]bool{}
+	d.mu.Lock()
+	for _, sb := range d.instances {
+		if !sb.released {
+			held[sb.netnsPath] = true
+		}
+	}
+	d.mu.Unlock()
+	// What is left is the pin of a worker whose container went without a DEL, or of a daemon that died between a DEL
+	// and its unpin.
+	for _, cniID := range d.netns.unheld(held) {
+		d.release(ctx, cniID)
+	}
+	return nil
 }
 
 // lookup resolves an instance id to its worker + namespaced context.
