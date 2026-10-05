@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -460,18 +461,29 @@ func KeepEdgeHeaders(rp *httputil.ReverseProxy, w http.ResponseWriter) {
 
 // rebase addresses r under base, the path an upstream serves its function at: r's root is base
 // itself, since a pool worker serves a member at /function/<name> and not at /function/<name>/
-// (ADR-0046), and any other path of r is appended to base.
+// (ADR-0046), and any other path of r is appended to base. The appended path is resolved as if
+// rooted at "/" first, so a dot segment cannot climb out of base: a pool worker resolves
+// /function/<name>/../<other> to the sibling member <other>.
 func rebase(r *http.Request, base string) *http.Request {
 	out := r.WithContext(r.Context())
 	u := *r.URL
-	if u.Path == "" || u.Path == "/" {
+	if rest := rootedClean(u.Path); rest == "/" {
 		u.Path = base
 	} else {
-		u.Path = strings.TrimSuffix(base, "/") + u.Path
+		u.Path = strings.TrimSuffix(base, "/") + rest
 	}
 	u.RawPath = ""
 	out.URL = &u
 	return out
+}
+
+// rootedClean resolves the dot segments of p as a path rooted at "/" and keeps a trailing slash.
+func rootedClean(p string) string {
+	c := path.Clean("/" + p)
+	if c != "/" && strings.HasSuffix(p, "/") {
+		c += "/"
+	}
+	return c
 }
 
 // ReclaimIdle scales to zero every minReplicas==0 function in a Reclaimable phase whose last activity is older
