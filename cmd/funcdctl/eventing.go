@@ -52,7 +52,8 @@ func (a *cli) dlqCmd() *cobra.Command {
 	return cmd
 }
 
-// dlqListCmd lists a namespace's dead letters, newest first.
+// dlqListCmd lists a namespace's dead letters, newest first, one row each. A reason carries the start of
+// the failed function's answer, so every field passes through termSafe.
 func (a *cli) dlqListCmd() *cobra.Command {
 	var ns, output string
 	cmd := &cobra.Command{
@@ -79,7 +80,8 @@ func (a *cli) dlqListCmd() *cobra.Command {
 			}
 			for _, dl := range items {
 				if werr := a.writef("%s\t%s\t%s/%s\taction=%s\tattempts=%s\treason=%s\n",
-					dl.ID, dl.Sensor, dl.Source, dl.Event, dl.Action, strconv.Itoa(dl.Attempts), dl.Reason); werr != nil {
+					termSafe(dl.ID), termSafe(string(dl.Sensor)), termSafe(string(dl.Source)), termSafe(string(dl.Event)),
+					termSafe(dl.Action), strconv.Itoa(dl.Attempts), termSafe(dl.Reason)); werr != nil {
 					return werr
 				}
 			}
