@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -153,6 +154,39 @@ func TestScenarioCorrelated(t *testing.T) {
 	inv, ok := lr.Attributes().Get("inv")
 	require.True(t, ok, "inv attribute present")
 	require.Equal(t, "inv-1", inv.Str())
+}
+
+// A console object arg with an inv or funcd.source key must not replace the invocation id and
+// capture path the wire envelope carries, with or without an envelope inv.
+func TestUserAttrsDoNotOverrideInvocationOrSource(t *testing.T) {
+	lines := `{"ts":1700000000000000000,"sev":"INFO","body":"spoof","attrs":{"inv":"spoofed-inv","funcd.source":"stderr","function":"other-fn"},"inv":"9fa65e0723e9f67c","funcd.source":"console"}
+{"ts":1700000000000000001,"sev":"INFO","body":"boot","attrs":{"inv":"spoofed-inv"},"funcd.source":"console"}
+`
+	b := memBucket(t)
+	s := newSink(t, b, 1<<20)
+	r := funclog.NewNDJSONReader(strings.NewReader(lines))
+	for range 2 {
+		e, err := r.Read(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, s.Append(context.Background(), defaultRes(), e))
+	}
+	_, err := s.Flush(context.Background(), defaultRes())
+	require.NoError(t, err)
+	objs, err := b.List(context.Background(), "logs/")
+	require.NoError(t, err)
+	require.Len(t, objs, 1)
+	data, err := b.Get(context.Background(), objs[0].Key)
+	require.NoError(t, err)
+
+	rows, err := compact.DecodeJSONL(data)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "9fa65e0723e9f67c", rows[0].Invocation)
+	assert.Equal(t, string(funclog.SourceConsole), rows[0].Source)
+	assert.Equal(t, "hello", rows[0].Function)
+	assert.JSONEq(t, `{"function":"other-fn"}`, rows[0].AttrsJSON)
+	assert.Empty(t, rows[1].Invocation, "an entry outside an invocation keeps an empty inv")
+	assert.Equal(t, string(funclog.SourceConsole), rows[1].Source)
 }
 
 // scenario: persisted-via-blob — a sealed segment is written as exactly ONE blob object whose body
