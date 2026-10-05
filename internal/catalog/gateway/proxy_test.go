@@ -8,9 +8,12 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -402,4 +406,71 @@ func TestCatalogProxy_DeniesCrossNamespaceCaller(t *testing.T) {
 		require.Equal(t, http.StatusForbidden, code, "%s must not query victim/lake", name)
 		require.False(t, stub.hit, "%s must never reach victim/lake's engine", name)
 	}
+}
+
+// deadOnWriteConn is an engine connection whose peer is gone. Once dead, a write fails with a reset before a byte
+// goes out while a read still waits: the transport has not yet read the reset of its parked connection.
+type deadOnWriteConn struct {
+	net.Conn
+	dead atomic.Bool
+}
+
+func (c *deadOnWriteConn) Write(p []byte) (int, error) {
+	if c.dead.Load() {
+		return 0, &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
+	}
+	return c.Conn.Write(p)
+}
+
+// TestIssue634_ProxyResendsUnsentQueryOnFreshConn: an engine restarted on the address of the one that crashed
+// leaves the proxy a parked connection to the dead engine, and the next query's write on it fails before a byte
+// goes out. net/http sends such a request again on a fresh connection only when it can rewind the body; the proxy
+// holds the whole handshake in memory, so the query must reach the engine instead of failing with a 503.
+func TestIssue634_ProxyResendsUnsentQueryOnFreshConn(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	master := []byte("issue-634-master")
+	keys := NewCatalogKeys(master, st)
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+
+	bodies := make(chan []byte, 2)
+	up := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies <- b
+	}))
+	t.Cleanup(up.Close)
+
+	conns := make(chan *deadOnWriteConn, 4)
+	transport := httpx.Transport()
+	dial := transport.DialContext
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, derr := dial(ctx, network, addr)
+		if derr != nil {
+			return nil, derr
+		}
+		dc := &deadOnWriteConn{Conn: c}
+		conns <- dc
+		return dc, nil
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	proxy := newCatalogProxy(keys, buildPDP(t, st), EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken},
+		transport, slog.New(slog.DiscardHandler))
+	query := func() int {
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", bytes.NewReader(makeHandshake(granted))))
+		return rec.Code
+	}
+
+	require.Equal(t, http.StatusOK, query())
+	<-bodies
+	(<-conns).dead.Store(true)
+
+	require.Equal(t, http.StatusOK, query(), "a query never written to the dead engine is sent again on a fresh connection")
+	require.Len(t, conns, 1, "the query went out on a fresh connection")
+	_, forwarded, ok := swapHandshakeToken(<-bodies, "x")
+	require.True(t, ok)
+	require.Equal(t, engineToken, forwarded, "the resent query carries the swapped handshake")
 }

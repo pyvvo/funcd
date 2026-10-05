@@ -88,9 +88,10 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.Invalid, proxyOp, "read request body"))
 		return
 	}
+	whole := len(head) < handshakeHeadMax
 	length := r.ContentLength
-	if len(head) < handshakeHeadMax {
-		length = int64(len(head)) // the whole body
+	if whole {
+		length = int64(len(head))
 	}
 
 	rewritten, callerToken, isHandshake := swapHandshakeToken(head, p.engine.EngineToken)
@@ -133,6 +134,11 @@ func (p *catalogProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.Reader
 		io.Closer
 	}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
+	if whole {
+		// A parked engine connection can be dead before the request is written to it, when the engine restarted
+		// on the same address (#634); a rewindable body lets net/http send the request again on a fresh one.
+		r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(head)), nil }
+	}
 	r.ContentLength = length
 	if length >= 0 {
 		r.Header.Set("Content-Length", strconv.FormatInt(length, 10))
