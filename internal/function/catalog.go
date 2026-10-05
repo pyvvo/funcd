@@ -21,7 +21,8 @@ import (
 // env — the caller holds the function Ready=False/CatalogNotReady and requeues. Readiness is the
 // catalog's Phase, not a non-empty status.endpoint: while the engine starts, the catalog reconciler
 // publishes the raw engine address there, and injecting it would bypass the PEP proxy (the engine
-// then rejects the per-function token). Only a Ready catalog publishes the proxy URL. Returns (nil,
+// then rejects the per-function token). Only a Ready catalog publishes the proxy URL, and with
+// catalogProxies set it must also be the URL of the proxy this daemon runs now (#662). Returns (nil,
 // false, nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through

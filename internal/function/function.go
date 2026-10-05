@@ -500,7 +500,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
 	}
 	if requeue {
-		const msg = "a bound CatalogService is not Ready yet (no endpoint or token); waiting"
+		const msg = "a bound CatalogService is not Ready yet (no endpoint, token or live proxy); waiting"
 		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, zeroReplicas: true, requeue: 2 * time.Second}, drainAfter)
 	}
 
