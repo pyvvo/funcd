@@ -200,3 +200,45 @@ func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
 	require.NoFileExists(t, callerLog+".port", "Close deletes the driver-owned port file beside a caller's log")
 	require.FileExists(t, callerLog, "Close keeps a log the caller set through LogPath")
 }
+
+// A worker's environment is what its spec carries plus the few host variables a process needs to run, never the
+// daemon's own: the control-plane token and any other credential the daemon was started with stay out of it, as
+// they do in the containerd driver.
+func TestWorkerEnvExcludesDaemonEnvironment(t *testing.T) {
+	t.Setenv("FUNCD_TOKEN", "daemon-admin-token")
+	t.Setenv("BACKUP_SECRET_ACCESS_KEY", "daemon-backend-secret")
+	ctx := context.Background()
+	dir := t.TempDir()
+	out := filepath.Join(dir, "env.out")
+	rt := process.New()
+	t.Cleanup(func() { _ = rt.Close() })
+	inst, err := rt.Create(ctx, runtime.WorkerSpec{
+		Namespace: "default",
+		Name:      "envdump",
+		Command:   []string{"sh", "-c", `env > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"; sleep 30`},
+		Env:       map[string]string{"OUT": out, "SPEC_VAR": "from-spec"},
+		LogPath:   filepath.Join(dir, "w.log"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, rt.Start(ctx, inst.ID))
+	t.Cleanup(func() { _ = rt.Stop(ctx, inst.ID) })
+
+	env := map[string]string{}
+	require.Eventually(t, func() bool {
+		b, rerr := os.ReadFile(out) //nolint:gosec // test-owned temp file
+		for line := range strings.SplitSeq(string(b), "\n") {
+			if k, v, ok := strings.Cut(line, "="); ok {
+				env[k] = v
+			}
+		}
+		return rerr == nil
+	}, 5*time.Second, 10*time.Millisecond, "the worker never wrote its environment")
+
+	// Asserted per key, so a failure never prints the worker's (the host's) whole environment.
+	_, leaked := env["FUNCD_TOKEN"]
+	require.False(t, leaked, "the daemon's control-plane token reached the worker")
+	_, leaked = env["BACKUP_SECRET_ACCESS_KEY"]
+	require.False(t, leaked, "a daemon credential reached the worker")
+	require.Equal(t, "from-spec", env["SPEC_VAR"])
+	require.NotEmpty(t, env["PATH"], "the worker keeps PATH to find its interpreter's tools")
+}

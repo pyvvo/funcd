@@ -710,6 +710,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 
 	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver.
+	logger.WarnContext(ctx, "funcd: runtime.mode process — functions run as the daemon's OS user with no isolation (dev/test only, ADR-0011); set runtime.mode: containerd for untrusted functions")
 	opts := []funcd.Option{funcd.WithRuntime(process.New())}
 	node := envOr("FUNCD_NODE", "")
 	if node == "" {

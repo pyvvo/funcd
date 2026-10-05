@@ -41,6 +41,10 @@ The unit runs as the unprivileged `funcd` user, restarts on failure, and ships h
 (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, …). The function-worker lane
 (F12/F13) later adds `CAP_NET_ADMIN` for netns wiring — see the comment in the unit.
 
+> **Runtime.** The unit runs the default `runtime.mode: process`, which is not an isolation boundary (ADR-0011):
+> every function runs as the `funcd` user and can read what that user can. Use it only for trusted functions;
+> untrusted ones need `runtime.mode: containerd` (Linux, root). The daemon logs a warning at startup in process mode.
+
 ## 4. Drive it
 
 Use the CLI (built alongside via `go build ./cmd/funcdctl`, ADR-0024):
