@@ -511,7 +511,7 @@ type gateFailure struct {
 	readyMessage    string        // the message the gate writes on Ready when nothing serves
 	phase           v1.Phase      // the phase the gate writes when nothing serves
 	shapeInvalid    bool          // the shape gate: ShapeValid turns False too
-	poolFull        bool          // the pool gate: PoolFull is set, ShapeValid stays True
+	poolFull        bool          // the pool gate: PoolFull is set, ShapeValid stays as served leaves it (ADR-0174)
 	zeroReplicas    bool          // the gate writes status.replicas 0 when nothing serves
 	requeue         time.Duration // the gate's requeue when nothing serves (0 = none)
 }
@@ -521,12 +521,18 @@ type gateFailure struct {
 // (ADR-0143 Decision 4.6). Otherwise the gate's own writes apply, as before ADR-0143.
 func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration) (controller.Result, error) {
 	const op = "function.Reconcile"
-	fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.message})
+	gen := fn.Generation
+	fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.message, ObservedGeneration: gen})
 	switch {
 	case g.shapeInvalid:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: g.message})
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: g.message, ObservedGeneration: gen})
 	case g.poolFull:
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
+		// the pool gate loads nothing, so only a generation that has served keeps ShapeValid True (ADR-0174)
+		if served(fn) {
+			fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue, ObservedGeneration: gen})
+		} else {
+			fn.Status.Conditions.Set(notStarted(fn, condShapeValid))
+		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionTrue, Reason: "PoolFull", Message: g.message})
 	}
 	requeue := g.requeue
@@ -573,17 +579,23 @@ type verdict struct {
 }
 
 // finish writes the pass's status from v and returns its requeue. Ready and the phase describe the serving side;
-// ShapeValid and RevisionReady, the current revision (ADR-0143 Decision 5).
+// ShapeValid and RevisionReady, the current revision (ADR-0143 Decision 5), which neither reports True before a replica
+// of it has been ready (ADR-0174).
 func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, drainAfter time.Duration) (controller.Result, error) {
 	const op = "function.Reconcile"
+	loaded := (!v.switching && v.ready >= 1) || served(fn)
+	gen := fn.Generation
 	fn.Status.Replicas = v.running
-	fn.Status.ObservedGeneration = fn.Generation
+	fn.Status.ObservedGeneration = gen
 	// ShapeValid is set once, from its final value: setting it True and then False in one pass would move its
 	// LastTransitionTime on every pass, a write that retriggers the pass through the watch (issue #24).
-	if v.shapeFailed || (v.switching && v.currentFailed) {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: v.loadErr})
-	} else {
-		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue})
+	switch {
+	case v.shapeFailed || (v.switching && v.currentFailed):
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: v.loadErr, ObservedGeneration: gen})
+	case loaded:
+		fn.Status.Conditions.Set(v1.Condition{Type: condShapeValid, Status: v1.ConditionTrue, ObservedGeneration: gen})
+	default:
+		fn.Status.Conditions.Set(notStarted(fn, condShapeValid))
 	}
 	switch {
 	case v.shapeFailed:
@@ -618,19 +630,21 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	}
 	switch {
 	case v.switching && v.currentFailed:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls", ObservedGeneration: gen})
 	case v.switching && v.startErr != nil:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error()})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error(), ObservedGeneration: gen})
 	case v.switching:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one", ObservedGeneration: gen})
 	case v.shapeFailed:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", ObservedGeneration: gen})
 	case v.startErr != nil && fn.Status.Phase == v1.PhaseFailed:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error()})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error(), ObservedGeneration: gen})
 	case fn.Status.Phase == v1.PhaseDeploying:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing"})
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", ObservedGeneration: gen})
+	case loaded:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionTrue, ObservedGeneration: gen})
 	default:
-		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionTrue})
+		fn.Status.Conditions.Set(notStarted(fn, condRevisionReady))
 	}
 	if _, uerr := r.store.Update(ctx, fn); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
@@ -643,6 +657,17 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		requeue = earliest(requeue, r.handOutSettle) // come back for the drain
 	}
 	return controller.Result{RequeueAfter: earliest(requeue, drainAfter)}, nil
+}
+
+// served reports whether a replica of fn's latest generation has been ready (ADR-0174 Decision 1).
+func served(fn *v1.Function) bool {
+	c, ok := fn.Status.Conditions.Get(condShapeValid)
+	return ok && c.Status == v1.ConditionTrue && c.ObservedGeneration == fn.Generation
+}
+
+// notStarted is condition t of fn while no replica of fn's latest generation has been ready (ADR-0174).
+func notStarted(fn *v1.Function, t v1.ConditionType) v1.Condition {
+	return v1.Condition{Type: t, Status: v1.ConditionUnknown, Reason: "NotStarted", Message: "no replica of this generation has been ready yet", ObservedGeneration: fn.Generation}
 }
 
 // requeueFor is how soon a pass comes back (ADR-0142; ADR-0143 Decision 4.7). While the current revision comes up

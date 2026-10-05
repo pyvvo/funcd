@@ -459,11 +459,12 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		worker string
-		held   bool     // the pool host never serves, so the member has not served yet
-		phase  v1.Phase // the member's phase while its pool host waits out the backoff
+		held   bool               // the pool host never serves, so the member has not served yet
+		phase  v1.Phase           // the member's phase while its pool host waits out the backoff
+		shape  v1.ConditionStatus // ShapeValid: Unknown until the generation has served (ADR-0174)
 	}{
-		{"issue70-booting", true, v1.PhaseDeploying},
-		{"issue70-serving", false, v1.PhaseDegraded},
+		{"issue70-booting", true, v1.PhaseDeploying, v1.ConditionUnknown},
+		{"issue70-serving", false, v1.PhaseDegraded, v1.ConditionTrue},
 	} {
 		t.Run(tc.worker, func(t *testing.T) {
 			t.Parallel()
@@ -479,7 +480,7 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 			after, _ := h.rt.counts()
 			require.Equal(t, creates, after, "a pool host younger than one period is not created again")
 			require.Equal(t, tc.phase, h.getFn(t, "m").Status.Phase)
-			require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "m"))
+			require.Equal(t, tc.shape, h.shapeValid(t, "m"))
 			require.Greater(t, res.RequeueAfter, time.Second, "the pass comes back when the backoff ends, not at the readiness poll")
 			require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod)
 
@@ -515,7 +516,7 @@ func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
 		require.Equal(t, v1.ConditionFalse, ready.Status, name)
 		require.Equal(t, "StartFailed", ready.Reason, name)
 		require.Contains(t, ready.Message, "/nonexistent/bin/node", name)
-		require.Equal(t, v1.ConditionTrue, h.shapeValid(t, name), "a pool worker that cannot start is not a shape failure")
+		require.Equal(t, v1.ConditionUnknown, h.shapeValid(t, name), "a pool worker that cannot start is not a shape failure, and nothing loaded the generation (ADR-0174)")
 		require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
 	}
 
@@ -578,4 +579,46 @@ func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
 	after, _ := h.rt.counts()
 	require.Equal(t, creates+1, after, "the supervision pass creates team-a's dead pool worker again")
 	requireOwnMembers("after team-a's pool worker was restarted")
+}
+
+// scenario: pooled-member-never-booted-is-unknown (ADR-0174) — a pooled member whose pool wants 0, or that the pool
+// gate holds without loading it, reports both conditions Unknown/NotStarted until the pool worker serves it.
+func TestScenarioPooledMemberNeverBootedIsUnknown(t *testing.T) {
+	t.Parallel()
+	t.Run("pool-wants-zero", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withNodePool)
+		h.create(t, "m", func(fn *v1.Function) { fn.Spec.Replicas = 0; fn.Spec.Pooling.Worker = "zero" })
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase)
+		creates, _ := h.rt.counts()
+		require.Zero(t, creates, "no pool worker is created")
+		h.requireRevisionStatus(t, "m", v1.ConditionUnknown, "NotStarted")
+
+		h.setPhase(t, "m", v1.PhaseDeploying)
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "m").Status.Phase)
+		h.requireRevisionStatus(t, "m", v1.ConditionTrue, "")
+	})
+	t.Run("pool-gate", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.PoolLimit = 1 })
+		for _, name := range []string{"p1", "p2"} {
+			h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "gate" })
+		}
+		h.reconcile(t, "p1")
+		h.reconcile(t, "p2")
+		require.Equal(t, "PoolFull", h.condition(t, "p2", "Ready").Reason)
+		sv := h.condition(t, "p2", "ShapeValid")
+		require.Equal(t, v1.ConditionUnknown, sv.Status)
+		require.Equal(t, "NotStarted", sv.Reason)
+		require.Equal(t, h.getFn(t, "p2").Generation, sv.ObservedGeneration)
+		require.Equal(t, "PoolFull", h.condition(t, "p2", "RevisionReady").Reason, "the gate's failure write is unchanged")
+
+		require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "p1", ""))
+		h.reconcile(t, "p1")
+		h.reconcile(t, "p2")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "p2").Status.Phase, "the freed slot admits p2")
+		h.requireRevisionStatus(t, "p2", v1.ConditionTrue, "")
+	})
 }

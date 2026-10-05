@@ -327,7 +327,7 @@ func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	require.Equal(t, v1.ConditionFalse, ready.Status)
 	require.Equal(t, "StartFailed", ready.Reason)
 	require.Contains(t, ready.Message, "/nonexistent/bin/node")
-	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "calm"), "a worker that cannot start is not a shape failure")
+	require.Equal(t, v1.ConditionUnknown, h.shapeValid(t, "calm"), "a worker that cannot start is not a shape failure, and nothing loaded the generation (ADR-0174)")
 	require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
 
 	rv := fn.ResourceVersion
