@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // workflowRunSrc is embedded rather than read from disk so a `go test -overlay` revert check sees the
@@ -44,4 +46,22 @@ func TestIssue514_PausedDocSaysTerminalRunIgnoresIt(t *testing.T) {
 	doc := workflowRunSpecFieldDoc(t, "Paused")
 	require.Contains(t, doc, rule, "Paused doc must state the Cancel rule for a terminal run (#419)")
 	require.Contains(t, doc, "keeps its phase")
+}
+
+// scenario: child-name-never-admitted
+func TestScenarioChildNameNeverAdmitted(t *testing.T) {
+	run := func(name string, replay *ReplaySeed) *WorkflowRun {
+		return &WorkflowRun{
+			TypeMeta:   TypeMeta{APIVersion: KindWorkflowRun.GVK().APIVersion(), Kind: KindWorkflowRun},
+			ObjectMeta: ObjectMeta{Name: ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
+			Spec:       WorkflowRunSpec{Workflow: "wf", Replay: replay},
+		}
+	}
+	require.NoError(t, run("p-sub", &ReplaySeed{Run: "p-sub", From: "y"}).Validate())
+	for field, r := range map[string]*WorkflowRun{
+		"metadata.name":   run("p.sub", nil),
+		"spec.replay.run": run("rep", &ReplaySeed{Run: "p.sub", From: "y"}),
+	} {
+		require.Equal(t, fault.Invalid, fault.KindOf(r.Validate()), "a WorkflowRun whose %s is p.sub", field)
+	}
 }

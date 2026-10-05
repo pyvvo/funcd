@@ -506,18 +506,19 @@ func TestCrashRecoveryResumesRun(t *testing.T) {
 	}
 }
 
-// crashAt keeps run's record as the store held it when step at was dispatched on attempt n: what a
-// crash during that dispatch leaves for recovery. Step hold, a concurrent sibling, is in flight then.
-// The call itself goes to the embedded dispatcher.
+// crashAt keeps run's record, and child's when set, as the store held them when step at was dispatched on
+// attempt n: what a crash during that dispatch leaves for recovery. Step hold, a concurrent sibling, is in
+// flight then. The call itself goes to the embedded dispatcher.
 type crashAt struct {
 	*capturingDispatcher
-	runs     runstate.Store
-	run      v1.ObjectName
-	at, hold v1.ObjectName
-	n        int
-	left     *runstate.Record
-	holdIn   chan struct{}
-	captured chan struct{}
+	runs       runstate.Store
+	run, child v1.ObjectName
+	at, hold   v1.ObjectName
+	n          int
+	left       *runstate.Record
+	leftChild  *runstate.Record
+	holdIn     chan struct{}
+	captured   chan struct{}
 }
 
 func (c *crashAt) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
@@ -527,6 +528,9 @@ func (c *crashAt) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMe
 			<-c.holdIn
 		}
 		c.left, _ = c.runs.Get(ctx, req.Namespace, c.run)
+		if c.child != "" {
+			c.leftChild, _ = c.runs.Get(ctx, req.Namespace, c.child)
+		}
 		close(c.captured)
 	case req.Step == c.hold:
 		close(c.holdIn)

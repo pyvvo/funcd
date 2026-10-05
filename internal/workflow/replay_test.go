@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -306,5 +307,31 @@ func TestIssue420_ReplayBindsPinnedSchemaDefault(t *testing.T) {
 	}
 	if rec.Phase != runSucceeded || f.calls["a"] != 0 || f.calls["b"] != 1 {
 		t.Fatalf("replay phase=%s a calls=%d b calls=%d, want Succeeded with only b re-run on the bound default", rec.Phase, f.calls["a"], f.calls["b"])
+	}
+}
+
+// scenario: replay-child-uses-dotted-name
+func TestScenarioReplayChildUsesDottedName(t *testing.T) {
+	f := newFake()
+	e := childEngine(t, f, fakeChildren{"scorer": spec(step("c_leaf", ""))}, Config{})
+	ctx := context.Background()
+	sp := spec(step("prep", ""), subwfStep("sub", "scorer", "prep"))
+	if rec, err := e.Execute(ctx, "default", "src", "wf", sp, json.RawMessage(`{}`), StartOptions{}); err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("source run: %v, want Succeeded", err)
+	}
+	before := getRecord(t, e.runs, "src.sub")
+	resetFake(f)
+	rep, err := e.Replay(ctx, "default", "rep", "wf", v1.ReplaySeed{Run: "src", From: "sub"}, nil)
+	if err != nil || rep.Phase != runSucceeded {
+		t.Fatalf("Replay: %v, want Succeeded", err)
+	}
+	if f.calls["c_leaf"] != 1 {
+		t.Fatalf("the replayed child step ran %d times, want 1", f.calls["c_leaf"])
+	}
+	if child := getRecord(t, e.runs, "rep.sub"); child.Phase != runSucceeded || child.Workflow != "scorer" {
+		t.Fatalf("child record rep.sub = %s of %s, want Succeeded of scorer", child.Phase, child.Workflow)
+	}
+	if after := getRecord(t, e.runs, "src.sub"); !reflect.DeepEqual(after, before) {
+		t.Fatalf("source child record src.sub changed:\n%+v\nwant\n%+v", after, before)
 	}
 }

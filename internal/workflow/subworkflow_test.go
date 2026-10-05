@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	"github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
@@ -97,8 +99,8 @@ func TestSubworkflowRunsInlineAndOutputFlows(t *testing.T) {
 	if string(afterIn["score"]) != "50" {
 		t.Fatalf("child leaf output must flow into the downstream step, got after input = %s", f.inputs["after"])
 	}
-	if _, gerr := e.runs.Get(context.Background(), "default", "run-p-sub"); gerr != nil {
-		t.Fatalf("child run should be recorded under run-p-sub: %v", gerr)
+	if _, gerr := e.runs.Get(context.Background(), "default", "run-p.sub"); gerr != nil {
+		t.Fatalf("child run should be recorded under run-p.sub: %v", gerr)
 	}
 }
 
@@ -307,7 +309,7 @@ func TestIssue349_StoppedChildRunsItsOnFailureHandler(t *testing.T) {
 			if err == nil || rec == nil || rec.Phase != runFailed {
 				t.Fatalf("parent run must end Failed, got err %v", err)
 			}
-			child, err := e.runs.Get(context.Background(), "default", "run-p-sub")
+			child, err := e.runs.Get(context.Background(), "default", "run-p.sub")
 			if err != nil {
 				t.Fatalf("child run record: %v", err)
 			}
@@ -378,7 +380,7 @@ func TestIssue445_StepStoppedInBackoffKeepsItsDispatchCause(t *testing.T) {
 		run      v1.ObjectName
 		deadline bool
 	}{
-		{"parent-fail-fast", spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r")), "run-p-sub", false},
+		{"parent-fail-fast", spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r")), "run-p.sub", false},
 		{"run-deadline", timed, "run-p", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -400,5 +402,92 @@ func TestIssue445_StepStoppedInBackoffKeepsItsDispatchCause(t *testing.T) {
 				t.Fatalf("run error %q: RunTimedOut %v, want %v", rec.Error, got, tc.deadline)
 			}
 		})
+	}
+}
+
+// recordNames lists the names of every run record in "default", sorted.
+func recordNames(t *testing.T, runs runstate.Store) []v1.ObjectName {
+	t.Helper()
+	recs, err := runs.List(context.Background(), runstate.ListOptions{Namespace: "default"})
+	if err != nil {
+		t.Fatalf("list run records: %v", err)
+	}
+	names := make([]v1.ObjectName, 0, len(recs))
+	for _, r := range recs {
+		names = append(names, r.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// scenario: child-names-never-collide
+func TestScenarioChildNamesNeverCollide(t *testing.T) {
+	e := childEngine(t, newFake(), fakeChildren{"kid-one": spec(step("k1", "")), "kid-two": spec(step("k2", ""))}, Config{})
+	for _, run := range []struct{ name, step, child string }{{"a", "b-c", "kid-one"}, {"a-b", "c", "kid-two"}} {
+		rec, err := e.Execute(context.Background(), "default", v1.ObjectName(run.name), "top", spec(subwfStep(run.step, run.child)), json.RawMessage(`{}`), StartOptions{})
+		if err != nil || rec.Phase != runSucceeded {
+			t.Fatalf("run %s: %v, want Succeeded", run.name, err)
+		}
+	}
+	for name, child := range map[v1.ObjectName]v1.ObjectName{"a.b-c": "kid-one", "a-b.c": "kid-two"} {
+		if rec := getRecord(t, e.runs, name); rec.Workflow != child {
+			t.Fatalf("record %s holds workflow %s, want %s", name, rec.Workflow, child)
+		}
+	}
+}
+
+// scenario: nested-child-names
+func TestScenarioNestedChildNames(t *testing.T) {
+	e := childEngine(t, newFake(), fakeChildren{"mid": spec(subwfStep("inner", "grand")), "grand": spec(step("g", ""))}, Config{})
+	rec, err := e.Execute(context.Background(), "default", "p", "top", spec(subwfStep("sub", "mid")), json.RawMessage(`{}`), StartOptions{})
+	if err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("run p: %v, want Succeeded", err)
+	}
+	if got, want := recordNames(t, e.runs), []v1.ObjectName{"p", "p.sub", "p.sub.inner"}; !slices.Equal(got, want) {
+		t.Fatalf("run records %v, want %v", got, want)
+	}
+}
+
+// scenario: restart-reruns-child-under-its-dotted-name
+func TestScenarioRestartRerunsChildUnderItsDottedName(t *testing.T) {
+	ctx := context.Background()
+	children := fakeChildren{"kid": spec(step("c1", ""), step("c2", "", "c1"))}
+	first, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = first.Close() })
+	crash := &crashAt{capturingDispatcher: &capturingDispatcher{}, runs: first, run: "p", child: "p.sub", at: "c1", n: 1, captured: make(chan struct{})}
+	e1, _ := New(Deps{Runs: first, Dispatch: crash, Children: children})
+	_, _ = e1.Execute(ctx, "default", "p", "top", spec(subwfStep("sub", "kid")), json.RawMessage(`{}`), StartOptions{})
+	if crash.left == nil || crash.leftChild == nil {
+		t.Fatalf("records at the child's first dispatch: parent kept %t, child kept %t; want both", crash.left != nil, crash.leftChild != nil)
+	}
+	if st := stepState(crash.left, "sub"); st == nil || st.Phase != v1.StepRunning || crash.leftChild.Terminal() {
+		t.Fatalf("setup: parent step sub %+v, child phase %s; want sub Running and the child not terminal", st, crash.leftChild.Phase)
+	}
+
+	restarted, _ := badger.New(badger.Config{InMemory: true})
+	t.Cleanup(func() { _ = restarted.Close() })
+	for _, rec := range []*runstate.Record{crash.left, crash.leftChild} {
+		if err := restarted.Put(ctx, rec); err != nil {
+			t.Fatalf("seed the crashed record %s: %v", rec.Name, err)
+		}
+	}
+	again := &capturingDispatcher{}
+	e2, _ := New(Deps{Runs: restarted, Dispatch: again, Children: children})
+	rec, err := e2.Resume(ctx, "default", "p")
+	if err != nil || rec.Phase != runSucceeded {
+		t.Fatalf("Resume p: %v, want Succeeded", err)
+	}
+	var dispatched []string
+	for _, r := range again.reqs {
+		dispatched = append(dispatched, string(r.Run)+"/"+string(r.Step))
+	}
+	if want := []string{"p.sub/c1", "p.sub/c2"}; !slices.Equal(dispatched, want) {
+		t.Fatalf("after the restart dispatched %v, want %v", dispatched, want)
+	}
+	if child := getRecord(t, restarted, "p.sub"); child.Phase != runSucceeded {
+		t.Fatalf("child record p.sub = %s, want Succeeded", child.Phase)
+	}
+	if got, want := recordNames(t, restarted), []v1.ObjectName{"p", "p.sub"}; !slices.Equal(got, want) {
+		t.Fatalf("run records %v, want %v", got, want)
 	}
 }
