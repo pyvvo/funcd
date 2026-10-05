@@ -33,16 +33,22 @@ type RunReconciler struct {
 	engine *Engine
 	traces funclog.TraceSink // ADR-0103: emits the run-root span at terminal; nil ⇒ no span (additive)
 	log    *slog.Logger
+	// waitRequeue is controller.referentPollInterval (ADR-0163).
+	waitRequeue time.Duration
 }
 
 // NewRunReconciler builds the run reconciler. traces is the shared funclog trace sink (ADR-0103): when
 // non-nil, the reconciler emits one INTERNAL run-root span per terminal run so the run's step spans
-// (F51, parented on the run root) nest under it. nil ⇒ no run-root span (additive).
-func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *slog.Logger) *RunReconciler {
+// (F51, parented on the run root) nest under it. nil ⇒ no run-root span (additive). referentPollInterval re-checks a
+// run waiting for its Workflow; 0 ⇒ waitRequeue.
+func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *slog.Logger, referentPollInterval time.Duration) *RunReconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run")}
+	if referentPollInterval <= 0 {
+		referentPollInterval = waitRequeue
+	}
+	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval}
 }
 
 // buildRunSpan builds the run-root Resource + INTERNAL Span for a terminal run (ADR-0103; shared by the
@@ -266,7 +272,7 @@ func (r *RunReconciler) wait(ctx context.Context, run *v1.WorkflowRun, before []
 	if err != nil || res.Requeue {
 		return res, err
 	}
-	return controller.Result{RequeueAfter: waitRequeue}, nil
+	return controller.Result{RequeueAfter: r.waitRequeue}, nil
 }
 
 // ownRecord returns run's own engine record, nil when it has none. The record that an earlier WorkflowRun of

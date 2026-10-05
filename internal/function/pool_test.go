@@ -600,6 +600,17 @@ func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
 			require.Positive(t, res.RequeueAfter, "the pool worker is tried again (pass %d)", i)
 			require.LessOrEqual(t, res.RequeueAfter, testPeriod)
 		}
+		creates, _ := h.rt.counts()
+		time.Sleep(testPeriod)
+		h.reconcile(t, "m")
+		after, _ := h.rt.counts()
+		require.Equal(t, creates+1, after, "the pool worker is started again once a period has passed")
+		require.Equal(t, v1.PhaseDeploying, h.getFn(t, "m").Status.Phase)
+
+		clk := clock.NewManual(time.Now())
+		reclaimPastIdle(t, h.activator(t, clk), clk, idle)
+		h.reconcile(t, "m")
+		require.NotEqual(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase, "never Idle")
 	})
 }
 

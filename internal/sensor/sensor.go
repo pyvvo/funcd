@@ -74,7 +74,11 @@ type Deps struct {
 	MaxDeliveriesInFlight int
 	MaxInFlightPerTarget  int
 	MaxQueuedPerSensor    int
-	Logger                *slog.Logger
+	// DeliveryBackoffInitial and DeliveryBackoffMax are eventing.deliveryBackoffInitial/Max (ADR-0163): the first
+	// delivery retry wait, doubled up to the max; 0 ⇒ 100ms and 10s.
+	DeliveryBackoffInitial time.Duration
+	DeliveryBackoffMax     time.Duration
+	Logger                 *slog.Logger
 }
 
 // subEntry is a Sensor's live subscription bookkeeping (ADR-0109 B1 idempotency): the cancels for its
@@ -139,7 +143,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		deadletters:           d.DeadLetters,
 		deliveryAttempts:      attempts,
 		maxDeliveriesInFlight: workers,
-		retry:                 newRetryQueue(retryBaseDelay, retryMaxDelay, d.MaxInFlightPerTarget, d.MaxQueuedPerSensor),
+		retry:                 newRetryQueue(d.DeliveryBackoffInitial, d.DeliveryBackoffMax, d.MaxInFlightPerTarget, d.MaxQueuedPerSensor),
 		subs:                  map[sensorKey]*subEntry{},
 	}, nil
 }

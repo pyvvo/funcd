@@ -152,6 +152,9 @@ type Config struct {
 	MaxSubworkflowDepth int           // ADR-0099: max sub-workflow nesting (default 8); a deeper chain fails cleanly
 	// MaxStepsInFlight bounds the function-step dispatch attempts in flight across all runs; 0 ⇒ no cap (ADR-0146).
 	MaxStepsInFlight int
+	// DefaultRetryBackoff is the first retry gap of a step whose retry.backoff is unset or 0, doubled per attempt
+	// (workflow.defaultRetryBackoff, ADR-0163 Decision 8); 0 ⇒ back to back.
+	DefaultRetryBackoff time.Duration
 }
 
 // Deps wires the engine (internal component, ADR-0002 §1).
@@ -1119,6 +1122,9 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 			maxAttempts = fn.Retry.MaxAttempts
 		}
 		backoff = fn.Retry.Backoff
+	}
+	if backoff == 0 {
+		backoff = e.cfg.DefaultRetryBackoff
 	}
 	first := n.attempts + 1
 	target := stepTarget(workflow, run.spec, n.name)

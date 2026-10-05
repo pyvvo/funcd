@@ -53,6 +53,7 @@ func classifyExit(in runtime.Instance, serving, legacy bool) exitClass {
 type bootBackoff struct {
 	mu             sync.Mutex
 	initial, limit time.Duration
+	bootTimeout    time.Duration
 	crashes        map[runtime.InstanceID]bootCrash
 	logger         *slog.Logger
 }
@@ -68,8 +69,8 @@ type bootCrash struct {
 	startAfter time.Time // when that replica may be started again
 }
 
-func newBootBackoff(initial, limit time.Duration, logger *slog.Logger) *bootBackoff {
-	return &bootBackoff{initial: initial, limit: limit, crashes: map[runtime.InstanceID]bootCrash{}, logger: logger}
+func newBootBackoff(initial, limit, bootTimeout time.Duration, logger *slog.Logger) *bootBackoff {
+	return &bootBackoff{initial: initial, limit: limit, bootTimeout: bootTimeout, crashes: map[runtime.InstanceID]bootCrash{}, logger: logger}
 }
 
 // observe records how terminal replica in ended, as class, and returns its crash record and when it may be re-created.
@@ -140,10 +141,10 @@ func (b *bootBackoff) timedOut(in runtime.Instance) {
 	c.count++
 	c.counted = in.CreatedAt
 	c.message = fmt.Sprintf("replica %d did not listen within %s; boot crash %d in a row, retried %s after its last start",
-		in.Replica, bootTimeout, c.count, max(b.wait(c.count), bootTimeout))
+		in.Replica, b.bootTimeout, c.count, max(b.wait(c.count), b.bootTimeout))
 	b.crashes[in.ID] = c
 	b.logger.Warn("a worker did not listen within the boot timeout", "namespace", in.Namespace, "name", in.Name,
-		"replica", in.Replica, "count", c.count, "timeout", bootTimeout)
+		"replica", in.Replica, "count", c.count, "timeout", b.bootTimeout)
 }
 
 // crash is the crash record of id, if it has one.

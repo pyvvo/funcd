@@ -351,6 +351,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithBootBackoff(bootInitial, bootMax))
+	pace, err := pacing(cfg)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithPacing(pace))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
@@ -560,6 +565,67 @@ func bootBackoff(cfg config.Config) (initial, limit time.Duration, err error) {
 		return 0, 0, fault.Invalidf("buildOptions", "config key %q has value %s, below runtime.bootBackoffInitial %s", "runtime.bootBackoffMax", limit, initial)
 	}
 	return initial, limit, nil
+}
+
+// pacingKey is one ADR-0163 key: its name, raw value, default and where its parsed value goes.
+type pacingKey struct {
+	key, value string
+	def        time.Duration
+	dst        *time.Duration
+}
+
+// pacing parses the ADR-0163 keys with parseDuration (workflow.defaultRetryBackoff may be 0), then checks Decision 5's
+// orderings, each failure a fault.Invalid naming the first key with the other bound.
+func pacing(cfg config.Config) (funcd.Pacing, error) {
+	var p funcd.Pacing
+	keys := []pacingKey{
+		{"controller.retryBackoffMax", cfg.Controller.RetryBackoffMax, time.Second, &p.RetryBackoffMax},
+		{"controller.referentPollInterval", cfg.Controller.ReferentPollInterval, 2 * time.Second, &p.ReferentPollInterval},
+		{"controller.routeResyncInterval", cfg.Controller.RouteResyncInterval, 10 * time.Second, &p.RouteResyncInterval},
+		{"runtime.supervisionPeriod", cfg.Runtime.SupervisionPeriod, 10 * time.Second, &p.SupervisionPeriod},
+		{"runtime.bootTimeout", cfg.Runtime.BootTimeout, time.Minute, &p.BootTimeout},
+		{"runtime.drainGrace", cfg.Runtime.DrainGrace, 30 * time.Second, &p.DrainGrace},
+		{"runtime.handOutSettle", cfg.Runtime.HandOutSettle, 2 * time.Second, &p.HandOutSettle},
+		{"runtime.drainPollInterval", cfg.Runtime.DrainPollInterval, time.Second, &p.DrainPollInterval},
+		{"catalog.enginePollInterval", cfg.Catalog.EnginePollInterval, 2 * time.Second, &p.EnginePollInterval},
+		{"catalog.engineProbeTimeout", cfg.Catalog.EngineProbeTimeout, 2 * time.Second, &p.EngineProbeTimeout},
+		{"workflow.artifactPollInterval", cfg.Workflow.ArtifactPollInterval, 5 * time.Second, &p.ArtifactPollInterval},
+		{"workflow.defaultRetryBackoff", cfg.Workflow.DefaultRetryBackoff, 0, &p.DefaultRetryBackoff},
+		{"eventing.bucketRecheckInterval", cfg.Eventing.BucketRecheckInterval, 15 * time.Second, &p.BucketRecheckInterval},
+		{"eventing.deliveryBackoffInitial", cfg.Eventing.DeliveryBackoffInitial, 100 * time.Millisecond, &p.DeliveryBackoffInitial},
+		{"eventing.deliveryBackoffMax", cfg.Eventing.DeliveryBackoffMax, 0, &p.DeliveryBackoffMax},
+		{"invoke.activationTimeout", cfg.Invoke.ActivationTimeout, 30 * time.Second, &p.ActivationTimeout},
+		{"invoke.reclaimInterval", cfg.Invoke.ReclaimInterval, 30 * time.Second, &p.ReclaimInterval},
+		{"server.shutdownTimeout", cfg.Server.ShutdownTimeout, 15 * time.Second, &p.ShutdownTimeout},
+		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval},
+	}
+	for _, k := range keys {
+		d, err := parseDuration(k.key, k.value, k.def, k.key == "workflow.defaultRetryBackoff")
+		if err != nil {
+			return funcd.Pacing{}, err
+		}
+		*k.dst = d
+	}
+	maxSet := p.DeliveryBackoffMax > 0
+	if !maxSet {
+		p.DeliveryBackoffMax = max(10*time.Second, p.DeliveryBackoffInitial)
+	}
+	refuse := func(key string, d time.Duration, want string) error {
+		return fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s)", key, d.String(), want)
+	}
+	switch {
+	case p.RetryBackoffMax < 5*time.Millisecond:
+		return funcd.Pacing{}, refuse("controller.retryBackoffMax", p.RetryBackoffMax, "at least 5ms")
+	case p.BootTimeout <= p.ActivationTimeout:
+		return funcd.Pacing{}, refuse("runtime.bootTimeout", p.BootTimeout, "more than invoke.activationTimeout, "+p.ActivationTimeout.String())
+	case p.HandOutSettle > p.DrainGrace:
+		return funcd.Pacing{}, refuse("runtime.handOutSettle", p.HandOutSettle, "at most runtime.drainGrace, "+p.DrainGrace.String())
+	case p.DefaultRetryBackoff > time.Hour:
+		return funcd.Pacing{}, refuse("workflow.defaultRetryBackoff", p.DefaultRetryBackoff, "at most 1h")
+	case maxSet && p.DeliveryBackoffMax < p.DeliveryBackoffInitial:
+		return funcd.Pacing{}, refuse("eventing.deliveryBackoffMax", p.DeliveryBackoffMax, "at least eventing.deliveryBackoffInitial, "+p.DeliveryBackoffInitial.String())
+	}
+	return p, nil
 }
 
 // maxStopGrace bounds runtime.process.stopGrace by the containerd driver's stop grace (ADR-0167).

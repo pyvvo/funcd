@@ -441,6 +441,47 @@ func TestIssue180_RetryBackoffIsExponential(t *testing.T) {
 	}
 }
 
+// scenario: workflow-keys-pace-artifact-wait-and-retry, defaultRetryBackoff (ADR-0163 Decision 8) — a step whose
+// retry.backoff is unset starts attempt 2 at least 300 ms and attempt 3 at least 600 ms after the previous failure; a
+// step's own retry.backoff wins over the default.
+func TestDefaultRetryBackoffPacesAStepWithNoBackoff(t *testing.T) {
+	t.Parallel()
+	attempts := func(t *testing.T, stepBackoff time.Duration) []time.Time {
+		d := &attemptClock{}
+		e := newTestEngine(t, d, Config{DefaultRetryBackoff: 300 * time.Millisecond})
+		st := retryStep("a", 3)
+		st.Function.Retry.Backoff = stepBackoff
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := e.Execute(ctx, "default", "run-default-bo", "wf", spec(st), json.RawMessage(`{}`), StartOptions{}); err == nil {
+			t.Fatal("run should have failed after its retries")
+		}
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if len(d.at) != 3 {
+			t.Fatalf("attempts = %d, want 3", len(d.at))
+		}
+		return d.at
+	}
+	t.Run("unset retry.backoff", func(t *testing.T) {
+		t.Parallel()
+		at := attempts(t, 0)
+		if g := at[1].Sub(at[0]); g < 300*time.Millisecond {
+			t.Fatalf("attempt 2 came %v after attempt 1, want at least 300ms", g)
+		}
+		if g := at[2].Sub(at[1]); g < 600*time.Millisecond {
+			t.Fatalf("attempt 3 came %v after attempt 2, want at least 600ms", g)
+		}
+	})
+	t.Run("retry.backoff wins", func(t *testing.T) {
+		t.Parallel()
+		at := attempts(t, time.Millisecond)
+		if g := at[2].Sub(at[0]); g >= 300*time.Millisecond {
+			t.Fatalf("attempts 1 to 3 took %v, want the step's 1ms backoff, not the 300ms default", g)
+		}
+	})
+}
+
 func retryStep(name string, maxAttempts int, deps ...string) v1.WorkflowStep {
 	s := step(name, "", deps...)
 	s.Function.Retry = &v1.StepRetry{MaxAttempts: maxAttempts}

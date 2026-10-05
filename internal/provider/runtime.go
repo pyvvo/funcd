@@ -40,9 +40,14 @@ type Deps struct {
 	// that declares a Route then is reported Ready but unexposed, with a logged warning).
 	Gateway gateway.Gateway
 	Logger  *slog.Logger
-	// HTTPClient probes ReadinessProbe; nil ⇒ a default short-timeout client.
+	// HTTPClient probes ReadinessProbe; nil ⇒ a node client bounded by ProbeTimeout.
 	HTTPClient *http.Client
+	// ProbeTimeout bounds one readiness probe (catalog.engineProbeTimeout, ADR-0163); 0 ⇒ defaultProbeTimeout. Ignored
+	// when HTTPClient is set.
+	ProbeTimeout time.Duration
 }
+
+const defaultProbeTimeout = 2 * time.Second
 
 // engineRuntime is the in-process driver of the provider Runtime port.
 type engineRuntime struct {
@@ -69,7 +74,11 @@ func NewRuntime(d Deps) (Runtime, error) {
 	}
 	client := d.HTTPClient
 	if client == nil {
-		client = httpx.NodeClient(2 * time.Second)
+		timeout := d.ProbeTimeout
+		if timeout <= 0 {
+			timeout = defaultProbeTimeout
+		}
+		client = httpx.NodeClient(timeout)
 	}
 	return &engineRuntime{
 		rt:         d.Runtime,

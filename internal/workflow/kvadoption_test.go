@@ -255,7 +255,7 @@ func reconcileReady(t *testing.T, s store.Store, rt RuntimeResolver, w *v1.Workf
 	w.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked"})
 	_, err := s.Update(ctx, w)
 	require.NoError(t, err)
-	r := NewWorkflowReconciler(s, NewMaterializer(s, rt, nil, 0), nil, nil)
+	r := NewWorkflowReconciler(s, NewMaterializer(s, rt, nil, 0), nil, nil, 0)
 	_, rerr := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: w.Name})
 	ready, ok := getObj(t, s, v1.KindWorkflow, w.Name).(*v1.Workflow).Status.Conditions.Get(condReady)
 	require.True(t, ok)

@@ -62,7 +62,7 @@ func TestRunSpanOnSuccess(t *testing.T) {
 	seedRun(t, s, "orders-01", "orders", `{}`)
 	sink := &fakeTraceSink{}
 	eng := engineWith(t, newFake())
-	rr := NewRunReconciler(s, eng, sink, nil)
+	rr := NewRunReconciler(s, eng, sink, nil, 0)
 
 	if _, err := settleRun(ctx, rr, runReq("orders-01")); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -101,7 +101,7 @@ func TestRunSpanOnFailure(t *testing.T) {
 	sink := &fakeTraceSink{}
 	f := newFake()
 	f.permanent["a"] = true // permanent 4xx → the run fails
-	rr := NewRunReconciler(s, engineWith(t, f), sink, nil)
+	rr := NewRunReconciler(s, engineWith(t, f), sink, nil, 0)
 
 	_, _ = settleRun(ctx, rr, runReq("orders-f")) // a run failure is a terminal outcome, not a reconcile error
 	if sink.count() != 1 {
@@ -134,7 +134,7 @@ func TestRunSpanOnCancel(t *testing.T) {
 		StartedAt: 1_700_000_000_000_000_000, UpdatedAt: 1_700_000_000_001_000_000,
 		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepRunning}},
 	})
-	rr := NewRunReconciler(s, eng, sink, nil)
+	rr := NewRunReconciler(s, eng, sink, nil, 0)
 
 	if _, err := settleRun(ctx, rr, runReq("orders-c")); err != nil {
 		t.Fatalf("Reconcile(cancel): %v", err)
@@ -163,7 +163,7 @@ func TestRunSpanOnContractReject(t *testing.T) {
 	seedRun(t, s, "orders-r", "orders", `{}`) // missing "day"
 	sink := &fakeTraceSink{}
 	f := newFake()
-	rr := NewRunReconciler(s, engineWith(t, f), sink, nil)
+	rr := NewRunReconciler(s, engineWith(t, f), sink, nil, 0)
 
 	_, _ = settleRun(ctx, rr, runReq("orders-r"))
 	if sink.count() != 1 {
@@ -184,7 +184,7 @@ func TestRunSpanOnce(t *testing.T) {
 	seedWorkflow(t, s, "orders", step("a", ""))
 	seedRun(t, s, "orders-1x", "orders", `{}`)
 	sink := &fakeTraceSink{}
-	rr := NewRunReconciler(s, engineWith(t, newFake()), sink, nil)
+	rr := NewRunReconciler(s, engineWith(t, newFake()), sink, nil, 0)
 
 	_, _ = settleRun(ctx, rr, runReq("orders-1x")) // → Succeeded, emits once
 	_, _ = settleRun(ctx, rr, runReq("orders-1x")) // terminal → short-circuits, no emit
@@ -199,7 +199,7 @@ func TestRunSpanNoSink(t *testing.T) {
 	s := newStore(t)
 	seedWorkflow(t, s, "orders", step("a", ""))
 	seedRun(t, s, "orders-n", "orders", `{}`)
-	rr := NewRunReconciler(s, engineWith(t, newFake()), nil, nil) // nil sink
+	rr := NewRunReconciler(s, engineWith(t, newFake()), nil, nil, 0) // nil sink
 
 	if _, err := settleRun(ctx, rr, runReq("orders-n")); err != nil {
 		t.Fatalf("Reconcile: %v", err)

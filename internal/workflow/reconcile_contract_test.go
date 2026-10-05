@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -45,6 +46,12 @@ func reconcileWF(t *testing.T, s store.Store, c ContractResolver, steps ...v1.Wo
 
 func reconcileSpec(t *testing.T, s store.Store, c ContractResolver, spec v1.WorkflowSpec) (*v1.Workflow, controller.Result) {
 	t.Helper()
+	return reconcileWith(t, s, NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), c, nil, 0), spec)
+}
+
+// reconcileWith stores a Workflow "wf" with spec and runs one pass of r over it.
+func reconcileWith(t *testing.T, s store.Store, r *WorkflowReconciler, spec v1.WorkflowSpec) (*v1.Workflow, controller.Result) {
+	t.Helper()
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -54,7 +61,6 @@ func reconcileSpec(t *testing.T, s store.Store, c ContractResolver, spec v1.Work
 	if _, err := s.Create(ctx, wf); err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), c, nil)
 	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: "wf"})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -166,6 +172,21 @@ func TestArtifactNotPushedRequeues(t *testing.T) {
 	}
 	if ready(wf) {
 		t.Fatal("a workflow with an unresolved artifact is not Ready")
+	}
+	if res.RequeueAfter != contractRequeue {
+		t.Fatalf("requeueAfter = %v, want the %v default", res.RequeueAfter, contractRequeue)
+	}
+}
+
+// scenario: workflow-keys-pace-artifact-wait-and-retry, artifactPollInterval (ADR-0163) — a Workflow whose step
+// artifact is not pushed is checked again after workflow.artifactPollInterval.
+func TestArtifactPollIntervalPacesTheContractWait(t *testing.T) {
+	s := newStore(t)
+	c := fakeContracts{notReady: map[string]bool{"oci:a": true}}
+	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), c, nil, 200*time.Millisecond)
+	_, res := reconcileWith(t, s, r, v1.WorkflowSpec{Steps: []v1.WorkflowStep{fnStep("a", "oci:a")}})
+	if res.RequeueAfter != 200*time.Millisecond {
+		t.Fatalf("requeueAfter = %v, want 200ms", res.RequeueAfter)
 	}
 }
 

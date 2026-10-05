@@ -181,6 +181,13 @@ type Deps struct {
 	DrainGrace time.Duration
 	// HandOutSettle is how long after a hand-out, or after the switch, a worker may still receive a call; 0 ⇒ 2 s.
 	HandOutSettle time.Duration
+	// DrainPollInterval is the longest gap between drain passes (runtime.drainPollInterval, ADR-0163); 0 ⇒ 1 s.
+	DrainPollInterval time.Duration
+	// BootTimeout stops a replica not ready this long after creation (runtime.bootTimeout, ADR-0163); 0 ⇒ 1 min.
+	BootTimeout time.Duration
+	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
+	// bounded by the supervision period (ADR-0142 Decision 9); 0 ⇒ 2 s.
+	ReferentPollInterval time.Duration
 	// Clock times the drain from drainingSince; nil ⇒ clock.System().
 	Clock clock.Clock
 }
@@ -298,12 +305,19 @@ type Reconciler struct {
 	calls         *activator.CallTracker
 	drainGrace    time.Duration
 	handOutSettle time.Duration
+	drainPoll     time.Duration
 	clock         clock.Clock
+
+	// bootTimeout bounds a replica's boot; referentPoll is the referent-gate requeue (ADR-0163).
+	bootTimeout  time.Duration
+	referentPoll time.Duration
 }
 
 const (
-	defaultDrainGrace    = 30 * time.Second
-	defaultHandOutSettle = 2 * time.Second
+	defaultDrainGrace        = 30 * time.Second
+	defaultHandOutSettle     = 2 * time.Second
+	defaultDrainPollInterval = time.Second
+	defaultReferentPoll      = 2 * time.Second
 )
 
 // defaultPoolLimit is the per-pool handler cap when Deps.PoolLimit is unset (ADR-0046 Decision 3).
@@ -330,7 +344,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "ShimCommand is required when a Materializer is set in process mode")
 	case d.Materializer != nil && d.EndpointMode == EndpointNetnsFixedPort && d.ImageFor == nil:
 		return nil, fault.Invalidf(op, "ImageFor is required when a Materializer is set in container mode")
-	case d.BootBackoffInitial < 0 || d.BootBackoffMax < 0:
+	case d.BootBackoffInitial < 0 || d.BootBackoffMax < 0 || d.BootTimeout < 0:
 		return nil, fault.Invalidf(op, "the boot backoff must not be negative")
 	}
 	bootInitial := d.BootBackoffInitial
@@ -378,6 +392,18 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if clk == nil {
 		clk = clock.System()
 	}
+	drainPoll := d.DrainPollInterval
+	if drainPoll <= 0 {
+		drainPoll = defaultDrainPollInterval
+	}
+	bootTO := d.BootTimeout
+	if bootTO == 0 {
+		bootTO = defaultBootTimeout
+	}
+	referentPoll := d.ReferentPollInterval
+	if referentPoll <= 0 {
+		referentPoll = defaultReferentPoll
+	}
 	return &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
@@ -401,11 +427,14 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolManifestDir:     manifestDir,
 		ownManifestDir:      ownManifestDir,
 		supervisionPeriod:   period,
-		boot:                newBootBackoff(bootInitial, bootMax, logger.With("component", "function")),
+		boot:                newBootBackoff(bootInitial, bootMax, bootTO, logger.With("component", "function")),
 		calls:               d.Calls,
 		drainGrace:          drainGrace,
 		handOutSettle:       settle,
+		drainPoll:           drainPoll,
 		clock:               clk,
+		bootTimeout:         bootTO,
+		referentPoll:        min(referentPoll, period),
 	}, nil
 }
 
@@ -569,7 +598,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
 		var requeue time.Duration
 		if fault.KindOf(serr) == fault.NotFound {
-			requeue = 2 * time.Second
+			requeue = r.referentPoll
 		}
 		return r.gateFailed(ctx, fn, gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, requeue: requeue}, drainAfter)
 	}
@@ -584,7 +613,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return controller.Result{}, rferr
 	}
 	if refRequeue {
-		return r.gateFailed(ctx, fn, gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: 2 * time.Second}, drainAfter)
+		return r.gateFailed(ctx, fn, gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}, drainAfter)
 	}
 
 	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
@@ -598,7 +627,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	}
 	if requeue {
 		const msg = "a bound CatalogService is not Ready yet (no endpoint, token or live proxy); waiting"
-		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: 2 * time.Second}, drainAfter)
+		return r.gateFailed(ctx, fn, gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, drainAfter)
 	}
 
 	// 4. converge to the EFFECTIVE desired count (honors the activator's wake Phase). Pooled: the one shared pool
@@ -996,11 +1025,11 @@ func earliest(a, b time.Duration) time.Duration {
 // readinessPoll is how soon a pass re-checks a booting shim.
 const readinessPoll = 200 * time.Millisecond
 
-// bootTimeout bounds how long a solo replica may run before it listens, or listen without becoming ready (ADR-0030 §4b's
+// defaultBootTimeout bounds how long a solo replica may run before it listens, or listen without becoming ready (ADR-0030 §4b's
 // timeout): one that never listens is a boot crash (ADR-0161 Decision 3), one that listens but is never ready a shape
 // failure. It exceeds the activator's 30 s activation hold, so it never cuts short a boot that a cold call still waits
-// for.
-const bootTimeout = time.Minute
+// for. runtime.bootTimeout replaces it (ADR-0163).
+const defaultBootTimeout = time.Minute
 
 // probeTimeout bounds one readiness probe. The probe runs inside the pass, on the engine's shared worker, so a replica
 // that never answers must cost less than the poll it is repeated at (issue #75); a local shim answers in microseconds.
@@ -1151,7 +1180,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		return verdict{}, err
 	}
 	running := pass.running
-	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, bootTimeout, serving, r.boot)
+	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, r.bootTimeout, serving, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1173,7 +1202,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		}
 		if stopped {
 			running--
-			repairErr = notReadyError()
+			repairErr = r.notReadyError()
 		}
 		failed = ""
 	}
@@ -1193,7 +1222,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 // then, so one failed probe of a busy worker does not stop it. It reports whether it stopped the replica.
 func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed runtime.InstanceID) (bool, error) {
 	rc, _ := fn.Status.Conditions.Get(condReady)
-	if failed == "" || fn.Status.Phase != v1.PhaseDegraded || time.Since(rc.LastTransitionTime) < bootTimeout {
+	if failed == "" || fn.Status.Phase != v1.PhaseDegraded || time.Since(rc.LastTransitionTime) < r.bootTimeout {
 		return false, nil
 	}
 	if in, err := r.runtime.Status(ctx, failed); err != nil || in.State != runtime.StateRunning {
@@ -1235,7 +1264,7 @@ func (r *Reconciler) stopUnlistened(ctx context.Context, fn *v1.Function, rev v1
 			continue
 		}
 		if in.State == runtime.StateRunning && !r.listening(in) {
-			deadline := in.CreatedAt.Add(bootTimeout)
+			deadline := in.CreatedAt.Add(r.bootTimeout)
 			if now.Before(deadline) {
 				if c, ok := r.boot.crash(in.ID); ok && c.count > 0 {
 					u.pollAt = earlier(u.pollAt, deadline)
@@ -1286,7 +1315,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC, cRetry, cCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, readinessPath, bootTimeout, false, r.boot)
+	readyC, failedC, cRetry, cCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, readinessPath, r.bootTimeout, false, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1303,7 +1332,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: cPass.running, ready: readyC, serving: true, switched: true, desired: desired}, nil
 	}
-	readyS, _, sRetry, sCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, readinessPath, bootTimeout, true, r.boot)
+	readyS, _, sRetry, sCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, readinessPath, r.bootTimeout, true, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1610,7 +1639,7 @@ func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration,
 	if elapsed < r.handOutSettle {
 		wait = r.handOutSettle - elapsed
 	}
-	return min(time.Second, max(wait, time.Millisecond)), nil
+	return min(r.drainPoll, max(wait, time.Millisecond)), nil
 }
 
 // idle reports whether no call to worker in is in flight and the resolver has not handed it out recently (ADR-0143).
@@ -2101,7 +2130,7 @@ func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) strin
 		return ""
 	}
 	if in, err := r.runtime.Status(ctx, id); err == nil && in.State == runtime.StateRunning {
-		return notReadyError()
+		return r.notReadyError()
 	}
 	last := "the runtime shim could not load the handler"
 	rc, err := r.runtime.Logs(ctx, id)
@@ -2118,8 +2147,10 @@ func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) strin
 	return last
 }
 
-// notReadyError is why a replica that ran for bootTimeout without becoming ready failed.
-func notReadyError() string { return "the handler did not become ready within " + bootTimeout.String() }
+// notReadyError is why a replica that ran for the boot timeout without becoming ready failed.
+func (r *Reconciler) notReadyError() string {
+	return "the handler did not become ready within " + r.bootTimeout.String()
+}
 
 // The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044); a pool host also reports each
 // member's state.

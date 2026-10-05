@@ -44,6 +44,8 @@ type Deps struct {
 	// present) when a Site's spec.index is empty. "" ⇒ "index.html".
 	DefaultIndex string
 	Logger       *slog.Logger
+	// ReferentPollInterval is controller.referentPollInterval (ADR-0163); 0 ⇒ routeRequeue.
+	ReferentPollInterval time.Duration
 }
 
 // Reconciler drives a Site to its desired state (controller.Reconciler).
@@ -52,6 +54,7 @@ type Reconciler struct {
 	buckets      BucketResolver
 	defaultIndex string
 	logger       *slog.Logger
+	routeRequeue time.Duration
 }
 
 // New builds the Site reconciler.
@@ -60,7 +63,11 @@ func New(d Deps) *Reconciler {
 	if l == nil {
 		l = slog.Default()
 	}
-	return &Reconciler{store: d.Store, buckets: d.Buckets, defaultIndex: d.DefaultIndex, logger: l.With("component", "site")}
+	poll := d.ReferentPollInterval
+	if poll <= 0 {
+		poll = routeRequeue
+	}
+	return &Reconciler{store: d.Store, buckets: d.Buckets, defaultIndex: d.DefaultIndex, logger: l.With("component", "site"), routeRequeue: poll}
 }
 
 // outcome is one reconcile's publishable result: the digest the owned Route holds (serving), whether
@@ -160,7 +167,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	switch {
 	case !ok || cnd.ObservedGeneration < rt.Generation:
 		out.cond = notReady("RouteNotReady", fmt.Sprintf("route %q is pending", rt.Name))
-		out.result = controller.Result{RequeueAfter: routeRequeue}
+		out.result = controller.Result{RequeueAfter: r.routeRequeue}
 	case cnd.Status != v1.ConditionTrue:
 		out.cond = notReady("RouteNotReady", fmt.Sprintf("route %q: %s: %s", rt.Name, cnd.Reason, cnd.Message))
 	default:
