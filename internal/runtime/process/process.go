@@ -376,12 +376,27 @@ func readPortFile(path string) (int, bool) {
 	return port, true
 }
 
-// envSlice renders an env map as KEY=VALUE entries (process env), inheriting the
-// host environment so PATH etc. are available to the child.
+// envSlice renders an env map as KEY=VALUE entries (process env) after the host variables a worker inherits.
 func envSlice(env map[string]string) []string {
-	out := os.Environ()
+	var out []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); inheritedHostVar(k) {
+			out = append(out, kv)
+		}
+	}
 	for k, v := range env {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// inheritedHostVar reports whether a worker inherits the host variable k: only what a process needs to find
+// its tools and run. The daemon's own configuration and credentials (FUNCD_TOKEN, backend keys) never reach a
+// worker, whose env is otherwise its spec, as in the containerd driver (ADR-0028, ADR-0057).
+func inheritedHostVar(k string) bool {
+	switch k {
+	case "PATH", "HOME", "TMPDIR", "TZ", "LANG":
+		return true
+	}
+	return strings.HasPrefix(k, "LC_")
 }
