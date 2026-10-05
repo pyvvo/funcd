@@ -104,8 +104,10 @@ func (c *Controller) Watches(gvk v1.GroupVersionKind, mapFn MapFunc) {
 	c.mappers[gvk] = append(c.mappers[gvk], mapFn)
 }
 
-// Enqueue adds req to the workqueue without blocking, for a change no watch event carries, such as an edge
-// verdict that another source's Set moved (ADR-0176). Safe to call before Run and from a reconcile.
+// Enqueue adds req to the workqueue without blocking, as a store event would (deduplicated, re-queued on Done if
+// in process), for a change no watch event carries: an edge verdict that another source's Set moved (ADR-0176), a
+// run the workflow engine's goroutine advanced (ADR-0146). Safe from any goroutine, before Run, and a no-op after
+// shutdown.
 func (c *Controller) Enqueue(req Request) {
 	c.queue.Add(req)
 }

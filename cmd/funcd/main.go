@@ -339,7 +339,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	if cfg.Storage.Mode != "memory" {
 		workflowDir = cfg.Workflow.DataDir
 	}
-	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit))
+	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit),
+		funcd.WithWorkflowMaxStepsInFlight(cfg.Workflow.MaxStepsInFlight))
 	// ADR-0151: the response deadline of an external invoke whose Function sets no spec.timeout.
 	invokeTimeout, err := parseDuration("invoke.defaultTimeout", cfg.Invoke.DefaultTimeout, 0, true)
 	if err != nil {

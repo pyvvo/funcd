@@ -592,25 +592,39 @@ func TestIssue124_RecoveryRedispatchesOnlyTheInFlightStep(t *testing.T) {
 	}
 }
 
-// scenario: cancel-terminates-run — cancel marks the run and its live steps Cancelled.
+// scenario: cancel-terminates-run — a cancel of a live run closes its in-flight call and ends it Cancelled
+// (ADR-0146); with no live goroutine, the record is written Cancelled with the running step's end and error.
 func TestCancelTerminatesRun(t *testing.T) {
-	rs, _ := badger.New(badger.Config{InMemory: true})
-	t.Cleanup(func() { _ = rs.Close() })
+	g := newGate()
+	g.block["b"] = 1
+	e := newTestEngine(t, g, Config{})
 	ctx := context.Background()
-	_ = rs.Put(ctx, &runstate.Record{
-		Namespace: "default", Name: "run-c", Phase: runRunning,
-		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}, {Name: "b", Phase: v1.StepRunning}},
-	})
-	e, _ := New(Deps{Runs: rs, Dispatch: newFake()})
+	if _, err := e.start("uid-c", "default", "run-c", func(ctx context.Context) (*runstate.Record, error) {
+		return e.Execute(ctx, "default", "run-c", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{RunUID: "uid-c"})
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	receive(t, g.entered, "b")
 	if err := e.Cancel(ctx, "default", "run-c"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	got, _ := rs.Get(ctx, "default", "run-c")
-	if got.Phase != runCancelled {
-		t.Fatalf("phase = %s, want Cancelled", got.Phase)
+	receive(t, g.ended, "b")
+	waitFor(t, "the run goroutine exits", notLive(e, "run-c"))
+	got, _ := e.runs.Get(ctx, "default", "run-c")
+	if got.Phase != runCancelled || got.Steps[1].Phase != v1.StepCancelled || got.Steps[1].Error != cancelledStepError {
+		t.Fatalf("live cancel: phase %s steps %+v, want Cancelled with b Cancelled", got.Phase, got.Steps)
 	}
-	if got.Steps[1].Phase != v1.StepCancelled {
-		t.Fatalf("running step b should be Cancelled, got %s", got.Steps[1].Phase)
+
+	_ = e.runs.Put(ctx, &runstate.Record{
+		Namespace: "default", Name: "run-r", Phase: runRunning,
+		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded}, {Name: "b", Phase: v1.StepRunning, StartedAt: 1}},
+	})
+	if err := e.Cancel(ctx, "default", "run-r"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got, _ = e.runs.Get(ctx, "default", "run-r")
+	if b := got.Steps[1]; got.Phase != runCancelled || b.Phase != v1.StepCancelled || b.EndedAt == 0 || b.Error != cancelledStepError {
+		t.Fatalf("record cancel: phase %s step b %+v, want Cancelled with endedAt and the cancel error", got.Phase, b)
 	}
 }
 
@@ -664,34 +678,37 @@ func TestIssue419_PauseLeavesTerminalRunUnchanged(t *testing.T) {
 	}
 }
 
-// scenario: pause-and-resume-run — pause stops new dispatch; resume completes it.
+// scenario: pause-and-resume-run — a pause of a live run lets its in-flight step finish, dispatches nothing new
+// and persists Paused (ADR-0146); resume completes it.
 func TestPauseAndResume(t *testing.T) {
-	f := newFake()
-	rs, _ := badger.New(badger.Config{InMemory: true})
-	t.Cleanup(func() { _ = rs.Close() })
+	g := newGate()
+	g.block["a"] = 1
+	e := newTestEngine(t, g, Config{})
 	ctx := context.Background()
-	_ = rs.Put(ctx, &runstate.Record{
-		Namespace: "default", Name: "run-p", Phase: runRunning,
-		Spec:  spec(step("a", ""), step("b", "", "a")),
-		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)}, {Name: "b", Phase: v1.StepPending}},
-	})
-	e, _ := New(Deps{Runs: rs, Dispatch: f})
+	if _, err := e.start("uid-p", "default", "run-p", func(ctx context.Context) (*runstate.Record, error) {
+		return e.Execute(ctx, "default", "run-p", "wf", spec(step("a", ""), step("b", "", "a")), json.RawMessage(`{}`), StartOptions{RunUID: "uid-p"})
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	receive(t, g.entered, "a")
 	if err := e.Pause(ctx, "default", "run-p"); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	got, _ := rs.Get(ctx, "default", "run-p")
-	if got.Phase != runPaused {
-		t.Fatalf("phase = %s, want Paused", got.Phase)
+	close(g.release)
+	waitFor(t, "the run goroutine exits", notLive(e, "run-p"))
+	got, _ := e.runs.Get(ctx, "default", "run-p")
+	if got.Phase != runPaused || !got.Paused || got.PausedAt == 0 || got.Steps[0].Phase != v1.StepSucceeded {
+		t.Fatalf("paused run: phase %s paused %v at %d steps %+v, want Paused with a Succeeded", got.Phase, got.Paused, got.PausedAt, got.Steps)
 	}
-	if f.calls["b"] != 0 {
+	if len(g.calls("b")) != 0 {
 		t.Fatal("b must not dispatch while paused")
 	}
 	rec, err := e.Resume(ctx, "default", "run-p")
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if rec.Phase != runSucceeded || f.calls["b"] != 1 {
-		t.Fatalf("resume should complete b; phase=%s calls=%d", rec.Phase, f.calls["b"])
+	if rec.Phase != runSucceeded || len(g.calls("b")) != 1 {
+		t.Fatalf("resume should complete b; phase=%s calls=%v", rec.Phase, g.calls("b"))
 	}
 }
 

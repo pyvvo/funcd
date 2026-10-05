@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 func key(name string) Request {
@@ -98,4 +100,33 @@ func TestAddAfterLaterIsDropped(t *testing.T) {
 
 	time.Sleep(400 * time.Millisecond)
 	require.Equal(t, 0, q.Len(), "the later delay was dropped, so nothing fires at 300ms")
+}
+
+// Enqueue (ADR-0146) adds a request as a store event would: deduplicated, re-queued on Done while in process,
+// and a no-op after shutdown.
+func TestEnqueueDedupsRequeuesAndStopsAtShutdown(t *testing.T) {
+	c, err := New(Deps{Store: store.New(memory.New())})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-1"}
+	c.Enqueue(req)
+	c.Enqueue(req)
+	if n := c.queue.Len(); n != 1 {
+		t.Fatalf("queue length after two enqueues = %d, want 1", n)
+	}
+	got, _ := c.queue.Get()
+	c.Enqueue(got)
+	if n := c.queue.Len(); n != 0 {
+		t.Fatalf("queue length while in process = %d, want 0", n)
+	}
+	c.queue.Done(got)
+	if n := c.queue.Len(); n != 1 {
+		t.Fatalf("queue length after Done = %d, want the in-process enqueue re-queued", n)
+	}
+	c.queue.ShutDown()
+	c.Enqueue(Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-2"})
+	if n := c.queue.Len(); n != 1 {
+		t.Fatalf("queue length after shutdown = %d, want the enqueue dropped", n)
+	}
 }

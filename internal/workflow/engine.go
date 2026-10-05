@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -149,6 +150,8 @@ type Config struct {
 	DefaultStepTimeout  time.Duration // per-step invocation bound (0 = none)
 	PayloadLimit        int64         // max bytes for a run input (at admission and run start) and a step output; 0 = unbounded
 	MaxSubworkflowDepth int           // ADR-0099: max sub-workflow nesting (default 8); a deeper chain fails cleanly
+	// MaxStepsInFlight bounds the function-step dispatch attempts in flight across all runs; 0 ⇒ no cap (ADR-0146).
+	MaxStepsInFlight int
 }
 
 // Deps wires the engine (internal component, ADR-0002 §1).
@@ -161,6 +164,9 @@ type Deps struct {
 	// Traces is the shared funclog trace sink (ADR-0104): the engine emits the run-root span for INLINE
 	// sub-workflow child runs (the reconciler drives only top-level runs). nil ⇒ no child run-root span.
 	Traces funclog.TraceSink
+	// Notify: a top-level run's key after each record write and on goroutine exit; nil ⇒ none; must not block
+	// (ADR-0146: wired to Controller.Enqueue, so the run reconciler mirrors the record).
+	Notify func(ns v1.NamespaceName, name v1.ObjectName)
 	Logger *slog.Logger
 }
 
@@ -173,6 +179,18 @@ type Engine struct {
 	children ChildResolver
 	traces   funclog.TraceSink // ADR-0104: run-root span emitter for inline child runs; nil ⇒ none
 	log      *slog.Logger
+	notify   func(ns v1.NamespaceName, name v1.ObjectName)
+	slots    chan struct{} // ADR-0146 Decision 7: one per function-step attempt in flight; nil ⇒ no cap
+
+	// The live top-level runs (ADR-0146 Decision 2), keyed by namespace and name; mu guards the maps and draining.
+	mu       sync.Mutex
+	running  map[runKey]*liveRun
+	exits    map[runKey]runExit
+	draining bool
+	drainCh  chan struct{}           // closed when Run's ctx ends: no drive starts a new step or attempt
+	bound    context.Context         // ends with errRunStopped at the drain bound: it cuts an onFailure handler
+	endBound context.CancelCauseFunc // ends bound
+	wg       sync.WaitGroup          // the live run goroutines
 }
 
 // New builds the engine.
@@ -197,7 +215,16 @@ func New(d Deps) (*Engine, error) {
 	if clk == nil {
 		clk = clock.System()
 	}
-	return &Engine{runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, traces: d.Traces, log: log.With("component", "workflow.engine")}, nil
+	e := &Engine{
+		runs: d.Runs, dispatch: d.Dispatch, cfg: d.Config, clock: clk, children: d.Children, traces: d.Traces,
+		log: log.With("component", "workflow.engine"), notify: d.Notify,
+		running: map[runKey]*liveRun{}, exits: map[runKey]runExit{}, drainCh: make(chan struct{}),
+	}
+	if d.Config.MaxStepsInFlight > 0 {
+		e.slots = make(chan struct{}, d.Config.MaxStepsInFlight)
+	}
+	e.bound, e.endBound = context.WithCancelCause(context.Background())
+	return e, nil
 }
 
 // StartOptions consolidates run-start inputs (ADR-0107, replacing Execute's variadic contract param):
@@ -212,12 +239,11 @@ type StartOptions struct {
 	RunUID        v1.UID // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
 }
 
-// Execute runs a workflow synchronously to a terminal phase and returns the final
-// record. It is the engine core; the controller reconciler drives it asynchronously
-// (wiring is a separate layer). Every ready step is dispatched at once (ADR-0094: fan-out
-// is parallel dispatch).
+// Execute runs a workflow synchronously until it is terminal, paused or halted, and returns the record. The
+// run reconciler calls it on the run's engine-owned goroutine (start, ADR-0146). Every ready step is dispatched
+// at once (ADR-0094: fan-out is parallel dispatch). ctx ends the steps; record writes outlive it.
 func (e *Engine) Execute(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, spec v1.WorkflowSpec, input json.RawMessage, opts StartOptions) (*runstate.Record, error) {
-	return e.execute(ctx, ctx, ns, runName, workflow, spec, input, opts, 0, "", "") // top-level run: depth 0, fresh trace
+	return e.execute(context.WithoutCancel(ctx), ctx, ns, runName, workflow, spec, input, opts, 0, "", "") // top-level run: depth 0, fresh trace
 }
 
 // execute is Execute threading the sub-workflow nesting depth (ADR-0099): the public Execute starts at 0;
@@ -314,7 +340,7 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 	}
 	rec.Paused = false // resume clears the pause
 	rec.Phase = runRunning
-	return e.drive(ctx, ctx, &activeRun{rec: rec, rs: rs, outputs: outputs, spec: spec, input: rec.Input})
+	return e.drive(context.WithoutCancel(ctx), ctx, &activeRun{rec: rec, rs: rs, outputs: outputs, spec: spec, input: rec.Input})
 }
 
 // Replay seeds runName from a finished source run's checkpoint and drives it (ADR-0107): a NEW run that
@@ -411,10 +437,10 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 		}
 	}
 	run := &activeRun{rec: rec, rs: rs, outputs: outputs, spec: spec, input: src.Input}
-	if err := e.persist(ctx, run); err != nil {
+	if err := e.persist(context.WithoutCancel(ctx), run); err != nil {
 		return nil, err
 	}
-	return e.drive(ctx, ctx, run)
+	return e.drive(context.WithoutCancel(ctx), ctx, run)
 }
 
 // isCopied reports whether a source step's phase means "reuse it verbatim" in a replay (a terminal
@@ -490,29 +516,41 @@ func (e *Engine) SweepExpired(ctx context.Context, retention time.Duration, recl
 	return swept, nil
 }
 
-// Pause requests a graceful pause: the persisted run is marked Paused so the next
-// drive dispatches nothing new (in-flight steps, in the async model, finish first). A run that is
-// already terminal is left unchanged.
+// Pause requests a graceful pause (ADR-0146 Decision 5). A live run is only signalled: its goroutine lets
+// the in-flight calls finish, starts nothing new and persists Paused. Otherwise the record is marked Paused,
+// so the next drive dispatches nothing. A terminal or already Paused record is left unchanged.
 func (e *Engine) Pause(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	e.mu.Lock()
+	if lr, ok := e.running[runKey{ns, name}]; ok {
+		if lr.pausedAt == 0 {
+			lr.pausedAt = e.clock.Now().UnixNano()
+			close(lr.pause)
+		}
+		e.mu.Unlock()
+		return nil
+	}
+	e.mu.Unlock()
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
 	}
-	if rec.Terminal() {
+	if rec.Terminal() || rec.Paused {
 		return nil
 	}
-	if !rec.Paused { // a repeated pause keeps the interval's start
-		rec.PausedAt = e.clock.Now().UnixNano()
-	}
+	rec.PausedAt = e.clock.Now().UnixNano()
 	rec.Paused = true
 	rec.Phase = runPaused
 	return e.runs.Put(ctx, rec)
 }
 
-// Cancel abandons a run: pending/running steps are marked Cancelled and the run ends
-// Cancelled immediately (the in-flight invocation is abandoned; idempotency covers it). A run that
-// is already terminal is left unchanged (WorkflowRunSpec.Cancel).
+// Cancel abandons a run (ADR-0146 Decision 3). A live run's context is cancelled with a cancel cause: its
+// in-flight calls close and its goroutine records the run Cancelled. Otherwise the record is written here:
+// pending and running steps Cancelled (a running one with its end time and the cancel error) and the run
+// Cancelled. A terminal record is left unchanged (WorkflowRunSpec.Cancel).
 func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	if e.cancelLive(ns, name) {
+		return nil
+	}
 	rec, err := e.runs.Get(ctx, ns, name)
 	if err != nil {
 		return err
@@ -520,8 +558,13 @@ func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.Object
 	if rec.Terminal() {
 		return nil
 	}
+	now := e.clock.Now().UnixNano()
 	for i := range rec.Steps {
-		if rec.Steps[i].Phase == v1.StepPending || rec.Steps[i].Phase == v1.StepRunning {
+		switch rec.Steps[i].Phase {
+		case v1.StepRunning:
+			rec.Steps[i].EndedAt, rec.Steps[i].Error = now, cancelledStepError
+			rec.Steps[i].Phase = v1.StepCancelled
+		case v1.StepPending:
 			rec.Steps[i].Phase = v1.StepCancelled
 		}
 	}
@@ -529,20 +572,229 @@ func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.Object
 	return e.runs.Put(ctx, rec)
 }
 
+// runKey names a top-level run in the registry.
+type runKey struct {
+	ns   v1.NamespaceName
+	name v1.ObjectName
+}
+
+// liveRun is a top-level run whose goroutine is live: its WorkflowRun's uid, the cancel of its context, and
+// its pause signal (closed once, at pausedAt).
+type liveRun struct {
+	uid      v1.UID
+	cancel   context.CancelCauseFunc
+	pause    chan struct{}
+	pausedAt int64
+}
+
+// runExit is what a run goroutine exited with when it left no terminal record: start returns it once to the
+// next start of the same uid.
+type runExit struct {
+	uid v1.UID
+	rec *runstate.Record
+	err error
+}
+
+// cancelCause is the cause a run's context is cancelled with on spec.cancel or the WorkflowRun's deletion.
+type cancelCause struct{ at int64 }
+
+func (c *cancelCause) Error() string { return "run cancelled" }
+
+// cancelledStepError is the error a step that was running at the cancel records (ADR-0146 Decision 3).
+const cancelledStepError = "cancelled while running (spec.cancel); the step's call may have completed"
+
+var (
+	// errRunStopped is the cause the shutdown drain cancels the in-flight calls with at its bound.
+	errRunStopped = errors.New("run stopped by the shutdown drain")
+	// errHalted ends a step or an inline child that did not start its next attempt or step: the run paused
+	// or the engine drains. The step goes back to Pending with its attempts kept.
+	errHalted = errors.New("run halted before its next attempt")
+	// errDraining is start's refusal once the engine drains.
+	errDraining = errors.New("the workflow engine is draining")
+)
+
+// cancelOf returns the cancel cause ctx ended with, nil when it did not end by a cancel.
+func cancelOf(ctx context.Context) *cancelCause {
+	var c *cancelCause
+	if errors.As(context.Cause(ctx), &c) {
+		return c
+	}
+	return nil
+}
+
+// start runs drive on an engine-owned goroutine, returning at once (ADR-0146 Decision 2). drive gets the
+// run's own context, which only Cancel, a deletion and the drain bound end. A live run ⇒ (nil, nil); the
+// record and error a previous goroutine of uid exited with are returned once instead; draining ⇒
+// fault.Unavailable.
+func (e *Engine) start(uid v1.UID, ns v1.NamespaceName, name v1.ObjectName, drive func(ctx context.Context) (*runstate.Record, error)) (*runstate.Record, error) {
+	key := runKey{ns, name}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if x, ok := e.exits[key]; ok {
+		delete(e.exits, key)
+		if x.uid == uid {
+			return x.rec, x.err
+		}
+	}
+	if e.draining {
+		return nil, fault.Wrapf(errDraining, fault.Unavailable, engineOp, "start run %q", name)
+	}
+	if _, ok := e.running[key]; ok {
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	e.running[key] = &liveRun{uid: uid, cancel: cancel, pause: make(chan struct{})}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		rec, err := drive(ctx)
+		e.mu.Lock()
+		delete(e.running, key)
+		if err != nil && !errors.Is(err, errHalted) && (rec == nil || !rec.Terminal()) {
+			e.exits[key] = runExit{uid: uid, rec: rec, err: err}
+		}
+		e.mu.Unlock()
+		cancel(nil)
+		if e.notify != nil {
+			e.notify(ns, name)
+		}
+	}()
+	return nil, nil
+}
+
+// live reports the uid of the run's live goroutine, if one is live.
+func (e *Engine) live(ns v1.NamespaceName, name v1.ObjectName) (v1.UID, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	lr, ok := e.running[runKey{ns, name}]
+	if !ok {
+		return "", false
+	}
+	return lr.uid, true
+}
+
+// cancelLive cancels the run's live goroutine, reporting whether one was live.
+func (e *Engine) cancelLive(ns v1.NamespaceName, name v1.ObjectName) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	lr, ok := e.running[runKey{ns, name}]
+	if ok {
+		lr.cancel(&cancelCause{at: e.clock.Now().UnixNano()})
+	}
+	return ok
+}
+
+// forget cancels the run's live goroutine and drops what an exited one left: its WorkflowRun is gone.
+func (e *Engine) forget(ns v1.NamespaceName, name v1.ObjectName) {
+	e.cancelLive(ns, name)
+	e.mu.Lock()
+	delete(e.exits, runKey{ns, name})
+	e.mu.Unlock()
+}
+
+// Run blocks until ctx ends, then drains (ADR-0146 Decision 6) for at most drain: start refuses, every drive
+// starts no new step or attempt, and the in-flight calls may finish; at the bound they are cancelled with
+// errRunStopped and return to Pending. Run returns when every run goroutine exited.
+func (e *Engine) Run(ctx context.Context, drain time.Duration) {
+	<-ctx.Done()
+	e.mu.Lock()
+	if !e.draining {
+		e.draining = true
+		close(e.drainCh)
+	}
+	e.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(max(drain, 0))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+	e.mu.Lock()
+	for _, lr := range e.running {
+		lr.cancel(errRunStopped)
+	}
+	e.mu.Unlock()
+	e.endBound(errRunStopped)
+	<-done
+}
+
+// pauseOf returns the pause signal of a top-level run's live goroutine; nil (never closed) for an inline
+// child, which does not see the pause, or a run driven outside start.
+func (e *Engine) pauseOf(rec *runstate.Record) chan struct{} {
+	if rec.Depth != 0 {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if lr, ok := e.running[runKey{rec.Namespace, rec.Name}]; ok && (rec.RunUID == "" || rec.RunUID == lr.uid) {
+		return lr.pause
+	}
+	return nil
+}
+
+// pausedAt is the time a run's pause was signalled, 0 when none was.
+func (e *Engine) pausedAt(rec *runstate.Record) int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if lr, ok := e.running[runKey{rec.Namespace, rec.Name}]; ok {
+		return lr.pausedAt
+	}
+	return 0
+}
+
+// halted reports whether the run may start no new step or attempt: it paused or the engine drains.
+func (e *Engine) halted(run *activeRun) bool {
+	select {
+	case <-e.drainCh:
+		return true
+	case <-run.pause:
+		return true
+	default:
+		return false
+	}
+}
+
+// acquire takes a step-call slot (ADR-0146 Decision 7), waiting while the cap is reached. It returns the
+// slot's release; ctx ending ends the wait with its error, a halt signal with errHalted.
+func (e *Engine) acquire(ctx context.Context, pause, drain <-chan struct{}) (func(), error) {
+	if e.slots == nil {
+		return func() {}, nil
+	}
+	release := func() { <-e.slots }
+	select {
+	case e.slots <- struct{}{}:
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-pause:
+		return nil, errHalted
+	case <-drain:
+		return nil, errHalted
+	}
+}
+
 // activeRun is the per-run state the engine threads through a run's drive: its record, its scheduling state,
-// the recorded step outputs, the pinned spec and the run input. While the steps run concurrently, rs.mu guards
-// rec, the step nodes and outputs; spec and input are only read.
+// the recorded step outputs, the pinned spec, the run input and its pause signal. While the steps run
+// concurrently, rs.mu guards rec, the step nodes and outputs; spec, input and pause are only read.
 type activeRun struct {
 	rec     *runstate.Record
 	rs      *runState
 	outputs map[v1.ObjectName]json.RawMessage
 	spec    v1.WorkflowSpec
 	input   json.RawMessage
+	pause   chan struct{} // closed when the run's live goroutine is paused; nil ⇒ never
 }
 
-// drive advances a run to a terminal phase from the given scheduling state. Its steps run until stop ends;
-// its record and onFailure handler use ctx, so a child its parent stopped still records and handles its failure.
+// drive advances a run from the given scheduling state until it is terminal, paused or halted by the drain.
+// Its steps run until stop ends; its record and onFailure handler use ctx, so a child its parent stopped still
+// records and handles its failure. A cancel cause on stop ends it Cancelled (ADR-0146 Decision 3).
 func (e *Engine) drive(ctx, stop context.Context, run *activeRun) (*runstate.Record, error) {
+	run.pause = e.pauseOf(run.rec)
 	if run.rec.Paused {
 		run.rec.Phase = runPaused
 		if err := e.persist(ctx, run); err != nil {
@@ -550,10 +802,9 @@ func (e *Engine) drive(ctx, stop context.Context, run *activeRun) (*runstate.Rec
 		}
 		return run.rec, nil
 	}
-	// Run-timeout is start-relative and excludes paused time (ADR-0094 guarantee, ADR-0096): a run
-	// now spans reconciles (a builtin wait yields), so a single-drive ctx deadline can't bound it.
-	// runCtx bounds the steps only: fail() runs the onFailure handler on ctx, so a RunTimedOut run
-	// still invokes it.
+	// Run-timeout is start-relative and excludes paused time (ADR-0094 guarantee, ADR-0096): a run spans
+	// drives (pause, restart), so a single-drive ctx deadline can't bound it. runCtx bounds the steps only:
+	// fail() runs the onFailure handler on ctx, so a RunTimedOut run still invokes it.
 	runCtx := stop
 	if run.spec.Timeout > 0 {
 		if e.clock.Now().UnixNano() > runDeadline(run.rec, run.spec) {
@@ -591,15 +842,64 @@ func (e *Engine) drive(ctx, stop context.Context, run *activeRun) (*runstate.Rec
 			cancelSteps()
 		}
 	}
+	if c := cancelOf(runCtx); c != nil {
+		return e.finishCancelled(ctx, run, c)
+	}
 	if end != nil {
 		return end()
 	}
 
 	run.rec.Phase = run.rs.runPhase()
+	if run.rec.Phase == runRunning && (e.halted(run) || errors.Is(context.Cause(runCtx), errRunStopped)) {
+		return e.finishHalted(ctx, run)
+	}
 	if err := e.persist(ctx, run); err != nil {
 		return nil, err
 	}
 	return run.rec, nil
+}
+
+// finishCancelled ends a cancelled run (ADR-0146 Decision 3): each step still Pending is Cancelled without
+// timings (the in-flight ones were recorded Cancelled as they returned) and the run is Cancelled, with no
+// retry and no onFailure.
+func (e *Engine) finishCancelled(ctx context.Context, run *activeRun, c *cancelCause) (*runstate.Record, error) {
+	run.rs.mu.Lock()
+	for _, n := range run.rs.steps {
+		switch n.phase {
+		case v1.StepPending:
+			n.phase = v1.StepCancelled
+		case v1.StepRunning:
+			n.phase, n.endedAt, n.errMsg = v1.StepCancelled, c.at, cancelledStepError
+		}
+	}
+	run.rs.mu.Unlock()
+	run.rec.Phase = runCancelled
+	if err := e.persist(ctx, run); err != nil {
+		return nil, err
+	}
+	return run.rec, nil
+}
+
+// finishHalted ends a drive that stopped with steps left (ADR-0146 Decisions 5 and 6): a paused run persists
+// Paused from the signal's time; a run the drain halted persists Running, its unfinished steps Pending, and
+// returns errHalted, so an inline child's parent step returns to Pending too.
+func (e *Engine) finishHalted(ctx context.Context, run *activeRun) (*runstate.Record, error) {
+	select {
+	case <-run.pause:
+		if !run.rec.Paused {
+			run.rec.PausedAt = e.pausedAt(run.rec)
+		}
+		run.rec.Paused, run.rec.Phase = true, runPaused
+		if err := e.persist(ctx, run); err != nil {
+			return nil, err
+		}
+		return run.rec, nil
+	default:
+	}
+	if err := e.persist(ctx, run); err != nil {
+		return nil, err
+	}
+	return run.rec, fault.Wrapf(errHalted, fault.Unavailable, engineOp, "run %q halted by the shutdown drain", run.rec.Name)
 }
 
 // recordFailed ends a drive whose run record could not be written: a record the run store cannot hold
@@ -643,6 +943,9 @@ func (e *Engine) startReady(ctx, stepCtx, runCtx context.Context, run *activeRun
 			}
 			return started, nil
 		}
+		if e.halted(run) {
+			return started, nil
+		}
 		if err := runCtx.Err(); err != nil { // the run's context ended between steps
 			return started, runStopped(err)
 		}
@@ -674,7 +977,7 @@ func (e *Engine) capOutput(n *stepNode, out json.RawMessage) error {
 func (e *Engine) runStep(ctx, stepCtx context.Context, run *activeRun, n *stepNode, parents map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	st := specStep(run.spec, n.name)
 	if functionOf(st) == nil { // a builtin or sub-workflow step; dispatchStep records each attempt itself
-		if err := e.persist(stepCtx, run); err != nil {
+		if err := e.persist(ctx, run); err != nil {
 			return nil, &writeAheadError{err: err}
 		}
 	}
@@ -688,7 +991,7 @@ func (e *Engine) runStep(ctx, stepCtx context.Context, run *activeRun, n *stepNo
 	case st != nil && st.Workflow != nil: // a sub-workflow step runs a child workflow inline (ADR-0099)
 		out, err = e.runChild(ctx, stepCtx, run.rec, st.Workflow.Ref, n, run.input, parents)
 	default:
-		out, err = e.dispatchStep(stepCtx, run, n, e.stepInput(n, run.input, parents, st))
+		out, err = e.dispatchStep(ctx, stepCtx, run, n, e.stepInput(n, run.input, parents, st))
 	}
 	if err != nil {
 		return nil, err
@@ -712,19 +1015,30 @@ func parentOutputs(n *stepNode, outputs map[v1.ObjectName]json.RawMessage) map[v
 
 // settle records how a step returned. A failure returns how the run ends (the first one decides). A
 // sibling that fail-fast cancelled (ending) goes back to Pending: it never finished, so a replay of the
-// failed run runs it (ADR-0107); like recovery, it keeps its attempt count and drops its timings.
+// failed run runs it (ADR-0107); like recovery, it keeps its attempt count and drops its timings. So does a
+// step the pause or the drain halted (ADR-0146). After a cancel, any result is discarded: the step is
+// Cancelled.
 func (e *Engine) settle(ctx, runCtx context.Context, run *activeRun, r stepResult, ending bool) func() (*runstate.Record, error) {
 	run.rs.mu.Lock()
+	if c := cancelOf(runCtx); c != nil {
+		r.n.phase, r.n.endedAt, r.n.errMsg = v1.StepCancelled, c.at, cancelledStepError
+		run.rs.mu.Unlock()
+		return func() (*runstate.Record, error) { return e.finishCancelled(ctx, run, c) }
+	}
+	halted := r.err != nil && (errors.Is(r.err, errHalted) || errors.Is(context.Cause(runCtx), errRunStopped))
 	switch {
 	case r.err == nil:
 		e.markSucceeded(r.n)
 		run.outputs[r.n.name] = r.out
-	case ending && (errors.Is(r.err, context.Canceled) || errors.Is(r.err, context.DeadlineExceeded)):
-		r.n.phase, r.n.startedAt, r.n.errMsg = v1.StepPending, 0, ""
+	case halted || ending && (errors.Is(r.err, context.Canceled) || errors.Is(r.err, context.DeadlineExceeded)):
+		r.n.phase, r.n.startedAt, r.n.endedAt, r.n.errMsg = v1.StepPending, 0, 0, ""
 	default:
 		e.markFailed(r.n, r.err) // ADR-0100: a builtin/sub-workflow passes its raw cause; dispatchStep stamped its own
 	}
 	run.rs.mu.Unlock()
+	if halted {
+		return nil
+	}
 	if r.err == nil {
 		if ending {
 			return nil
@@ -789,10 +1103,12 @@ func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName
 
 // dispatchStep invokes one step with retry, sending it stepInput. It reads the run's
 // pinned identity + trace context off rec (ADR-0102: every attempt propagates the run's traceparent).
-// Each attempt is persisted before it goes out (the ADR-0094 write-ahead intent), so recovery knows the
-// attempts already made: a recovered in-flight step continues with a fresh attempt ID and the rest of
-// its retry budget, and always gets its re-dispatch.
-func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, stepInput json.RawMessage) (json.RawMessage, error) {
+// Each attempt is persisted on rctx before it goes out on ctx (the ADR-0094 write-ahead intent), so
+// recovery knows the attempts already made: a recovered in-flight step continues with a fresh attempt ID and
+// the rest of its retry budget, and always gets its re-dispatch. Each attempt holds a step-call slot while
+// its call is out (ADR-0146 Decision 7); a pause or the drain ends the step with errHalted instead of its
+// next attempt.
+func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *stepNode, stepInput json.RawMessage) (json.RawMessage, error) {
 	ns, runName, workflow := run.rec.Namespace, run.rec.Name, run.rec.Workflow
 	st := specStep(run.spec, n.name)
 	maxAttempts := e.cfg.DefaultMaxAttempts
@@ -826,10 +1142,15 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 	stepTimeout := e.stepTimeout(fn)
 	var lastErr, stopped error
 	for attempt := first; attempt <= max(maxAttempts, first); attempt++ {
+		release, err := e.acquire(ctx, run.pause, e.drainCh)
+		if err != nil {
+			return nil, err
+		}
 		run.rs.mu.Lock()
 		n.attempts = attempt // ADR-0100: the dispatch attempt count
 		run.rs.mu.Unlock()
-		if err := e.persist(ctx, run); err != nil {
+		if err := e.persist(rctx, run); err != nil {
+			release()
 			return nil, &writeAheadError{err: err}
 		}
 		attemptCtx := ctx
@@ -846,6 +1167,7 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 		if cancel != nil {
 			cancel()
 		}
+		release()
 		if err == nil {
 			return out, nil
 		}
@@ -853,14 +1175,21 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 		if isPermanent(err) || attempt >= maxAttempts || ctx.Err() != nil {
 			break
 		}
+		if e.halted(run) {
+			return nil, errHalted
+		}
 		if backoff > 0 {
 			timer := time.NewTimer(retryBackoff(backoff, attempt))
 			select {
 			case <-ctx.Done():
-				timer.Stop()
 				stopped = runStopped(ctx.Err())
+			case <-run.pause:
+				stopped = errHalted
+			case <-e.drainCh:
+				stopped = errHalted
 			case <-timer.C:
 			}
+			timer.Stop()
 			if stopped != nil {
 				break
 			}
@@ -871,7 +1200,7 @@ func (e *Engine) dispatchStep(ctx context.Context, run *activeRun, n *stepNode, 
 	run.rs.mu.Lock()
 	n.errMsg = capErr(lastErr.Error())
 	run.rs.mu.Unlock()
-	if stopped != nil { // the step's context ended in the backoff: a deadline or a stop, not the step
+	if stopped != nil { // the backoff was ended by the step's context, a pause or the drain, not the step
 		return nil, stopped
 	}
 	return nil, fault.Wrapf(lastErr, fault.Unavailable, engineOp, "step %q failed after retries", n.name)
@@ -972,7 +1301,8 @@ func failureContextSchema() json.RawMessage {
 	)
 }
 
-// fail finalizes a Failed run, invoking the onFailure handler once if present.
+// fail finalizes a Failed run, invoking the onFailure handler once if present. The handler's call holds a
+// step-call slot and ends at its step timeout or the drain bound (ADR-0146).
 func (e *Engine) fail(ctx context.Context, run *activeRun, cause error) (*runstate.Record, error) {
 	run.rec.Phase, run.rec.Error = runFailed, capErr(cause.Error())
 	if run.spec.OnFailure != "" {
@@ -980,10 +1310,12 @@ func (e *Engine) fail(ctx context.Context, run *activeRun, cause error) (*runsta
 			Workflow: run.rec.Workflow, Run: run.rec.Name, FailedStep: run.rs.failedStep(),
 			Reason: cause.Error(), Input: run.input,
 		})
-		hctx := ctx
+		hctx, cancelBound := context.WithCancelCause(ctx)
+		defer cancelBound(nil)
+		defer context.AfterFunc(e.bound, func() { cancelBound(errRunStopped) })()
 		if d := e.stepTimeout(functionOf(specStep(run.spec, run.spec.OnFailure))); d > 0 {
 			var cancel context.CancelFunc
-			hctx, cancel = context.WithTimeout(ctx, d)
+			hctx, cancel = context.WithTimeout(hctx, d)
 			defer cancel()
 		}
 		h := run.rs.steps[run.spec.OnFailure]
@@ -991,12 +1323,16 @@ func (e *Engine) fail(ctx context.Context, run *activeRun, cause error) (*runsta
 			e.setRunning(h)
 			h.attempts = 1
 		}
-		_, herr := e.dispatch.Dispatch(hctx, DispatchRequest{
-			Namespace: run.rec.Namespace, Run: run.rec.Name, Step: run.spec.OnFailure,
-			Target:  stepTarget(run.rec.Workflow, run.spec, run.spec.OnFailure),
-			Attempt: 1, Input: fc, MaxOutput: e.cfg.PayloadLimit,
-			TraceID: run.rec.TraceID, ParentSpanID: run.rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
-		})
+		release, herr := e.acquire(hctx, nil, nil)
+		if herr == nil {
+			_, herr = e.dispatch.Dispatch(hctx, DispatchRequest{
+				Namespace: run.rec.Namespace, Run: run.rec.Name, Step: run.spec.OnFailure,
+				Target:  stepTarget(run.rec.Workflow, run.spec, run.spec.OnFailure),
+				Attempt: 1, Input: fc, MaxOutput: e.cfg.PayloadLimit,
+				TraceID: run.rec.TraceID, ParentSpanID: run.rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
+			})
+			release()
+		}
 		if h != nil { // the handler's outcome is recorded but never changes the run phase (ADR-0094)
 			if herr != nil {
 				e.markFailed(h, herr)
@@ -1063,7 +1399,8 @@ func revisionFor(spec v1.WorkflowSpec, name v1.ObjectName, images map[v1.ObjectN
 	return fn.Image
 }
 
-// persist writes the run record (the write-ahead intent + the coarse step mirror).
+// persist writes the run record (the write-ahead intent + the coarse step mirror) and notifies a top-level
+// run's key.
 func (e *Engine) persist(ctx context.Context, run *activeRun) error {
 	run.rs.mu.Lock()
 	defer run.rs.mu.Unlock()
@@ -1086,20 +1423,10 @@ func (e *Engine) persist(ctx context.Context, run *activeRun) error {
 	if err := e.runs.Put(ctx, run.rec); err != nil {
 		return err
 	}
-	if fn, ok := ctx.Value(transitionKey{}).(func(context.Context, *runstate.Record)); ok {
-		fn(ctx, run.rec)
+	if run.rec.Depth == 0 && e.notify != nil { // ADR-0146: the run reconciler mirrors the record on its next pass
+		e.notify(run.rec.Namespace, run.rec.Name)
 	}
 	return nil
-}
-
-// transitionKey carries a per-drive observer of run-record writes on the context (the net/http/httptrace
-// pattern), so the run reconciler can mirror every transition into the metastore (ADR-0094) while the
-// engine stays metastore-free and shared across concurrent reconciles.
-type transitionKey struct{}
-
-// withTransitions returns ctx carrying fn, which persist calls after every successful run-record write.
-func withTransitions(ctx context.Context, fn func(context.Context, *runstate.Record)) context.Context {
-	return context.WithValue(ctx, transitionKey{}, fn)
 }
 
 func specStep(spec v1.WorkflowSpec, name v1.ObjectName) *v1.WorkflowStep {

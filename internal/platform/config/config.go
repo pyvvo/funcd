@@ -214,6 +214,8 @@ type Config struct {
 		DefaultRetry       int    `json:"defaultRetry,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY" validate:"min=0"`
 		Retention          string `json:"retention,omitempty" env:"FUNCD_WORKFLOW_RETENTION"`
 		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT" validate:"min=0"`
+		// MaxStepsInFlight bounds the function-step calls in flight across all runs (ADR-0146); 0 ⇒ no cap.
+		MaxStepsInFlight int `json:"maxStepsInFlight,omitempty" env:"FUNCD_WORKFLOW_MAX_STEPS_IN_FLIGHT" validate:"min=0"`
 		// DataDir is the run-state Badger directory. Empty ⇒ derived as <Storage.DataDir>/workflow in
 		// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_WORKFLOW_DATA_DIR"`
@@ -294,6 +296,7 @@ func defaults() Config {
 	c.Workflow.DefaultStepTimeout = "300s"
 	c.Workflow.Retention = "720h"
 	c.Workflow.PayloadLimit = 256 << 10
+	c.Workflow.MaxStepsInFlight = 64
 	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
 	// per-namespace cap of 1000, swept periodically.
 	c.Eventing.DeliveryAttempts = 3
