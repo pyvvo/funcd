@@ -1414,6 +1414,28 @@ components:
         - metadata
         - spec
       type: object
+    RevisionPin:
+      additionalProperties: false
+      properties:
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        functionUID:
+          type: string
+        imageDigest:
+          type: string
+        revision:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - function
+        - functionUID
+        - revision
+      type: object
     RevisionSpec:
       additionalProperties: false
       properties:
@@ -2308,6 +2330,12 @@ components:
             - Failed
             - Cancelled
           type: string
+        pins:
+          items:
+            $ref: "#/components/schemas/RevisionPin"
+          type:
+            - array
+            - "null"
         steps:
           items:
             $ref: "#/components/schemas/RunStepStatus"
@@ -2315,6 +2343,8 @@ components:
             - array
             - "null"
         traceId:
+          type: string
+        workflowUID:
           type: string
       type: object
     WorkflowSpec:

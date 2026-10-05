@@ -14,6 +14,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -327,10 +328,14 @@ func kvStoreCollectable(refs []v1.OwnerReference) bool {
 }
 
 // collectChild deletes obj when its owner is dead, with its resourceVersion as the precondition. A Conflict
-// re-reads it and re-judges once with a fresh owner Get; a second Conflict waits for the next sweep.
+// re-reads it and re-judges once with a fresh owner Get; a second Conflict waits for the next sweep. A Function or
+// Revision an open workflow run holds waits for a later sweep (ADR-0190 Decision 7).
 func (p *pass) collectChild(ctx context.Context, obj v1.Object, ref v1.OwnerReference) error {
 	live, err := p.ownerLive(ctx, obj, ref, true)
 	if err != nil || live {
+		return err
+	}
+	if held, err := p.c.held(ctx, obj); err != nil || held {
 		return err
 	}
 	m := obj.GetObjectMeta()
@@ -359,6 +364,9 @@ func (p *pass) collectChild(ctx context.Context, obj v1.Object, ref v1.OwnerRefe
 		return nil
 	}
 	if live, err = p.ownerLive(ctx, cur, ref, false); err != nil || live {
+		return err
+	}
+	if held, err := p.c.held(ctx, cur); err != nil || held {
 		return err
 	}
 	cm := cur.GetObjectMeta()
@@ -397,4 +405,23 @@ func (p *pass) ownerLive(ctx context.Context, child v1.Object, ref v1.OwnerRefer
 	}
 	p.live[key] = live
 	return live, nil
+}
+
+// held reports whether obj is a Function or a Revision an open workflow run holds, read from the store once per
+// decision (ADR-0190 Decision 7).
+func (c *Collector) held(ctx context.Context, obj v1.Object) (bool, error) {
+	m := obj.GetObjectMeta()
+	switch o := obj.(type) {
+	case *v1.Function:
+		h, err := revhold.Held(ctx, c.store, m.Namespace)
+		return err == nil && h.Function(m.Name, m.UID), err
+	case *v1.Revision:
+		owner, ok := v1.ControllerOf(o.OwnerReferences)
+		if !ok {
+			return false, nil
+		}
+		h, err := revhold.Held(ctx, c.store, m.Namespace)
+		return err == nil && h.Revision(owner.Name, owner.UID, m.Name), err
+	}
+	return false, nil
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/pooling"
+	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
@@ -317,6 +318,17 @@ type Reconciler struct {
 	// bootTimeout bounds a replica's boot; referentPoll is the referent-gate requeue (ADR-0163).
 	bootTimeout  time.Duration
 	referentPoll time.Duration
+
+	// spared names, by Function, the UID of each Function whose last retire pass kept workers of a revision an open
+	// workflow run holds (ADR-0190 Decision 7): its passes skip the steady state until a pass retires them.
+	sparedMu sync.Mutex
+	spared   map[fnKey]v1.UID
+}
+
+// fnKey names a Function in the spared set.
+type fnKey struct {
+	ns   v1.NamespaceName
+	name v1.ObjectName
 }
 
 const (
@@ -442,6 +454,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		clock:               clk,
 		bootTimeout:         bootTO,
 		referentPoll:        min(referentPoll, period),
+		spared:              map[fnKey]v1.UID{},
 	}, nil
 }
 
@@ -455,6 +468,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
+			r.setSpared(&v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}, false)
 			if derr := r.reclaimOrphanPools(ctx, req.Namespace); derr != nil {
 				return controller.Result{}, derr
 			}
@@ -1118,7 +1132,7 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 		return false
 	}
 	c := fn.Status.CurrentRevision
-	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" {
+	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" || r.isSpared(fn) {
 		return false
 	}
 	if rr, ok := fn.Status.Conditions.Get(condRevisionReady); !ok || rr.Status != v1.ConditionTrue {
@@ -1688,10 +1702,20 @@ func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration,
 	if fn.Status.DrainingSince != nil {
 		elapsed = r.clock.Now().Sub(*fn.Status.DrainingSince)
 	}
-	draining := 0
+	draining, kept := 0, 0
+	var held revhold.Holds
 	for _, in := range insts {
 		rev := string(in.Revision)
 		if rev == s || rev == c {
+			continue
+		}
+		if held == nil {
+			if held, err = revhold.Held(ctx, r.store, fn.Namespace); err != nil {
+				return 0, err
+			}
+		}
+		if held.Revision(fn.Name, fn.UID, in.Revision) {
+			kept++
 			continue
 		}
 		if d != "" && rev == d && in.State == runtime.StateRunning &&
@@ -1703,6 +1727,7 @@ func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration,
 			return 0, err
 		}
 	}
+	r.setSpared(fn, kept > 0)
 	if draining == 0 && d != "" {
 		fn.Status.DrainingRevision, fn.Status.DrainingSince = "", nil
 	}
@@ -1737,13 +1762,25 @@ func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
 
 // stopAll stops every worker of a Function scaled to zero and retires those of revisions other than c, with their
 // boot-crash entries (ADR-0169); c's stopped replicas stay listed for ADR-0142's wake backoff (ADR-0143 Decision 5).
+// A revision an open workflow run holds is spared (ADR-0190 Decision 7).
 func (r *Reconciler) stopAll(ctx context.Context, fn *v1.Function, c v1.ObjectName) error {
 	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
 	if err != nil {
 		return err
 	}
+	var held revhold.Holds
+	kept := false
 	for _, in := range insts {
 		if in.Revision != c {
+			if held == nil {
+				if held, err = revhold.Held(ctx, r.store, fn.Namespace); err != nil {
+					return err
+				}
+			}
+			if held.Revision(fn.Name, fn.UID, in.Revision) {
+				kept = true
+				continue
+			}
 			if err := r.retire(ctx, in); err != nil {
 				return err
 			}
@@ -1755,8 +1792,29 @@ func (r *Reconciler) stopAll(ctx context.Context, fn *v1.Function, c v1.ObjectNa
 			}
 		}
 	}
+	r.setSpared(fn, kept)
 	r.boot.forgetStale(backoffPrefix(fn.Namespace, fn.Name), string(c))
 	return nil
+}
+
+// setSpared records whether fn's last retire pass kept a held revision's workers.
+func (r *Reconciler) setSpared(fn *v1.Function, kept bool) {
+	r.sparedMu.Lock()
+	defer r.sparedMu.Unlock()
+	if kept {
+		r.spared[fnKey{fn.Namespace, fn.Name}] = fn.UID
+	} else {
+		delete(r.spared, fnKey{fn.Namespace, fn.Name})
+	}
+}
+
+// isSpared reports whether fn's last retire pass kept a held revision's workers, which a later pass retires once
+// no open run holds them.
+func (r *Reconciler) isSpared(fn *v1.Function) bool {
+	r.sparedMu.Lock()
+	defer r.sparedMu.Unlock()
+	uid, ok := r.spared[fnKey{fn.Namespace, fn.Name}]
+	return ok && uid == fn.UID
 }
 
 // stopRevision stops every worker of revision rev.
@@ -2293,6 +2351,9 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	// /function/<name> path the pool routes the member by (ADR-0046 Decision 5): every caller (the
 	// data plane, a workflow step, a Sensor action) gets it from here, where pooling is decided.
 	obj, err := e.r.store.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
+	if fn.Revision != "" {
+		return e.pinned(ctx, fn, obj, err)
+	}
 	if err != nil {
 		return "", false, nil
 	}
@@ -2307,6 +2368,50 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 	ready := f.Status.Phase == v1.PhaseReady && up != ""
 	if ready && e.r.calls != nil {
 		e.r.calls.HandedOut(up) // the drain waits out a call that resolved this upstream (ADR-0143)
+	}
+	return up, ready, nil
+}
+
+// pinned resolves a ref pinned to one revision (ADR-0190 Decision 4): a listening worker of exactly that revision
+// through upstreamOf, or the pool worker while the pinned revision is a pooled member's current one. A Function that is
+// gone or has another UID, or a Revision that is gone or another Function's, is fault.NotFound naming the pin; nothing
+// falls back to the serving revision. A pinned revision that is not the serving one is ready once a worker listens.
+func (e endpoints) pinned(ctx context.Context, ref activator.FunctionRef, obj v1.Object, err error) (string, bool, error) {
+	const op = "function.Upstream"
+	gone := func(why string) error {
+		return fault.NotFoundf(op, "pinned revision %q of function %s/%s (uid %s) %s", ref.Revision, ref.Namespace, ref.Name, ref.UID, why)
+	}
+	if fault.KindOf(err) == fault.NotFound {
+		return "", false, gone("is gone: the function is deleted")
+	}
+	f, ok := obj.(*v1.Function)
+	if err != nil || !ok {
+		return "", false, nil
+	}
+	if f.UID != ref.UID {
+		return "", false, gone(fmt.Sprintf("is gone: the function has uid %s", f.UID))
+	}
+	rev, err := e.r.getRevision(ctx, ref.Namespace, ref.Revision)
+	if fault.KindOf(err) == fault.NotFound {
+		return "", false, gone("is not found")
+	}
+	if err != nil {
+		return "", false, nil
+	}
+	if revisionOf(rev, f) != revSelf {
+		return "", false, gone("belongs to another function")
+	}
+	var up string
+	if e.r.pooled(f) && string(ref.Revision) == f.Status.CurrentRevision {
+		if up, _ = e.r.upstreamForFn(ctx, f); up != "" {
+			up += "/function/" + string(f.Name)
+		}
+	} else {
+		up, _ = e.r.upstreamOf(ctx, ref.Namespace, ref.Name, ref.Revision)
+	}
+	ready := up != "" && (ref.Revision != servingRevision(f) || f.Status.Phase == v1.PhaseReady)
+	if ready && e.r.calls != nil {
+		e.r.calls.HandedOut(up)
 	}
 	return up, ready, nil
 }

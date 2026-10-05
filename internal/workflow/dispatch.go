@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -55,9 +56,10 @@ type Waker interface {
 }
 
 // Granter authorizes a step dispatch: only functions declared in a run's pinned spec
-// may be invoked (spec-as-grant, ADR-0094). An undeclared target is Forbidden.
+// may be invoked (spec-as-grant, ADR-0094). An undeclared target is Forbidden. A non-nil pin is
+// the target's revision pin (ADR-0190): it is granted only while that revision is the pinned one.
 type Granter interface {
-	Allow(ns v1.NamespaceName, target v1.ObjectName) bool
+	Allow(ns v1.NamespaceName, target v1.ObjectName, pin *v1.RevisionPin) bool
 }
 
 // HTTPDispatcher is the production Dispatcher: it resolves a step function's ready
@@ -105,12 +107,21 @@ func NewHTTPDispatcher(d DispatchDeps) (*HTTPDispatcher, error) {
 func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (json.RawMessage, error) {
 	const op = "workflow.dispatch"
 	// Fail-closed: only a target declared in the run's pinned spec may be invoked.
-	if d.grant != nil && !d.grant.Allow(req.Namespace, req.Target) {
+	if pin := req.Revision; pin != nil && pin.Function != req.Target {
+		return nil, fault.Forbiddenf(op, "target %q is not the function of the pin %s of run %q", req.Target, PinString(*pin), req.Run)
+	}
+	if d.grant != nil && !d.grant.Allow(req.Namespace, req.Target, req.Revision) {
+		if req.Revision != nil { // ADR-0190 Decision 4: no fallback to latest
+			return nil, fault.NotFoundf(op, "pinned revision %s of run %q is gone", PinString(*req.Revision), req.Run)
+		}
 		d.log.Warn("dispatch denied: undeclared target",
 			"namespace", req.Namespace, "run", req.Run, "step", req.Step, "target", req.Target)
 		return nil, fault.Forbiddenf(op, "target %q is not declared in run %q", req.Target, req.Run)
 	}
 	fn := activator.FunctionRef{Namespace: req.Namespace, Name: req.Target}
+	if req.Revision != nil {
+		fn.Revision, fn.UID = req.Revision.Revision, req.Revision.FunctionUID
+	}
 	upstream, err := d.upstream(ctx, fn)
 	if err != nil {
 		return nil, err
@@ -187,6 +198,15 @@ func (d *HTTPDispatcher) upstream(ctx context.Context, fn activator.FunctionRef)
 		return "", fault.Unavailablef(op, "function %s/%s has no ready upstream", fn.Namespace, fn.Name)
 	}
 	return upstream, nil
+}
+
+// PinString names a revision pin in a fault message.
+func PinString(p v1.RevisionPin) string {
+	s := fmt.Sprintf("function %q revision %q (uid %s", p.Function, p.Revision, p.FunctionUID)
+	if p.ImageDigest != "" {
+		s += ", digest " + p.ImageDigest
+	}
+	return s + ")"
 }
 
 func truncate(b []byte) string {

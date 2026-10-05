@@ -473,3 +473,47 @@ func TestScenarioUpgradeRefusesOlderStoreAndCollectorKeepsIt(t *testing.T) {
 	}
 	require.True(t, exists(t, st, v1.KindKVStore, "shared"), "an unmarked store is never collected")
 }
+
+// holdPins stores an open WorkflowRun in ns whose status pins revision rev of fn (ADR-0190).
+func holdPins(t *testing.T, st store.Store, fn v1.Object, rev v1.ObjectName) v1.Object {
+	t.Helper()
+	run := object(t, v1.KindWorkflowRun, "r1").(*v1.WorkflowRun)
+	run.Spec.Workflow = "wf"
+	created, err := st.Create(context.Background(), run)
+	require.NoError(t, err)
+	run = created.(*v1.WorkflowRun)
+	run.Status.Phase = v1.RunRunning
+	run.Status.Pins = []v1.RevisionPin{{Function: fn.GetObjectMeta().Name, FunctionUID: fn.GetObjectMeta().UID, Revision: rev}}
+	updated, err := st.Update(context.Background(), run)
+	require.NoError(t, err)
+	return updated
+}
+
+// A dead-owned Function or Revision an open workflow run pins waits for a sweep after the run ends (ADR-0190
+// Decision 7).
+func TestHeldChildrenWaitForTheirRun(t *testing.T) {
+	st := store.New(memory.New())
+	f := fleet(t, st)
+	stepFn, fnRev := f[v1.KindFunction][1], f[v1.KindRevision][1]
+	run := holdPins(t, st, stepFn, "wf-s1-1")
+	runPin := run.(*v1.WorkflowRun)
+	runPin.Status.Pins = append(runPin.Status.Pins, v1.RevisionPin{Function: "fn", FunctionUID: f[v1.KindRevision][0].GetObjectMeta().UID, Revision: fnRev.GetObjectMeta().Name})
+	run, err := st.Update(context.Background(), runPin)
+	require.NoError(t, err)
+	del(t, st, v1.KindWorkflow, "wf")
+	del(t, st, v1.KindFunction, "fn")
+
+	c := newCollector(t, st, 0)
+	require.NoError(t, c.CollectNamespace(context.Background(), ns))
+	require.True(t, exists(t, st, v1.KindFunction, "wf-s1"), "a held step Function waits")
+	require.True(t, exists(t, st, v1.KindRevision, "fn-1"), "a held Revision waits")
+	require.False(t, exists(t, st, v1.KindKVStore, "wf-state"), "an unheld child of the same owner is collected")
+
+	ended := run.(*v1.WorkflowRun)
+	ended.Status.Phase = v1.RunCancelled
+	_, err = st.Update(context.Background(), ended)
+	require.NoError(t, err)
+	require.NoError(t, c.CollectNamespace(context.Background(), ns))
+	require.False(t, exists(t, st, v1.KindFunction, "wf-s1"), "the next sweep after the run ends collects it")
+	require.False(t, exists(t, st, v1.KindRevision, "fn-1"))
+}

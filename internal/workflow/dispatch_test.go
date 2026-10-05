@@ -81,7 +81,7 @@ func (z *zeroScaler) reclaimed() []activator.FunctionRef {
 	return append([]activator.FunctionRef(nil), z.zero...)
 }
 
-func (f fakeGrant) Allow(v1.NamespaceName, v1.ObjectName) bool { return f.allow }
+func (f fakeGrant) Allow(v1.NamespaceName, v1.ObjectName, *v1.RevisionPin) bool { return f.allow }
 
 func echoServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()

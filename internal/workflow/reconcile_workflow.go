@@ -11,6 +11,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -91,7 +92,8 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		return controller.Result{}, err
 	}
 	wf := obj.(*v1.Workflow)
-	if merr := r.mat.Materialize(ctx, wf); merr != nil {
+	postponed, merr := r.mat.materialize(ctx, wf)
+	if merr != nil {
 		var no *notOwnedError
 		if !errors.As(merr, &no) {
 			// A failed materialization, a failed strip write included, leaves no Ready Workflow (ADR-0178
@@ -106,8 +108,12 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		}
 		return controller.Result{RequeueAfter: r.mat.supervisionPeriod}, nil
 	}
+	var res controller.Result
+	if postponed { // a run holds a removed step's Function: prune it on a later pass (ADR-0190 Decision 7)
+		res.RequeueAfter = r.mat.supervisionPeriod
+	}
 	if r.contracts == nil {
-		return controller.Result{}, nil // gate disabled (materialization-only wiring / tests)
+		return res, nil // gate disabled (materialization-only wiring / tests)
 	}
 
 	contract, steps, cerr := r.deriveAndCheck(ctx, wf)
@@ -122,7 +128,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 				return controller.Result{}, uerr
 			}
 		}
-		return controller.Result{RequeueAfter: r.contractRequeue}, nil
+		return controller.Result{RequeueAfter: earliest(r.contractRequeue, res.RequeueAfter)}, nil
 	case cerr != nil:
 		var mm *mismatchError
 		if !errors.As(cerr, &mm) {
@@ -141,7 +147,15 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	if _, uerr := r.store.Update(ctx, wf); uerr != nil {
 		return controller.Result{}, uerr
 	}
-	return controller.Result{}, nil
+	return res, nil
+}
+
+// earliest is the sooner of two requeue delays, 0 meaning none.
+func earliest(a, b time.Duration) time.Duration {
+	if a == 0 || b != 0 && b < a {
+		return b
+	}
+	return a
 }
 
 // ready reports whether wf is Ready=True for its current spec. An update keeps the stored status, so a verdict
@@ -217,9 +231,15 @@ func controlledBy(refs []v1.OwnerReference, wf *v1.Workflow) bool {
 // a Function this incarnation controls to a store it did not make, then binds a step only to stores this
 // incarnation made (ADR-0178 Decision 2).
 func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
+	_, err := m.materialize(ctx, wf)
+	return err
+}
+
+// materialize is Materialize reporting whether a removed step's Function was kept because an open run holds it.
+func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, error) {
 	kvs := kvView{s: m.store, ns: wf.Namespace, seen: map[v1.ObjectName]*v1.KVStore{}}
 	if err := m.stripBindings(ctx, wf, &kvs); err != nil {
-		return err
+		return false, err
 	}
 	owner := ownerRef(wf)
 	// 1. Owned Functions (without kv, so the store owners exist before the KVStores).
@@ -230,11 +250,11 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 		}
 		rt, err := m.runtimes.Runtime(ctx, st.Function.Image)
 		if err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "resolve runtime for step %q", st.Name)
+			return false, fault.Wrapf(err, fault.KindOf(err), materializeOp, "resolve runtime for step %q", st.Name)
 		}
 		fn := buildFunction(wf, st, rt, owner)
 		if err := m.ensureFunction(ctx, wf, fn, &kvs); err != nil {
-			return err
+			return false, err
 		}
 	}
 	// 2. Owned KVStores: every declared and every step-bound store passes the ownership check before any write.
@@ -242,17 +262,17 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 	for i := range wf.Spec.KV {
 		stores[i] = buildKVStore(wf, &wf.Spec.KV[i], owner)
 		if err := m.checkKVStore(ctx, wf, stores[i]); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := checkStepStores(wf); err != nil {
-		return err
+		return false, err
 	}
 	checked := make(map[v1.ObjectName]v1.UID, len(stores))
 	for _, st := range stores {
 		uid, err := m.ensureKVStore(ctx, wf, st)
 		if err != nil {
-			return err
+			return false, err
 		}
 		checked[st.Name] = uid
 	}
@@ -263,7 +283,7 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 			continue
 		}
 		if err := m.patchFunctionKV(ctx, wf, st, checked); err != nil {
-			return err
+			return false, err
 		}
 	}
 	return m.pruneFunctions(ctx, wf)
@@ -360,8 +380,9 @@ func kvNotOwned(name v1.ObjectName, wf *v1.Workflow) *notOwnedError {
 }
 
 // pruneFunctions deletes every Function this Workflow controls (kind, name and UID) that is no image step's
-// materialized name, each with its resourceVersion (ADR-0170 Decision 5). KVStores are never pruned.
-func (m *Materializer) pruneFunctions(ctx context.Context, wf *v1.Workflow) error {
+// materialized name, each with its resourceVersion (ADR-0170 Decision 5), except one an open run holds (ADR-0190
+// Decision 7), which it reports postponed. KVStores are never pruned.
+func (m *Materializer) pruneFunctions(ctx context.Context, wf *v1.Workflow) (bool, error) {
 	keep := make(map[v1.ObjectName]bool, len(wf.Spec.Steps))
 	for i := range wf.Spec.Steps {
 		if st := &wf.Spec.Steps[i]; st.Function != nil && st.Function.Image != "" {
@@ -370,18 +391,29 @@ func (m *Materializer) pruneFunctions(ctx context.Context, wf *v1.Workflow) erro
 	}
 	res, err := m.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: wf.Namespace})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "list functions")
+		return false, fault.Wrapf(err, fault.KindOf(err), materializeOp, "list functions")
 	}
+	var held revhold.Holds
+	postponed := false
 	for _, obj := range res.Items {
 		fm := obj.GetObjectMeta()
 		if keep[fm.Name] || !controlledByUID(fm.OwnerReferences, wf) {
 			continue
 		}
+		if held == nil {
+			if held, err = revhold.Held(ctx, m.store, wf.Namespace); err != nil {
+				return false, err
+			}
+		}
+		if held.Function(fm.Name, fm.UID) {
+			postponed = true
+			continue
+		}
 		if err := m.store.Delete(ctx, v1.KindFunction.GVK(), fm.Namespace, fm.Name, fm.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
-			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "delete removed step function %q", fm.Name)
+			return false, fault.Wrapf(err, fault.KindOf(err), materializeOp, "delete removed step function %q", fm.Name)
 		}
 	}
-	return nil
+	return postponed, nil
 }
 
 // controlledByUID reports whether refs hold a controller ref naming wf's kind, name and UID.

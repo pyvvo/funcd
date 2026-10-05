@@ -29,10 +29,19 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// FunctionRef identifies the function a request / scale-decision targets.
+// FunctionRef identifies the function a request / scale-decision targets. A ref with a Revision names one revision
+// of the Function with UID (ADR-0190), so single-flight, activity and idle reclaim keyed by it are per revision.
 type FunctionRef struct {
 	Namespace v1.NamespaceName
 	Name      v1.ObjectName
+	Revision  v1.ObjectName // "" ⇒ the serving revision
+	UID       v1.UID        // set with Revision
+}
+
+// function is fn without its revision: idle reclaim is per Function, so a pinned call counts as its Function's
+// activity and its hand-out is spared like any other call to the Function.
+func (fn FunctionRef) function() FunctionRef {
+	return FunctionRef{Namespace: fn.Namespace, Name: fn.Name}
 }
 
 // Endpoints resolves a function's currently-ready upstream. P-M/scheduler provide the
@@ -228,8 +237,11 @@ func (a *Activator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // upstream immediately; a not-ready one is woken via the existing per-fn singleflight.
 func (a *Activator) Wake(ctx context.Context, fn FunctionRef) (string, error) {
 	const op = "activator.Wake"
-	a.touch(fn)
+	a.touch(fn.function())
 	upstream, ready, err := a.endpoints.Upstream(ctx, fn)
+	if fault.KindOf(err) == fault.NotFound && fn.Revision != "" {
+		return "", fault.Wrapf(err, fault.NotFound, op, "resolve upstream for %s/%s", fn.Namespace, fn.Name) // a pin that is gone (ADR-0190)
+	}
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "resolve upstream for %s/%s", fn.Namespace, fn.Name)
 	}
@@ -238,7 +250,7 @@ func (a *Activator) Wake(ctx context.Context, fn FunctionRef) (string, error) {
 			return "", err
 		}
 	}
-	a.handedOut(fn, upstream)
+	a.handedOut(fn.function(), upstream)
 	return upstream, nil
 }
 
@@ -327,6 +339,10 @@ func (a *Activator) drive(fn FunctionRef, act *activation) {
 			a.resolve(fn, act, upstream, nil)
 			return
 		}
+		if fault.KindOf(err) == fault.NotFound && fn.Revision != "" { // the pinned revision is gone (ADR-0190)
+			a.resolve(fn, act, "", err)
+			return
+		}
 		if err != nil {
 			a.logger.WarnContext(ctx, "endpoint resolve failed during activation",
 				"namespace", string(fn.Namespace), "name", string(fn.Name), "error", err)
@@ -391,9 +407,9 @@ func (a *Activator) resolve(fn FunctionRef, act *activation, upstream string, er
 		delete(a.inflight, fn)
 	}
 	if err == nil {
-		e := a.lastActive[fn]
+		e := a.lastActive[fn.function()]
 		e.at = a.clock.Now()
-		a.lastActive[fn] = e
+		a.lastActive[fn.function()] = e
 	}
 	a.mu.Unlock()
 	act.upstream = upstream

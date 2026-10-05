@@ -1593,12 +1593,27 @@ func (r childResolver) ChildWorkflow(ctx context.Context, ns v1.NamespaceName, n
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.
 // The engine only ever dispatches steps of a run's pinned spec to their declared/materialized
 // targets; this gate additionally requires the target to resolve to a real Function, so an
-// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.)
+// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.) A pinned
+// dispatch (ADR-0190) is granted only when the pin names the target and its Revision is still the one
+// pinned: controlled by the pinned Function UID and, except for a file:// artifact, of the pinned digest.
 type storeGranter struct{ store store.Store }
 
-func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
-	_, err := g.store.Get(context.Background(), v1.KindFunction.GVK(), ns, target)
-	return err == nil
+func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName, pin *v1.RevisionPin) bool {
+	ctx := context.Background()
+	if pin == nil {
+		_, err := g.store.Get(ctx, v1.KindFunction.GVK(), ns, target)
+		return err == nil
+	}
+	if pin.Function != target {
+		return false
+	}
+	obj, err := g.store.Get(ctx, v1.KindRevision.GVK(), ns, pin.Revision)
+	if err != nil {
+		return false
+	}
+	rev := obj.(*v1.Revision)
+	owner, ok := v1.ControllerOf(rev.OwnerReferences)
+	return ok && owner.Name == target && owner.UID == pin.FunctionUID && rev.Spec.ImageDigest == pin.ImageDigest
 }
 
 // runWorkflowRetention periodically reclaims terminal workflow runs older than the retention horizon,

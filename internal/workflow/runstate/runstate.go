@@ -36,6 +36,9 @@ type Record struct {
 	// ChildPins pins every child Workflow reachable from Spec through workflow: steps, keyed by name in
 	// Namespace (ADR-0189). Nil: the record predates ADR-0189 or has no children.
 	ChildPins map[v1.ObjectName]ChildPin `json:"childPins,omitempty"`
+	// Pins binds every step Function the run can reach to its revision at start, by Function name (ADR-0190). Nil:
+	// the record predates ADR-0190 and dispatches by name.
+	Pins map[v1.ObjectName]v1.RevisionPin `json:"pins,omitempty"`
 	// Depth is the sub-workflow nesting depth (ADR-0099): 0 for a top-level run, +1 per child. The
 	// engine caps it (Config.MaxSubworkflowDepth) so a reference cycle fails cleanly, not by overflow.
 	Depth int `json:"depth,omitempty"`
