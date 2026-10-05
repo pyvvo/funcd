@@ -102,3 +102,34 @@ func TestScenarioRecreatedIdentityGetsFreshCredential(t *testing.T) {
 	reconcile(t, r, "ns1", "ext")
 	require.Equal(t, sec.Spec.Data, getSecret(t, st, "ns1", "ext").Spec.Data, "a same-UID Secret is kept")
 }
+
+// Lookup resolves an Identity's key only through a Secret that Identity controls: one naming another Identity's
+// Secret or an API Secret, and one re-created before its Secret is re-issued, authenticate with nothing.
+func TestLookupResolvesOnlyTheIdentitysOwnSecret(t *testing.T) {
+	st, r := setup(t)
+	identityNamed(t, st, "y", "")
+	reconcileResult(t, r, "y")
+	sobj, _ := v1.NewObject(v1.KindSecret)
+	api := sobj.(*v1.Secret)
+	api.Namespace, api.Name, api.ResourceGroup = "ns1", "u", "rg1"
+	api.Spec = v1.SecretSpec{Type: v1.SecretTypeOpaque, Data: map[string][]byte{secretKeySecretAccessKey: []byte("user")}}
+	_, err := st.Create(context.Background(), api)
+	require.NoError(t, err)
+	identityNamed(t, st, "x", "y")
+	identityNamed(t, st, "x2", "u")
+	keys := NewExternalKeys(st)
+	for _, name := range []string{"x", "x2"} {
+		_, _, ok := keys.Lookup(s3gateway.IdentityAccessKey("ns1", name))
+		require.False(t, ok, "%s resolves through a Secret it does not control", name)
+	}
+	_, _, ok := keys.Lookup(s3gateway.IdentityAccessKey("ns1", "y"))
+	require.True(t, ok)
+
+	require.NoError(t, st.Delete(context.Background(), v1.KindIdentity.GVK(), "ns1", "y", ""))
+	identityNamed(t, st, "y", "")
+	_, _, ok = keys.Lookup(s3gateway.IdentityAccessKey("ns1", "y"))
+	require.False(t, ok, "a re-created y resolves through the Secret of the deleted y")
+	reconcileResult(t, r, "y")
+	_, _, ok = keys.Lookup(s3gateway.IdentityAccessKey("ns1", "y"))
+	require.True(t, ok, "y resolves once its Secret is re-issued")
+}
