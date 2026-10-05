@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — the steady state also makes one store Get per catalog binding (its Decision 5), in the Refines entry for ADR-0143 Decision 7, the Constraint, Decision 2 and the Review-checklist item.
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 2 (line 140) and Decision 3 (lines 156-157, 161-162, 165): the boot timeout and re-create times count from the last successful Start.
+- **Superseded in part by**: [ADR-0192](0192-asleep-function-gate-stops-worker.md) (2026-10-05) — Decision 2 (gateFailed lead-in line 145, row line 150, header lines 22-23) and Decision 3 line 155: an asleep solo Function's workers are stopped and the gate's own phase is written.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, resolver, activator, crash-recovery

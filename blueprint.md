@@ -670,15 +670,17 @@ stateDiagram-v2
     note right of Deploying : a failed pass keeps its phase and retries (ADR-0161)
     Ready --> Failed : a gate fails on a later pass, such as the revision gate or a pooled member of a new revision that cannot load (ADR-0172, ADR-0158)
     Degraded --> Failed : a gate fails on a later pass (ADR-0158)
-    Failed --> Deploying : a new spec, a gate that passes, or a Start retried after a growing wait (ADR-0169)
+    Failed --> Deploying : a new spec, a gate that passes, or a Start retried after a growing wait (ADR-0169) (not while asleep, ADR-0192)
     Failed --> Ready : a worker becomes ready (ADR-0169)
     note right of Failed : idle reclaim never leaves it
     Ready --> Degraded : partial failure detected
     Degraded --> Ready : reconciliation repairs
     Ready --> Idle : no traffic for idleTimeout (scale-to-zero)
     Degraded --> Idle : no traffic for idleTimeout
-    Pending --> Idle : a gate clears with nothing to run (replicas 0), written by the reconciler (ADR-0185)
-    Idle --> Pending : a gate fails while asleep (ADR-0121, ADR-0185)
+    Pending --> Idle : a gate clears with nothing to run (replicas 0, or asleep), written by the reconciler (ADR-0185, ADR-0192)
+    Idle --> Pending : a gate fails while asleep (ADR-0121, ADR-0185, ADR-0192)
+    Idle --> Failed : a gate with phase Failed fails while asleep (ADR-0192)
+    Failed --> Idle : the gates pass on an asleep Function (ADR-0192)
     Idle --> Deploying : request / event arrives (scale from zero)
     Ready --> Terminating : delete requested
     Idle --> Terminating : delete requested
