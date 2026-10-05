@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0](https://github.com/pyvvo/funcd/compare/v0.5.0...v0.6.0) (2026-10-05)
+
+
+### Features
+
+* **catalog:** keep a consumer's catalog URL across a catalog delete and a daemon restart (ADR-0162) ([#692](https://github.com/pyvvo/funcd/issues/692)) ([24e3d0a](https://github.com/pyvvo/funcd/commit/24e3d0aa95adc14efaf3aa981d4b935b68d55465))
+* **config:** make the retry, requeue, supervision and drain times config keys (ADR-0163) ([#691](https://github.com/pyvvo/funcd/issues/691)) ([1b4ec5c](https://github.com/pyvvo/funcd/commit/1b4ec5c5e375f639518d5f41ea8815483fb244cb))
+* **function:** keep Revisions read-only, fail closed when one is missing, and stamp every Function name (ADR-0172) ([#689](https://github.com/pyvvo/funcd/issues/689)) ([24f604f](https://github.com/pyvvo/funcd/commit/24f604f8f33bbcd7328a8b545634eba5b72ad33e))
+* **function:** write every failed pass's status and hand out only listening workers (ADR-0161) ([#685](https://github.com/pyvvo/funcd/issues/685)) ([5881659](https://github.com/pyvvo/funcd/commit/5881659b06149285b9bb96c45a20cdec0e414c74))
+* **invoke:** forward traceparent on fn-to-fn calls and keep them out of edge observ ([#693](https://github.com/pyvvo/funcd/issues/693)) ([b437326](https://github.com/pyvvo/funcd/commit/b4373262d0c8daebde0bc51f542c36dc4c329d40))
+* **runtime:** read raw worker output through pipes and bound log records ([#694](https://github.com/pyvvo/funcd/issues/694)) ([6baf945](https://github.com/pyvvo/funcd/commit/6baf945a3660d66972f8fa9059a8eed74a06f15b))
+
+
+### Bug Fixes
+
+* **auth:** stable Cedar built-in ids and is-in scope type check ([#686](https://github.com/pyvvo/funcd/issues/686)) ([599d663](https://github.com/pyvvo/funcd/commit/599d663384a00e0ca9aa1eabb5d0959d1b42bb34))
+* **function:** keep a pooled member serving through a failed gate ([#695](https://github.com/pyvvo/funcd/issues/695)) ([5644bb4](https://github.com/pyvvo/funcd/commit/5644bb42069ec21aa6b944171679466fa82addb1))
+* **function:** report a pooled member redeployed to an unloadable handler ShapeInvalid ([#743](https://github.com/pyvvo/funcd/issues/743)) ([a598f84](https://github.com/pyvvo/funcd/commit/a598f84f26c93ee33a3dcb9ae0e0ab09e5127f76))
+* **procreg:** wait for the test child's argv before checking ownership ([#681](https://github.com/pyvvo/funcd/issues/681)) ([2fbf623](https://github.com/pyvvo/funcd/commit/2fbf62383f7d408e9bcb69666a91d1f9e18d252f))
+
 ## [0.5.0](https://github.com/pyvvo/funcd/compare/v0.4.0...v0.5.0) (2026-10-05)
 
 
