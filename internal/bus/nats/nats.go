@@ -59,9 +59,10 @@ func Open(ctx context.Context, opts Options) (bus.Bus, error) {
 		cleanup = func() { _ = os.RemoveAll(d) }
 	}
 
+	// No network listener: the only client connects in process, and the bus is internal-plane only (ADR-0008).
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		ServerName: "funcd-bus",
-		Port:       -1, // random free port
+		DontListen: true,
 		JetStream:  true,
 		StoreDir:   storeDir,
 		NoLog:      true,
