@@ -613,6 +613,20 @@ func TestScenarioPooledFunctionRunsSoloInContainerMode(t *testing.T) {
 	}
 }
 
+// WithSensorDelivery (ADR-0156) carries the delivery queue sizes into the sensor.Deps fields; a size below 1
+// or a per-target cap above the workers is Invalid.
+func TestWithSensorDelivery(t *testing.T) {
+	t.Parallel()
+	p, err := New(WithSensorDelivery(5, 2, 10), InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	require.Equal(t, []int{5, 2, 10}, []int{p.cfg.sensorMaxDeliveriesInFlight, p.cfg.sensorMaxInFlightPerTarget, p.cfg.sensorMaxQueuedPerSensor})
+	for _, bad := range [][3]int{{0, 1, 1}, {4, 0, 1}, {4, 4, 0}, {4, 5, 1}} {
+		_, err := New(WithSensorDelivery(bad[0], bad[1], bad[2]), InMemory())
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "WithSensorDelivery%v", bad)
+	}
+}
+
 // WithNestedInFlightCap (ADR-0147): a negative cap is Invalid from New; 0 keeps the default.
 func TestWithNestedInFlightCapValidated(t *testing.T) {
 	_, err := New(WithNestedInFlightCap(-1))

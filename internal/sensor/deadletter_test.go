@@ -407,7 +407,7 @@ func TestIssue174_ReplayRecordsInvocation(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reqOf("s"))
 	require.NoError(t, err)
 	fire(t, fan, "git", "push", "")
-	require.Len(t, dlqList(t, dlq, "team-a"), 1)
+	require.Eventually(t, func() bool { return len(dlqList(t, dlq, "team-a")) == 1 }, 3*time.Second, 20*time.Millisecond)
 	id := dlqList(t, dlq, "team-a")[0].ID
 
 	require.Error(t, r.Replay(context.Background(), "team-a", id))

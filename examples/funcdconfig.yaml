@@ -89,6 +89,9 @@ storage:
 #   payloadLimit: 262144          # max run input / step output bytes. default: 262144 (256 KiB)
 # eventing:                       # Sensor delivery reliability (ADR-0118)
 #   deliveryAttempts: 3           # attempts before a failed action is dead-lettered. default: 3
+#   maxDeliveriesInFlight: 32     # delivery workers across all targets (ADR-0156). default: 32
+#   maxInFlightPerTarget: 4       # deliveries in flight to one Function or Workflow. default: 4
+#   maxQueuedPerSensor: 4096      # undelivered deliveries per Sensor; more are dead-lettered. default: 4096
 #   blobPollInterval: 15s         # poll cadence of blob: EventSources (ADR-0119). default: 15s
 #   deadletter:
 #     dataDir: ""                 # dead-letter-queue Badger dir. default: <dataDir>/deadletter
