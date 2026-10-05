@@ -54,7 +54,7 @@ func reconcileSpec(t *testing.T, s store.Store, c ContractResolver, spec v1.Work
 	if _, err := s.Create(ctx, wf); err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil), c, nil)
+	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), c, nil)
 	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: "wf"})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)

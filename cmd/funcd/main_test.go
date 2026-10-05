@@ -909,3 +909,31 @@ func TestInvokeDefaultTimeoutNegativeRejected(t *testing.T) {
 		require.NoError(t, closeExec())
 	}
 }
+
+// controller.gcSweepInterval accepts a positive Go duration only: 0, a negative or a malformed value fails startup
+// with fault.Invalid naming the key (ADR-0170 Decision 9).
+func TestGCSweepIntervalMustBePositive(t *testing.T) {
+	root := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dir := shortDataDir(t)
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+			"storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	base, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "5m", base.Controller.GCSweepInterval)
+	for _, bad := range []string{"0", "0s", "-1m", "bogus"} {
+		t.Run(bad, func(t *testing.T) {
+			cfg := base
+			cfg.Controller.GCSweepInterval = bad
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, "controller.gcSweepInterval")
+		})
+	}
+	cfg := base
+	cfg.Controller.GCSweepInterval = "30s"
+	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+	require.NoError(t, err)
+	require.NoError(t, closeExec())
+}

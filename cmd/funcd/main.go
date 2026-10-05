@@ -359,6 +359,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries),
 		funcd.WithSensorDelivery(cfg.Eventing.MaxDeliveriesInFlight, cfg.Eventing.MaxInFlightPerTarget, cfg.Eventing.MaxQueuedPerSensor))
 
+	gcSweep, err := parseDuration("controller.gcSweepInterval", cfg.Controller.GCSweepInterval, 0, false)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithGCSweepInterval(gcSweep))
+
 	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
 	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, true)
 	if err != nil {

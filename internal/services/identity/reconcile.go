@@ -10,7 +10,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -39,13 +42,19 @@ const (
 type ReconcilerDeps struct {
 	Store  store.Store
 	Logger *slog.Logger
+	// SupervisionPeriod requeues an Identity refused a Secret it does not own; 0 ⇒ controller.SupervisionPeriod.
+	SupervisionPeriod time.Duration
 }
 
 // Reconciler is the controller.Reconciler for KindIdentity.
 type Reconciler struct {
 	store  store.Store
 	logger *slog.Logger
+	period time.Duration
 }
+
+// errSecretNotOwned refuses a credentialSecretName taken by a Secret another Identity, or no Identity, controls.
+var errSecretNotOwned = errors.New("secret not owned")
 
 // NewReconciler builds the Identity reconciler. Store is required.
 func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
@@ -56,11 +65,15 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Reconciler{store: d.Store, logger: logger.With("component", "services.identity")}, nil
+	period := d.SupervisionPeriod
+	if period <= 0 {
+		period = controller.SupervisionPeriod
+	}
+	return &Reconciler{store: d.Store, logger: logger.With("component", "services.identity"), period: period}, nil
 }
 
 // Reconcile issues/rotates an Identity's credential (idempotent, at-least-once). A deleted Identity
-// (NotFound) needs no teardown — its owned Secret cascades via the OwnerReference GC, and the
+// (NotFound) needs no teardown — the owner garbage collector deletes its Secret (ADR-0170), and the
 // store-backed ExternalKeys lookup naturally fails for a missing Identity, so the credential stops
 // authenticating.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
@@ -78,7 +91,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 
 	access := s3gateway.IdentityAccessKey(string(id.Namespace), string(id.Name))
-	if err := r.ensureSecret(ctx, id, access); err != nil {
+	if err := r.ensureSecret(ctx, id, access); errors.Is(err, errSecretNotOwned) {
+		id.Status.Phase = v1.PhasePending
+		id.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "SecretNotOwned", Message: err.Error()})
+		if _, uerr := r.store.Update(ctx, id); uerr != nil {
+			return controller.Result{}, retryOnConflict(uerr, op)
+		}
+		return controller.Result{RequeueAfter: r.period}, nil
+	} else if err != nil {
 		id.Status.Phase = v1.PhasePending
 		id.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "SecretIssueFailed", Message: err.Error()})
 		if _, uerr := r.store.Update(ctx, id); uerr != nil {
@@ -98,8 +118,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 }
 
 // ensureSecret idempotently creates/rotates the Identity's owned credential Secret. It generates a new
-// random secret when the Secret is absent OR spec.rotate advanced past status.observedRotate (rotation);
-// otherwise it leaves the existing secret in place. The access key id is stable.
+// random secret when the Secret is absent, controlled by a deleted namesake (another UID), OR spec.rotate
+// advanced past status.observedRotate (rotation); otherwise it leaves the existing secret in place. Any
+// other Secret of the name is never written: errSecretNotOwned (ADR-0170 Decision 4). The access key id
+// is stable.
 func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access string) error {
 	name := id.Spec.CredentialSecretName
 	if name == "" {
@@ -109,7 +131,16 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 	if gerr != nil && fault.KindOf(gerr) != fault.NotFound {
 		return gerr
 	}
-	rotate := gerr != nil || id.Spec.Rotate > id.Status.ObservedRotate
+	reissue := false
+	if gerr == nil {
+		sec, _ := existing.(*v1.Secret)
+		named, sameUID := secretControl(sec, id)
+		if !named {
+			return fmt.Errorf("%w: secret %q is not controlled by identity %q", errSecretNotOwned, name, id.Name)
+		}
+		reissue = !sameUID
+	}
+	rotate := gerr != nil || reissue || id.Spec.Rotate > id.Status.ObservedRotate
 	if !rotate {
 		return nil // secret already issued for this rotation generation
 	}
@@ -138,13 +169,24 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 		_, cerr := r.store.Create(ctx, sec)
 		return cerr
 	}
-	sec := existing.(*v1.Secret) // rotate → update in place (preserve UID/RV)
+	sec := existing.(*v1.Secret) // rotate or re-issue → update in place (preserve UID/RV)
+	sec.OwnerReferences = []v1.OwnerReference{ownerRef(id)}
 	sec.Spec.Data = data
 	if sec.Spec.Type == "" {
 		sec.Spec.Type = v1.SecretTypeOpaque
 	}
 	_, uerr := r.store.Update(ctx, sec)
 	return uerr
+}
+
+// secretControl reports whether sec's controller ref names id's kind and name, and whether it carries id's UID.
+func secretControl(sec *v1.Secret, id *v1.Identity) (named, sameUID bool) {
+	if sec == nil {
+		return false, false
+	}
+	r, ok := v1.ControllerOf(sec.OwnerReferences)
+	named = ok && r.Kind == v1.KindIdentity && r.Name == id.Name && (r.Namespace == "" || r.Namespace == id.Namespace)
+	return named, named && r.UID == id.UID
 }
 
 // ownerRef ties the credential Secret to its Identity so it cascades on delete (revocation).

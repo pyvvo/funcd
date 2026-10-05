@@ -7,6 +7,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -19,16 +20,28 @@ import (
 // storeHandlers is the real, store-backed Handlers: authenticated (via the authn
 // middleware that populates ctx), namespace-authorized (the PDP), and admission-validated.
 type storeHandlers struct {
-	store store.Store
-	authz auth.Authorizer
-	admit *admission.Pipeline
-	locks *nsLocks // ADR-0147
+	store     store.Store
+	authz     auth.Authorizer
+	admit     *admission.Pipeline
+	locks     *nsLocks       // ADR-0147
+	collector OwnerCollector // ADR-0170: a forced ResourceGroup delete; nil ⇒ force answers Unavailable
 }
 
 // NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018). The admission
 // pipeline (ADR-0063) is the admit step on every write; pass admission.NewPipeline(...).
-func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline) Handlers {
-	return &storeHandlers{store: st, authz: authz, admit: admit, locks: newNSLocks()}
+func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline, collector OwnerCollector) Handlers {
+	return &storeHandlers{store: st, authz: authz, admit: admit, locks: newNSLocks(), collector: collector}
+}
+
+// listReader adapts store.Store to admission.StoreReader.
+type listReader struct{ s store.Store }
+
+func (r listReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
+	res, err := r.s.List(ctx, gvk, store.ListOptions{Namespace: ns})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
 }
 
 // lockFor takes ns's admission lock when an admission of (kind, op) reads the namespace (ADR-0147), so
@@ -275,6 +288,12 @@ func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 }
 
 func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObjIf(ctx, kind, ns, name, "")
+}
+
+// deleteObjIf is the whole delete path: authorize → the namespace admission lock when a Delete admission reads
+// the namespace (ADR-0147) → Get Old → Admit → store.Delete with rv as the precondition ("" ⇒ none) → unlock.
+func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
@@ -297,7 +316,99 @@ func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.Names
 			return err
 		}
 	}
-	return h.store.Delete(ctx, kind.GVK(), ns, name, "")
+	return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
+}
+
+// forceDeleteResourceGroup deletes a ResourceGroup's members, then the group (ADR-0170 Decision 8). Each pass
+// lists the members and deletes each through deleteObjIf with its listed resourceVersion, Sensors first, so every
+// member's authorization and admissions apply; then it collects the namespace's dead-owned children. A pass that
+// deleted a member runs another; one that deleted none stops with its first 409, else deletes the group normally.
+func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	const op = "controlplane.forceDeleteResourceGroup"
+	if err := h.authorize(ctx, auth.VerbDelete, v1.KindResourceGroup, ns); err != nil {
+		return err
+	}
+	if h.collector == nil {
+		return fault.Unavailablef(op, "no owner garbage collector is wired; force is unavailable")
+	}
+	if _, err := h.store.Get(ctx, v1.KindResourceGroup.GVK(), ns, name); err != nil {
+		return err
+	}
+	group := v1.ResourceGroupName(name)
+	for {
+		members, err := admission.Members(ctx, listReader{h.store}, ns, group)
+		if err != nil {
+			return err
+		}
+		slices.SortStableFunc(members, func(a, b v1.Object) int {
+			return boolRank(b.GroupVersionKind().Kind == v1.KindSensor) - boolRank(a.GroupVersionKind().Kind == v1.KindSensor)
+		})
+		deleted := false
+		var refused error
+		for _, m := range members {
+			ok, err := h.deleteMember(ctx, m, group)
+			switch {
+			case ok:
+				deleted = true
+			case fault.KindOf(err) == fault.Conflict:
+				if refused == nil {
+					refused = err
+				}
+			case err != nil:
+				return err
+			}
+		}
+		if err := h.collector.CollectNamespace(ctx, ns); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "collect children in %q", ns)
+		}
+		if deleted {
+			continue
+		}
+		if refused != nil {
+			return refused
+		}
+		return h.deleteObj(ctx, v1.KindResourceGroup, ns, name)
+	}
+}
+
+// deleteMember deletes one listed member. On a 409 it re-reads it once and retries with the new
+// resourceVersion if it is still a member; gone or moved is skipped. It reports whether it deleted it.
+func (h *storeHandlers) deleteMember(ctx context.Context, m v1.Object, group v1.ResourceGroupName) (bool, error) {
+	kind, meta := m.GroupVersionKind().Kind, m.GetObjectMeta()
+	err := h.deleteObjIf(ctx, kind, meta.Namespace, meta.Name, meta.ResourceVersion)
+	if err == nil {
+		return true, nil
+	}
+	switch fault.KindOf(err) {
+	case fault.NotFound:
+		return false, nil
+	case fault.Conflict:
+	default:
+		return false, err
+	}
+	cur, gerr := h.store.Get(ctx, kind.GVK(), meta.Namespace, meta.Name)
+	if fault.KindOf(gerr) == fault.NotFound {
+		return false, nil
+	}
+	if gerr != nil {
+		return false, gerr
+	}
+	cm := cur.GetObjectMeta()
+	if _, owned := v1.ControllerOf(cm.OwnerReferences); cm.ResourceGroup != group || owned {
+		return false, nil
+	}
+	err = h.deleteObjIf(ctx, kind, cm.Namespace, cm.Name, cm.ResourceVersion)
+	if fault.KindOf(err) == fault.NotFound {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // --- Namespace (cluster-scoped) ---
@@ -380,7 +491,10 @@ func (h *storeHandlers) ReplaceResourceGroup(ctx context.Context, ns v1.Namespac
 	return *o.(*v1.ResourceGroup), nil
 }
 
-func (h *storeHandlers) DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (h *storeHandlers) DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, force bool) error {
+	if force {
+		return h.forceDeleteResourceGroup(ctx, ns, name)
+	}
 	return h.deleteObj(ctx, v1.KindResourceGroup, ns, name)
 }
 

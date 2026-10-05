@@ -178,14 +178,33 @@ func (c *Client) List(ctx context.Context, kind v1.Kind, ns v1.NamespaceName) ([
 }
 
 // Delete removes one object.
-func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
+func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, opts ...DeleteOption) error {
+	var o deleteOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.force && kind != v1.KindResourceGroup {
+		return fault.Invalidf("sdk.Delete", "force applies only to a ResourceGroup, not %s", kind)
+	}
 	itemURL, err := c.itemURL(kind, ns, name)
 	if err != nil {
 		return err
 	}
+	if o.force {
+		itemURL += "?force=true"
+	}
 	_, err = c.do(ctx, http.MethodDelete, itemURL, nil)
 	return err
 }
+
+// DeleteOption tunes a Delete.
+type DeleteOption func(*deleteOptions)
+
+type deleteOptions struct{ force bool }
+
+// Force deletes a ResourceGroup's members first, each under its own protections, then the group (ADR-0170).
+// Delete refuses it with fault.Invalid for any other kind, before a request.
+func Force() DeleteOption { return func(o *deleteOptions) { o.force = true } }
 
 // collectionURL builds the collection path for a kind (and namespace, if namespaced).
 func (c *Client) collectionURL(kind v1.Kind, ns v1.NamespaceName) (string, error) {

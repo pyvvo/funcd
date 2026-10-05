@@ -1287,7 +1287,8 @@ func (r *Reconciler) teardown(ctx context.Context, ns v1.NamespaceName, name v1.
 // digest is the explicit spec digest, else the resolved-and-pinned one; on the early-return
 // path it is the EXISTING Revision's digest — a stamped Revision is NEVER re-resolved, so a
 // moved tag cannot drift it (the immutability guarantee). A Revision of the name that a since-deleted Function stamped
-// is dropped with its workers, and the generation is stamped afresh.
+// is dropped, and the generation is stamped afresh. The create path first retires every worker labelled with the
+// Revision's name: the owner garbage collector may already have deleted a deleted namesake's Revision (ADR-0170).
 func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (string, error) {
 	const op = "function.ensureRevision"
 	revName := revisionName(fn)
@@ -1302,7 +1303,7 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 			}
 			return fn.Spec.ImageDigest, nil
 		}
-		if derr := r.dropRevision(ctx, fn, rev); derr != nil {
+		if derr := r.dropRevision(ctx, rev); derr != nil {
 			return "", derr
 		}
 	case fault.KindOf(err) != fault.NotFound:
@@ -1331,6 +1332,9 @@ func (r *Reconciler) ensureRevision(ctx context.Context, fn *v1.Function) (strin
 		Handler:  fn.Spec.Handler,
 		Image:    fn.Spec.Image, ImageDigest: pinned,
 	}
+	if err := r.retireStale(ctx, fn, rev.Name); err != nil {
+		return "", err
+	}
 	if _, cerr := r.store.Create(ctx, rev); cerr != nil {
 		if fault.KindOf(cerr) != fault.Conflict {
 			return "", fault.Wrapf(cerr, fault.KindOf(cerr), op, "create revision")
@@ -1352,29 +1356,31 @@ func revisionName(fn *v1.Function) string { return fmt.Sprintf("%s-%d", fn.Name,
 // ownedByAnother reports whether rev was stamped for another Function of fn's name, one since deleted. A Revision that
 // names no owner is taken as fn's.
 func ownedByAnother(rev *v1.Revision, fn *v1.Function) bool {
-	for _, o := range rev.OwnerReferences {
-		if o.Kind == v1.KindFunction && o.Controller {
-			return o.UID != fn.UID
-		}
-	}
-	return false
+	o, ok := v1.ControllerOf(rev.OwnerReferences)
+	return ok && o.Kind == v1.KindFunction && o.UID != fn.UID
 }
 
-// dropRevision retires the workers of rev, a deleted Function's Revision, and deletes it: when the delete and the
-// re-create reach one pass, teardown never ran, and the re-created Function's revision of that name must not adopt them
-// (issue #55).
-func (r *Reconciler) dropRevision(ctx context.Context, fn *v1.Function, rev *v1.Revision) error {
+// retireStale retires every worker of fn's name labelled with Revision rev before that Revision is created: no worker
+// of a previous Revision of that name survives (issue #55, ADR-0170 Decision 6). A crash between the retire and the
+// create retires again on the next pass.
+func (r *Reconciler) retireStale(ctx context.Context, fn *v1.Function, rev v1.ObjectName) error {
 	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
 	if err != nil {
 		return err
 	}
 	for _, in := range insts {
-		if in.Revision == rev.Name {
+		if in.Revision == rev {
 			if err := r.retire(ctx, in); err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
+
+// dropRevision deletes rev, a deleted Function's Revision, so the create path stamps it afresh and retires its
+// workers (issue #55).
+func (r *Reconciler) dropRevision(ctx context.Context, rev *v1.Revision) error {
 	if err := r.store.Delete(ctx, v1.KindRevision.GVK(), rev.Namespace, rev.Name, rev.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
 		return fault.Wrapf(err, fault.KindOf(err), "function.dropRevision", "delete revision %q", rev.Name)
 	}

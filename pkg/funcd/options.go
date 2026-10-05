@@ -240,6 +240,18 @@ func WithBlobPollInterval(d time.Duration) Option {
 	return func(c *config) error { c.blobPollInterval = d; return nil }
 }
 
+// WithGCSweepInterval sets the owner garbage collector's sweep period (ADR-0170, config
+// controller.gcSweepInterval); not the stores' WithValueLogGCInterval. 0 ⇒ gc.DefaultInterval (5m).
+func WithGCSweepInterval(d time.Duration) Option {
+	return func(c *config) error {
+		if d < 0 {
+			return fault.Invalidf("funcd.WithGCSweepInterval", "gc sweep interval %s must be positive", d)
+		}
+		c.gcSweepInterval = d
+		return nil
+	}
+}
+
 // WithSiteDefaultIndex sets the document a Site serves for "/" (and asserts present before Ready) when
 // its spec.index is empty (ADR-0139, F103). "" ⇒ "index.html". A relative path, never a leading '/'.
 func WithSiteDefaultIndex(index string) Option {

@@ -144,6 +144,11 @@ type createResourceGroupInput struct {
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.ResourceGroup
 }
+type deleteResourceGroupInput struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Name      v1.ObjectName    `path:"name"`
+	Force     bool             `query:"force" doc:"delete the members first; their protections apply (ADR-0170)"`
+}
 type resourceGroupOutput struct {
 	Body v1.ResourceGroup
 }
@@ -208,8 +213,8 @@ func registerResourceGroup(api huma.API, h Handlers) {
 	huma.Register(api, huma.Operation{
 		OperationID: "deleteResourceGroup", Method: http.MethodDelete, Path: base + "/{name}",
 		Tags: []string{"ResourceGroup"},
-	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteResourceGroup(ctx, in.Namespace, in.Name))
+	}, func(ctx context.Context, in *deleteResourceGroupInput) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteResourceGroup(ctx, in.Namespace, in.Name, in.Force))
 	})
 }
 

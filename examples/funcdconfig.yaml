@@ -166,6 +166,10 @@ log:
 # catalog:
 #   proxyHost: ""                 # host the proxies publish to functions; a node address under containerd. default: "" ⇒ 127.0.0.1
 
+# --- controller: the platform controllers (ADR-0170) --------------------------------------------
+# controller:
+#   gcSweepInterval: 5m           # owner garbage collector sweep period; positive. default: 5m
+
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
 #   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html

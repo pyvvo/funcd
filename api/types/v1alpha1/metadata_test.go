@@ -213,3 +213,18 @@ func TestGenerateObjectName(t *testing.T) {
 		t.Fatalf("GenerateObjectName did not bound to 63 chars: len=%d", len(got))
 	}
 }
+
+func TestControllerOf(t *testing.T) {
+	owner := OwnerReference{ObjectRef: ObjectRef{Kind: KindIdentity, Name: "a"}, UID: "u1"}
+	ctrl := OwnerReference{ObjectRef: ObjectRef{Kind: KindWorkflow, Name: "b"}, UID: "u2", Controller: true}
+	if _, ok := ControllerOf(nil); ok {
+		t.Fatal("no refs: no controller")
+	}
+	if _, ok := ControllerOf([]OwnerReference{owner}); ok {
+		t.Fatal("a ref without Controller is not the controller")
+	}
+	got, ok := ControllerOf([]OwnerReference{owner, ctrl})
+	if !ok || got != ctrl {
+		t.Fatalf("ControllerOf = %+v, %v; want %+v, true", got, ok, ctrl)
+	}
+}

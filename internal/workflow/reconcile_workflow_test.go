@@ -27,7 +27,7 @@ func newStore(t *testing.T) store.Store {
 // a KVStore (owner = the materialized function), the ADR-0073 cycle engine-internal.
 func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 	s := newStore(t)
-	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
 
 	wf := &v1.Workflow{
@@ -98,7 +98,7 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 // owner reference (it outlives the workflow); a `delete` one does (it cascades).
 func TestMaterializeDeletionPolicy(t *testing.T) {
 	s := newStore(t)
-	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -137,7 +137,7 @@ func TestIssue149_KVDeletionPolicyChangeUpdatesOwnerRef(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(string(tc.from)+"-to-"+string(tc.to), func(t *testing.T) {
 			s := newStore(t)
-			m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+			m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 			ctx := context.Background()
 			wf := &v1.Workflow{
 				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -176,7 +176,7 @@ func TestIssue149_KVDeletionPolicyChangeUpdatesOwnerRef(t *testing.T) {
 // materialize is idempotent (re-running updates, does not error on existing).
 func TestMaterializeIdempotent(t *testing.T) {
 	s := newStore(t)
-	m := NewMaterializer(s, fakeRuntimes{rt: "python314"}, nil)
+	m := NewMaterializer(s, fakeRuntimes{rt: "python314"}, nil, 0)
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -194,7 +194,7 @@ func TestMaterializeIdempotent(t *testing.T) {
 // A re-materialize keeps the status the Function reconciler wrote, which tracks a redeploy (ADR-0143).
 func TestMaterializeKeepsFunctionStatus(t *testing.T) {
 	s := newStore(t)
-	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -230,7 +230,7 @@ func TestMaterializeKeepsFunctionStatus(t *testing.T) {
 // Issue 19: a re-materialize keeps the status the KVStore reconciler wrote.
 func TestIssue19_RematerializeKeepsKVStoreStatus(t *testing.T) {
 	s := newStore(t)
-	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
@@ -282,7 +282,7 @@ func TestIssue50_IdleStepFunctionScalesToZero(t *testing.T) {
 					Steps:   []v1.WorkflowStep{{Name: "ingest", Function: &v1.FunctionStep{Image: "oci:ingest"}}},
 				},
 			}
-			if err := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil).Materialize(ctx, wf); err != nil {
+			if err := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0).Materialize(ctx, wf); err != nil {
 				t.Fatalf("Materialize: %v", err)
 			}
 			obj, err := s.Get(ctx, v1.KindFunction.GVK(), "default", "wfz-ingest")

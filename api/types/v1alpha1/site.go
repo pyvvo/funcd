@@ -144,7 +144,7 @@ func (s *Site) Validate() error {
 	switch s.Spec.Bucket.Deletion {
 	case "", DeletionRetain:
 	case DeletionDelete:
-		return fault.Invalidf(op, "spec.bucket.deletion %q is not implemented in V1 (no owner-reference collector exists); use %q", DeletionDelete, DeletionRetain)
+		return fault.Invalidf(op, "spec.bucket.deletion %q is not implemented in V1 (needs a drain-then-delete teardown, ADR-0139); use %q", DeletionDelete, DeletionRetain)
 	default:
 		return fault.Invalidf(op, "spec.bucket.deletion %q must be %q", s.Spec.Bucket.Deletion, DeletionRetain)
 	}

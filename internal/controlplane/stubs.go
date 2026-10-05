@@ -177,7 +177,7 @@ func (s *StubHandlers) ReplaceResourceGroup(_ context.Context, ns v1.NamespaceNa
 	return rg, nil
 }
 
-func (s *StubHandlers) DeleteResourceGroup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteResourceGroup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)

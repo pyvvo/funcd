@@ -227,3 +227,20 @@ func TestIssue323_TooLargeAndThrottledMapToTheirKinds(t *testing.T) {
 		})
 	}
 }
+
+func TestForceIsRefusedForAnyKindButResourceGroup(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		require.Equal(t, "true", r.URL.Query().Get("force"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL)
+	require.NoError(t, err)
+	err = c.Delete(context.Background(), v1.KindFunction, "ns", "a", sdk.Force())
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Zero(t, calls, "refused before a request")
+	require.NoError(t, c.Delete(context.Background(), v1.KindResourceGroup, "ns", "team", sdk.Force()))
+	require.Equal(t, 1, calls)
+}

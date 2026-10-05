@@ -1,12 +1,14 @@
 package controlplane
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
@@ -34,6 +36,14 @@ type Deps struct {
 	DeadLetters deadletter.Store
 	// Replayer performs the imperative DLQ replay (ADR-0118 §4). Required alongside DeadLetters.
 	Replayer Replayer
+	// Collector is the owner garbage collector a forced ResourceGroup delete runs (ADR-0170). Optional; nil ⇒
+	// force answers fault.Unavailable.
+	Collector OwnerCollector
+}
+
+// OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
+type OwnerCollector interface {
+	CollectNamespace(ctx context.Context, ns v1.NamespaceName) error
 }
 
 // NewServer builds the authenticated, authorized, store-backed control-plane API
@@ -60,7 +70,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.Authn(d.Credentials))
 	admissions := append([]admission.Admission{admission.NewValidateAdmission()}, d.Admissions...)
-	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...)))
+	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...), d.Collector))
 	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
 		RegisterLogs(api, d.Logs, d.Authorizer)
 	}
