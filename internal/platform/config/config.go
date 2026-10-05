@@ -166,6 +166,11 @@ type Config struct {
 			ImageOverride map[string]string `json:"imageOverride,omitempty" env:"FUNCD_IMAGE_OVERRIDE" envSeparator:"," envKeyValSeparator:"="`
 		} `json:"containerd,omitempty"`
 	} `json:"runtime,omitempty"`
+	// Controller tunes the platform controllers; GCSweepInterval is the owner garbage collector's sweep period
+	// (ADR-0170), a positive Go duration.
+	Controller struct {
+		GCSweepInterval string `json:"gcSweepInterval,omitempty" env:"FUNCD_CONTROLLER_GC_SWEEP_INTERVAL"`
+	} `json:"controller,omitempty"`
 	Log struct {
 		Format string `json:"format,omitempty" env:"FUNCD_LOG_FORMAT" validate:"oneof=json text"`
 		Level  string `json:"level,omitempty" env:"FUNCD_LOG_LEVEL" validate:"oneof=debug info warn error"`
@@ -289,6 +294,7 @@ func defaults() Config {
 	c.Auth.Namespaces = []string{"default"}
 	c.Runtime.Mode = "process"
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
+	c.Controller.GCSweepInterval = "5m"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"
 	c.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
 	c.Runtime.Containerd.ImagePrefix = DefaultImagePrefix

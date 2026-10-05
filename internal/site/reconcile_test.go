@@ -491,7 +491,7 @@ func TestScenarioSiteNotReadyWhenRouteNotReady(t *testing.T) {
 }
 
 // scenario: deleted-site-reclaims-nothing (ADR-0139 §5) — reconciling a Site that no longer exists is a
-// no-op: no collector exists, the owned Route survives, and no error is raised.
+// no-op: the owned Route survives, and no error is raised.
 func TestScenarioDeletedSiteReclaimsNothing(t *testing.T) {
 	h := newHarness(t)
 	h.push("v1", siteA())

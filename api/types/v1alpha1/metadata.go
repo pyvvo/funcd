@@ -232,6 +232,16 @@ type OwnerReference struct {
 	BlockOwnerDeletion bool `json:"blockOwnerDeletion,omitempty"`
 }
 
+// ControllerOf returns the controller OwnerReference of refs, the first one marked Controller.
+func ControllerOf(refs []OwnerReference) (OwnerReference, bool) {
+	for _, r := range refs {
+		if r.Controller {
+			return r, true
+		}
+	}
+	return OwnerReference{}, false
+}
+
 // Object is the generic interface satisfied by every resource kind. The store
 // persists and the controller watches through this interface — no per-kind switch.
 type Object interface {

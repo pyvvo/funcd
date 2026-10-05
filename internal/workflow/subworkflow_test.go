@@ -184,7 +184,7 @@ func seedWF(t *testing.T, s store.Store, name string, contract *v1.WorkflowContr
 func reconcileByName(t *testing.T, s store.Store, c ContractResolver, name string) (*v1.Workflow, controller.Result) {
 	t.Helper()
 	ctx := context.Background()
-	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil), c, nil)
+	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), c, nil)
 	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: v1.ObjectName(name)})
 	if err != nil {
 		t.Fatalf("reconcile %q: %v", name, err)

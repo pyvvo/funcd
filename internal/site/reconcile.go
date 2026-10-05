@@ -93,7 +93,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	obj, err := r.store.Get(ctx, v1.KindSite.GVK(), req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return controller.Result{}, nil // deleted; nothing is reclaimed — no collector exists (Decision §5)
+			return controller.Result{}, nil // deleted; nothing is reclaimed here (Decision §5)
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get site %s/%s", req.Namespace, req.Name)
 	}

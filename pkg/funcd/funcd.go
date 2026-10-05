@@ -55,6 +55,7 @@ import (
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/network"
@@ -273,6 +274,7 @@ type config struct {
 	// Blob EventSource poll watcher (ADR-0119, F83): the platform-wide cadence a `blob:` source's prefixes
 	// are List-polled for new objects. 0 ⇒ the 15s default.
 	blobPollInterval time.Duration
+	gcSweepInterval  time.Duration // ADR-0170: the owner garbage collector's sweep period (0 ⇒ gc.DefaultInterval)
 
 	// Site reconciler (ADR-0139, F103): the index document served for "/" when a Site's spec.index is
 	// empty. "" ⇒ "index.html".
@@ -315,6 +317,7 @@ type Platform struct {
 	providers *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller  *controller.Controller
+	collector   *gc.Collector // ADR-0170: the owner garbage collector, run beside the controller
 	eventing    *eventing.Source
 	eventFanout *eventing.Fanout      // ADR-0108: the named-event publisher the F69 Sensor subscribes to
 	blobWatcher *eventing.BlobWatcher // ADR-0119: the blob EventSource poll watcher (side Run loop)
@@ -736,6 +739,9 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
+	if p.collector, err = gc.New(gc.Deps{Store: c.store, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
+	}
 	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
 	// Edge-route aggregator (ADR-0138): the SINGLE sole-writer of p.edgeRouter's replace-all table. The
 	// Route reconciler (user Routes) and the CatalogService reconciler (its node-private catalog::query
@@ -931,7 +937,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.workflowRetention = c.workflowRetention
 	p.workflowEngine = wfEngine
-	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
+	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger, 0)
 	wfContracts := workflow.ContractResolver(contractResolver{})
 	if c.workflowContracts != nil {
 		wfContracts = c.workflowContracts
@@ -960,6 +966,7 @@ func (p *Platform) buildControlPlane() error {
 		RunLogs:     runLogQuerier,
 		DeadLetters: dlq,              // ADR-0118: the DLQ read + replay/discard surface
 		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
 		Admissions: []admission.Admission{
 			// ADR-0064 fn-to-fn link rules on the write path.
 			admission.NewLinkValidityAdmission(storeReader{c.store}),
@@ -991,6 +998,8 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
 			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
 			admission.NewWorkflowRunSpecImmutableAdmission(),
+			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
+			admission.NewResourceGroupDeletionProtectionAdmission(storeReader{c.store}),
 		},
 	})
 	if err != nil {
@@ -1178,11 +1187,17 @@ func (p *Platform) Run(ctx context.Context) error {
 		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "load the Route table"))
 	}
 
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		if err := p.controller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			p.logger.ErrorContext(ctx, "controller stopped", "error", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := p.collector.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			p.logger.ErrorContext(ctx, "garbage collector stopped", "error", err)
 		}
 	}()
 	go func() {

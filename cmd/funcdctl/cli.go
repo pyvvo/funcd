@@ -181,6 +181,7 @@ func (a *cli) applyCmd() *cobra.Command {
 
 func (a *cli) deleteCmd() *cobra.Command {
 	var ns string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "delete <kind> <name>",
 		Short: "Delete an object",
@@ -194,13 +195,18 @@ func (a *cli) deleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.Delete(cmd.Context(), kind, v1.NamespaceName(ns), v1.ObjectName(args[1])); err != nil {
+			var opts []sdk.DeleteOption
+			if force {
+				opts = append(opts, sdk.Force())
+			}
+			if err := c.Delete(cmd.Context(), kind, v1.NamespaceName(ns), v1.ObjectName(args[1]), opts...); err != nil {
 				return err
 			}
 			return a.writef("deleted %s/%s\n", kind, args[1])
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace")
+	cmd.Flags().BoolVar(&force, "force", false, "ResourceGroup only: delete its members first; their protections apply")
 	return cmd
 }
 

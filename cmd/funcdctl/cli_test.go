@@ -434,3 +434,24 @@ func TestIssue316_ApplyRejectionNamesTheDocument(t *testing.T) {
 	require.NoError(t, execCLI(&out, nil, "apply", "--help"))
 	require.Contains(t, out.String(), "stops at the first error")
 }
+
+// scenario: force-only-on-resourcegroup — `delete function a --force` fails before any request and a stays;
+// `delete rg <name> --force` reaches the force route (here answered 503: the test server wires no collector).
+func TestScenarioForceOnlyOnResourceGroup(t *testing.T) {
+	ctx := context.Background()
+	c := newClient(t)
+	mkfn(ctx, t, c)
+	err := execCLI(io.Discard, c, "delete", "function", "fn1", "-n", "team-a", "--force")
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	_, err = c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+	require.NoError(t, err, "fn1 stays")
+
+	rg := &v1.ResourceGroup{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindResourceGroup.GVK().APIVersion(), Kind: v1.KindResourceGroup},
+		ObjectMeta: v1.ObjectMeta{Name: "rg1", Namespace: "team-a", ResourceGroup: "rg1"},
+	}
+	_, err = c.Apply(ctx, rg)
+	require.NoError(t, err)
+	err = execCLI(io.Discard, c, "delete", "rg", "rg1", "-n", "team-a", "--force")
+	require.Equal(t, fault.Unavailable, fault.KindOf(err), "the force query reached the route")
+}

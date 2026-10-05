@@ -36,7 +36,7 @@ type Handlers interface {
 	CreateResourceGroup(ctx context.Context, rg v1.ResourceGroup) (v1.ResourceGroup, error)
 	ListResourceGroups(ctx context.Context, ns v1.NamespaceName) ([]v1.ResourceGroup, error)
 	ReplaceResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rg v1.ResourceGroup) (v1.ResourceGroup, error)
-	DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, force bool) error
 
 	// Function (namespaced)
 	GetFunction(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Function, error)
