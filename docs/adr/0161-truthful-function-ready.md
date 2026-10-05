@@ -1,6 +1,6 @@
 # ADR-0161: Truthful Function Ready — every failed pass writes the status, and only listening workers get calls
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — the steady state also makes one store Get per catalog binding (its Decision 5), in the Refines entry for ADR-0143 Decision 7, the Constraint, Decision 2 and the Review-checklist item.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
