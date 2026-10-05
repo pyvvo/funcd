@@ -64,7 +64,8 @@ func accessDenied() error { return s3err.GetAPIError(s3err.ErrAccessDenied) }
 
 // splitKey separates an S3 object key into its leading prefix sub-domain and the rest
 // (ADR-0080): "gold/q.parquet" → ("gold", "q.parquet"). A key with no "/" is the
-// prefix itself with an empty object path.
+// prefix itself with an empty object path. The substrate key is the S3 key itself:
+// rebuilding it from the split would store the folder marker "gold/" as "gold" (issue 709).
 func splitKey(key string) (prefix, object string) {
 	if i := strings.IndexByte(key, '/'); i >= 0 {
 		return key[:i], key[i+1:]
@@ -131,15 +132,6 @@ func (b *be) allowed(ctx context.Context, pr principal, action authz.Action, buc
 	return dec.Allowed, nil
 }
 
-// blobKey is the substrate key for an S3 (prefix, object) within a bucket: the prefix
-// sub-domain is preserved so distinct prefixes stay isolated under the bucket view.
-func blobKey(prefix, object string) string {
-	if object == "" {
-		return prefix
-	}
-	return prefix + "/" + object
-}
-
 // mapBlobErr translates a blob fault to the closest S3 error (ADR-0080).
 func mapBlobErr(err error) error {
 	switch fault.KindOf(err) {
@@ -166,13 +158,12 @@ func mapBlobErr(err error) error {
 func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.GetObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	bucket := deref(in.Bucket)
-	prefix, object := splitKey(deref(in.Key))
+	bucket, key := deref(in.Bucket), deref(in.Key)
+	prefix, _ := splitKey(key)
 	sub, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
-	key := blobKey(prefix, object)
 	attrs, found, err := blob.Stat(ctx, sub, key)
 	if err != nil {
 		return nil, mapBlobErr(err)
@@ -253,13 +244,13 @@ func getRange(ctx context.Context, sub blob.Bucket, key, header string, size int
 func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.HeadObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	bucket := deref(in.Bucket)
-	prefix, object := splitKey(deref(in.Key))
+	bucket, key := deref(in.Bucket), deref(in.Key)
+	prefix, _ := splitKey(key)
 	sub, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
-	attrs, found, serr := blob.Stat(ctx, sub, blobKey(prefix, object))
+	attrs, found, serr := blob.Stat(ctx, sub, key)
 	if serr != nil {
 		return nil, mapBlobErr(serr)
 	}
@@ -286,12 +277,12 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix string) ([]s3response.Object, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	prefix, objPrefix := splitKey(keyPrefix)
+	prefix, _ := splitKey(keyPrefix)
 	sub, _, err := b.authorize(ctx, action, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
-	items, lerr := sub.List(ctx, blobKey(prefix, objPrefix))
+	items, lerr := sub.List(ctx, keyPrefix)
 	if lerr != nil {
 		return nil, mapBlobErr(lerr)
 	}
@@ -458,13 +449,12 @@ func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3res
 func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3response.PutObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	bucket := deref(in.Bucket)
-	prefix, object := splitKey(deref(in.Key))
+	bucket, key := deref(in.Bucket), deref(in.Key)
+	prefix, _ := splitKey(key)
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 	if err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
-	key := blobKey(prefix, object)
 	data, rerr := b.readCapped(in.Body)
 	if rerr != nil {
 		return s3response.PutObjectOutput{}, rerr
@@ -482,13 +472,13 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*awss3.DeleteObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	bucket := deref(in.Bucket)
-	prefix, object := splitKey(deref(in.Key))
+	bucket, key := deref(in.Bucket), deref(in.Key)
+	prefix, _ := splitKey(key)
 	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
-	if derr := sub.Delete(ctx, blobKey(prefix, object)); derr != nil && fault.KindOf(derr) != fault.NotFound {
+	if derr := sub.Delete(ctx, key); derr != nil && fault.KindOf(derr) != fault.NotFound {
 		return nil, mapBlobErr(derr)
 	}
 	return &awss3.DeleteObjectOutput{}, nil
@@ -505,13 +495,13 @@ func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s
 	}
 	for _, obj := range in.Delete.Objects {
 		key := deref(obj.Key)
-		prefix, object := splitKey(key)
+		prefix, _ := splitKey(key)
 		sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 		if err != nil {
 			res.Error = append(res.Error, awstypes.Error{Key: ptr(key), Code: ptr("AccessDenied"), Message: ptr("access denied")})
 			continue
 		}
-		if derr := sub.Delete(ctx, blobKey(prefix, object)); derr != nil && fault.KindOf(derr) != fault.NotFound {
+		if derr := sub.Delete(ctx, key); derr != nil && fault.KindOf(derr) != fault.NotFound {
 			res.Error = append(res.Error, awstypes.Error{Key: ptr(key), Code: ptr("InternalError"), Message: ptr("delete failed")})
 			continue
 		}

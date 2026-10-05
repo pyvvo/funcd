@@ -1299,3 +1299,93 @@ func TestScenarioConditionalRangedReadStaysRanged(t *testing.T) {
 	require.Equal(t, int32(1), sub.ranges.Load(), "one range read")
 	require.Zero(t, sub.gets.Load(), "no whole-object read")
 }
+
+// TestIssue709_FolderMarkerKeepsItsOwnKey: the folder-marker key bronze/ is its own object, stored under
+// its own substrate key, not collapsed onto bronze: on a file substrate writes under the marker still
+// succeed, and on any substrate the marker and an object named bronze stay two objects for every verb.
+func TestIssue709_FolderMarkerKeepsItsOwnKey(t *testing.T) {
+	ctx := context.Background()
+	put := func(t *testing.T, c *awss3.Client, key, body string) {
+		t.Helper()
+		_, err := c.PutObject(ctx, &awss3.PutObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS(key), Body: strings.NewReader(body)})
+		require.NoError(t, err, "PUT %s", key)
+	}
+	get := func(t *testing.T, c *awss3.Client, key string) string {
+		t.Helper()
+		out, err := c.GetObject(ctx, &awss3.GetObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS(key)})
+		require.NoError(t, err, "GET %s", key)
+		body, err := io.ReadAll(out.Body)
+		require.NoError(t, err)
+		require.NoError(t, out.Body.Close())
+		return string(body)
+	}
+	list := func(t *testing.T, c *awss3.Client, prefix string) []string {
+		t.Helper()
+		out, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: ptrS("lakehouse"), Prefix: ptrS(prefix)})
+		require.NoError(t, err)
+		return objectKeys(out.Contents)
+	}
+	substrateKeys := func(t *testing.T, g *gw) []string {
+		t.Helper()
+		items, err := g.buckets["default/lakehouse"].List(ctx, "")
+		require.NoError(t, err)
+		keys := make([]string, 0, len(items))
+		for _, it := range items {
+			keys = append(keys, it.Key)
+		}
+		return keys
+	}
+
+	t.Run("file substrate writes under a marker", func(t *testing.T) {
+		g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket {
+			t.Helper()
+			b, err := gocloud.Open(ctx, gocloud.FileURL(t.TempDir()))
+			require.NoError(t, err)
+			return b
+		})
+		owner := g.client(t, "default", "etl-svc")
+		put(t, owner, "bronze/", "")
+		put(t, owner, "bronze/x.parquet", "rows")
+		require.Equal(t, []string{"bronze/", "bronze/x.parquet"}, substrateKeys(t, g))
+		require.Equal(t, []string{"bronze/", "bronze/x.parquet"}, list(t, g.client(t, "default", "analytics"), "bronze/"))
+	})
+
+	t.Run("marker and prefix-named object stay distinct", func(t *testing.T) {
+		g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+		owner, reader := g.client(t, "default", "etl-svc"), g.client(t, "default", "analytics")
+		put(t, owner, "bronze/", "MARKER")
+		put(t, owner, "bronze", "OBJECT")
+		require.Equal(t, []string{"bronze", "bronze/"}, substrateKeys(t, g))
+		require.Equal(t, "MARKER", get(t, reader, "bronze/"))
+		require.Equal(t, "OBJECT", get(t, reader, "bronze"))
+		head, err := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/")})
+		require.NoError(t, err)
+		require.Equal(t, int64(len("MARKER")), aws.ToInt64(head.ContentLength))
+		require.Equal(t, []string{"bronze/"}, list(t, reader, "bronze/"))
+
+		_, err = owner.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/")})
+		require.NoError(t, err)
+		require.Equal(t, []string{"bronze"}, substrateKeys(t, g), "DeleteObject removes only the marker")
+
+		create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/")})
+		require.NoError(t, err)
+		num := int32(1)
+		part, err := owner.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: ptrS("lakehouse"), Key: ptrS("bronze/"), UploadId: create.UploadId, PartNumber: &num, Body: strings.NewReader("PARTS"),
+		})
+		require.NoError(t, err)
+		_, err = owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: ptrS("lakehouse"), Key: ptrS("bronze/"), UploadId: create.UploadId,
+			MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{ETag: part.ETag, PartNumber: &num}}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "PARTS", get(t, reader, "bronze/"))
+		require.Equal(t, "OBJECT", get(t, reader, "bronze"), "a multipart marker leaves the object bronze alone")
+
+		_, err = owner.DeleteObjects(ctx, &awss3.DeleteObjectsInput{Bucket: ptrS("lakehouse"), Delete: &awstypes.Delete{
+			Objects: []awstypes.ObjectIdentifier{{Key: ptrS("bronze/")}},
+		}})
+		require.NoError(t, err)
+		require.Equal(t, []string{"bronze"}, substrateKeys(t, g), "DeleteObjects removes only the marker")
+	})
+}

@@ -72,12 +72,10 @@ func NewFacade(d FacadeDeps) (*Facade, error) {
 }
 
 // blobKey is the substrate key for a (prefix, object) within a bucket — the prefix sub-domain is
-// preserved so distinct prefixes stay isolated. IDENTICAL to the s3gateway keyspace (ADR-0080/0127), so
-// context.blob objects are the same objects the S3 frontend serves.
+// preserved so distinct prefixes stay isolated. It is the S3 key prefix/object the s3gateway serves
+// (ADR-0080/0127), so context.blob objects are the same objects the S3 frontend serves; the empty object
+// is the folder marker prefix/, never the object named prefix (issue 709).
 func blobKey(prefix, object string) string {
-	if object == "" {
-		return prefix
-	}
 	return prefix + "/" + object
 }
 
@@ -166,7 +164,7 @@ func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 	if err != nil {
 		return nil, err
 	}
-	strip := blobKey(b.Prefix, "") + "/"
+	strip := blobKey(b.Prefix, "")
 	attrs, err := sub.List(ctx, strip+prefix)
 	if err != nil {
 		return nil, err
