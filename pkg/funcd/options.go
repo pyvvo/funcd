@@ -333,6 +333,16 @@ func WithPoolLimit(limit int) Option {
 	return func(c *config) error { c.poolLimit = limit; return nil }
 }
 
+// WithBootBackoff sets runtime.bootBackoffInitial and runtime.bootBackoffMax (ADR-0160): a worker that crashed while
+// booting is created again after initial, doubling per crash in a row up to limit. 0 ⇒ 10s and max(5m, initial);
+// negative, or a set limit below initial ⇒ fault.Invalid from New.
+func WithBootBackoff(initial, limit time.Duration) Option {
+	return func(c *config) error {
+		c.bootBackoffInitial, c.bootBackoffMax = initial, limit
+		return nil
+	}
+}
+
 // WithMaterializer overrides the artifact Materializer (ADR-0030). When a shim is
 // configured but no Materializer is supplied, the local-file driver is used (the OCI
 // driver is P-V-A). Has no effect unless a runtime shim is also configured.

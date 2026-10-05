@@ -22,7 +22,10 @@ import (
 // testPeriod is the supervision period the ADR-0142 tests run with.
 const testPeriod = 50 * time.Millisecond
 
-func withPeriod(d *function.Deps) { d.SupervisionPeriod = testPeriod }
+func withPeriod(d *function.Deps) {
+	d.SupervisionPeriod = testPeriod
+	d.BootBackoffInitial, d.BootBackoffMax = testPeriod, testPeriod
+}
 
 func (h *shimHarness) setPhase(t *testing.T, name string, phase v1.Phase) {
 	t.Helper()
@@ -121,6 +124,9 @@ func TestScenarioFailedRestartRetriesWithBackoff(t *testing.T) {
 	h.reconcile(t, "flaky")
 	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "flaky").Status.Phase, "no replica is ready while it is replaced")
 	require.Equal(t, v1.ConditionTrue, h.shapeValid(t, "flaky"))
+	ready, _ := h.getFn(t, "flaky").Status.Conditions.Get("Ready")
+	require.Equal(t, v1.ConditionFalse, ready.Status)
+	require.Equal(t, "CrashLoopBackOff", ready.Reason, "a replacement that cannot boot is a boot crash (ADR-0160)")
 	c1, _ := h.rt.counts()
 
 	res := h.reconcile(t, "flaky")

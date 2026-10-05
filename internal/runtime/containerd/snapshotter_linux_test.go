@@ -67,7 +67,7 @@ func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": overlay, "native": native})
-	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.NoError(t, err, "the image layers are in the configured snapshotter, so the worker's snapshot must be prepared there")
@@ -161,7 +161,7 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 		containerd.WithTaskClient(&createdTasks{}),
 	))
 	require.NoError(t, err)
-	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Snapshotter: "native"}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err = d.Create(ctx, spec)
 	require.NoError(t, err, "the image is present but its layers are only in another snapshotter, so Create must unpack it first")
@@ -184,7 +184,7 @@ func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
 	overlay := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: "docker.io/" + spec.Image, Target: manifest},
 		&memContainers{records: map[string]containers.Container{}}, map[string]snapshots.Snapshotter{"overlayfs": overlay})
-	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err := d.Create(ctx, spec)
 	require.NoError(t, err, "the curated image is already imported under its normalized name, so Create must use it, not import the embedded tar again")
@@ -202,7 +202,7 @@ func TestResolveImage_PullsShortRefFromDockerHub(t *testing.T) {
 		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}})
 	const prefix = "acme/runtime-"
 	mapping := ctrmanager.Config{}
-	d := &driver{cfg: Config{Pullable: mapping.Pullable(prefix)}, client: client, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{cfg: Config{Pullable: mapping.Pullable(prefix)}, client: client, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	_, err = d.resolveImage(ctx, "create", mapping.ImageFor(prefix)("deno"))
 	var uerr *url.Error
@@ -271,7 +271,7 @@ func pullDriver(t *testing.T, pullable func(string) bool) (*driver, *leaseCounte
 	client := fakeClient(t, cs, images.Image{}, &memContainers{records: map[string]containers.Container{}},
 		map[string]snapshots.Snapshotter{"overlayfs": &memSnapshotter{keys: map[string]bool{}}},
 		containerd.WithLeasesService(pulls))
-	return &driver{cfg: Config{Pullable: pullable}, client: client, instances: map[runtime.InstanceID]*worker{}}, pulls
+	return &driver{cfg: Config{Pullable: pullable}, client: client, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}, pulls
 }
 
 var errPullRecorded = fmt.Errorf("pull recorded, not run: %w", errdefs.ErrUnavailable)

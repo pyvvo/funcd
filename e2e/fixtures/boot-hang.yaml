@@ -1,0 +1,14 @@
+# ADR-0160: a Function whose handler takes 30 s to load; the env-echo suite kills its worker while it boots.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: boot-hang
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:boot-hang
+  replicas: 1
+  scaling:
+    minReplicas: 1

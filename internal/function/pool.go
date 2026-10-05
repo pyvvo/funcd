@@ -177,7 +177,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	// A pool host serves only once every member's handler has loaded, then fails its readiness while any one handler's
 	// thread respawns (ADR-0044 Decision 4). No endpoint judges one member, so a member is ready while its pool is live
 	// (ADR-0046 Decision 5). Every (re)start creates the pool worker again, so it gets a solo replica's boot limit.
-	ready, failed, err := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, bootTimeout)
+	ready, failed, _, _, err := r.readyReplicas(ctx, a.Key.Namespace, poolInstanceName(a.Key), "", running, 1, livenessPath, bootTimeout, false, nil)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -260,7 +260,7 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 		// the pool worker exists but is stopped or exited, and a member now wants it up with the same manifest → restart
 		// it by ADR-0142's per-replica table as a crash under repair, so one that exited is created again only once it is
 		// a period old: a pool host that cannot boot is retried once per period, as a solo replica is (issue #70).
-		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: insts[0]}, []int{0}, convergeOpts{serving: true}, time.Now(), r.supervisionPeriod)
+		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: insts[0]}, []int{0}, convergeOpts{serving: true}, time.Now(), r.supervisionPeriod, nil, false)
 		if !pass.retryAt.IsZero() {
 			break
 		}

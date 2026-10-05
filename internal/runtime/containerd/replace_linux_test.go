@@ -36,7 +36,7 @@ func TestIssue424_RecreateRemovesReplacedLogFile(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, spec)
 	require.NoError(t, err)

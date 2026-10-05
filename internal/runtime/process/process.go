@@ -34,6 +34,8 @@ type instance struct {
 	state     runtime.State
 	stopping  bool
 	released  bool // Stop has run and the process is gone, so Remove may forget it (ADR-0143)
+	listened  bool // the shim wrote its port since the last Start (ADR-0160)
+	exit      runtime.Exit
 	done      chan struct{}
 	createdAt time.Time
 }
@@ -168,6 +170,8 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 	inst.pid = cmd.Process.Pid
 	inst.state = runtime.StateRunning
 	inst.stopping = false
+	inst.listened = false
+	inst.exit = runtime.Exit{}
 	inst.done = make(chan struct{})
 	go d.wait(inst, logFile)
 	return nil
@@ -180,11 +184,15 @@ func (d *driver) wait(inst *instance, logFile *os.File) {
 	// The worker's exit reclaims what it started, as a container's exit tears down its PID namespace (ADR-0011 C4).
 	_ = syscall.Kill(-inst.pid, syscall.SIGKILL)
 	_ = logFile.Close()
+	_, wrote := readPortFile(inst.portFile)
 
 	d.mu.Lock()
+	inst.listened = inst.listened || wrote
+	inst.exit = exitOf(inst.cmd.ProcessState)
 	switch {
 	case inst.stopping:
 		inst.state = runtime.StateStopped
+		inst.exit = runtime.Exit{Cause: runtime.ExitByStop}
 	case err != nil:
 		inst.state = runtime.StateFailed
 	default:
@@ -207,6 +215,7 @@ func (d *driver) Stop(_ context.Context, id runtime.InstanceID) error {
 		// idempotent: already exited or never started. The instance reads Stopped afterwards, as containerd
 		// reports once Stop has deleted the container (ADR-0142: a reclaimed replica is Stopped, never Failed).
 		inst.state = runtime.StateStopped
+		inst.exit = runtime.Exit{Cause: runtime.ExitByStop}
 		inst.released = true
 		d.mu.Unlock()
 		return nil
@@ -346,8 +355,15 @@ func terminate(pid int, done <-chan struct{}) {
 	}
 }
 
-// snapshotLocked builds an Instance from internal state; caller holds d.mu.
+// snapshotLocked builds an Instance from internal state and latches Listened; caller holds d.mu.
 func (d *driver) snapshotLocked(id runtime.InstanceID, inst *instance) runtime.Instance {
+	var port int
+	if inst.state == runtime.StateRunning {
+		if p, ok := readPortFile(inst.portFile); ok {
+			port = p
+			inst.listened = true
+		}
+	}
 	out := runtime.Instance{
 		ID:        id,
 		Namespace: inst.spec.Namespace,
@@ -358,15 +374,29 @@ func (d *driver) snapshotLocked(id runtime.InstanceID, inst *instance) runtime.I
 		PID:       inst.pid,
 		State:     inst.state,
 		CreatedAt: inst.createdAt,
+		Listened:  inst.listened,
+		Exit:      inst.exit,
 	}
 	// Surface the shim's endpoint once it has reported its port (ADR-0030).
-	if inst.state == runtime.StateRunning {
-		if port, ok := readPortFile(inst.portFile); ok {
-			out.IP = "127.0.0.1"
-			out.Port = port
-		}
+	if port > 0 {
+		out.IP = "127.0.0.1"
+		out.Port = port
 	}
 	return out
+}
+
+// exitOf reads how a reaped worker ended (ADR-0160).
+func exitOf(ps *os.ProcessState) runtime.Exit {
+	if ps == nil {
+		return runtime.Exit{}
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return runtime.Exit{Cause: runtime.ExitBySignal, Signal: int(ws.Signal())}
+	}
+	if ps.Exited() {
+		return runtime.Exit{Cause: runtime.ExitByCode, Code: ps.ExitCode()}
+	}
+	return runtime.Exit{}
 }
 
 // readPortFile reads the shim's bound port from the handshake file; ok=false until the

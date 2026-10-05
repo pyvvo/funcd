@@ -937,3 +937,38 @@ func TestGCSweepIntervalMustBePositive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, closeExec())
 }
+
+// scenario: configured-backoff-honored (ADR-0160) — runtime.bootBackoffInitial 2s and runtime.bootBackoffMax 8s are
+// honored; a zero or negative key, or a max below the initial wait, refuses to start and names the key.
+func TestScenarioConfiguredBackoffHonored_BadKeyRefused(t *testing.T) {
+	with := func(initial, limit string) config.Config {
+		var c config.Config
+		c.Runtime.BootBackoffInitial, c.Runtime.BootBackoffMax = initial, limit
+		return c
+	}
+	initial, limit, err := bootBackoff(with("2s", "8s"))
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Second, initial)
+	require.Equal(t, 8*time.Second, limit)
+
+	initial, limit, err = bootBackoff(with("10s", ""))
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Second, initial)
+	require.Equal(t, 5*time.Minute, limit, "the default max")
+
+	_, limit, err = bootBackoff(with("10m", ""))
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Minute, limit, "an unset max is the initial wait when that is larger")
+
+	for _, bad := range []struct{ initial, limit, key string }{
+		{"0s", "", "runtime.bootBackoffInitial"},
+		{"-1s", "", "runtime.bootBackoffInitial"},
+		{"10s", "0s", "runtime.bootBackoffMax"},
+		{"10s", "-5s", "runtime.bootBackoffMax"},
+		{"10s", "5s", "runtime.bootBackoffMax"},
+	} {
+		_, _, err := bootBackoff(with(bad.initial, bad.limit))
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "initial %q, max %q", bad.initial, bad.limit)
+		require.Contains(t, err.Error(), bad.key)
+	}
+}

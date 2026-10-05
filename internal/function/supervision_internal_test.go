@@ -33,10 +33,10 @@ func TestReadyReplicasIgnoresReplicasAtOrAboveBound(t *testing.T) {
 		return serr == nil && in.State == runtime.StateFailed
 	}, 5*time.Second, 10*time.Millisecond)
 
-	_, failed, err := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1, readinessPath, bootTimeout)
+	_, failed, _, _, err := r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 1, readinessPath, bootTimeout, false, r.boot)
 	require.NoError(t, err)
 	require.Empty(t, failed, "replica 1 is at the bound, so it is not judged")
-	_, failed, err = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2, readinessPath, bootTimeout)
+	_, failed, _, _, err = r.readyReplicas(ctx, "default", "gone", "gone-1", 0, 2, readinessPath, bootTimeout, false, r.boot)
 	require.NoError(t, err)
 	require.Equal(t, inst.ID, failed, "inside the bound, a Failed replica is a shape failure")
 }

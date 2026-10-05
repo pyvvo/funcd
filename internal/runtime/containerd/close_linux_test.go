@@ -122,7 +122,7 @@ func TestStop_KeepsWorkerOnLoadError(t *testing.T) {
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
 	client := fakeClient(t, cs, images.Image{Name: spec.Image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap})
-	d := &driver{client: client, cni: attachedCNI{}, instances: map[runtime.InstanceID]*worker{}}
+	d := &driver{client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 
 	inst, err := d.Create(ctx, spec)
 	require.NoError(t, err)
@@ -141,10 +141,11 @@ func requireNoneReleased(t *testing.T, d *driver) {
 
 // closeFixture is a fake containerd holding one image and the funcd namespaces it lists.
 type closeFixture struct {
-	client *containerd.Client
-	ctrs   *memContainers
-	cni    *removedCNI
-	image  string
+	bootRoot string
+	client   *containerd.Client
+	ctrs     *memContainers
+	cni      *removedCNI
+	image    string
 }
 
 func newCloseFixture(t *testing.T, namespaces ...string) *closeFixture {
@@ -155,12 +156,12 @@ func newCloseFixture(t *testing.T, namespaces ...string) *closeFixture {
 	client := fakeClient(t, cs, images.Image{Name: image, Target: manifest}, ctrs,
 		map[string]snapshots.Snapshotter{"overlayfs": snap},
 		containerd.WithNamespaceService(listedNamespaces{names: namespaces}))
-	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, image: image}
+	return &closeFixture{client: client, ctrs: ctrs, cni: &removedCNI{}, image: image, bootRoot: t.TempDir()}
 }
 
 // driver starts a driver on the fixture's containerd with no instances, as a daemon or a bench does.
 func (f *closeFixture) driver(private bool) *driver {
-	return &driver{cfg: Config{Private: private}, client: f.client, cni: f.cni, instances: map[runtime.InstanceID]*worker{}}
+	return &driver{cfg: Config{Private: private}, client: f.client, cni: f.cni, bootRoot: f.bootRoot, instances: map[runtime.InstanceID]*worker{}}
 }
 
 // create runs a worker through d and returns its container and network attachment ids.
