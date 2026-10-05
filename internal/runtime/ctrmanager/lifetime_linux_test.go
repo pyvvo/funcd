@@ -18,7 +18,7 @@ func TestIssue630_ContainerdOutlivesEnsureContextUntilClose(t *testing.T) {
 	if isExecutable(filepath.Join(BinDir(), "containerd")) {
 		t.Skip("a laid-down containerd in the bin dir would start in place of the fake one")
 	}
-	bin, root := t.TempDir(), t.TempDir()
+	bin, root := t.TempDir(), shortRoot(t)
 	ready, closed := filepath.Join(bin, "ready"), filepath.Join(bin, "closed")
 	if err := syscall.Mkfifo(ready, 0o600); err != nil {
 		t.Fatal(err)
@@ -31,9 +31,7 @@ func TestIssue630_ContainerdOutlivesEnsureContextUntilClose(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	m := &privateManager{cfg: Config{DataRoot: root}, socket: filepath.Join(root, "containerd.sock")}
-	if err := os.WriteFile(m.socket, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	listenOn(t, m.socket)
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

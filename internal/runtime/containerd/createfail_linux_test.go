@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
@@ -119,6 +120,43 @@ func TestCreate_FailedNetworkSetupKillsTask(t *testing.T) {
 	require.Equal(t, []string{ctrID}, tasks.deleted, "a failed Create must delete its task")
 	require.Empty(t, ctrs.records, "a failed Create must delete its container")
 	require.NotContains(t, snap.keys, ctrID+"-snap", "a failed Create must remove its snapshot")
+}
+
+// Issue 706: a Create that fails after it pinned the task's netns sends the DEL in the pin and drops the pin, and one
+// that cannot pin it sets nothing up and still kills its task and deletes its container.
+func TestIssue706_FailedCreateDropsItsPin(t *testing.T) {
+	errMount := errors.New("mount: operation not permitted")
+	for _, tc := range []struct {
+		name    string
+		mount   error
+		wantErr error
+	}{
+		{name: "setup fails", wantErr: errFirewallAdd},
+		{name: "pin fails", mount: errMount, wantErr: errMount},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCNIIDFixture(t)
+			cni := &failingSetupCNI{}
+			f.d.cni = cni
+			mounts := fakePins(t, f.d)
+			if tc.mount != nil {
+				f.d.netns.mount = func(string, string) error { return tc.mount }
+			}
+			_, err := f.d.Create(leases.WithLease(context.Background(), "issue706"), f.engine(t, "a", "b"))
+			require.ErrorIs(t, err, tc.wantErr)
+			pin := filepath.Join(f.d.netns.dir, "a_b-r0")
+			if tc.mount == nil {
+				require.Equal(t, [][2]string{{"a_b-r0", pin}}, cni.removed, "the DEL runs in the pinned netns")
+				require.Equal(t, []string{"/proc/1/ns/net on " + pin, "unmount " + pin}, *mounts)
+			} else {
+				require.Empty(t, cni.removed, "nothing was set up")
+			}
+			require.NoFileExists(t, pin)
+			tasks := f.d.client.TaskService().(*createdTasks)
+			require.Equal(t, []string{"b-r0"}, tasks.killed, "a failed Create must kill its created task")
+			require.Empty(t, f.ctrs.records, "a failed Create must delete its container")
+		})
+	}
 }
 
 var errFirewallAdd = errors.New("plugin type=\"firewall\" failed (add)")

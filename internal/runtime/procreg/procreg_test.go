@@ -1,11 +1,14 @@
 package procreg_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -175,4 +178,49 @@ func TestScenarioTempFilesRemoved(t *testing.T) {
 	require.Eventually(t, func() bool { return !alive(owned.Process.Pid) }, 5*time.Second, 20*time.Millisecond)
 	require.Empty(t, savedEntries(t, dir, "workers"))
 	require.NoError(t, r.Close())
+}
+
+// Issue 725: a worker's group leader that exits on SIGTERM leaves no SIGKILL to the rest of its group, so a
+// subprocess that ignores SIGTERM outlived the reap.
+func TestIssue725_ReapKillsGroupAfterLeaderExits(t *testing.T) {
+	const token = "--funcd-instance=default/f/r1"
+	cmd := exec.Command("sh", "-c", `sh -c 'trap "" TERM; echo $$; exec sleep 300' & wait; true`, "sh", token)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	line, err := bufio.NewReader(out).ReadString('\n')
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	child, aerr := strconv.Atoi(strings.TrimSpace(line))
+	t.Cleanup(func() {
+		if aerr == nil {
+			_ = syscall.Kill(child, syscall.SIGKILL)
+		}
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+	})
+	require.NoError(t, err)
+	require.NoError(t, aerr)
+	leader := cmd.Process.Pid
+	pgid, err := syscall.Getpgid(child)
+	require.NoError(t, err)
+	require.Equal(t, leader, pgid, "the subprocess is in the worker's process group")
+
+	dir := t.TempDir()
+	seed(t, dir, "workers", procreg.Entry{ID: "default/f/r1", PID: leader, PGID: leader, StartTime: mustStart(leader), Token: token})
+	r, err := procreg.Open(dir, "workers")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+	killed, err := r.Reap(context.Background(), 500*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, 1, killed)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the leader survived the reap")
+	}
+	require.Eventually(t, func() bool { return syscall.Kill(child, 0) != nil }, 2*time.Second, 20*time.Millisecond,
+		"pid %d of the reaped worker's process group still runs after the reap", child)
 }

@@ -131,13 +131,13 @@ func TestCreateBootDir(t *testing.T) {
 func TestMakeBootRoot(t *testing.T) {
 	state := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(state, "boot"), 0o755))
-	dir, err := makeBootRoot(state)
+	dir, err := makeStateDir(state, "boot")
 	require.NoError(t, err)
 	fi, err := os.Stat(dir)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o700), fi.Mode().Perm(), "0700 is enforced on an existing boot root")
 
-	tmp, err := makeBootRoot("")
+	tmp, err := makeStateDir("", "boot")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	fi, err = os.Stat(tmp)

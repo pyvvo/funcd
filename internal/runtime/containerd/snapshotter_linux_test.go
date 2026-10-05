@@ -465,7 +465,7 @@ func (anySnapshotPlugin) Plugins(context.Context, ...string) (*introspectionapi.
 	return &introspectionapi.PluginsResponse{Plugins: []*introspectionapi.Plugin{{}}}, nil
 }
 
-// createdTasks runs nothing: a task it creates stays created, with pid 1, until a kill stops it. It reports that
+// createdTasks runs nothing: a task it creates stays created, with pid 1 or pid, until a kill stops it. It reports that
 // state like containerd, so containerd's client refuses to delete the task, and then its container, before the kill.
 type createdTasks struct {
 	tasksapi.TasksClient
@@ -475,6 +475,14 @@ type createdTasks struct {
 	signal  map[string]uint32 // the first signal each task got
 	deleted []string
 	getErr  error // when set, every Get fails with it
+	pid     uint32
+}
+
+func (f *createdTasks) taskPid() uint32 {
+	if f.pid == 0 {
+		return 1
+	}
+	return f.pid
 }
 
 func (f *createdTasks) Create(_ context.Context, req *tasksapi.CreateTaskRequest, _ ...grpc.CallOption) (*tasksapi.CreateTaskResponse, error) {
@@ -484,7 +492,7 @@ func (f *createdTasks) Create(_ context.Context, req *tasksapi.CreateTaskRequest
 		f.stopped = map[string]chan struct{}{}
 	}
 	f.stopped[req.ContainerID] = make(chan struct{})
-	return &tasksapi.CreateTaskResponse{Pid: 1}, nil
+	return &tasksapi.CreateTaskResponse{Pid: f.taskPid()}, nil
 }
 
 func (f *createdTasks) Get(_ context.Context, req *tasksapi.GetRequest, _ ...grpc.CallOption) (*tasksapi.GetResponse, error) {
@@ -503,7 +511,7 @@ func (f *createdTasks) Get(_ context.Context, req *tasksapi.GetRequest, _ ...grp
 		state = tasktypes.Status_STOPPED
 	default:
 	}
-	return &tasksapi.GetResponse{Process: &tasktypes.Process{ID: req.ContainerID, Pid: 1, Status: state}}, nil
+	return &tasksapi.GetResponse{Process: &tasktypes.Process{ID: req.ContainerID, Pid: f.taskPid(), Status: state}}, nil
 }
 
 func (f *createdTasks) Kill(_ context.Context, req *tasksapi.KillRequest, _ ...grpc.CallOption) (*ptypes.Empty, error) {
