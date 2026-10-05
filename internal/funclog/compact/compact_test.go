@@ -102,7 +102,7 @@ func seedRaw(t *testing.T, b blob.Bucket, ns, fn, replica string, sealNano int64
 	}
 	date := time.Unix(0, sealNano).UTC().Format("2006-01-02")
 	key := fmt.Sprintf("logs/%s/%s/%s/%d-%s.otlp.jsonl", ns, fn, date, sealNano, rep)
-	if err := b.Put(context.Background(), key, data); err != nil {
+	if err := b.Put(context.Background(), key, data, blob.PutOptions{}); err != nil {
 		t.Fatalf("put raw: %v", err)
 	}
 }
@@ -335,7 +335,7 @@ func TestScenarioRetentionPrunesCompacted(t *testing.T) {
 	put := func(start int64) string {
 		date := time.Unix(0, start).UTC().Format("2006-01-02")
 		key := fmt.Sprintf("logs/default/fn/%s/%d.parquet", date, start)
-		if err := b.Put(context.Background(), key, []byte("compacted")); err != nil {
+		if err := b.Put(context.Background(), key, []byte("compacted"), blob.PutOptions{}); err != nil {
 			t.Fatalf("seed compacted: %v", err)
 		}
 		return key
@@ -368,7 +368,7 @@ func TestScenarioDisabledConfigNoOp(t *testing.T) {
 	oldStart := baseTime().Add(-1000 * time.Hour).UnixNano()
 	date := time.Unix(0, oldStart).UTC().Format("2006-01-02")
 	oldCompacted := fmt.Sprintf("logs/default/fn/%s/%d.parquet", date, oldStart)
-	if err := b.Put(context.Background(), oldCompacted, []byte("compacted")); err != nil {
+	if err := b.Put(context.Background(), oldCompacted, []byte("compacted"), blob.PutOptions{}); err != nil {
 		t.Fatalf("seed compacted: %v", err)
 	}
 
@@ -432,12 +432,12 @@ func TestIssue84_UndecodableRawObjectDoesNotBlockCompaction(t *testing.T) {
 	}
 	date := time.Unix(0, sealNano).UTC().Format("2006-01-02")
 	badKey := fmt.Sprintf("logs/default/mmm/%s/%d-0.otlp.jsonl", date, sealNano)
-	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`)); err != nil {
+	if err := b.Put(ctx, badKey, []byte(`{"resourceLogs":[{"resource":{"attributes":[`), blob.PutOptions{}); err != nil {
 		t.Fatalf("put truncated raw: %v", err)
 	}
 	oldStart := baseTime().Add(-48 * time.Hour).UnixNano()
 	oldCompacted := fmt.Sprintf("logs/default/aaa/%s/%d.parquet", time.Unix(0, oldStart).UTC().Format("2006-01-02"), oldStart)
-	if err := b.Put(ctx, oldCompacted, []byte("compacted")); err != nil {
+	if err := b.Put(ctx, oldCompacted, []byte("compacted"), blob.PutOptions{}); err != nil {
 		t.Fatalf("seed compacted: %v", err)
 	}
 

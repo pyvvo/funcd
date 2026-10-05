@@ -178,7 +178,7 @@ func (s *BlobTraceSink) flush(ctx context.Context, res Resource) (string, error)
 		return "", err
 	}
 	key := traceSegmentKey(res, now)
-	if err := s.bucket.Put(ctx, key, data); err != nil {
+	if err := s.bucket.Put(ctx, key, data, blob.PutOptions{}); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), "funclog.BlobTraceSink.Flush", "put trace segment %q", key)
 	}
 	return key, nil

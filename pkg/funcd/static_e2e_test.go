@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
@@ -42,7 +43,9 @@ func TestScenarioE2EStaticServing(t *testing.T) {
 	for i := range big {
 		big[i] = byte('a' + i%26)
 	}
-	put := func(ns, key string, v []byte) { require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/bi/"+key, v)) }
+	put := func(ns, key string, v []byte) {
+		require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/bi/"+key, v, blob.PutOptions{}))
+	}
 	put("openteam", "index.html", indexHTML)
 	put("openteam", "img/logo.png", logoPNG)
 	put("openteam", "big.bin", big)

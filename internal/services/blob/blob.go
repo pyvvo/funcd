@@ -146,7 +146,7 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if err != nil {
 		return err
 	}
-	return sub.Put(ctx, blobKey(b.Prefix, key), data)
+	return sub.Put(ctx, blobKey(b.Prefix, key), data, blob.PutOptions{})
 }
 
 // Delete removes the alias's key. The PDP authorizes s3::write (owner-only).

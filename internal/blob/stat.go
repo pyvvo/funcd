@@ -1,18 +1,20 @@
 package blob
 
-import "context"
+import (
+	"context"
 
-// Stat returns the attributes of the object at key via a List keyed by that exact key: the port has no
-// per-key Stat (ADR-0007), and a listing reads metadata, never the object. found=false ⇒ no object at key.
+	"github.com/pyvvo/funcd/api/fault"
+)
+
+// Stat returns the attributes of the object at key through Bucket.Attributes, which reads metadata, never the
+// object (ADR-0159). found=false ⇒ no object at key, or a key the driver cannot hold as an object.
 func Stat(ctx context.Context, b Bucket, key string) (Attributes, bool, error) {
-	items, err := b.List(ctx, key)
-	if err != nil {
-		return Attributes{}, false, err
+	a, err := b.Attributes(ctx, key)
+	if err == nil {
+		return a, true, nil
 	}
-	for i := range items {
-		if items[i].Key == key {
-			return items[i], true, nil
-		}
+	if k := fault.KindOf(err); k == fault.NotFound || k == fault.Invalid {
+		return Attributes{}, false, nil
 	}
-	return Attributes{}, false, nil
+	return Attributes{}, false, err
 }

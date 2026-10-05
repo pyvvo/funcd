@@ -24,6 +24,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
@@ -356,7 +357,7 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	if perr := put("raw/ok.parquet", 16); perr != nil {
 		t.Fatalf("an object at the cap must land: %v", perr)
 	}
-	if perr := view.Put(ctx, "raw/direct.parquet", make([]byte, 17)); fault.KindOf(perr) != fault.PayloadTooLarge {
+	if perr := view.Put(ctx, "raw/direct.parquet", make([]byte, 17), blob.PutOptions{}); fault.KindOf(perr) != fault.PayloadTooLarge {
 		t.Fatalf("the Bucket view must refuse an over-cap Put as PayloadTooLarge, got %v", perr)
 	}
 }

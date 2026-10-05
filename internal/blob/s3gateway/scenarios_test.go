@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -301,8 +302,8 @@ type noRangeBucket struct{ inner blob.Bucket }
 func (n noRangeBucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return n.inner.Get(ctx, key)
 }
-func (n noRangeBucket) Put(ctx context.Context, key string, data []byte) error {
-	return n.inner.Put(ctx, key, data)
+func (n noRangeBucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
+	return n.inner.Put(ctx, key, data, opts)
 }
 func (n noRangeBucket) Delete(ctx context.Context, key string) error { return n.inner.Delete(ctx, key) }
 func (n noRangeBucket) Exists(ctx context.Context, key string) (bool, error) {
@@ -310,6 +311,9 @@ func (n noRangeBucket) Exists(ctx context.Context, key string) (bool, error) {
 }
 func (n noRangeBucket) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
 	return n.inner.List(ctx, prefix)
+}
+func (n noRangeBucket) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
+	return n.inner.Attributes(ctx, key)
 }
 func (n noRangeBucket) SignedURL(ctx context.Context, key string, opts blob.SignOptions) (string, error) {
 	return n.inner.SignedURL(ctx, key, opts)
@@ -709,8 +713,8 @@ func TestIssue380_ETagsAreQuoted(t *testing.T) {
 }
 
 // TestIssue425_RangedGetKeepsObjectETag: a ranged GET never sends an ETag computed over the range.
-// It carries the object's ETag (the one PutObject and a full GET return) or none, on both the
-// RangeReader path and the full-Get fallback.
+// It carries the object's ETag (the one PutObject and a full GET return), on both the RangeReader
+// path and the full-Get fallback (ADR-0159).
 func TestIssue425_RangedGetKeepsObjectETag(t *testing.T) {
 	drivers := map[string]func(t *testing.T) blob.Bucket{
 		"range-reader": memBucket,
@@ -739,9 +743,7 @@ func TestIssue425_RangedGetKeepsObjectETag(t *testing.T) {
 				require.NoError(t, gerr, "Range %s", rng)
 				require.NoError(t, out.Body.Close())
 				require.NotEmpty(t, aws.ToString(out.ContentRange), "Range %s is a 206", rng)
-				if got := aws.ToString(out.ETag); got != "" {
-					require.Equal(t, want, got, "Range %s must carry the object's ETag or none", rng)
-				}
+				require.Equal(t, want, aws.ToString(out.ETag), "Range %s must carry the object's ETag", rng)
 			}
 		})
 	}
@@ -755,13 +757,13 @@ type ctxBucket struct {
 	block atomic.Bool
 }
 
-func (c *ctxBucket) Put(ctx context.Context, key string, data []byte) error {
+func (c *ctxBucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	c.puts <- ctx
 	if c.block.Load() {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	return c.Bucket.Put(ctx, key, data)
+	return c.Bucket.Put(ctx, key, data, opts)
 }
 
 // Issue #462: the substrate never gets fasthttp's pooled RequestCtx, whose Done reads server
@@ -902,6 +904,7 @@ func TestIssue111_DatePreconditionsAndCreateOnlyPut(t *testing.T) {
 		{name: "if-unmodified-since before", unmodSince: &before, want: 412},
 		{name: "not modified and modified after", modSince: &lastModified, unmodSince: &before, want: 412},
 		{name: "if-match decides over if-unmodified-since", unmodSince: &before, ifMatch: created.ETag, want: 200},
+		{name: "stale if-match with if-unmodified-since last-modified", unmodSince: &lastModified, ifMatch: ptrS(`"stale"`), want: 412},
 		{name: "if-none-match decides over if-modified-since", modSince: &lastModified, ifNoneMatch: ptrS(`"other"`), want: 200},
 	}
 	for _, tc := range cases {
@@ -967,4 +970,332 @@ func TestIssue111_CreateOnlyMultipartComplete(t *testing.T) {
 	require.Equal(t, "rows", string(mustGet(t, g, "default", "lakehouse", "bronze/x.parquet")))
 	require.NoError(t, completeCreateOnly("bronze/new.parquet", "fresh"), "If-None-Match: * creates a missing object")
 	require.Equal(t, "fresh", string(mustGet(t, g, "default", "lakehouse", "bronze/new.parquet")))
+}
+
+func fileBucketIn(dir string) func(t *testing.T) blob.Bucket {
+	return func(t *testing.T) blob.Bucket {
+		t.Helper()
+		b, err := gocloud.Open(context.Background(), "file://"+dir)
+		require.NoError(t, err)
+		return b
+	}
+}
+
+// scenario: etag-on-every-read (ADR-0159) — the ETag a PUT answered comes back on HEAD, a ranged GET and
+// the listing, on the memory and the file substrate.
+func TestScenarioETagOnEveryRead(t *testing.T) {
+	for name, makeBucket := range map[string]func(t *testing.T) blob.Bucket{
+		"memory": memBucket,
+		"file":   func(t *testing.T) blob.Bucket { return fileBucketIn(t.TempDir())(t) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, makeBucket)
+			ctx := context.Background()
+			reader := g.client(t, "default", "analytics")
+			bucket, key := ptrS("lakehouse"), ptrS("bronze/e.bin")
+			put, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+				Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("0123456789")),
+			})
+			require.NoError(t, err)
+			want := aws.ToString(put.ETag)
+			require.NotEmpty(t, want)
+
+			head, err := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key})
+			require.NoError(t, err)
+			require.Equal(t, want, aws.ToString(head.ETag), "HEAD")
+
+			ranged, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, Range: ptrS("bytes=0-3")})
+			require.NoError(t, err)
+			require.NoError(t, ranged.Body.Close())
+			require.Equal(t, "bytes 0-3/10", aws.ToString(ranged.ContentRange))
+			require.Equal(t, want, aws.ToString(ranged.ETag), "ranged GET")
+
+			list, err := reader.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: bucket, Prefix: ptrS("bronze/")})
+			require.NoError(t, err)
+			require.Len(t, list.Contents, 1)
+			require.Equal(t, want, aws.ToString(list.Contents[0].ETag), "LIST")
+		})
+	}
+}
+
+// scenario: stale-if-match-put-rejected (ADR-0159) — a PUT or CompleteMultipartUpload whose If-Match names a
+// replaced ETag is 412 and leaves the object as it was; the current ETag succeeds. The rest of the write
+// rows: If-Match: * proceeds on an existing object, If-Match on an absent one is 404, an entity-tag
+// If-None-Match and If-Match with If-None-Match: * are 501.
+func TestScenarioStaleIfMatchPutRejected(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner := g.client(t, "default", "etl-svc")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/x.bin")
+	put := func(k *string, body string, ifMatch, ifNoneMatch *string) (*awss3.PutObjectOutput, error) {
+		return owner.PutObject(ctx, &awss3.PutObjectInput{
+			Bucket: bucket, Key: k, Body: bytes.NewReader([]byte(body)), IfMatch: ifMatch, IfNoneMatch: ifNoneMatch,
+		})
+	}
+	v0, err := put(key, "v0", nil, nil)
+	require.NoError(t, err)
+	v1, err := put(key, "v1", nil, nil)
+	require.NoError(t, err)
+	e0, e1 := v0.ETag, v1.ETag
+	require.NotEqual(t, aws.ToString(e0), aws.ToString(e1))
+
+	_, err = put(key, "STALE", e0, nil)
+	require.Equal(t, 412, statusCode(err), "If-Match of the replaced ETag: %v", err)
+	require.Equal(t, "v1", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+	v2, err := put(key, "v2", e1, nil)
+	require.NoError(t, err, "If-Match of the current ETag")
+	require.Equal(t, "v2", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+
+	_, err = put(key, "v3", ptrS("*"), nil)
+	require.NoError(t, err, "If-Match: * on an existing object")
+	require.Equal(t, "v3", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+	_, err = put(ptrS("bronze/absent.bin"), "a", ptrS("*"), nil)
+	require.Equal(t, 404, statusCode(err), "If-Match: * on an absent object")
+	_, err = put(ptrS("bronze/absent.bin"), "a", v2.ETag, nil)
+	require.Equal(t, 404, statusCode(err), "If-Match on an absent object")
+	_, err = put(key, "x", nil, e1)
+	require.Equal(t, 501, statusCode(err), "an entity-tag If-None-Match")
+	_, err = put(key, "x", ptrS("*"), ptrS("*"))
+	require.Equal(t, 501, statusCode(err), "If-Match with If-None-Match: *")
+	require.Equal(t, "v3", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+
+	current, err := g.client(t, "default", "analytics").HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	num := int32(1)
+	part, err := owner.UploadPart(ctx, &awss3.UploadPartInput{
+		Bucket: bucket, Key: key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte("multipart")),
+	})
+	require.NoError(t, err)
+	complete := func(ifMatch *string) error {
+		_, cerr := owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: bucket, Key: key, UploadId: create.UploadId, IfMatch: ifMatch,
+			MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{PartNumber: &num, ETag: part.ETag}}},
+		})
+		return cerr
+	}
+	require.Equal(t, 412, statusCode(complete(e0)), "a stale If-Match on Complete")
+	require.Equal(t, "v3", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+	require.NoError(t, complete(current.ETag), "the same upload completes with the current ETag")
+	require.Equal(t, "multipart", string(mustGet(t, g, "default", "lakehouse", "bronze/x.bin")))
+}
+
+// scenario: if-none-match-not-modified (ADR-0159) — a GET or HEAD whose If-None-Match names the object's
+// ETag (or *) is 304 with no body; another ETag gets 200 and the object.
+func TestScenarioIfNoneMatchNotModified(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	reader := g.client(t, "default", "analytics")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/n.bin")
+	put, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("body")),
+	})
+	require.NoError(t, err)
+
+	for _, inm := range []*string{put.ETag, ptrS("*")} {
+		_, gerr := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, IfNoneMatch: inm})
+		require.Equal(t, 304, statusCode(gerr), "GET If-None-Match %s", aws.ToString(inm))
+		_, herr := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key, IfNoneMatch: inm})
+		require.Equal(t, 304, statusCode(herr), "HEAD If-None-Match %s", aws.ToString(inm))
+	}
+
+	other := ptrS(`"0123456789abcdef0123456789abcdef"`)
+	out, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, IfNoneMatch: other})
+	require.NoError(t, err)
+	body, err := io.ReadAll(out.Body)
+	require.NoError(t, err)
+	require.NoError(t, out.Body.Close())
+	require.Equal(t, "body", string(body))
+	require.Equal(t, aws.ToString(put.ETag), aws.ToString(out.ETag))
+	head, err := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key, IfNoneMatch: other})
+	require.NoError(t, err)
+	require.Equal(t, int64(4), aws.ToInt64(head.ContentLength))
+}
+
+// scenario: content-type-and-metadata-roundtrip (ADR-0159) — the Content-Type and x-amz-meta-* of a PUT, and
+// of a multipart upload's Create, come back on HEAD and GET; a type that does not parse is 400.
+func TestScenarioContentTypeAndMetadataRoundTrip(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	owner, reader := g.client(t, "default", "etl-svc"), g.client(t, "default", "analytics")
+	bucket := ptrS("lakehouse")
+	meta := map[string]string{"owner": "etl"}
+	check := func(key string) {
+		t.Helper()
+		head, err := reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: &key})
+		require.NoError(t, err)
+		require.Equal(t, "application/json", aws.ToString(head.ContentType), "HEAD %s", key)
+		require.Equal(t, meta, head.Metadata, "HEAD %s", key)
+		out, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: &key})
+		require.NoError(t, err)
+		require.NoError(t, out.Body.Close())
+		require.Equal(t, "application/json", aws.ToString(out.ContentType), "GET %s", key)
+		require.Equal(t, meta, out.Metadata, "GET %s", key)
+	}
+
+	_, err := owner.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: ptrS("bronze/put.json"), Body: bytes.NewReader([]byte(`{"a":1}`)),
+		ContentType: ptrS("application/json"), Metadata: meta,
+	})
+	require.NoError(t, err)
+	check("bronze/put.json")
+
+	key := "bronze/mpu.json"
+	create, err := owner.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{
+		Bucket: bucket, Key: &key, ContentType: ptrS("application/json"), Metadata: meta,
+	})
+	require.NoError(t, err)
+	num := int32(1)
+	part, err := owner.UploadPart(ctx, &awss3.UploadPartInput{
+		Bucket: bucket, Key: &key, UploadId: create.UploadId, PartNumber: &num, Body: bytes.NewReader([]byte(`{"b":2}`)),
+	})
+	require.NoError(t, err)
+	_, err = owner.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+		Bucket: bucket, Key: &key, UploadId: create.UploadId,
+		MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{PartNumber: &num, ETag: part.ETag}}},
+	})
+	require.NoError(t, err)
+	check(key)
+
+	_, err = owner.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: ptrS("bronze/bad.json"), Body: bytes.NewReader([]byte("x")), ContentType: ptrS("not a type;;"),
+	})
+	require.Equal(t, 400, statusCode(err), "an unparsable Content-Type: %v", err)
+}
+
+// bodyRecorder is an S3 client HTTP client that keeps the raw body of the last response.
+type bodyRecorder struct{ last []byte }
+
+func (r *bodyRecorder) Do(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, rerr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if rerr != nil {
+		return nil, rerr
+	}
+	r.last = body
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
+}
+
+// scenario: no-digest-no-etag (ADR-0159) — an object in the file substrate without gocloud's sidecar has no
+// ETag on HEAD, GET or the listing; an If-Match other than * is 412 on GET, HEAD and PUT and leaves the
+// object unchanged; an entity-tag If-None-Match proceeds; and no whole-object read computes an ETag.
+func TestScenarioNoDigestNoETag(t *testing.T) {
+	dir := t.TempDir()
+	var sub *getCountingBucket
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket {
+		t.Helper()
+		sub = &getCountingBucket{Bucket: fileBucketIn(dir)(t)}
+		return sub
+	})
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bronze"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bronze", "raw.bin"), []byte("raw bytes"), 0o600))
+	ctx := context.Background()
+	reader := g.client(t, "default", "analytics")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/raw.bin")
+	anyTag := ptrS(`"0123456789abcdef0123456789abcdef"`)
+	okGets := int32(0)
+	get := func(ifMatch, ifNoneMatch *string) (*awss3.GetObjectOutput, error) {
+		out, err := reader.GetObject(ctx, &awss3.GetObjectInput{Bucket: bucket, Key: key, IfMatch: ifMatch, IfNoneMatch: ifNoneMatch})
+		if err == nil {
+			okGets++
+			body, rerr := io.ReadAll(out.Body)
+			require.NoError(t, rerr)
+			require.NoError(t, out.Body.Close())
+			require.Equal(t, "raw bytes", string(body))
+		}
+		return out, err
+	}
+	head := func(ifMatch, ifNoneMatch *string) (*awss3.HeadObjectOutput, error) {
+		return reader.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: bucket, Key: key, IfMatch: ifMatch, IfNoneMatch: ifNoneMatch})
+	}
+
+	h, err := head(nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, h.ETag, "HEAD")
+	out, err := get(nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, out.ETag, "GET")
+	rec := &bodyRecorder{}
+	list, err := reader.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: bucket, Prefix: ptrS("bronze/")},
+		func(o *awss3.Options) { o.HTTPClient = rec })
+	require.NoError(t, err)
+	require.Len(t, list.Contents, 1)
+	require.Nil(t, list.Contents[0].ETag, "LIST")
+	require.Contains(t, string(rec.last), "<Key>bronze/raw.bin</Key>")
+	require.NotContains(t, string(rec.last), "<ETag>", "the raw ListObjectsV2 XML")
+
+	_, err = get(anyTag, nil)
+	require.Equal(t, 412, statusCode(err), "GET If-Match")
+	_, err = head(anyTag, nil)
+	require.Equal(t, 412, statusCode(err), "HEAD If-Match")
+	_, err = g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: key, Body: bytes.NewReader([]byte("CLOBBERED")), IfMatch: anyTag,
+	})
+	require.Equal(t, 412, statusCode(err), "PUT If-Match")
+	raw, err := os.ReadFile(filepath.Join(dir, "bronze", "raw.bin"))
+	require.NoError(t, err)
+	require.Equal(t, "raw bytes", string(raw))
+
+	_, err = get(nil, anyTag)
+	require.NoError(t, err, "GET If-None-Match matches nothing")
+	h, err = head(nil, anyTag)
+	require.NoError(t, err, "HEAD If-None-Match matches nothing")
+	require.Equal(t, int64(len("raw bytes")), aws.ToInt64(h.ContentLength))
+	_, err = get(ptrS("*"), nil)
+	require.NoError(t, err, "If-Match: * is an existence test")
+
+	require.Equal(t, okGets, sub.gets.Load(), "one whole-object read per 200 GET, none for an ETag")
+}
+
+// rangeCountingBucket counts the whole-object Gets and the range reads made on a bucket with RangeReader.
+type rangeCountingBucket struct {
+	blob.Bucket
+	gets, ranges atomic.Int32
+}
+
+func (c *rangeCountingBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	c.gets.Add(1)
+	return c.Bucket.Get(ctx, key)
+}
+
+func (c *rangeCountingBucket) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	c.ranges.Add(1)
+	return c.Bucket.(blob.RangeReader).GetRange(ctx, key, offset, length)
+}
+
+// scenario: conditional-ranged-read-stays-ranged (ADR-0159) — a ranged GET under a matching If-Match is
+// a 206 with the range and the object's ETag, served by one range read and no whole-object read.
+func TestScenarioConditionalRangedReadStaysRanged(t *testing.T) {
+	var sub *rangeCountingBucket
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, func(t *testing.T) blob.Bucket {
+		t.Helper()
+		sub = &rangeCountingBucket{Bucket: memBucket(t)}
+		return sub
+	})
+	ctx := context.Background()
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/big.parquet")
+	data := bytes.Repeat([]byte("0123456789abcdef"), 1<<16)
+	put, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: bucket, Key: key, Body: bytes.NewReader(data),
+	})
+	require.NoError(t, err)
+
+	out, err := g.client(t, "default", "analytics").GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: bucket, Key: key, Range: ptrS("bytes=0-1023"), IfMatch: put.ETag,
+	})
+	require.NoError(t, err)
+	body, err := io.ReadAll(out.Body)
+	require.NoError(t, err)
+	require.NoError(t, out.Body.Close())
+	require.Equal(t, data[:1024], body)
+	require.Equal(t, fmt.Sprintf("bytes 0-1023/%d", len(data)), aws.ToString(out.ContentRange), "a 206")
+	require.Equal(t, aws.ToString(put.ETag), aws.ToString(out.ETag))
+	require.Equal(t, int32(1), sub.ranges.Load(), "one range read")
+	require.Zero(t, sub.gets.Load(), "no whole-object read")
 }

@@ -21,10 +21,10 @@ type gatedBucket struct {
 	once    sync.Once
 }
 
-func (g *gatedBucket) Put(ctx context.Context, key string, data []byte) error {
+func (g *gatedBucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	g.once.Do(func() { close(g.entered) })
 	<-g.release
-	return g.Bucket.Put(ctx, key, data)
+	return g.Bucket.Put(ctx, key, data, opts)
 }
 
 // A Flush takes its segment out of the sink before it Puts it, so Close must wait for that Put: Shutdown closes

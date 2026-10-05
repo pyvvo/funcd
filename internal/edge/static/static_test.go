@@ -24,7 +24,7 @@ func site(t *testing.T, extra map[string][]byte) *static.Handler {
 	b, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = b.Close() })
-	put := func(k string, v []byte) { require.NoError(t, b.Put(context.Background(), k, v)) }
+	put := func(k string, v []byte) { require.NoError(t, b.Put(context.Background(), k, v, blob.PutOptions{})) }
 	put("bi/index.html", []byte("<!doctype html><title>bi</title>"))
 	put("bi/img/logo.png", []byte("\x89PNG\r\n\x1a\nlogo-bytes"))
 	put("secret", []byte("TOP-SECRET"))
@@ -186,19 +186,17 @@ func TestUnknownBucketNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// pinnedModTime reports a test-chosen ModTime from List, so two writes land deterministically in the
+// pinnedModTime reports a test-chosen ModTime from Attributes, so two writes land deterministically in the
 // same wall-clock second.
 type pinnedModTime struct {
 	blob.Bucket
 	modTime time.Time
 }
 
-func (p *pinnedModTime) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
-	items, err := p.Bucket.List(ctx, prefix)
-	for i := range items {
-		items[i].ModTime = p.modTime
-	}
-	return items, err
+func (p *pinnedModTime) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
+	a, err := p.Bucket.Attributes(ctx, key)
+	a.ModTime = p.modTime
+	return a, err
 }
 
 // A same-length rewrite within the same second must not revalidate as unchanged (a stale 304).
@@ -210,12 +208,12 @@ func TestIssue161_SameSecondRedeployIsNotStale304(t *testing.T) {
 	h, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, bool) { return b, true }})
 	require.NoError(t, err)
 
-	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v1</title>")))
+	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v1</title>"), blob.PutOptions{}))
 	first := serve(h, http.MethodGet, "/", backend("bi/", false), nil)
 	require.Equal(t, http.StatusOK, first.Code)
 	etag := first.Header().Get("ETag")
 
-	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v2</title>")))
+	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v2</title>"), blob.PutOptions{}))
 	b.modTime = b.modTime.Add(300 * time.Millisecond)
 	revalidate := serve(h, http.MethodGet, "/", backend("bi/", false), map[string]string{"If-None-Match": etag})
 	require.Equal(t, http.StatusOK, revalidate.Code, "changed content revalidated as unchanged (ETag %s)", etag)

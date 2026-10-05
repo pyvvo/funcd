@@ -254,7 +254,7 @@ func (b *backup) saveManifest(ctx context.Context, m manifest) error {
 	if err != nil {
 		return fault.Internalf("kvbadger.backup.saveManifest", "encode manifest: %v", err)
 	}
-	return b.bucket.Put(ctx, manifestKey, data)
+	return b.bucket.Put(ctx, manifestKey, data, blob.PutOptions{})
 }
 
 // chunkWriter is the io.Writer db.Backup streams into: it buffers up to chunkBytes then flushes a part to
@@ -291,7 +291,7 @@ func (w *chunkWriter) flush(n int) error {
 	chunk := make([]byte, n)
 	copy(chunk, w.buf.Next(n))
 	name := fmt.Sprintf("%s/part-%05d", w.prefix, w.parts)
-	if err := w.bucket.Put(w.ctx, name, chunk); err != nil {
+	if err := w.bucket.Put(w.ctx, name, chunk, blob.PutOptions{}); err != nil {
 		return fault.Internalf("kvbadger.backup.flush", "upload %q: %v", name, err)
 	}
 	w.parts++

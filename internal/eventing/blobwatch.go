@@ -215,8 +215,9 @@ func advance(prior Cursor, objs []blob.Attributes) Cursor {
 	return next
 }
 
-// versionOf is the V1 object-version fingerprint (ADR-0119): a (ModTime,Size) pair, NOT a content ETag
-// (blob.Attributes exposes none). A real per-object ETag is a follow-on additive `data.etag` field.
+// versionOf is the V1 object-version fingerprint (ADR-0119): a (ModTime,Size) pair, NOT a content ETag.
+// blob.Attributes carries the content MD5 when the driver has one (ADR-0159); a per-object ETag from it is
+// ADR-0119's follow-on additive `data.etag` field.
 func versionOf(o blob.Attributes) string {
 	return strconv.FormatInt(o.ModTime.UTC().UnixNano(), 10) + "-" + strconv.FormatInt(o.Size, 10)
 }

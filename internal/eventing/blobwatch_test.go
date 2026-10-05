@@ -185,7 +185,7 @@ func TestScenarioExternalS3WriteDetected(t *testing.T) {
 	w := newWatcher(t, s3ViewLister{shared: shared}, pub, wm)
 
 	// A write the watcher never made, landing where the ADR-0080 S3 frontend puts a `raw` object under `drop/`.
-	require.NoError(t, shared.Put(ctx, "s3/lake/raw/drop/b.parquet", []byte("parquet-bytes")))
+	require.NoError(t, shared.Put(ctx, "s3/lake/raw/drop/b.parquet", []byte("parquet-bytes"), blob.PutOptions{}))
 	w.poll(ctx)
 
 	require.Equal(t, 1, pub.count(), "the poll detects the external write over the shared substrate view")

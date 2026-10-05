@@ -18,6 +18,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	authz "github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -45,6 +46,7 @@ type uploadTarget struct {
 
 type upload struct {
 	target  uploadTarget
+	opts    blob.PutOptions // the Content-Type and user metadata of CreateMultipartUpload
 	parts   map[int32][]byte
 	size    int64     // the sum of the buffered parts' lengths
 	touched time.Time // the last Create or UploadPart
@@ -56,7 +58,7 @@ func newMultipartStore() *multipartStore {
 
 // create starts an upload and drops the abandoned ones: a new upload is the only way the
 // number of buffered uploads grows, so sweeping here keeps it to the recently active ones.
-func (m *multipartStore) create(t uploadTarget) string {
+func (m *multipartStore) create(t uploadTarget, opts blob.PutOptions) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock.Now()
@@ -68,7 +70,12 @@ func (m *multipartStore) create(t uploadTarget) string {
 	id := "funcd-mpu-" + rand.Text()
 	// The request's strings alias fiber's reused buffers; the binding outlives the request.
 	t = uploadTarget{ns: v1.NamespaceName(strings.Clone(string(t.ns))), bucket: strings.Clone(t.bucket), key: strings.Clone(t.key)}
-	m.uploads[id] = &upload{target: t, parts: map[int32][]byte{}, touched: now}
+	md := make(map[string]string, len(opts.Metadata))
+	for k, v := range opts.Metadata {
+		md[strings.Clone(k)] = strings.Clone(v)
+	}
+	opts = blob.PutOptions{ContentType: strings.Clone(opts.ContentType), Metadata: md}
+	m.uploads[id] = &upload{target: t, opts: opts, parts: map[int32][]byte{}, touched: now}
 	return id
 }
 
@@ -103,35 +110,36 @@ func (m *multipartStore) putPart(id string, t uploadTarget, num int32, data []by
 
 // assemble concatenates the parts the client listed, in its order (S3
 // CompleteMultipartUpload): part numbers must ascend and each must be buffered with a
-// matching ETag; unlisted parts are dropped. It does NOT delete the upload (Complete does).
-func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.CompletedMultipartUpload) ([]byte, error) {
+// matching ETag; unlisted parts are dropped. It returns the upload's Put options with the bytes and
+// does NOT delete the upload (Complete does).
+func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.CompletedMultipartUpload) ([]byte, blob.PutOptions, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.get(id, t)
 	if !ok {
-		return nil, s3err.GetAPIError(s3err.ErrNoSuchUpload)
+		return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
 	if mpu == nil || len(mpu.Parts) == 0 {
-		return nil, s3err.GetAPIError(s3err.ErrMalformedXML)
+		return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrMalformedXML)
 	}
 	var buf []byte
 	var prev int32
 	for _, p := range mpu.Parts {
 		if p.PartNumber == nil || p.ETag == nil {
-			return nil, s3err.GetAPIError(s3err.ErrMalformedXML)
+			return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrMalformedXML)
 		}
 		num := *p.PartNumber
 		if num <= prev {
-			return nil, s3err.GetAPIError(s3err.ErrInvalidPartOrder)
+			return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrInvalidPartOrder)
 		}
 		prev = num
 		data, ok := u.parts[num]
 		if !ok || !backend.AreEtagsSame(etag(data), *p.ETag) {
-			return nil, s3err.GetInvalidPartErr(id, num, *p.ETag)
+			return nil, blob.PutOptions{}, s3err.GetInvalidPartErr(id, num, *p.ETag)
 		}
 		buf = append(buf, data...)
 	}
-	return buf, nil
+	return buf, u.opts, nil
 }
 
 // abort drops the upload when it is bound to t and reports whether it did.
@@ -166,7 +174,8 @@ func (m *multipartStore) parts(id string, t uploadTarget) ([]s3response.Part, bo
 
 // --- backend multipart methods (PEP-guarded) -------------------------------------
 
-// CreateMultipartUpload starts a buffered multipart upload (ADR-0080): s3::write PEP.
+// CreateMultipartUpload starts a buffered multipart upload (ADR-0080): s3::write PEP. The upload keeps
+// the request's Content-Type and user metadata for the Put at Complete (ADR-0159).
 func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMultipartUploadInput) (s3response.InitiateMultipartUploadResult, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -177,7 +186,7 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 	if err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
-	id := b.mp.create(uploadTarget{ns: pr.namespace, bucket: bucket, key: key})
+	id := b.mp.create(uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, blob.PutOptions{ContentType: deref(in.ContentType), Metadata: in.Metadata})
 	return s3response.InitiateMultipartUploadResult{Bucket: bucket, Key: key, UploadId: id}, nil
 }
 
@@ -206,9 +215,10 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	return &awss3.UploadPartOutput{ETag: ptr(etag(data))}, nil
 }
 
-// CompleteMultipartUpload assembles the buffered parts and Puts the object once
-// (ADR-0080): s3::write PEP, total bounded by maxUpload (fail-closed). If-None-Match: * makes
-// it create-only (createOnly); a refused Complete leaves the upload in place.
+// CompleteMultipartUpload assembles the buffered parts and Puts the object once with the upload's
+// Content-Type and user metadata (ADR-0080): s3::write PEP, total bounded by maxUpload (fail-closed).
+// If-Match and If-None-Match are evaluated by writePreconditions after assembly, immediately before the
+// Put (ADR-0159); a refused Complete leaves the upload in place for a retry.
 func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMultipartUploadInput) (s3response.CompleteMultipartUploadResult, string, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -220,11 +230,8 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	}
 	target := uploadTarget{ns: pr.namespace, bucket: bucket, key: deref(in.Key)}
 	key := blobKey(prefix, object)
-	if cerr := createOnly(ctx, sub, key, in.IfNoneMatch); cerr != nil {
-		return s3response.CompleteMultipartUploadResult{}, "", cerr
-	}
 	id := deref(in.UploadId)
-	data, aerr := b.mp.assemble(id, target, in.MultipartUpload)
+	data, opts, aerr := b.mp.assemble(id, target, in.MultipartUpload)
 	if aerr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", aerr
 	}
@@ -232,7 +239,10 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 		b.mp.abort(id, target)
 		return s3response.CompleteMultipartUploadResult{}, "", s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
-	if perr := sub.Put(ctx, key, data); perr != nil {
+	if cerr := writeConditions(ctx, sub, key, in.IfMatch, in.IfNoneMatch); cerr != nil {
+		return s3response.CompleteMultipartUploadResult{}, "", cerr
+	}
+	if perr := sub.Put(ctx, key, data, opts); perr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", mapBlobErr(perr)
 	}
 	b.mp.abort(id, target)
@@ -279,8 +289,46 @@ func (b *be) ListParts(ctx context.Context, in *awss3.ListPartsInput) (s3respons
 }
 
 // etag is the S3 ETag of data in its wire form: the MD5 hex in double quotes (an RFC 9110
-// entity-tag). Every response that carries an ETag uses it, so the gateway has one form.
+// entity-tag). It equals the objectETag of the digest the driver stores for data, so the gateway has one form.
 func etag(data []byte) string {
 	sum := md5.Sum(data) //nolint:gosec // content fingerprint, not security
-	return `"` + hex.EncodeToString(sum[:]) + `"`
+	return objectETag(sum[:])
+}
+
+// objectETag is the quoted lowercase hex ETag of digest, or "" when digest is nil or empty; the caller
+// then sets a nil ETag, so no header and no listing element (ADR-0159).
+func objectETag(digest []byte) string {
+	if len(digest) == 0 {
+		return ""
+	}
+	return `"` + hex.EncodeToString(digest) + `"`
+}
+
+// readPreconditions evaluates a GET or HEAD's conditions in RFC 9110 §13.2.2 order (ADR-0159): If-Match,
+// then the dates (datePreconditions, which skips a date condition its ETag condition decides), then
+// If-None-Match. Without a digest the ETag is "", so only If-Match: * matches it and an entity-tag
+// If-None-Match matches nothing. The error is NotModified (304) or PreconditionFailed (412); the caller
+// returns it with a nil output, so no output header (a non-nil one adds x-amz-delete-marker).
+func readPreconditions(attrs blob.Attributes, c backend.PreConditions) error {
+	tag := objectETag(attrs.MD5)
+	if err := backend.EvaluatePreconditions(tag, attrs.ModTime, backend.PreConditions{IfMatch: c.IfMatch}); err != nil {
+		return err
+	}
+	if err := datePreconditions(attrs.ModTime, c); err != nil {
+		return err
+	}
+	return backend.EvaluatePreconditions(tag, attrs.ModTime, backend.PreConditions{IfNoneMatch: c.IfNoneMatch})
+}
+
+// writePreconditions answers a PUT or CompleteMultipartUpload's If-Match and If-None-Match (ADR-0159):
+// nil, PreconditionFailed (412), NoSuchKey (404) or NotImplemented (501). versitygw's evaluator compares
+// If-Match: * as an entity tag, so * alone is answered here: the write proceeds when the object exists.
+func writePreconditions(attrs blob.Attributes, found bool, ifMatch, ifNoneMatch *string) error {
+	if ifNoneMatch == nil && deref(ifMatch) == "*" {
+		if !found {
+			return s3err.GetAPIError(s3err.ErrNoSuchKey)
+		}
+		return nil
+	}
+	return backend.EvaluateObjectPutPreconditions(objectETag(attrs.MD5), ifMatch, ifNoneMatch, found)
 }

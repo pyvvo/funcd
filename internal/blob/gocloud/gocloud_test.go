@@ -2,6 +2,7 @@ package gocloud_test
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // the port's content digest is MD5 (ADR-0159)
 	"os"
 	"path/filepath"
 	"slices"
@@ -56,7 +57,7 @@ func TestIssue331_FileURLBucketWritesIntoExactlyThatDirectory(t *testing.T) {
 			b, err := gocloud.Open(ctx, gocloud.FileURL(dir))
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = b.Close() })
-			require.NoError(t, b.Put(ctx, "k", []byte("v")))
+			require.NoError(t, b.Put(ctx, "k", []byte("v"), blob.PutOptions{}))
 			got, err := os.ReadFile(filepath.Join(dir, "k"))
 			require.NoError(t, err)
 			require.Equal(t, "v", string(got))
@@ -96,7 +97,7 @@ func TestIssue160_UnstorableKeysAreInvalidAndNeverAlias(t *testing.T) {
 		storedOrInvalid := func(t *testing.T, b blob.Bucket, key string) {
 			t.Helper()
 			data := []byte("v:" + key)
-			if err := b.Put(ctx, key, data); err != nil {
+			if err := b.Put(ctx, key, data, blob.PutOptions{}); err != nil {
 				require.Equal(t, fault.Invalid, fault.KindOf(err), "Put: %v", err)
 				return
 			}
@@ -115,12 +116,12 @@ func TestIssue160_UnstorableKeysAreInvalidAndNeverAlias(t *testing.T) {
 			}
 			t.Run("object over an existing prefix", func(t *testing.T) {
 				b := open(t)
-				require.NoError(t, b.Put(ctx, "bronze/x", []byte("x")))
+				require.NoError(t, b.Put(ctx, "bronze/x", []byte("x"), blob.PutOptions{}))
 				storedOrInvalid(t, b, "bronze")
 			})
 			t.Run("prefix under an existing object", func(t *testing.T) {
 				b := open(t)
-				require.NoError(t, b.Put(ctx, "bronze", []byte("x")))
+				require.NoError(t, b.Put(ctx, "bronze", []byte("x"), blob.PutOptions{}))
 				storedOrInvalid(t, b, "bronze/x")
 			})
 			for key, other := range map[string]string{
@@ -155,13 +156,13 @@ func TestIssue375_EscapeSequenceKeysNeverAlias(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = b.Close() })
 
-			require.NoError(t, b.Put(ctx, "a//b", []byte("v:a//b")))
+			require.NoError(t, b.Put(ctx, "a//b", []byte("v:a//b"), blob.PutOptions{}))
 			got, err := b.Get(ctx, "a/__0x2f__b")
 			require.Error(t, err, "Get(a/__0x2f__b) read the object of a//b: %q", got)
 			require.Contains(t, []fault.Kind{fault.NotFound, fault.Invalid}, fault.KindOf(err), "Get: %v", err)
 
 			key := "c/__0x41__"
-			if err := b.Put(ctx, key, []byte("v:"+key)); err != nil {
+			if err := b.Put(ctx, key, []byte("v:"+key), blob.PutOptions{}); err != nil {
 				require.Equal(t, fault.Invalid, fault.KindOf(err), "Put: %v", err)
 				return
 			}
@@ -195,7 +196,7 @@ func TestEmptyKeyIsInvalidOnTheFileBackend(t *testing.T) {
 		"Get":      getErr,
 		"Exists":   existsErr,
 		"GetRange": rangeErr,
-		"Put":      b.Put(ctx, "", []byte("v")),
+		"Put":      b.Put(ctx, "", []byte("v"), blob.PutOptions{}),
 		"Delete":   b.Delete(ctx, ""),
 	} {
 		assert.Equal(t, fault.Invalid, fault.KindOf(err), "%s(%q): %v", op, "", err)
@@ -204,7 +205,7 @@ func TestEmptyKeyIsInvalidOnTheFileBackend(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
 
-	require.NoError(t, b.Put(ctx, "k", []byte("v")))
+	require.NoError(t, b.Put(ctx, "k", []byte("v"), blob.PutOptions{}))
 	items, err := b.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -233,7 +234,7 @@ func TestIssue459_ListFindsKeysUnderEscapedPrefixes(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = b.Close() })
 			for _, k := range keys {
-				require.NoError(t, b.Put(ctx, k, []byte(k)), "Put(%q)", k)
+				require.NoError(t, b.Put(ctx, k, []byte(k), blob.PutOptions{}), "Put(%q)", k)
 			}
 			for _, p := range prefixes {
 				want := []string{}
@@ -254,5 +255,66 @@ func TestIssue459_ListFindsKeysUnderEscapedPrefixes(t *testing.T) {
 				assert.Equal(t, want, got, "List(%q)", p)
 			}
 		})
+	}
+}
+
+// ADR-0159: the driver reports the content MD5 from Attributes on memory and file, a file without gocloud's
+// sidecar has no digest and the octet-stream type, and an unparsable content type is refused as Invalid.
+func TestADR0159_AttributesDigestAndContentType(t *testing.T) {
+	ctx := context.Background()
+	val := []byte("payload")
+	want := md5.Sum(val) //nolint:gosec // content digest, not security
+	for name, url := range map[string]string{"memory": "mem://", "file": "file://" + t.TempDir()} {
+		t.Run(name, func(t *testing.T) {
+			b, err := gocloud.Open(ctx, url)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = b.Close() })
+			require.NoError(t, b.Put(ctx, "k", val, blob.PutOptions{}))
+			a, err := b.Attributes(ctx, "k")
+			require.NoError(t, err)
+			require.Equal(t, want[:], a.MD5)
+
+			err = b.Put(ctx, "bad", val, blob.PutOptions{ContentType: "not a type;;"})
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "unparsable content type: %v", err)
+			err = b.Put(ctx, "bad", val, blob.PutOptions{Metadata: map[string]string{"": "v"}})
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "empty metadata key: %v", err)
+		})
+	}
+
+	t.Run("file without sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "raw.bin"), val, 0o600))
+		b, err := gocloud.Open(ctx, "file://"+dir)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = b.Close() })
+		a, err := b.Attributes(ctx, "raw.bin")
+		require.NoError(t, err)
+		require.Nil(t, a.MD5)
+		require.Equal(t, "application/octet-stream", a.ContentType)
+		require.Equal(t, int64(len(val)), a.Size)
+		items, err := b.List(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+		require.Nil(t, items[0].MD5)
+	})
+}
+
+// ADR-0159 Temporary workarounds: a file:// List entry carries the MD5 Attributes reports for the same key.
+func TestADR0159_FileListCarriesAttributesMD5(t *testing.T) {
+	ctx := context.Background()
+	b, err := gocloud.Open(ctx, "file://"+t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+	for _, k := range []string{"a/1", "a/2", "a/b/3"} {
+		require.NoError(t, b.Put(ctx, k, []byte("v-"+k), blob.PutOptions{}))
+	}
+	items, err := b.List(ctx, "a/")
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	for _, it := range items {
+		a, aerr := b.Attributes(ctx, it.Key)
+		require.NoError(t, aerr)
+		require.NotEmpty(t, a.MD5, it.Key)
+		require.Equal(t, a.MD5, it.MD5, it.Key)
 	}
 }

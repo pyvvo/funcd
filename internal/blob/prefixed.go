@@ -29,8 +29,8 @@ func (p *prefixedBucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return p.inner.Get(ctx, p.k(key))
 }
 
-func (p *prefixedBucket) Put(ctx context.Context, key string, data []byte) error {
-	return p.inner.Put(ctx, p.k(key), data)
+func (p *prefixedBucket) Put(ctx context.Context, key string, data []byte, opts PutOptions) error {
+	return p.inner.Put(ctx, p.k(key), data, opts)
 }
 
 func (p *prefixedBucket) Delete(ctx context.Context, key string) error {
@@ -53,6 +53,15 @@ func (p *prefixedBucket) List(ctx context.Context, prefix string) ([]Attributes,
 		out = append(out, it)
 	}
 	return out, nil
+}
+
+func (p *prefixedBucket) Attributes(ctx context.Context, key string) (Attributes, error) {
+	a, err := p.inner.Attributes(ctx, p.k(key))
+	if err != nil {
+		return Attributes{}, err
+	}
+	a.Key = key
+	return a, nil
 }
 
 func (p *prefixedBucket) SignedURL(ctx context.Context, key string, opts SignOptions) (string, error) {

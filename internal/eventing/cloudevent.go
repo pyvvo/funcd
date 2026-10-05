@@ -57,7 +57,8 @@ func NewNamedEvent(ns v1.NamespaceName, source, event v1.ObjectName) (CloudEvent
 
 // BlobEventData is the `data` payload of a blob CloudEvent (ADR-0119, F83): what landed under a watched
 // Bucket prefix, for a Sensor to project (e.g. `${{ event.data.key }}`). Version is a (ModTime,Size)
-// fingerprint of the observed object version — NOT a content ETag (blob.Attributes exposes none in V1).
+// fingerprint of the observed object version — NOT a content ETag (a `data.etag` from blob.Attributes.MD5,
+// ADR-0159, is ADR-0119's follow-up).
 type BlobEventData struct {
 	Bucket  string    `json:"bucket"`
 	Key     string    `json:"key"`

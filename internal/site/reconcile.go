@@ -281,7 +281,7 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 		if rerr != nil {
 			return "", "", fault.Wrapf(rerr, fault.Internal, op, "read %q", rel)
 		}
-		if perr := view.Put(ctx, sp+rel, data); perr != nil {
+		if perr := view.Put(ctx, sp+rel, data, blob.PutOptions{}); perr != nil {
 			// An object over the Bucket's maxObjectBytes (blob.Capped: PayloadTooLarge), or a key the
 			// substrate cannot store (Invalid), fails every retry until the spec or the Bucket changes
 			// (MapBucket).

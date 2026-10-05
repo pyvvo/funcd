@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"mime"
 	neturl "net/url"
 	"path/filepath"
 	"sort"
@@ -23,7 +24,7 @@ import (
 	// Register the URL schemes the port supports.
 	"gocloud.dev/blob/fileblob"  // file://
 	_ "gocloud.dev/blob/memblob" // mem://
-	_ "gocloud.dev/blob/s3blob"  // s3://
+	"gocloud.dev/blob/s3blob"    // s3://
 )
 
 const (
@@ -44,7 +45,11 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
 	}
-	return &bucket{b: b, file: strings.HasPrefix(url, fileblob.Scheme+"://")}, nil
+	return &bucket{
+		b:    b,
+		file: strings.HasPrefix(url, fileblob.Scheme+"://"),
+		s3:   strings.HasPrefix(url, s3blob.Scheme+"://"),
+	}, nil
 }
 
 // FileURL is the file:// bucket URL for the absolute directory dir, path-escaped so URL syntax in a
@@ -56,6 +61,8 @@ func FileURL(dir string) string {
 type bucket struct {
 	b    *gcblob.Bucket
 	file bool
+	// s3 leaves MD5 nil: s3blob decodes an SSE-KMS/SSE-C ETag that is not the content's MD5 (ADR-0159).
+	s3 bool
 }
 
 // checkKey rejects a key the file backend cannot keep as its own object: an empty key
@@ -96,14 +103,45 @@ func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-func (k *bucket) Put(ctx context.Context, key string, data []byte) error {
-	if err := k.checkKey("blob.Put", key); err != nil {
+// Put stays on WriteAll: memblob's Upload never feeds the MD5 Attributes reports (ADR-0159). gocloud
+// returns a ParseMediaType error unwrapped, so the content type is checked here first.
+func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
+	const op = "blob.Put"
+	if err := k.checkKey(op, key); err != nil {
 		return err
 	}
-	if err := k.b.WriteAll(ctx, key, data, nil); err != nil {
-		return mapErr("blob.Put", key, err)
+	if opts.ContentType != "" {
+		if _, _, err := mime.ParseMediaType(opts.ContentType); err != nil {
+			return fault.Wrapf(err, fault.Invalid, op, "content type %q of %q", opts.ContentType, key)
+		}
+	}
+	wo := &gcblob.WriterOptions{ContentType: opts.ContentType, Metadata: opts.Metadata}
+	if err := k.b.WriteAll(ctx, key, data, wo); err != nil {
+		return mapErr(op, key, err)
 	}
 	return nil
+}
+
+func (k *bucket) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
+	const op = "blob.Attributes"
+	if err := k.checkKey(op, key); err != nil {
+		return blob.Attributes{}, err
+	}
+	a, err := k.b.Attributes(ctx, key)
+	if err != nil {
+		return blob.Attributes{}, mapErr(op, key, err)
+	}
+	out := blob.Attributes{
+		Key:         key,
+		Size:        a.Size,
+		ModTime:     a.ModTime,
+		ContentType: a.ContentType,
+		Metadata:    a.Metadata,
+	}
+	if !k.s3 {
+		out.MD5 = a.MD5
+	}
+	return out, nil
 }
 
 func (k *bucket) Delete(ctx context.Context, key string) error {
@@ -150,10 +188,28 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 		if !strings.HasPrefix(obj.Key, prefix) {
 			continue
 		}
-		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime})
+		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime, MD5: k.listMD5(ctx, obj)})
 	}
 	sortByKey(out)
 	return out, nil
+}
+
+// listMD5 is the digest a List entry carries. fileblob's List does not return the MD5 its Attributes reads
+// from the sidecar, so a file entry reads its attributes, nil when that read fails, so List fails no more
+// often than without it (ADR-0159 Temporary workarounds).
+func (k *bucket) listMD5(ctx context.Context, obj *gcblob.ListObject) []byte {
+	switch {
+	case k.s3:
+		return nil
+	case k.file:
+		a, err := k.b.Attributes(ctx, obj.Key)
+		if err != nil {
+			return nil
+		}
+		return a.MD5
+	default:
+		return obj.MD5
+	}
 }
 
 // fileWalkPrefix cuts prefix before the first rune fileblob would not walk to: it starts its
@@ -237,6 +293,8 @@ func mapErr(op, key string, err error) error {
 		return fault.Wrapf(err, fault.NotFound, op, "%q not found", key)
 	case gcerrors.Unimplemented:
 		return fault.Wrapf(err, fault.Unavailable, op, "operation not supported by this backend")
+	case gcerrors.InvalidArgument:
+		return fault.Wrapf(err, fault.Invalid, op, "invalid argument for %q", key)
 	}
 	// fileblob reports a key its OS path cannot hold as Unknown: a name past the OS limit, or
 	// an object and a "key/" prefix needing one path (a rename onto a directory is EISDIR on

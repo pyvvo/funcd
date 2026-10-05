@@ -27,11 +27,11 @@ type cappedBucket struct {
 	max int64
 }
 
-func (c *cappedBucket) Put(ctx context.Context, key string, data []byte) error {
+func (c *cappedBucket) Put(ctx context.Context, key string, data []byte, opts PutOptions) error {
 	if int64(len(data)) > c.max {
 		return fault.PayloadTooLargef("blob.Capped.Put", "object %q is %d bytes, over the bucket's maxObjectBytes (%d)", key, len(data), c.max)
 	}
-	return c.Bucket.Put(ctx, key, data)
+	return c.Bucket.Put(ctx, key, data, opts)
 }
 
 func (c *cappedBucket) SignedURL(ctx context.Context, key string, opts SignOptions) (string, error) {
