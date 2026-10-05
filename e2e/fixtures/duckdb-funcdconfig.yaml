@@ -1,0 +1,28 @@
+# The duckdb lane's daemon config: the catalog-quack example's funcdconfig.yaml (pyvvo/funcd-python) with auth.token
+# replaced by an ADR-0171 credential list, so the suite applies the ADR-0179 engines in namespaces a-b and a with an
+# admin token. The provisioning writes both token files (root, 0600) from the lane's `tokens` in scripts/lanes.yaml.
+apiVersion: funcd.io/v1alpha1
+kind: FuncdConfig
+server:
+  listenAddr: 127.0.0.1:8080
+  dataPlaneAddr: 127.0.0.1:8081
+storage:
+  mode: file
+  dataDir: /var/lib/funcd/data
+auth:
+  credentials:
+    - tokenFile: /etc/funcd/tokens/admin
+      role: admin
+    - tokenFile: /etc/funcd/tokens/developer
+      role: developer
+runtime:
+  mode: containerd
+s3gateway:
+  enabled: true
+  listenAddr: 0.0.0.0:9000
+  endpoint: http://10.63.0.1:9000
+catalog:
+  proxyHost: 10.63.0.1
+log:
+  format: text
+  level: info

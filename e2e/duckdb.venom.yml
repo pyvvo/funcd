@@ -15,7 +15,16 @@
 # (ADR-0091 — FUNCD_CATALOG_LAKE_URL/_TOKEN injected from the `lake` catalog's status.endpoint + QUACK_TOKEN),
 # runs the SQL on `lake` over Quack, and returns the rows. Ready alone proves the binding injected the
 # endpoint/token and `lake` is reachable; the invoke proves the whole consumer loop end-to-end on containerd.
+#
+# Last, the ADR-0179 cases: the boot sweep releases a CNI attachment planted under the ID form used before ADR-0179
+# (<ns>-<name>-r<replica>), and engines c in namespace a-b and b-c in namespace a, whose IDs collided under that
+# form, each hold their own attachment.
 name: catalog-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
+
+vars:
+  # the lane's `tokens` in scripts/lanes.yaml, listed in auth.credentials (e2e/fixtures/duckdb-funcdconfig.yaml)
+  devtoken: duckdb-lane-developer
+  admintoken: duckdb-lane-admin
 
 testcases:
   - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
@@ -30,7 +39,7 @@ testcases:
         # internal :8080 (which the proxy now fronts as its upstream).
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             cs=$(funcdctl get catalogservice lake -n default -o json)
             phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
@@ -52,7 +61,7 @@ testcases:
         # shows the catalog HEAD authorized as 404 (fresh) — proving the provider's F47/Cedar identity.
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
             code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$addr/")
             denied=$(sudo journalctl -u funcd-demo --no-pager 2>/dev/null | grep -c " 403 .* /lakehouse/gold/" || echo 0)
@@ -76,7 +85,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             fn=$(funcdctl get function catalog-reader -n default -o json)
             phase=$(echo "$fn" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             echo "PHASE=$phase"'
@@ -149,7 +158,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-before
             pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
@@ -175,7 +184,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             now=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
             pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
@@ -195,7 +204,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             [ -n "$pid" ] || exit 1
@@ -210,7 +219,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             fn=$(funcdctl get function lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             [ "$fn" = Ready ] || exit 1
             sed -e "s/^  replicas: 1/  replicas: 2/" /tmp/lake-function.yaml > /tmp/lake-function-2.yaml
@@ -225,7 +234,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             label() { sudo ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
             phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
@@ -277,7 +286,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             label() { sudo ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
             phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
@@ -303,3 +312,117 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
+
+  # ADR-0179: a container from before the change is attached under <ns>-<name>-r<replica>; the old ID of engine c in
+  # namespace a-b is a-b-c-r0. The step plants one (labels as Create sets them, no revision) with the netns already
+  # gone, as discard sees it, then a hard restart's boot sweep (ADR-0167) discards the container.
+  - name: leftover-old-form-attachment-released — the boot sweep releases an attachment left under the old CNI ID form
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            sudo mkdir -p /tmp/leftover-rootfs
+            sudo ctr --address $sock -n funcd-a-b containers create --rootfs \
+              --label funcd/namespace=a-b --label funcd/name=c --label funcd/replica=0 /tmp/leftover-rootfs c-r0
+            sudo ip netns add cni-leftover
+            sudo /mnt/funcd-deps/cniadd /opt/cni/bin /var/lib/funcd/data/cni a-b-c-r0 /var/run/netns/cni-leftover
+            sudo ip netns delete cni-leftover
+            echo "LEASES=$(sudo grep -rlF a-b-c-r0 /var/lib/cni/networks/funcd | wc -l) RESULTS=$(sudo ls /var/lib/cni/results | grep -cF -- -a-b-c-r0-)"'
+        info: "planted → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEASES=1 RESULTS=2"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            systemctl is-active -q funcd-demo && exit 1
+            sudo systemctl reset-failed funcd-demo 2>/dev/null
+            sudo systemd-run --unit funcd-demo /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      # the control plane serves once funcd.New runs, after the boot sweep
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl get catalogservice lake -n default >/dev/null || exit 1
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            ctr=$(sudo ctr --address $sock -n funcd-a-b containers ls -q | grep -cx c-r0)
+            echo "CONTAINER=$ctr LEASES=$(sudo grep -rlF a-b-c-r0 /var/lib/cni/networks/funcd | wc -l) RESULTS=$(sudo ls /var/lib/cni/results | grep -cF -- -a-b-c-r0-)"'
+        retry: 30
+        delay: 2
+        info: "after the boot sweep → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CONTAINER=0 LEASES=0 RESULTS=0"
+
+  # ADR-0179: engines c in a-b and b-c in a both had the CNI ID a-b-c-r0 before the change. Each engine prints
+  # phase/quack status/the CNI ID holding its address's host-local lease/its address.
+  - name: unrevisioned-cni-ids-distinct-across-namespaces — engines c in a-b and b-c in a each hold their own attachment, and stopping one leaves the other serving
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/cni-engines.yaml
+        retry: 10
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            engine() {
+              read -r phase ep < <(funcdctl get catalogservice $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
+              code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$ep/")
+              pid=$(sudo ctr --address $sock -n funcd-$1 task ls | awk "\$1==\"$2-r0\"{print \$2}")
+              ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1)
+              echo "$phase/$code/$(sudo head -n1 /var/lib/cni/networks/funcd/$ip 2>/dev/null | tr -d "\r")/$ip"
+            }
+            c=$(engine a-b c); bc=$(engine a b-c)
+            [ -n "${c##*/}" ] && [ "${c##*/}" != "${bc##*/}" ] && ips=distinct || ips=shared
+            echo "ENGINE_C=$c ENGINE_BC=$bc IPS=$ips"'
+        retry: 90
+        delay: 2
+        info: "engines → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENGINE_C=Ready/200/a-b_c-r0/"
+          - result.systemout ShouldContainSubstring "ENGINE_BC=Ready/200/a_b-c-r0/"
+          - result.systemout ShouldContainSubstring "IPS=distinct"
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl delete catalogservice c -n a-b
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            engine() {
+              read -r phase ep < <(funcdctl get catalogservice $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
+              code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$ep/")
+              pid=$(sudo ctr --address $sock -n funcd-$1 task ls | awk "\$1==\"$2-r0\"{print \$2}")
+              ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1)
+              echo "$phase/$code/$(sudo head -n1 /var/lib/cni/networks/funcd/$ip 2>/dev/null | tr -d "\r")/$ip"
+            }
+            [ "$(sudo ctr --address $sock -n funcd-a-b containers ls -q | grep -cx c-r0)" = 0 ] || exit 1
+            echo "C_LEASES=$(sudo grep -rlF a-b_c-r0 /var/lib/cni/networks/funcd | wc -l) ENGINE_BC=$(engine a b-c)"'
+        retry: 30
+        delay: 2
+        info: "after stopping c → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "C_LEASES=0 ENGINE_BC=Ready/200/a_b-c-r0/"

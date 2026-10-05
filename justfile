@@ -225,6 +225,7 @@ lima-example name:
     mkdir -p "$deps"
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcd"    ./cmd/funcd
     CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/funcdctl" ./cmd/funcdctl
+    CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/cniadd"   ./e2e/cniadd
     # host driver: run the lane's `build`, stage lane.tgz (files + registry + LANE marker), print its suite.
     suite="$(python3 scripts/lane.py "$name" "$deps")"
     trap "limactl stop -f '$vm' >/dev/null 2>&1 || true; limactl delete -f '$vm' >/dev/null 2>&1 || true" EXIT
