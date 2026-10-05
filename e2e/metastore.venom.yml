@@ -14,10 +14,12 @@ name: metastore durability — a ConfigMap survives a daemon restart (ADR-0065, 
 testcases:
   - name: boot #1 — start funcd (containerd + file/Badger metastore) and apply a ConfigMap
     steps:
-      # start funcd #1 with the REAL production config (transient systemd unit). systemd-run returns at once.
+      # start funcd #1 with the REAL production config (transient systemd unit). systemd-run returns at once. The unit
+      # takes the installed funcd.service's KillMode=mixed: a stop signals funcd alone, so it stops its workers before
+      # its private containerd.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'mkdir -p /var/lib/funcd/data && systemd-run --unit funcd-meta /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'mkdir -p /var/lib/funcd/data && systemd-run --unit funcd-meta -p KillMode=mixed /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
         assertions:
           - result.code ShouldEqual 0
       # apply the ConfigMap — retry/delay IS the wait: it re-issues until the daemon is up and accepts it.
@@ -39,10 +41,11 @@ testcases:
 
   - name: the ConfigMap is recovered from the durable Badger metastore after a daemon restart
     steps:
-      # restart funcd (stop → start, SAME dataDir) — the transient unit is GC'd on stop, so re-run is clean.
+      # restart funcd (stop → start, SAME dataDir) — a clean stop exits 0, so the transient unit is GC'd and the
+      # same unit name starts again.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'systemctl stop funcd-meta; sleep 2; mkdir -p /var/lib/funcd/data; systemd-run --unit funcd-meta /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'systemctl stop funcd-meta; sleep 2; mkdir -p /var/lib/funcd/data; systemd-run --unit funcd-meta -p KillMode=mixed /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
         assertions:
           - result.code ShouldEqual 0
       # read the ConfigMap back — retry/delay IS the wait: re-issues until funcd is back up AND the ConfigMap is

@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/network"
+	"github.com/pyvvo/funcd/internal/network/egress"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -179,6 +180,64 @@ type removeProbe struct {
 
 func (r *removeProbe) Apply(context.Context, network.Policy) error { return r.applyErr }
 func (r *removeProbe) Remove(context.Context) error                { r.removed = true; return nil }
+
+// Shutdown removes the egress fence (ADR-0115) and closes the egress gateway (ADR-0117) only after the runtime's Close
+// has stopped the workers, so no worker runs without them while the daemon stops.
+func TestShutdown_KeepsEgressFenceUntilRuntimeClosed(t *testing.T) {
+	probe := &removeProbe{}
+	rt := &fenceAtClose{fence: probe}
+	p, err := New(InMemory(), WithoutLogCompaction(), WithEgressIsolation(probe, network.Policy{}), func(c *config) error {
+		rt.Runtime, c.runtime = c.runtime, rt
+		return nil
+	})
+	require.NoError(t, err)
+	gw := &gatewayAtClose{rt: rt}
+	p.egressGateway = gw
+	require.NoError(t, p.Shutdown(context.Background()))
+	require.True(t, rt.closed, "Shutdown must close the runtime")
+	require.False(t, rt.fenceGone, "Shutdown removed the egress fence while the runtime's workers were still running")
+	require.True(t, probe.removed, "Shutdown must remove the egress fence")
+	require.True(t, gw.closed, "Shutdown must close the egress gateway")
+	require.True(t, gw.afterRuntime, "Shutdown closed the egress gateway while the runtime's workers were still running")
+}
+
+// When the runtime's Close fails a worker may still run, so Shutdown leaves the egress fence for the next start's Apply.
+func TestShutdown_KeepsEgressFenceWhenRuntimeCloseFails(t *testing.T) {
+	probe := &removeProbe{}
+	rt := &fenceAtClose{fence: probe, err: errors.New("worker still running")}
+	p, err := New(InMemory(), WithoutLogCompaction(), WithEgressIsolation(probe, network.Policy{}), func(c *config) error {
+		rt.Runtime, c.runtime = c.runtime, rt
+		return nil
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, p.Shutdown(context.Background()), rt.err)
+	require.False(t, probe.removed, "Shutdown removed the egress fence although the runtime could not stop its workers")
+}
+
+// gatewayAtClose is an egress gateway that records whether the runtime was already closed when Close ran.
+type gatewayAtClose struct {
+	egress.Gateway
+	rt                   *fenceAtClose
+	closed, afterRuntime bool
+}
+
+func (g *gatewayAtClose) Close() error {
+	g.closed, g.afterRuntime = true, g.rt.closed
+	return nil
+}
+
+// fenceAtClose is a runtime that records whether the egress fence was already removed when Close ran.
+type fenceAtClose struct {
+	runtime.Runtime
+	fence             *removeProbe
+	err               error // when set, Close fails with it
+	closed, fenceGone bool
+}
+
+func (r *fenceAtClose) Close() error {
+	r.closed, r.fenceGone = true, r.fence.removed
+	return errors.Join(r.Runtime.Close(), r.err)
+}
 
 // Issue #489: a setup error in Run (egress isolation, TLS) stops the loops Run started and shuts the platform down
 // before Run returns it, so the daemon does not exit with its stores, listeners and runtime still open (ADR-0028).

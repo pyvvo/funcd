@@ -1264,12 +1264,6 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
 		}
-		if p.cfg.netManager != nil {
-			_ = p.cfg.netManager.Remove(ctx) // tear down the egress nftables tables (ADR-0115, F80)
-		}
-		if p.egressGateway != nil {
-			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
-		}
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()
 		}
@@ -1287,6 +1281,14 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		// channel to the end and flush, then seal any remaining funclog segments, all before blob.Close()
 		// (the sink writes to blob) — ADR-0081.
 		runtimeErr := closeDriver(p.cfg.runtime)
+		// The egress fence comes down only once the runtime has stopped the workers it confines. When the runtime's Close
+		// failed a worker may still run, so the nftables tables stay for the next start's Apply to replace.
+		if p.cfg.netManager != nil && runtimeErr == nil {
+			_ = p.cfg.netManager.Remove(ctx) // tear down the egress nftables tables (ADR-0115, F80)
+		}
+		if p.egressGateway != nil {
+			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
+		}
 		p.logRoutes.drain(ctx)
 		var logSinkErr, traceSinkErr error
 		if p.logSink != nil {

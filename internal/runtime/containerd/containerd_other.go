@@ -26,6 +26,11 @@ type Config struct {
 	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
 	// nil ⇒ none may.
 	Pullable func(ref string) bool
+
+	// Private marks Socket as funcd's private managed containerd (ADR-0054): no other owner runs workers in it, so
+	// Close may sweep every funcd namespace in it. An external containerd may hold another daemon's or a bench's
+	// workers (ADR-0055), so there Close stops only the workers this driver runs.
+	Private bool
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime

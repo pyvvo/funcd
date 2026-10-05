@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -297,11 +296,11 @@ func reportPythonPool(ctx context.Context, out io.Writer, c benchConfig) error {
 // When Ensure fails (non-Linux dev box, non-root, or the private containerd can't start) the lane
 // SKIPS cleanly with exit 0 — the run succeeds; only hosts on the production path measure.
 func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error {
-	// SIGINT/SIGTERM-safe: cancel ctx on the first signal so RunContainerd unwinds and its deferred
+	// Stop-signal-safe: cancel ctx on the first stop signal so RunContainerd unwinds and its deferred
 	// container teardown + the Manager.Close below run (graceful cleanup), instead of the process
 	// being killed mid-run and orphaning the managed containerd + its container shims (which would
 	// make the next `funcd bench --containerd` collide on the same container ids).
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
 	defer stop()
 
 	// ADR-0054 runtime Manager: ExternalSocket "" ⇒ a privately-managed containerd + embedded

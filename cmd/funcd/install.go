@@ -50,8 +50,9 @@ User=root
 Environment=FUNCD_DATA_DIR={{.DataRoot}}
 StateDirectory=funcd
 LimitNOFILE=1048576
-# containerd is a managed CHILD of this process, so kill the whole control group on stop.
-KillMode=control-group
+# containerd is a managed CHILD of this process: stop signals funcd alone, so it stops its workers and then
+# containerd, and systemd then kills whatever is left in the control group.
+KillMode=mixed
 TimeoutStopSec=30
 
 [Install]

@@ -148,7 +148,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		return fmt.Errorf("assemble platform: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parent, stopSignals()...)
 	defer stop()
 
 	root.InfoContext(ctx, "funcd starting",
@@ -160,6 +160,16 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		return fmt.Errorf("run: %w", err)
 	}
 	return nil
+}
+
+// stopSignals are the signals that stop funcd gracefully. A hangup (a closed terminal or a dropped SSH session) is one:
+// it does not reach the private containerd, which runs in its own process group, so funcd must stop it after the
+// workers. Under nohup a hangup stays ignored. SIGQUIT keeps Go's dump-and-exit.
+func stopSignals() []os.Signal {
+	if signal.Ignored(syscall.SIGHUP) {
+		return []os.Signal{os.Interrupt, syscall.SIGTERM}
+	}
+	return []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 }
 
 // buildOptions assembles the daemon's []funcd.Option from the resolved config (ADR-0061): the
@@ -701,6 +711,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 			SubnetCIDR:  c.SubnetCIDR,
 			Logger:      logger,
 			Pullable:    mgrCfg.Pullable(c.ImagePrefix),
+			Private:     c.Socket == "",
 		})
 		if err != nil {
 			_ = mgr.Close()
