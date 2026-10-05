@@ -1,6 +1,6 @@
 # ADR-0159: The blob content digest and object metadata — one ETag on every S3 path, and conditional requests
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, etag, conditional-requests, port

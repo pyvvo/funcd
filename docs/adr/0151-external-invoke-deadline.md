@@ -1,6 +1,6 @@
 # ADR-0151: External invoke deadline — a per-Function limit on the response start, 504 on expiry
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, invoke, timeout, activator, errors, rfc9457, shim, pool

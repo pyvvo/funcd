@@ -1,6 +1,6 @@
 # ADR-0147: Atomic admission and a nested-call in-flight cap
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: admission, control-plane, concurrency, links, invoke, worker-node, limits

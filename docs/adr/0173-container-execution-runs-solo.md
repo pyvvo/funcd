@@ -1,6 +1,6 @@
 # ADR-0173: Container execution runs every Function solo
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05 (drafted from issue #609; judged twice by three lenses)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, pooling, containerd, density, config
