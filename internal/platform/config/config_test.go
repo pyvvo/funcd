@@ -178,13 +178,13 @@ func TestIssue438_EveryKeyHasEnvOverride(t *testing.T) {
 			case f.Type.Kind() == reflect.Struct:
 				walk(prefix+name+".", f.Type)
 			case prefix == "" && (name == "apiVersion" || name == "kind"):
-			case f.Tag.Get("env") == "":
+			case f.Tag.Get("env") == "" || f.Tag.Get("env") == "-":
 				missing = append(missing, prefix+name)
 			}
 		}
 	}
 	walk("", reflect.TypeFor[config.Config]())
-	require.Emptyf(t, missing, "config keys without a FUNCD_* env override")
+	require.Equalf(t, []string{"auth.credentials"}, missing, "config keys without a FUNCD_* env override (auth.credentials is file-only, ADR-0171)")
 
 	t.Setenv("FUNCD_TLS_HOSTS", "a.example,b.example")
 	t.Setenv("FUNCD_SHAPING_CORS_ALLOW_ORIGINS", "https://a.example,https://b.example")
@@ -626,4 +626,71 @@ func TestScenarioInvalidDeliverySettingRefused(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int{32, 4, 4096}, []int{c.Eventing.MaxDeliveriesInFlight, c.Eventing.MaxInFlightPerTarget, c.Eventing.MaxQueuedPerSensor})
 	})
+}
+
+const twoCredentials = `auth:
+  credentials:
+    - tokenFile: /etc/funcd/tokens/ops
+      role: admin
+    - tokenFile: tokens/team-a
+      role: developer
+      namespaces:
+        - team-a
+`
+
+// ADR-0171 Decision 1: the two-entry list decodes; namespaces stay unset until cmd/funcd fills in default.
+func TestCredentialsDecode(t *testing.T) {
+	c, err := config.Load(writeCfg(t, twoCredentials), config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, config.CredentialList{
+		{TokenFile: "/etc/funcd/tokens/ops", Role: "admin"},
+		{TokenFile: "tokens/team-a", Role: "developer", Namespaces: []string{"team-a"}},
+	}, c.Auth.Credentials)
+
+	c, err = config.Load(writeCfg(t, twoCredentials+"  namespaces:\n    - default\n"), config.Flags{})
+	require.NoError(t, err, "an explicit auth.namespaces of default is the default value, so it passes")
+	require.Len(t, c.Auth.Credentials, 2)
+
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Nil(t, c.Auth.Credentials, "absent key ⇒ nil, the shorthand path")
+}
+
+// ADR-0171 Decision 1: auth.credentials has no env var, so a stray indexed variable adds no entry.
+func TestCredentialsIgnoreIndexedEnv(t *testing.T) {
+	for _, k := range []string{"0_TOKENFILE", "0_ROLE", "1_TOKENFILE", "1_ROLE", "0_NAMESPACES"} {
+		t.Setenv(k, "admin")
+	}
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Nil(t, c.Auth.Credentials)
+}
+
+// ADR-0171 Decisions 1 and 4: a malformed list or a list beside the shorthand fails naming its key.
+func TestCredentialsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, envKey, envVal, key string
+	}{
+		{"missing-tokenFile", "auth:\n  credentials:\n    - role: admin\n", "", "", "auth.credentials[0].tokenFile"},
+		{"unknown-role", "auth:\n  credentials:\n    - tokenFile: t\n      role: root\n", "", "", "auth.credentials[0].role"},
+		{"unknown-entry-key", "auth:\n  credentials:\n    - tokenFile: t\n      role: admin\n      token: inline-secret\n", "", "", "auth.credentials[0]"},
+		{"unquoted-numeric-namespace", "auth:\n  credentials:\n    - tokenFile: t\n      role: viewer\n      namespaces:\n        - 123\n", "", "", "auth.credentials[0]"},
+		{"empty-list", "auth:\n  credentials: []\n", "", "", "auth.credentials"},
+		{"commented-out-entries", "auth:\n  credentials:\n    # - tokenFile: t\n    #   role: admin\n", "", "", "auth.credentials"},
+		{"token-in-file", twoCredentials + "  token: shorthand-secret\n", "", "", "auth.token (FUNCD_TOKEN)"},
+		{"token-in-env", twoCredentials, "FUNCD_TOKEN", "shorthand-secret", "auth.token (FUNCD_TOKEN)"},
+		{"namespaces-in-file", twoCredentials + "  namespaces:\n    - team-a\n", "", "", "auth.namespaces (FUNCD_AUTH_NAMESPACES)"},
+		{"namespaces-in-env", twoCredentials, "FUNCD_AUTH_NAMESPACES", "team-a,team-b", "auth.namespaces (FUNCD_AUTH_NAMESPACES)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envKey != "" {
+				t.Setenv(tc.envKey, tc.envVal)
+			}
+			_, err := config.Load(writeCfg(t, tc.body), config.Flags{})
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+			require.Contains(t, err.Error(), tc.key)
+			require.NotContains(t, err.Error(), "secret", "no token value in the error")
+		})
+	}
 }

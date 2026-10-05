@@ -89,7 +89,7 @@ func Production() Option {
 		c.telemetry = telemetry
 
 		// Control plane (ADR-0028): a public bind + RBAC, but deliberately NO default
-		// credential — the operator supplies one via WithDevAuth (no default prod token).
+		// credential — the operator supplies WithCredentials or WithDevAuth (no default prod token).
 		c.listenAddr = "0.0.0.0:8080"
 		c.authorizer = rbac.New()
 		c.localNode = "local"

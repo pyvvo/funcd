@@ -181,6 +181,11 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 		return
 	}
 	out := r.Clone(r.Context())
+	// A Function never receives the platform credential the PEP consumed (ADR-0171 Decision 5).
+	if !internal && stance == v1.AuthAuthenticated {
+		out.Header.Del("Authorization")
+		out.Header.Del("X-Api-Key")
+	}
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
 	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
 	// (fn-to-fn/workflow/sensor) already emit a v1.0 envelope and bypass this — leave them streamed.

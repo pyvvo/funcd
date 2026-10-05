@@ -39,10 +39,14 @@ func (driver) Authorize(_ context.Context, req auth.Request) (auth.Decision, err
 		if clusterScoped {
 			return deny("viewer may not act on cluster-scoped kind %q", req.Kind), nil
 		}
+		// A credential is not read-only data: the viewer never reads a Secret (ADR-0171 Decision 9).
+		if req.Kind == v1.KindSecret {
+			return deny("viewer may not act on kind %q", req.Kind), nil
+		}
 		if !inNamespace(req.Identity, req.Namespace) {
 			return deny("viewer not scoped to namespace %q", req.Namespace), nil
 		}
-		if req.Verb.IsWrite() {
+		if req.Verb != auth.VerbGet && req.Verb != auth.VerbList {
 			return deny("viewer is read-only (verb %q)", req.Verb), nil
 		}
 		return allow(), nil

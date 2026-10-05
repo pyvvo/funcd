@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,13 @@ func (c creds) Lookup(_ context.Context, t string) (auth.Identity, error) {
 // spy scaler; the router carries `entries`.
 func authDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry, tokens creds) (http.Handler, store.Store, *spyScaler) {
 	t.Helper()
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	return authDoorUpstream(t, warm, entries, tokens, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+}
+
+// authDoorUpstream is authDoor with the warm function's upstream handler supplied by the test.
+func authDoorUpstream(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry, tokens creds, upstream http.Handler) (http.Handler, store.Store, *spyScaler) {
+	t.Helper()
+	up := httptest.NewServer(upstream)
 	t.Cleanup(up.Close)
 	st := store.New(memory.New())
 	scaler := &spyScaler{}
@@ -161,4 +168,50 @@ func TestNilEnforcerFailsClosed(t *testing.T) {
 
 	resp := authReq(t, h, "/function/api", "team", "tok")
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "authenticated stance + nil Enforcer ⇒ fail-closed 401")
+}
+
+// scenario: edge-drops-the-credential — after the PEP allows an `authenticated` call the Function sees
+// neither credential header; an `open` route forwards Authorization unchanged (ADR-0171 Decision 5).
+func TestScenarioEdgeDropsTheCredential(t *testing.T) {
+	var mu sync.Mutex
+	var seen []http.Header
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Clone())
+		mu.Unlock()
+		_, _ = w.Write([]byte("ok"))
+	})
+	last := func() http.Header {
+		mu.Lock()
+		defer mu.Unlock()
+		require.NotEmpty(t, seen, "the upstream was reached")
+		return seen[len(seen)-1]
+	}
+	warm := map[v1.ObjectName]string{"api": "u", "pub": "u"}
+	entries := []router.Entry{{Namespace: "team", Auth: v1.AuthOpen, Rules: []router.CompiledRule{{Path: "/pub", Function: "pub"}}}}
+	tokens := creds{"tok": {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team"}}}
+	h, st, _ := authDoorUpstream(t, warm, entries, tokens, upstream)
+	seedNSAuth(t, st, "team", v1.ExposureImplicit, v1.AuthAuthenticated)
+	seedFn(t, st, "team", "api")
+	seedFn(t, st, "team", "pub")
+
+	send := func(path string, hdr, val string) int {
+		r := httptest.NewRequest("POST", "http://any"+path, nil)
+		r.Header.Set("X-Funcd-Namespace", "team")
+		r.Header.Set(hdr, val)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Result().StatusCode
+	}
+
+	require.Equal(t, http.StatusOK, send("/function/api", "Authorization", "Bearer tok"))
+	require.Empty(t, last().Get("Authorization"), "the Function never sees the bearer the PEP consumed")
+	require.Empty(t, last().Get("X-Api-Key"))
+
+	require.Equal(t, http.StatusOK, send("/function/api", "X-Api-Key", "tok"))
+	require.Empty(t, last().Get("X-Api-Key"), "the Function never sees the API key the PEP consumed")
+	require.Empty(t, last().Get("Authorization"))
+
+	require.Equal(t, http.StatusOK, send("/pub", "Authorization", "Bearer own-scheme"))
+	require.Equal(t, "Bearer own-scheme", last().Get("Authorization"), "an open route forwards every header")
 }

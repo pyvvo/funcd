@@ -178,12 +178,10 @@ func stopSignals() []os.Signal {
 // execution closer the caller must defer, and the substrate label. The platform owns the drivers; a failed
 // call closes the ones it already opened (issue #437).
 func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
-	// Control-plane credential: auth.token / FUNCD_TOKEN, or the built-in dev token + a warning
-	// (Production() ships no default token — ADR-0028).
-	token := cfg.Auth.Token
-	if token == "" {
-		token = funcd.DevToken
-		root.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
+	// Credentials first: a bad token file or entry refuses startup before anything opens (ADR-0171 Decision 3).
+	credOpt, err := credentialOption(cfg, root)
+	if err != nil {
+		return nil, noopClose, nil, "", err
 	}
 
 	var opened []io.Closer
@@ -225,7 +223,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		funcd.WithKVStore(kvDriver),
 		funcd.WithKVStoreQuota(cfg.Kvstore.MaxStoresPerNamespace),
 		funcd.WithNestedInFlightCap(cfg.Invoke.MaxNestedInFlight),
-		funcd.WithDevAuth(token, cfg.Auth.Namespaces...),
+		credOpt,
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
 		funcd.WithInvokeSocketDir(filepath.Join(cfg.Storage.DataDir, "invoke")),
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
