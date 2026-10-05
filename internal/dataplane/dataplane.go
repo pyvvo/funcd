@@ -137,11 +137,6 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	if remainder == "" {
 		remainder = "/"
 	}
-	// Fill the F76 observability holder (if any) with the resolved target — so the metric/access-log
-	// function label is correct even for a Route hit (observ runs outside this handler, ADR-0114).
-	if t, ok := observ.TargetFrom(r.Context()); ok {
-		t.Namespace, t.Function = string(ns), string(name)
-	}
 	if !internal {
 		if s.enforcer != nil {
 			if err := s.enforcer.Enforce(r.Context(), r, activator.FunctionRef{Namespace: ns, Name: name}, stance); err != nil {
@@ -157,6 +152,12 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	if _, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name); err != nil {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 		return
+	}
+	// Fill the F76 observability holder (if any) only once the function exists, so the metric/log
+	// label is correct for a Route hit and stays "-" for a 404 or a PEP reject — a client-chosen
+	// name never becomes a metric series (ADR-0114 §1).
+	if t, ok := observ.TargetFrom(r.Context()); ok {
+		t.Namespace, t.Function = string(ns), string(name)
 	}
 	out := r.Clone(r.Context())
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
