@@ -94,6 +94,9 @@ storage:
 #     retention: 720h             # how long a parked entry is kept. default: 720h
 #     maxEntries: 1000            # parked entries per namespace. default: 1000
 
+# invoke:                         # fn-to-fn invoke (ADR-0147)
+#   maxNestedInFlight: 10         # 0 = default 10; cannot be disabled
+
 # --- auth: the control-plane dev credential (ADR-0028) ------------------------------------------
 auth:
   token: funcd-dev-token          # control-plane credential. default: a built-in dev token (with a warning)

@@ -58,3 +58,10 @@ type Admission interface {
 	// Admit reviews req and returns the (possibly-mutated) object, or a fault error denying the write.
 	Admit(ctx context.Context, req Request) (v1.Object, error)
 }
+
+// NamespaceReading marks an admission that needs the namespace's admission lock (ADR-0147): two
+// concurrent writes it admits could store a state no sequential order of them allows. The control
+// plane holds the lock from the Old fetch through the store write.
+type NamespaceReading interface {
+	ReadsNamespace() bool
+}

@@ -38,6 +38,9 @@ func NewKVStoreQuotaAdmission(r StoreReader, maxPerNamespace int) Admission {
 func (kvStoreQuota) Name() string { return "kvstore-quota" }
 func (kvStoreQuota) Phase() Phase { return Validating }
 
+// ReadsNamespace: the count check reads the namespace's KVStores, only while the quota is enabled (ADR-0147).
+func (a kvStoreQuota) ReadsNamespace() bool { return a.maxPerNamespace > 0 }
+
 func (kvStoreQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindKVStore.GVK() && op == Create
 }

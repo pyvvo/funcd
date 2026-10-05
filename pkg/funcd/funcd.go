@@ -20,6 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
@@ -105,6 +108,8 @@ const (
 	// defaults (ADR-0118), so a dead letter is evicted the same way in dev and in production.
 	defaultDeadletterRetention  = 720 * time.Hour
 	defaultDeadletterMaxEntries = 1000
+	// defaultNestedInFlightCap bounds the nested fn-to-fn calls in flight to one Function (ADR-0147).
+	defaultNestedInFlightCap = 10
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -117,7 +122,9 @@ type config struct {
 	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
 	// the default (100); negative disables the quota.
 	bucketMaxPerNamespace int
-	blob                  blob.Bucket
+	// nestedInFlightCap is the per-target cap on nested fn-to-fn calls in flight (ADR-0147); 0 ⇒ the default (10).
+	nestedInFlightCap int
+	blob              blob.Bucket
 	// funclog structured function-log capture (ADR-0081): on by default when the runtime supports it.
 	funclogDisabled bool
 	funclogMaxAge   time.Duration // segment seal age; 0 ⇒ sink default (10s)
@@ -540,7 +547,12 @@ func (p *Platform) buildControlPlane() error {
 		}
 		blobPort = blobFacade
 	}
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, local.NewInvoker(dpHolder), cedarPDP, kvFacade, blobPort, p.logger)
+	nestedCap := c.nestedInFlightCap
+	if nestedCap == 0 {
+		nestedCap = defaultNestedInFlightCap
+	}
+	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, p.logger)
 
 	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
 	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
@@ -1458,6 +1470,14 @@ func (p *Platform) runDeadLetterRetention(ctx context.Context) {
 
 // storeReader adapts store.Store to admission.StoreReader for the ADR-0064 link admissions and the
 // ADR-0072 KV admissions (the admission package stays a near-leaf and does not import store).
+// invokeMeter is the meter the nested-call cap counts its refusals on (ADR-0147); a no-op one without telemetry.
+func invokeMeter(t *observability.Telemetry) metric.Meter {
+	if t == nil {
+		return metricnoop.NewMeterProvider().Meter("funcd.invoke")
+	}
+	return t.MeterProvider().Meter("funcd.invoke")
+}
+
 type storeReader struct{ s store.Store }
 
 func (r storeReader) List(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {

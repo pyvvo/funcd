@@ -27,6 +27,9 @@ func NewLinkValidityAdmission(r StoreReader) Admission { return linkValidity{r: 
 func (linkValidity) Name() string { return "link-validity" }
 func (linkValidity) Phase() Phase { return Validating }
 
+// ReadsNamespace: the target and cycle checks read the namespace's Functions (ADR-0147).
+func (linkValidity) ReadsNamespace() bool { return true }
+
 func (linkValidity) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindFunction.GVK() && (op == Create || op == Update)
 }
@@ -114,6 +117,9 @@ func NewLinkDeletionProtectionAdmission(r StoreReader) Admission { return linkDe
 
 func (linkDeletionProtection) Name() string { return "link-deletion-protection" }
 func (linkDeletionProtection) Phase() Phase { return Validating }
+
+// ReadsNamespace: the linked-by check reads the namespace's Functions (ADR-0147).
+func (linkDeletionProtection) ReadsNamespace() bool { return true }
 
 func (linkDeletionProtection) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindFunction.GVK() && op == Delete

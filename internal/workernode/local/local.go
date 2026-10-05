@@ -132,6 +132,12 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 				_, _ = w.Write(ue.Body)
 				return
 			}
+			if fe := (*fault.Error)(nil); errors.As(err, &fe) && fe.Op == NestedCapOp {
+				logger.Warn("fn-to-fn invoke refused: nested in-flight cap", "caller", caller.String(), "alias", alias,
+					"target", target.String(), "err", err.Error())
+				fault.WriteProblem(w, err) // 429, no Retry-After (ADR-0147)
+				return
+			}
 			logger.Warn("fn-to-fn invoke failed", "caller", caller.String(), "alias", alias,
 				"target", target.String(), "durationMs", durMs, "err", err.Error())
 			fault.WriteProblem(w, err) // transport / cold-wake timeout → 503 etc.

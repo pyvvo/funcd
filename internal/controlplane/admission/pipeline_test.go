@@ -122,3 +122,42 @@ func TestHandlesMatrix(t *testing.T) {
 		})
 	}
 }
+
+// ReadsNamespace is true for exactly the four marked admissions (ADR-0147), and false for a disabled quota.
+func TestPipelineReadsNamespace(t *testing.T) {
+	r := emptyReader{}
+	enabled := admission.NewPipeline(
+		admission.NewValidateAdmission(),
+		admission.NewLinkValidityAdmission(r),
+		admission.NewLinkDeletionProtectionAdmission(r),
+		admission.NewKVStoreQuotaAdmission(r, 3),
+		admission.NewKVStoreDeletionProtectionAdmission(r, nil),
+		admission.NewBucketQuotaAdmission(r, 3),
+		admission.NewWorkflowRunContractAdmission(nil),
+	)
+	for _, tc := range []struct {
+		kind v1.Kind
+		op   admission.Operation
+		want bool
+	}{
+		{v1.KindFunction, admission.Create, true},
+		{v1.KindFunction, admission.Update, true},
+		{v1.KindFunction, admission.Delete, true},
+		{v1.KindKVStore, admission.Create, true},
+		{v1.KindBucket, admission.Create, true},
+		{v1.KindConfigMap, admission.Create, false},
+		{v1.KindKVStore, admission.Delete, false},
+		{v1.KindWorkflowRun, admission.Create, false},
+	} {
+		require.Equal(t, tc.want, enabled.ReadsNamespace(tc.kind.GVK(), tc.op), "%s %s", tc.kind, tc.op)
+	}
+	disabled := admission.NewPipeline(admission.NewKVStoreQuotaAdmission(r, 0), admission.NewBucketQuotaAdmission(r, -1))
+	require.False(t, disabled.ReadsNamespace(v1.KindKVStore.GVK(), admission.Create))
+	require.False(t, disabled.ReadsNamespace(v1.KindBucket.GVK(), admission.Create))
+}
+
+type emptyReader struct{}
+
+func (emptyReader) List(context.Context, v1.GroupVersionKind, v1.NamespaceName) ([]v1.Object, error) {
+	return nil, nil
+}

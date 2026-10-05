@@ -552,3 +552,13 @@ func TestScenarioPooledFunctionRunsSoloInContainerMode(t *testing.T) {
 		}
 	}
 }
+
+// WithNestedInFlightCap (ADR-0147): a negative cap is Invalid from New; 0 keeps the default.
+func TestWithNestedInFlightCapValidated(t *testing.T) {
+	_, err := New(WithNestedInFlightCap(-1))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	c := &config{}
+	require.NoError(t, WithNestedInFlightCap(0)(c))
+	require.Zero(t, c.nestedInFlightCap, "0 means the default")
+	require.Equal(t, 10, defaultNestedInFlightCap)
+}

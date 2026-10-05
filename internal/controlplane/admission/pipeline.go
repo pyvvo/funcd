@@ -43,6 +43,19 @@ func (p *Pipeline) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return false
 }
 
+// ReadsNamespace reports whether any admission handling (gvk, op) implements NamespaceReading and
+// returns true: the write must hold its namespace's admission lock (ADR-0147).
+func (p *Pipeline) ReadsNamespace(gvk v1.GroupVersionKind, op Operation) bool {
+	for _, phase := range [][]Admission{p.mutating, p.validating} {
+		for _, a := range phase {
+			if nr, ok := a.(NamespaceReading); ok && a.Handles(gvk, op) && nr.ReadsNamespace() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Admit runs all Mutating admissions (threading req.Object — each may transform it), then all
 // Validating ones (each sees the final object), skipping any whose Handles is false. The first
 // fault error short-circuits. Returns the final (possibly-mutated) object.
