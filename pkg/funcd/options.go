@@ -225,6 +225,7 @@ func WithRuntimeShimFor(runtimeFamily string, cmd ...string) Option {
 // spec.pooling.worker then co-locates with same-(namespace, runtime, worker-id) peers in one
 // pool worker, launched with this command + the FUNCD_POOL_MANIFEST of its admitted members.
 // With no pool shim configured pooling is off and every function runs solo (the default).
+// New refuses it together with WithContainerExecution, where every function runs solo (ADR-0173).
 func WithPoolShim(cmd ...string) Option {
 	return func(c *config) error { c.poolShim = cmd; return nil }
 }
@@ -233,7 +234,8 @@ func WithPoolShim(cmd ...string) Option {
 // python* function that opts into spec.pooling.worker co-pools via this host (the subinterpreter
 // pool.py) instead of staying solo. WithPoolShim remains the node default. A runtime family with no
 // pool host runs solo — so this is additive and host-gated. Used as
-// WithPoolShimFor("python", "python3.14", "/opt/funcd/pool.py").
+// WithPoolShimFor("python", "python3.14", "/opt/funcd/pool.py"). New refuses it together with
+// WithContainerExecution, where every function runs solo (ADR-0173).
 func WithPoolShimFor(runtimeFamily string, cmd ...string) Option {
 	return func(c *config) error {
 		if c.poolShimsByFamily == nil {
@@ -386,6 +388,8 @@ func WithEgressGateway(gatewayPort, dnsForwarderPort uint16, dnsUpstream netip.A
 // run in the containerd worker from the image imageFor(fn.Spec.Runtime) returns, with the
 // shim as the image entrypoint, the artifact bind-mounted, and a fixed netns port. Used
 // with the containerd runtime driver (prod); WithRuntimeShim is the process-driver path.
+// Every function runs solo in its own worker: New refuses WithPoolShim or WithPoolShimFor with it
+// (ADR-0173).
 func WithContainerExecution(imageFor func(runtime string) string) Option {
 	return func(c *config) error { c.imageFor = imageFor; return nil }
 }

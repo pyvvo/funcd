@@ -3,12 +3,14 @@ package funcd
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,9 +20,12 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/bus"
 	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
+	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/network"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario: inmemory-boots — New(InMemory()) returns a platform with every port wired.
@@ -324,4 +329,198 @@ func TestIssue94_FailedNewReleasesResources(t *testing.T) {
 	p, err = New(append([]Option{InMemory()}, persist...)...)
 	require.NoError(t, err, "a retry with the same data dirs succeeds")
 	require.NoError(t, p.Shutdown(context.Background()))
+}
+
+const containerPoolingRefused = "worker pooling is not supported with container execution: " +
+	"WithPoolShim and WithPoolShimFor cannot be combined with WithContainerExecution"
+
+func testImageFor(rt string) string { return "registry.test/funcd/" + rt + ":v1" }
+
+// scenario: pool-shim-with-container-execution-refused — a pool shim with container execution fails New
+// with fault.Invalid, op funcd.New, and no platform.
+func TestScenarioPoolShimWithContainerExecutionRefused(t *testing.T) {
+	t.Parallel()
+	cases := map[string][]Option{
+		"WithPoolShim":    {WithPoolShim("node", "pool.mjs")},
+		"WithPoolShimFor": {WithPoolShimFor("python", "python3.14", "pool.py")},
+		"both":            {WithPoolShim("node", "pool.mjs"), WithPoolShimFor("python", "python3.14", "pool.py")},
+	}
+	for name, pool := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p, err := New(append([]Option{InMemory(), WithContainerExecution(testImageFor)}, pool...)...)
+			require.Nil(t, p)
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			var fe *fault.Error
+			require.ErrorAs(t, err, &fe)
+			require.Equal(t, "funcd.New", fe.Op)
+			require.Equal(t, containerPoolingRefused, fe.Msg)
+		})
+	}
+}
+
+// scenario: container-execution-without-pool-shim-accepted — container execution alone passes the check.
+func TestScenarioContainerExecutionWithoutPoolShimAccepted(t *testing.T) {
+	t.Parallel()
+	p, err := New(InMemory(), WithContainerExecution(testImageFor))
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+}
+
+// recordingRuntime runs no process: it records every WorkerSpec the reconciler creates.
+type recordingRuntime struct {
+	mu    sync.Mutex
+	specs []runtime.WorkerSpec
+	insts map[runtime.InstanceID]runtime.Instance
+}
+
+func (r *recordingRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	in := runtime.Instance{
+		ID:        runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica),
+		Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
+		State: runtime.StateCreated, CreatedAt: time.Now(),
+	}
+	r.specs = append(r.specs, spec)
+	r.insts[in.ID] = in
+	return in, nil
+}
+
+func (r *recordingRuntime) setState(id runtime.InstanceID, s runtime.State) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	in, ok := r.insts[id]
+	if !ok {
+		return fault.NotFoundf("recordingRuntime", "instance %s", id)
+	}
+	in.State = s
+	r.insts[id] = in
+	return nil
+}
+
+func (r *recordingRuntime) Start(_ context.Context, id runtime.InstanceID) error {
+	return r.setState(id, runtime.StateRunning)
+}
+
+func (r *recordingRuntime) Stop(_ context.Context, id runtime.InstanceID) error {
+	_ = r.setState(id, runtime.StateStopped)
+	return nil
+}
+
+func (r *recordingRuntime) Status(_ context.Context, id runtime.InstanceID) (runtime.Instance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	in, ok := r.insts[id]
+	if !ok {
+		return runtime.Instance{}, fault.NotFoundf("recordingRuntime", "instance %s", id)
+	}
+	return in, nil
+}
+
+func (r *recordingRuntime) Logs(context.Context, runtime.InstanceID) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (r *recordingRuntime) Exec(context.Context, runtime.InstanceID, []string) error { return nil }
+
+func (r *recordingRuntime) List(_ context.Context, ns v1.NamespaceName) ([]runtime.Instance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []runtime.Instance
+	for _, in := range r.insts {
+		if in.Namespace == ns {
+			out = append(out, in)
+		}
+	}
+	return out, nil
+}
+
+func (r *recordingRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.insts, id)
+	return nil
+}
+
+func (r *recordingRuntime) Close() error { return nil }
+
+// created returns the recorded specs by worker name.
+func (r *recordingRuntime) created() map[v1.ObjectName][]runtime.WorkerSpec {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[v1.ObjectName][]runtime.WorkerSpec{}
+	for _, s := range r.specs {
+		out[s.Name] = append(out[s.Name], s)
+	}
+	return out
+}
+
+// applySharedWorker runs a platform on a recordingRuntime and applies alpha and beta, both declaring
+// spec.pooling.worker "shared" with one always-on replica.
+func applySharedWorker(t *testing.T, opts ...Option) *recordingRuntime {
+	t.Helper()
+	rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
+	p, err := New(append([]Option{InMemory(), WithRuntime(rt)}, opts...)...)
+	require.NoError(t, err)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(DevToken))
+	require.NoError(t, err)
+	dir := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		art := filepath.Join(dir, name+".mjs")
+		require.NoError(t, os.WriteFile(art, []byte("export function handle() { return {}; }\n"), 0o600))
+		obj, _ := v1.NewObject(v1.KindFunction)
+		fn := obj.(*v1.Function)
+		fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+		fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file://"+art
+		fn.Spec.Replicas, fn.Spec.Scaling = 1, v1.Scaling{MinReplicas: 1}
+		fn.Spec.Pooling.Worker = "shared"
+		_, err = c.Apply(context.Background(), fn)
+		require.NoError(t, err)
+	}
+	return rt
+}
+
+// scenario: process-mode-pooling-unchanged — without container execution, two Functions sharing a
+// spec.pooling.worker run in one pool worker whose manifest lists both, and neither gets a solo worker.
+func TestScenarioProcessModePoolingUnchanged(t *testing.T) {
+	t.Parallel()
+	rt := applySharedWorker(t, WithRuntimeShim("node", "shim.mjs"), WithPoolShim("node", "pool.mjs"))
+	const pool = v1.ObjectName("__pool__nodejs22__shared")
+	require.Eventually(t, func() bool {
+		specs := rt.created()[pool]
+		if len(specs) == 0 {
+			return false
+		}
+		manifest, err := os.ReadFile(specs[len(specs)-1].Env["FUNCD_POOL_MANIFEST"])
+		return err == nil && strings.Contains(string(manifest), `"alpha"`) && strings.Contains(string(manifest), `"beta"`)
+	}, 10*time.Second, 20*time.Millisecond, "one pool worker hosts alpha and beta; created %v", rt.created())
+	created := rt.created()
+	require.Len(t, created, 1, "only the pool worker is created")
+	require.Equal(t, []string{"node", "pool.mjs"}, created[pool][0].Command)
+}
+
+// scenario: pooled-function-runs-solo-in-container-mode — with container execution, two Functions sharing
+// a spec.pooling.worker each run in their own worker from imageFor(runtime), and no pool worker exists.
+func TestScenarioPooledFunctionRunsSoloInContainerMode(t *testing.T) {
+	t.Parallel()
+	rt := applySharedWorker(t, WithContainerExecution(testImageFor), WithMaterializer(function.NewFileMaterializer()))
+	require.Eventually(t, func() bool {
+		created := rt.created()
+		return len(created["alpha"]) > 0 && len(created["beta"]) > 0
+	}, 10*time.Second, 20*time.Millisecond, "alpha and beta each get a solo worker; created %v", rt.created())
+	created := rt.created()
+	require.Len(t, created, 2, "no worker besides alpha's and beta's")
+	for _, name := range []v1.ObjectName{"alpha", "beta"} {
+		for _, spec := range created[name] {
+			require.Equal(t, testImageFor("nodejs22"), spec.Image, name)
+			require.Empty(t, spec.Command, name)
+			require.NotContains(t, spec.Env, "FUNCD_POOL_MANIFEST", name)
+		}
+	}
 }
