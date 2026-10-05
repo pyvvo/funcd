@@ -48,6 +48,7 @@ const (
 	condShapeValid    v1.ConditionType = "ShapeValid"
 	condPoolFull      v1.ConditionType = "PoolFull"      // ADR-0046: over-cap pooled member held NotReady
 	condRevisionReady v1.ConditionType = "RevisionReady" // ADR-0143: whether the latest generation serves
+	condAsleep        v1.ConditionType = "Asleep"        // True: a gate held this Function Pending or Failed while asleep; no worker runs (ADR-0192)
 	upstreamPort                       = "8080"
 )
 
@@ -767,10 +768,12 @@ type gateFailure struct {
 	requeue         time.Duration // the gate's requeue when nothing serves (0 = none)
 }
 
-// gateFailed records a gate failure by the serving revision's workers, a pooled member's pool worker (ADR-0161 Decision
-// 2): while one listens and the Function was Ready it stays Ready with their count; while one runs it is Degraded;
-// otherwise the gate's own writes apply. While a worker of the serving revision runs, a solo Function's current
-// revision's workers stop if it is not the serving one (ADR-0143 Decision 4.6) and the pass returns after the period.
+// gateFailed records a gate failure. On an asleep Function (ADR-0192) it first stops the serving and the current
+// revision's workers and marks it Asleep, then the gate's own writes apply. Otherwise it judges by the serving revision's
+// workers, a pooled member's pool worker (ADR-0161 Decision 2): while one listens and the Function was Ready it stays
+// Ready with their count; while one runs it is Degraded; otherwise the gate's own writes apply. While a worker of the
+// serving revision runs, a solo Function's current revision's workers stop if it is not the serving one (ADR-0143
+// Decision 4.6) and the pass returns after the period.
 func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration) (controller.Result, error) {
 	const op = "function.Reconcile"
 	gen := fn.Generation
@@ -788,9 +791,18 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionTrue, Reason: "PoolFull", Message: g.message})
 	}
 	requeue := g.requeue
-	running, listening, err := r.servingWorkers(ctx, fn)
-	if err != nil {
-		return controller.Result{}, err
+	var running, listening int
+	if r.asleep(fn) {
+		if err := r.stopAsleep(ctx, fn); err != nil {
+			return controller.Result{}, err
+		}
+		fn.Status.Conditions.Set(v1.Condition{Type: condAsleep, Status: v1.ConditionTrue, Reason: "ScaledToZero", Message: "no worker runs; a call wakes the Function"})
+	} else {
+		clearAsleep(fn)
+		var err error
+		if running, listening, err = r.servingWorkers(ctx, fn); err != nil {
+			return controller.Result{}, err
+		}
 	}
 	if running >= 1 {
 		if c := fn.Status.CurrentRevision; c != fn.Status.ServingRevision && !r.pooled(fn) {
@@ -819,6 +831,47 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		return controller.Result{}, routeError{perr}
 	}
 	return controller.Result{RequeueAfter: earliest(requeue, drainAfter)}, nil
+}
+
+// asleep reports whether fn is a solo scale-to-zero Function that is asleep: its read phase is Idle, or a gate held it
+// Pending or Failed while asleep (ADR-0192). Its pass wants 0 workers, and only the activator's wake ends it.
+func (r *Reconciler) asleep(fn *v1.Function) bool {
+	if fn.Spec.Scaling.MinReplicas != 0 || r.pooled(fn) {
+		return false
+	}
+	switch fn.Status.Phase {
+	case v1.PhaseIdle:
+		return true
+	case v1.PhasePending, v1.PhaseFailed:
+		c, ok := fn.Status.Conditions.Get(condAsleep)
+		return ok && c.Status == v1.ConditionTrue
+	}
+	return false
+}
+
+// stopAsleep stops an asleep Function's serving and current revisions' workers and clears what served, as
+// convergeSolo's desired-0 branch does (ADR-0192 Decision 1).
+func (r *Reconciler) stopAsleep(ctx context.Context, fn *v1.Function) error {
+	s, c := fn.Status.ServingRevision, fn.Status.CurrentRevision
+	if s != "" {
+		if err := r.stopRevision(ctx, fn, v1.ObjectName(s)); err != nil {
+			return err
+		}
+	}
+	if c != "" && c != s {
+		if err := r.stopRevision(ctx, fn, v1.ObjectName(c)); err != nil {
+			return err
+		}
+	}
+	fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = "", "", nil
+	return nil
+}
+
+// clearAsleep sets Asleep False when it is True, so a Function that never slept carries no Asleep condition.
+func clearAsleep(fn *v1.Function) {
+	if c, ok := fn.Status.Conditions.Get(condAsleep); ok && c.Status == v1.ConditionTrue {
+		fn.Status.Conditions.Set(v1.Condition{Type: condAsleep, Status: v1.ConditionFalse})
+	}
 }
 
 // verdict is a pass's outcome: what serves (ADR-0142's phase rules) and how the current revision fares (ADR-0143).
@@ -854,7 +907,10 @@ func holdsFailed(started v1.Phase, v verdict) bool {
 // ShapeValid and RevisionReady, the current revision (ADR-0143 Decision 5), which neither reports True before a replica
 // of it has been ready (ADR-0174).
 func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, drainAfter time.Duration) (controller.Result, error) {
-	if holdsFailed(fn.Status.Phase, v) {
+	sleeping := r.asleep(fn)
+	clearAsleep(fn)
+	// ADR-0192 Decision 3: an asleep Failed Function whose gates pass goes Idle, not held Failed
+	if holdsFailed(fn.Status.Phase, v) && !sleeping {
 		// ADR-0169 Decision 2: phase, Ready, ShapeValid and RevisionReady stay as read
 		fn.Status.Replicas = 0
 		fn.Status.ObservedGeneration = fn.Generation
@@ -1150,17 +1206,21 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 
 // desiredReplicas computes the effective replica count: it honors the activator's wake
 // signal (ADR-0016's partitioned Status.Phase) for scaled-to-zero functions, so a cold
-// request's wake (Phase=Deploying) actually provisions a worker.
+// request's wake (Phase=Deploying) actually provisions a worker. An asleep Function wants
+// none until a call wakes it (ADR-0192).
 func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 	sc := fn.Spec.Scaling
 	if sc.MinReplicas == 0 { // scale-to-zero enabled
+		if r.asleep(fn) {
+			return 0
+		}
 		switch fn.Status.Phase {
 		case v1.PhaseDeploying, v1.PhaseReady, v1.PhaseDegraded, v1.PhaseFailed:
 			// woken, serving or repairing (ADR-0142) — stay up until the activator's idle-reclaim writes Idle. Without
 			// keeping Ready up, the reconcile right after a wake would tear the function down before it can serve
-			// (ADR-0033: a woken function stays up until idle, not torn down per request). A Failed function keeps its
-			// replicas, which idle reclaim never takes: a new spec, a gate that passes or a Start retried after its
-			// growing wait brings a worker up (ADR-0169).
+			// (ADR-0033: a woken function stays up until idle, not torn down per request). A Failed function that is
+			// not asleep keeps its replicas, which idle reclaim never takes: a new spec, a gate that passes or a Start
+			// retried after its growing wait brings a worker up (ADR-0169).
 			return maxInt(1, fn.Spec.Replicas)
 		case v1.PhaseIdle: // the activator reclaimed it
 			return 0
