@@ -8,6 +8,7 @@ package router
 
 import (
 	"context"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -123,6 +124,7 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 }
 
 func (t *table) Resolve(host, path, method string) (Match, bool) {
+	host = canonicalHost(host)
 	t.mu.RLock()
 	rows := t.rows
 	t.mu.RUnlock()
@@ -160,6 +162,16 @@ func (t *table) Hosts() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// canonicalHost is the one spelling a host is claimed and matched by: lowercase, without a port, IPv6 brackets or
+// a trailing dot. The Aggregator claims Entry hosts in it and Resolve matches the Host header in it, so a respelled
+// host is the same claim (ADR-0110 Decision 3) and a Host header carrying a port still matches.
+func canonicalHost(h string) string {
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".")
 }
 
 // matchPath is exact equality (Exact) or segment-aware prefix ("/x" matches "/x" and "/x/y",
