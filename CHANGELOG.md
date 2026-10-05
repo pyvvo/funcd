@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.0](https://github.com/pyvvo/funcd/compare/v0.2.5...v0.3.0) (2026-10-05)
+
+
+### Features
+
+* **fault:** answer 413 for every size cap funcd enforces (ADR-0148) ([#631](https://github.com/pyvvo/funcd/issues/631)) ([0204582](https://github.com/pyvvo/funcd/commit/0204582d2c4747b4fc813792267cc0f036a78572))
+
+
+### Bug Fixes
+
+* **artifact:** refuse a single-file artifact title that is not a plain file name ([#626](https://github.com/pyvvo/funcd/issues/626)) ([fe49615](https://github.com/pyvvo/funcd/commit/fe49615174edc94c815e7785557e3de4165a3ea1))
+* **blob:** keep bucket listings inside the caller's bound prefix ([#613](https://github.com/pyvvo/funcd/issues/613)) ([8eec6cb](https://github.com/pyvvo/funcd/commit/8eec6cb671b5d08d5263865faa3fb07005502062))
+* **blob:** refuse an empty key on the file backend ([#611](https://github.com/pyvvo/funcd/issues/611)) ([915f342](https://github.com/pyvvo/funcd/commit/915f3427b8a774f58312af09a7a0dfee7637ea56))
+* **bus:** stop the embedded NATS server from listening on the network ([#618](https://github.com/pyvvo/funcd/issues/618)) ([2bf921f](https://github.com/pyvvo/funcd/commit/2bf921fb04036acfe73976fadd7053fa2541c1a3))
+* **catalog:** deny catalog queries from principals outside the catalog's namespace ([#620](https://github.com/pyvvo/funcd/issues/620)) ([406f84c](https://github.com/pyvvo/funcd/commit/406f84cd20ee989677972fd443f0209083449384))
+* **containerd:** clean up a worker whose Create fails ([#602](https://github.com/pyvvo/funcd/issues/602)) ([14bce79](https://github.com/pyvvo/funcd/commit/14bce7965005771e161cf6e8f0ce569226f4b4f8))
+* **containerd:** pull normalized image refs and honor --image overrides ([#597](https://github.com/pyvvo/funcd/issues/597)) ([1ca62fe](https://github.com/pyvvo/funcd/commit/1ca62fe54a65148453a4bc376ed0be6be564ae52))
+* **dataplane:** keep upstream and worker addresses out of problem details ([#614](https://github.com/pyvvo/funcd/issues/614)) ([85a6310](https://github.com/pyvvo/funcd/commit/85a6310ed0d04a48f94861d9deabfaf5f4358635))
+* **dataplane:** label edge metrics for a missing function as unresolved ([#624](https://github.com/pyvvo/funcd/issues/624)) ([d17e1c2](https://github.com/pyvvo/funcd/commit/d17e1c23b7bb54a17be65f6476d364c1242a3dc0))
+* **expr:** bound expression evaluation cost and cap pass step outputs ([#632](https://github.com/pyvvo/funcd/issues/632)) ([9ecba7d](https://github.com/pyvvo/funcd/commit/9ecba7df8cca3ca2db430f9cb5044f46548357ec))
+* **funcdctl:** escape control characters when printing log records ([#615](https://github.com/pyvvo/funcd/issues/615)) ([ca96fc4](https://github.com/pyvvo/funcd/commit/ca96fc4286bbd29cc4d6879272eb3f88b648bee9))
+* **funcdctl:** start dev again on a fresh S3 port when the picked one is taken ([#629](https://github.com/pyvvo/funcd/issues/629)) ([dc3974b](https://github.com/pyvvo/funcd/commit/dc3974bdec87c6e62381d4926b5cb825c6d8c611))
+* **funcd:** refuse worker pooling combined with container execution ([#628](https://github.com/pyvvo/funcd/issues/628)) ([8c560ba](https://github.com/pyvvo/funcd/commit/8c560badd44b1435177489b4b575b46033697fd2))
+* **funclog:** bound the replica part of a trace segment key ([#608](https://github.com/pyvvo/funcd/issues/608)) ([5dbb7fb](https://github.com/pyvvo/funcd/commit/5dbb7fb18fa5899011c56576ce77da7e68377811))
+* **funclog:** user log attrs no longer override a line's inv and source ([#623](https://github.com/pyvvo/funcd/issues/623)) ([762d2fa](https://github.com/pyvvo/funcd/commit/762d2fa37e501d4b44631baaa53a372cf9693d3b))
+* **function:** back off before re-creating a failed pool host ([#603](https://github.com/pyvvo/funcd/issues/603)) ([0a29b5a](https://github.com/pyvvo/funcd/commit/0a29b5ab7a386723aced48a74c5a5f5732de37f5))
+* **function:** give each namespace's pool worker its own manifest file ([#617](https://github.com/pyvvo/funcd/issues/617)) ([464f08a](https://github.com/pyvvo/funcd/commit/464f08aa1fa0fb2f904afee45c802ea7947af5b6))
+* **function:** name each worker's spans after its Function ([#605](https://github.com/pyvvo/funcd/issues/605)) ([f93325d](https://github.com/pyvvo/funcd/commit/f93325d27d8673cd7f620cf2d9489ad61e081af9))
+* report over-cap site objects and page S3 listings under 4 MiB ([#596](https://github.com/pyvvo/funcd/issues/596)) ([2543622](https://github.com/pyvvo/funcd/commit/2543622aadce18622f54be17413413b4404dc045))
+* **route:** a static Route prefix must end with "/" so it never serves sibling Bucket prefixes ([#621](https://github.com/pyvvo/funcd/issues/621)) ([8a2d708](https://github.com/pyvvo/funcd/commit/8a2d7081bf73933b2281258b749bff9ef3df2dab))
+* **runtime:** keep the daemon's environment out of process-driver workers ([#616](https://github.com/pyvvo/funcd/issues/616)) ([1dc8646](https://github.com/pyvvo/funcd/commit/1dc864655ca9e08efc78fe70b4ee25021664b7be))
+* **s3gateway:** bind a multipart upload id to its namespace, bucket and key ([#619](https://github.com/pyvvo/funcd/issues/619)) ([74cd07c](https://github.com/pyvvo/funcd/commit/74cd07c87c1f958e933a67b706429624c1f10160))
+* **s3gateway:** honor date preconditions and create-only puts ([#600](https://github.com/pyvvo/funcd/issues/600)) ([c4dab54](https://github.com/pyvvo/funcd/commit/c4dab54942945998fb6530ca577ea67b3f095a28))
+* **scripts:** give each lane run its own checkout ([#599](https://github.com/pyvvo/funcd/issues/599)) ([eb7adfe](https://github.com/pyvvo/funcd/commit/eb7adfe8e6a25561b7233a1aa526f0310542dbc0))
+* **sdk:** use the server's path for WorkerNode ([#607](https://github.com/pyvvo/funcd/issues/607)) ([436e8b4](https://github.com/pyvvo/funcd/commit/436e8b47088115e5273e104b3a418eb27d7fe807))
+* **tls:** refuse TLS with no storage dir instead of keeping keys in the shared temp dir ([#622](https://github.com/pyvvo/funcd/issues/622)) ([d106b9c](https://github.com/pyvvo/funcd/commit/d106b9c638acbd8ddb8f48a08bf1ea788940e18a))
+* **workflow:** drain a step's response body so retries reuse the connection ([#598](https://github.com/pyvvo/funcd/issues/598)) ([0b8335c](https://github.com/pyvvo/funcd/commit/0b8335c55d96fdd9919dc7f7ec6535f21c13262d))
+* **workflow:** reject a void onFailure handler and params on a void step at reconcile ([#606](https://github.com/pyvvo/funcd/issues/606)) ([f3ccaa5](https://github.com/pyvvo/funcd/commit/f3ccaa5458986bb3f2b8e992db0bda63b15fd27e))
+
 ## [0.2.5](https://github.com/pyvvo/funcd/compare/v0.2.4...v0.2.5) (2026-10-03)
 
 
