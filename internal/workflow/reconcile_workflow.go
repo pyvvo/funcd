@@ -88,11 +88,14 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	if merr := r.mat.Materialize(ctx, wf); merr != nil {
 		var no *notOwnedError
 		if !errors.As(merr, &no) {
+			// A failed materialization, a failed strip write included, leaves no Ready Workflow (ADR-0178
+			// Decision 2); the returned error requeues with the controller's backoff.
+			if uerr := r.notReady(ctx, wf, "MaterializeFailed", merr.Error()); uerr != nil {
+				return controller.Result{}, uerr
+			}
 			return controller.Result{}, merr
 		}
-		wf.Status.Phase = v1.PhasePending
-		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: no.reason, Message: no.msg})
-		if _, uerr := r.store.Update(ctx, wf); uerr != nil && fault.KindOf(uerr) != fault.Conflict {
+		if uerr := r.notReady(ctx, wf, no.reason, no.msg); uerr != nil {
 			return controller.Result{}, uerr
 		}
 		return controller.Result{RequeueAfter: r.mat.supervisionPeriod}, nil
@@ -126,6 +129,21 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		return controller.Result{}, uerr
 	}
 	return controller.Result{}, nil
+}
+
+// notReady sets wf Pending with Ready False. It writes only on a change, so a failure that repeats does not
+// re-enqueue wf through its own watch.
+func (r *WorkflowReconciler) notReady(ctx context.Context, wf *v1.Workflow, reason, msg string) error {
+	if c, ok := wf.Status.Conditions.Get(condReady); ok && wf.Status.Phase == v1.PhasePending &&
+		c.Status == v1.ConditionFalse && c.Reason == reason && c.Message == msg {
+		return nil
+	}
+	wf.Status.Phase = v1.PhasePending
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
+	if _, err := r.store.Update(ctx, wf); err != nil && fault.KindOf(err) != fault.Conflict {
+		return err
+	}
+	return nil
 }
 
 // RuntimeResolver resolves a step image's runtime class from its OCI manifest
@@ -169,14 +187,14 @@ func controlledBy(refs []v1.OwnerReference, wf *v1.Workflow) bool {
 	return ok && r.Kind == v1.KindWorkflow && r.Name == wf.Name
 }
 
-// hasController reports whether refs hold a controller ref.
-func hasController(refs []v1.OwnerReference) bool {
-	_, ok := v1.ControllerOf(refs)
-	return ok
-}
-
-// Materialize brings the workflow's owned resources to the desired state.
+// Materialize brings the workflow's owned resources to the desired state. It first strips every binding of
+// a Function this incarnation controls to a store it did not make, then binds a step only to stores this
+// incarnation made (ADR-0178 Decision 2).
 func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
+	kvs := kvView{s: m.store, ns: wf.Namespace, seen: map[v1.ObjectName]*v1.KVStore{}}
+	if err := m.stripBindings(ctx, wf, &kvs); err != nil {
+		return err
+	}
 	owner := ownerRef(wf)
 	// 1. Owned Functions (without kv, so the store owners exist before the KVStores).
 	for i := range wf.Spec.Steps {
@@ -189,29 +207,130 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "resolve runtime for step %q", st.Name)
 		}
 		fn := buildFunction(wf, st, rt, owner)
-		if err := m.ensureFunction(ctx, wf, fn); err != nil {
+		if err := m.ensureFunction(ctx, wf, fn, &kvs); err != nil {
 			return err
 		}
 	}
-	// 2. Owned KVStores (owner = the materialized step Function).
+	// 2. Owned KVStores: every declared and every step-bound store passes the ownership check before any write.
+	stores := make([]*v1.KVStore, len(wf.Spec.KV))
 	for i := range wf.Spec.KV {
-		kv := &wf.Spec.KV[i]
-		st := buildKVStore(wf, kv, owner)
-		if err := m.ensureKVStore(ctx, wf, st); err != nil {
+		stores[i] = buildKVStore(wf, &wf.Spec.KV[i], owner)
+		if err := m.checkKVStore(ctx, wf, stores[i]); err != nil {
 			return err
 		}
 	}
-	// 3. Patch owned Functions that carry kv bindings (the binding IS the capability).
+	if err := checkStepStores(wf); err != nil {
+		return err
+	}
+	checked := make(map[v1.ObjectName]v1.UID, len(stores))
+	for _, st := range stores {
+		uid, err := m.ensureKVStore(ctx, wf, st)
+		if err != nil {
+			return err
+		}
+		checked[st.Name] = uid
+	}
+	// 3. Write every owned step's kv bindings, an empty one included (the binding IS the capability).
 	for i := range wf.Spec.Steps {
 		st := &wf.Spec.Steps[i]
-		if st.Function == nil || st.Function.Image == "" || len(st.Function.KV) == 0 {
+		if st.Function == nil || st.Function.Image == "" {
 			continue
 		}
-		if err := m.patchFunctionKV(ctx, wf, st); err != nil {
+		if err := m.patchFunctionKV(ctx, wf, st, checked); err != nil {
 			return err
 		}
 	}
 	return m.pruneFunctions(ctx, wf)
+}
+
+// kvView caches one reconcile's KVStore reads; a nil entry is a missing store.
+type kvView struct {
+	s    store.Store
+	ns   v1.NamespaceName
+	seen map[v1.ObjectName]*v1.KVStore
+}
+
+func (v *kvView) get(ctx context.Context, name v1.ObjectName) (*v1.KVStore, error) {
+	if st, ok := v.seen[name]; ok {
+		return st, nil
+	}
+	obj, err := v.s.Get(ctx, v1.KindKVStore.GVK(), v.ns, name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		v.seen[name] = nil
+		return nil, nil
+	case err != nil:
+		return nil, fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", name)
+	}
+	st := obj.(*v1.KVStore)
+	v.seen[name] = st
+	return st, nil
+}
+
+// ownedBindings returns the entries of kv whose store carries wf's marker.
+func (v *kvView) ownedBindings(ctx context.Context, wf *v1.Workflow, kv []v1.FunctionKV) ([]v1.FunctionKV, error) {
+	var out []v1.FunctionKV
+	for _, b := range kv {
+		st, err := v.get(ctx, b.Store)
+		if err != nil {
+			return nil, err
+		}
+		if st != nil && marked(st.OwnerReferences, wf) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// stripBindings removes, from every Function this incarnation controls (removed steps included), each kv
+// binding to a store without this incarnation's marker, each written at its read resourceVersion.
+func (m *Materializer) stripBindings(ctx context.Context, wf *v1.Workflow, kvs *kvView) error {
+	res, err := m.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: wf.Namespace})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "list functions")
+	}
+	for _, obj := range res.Items {
+		fn := obj.(*v1.Function)
+		if len(fn.Spec.KV) == 0 || !controlledByUID(fn.OwnerReferences, wf) {
+			continue
+		}
+		keep, err := kvs.ownedBindings(ctx, wf, fn.Spec.KV)
+		if err != nil {
+			return err
+		}
+		if len(keep) == len(fn.Spec.KV) {
+			continue
+		}
+		fn.Spec.KV = keep
+		if _, err := m.store.Update(ctx, fn); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "strip kv bindings of function %q", fn.Name)
+		}
+	}
+	return nil
+}
+
+// checkStepStores refuses a step binding to a store wf does not declare in spec.kv.
+func checkStepStores(wf *v1.Workflow) error {
+	declared := make(map[v1.ObjectName]bool, len(wf.Spec.KV))
+	for i := range wf.Spec.KV {
+		declared[wf.Spec.KV[i].Name] = true
+	}
+	for i := range wf.Spec.Steps {
+		st := &wf.Spec.Steps[i]
+		if st.Function == nil || st.Function.Image == "" {
+			continue
+		}
+		for _, b := range st.Function.KV {
+			if !declared[b.Store] {
+				return kvNotOwned(b.Store, wf)
+			}
+		}
+	}
+	return nil
+}
+
+func kvNotOwned(name v1.ObjectName, wf *v1.Workflow) *notOwnedError {
+	return &notOwnedError{reason: "KVStoreNotOwned", msg: fmt.Sprintf("kvstore %q was not made by this incarnation of workflow %q", name, wf.Name)}
 }
 
 // pruneFunctions deletes every Function this Workflow controls (kind, name and UID) that is no image step's
@@ -266,6 +385,29 @@ func ownerRef(wf *v1.Workflow) v1.OwnerReference {
 	}
 }
 
+// kvMarker is the non-controller reference naming the Workflow incarnation that made a KVStore (ADR-0178).
+func kvMarker(wf *v1.Workflow) v1.OwnerReference {
+	r := ownerRef(wf)
+	r.Controller, r.BlockOwnerDeletion = false, false
+	return r
+}
+
+// KVMarker is kvMarker for the control plane's handover, so the marker has one definition.
+func KVMarker(wf *v1.Workflow) v1.OwnerReference { return kvMarker(wf) }
+
+// IsKVMarker reports whether r has the shape of a KVStore marker: a non-controller Workflow ref.
+func IsKVMarker(r v1.OwnerReference) bool { return !r.Controller && r.Kind == v1.KindWorkflow }
+
+// marked reports whether refs hold a non-controller ref with wf's kind, name and UID.
+func marked(refs []v1.OwnerReference, wf *v1.Workflow) bool {
+	for _, r := range refs {
+		if IsKVMarker(r) && r.Name == wf.Name && r.UID == wf.UID {
+			return true
+		}
+	}
+	return false
+}
+
 // buildFunction constructs an owned Function for a step (without kv — added in the
 // patch phase). Pooling and scaling come from the effective pooling policy.
 func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owner v1.OwnerReference) *v1.Function {
@@ -318,10 +460,11 @@ func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore, owner v1.OwnerReferen
 		}
 	}
 	meta := v1.ObjectMeta{Name: kv.Name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup}
-	// deletion policy (ADR-0094): `delete` attaches a cascading owner reference so the store is
-	// reclaimed with the workflow; `retain` (default) attaches none, so the store outlives it.
+	// deletion policy (ADR-0094): `delete` adds a cascading controller reference so the store is reclaimed
+	// with the workflow; `retain` (default) carries only the marker, so the store outlives it (ADR-0178).
+	meta.OwnerReferences = []v1.OwnerReference{kvMarker(wf)}
 	if kv.Deletion == v1.DeletionDelete {
-		meta.OwnerReferences = []v1.OwnerReference{owner}
+		meta.OwnerReferences = append(meta.OwnerReferences, owner)
 	}
 	return &v1.KVStore{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
@@ -332,8 +475,9 @@ func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore, owner v1.OwnerReferen
 
 // ensureFunction creates the Function or updates it if its spec drifted. It keeps only a Function this
 // Workflow's kind and name control (any UID) and writes the ownerRefs it built, so a re-created Workflow's
-// steps carry its UID (ADR-0170 Decision 4).
-func (m *Materializer) ensureFunction(ctx context.Context, wf *v1.Workflow, fn *v1.Function) error {
+// steps carry its UID (ADR-0170 Decision 4). It keeps only the kv bindings to stores this incarnation made,
+// and none of a Function re-stamped from another UID (ADR-0178 Decision 4).
+func (m *Materializer) ensureFunction(ctx context.Context, wf *v1.Workflow, fn *v1.Function, kvs *kvView) error {
 	existing, err := m.store.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
 	if fault.KindOf(err) == fault.NotFound {
 		if _, err := m.store.Create(ctx, fn); err != nil {
@@ -348,52 +492,90 @@ func (m *Materializer) ensureFunction(ctx context.Context, wf *v1.Workflow, fn *
 	if !controlledBy(cur.OwnerReferences, wf) {
 		return &notOwnedError{reason: "FunctionNotOwned", msg: fmt.Sprintf("function %q exists and is not owned by workflow %q", fn.Name, wf.Name)}
 	}
+	var kv []v1.FunctionKV
+	if controlledByUID(cur.OwnerReferences, wf) {
+		if kv, err = kvs.ownedBindings(ctx, wf, cur.Spec.KV); err != nil {
+			return err
+		}
+	}
 	owners := fn.OwnerReferences
 	fn.ObjectMeta = cur.ObjectMeta // preserve UID/RV
 	fn.OwnerReferences = owners
-	fn.Spec.KV = cur.Spec.KV // kv is applied in the patch phase
-	fn.Status = cur.Status   // the Function reconciler owns the status, which tracks a redeploy (ADR-0143)
+	fn.Spec.KV = kv        // kv is applied in the patch phase
+	fn.Status = cur.Status // the Function reconciler owns the status, which tracks a redeploy (ADR-0143)
 	if _, err := m.store.Update(ctx, fn); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "update function %q", fn.Name)
 	}
 	return nil
 }
 
-// ensureKVStore creates the KVStore or updates it. It keeps a store this Workflow's kind and name control or
-// one no controller owns (#149), and refuses any other (ADR-0170 Decision 4).
-func (m *Materializer) ensureKVStore(ctx context.Context, wf *v1.Workflow, st *v1.KVStore) error {
+// checkKVStore refuses a declared store that exists without this incarnation's marker (ADR-0178 Decision 2).
+func (m *Materializer) checkKVStore(ctx context.Context, wf *v1.Workflow, st *v1.KVStore) error {
 	existing, err := m.store.Get(ctx, v1.KindKVStore.GVK(), st.Namespace, st.Name)
 	if fault.KindOf(err) == fault.NotFound {
-		if _, err := m.store.Create(ctx, st); err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "create kvstore %q", st.Name)
-		}
 		return nil
 	}
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", st.Name)
 	}
-	cur := existing.(*v1.KVStore)
-	if hasController(cur.OwnerReferences) && !controlledBy(cur.OwnerReferences, wf) {
-		return &notOwnedError{reason: "KVStoreNotOwned", msg: fmt.Sprintf("kvstore %q is owned by another resource, not workflow %q", st.Name, wf.Name)}
-	}
-	owners := st.OwnerReferences
-	st.ObjectMeta = cur.ObjectMeta // preserve UID/RV
-	st.OwnerReferences = owners    // re-derived from the current deletion policy (ADR-0094)
-	st.Status = cur.Status         // the KVStore reconciler owns the status (ADR-0073)
-	if _, err := m.store.Update(ctx, st); err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "update kvstore %q", st.Name)
+	if !marked(existing.GetObjectMeta().OwnerReferences, wf) {
+		return kvNotOwned(st.Name, wf)
 	}
 	return nil
 }
 
-// patchFunctionKV adds a step's kv bindings after its owned store exists.
-func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st *v1.WorkflowStep) error {
+// ensureKVStore creates the KVStore, or updates one carrying this incarnation's marker at its read
+// resourceVersion, and returns the UID it wrote. Any other store is refused (ADR-0178 Decision 2).
+func (m *Materializer) ensureKVStore(ctx context.Context, wf *v1.Workflow, st *v1.KVStore) (v1.UID, error) {
+	existing, err := m.store.Get(ctx, v1.KindKVStore.GVK(), st.Namespace, st.Name)
+	if fault.KindOf(err) == fault.NotFound {
+		out, err := m.store.Create(ctx, st)
+		if err != nil {
+			return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "create kvstore %q", st.Name)
+		}
+		return out.GetObjectMeta().UID, nil
+	}
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", st.Name)
+	}
+	cur := existing.(*v1.KVStore)
+	if !marked(cur.OwnerReferences, wf) {
+		return "", kvNotOwned(st.Name, wf)
+	}
+	owners := st.OwnerReferences
+	st.ObjectMeta = cur.ObjectMeta // preserve UID/RV
+	st.OwnerReferences = owners    // re-derived from the current deletion policy (ADR-0094, #149)
+	st.Status = cur.Status         // the KVStore reconciler owns the status (ADR-0073)
+	if _, err := m.store.Update(ctx, st); err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "update kvstore %q", st.Name)
+	}
+	return cur.UID, nil
+}
+
+// patchFunctionKV writes a step's kv bindings after re-reading each bound store: one whose UID is not the
+// one checked, or that lost the marker, is refused with no write.
+func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st *v1.WorkflowStep, checked map[v1.ObjectName]v1.UID) error {
+	for _, b := range st.Function.KV {
+		obj, err := m.store.Get(ctx, v1.KindKVStore.GVK(), wf.Namespace, b.Store)
+		if fault.KindOf(err) == fault.NotFound {
+			return kvNotOwned(b.Store, wf)
+		}
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "re-read kvstore %q", b.Store)
+		}
+		if meta := obj.GetObjectMeta(); meta.UID != checked[b.Store] || !marked(meta.OwnerReferences, wf) {
+			return kvNotOwned(b.Store, wf)
+		}
+	}
 	name := materializedName(wf, st.Name)
 	obj, err := m.store.Get(ctx, v1.KindFunction.GVK(), wf.Namespace, name)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "get function %q for kv patch", name)
 	}
 	fn := obj.(*v1.Function)
+	if len(fn.Spec.KV) == 0 && len(st.Function.KV) == 0 {
+		return nil
+	}
 	fn.Spec.KV = st.Function.KV
 	if _, err := m.store.Update(ctx, fn); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "patch kv on function %q", name)

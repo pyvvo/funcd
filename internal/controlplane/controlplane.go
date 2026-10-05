@@ -135,6 +135,8 @@ type Handlers interface {
 	ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error)
 	ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error)
 	DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	// HandoverKVStore makes workflow the owner of a kept store (ADR-0178 Decision 6).
+	HandoverKVStore(ctx context.Context, ns v1.NamespaceName, name, workflow v1.ObjectName) (v1.KVStore, error)
 
 	// Bucket (namespaced) — ADR-0080
 	GetBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error)

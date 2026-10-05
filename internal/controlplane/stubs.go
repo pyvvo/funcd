@@ -637,6 +637,10 @@ func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, nam
 	return nil
 }
 
+func (s *StubHandlers) HandoverKVStore(_ context.Context, ns v1.NamespaceName, name, _ v1.ObjectName) (v1.KVStore, error) {
+	return v1.KVStore{}, fault.Unavailablef("StubHandlers.HandoverKVStore", "KVStore %s: no workflow store behind the stub", nsKey(ns, name))
+}
+
 // ---- Bucket (ADR-0080) ----
 
 func (s *StubHandlers) GetBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error) {

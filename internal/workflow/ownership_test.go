@@ -60,23 +60,24 @@ func storeKV(name v1.ObjectName, deletion v1.DeletionPolicy) v1.WorkflowKVStore 
 	return v1.WorkflowKVStore{Name: name, Deletion: deletion, Tables: []v1.KVTable{{Name: "t"}}}
 }
 
-// scenario: recreated-workflow-takes-new-uid — children naming a deleted gcwf's UID are re-stamped with the
-// re-applied gcwf's UID, so two collector passes delete none of them.
+// scenario: recreated-workflow-takes-new-uid — step Functions naming a deleted gcwf's UID are re-stamped with the
+// re-applied gcwf's UID, so two collector passes delete none of them (its KVStore part is
+// TestScenarioRecreatedWorkflowNeedsHandover).
 func TestScenarioRecreatedWorkflowTakesNewUid(t *testing.T) {
 	s := newStore(t)
 	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
-	old := storedWorkflow(t, s, "gcwf", []string{"s1", "s2"}, storeKV("gcwf-state", v1.DeletionDelete))
+	old := storedWorkflow(t, s, "gcwf", []string{"s1", "s2"})
 	require.NoError(t, m.Materialize(ctx, old))
 	require.NoError(t, s.Delete(ctx, v1.KindWorkflow.GVK(), "default", "gcwf", ""))
 
-	wf := storedWorkflow(t, s, "gcwf", []string{"s1", "s2"}, storeKV("gcwf-state", v1.DeletionDelete))
+	wf := storedWorkflow(t, s, "gcwf", []string{"s1", "s2"})
 	require.NotEqual(t, old.UID, wf.UID)
 	require.NoError(t, m.Materialize(ctx, wf))
 	for _, c := range []struct {
 		kind v1.Kind
 		name v1.ObjectName
-	}{{v1.KindFunction, "gcwf-s1"}, {v1.KindFunction, "gcwf-s2"}, {v1.KindKVStore, "gcwf-state"}} {
+	}{{v1.KindFunction, "gcwf-s1"}, {v1.KindFunction, "gcwf-s2"}} {
 		require.Equal(t, wf.UID, controllerUID(getObj(t, s, c.kind, c.name)), "%s carries the new UID", c.name)
 	}
 
@@ -87,7 +88,6 @@ func TestScenarioRecreatedWorkflowTakesNewUid(t *testing.T) {
 	}
 	require.False(t, gone(t, s, v1.KindFunction, "gcwf-s1"))
 	require.False(t, gone(t, s, v1.KindFunction, "gcwf-s2"))
-	require.False(t, gone(t, s, v1.KindKVStore, "gcwf-state"))
 }
 
 func TestMaterializeRefusesAFunctionItDoesNotOwn(t *testing.T) {
@@ -142,8 +142,8 @@ func TestMaterializeRefusesAKVStoreAnotherOwnerControls(t *testing.T) {
 	_, err := s.Create(ctx, free)
 	require.NoError(t, err)
 	c := storedWorkflow(t, s, "c", []string{"z"}, storeKV("free", v1.DeletionDelete))
-	require.NoError(t, m.Materialize(ctx, c), "an unowned store is adopted (#149)")
-	require.Equal(t, c.UID, controllerUID(getObj(t, s, v1.KindKVStore, "free")))
+	require.Equal(t, "KVStoreNotOwned", reasonOf(m.Materialize(ctx, c)), "an unowned store is not adopted")
+	require.Empty(t, getObj(t, s, v1.KindKVStore, "free").GetObjectMeta().OwnerReferences)
 }
 
 func TestReconcileNotOwnedIsNotReadyAndRequeues(t *testing.T) {

@@ -89,8 +89,8 @@ func TestMaterializeOwnedFunctionsAndKV(t *testing.T) {
 	if kv.Spec.Tables[0].Owner != "orders-ingest" {
 		t.Fatalf("kv owner = %q, want orders-ingest (materialized)", kv.Spec.Tables[0].Owner)
 	}
-	if len(kv.OwnerReferences) != 1 {
-		t.Fatal("kvstore missing owner ref for cascade")
+	if controllerRefs(kv.OwnerReferences) != 1 || !hasMarker(kv.OwnerReferences) {
+		t.Fatalf("kvstore missing owner ref for cascade or marker: %+v", kv.OwnerReferences)
 	}
 }
 
@@ -115,12 +115,12 @@ func TestMaterializeDeletionPolicy(t *testing.T) {
 		t.Fatalf("Materialize: %v", err)
 	}
 	keep, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "keep-kv")
-	if refs := keep.(*v1.KVStore).OwnerReferences; len(refs) != 0 {
-		t.Fatalf("retain store must have NO owner ref (outlives the workflow), got %d", len(refs))
+	if refs := keep.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 0 || !marked(refs, wf) {
+		t.Fatalf("retain store must have NO controller ref (outlives the workflow) and the marker, got %+v", refs)
 	}
 	drop, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "drop-kv")
-	if refs := drop.(*v1.KVStore).OwnerReferences; len(refs) != 1 {
-		t.Fatalf("delete store must cascade via one owner ref, got %d", len(refs))
+	if refs := drop.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 1 || !marked(refs, wf) {
+		t.Fatalf("delete store must cascade via one controller ref and carry the marker, got %+v", refs)
 	}
 }
 
@@ -166,7 +166,10 @@ func TestIssue149_KVDeletionPolicyChangeUpdatesOwnerRef(t *testing.T) {
 			if kv.UID != first.(*v1.KVStore).UID {
 				t.Fatalf("kvstore UID changed across re-materialize: %q -> %q", first.(*v1.KVStore).UID, kv.UID)
 			}
-			if got := len(kv.OwnerReferences); got != tc.wantOwners {
+			if !marked(kv.OwnerReferences, wf) {
+				t.Fatalf("deletion %s -> %s: marker missing: %+v", tc.from, tc.to, kv.OwnerReferences)
+			}
+			if got := controllerRefs(kv.OwnerReferences); got != tc.wantOwners {
 				t.Fatalf("deletion %s -> %s: owner refs = %+v, want %d", tc.from, tc.to, kv.OwnerReferences, tc.wantOwners)
 			}
 		})
@@ -309,4 +312,14 @@ func TestIssue50_IdleStepFunctionScalesToZero(t *testing.T) {
 			}
 		})
 	}
+}
+
+func controllerRefs(refs []v1.OwnerReference) int {
+	n := 0
+	for _, r := range refs {
+		if r.Controller {
+			n++
+		}
+	}
+	return n
 }

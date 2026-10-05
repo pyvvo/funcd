@@ -1172,6 +1172,12 @@ func (p *Platform) Run(ctx context.Context) error {
 		}
 	}
 
+	// ADR-0178 Decision 3: mark the KVStores the previous materializer made, before any controller, the
+	// collector or the control plane reads them.
+	if err := workflow.MarkKVStoresOnce(ctx, p.cfg.store); err != nil && ctx.Err() == nil {
+		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores"))
+	}
+
 	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
 		wg.Add(1)
 		go func() {

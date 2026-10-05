@@ -183,6 +183,12 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 }
 
 func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object) (v1.Object, error) {
+	return h.replaceObjIf(ctx, kind, ns, name, obj, nil)
+}
+
+// replaceObjIf is replaceObj with guard run on the stored object before admission; the write is conditional on
+// that object's resourceVersion, so the guard's verdict holds for the write.
+func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object, guard func(context.Context, v1.Object) error) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbUpdate, kind, ns); err != nil {
 		return nil, err
 	}
@@ -202,6 +208,11 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
 	if err != nil {
 		return nil, err
+	}
+	if guard != nil {
+		if err := guard(ctx, cur); err != nil {
+			return nil, err
+		}
 	}
 	id, _ := middleware.IdentityFrom(ctx)
 	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
@@ -296,6 +307,11 @@ func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.Names
 func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
+	}
+	if kind == v1.KindConfigMap {
+		if err := refuseMigrationRecord(ns, name); err != nil {
+			return err
+		}
 	}
 	unlock, err := h.lockFor(ctx, kind, admission.Delete, ns)
 	if err != nil {
@@ -761,6 +777,9 @@ func (h *storeHandlers) GetConfigMap(ctx context.Context, ns v1.NamespaceName, n
 }
 
 func (h *storeHandlers) CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
+	if err := refuseMigrationRecord(cfg.Namespace, cfg.Name); err != nil {
+		return v1.ConfigMap{}, err
+	}
 	o, err := h.createObj(ctx, v1.KindConfigMap, &cfg)
 	if err != nil {
 		return v1.ConfigMap{}, err
@@ -781,6 +800,9 @@ func (h *storeHandlers) ListConfigMaps(ctx context.Context, ns v1.NamespaceName)
 }
 
 func (h *storeHandlers) ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
+	if err := refuseMigrationRecord(ns, name); err != nil {
+		return v1.ConfigMap{}, err
+	}
 	o, err := h.replaceObj(ctx, v1.KindConfigMap, ns, name, &cfg)
 	if err != nil {
 		return v1.ConfigMap{}, err
@@ -907,7 +929,7 @@ func (h *storeHandlers) ListKVStores(ctx context.Context, ns v1.NamespaceName) (
 }
 
 func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
-	o, err := h.replaceObj(ctx, v1.KindKVStore, ns, name, &ks)
+	o, err := h.replaceObjIf(ctx, v1.KindKVStore, ns, name, &ks, h.refuseLiveMarked)
 	if err != nil {
 		return v1.KVStore{}, err
 	}

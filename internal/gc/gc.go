@@ -289,7 +289,7 @@ func newPass(c *Collector) *pass { return &pass{c: c, live: map[v1.OwnerReferenc
 func (p *pass) judgeAll(ctx context.Context, items []v1.Object, only *ownerKey) error {
 	var errs []error
 	for _, obj := range items {
-		ref, ok := v1.ControllerOf(obj.GetObjectMeta().OwnerReferences)
+		ref, ok := childRef(obj)
 		if !ok {
 			continue
 		}
@@ -299,6 +299,31 @@ func (p *pass) judgeAll(ctx context.Context, items []v1.Object, only *ownerKey) 
 		errs = append(errs, p.collectChild(ctx, obj, ref))
 	}
 	return errors.Join(errs...)
+}
+
+// childRef returns obj's controller ref when obj is a child: a KVStore only when kvStoreCollectable.
+func childRef(obj v1.Object) (v1.OwnerReference, bool) {
+	refs := obj.GetObjectMeta().OwnerReferences
+	if obj.GroupVersionKind().Kind == v1.KindKVStore && !kvStoreCollectable(refs) {
+		return v1.OwnerReference{}, false
+	}
+	return v1.ControllerOf(refs)
+}
+
+// kvStoreCollectable reports whether a KVStore's controller ref and a non-controller marker name the same
+// kind, name and UID, so a ref the previous materializer wrote onto a store it did not make deletes nothing
+// (ADR-0178 Decision 5).
+func kvStoreCollectable(refs []v1.OwnerReference) bool {
+	c, ok := v1.ControllerOf(refs)
+	if !ok {
+		return false
+	}
+	for _, r := range refs {
+		if !r.Controller && r.Kind == c.Kind && r.Name == c.Name && r.UID == c.UID {
+			return true
+		}
+	}
+	return false
 }
 
 // collectChild deletes obj when its owner is dead, with its resourceVersion as the precondition. A Conflict
@@ -329,7 +354,7 @@ func (p *pass) collectChild(ctx context.Context, obj v1.Object, ref v1.OwnerRefe
 	if err != nil {
 		return err
 	}
-	ref, ok := v1.ControllerOf(cur.GetObjectMeta().OwnerReferences)
+	ref, ok := childRef(cur)
 	if !ok {
 		return nil
 	}
