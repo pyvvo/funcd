@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // the port's content digest is MD5 (ADR-0159), not a security primitive
+	"slices"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -28,6 +29,90 @@ func RunContract(t *testing.T, newBucket func(t *testing.T) blob.Bucket) {
 	t.Run("attributes-digest", func(t *testing.T) { testAttributesDigest(t, newBucket(t)) })
 	t.Run("put-options-roundtrip", func(t *testing.T) { testPutOptionsRoundtrip(t, newBucket(t)) })
 	t.Run("attributes-not-found", func(t *testing.T) { testAttributesNotFound(t, newBucket(t)) })
+	t.Run("list-after", func(t *testing.T) { testListAfter(t, newBucket(t)) })
+}
+
+// testListAfter: ListAfter returns the keys under prefix strictly after `after`, sorted, at most limit, with
+// more true exactly when a further key under prefix exists, and the fields List fills (ADR-0184).
+func testListAfter(t *testing.T, b blob.Bucket) {
+	ctx := context.Background()
+	for _, k := range []string{"la/d", "la/b", "lb/x", "la/a", "l", "la/c", "first q", "first pagez", "first page", "first a", "fir"} {
+		if err := b.Put(ctx, k, []byte(k), blob.PutOptions{}); err != nil {
+			t.Fatalf("Put(%s): %v", k, err)
+		}
+	}
+	cases := []struct {
+		prefix, after string
+		limit         int
+		want          []string
+		more          bool
+	}{
+		{"la/", "", 2, []string{"la/a", "la/b"}, true},
+		{"la/", "la/b", 2, []string{"la/c", "la/d"}, false},
+		{"la/", "la/bb", 10, []string{"la/c", "la/d"}, false},
+		{"la/", "la/c", 1, []string{"la/d"}, false},
+		{"la/", "la/d", 1, nil, false},
+		{"la/", "a", 10, []string{"la/a", "la/b", "la/c", "la/d"}, false},
+		{"la/", "zzz", 10, nil, false},
+		// "first page" is gocloud's FirstPageToken; as after it is a key like any other.
+		{"first", "first page", 1, []string{"first pagez"}, true},
+		{"first", "first page", 5, []string{"first pagez", "first q"}, false},
+	}
+	for _, c := range cases {
+		items, more, err := b.ListAfter(ctx, c.prefix, c.after, c.limit)
+		if err != nil {
+			t.Fatalf("ListAfter(%q, %q, %d): %v", c.prefix, c.after, c.limit, err)
+		}
+		if got := keysOf(items); !slices.Equal(got, c.want) || more != c.more {
+			t.Fatalf("ListAfter(%q, %q, %d): got (%v, more %v) want (%v, more %v)", c.prefix, c.after, c.limit, got, more, c.want, c.more)
+		}
+	}
+
+	// A page's last key resumes the listing, as memblob's page token does.
+	var paged []string
+	for after := ""; ; {
+		items, more, err := b.ListAfter(ctx, "la/", after, 1)
+		if err != nil {
+			t.Fatalf("ListAfter(la/, %q, 1): %v", after, err)
+		}
+		paged = append(paged, keysOf(items)...)
+		if !more {
+			break
+		}
+		after = items[len(items)-1].Key
+	}
+	if want := []string{"la/a", "la/b", "la/c", "la/d"}; !slices.Equal(paged, want) {
+		t.Fatalf("paging la/ by one: got %v want %v", paged, want)
+	}
+
+	listed, err := b.List(ctx, "la/")
+	if err != nil {
+		t.Fatalf("List(la/): %v", err)
+	}
+	ranged, _, err := b.ListAfter(ctx, "la/", "", 10)
+	if err != nil {
+		t.Fatalf("ListAfter(la/): %v", err)
+	}
+	for i := range listed {
+		l, r := listed[i], ranged[i]
+		if l.Key != r.Key || l.Size != r.Size || !bytes.Equal(l.MD5, r.MD5) || !l.ModTime.Equal(r.ModTime) {
+			t.Fatalf("ListAfter entry %+v differs from List's %+v", r, l)
+		}
+	}
+
+	for _, limit := range []int{0, -1} {
+		if _, _, err := b.ListAfter(ctx, "la/", "", limit); fault.KindOf(err) != fault.Invalid {
+			t.Fatalf("ListAfter(limit %d): kind=%v want invalid", limit, fault.KindOf(err))
+		}
+	}
+}
+
+func keysOf(items []blob.Attributes) []string {
+	var keys []string
+	for _, it := range items {
+		keys = append(keys, it.Key)
+	}
+	return keys
 }
 
 // testAttributesDigest: Attributes and every List entry carry the MD5 of the written bytes (ADR-0159). It

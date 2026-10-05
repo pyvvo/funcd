@@ -18,7 +18,11 @@ import (
 
 // mapBucket is a tiny in-memory blob.Bucket for the facade tests. Unlike memblob it supports SignedURL,
 // and its map is directly inspectable so a test can assert the SUBSTRATE key (the coexistence property).
-type mapBucket struct{ m map[string][]byte }
+// It embeds the port only to satisfy ListAfter, which the facade never calls.
+type mapBucket struct {
+	iblob.Bucket
+	m map[string][]byte
+}
 
 func newMapBucket() *mapBucket { return &mapBucket{m: map[string][]byte{}} }
 

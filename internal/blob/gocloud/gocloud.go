@@ -4,16 +4,23 @@
 package gocloud
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"mime"
 	neturl "net/url"
+	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -35,6 +42,10 @@ const (
 	fileEscapePrefix = "__0x"
 )
 
+// errNoV2Input reports an s3blob listing without a ListObjectsV2 request (Options.UseLegacyList), which has no
+// StartAfter; s3 ListAfter then falls back to List (ADR-0184 Decision 4).
+var errNoV2Input = errors.New("s3 listing has no ListObjectsV2 input")
+
 // Open adapts a gocloud bucket to blob.Bucket.
 //
 //	Open(ctx, "mem://")                       → in-memory (memblob; the cgo-free in-mem driver)
@@ -45,11 +56,31 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
 	}
-	return &bucket{
+	k := &bucket{
 		b:    b,
 		file: strings.HasPrefix(url, fileblob.Scheme+"://"),
 		s3:   strings.HasPrefix(url, s3blob.Scheme+"://"),
-	}, nil
+	}
+	if k.file {
+		if k.dir, err = fileDir(url); err != nil {
+			_ = b.Close()
+			return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "resolve the directory of %q", url)
+		}
+	}
+	return k, nil
+}
+
+// fileDir is the absolute directory fileblob's URL opener serves for url: its path, relative when the host is ".".
+func fileDir(url string) (string, error) {
+	u, err := neturl.Parse(url)
+	if err != nil {
+		return "", err
+	}
+	p := u.Path
+	if u.Host == "." {
+		p = strings.TrimPrefix(p, "/")
+	}
+	return filepath.Abs(filepath.FromSlash(p))
 }
 
 // FileURL is the file:// bucket URL for the absolute directory dir, path-escaped so URL syntax in a
@@ -61,6 +92,8 @@ func FileURL(dir string) string {
 type bucket struct {
 	b    *gcblob.Bucket
 	file bool
+	// dir is the file:// bucket's root, which the funcd-owned file walk reads (ADR-0184 Decision 5).
+	dir string
 	// s3 leaves MD5 nil: s3blob decodes an SSE-KMS/SSE-C ETag that is not the content's MD5 (ADR-0159).
 	s3 bool
 }
@@ -166,11 +199,11 @@ func (k *bucket) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
-	walk := prefix
 	if k.file {
-		walk = fileWalkPrefix(prefix)
+		items, _, err := k.fileWalk(ctx, prefix, "", -1)
+		return items, err
 	}
-	iter := k.b.List(&gcblob.ListOptions{Prefix: walk})
+	iter := k.b.List(&gcblob.ListOptions{Prefix: prefix})
 	var out []blob.Attributes
 	for {
 		obj, err := iter.Next(ctx)
@@ -185,38 +218,280 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 			// delimiter mode would — skip pseudo-directory entries.
 			continue
 		}
-		if !strings.HasPrefix(obj.Key, prefix) {
-			continue
-		}
-		out = append(out, blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime, MD5: k.listMD5(ctx, obj)})
+		out = append(out, k.listed(obj))
 	}
 	sortByKey(out)
 	return out, nil
 }
 
-// listMD5 is the digest a List entry carries. fileblob's List does not return the MD5 its Attributes reads
-// from the sidecar, so a file entry reads its attributes, nil when that read fails, so List fails no more
-// often than without it (ADR-0159 Temporary workarounds).
-func (k *bucket) listMD5(ctx context.Context, obj *gcblob.ListObject) []byte {
+// listed is a mem:// or s3:// listing entry; s3 leaves MD5 nil (ADR-0159).
+func (k *bucket) listed(obj *gcblob.ListObject) blob.Attributes {
+	a := blob.Attributes{Key: obj.Key, Size: obj.Size, ModTime: obj.ModTime, MD5: obj.MD5}
+	if k.s3 {
+		a.MD5 = nil
+	}
+	return a
+}
+
+// ListAfter is the ranged, limited listing (ADR-0184 Decisions 3-5).
+func (k *bucket) ListAfter(ctx context.Context, prefix, after string, limit int) ([]blob.Attributes, bool, error) {
+	if limit < 1 {
+		return nil, false, fault.Invalidf("blob.ListAfter", "limit %d is below 1", limit)
+	}
 	switch {
-	case k.s3:
-		return nil
 	case k.file:
-		a, err := k.b.Attributes(ctx, obj.Key)
-		if err != nil {
-			return nil
-		}
-		return a.MD5
+		return k.fileWalk(ctx, prefix, after, limit)
+	case k.s3:
+		return k.s3ListAfter(ctx, prefix, after, limit)
 	default:
-		return obj.MD5
+		return k.memListAfter(ctx, prefix, after, limit)
 	}
 }
 
-// fileWalkPrefix cuts prefix before the first rune fileblob would not walk to: it starts its
-// List at filepath.Join(dir, prefix[:lastSlash]), which cleans "//", "./" and "../", while it
+// memListAfter seeks with after as memblob's page token, which skips keys <= it. ListPage reads the token
+// "first page" (gocloud's FirstPageToken) as the first page, and would read a next token equal to it the same
+// way, so that after pages from the start with the iterator, whose driver tokens it never sees, instead.
+func (k *bucket) memListAfter(ctx context.Context, prefix, after string, limit int) ([]blob.Attributes, bool, error) {
+	if after == string(gcblob.FirstPageToken) {
+		iter := k.b.List(&gcblob.ListOptions{Prefix: prefix})
+		var out []blob.Attributes
+		for {
+			obj, err := iter.Next(ctx)
+			if errors.Is(err, io.EOF) {
+				return out, false, nil
+			}
+			if err != nil {
+				return nil, false, mapErr("blob.ListAfter", prefix, err)
+			}
+			if obj.Key <= after {
+				continue
+			}
+			if len(out) == limit {
+				return out, true, nil
+			}
+			out = append(out, k.listed(obj))
+		}
+	}
+	token := gcblob.FirstPageToken
+	if after != "" {
+		token = []byte(after)
+	}
+	objs, next, err := k.b.ListPage(ctx, token, limit, &gcblob.ListOptions{Prefix: prefix})
+	if err != nil {
+		return nil, false, mapErr("blob.ListAfter", prefix, err)
+	}
+	return k.listedAll(objs), next != nil, nil
+}
+
+// s3ListAfter asks for exactly limit keys from StartAfter; S3's truncation sets more.
+func (k *bucket) s3ListAfter(ctx context.Context, prefix, after string, limit int) ([]blob.Attributes, bool, error) {
+	opts := &gcblob.ListOptions{
+		Prefix: prefix,
+		BeforeList: func(as func(any) bool) error { //nolint:forbidigo // gocloud's ListOptions.BeforeList fixes this signature
+			var in *awss3.ListObjectsV2Input
+			if !as(&in) {
+				return errNoV2Input
+			}
+			// ListPage re-calls the driver with a ContinuationToken to fill a short page; S3 resumes from it.
+			if in.ContinuationToken == nil && after != "" {
+				start := s3EscapeKey(after)
+				in.StartAfter = &start
+			}
+			return nil
+		},
+	}
+	objs, next, err := k.b.ListPage(ctx, gcblob.FirstPageToken, limit, opts)
+	if errors.Is(err, errNoV2Input) {
+		all, lerr := k.List(ctx, prefix)
+		if lerr != nil {
+			return nil, false, lerr
+		}
+		all = all[sort.Search(len(all), func(i int) bool { return all[i].Key > after }):]
+		if len(all) > limit {
+			return all[:limit], true, nil
+		}
+		return all, false, nil
+	}
+	if err != nil {
+		return nil, false, mapErr("blob.ListAfter", prefix, err)
+	}
+	return k.listedAll(objs), next != nil, nil
+}
+
+func (k *bucket) listedAll(objs []*gcblob.ListObject) []blob.Attributes {
+	out := make([]blob.Attributes, 0, len(objs))
+	for _, obj := range objs {
+		out = append(out, k.listed(obj))
+	}
+	return out
+}
+
+// s3EscapeKey is s3blob's unexported escapeKey (s3blob.go:718-731; gocloud.dev/internal/escape is not
+// importable): a rune below 0x20 and a "/" after ".." become "__0x<hex>__", so StartAfter seeks in the order
+// S3 lists the stored keys.
+func s3EscapeKey(key string) string {
+	if !strings.ContainsFunc(key, func(c rune) bool { return c < ' ' }) && !strings.Contains(key, "../") {
+		return key
+	}
+	r := []rune(key)
+	var b strings.Builder
+	for i, c := range r {
+		if c < ' ' || (i > 1 && c == '/' && r[i-1] == '.' && r[i-2] == '.') {
+			b.WriteString("__0x" + strconv.FormatInt(int64(c), 16) + "__")
+			continue
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
+// fileUnescapeKey is fileblob's unexported unescapeKey (fileblob.go:352) on a "/" separator: it decodes each
+// "__0x<hex>__" rune escape.
+func fileUnescapeKey(name string) string {
+	if !strings.Contains(name, fileEscapePrefix) {
+		return name
+	}
+	var b strings.Builder
+	for i := 0; i < len(name); {
+		if r, n, ok := hexEscapeAt(name[i:]); ok {
+			b.WriteRune(r)
+			i += n
+			continue
+		}
+		b.WriteByte(name[i])
+		i++
+	}
+	return b.String()
+}
+
+// hexEscapeAt decodes a "__0x<hex>__" escape at the start of s into its rune and length.
+func hexEscapeAt(s string) (rune, int, bool) {
+	if !strings.HasPrefix(s, fileEscapePrefix) {
+		return 0, 0, false
+	}
+	rest := s[len(fileEscapePrefix):]
+	end := strings.IndexByte(rest, '_')
+	if end < 0 || !strings.HasPrefix(rest[end:], "__") {
+		return 0, 0, false
+	}
+	v, err := strconv.ParseInt(rest[:end], 16, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	return rune(v), len(fileEscapePrefix) + end + 2, true
+}
+
+// fileEntry is an object the file walk found; only returned ones have their attributes read.
+type fileEntry struct {
+	key string
+	de  fs.DirEntry
+}
+
+// fileWalk lists file:// keys under prefix after `after` in key order; limit < 0 means no limit (List).
+// It reads directories itself instead of paging fileblob's List, which re-walks per page and loses keys
+// (ADR-0184 Decision 5).
+func (k *bucket) fileWalk(ctx context.Context, prefix, after string, limit int) ([]blob.Attributes, bool, error) {
+	start := fileWalkPrefix(prefix)
+	start = start[:strings.LastIndex(start, "/")+1]
+	w := fileWalker{prefix: prefix, after: after, max: limit + 1}
+	if err := w.walk(ctx, filepath.Join(k.dir, filepath.FromSlash(start)), start); err != nil {
+		return nil, false, mapErr("blob.List", prefix, err)
+	}
+	found, more := w.found, limit >= 0 && len(w.found) > limit
+	if more {
+		found = found[:limit]
+	}
+	out := make([]blob.Attributes, 0, len(found))
+	for _, e := range found {
+		info, err := e.de.Info()
+		if err != nil {
+			continue
+		}
+		a := blob.Attributes{Key: e.key, Size: info.Size(), ModTime: info.ModTime()}
+		if attrs, err := k.b.Attributes(ctx, e.key); err == nil {
+			a.MD5 = attrs.MD5
+		}
+		out = append(out, a)
+	}
+	return out, more, nil
+}
+
+// fileWalker collects keys in key order; max <= 0 collects every key.
+type fileWalker struct {
+	prefix, after string
+	max           int
+	found         []fileEntry
+}
+
+// fileChild is a directory entry with its decoded key; a directory's sort key ends in "/".
+type fileChild struct {
+	key, sortKey string
+	de           fs.DirEntry
+}
+
+// walk visits dir, whose keys start with dirKey. Siblings sort by decoded key, a directory's with "/"
+// appended and after an equal file key, so the descent emits keys in order.
+func (w *fileWalker) walk(ctx context.Context, dir, dirKey string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // unreadable: skipped, as fileblob does
+	}
+	kids := make([]fileChild, 0, len(des))
+	for _, de := range des {
+		if !de.IsDir() && strings.HasSuffix(de.Name(), fileAttrsSuffix) {
+			continue
+		}
+		key := dirKey + fileUnescapeKey(de.Name())
+		sortKey := key
+		if de.IsDir() {
+			sortKey += "/"
+		}
+		kids = append(kids, fileChild{key: key, sortKey: sortKey, de: de})
+	}
+	slices.SortFunc(kids, func(a, b fileChild) int {
+		if c := strings.Compare(a.sortKey, b.sortKey); c != 0 {
+			return c
+		}
+		return cmp.Compare(boolInt(a.de.IsDir()), boolInt(b.de.IsDir()))
+	})
+	for _, c := range kids {
+		if w.max > 0 && len(w.found) >= w.max {
+			return nil
+		}
+		if !c.de.IsDir() {
+			if strings.HasPrefix(c.key, w.prefix) && c.key > w.after {
+				w.found = append(w.found, fileEntry{key: c.key, de: c.de})
+			}
+			continue
+		}
+		d := c.sortKey
+		if !strings.HasPrefix(d, w.prefix) && !strings.HasPrefix(w.prefix, d) {
+			continue
+		}
+		if d < w.after && !strings.HasPrefix(w.after, d) {
+			continue
+		}
+		if err := w.walk(ctx, filepath.Join(dir, c.de.Name()), d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// fileWalkPrefix cuts prefix before the first rune whose stored path differs from the key: fileblob
 // stores a key under its escaped path, hex-escaping a control rune, a "/" after "/" or "..",
-// and a key's trailing "/" ("a//b/c" lives at "a/__0x2f__b/c"). List filters the wider walk
-// back to prefix (issue #459).
+// and a key's trailing "/" ("a//b/c" lives at "a/__0x2f__b/c"), and filepath.Join cleans "./"
+// and "../". The file walk starts at its last "/" and filters back to prefix (issue #459).
 func fileWalkPrefix(prefix string) string {
 	for i, r := range prefix {
 		if r < ' ' || r == '/' && (i == 0 || i == len(prefix)-1 || prefix[i-1] == '/' || prefix[i-1] == '.') {

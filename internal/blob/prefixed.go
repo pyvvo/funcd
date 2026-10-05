@@ -46,13 +46,29 @@ func (p *prefixedBucket) List(ctx context.Context, prefix string) ([]Attributes,
 	if err != nil {
 		return nil, err
 	}
-	// Strip the view prefix back off so callers see their own key space.
+	return p.strip(items), nil
+}
+
+// ListAfter maps a non-empty after into the view; an empty one stays empty, so the listing starts at prefix.
+func (p *prefixedBucket) ListAfter(ctx context.Context, prefix, after string, limit int) ([]Attributes, bool, error) {
+	if after != "" {
+		after = p.k(after)
+	}
+	items, more, err := p.inner.ListAfter(ctx, p.k(prefix), after, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	return p.strip(items), more, nil
+}
+
+// strip takes the view prefix back off so callers see their own key space.
+func (p *prefixedBucket) strip(items []Attributes) []Attributes {
 	out := make([]Attributes, 0, len(items))
 	for _, it := range items {
 		it.Key = strings.TrimPrefix(it.Key, p.prefix)
 		out = append(out, it)
 	}
-	return out, nil
+	return out
 }
 
 func (p *prefixedBucket) Attributes(ctx context.Context, key string) (Attributes, error) {

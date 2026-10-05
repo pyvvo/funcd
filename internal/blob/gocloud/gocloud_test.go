@@ -21,6 +21,11 @@ import (
 // scenario: driver-conformance-parity — the gocloud driver passes the identical
 // blob contract against both the memory (memblob) and file (fileblob) backends.
 func TestScenario_DriverConformanceParity(t *testing.T) {
+	runContract(t)
+}
+
+func runContract(t *testing.T) {
+	t.Helper()
 	t.Run("memory", func(t *testing.T) {
 		blobcontract.RunContract(t, func(t *testing.T) blob.Bucket {
 			b, err := gocloud.Open(context.Background(), "mem://")

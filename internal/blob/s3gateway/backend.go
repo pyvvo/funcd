@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -271,38 +272,6 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	}, nil
 }
 
-// listing collects the objects under a bound prefix that match an optional sub-prefix. Only
-// the leading segment is authorized, so a key whose own segment differs (golden/… for a
-// Prefix of gold) belongs to another prefix and is left out.
-func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix string) ([]s3response.Object, error) {
-	ctx, end := b.opContext(ctx)
-	defer end()
-	prefix, _ := splitKey(keyPrefix)
-	sub, _, err := b.authorize(ctx, action, bucket, prefix)
-	if err != nil {
-		return nil, err
-	}
-	items, lerr := sub.List(ctx, keyPrefix)
-	if lerr != nil {
-		return nil, mapBlobErr(lerr)
-	}
-	out := make([]s3response.Object, 0, len(items))
-	for _, it := range items {
-		k := it.Key
-		if p, _ := splitKey(k); p != prefix {
-			continue
-		}
-		out = append(out, s3response.Object{
-			Key:          ptr(k),
-			Size:         ptr(it.Size),
-			LastModified: ptr(it.ModTime),
-			ETag:         backend.GetPtrFromString(objectETag(it.MD5)),
-			StorageClass: awstypes.ObjectStorageClassStandard,
-		})
-	}
-	return out, nil
-}
-
 // maxListXML bounds the encoded entries of a listing page: versitygw answers a response body over
 // 4 MiB with 500 InternalError (maxXMLBodyLen in s3api/controllers). The 64 KiB left holds the rest
 // of the page, whose prefix, marker and delimiter echo a request that fits an 8 KiB header.
@@ -318,50 +287,101 @@ type listPage struct {
 	next      string
 }
 
-// paginate applies the S3 listing parameters to objs, which blob.List returns sorted by
-// key (ADR-0007), so the keys sharing a common prefix are adjacent.
-func paginate(objs []s3response.Object, prefix, delimiter, marker string, limit int32) (listPage, error) {
+// list serves one listing page and keeps no state between requests (ADR-0184): it authorizes the Prefix's
+// leading segment once, then seeks storage from the marker with ListAfter, each call asking for the page's
+// remaining slots. The next marker is the page's last entry, a key or a common prefix.
+func (b *be) list(ctx context.Context, action authz.Action, bucket, prefix, delimiter, marker string, limit int32) (listPage, error) {
+	ctx, end := b.opContext(ctx)
+	defer end()
+	segment, _ := splitKey(prefix)
+	sub, _, err := b.authorize(ctx, action, bucket, segment)
+	if err != nil {
+		return listPage{}, err
+	}
 	var p listPage
 	if limit <= 0 {
 		return p, nil
 	}
-	var last string
+	after := marker
+	if cp := commonPrefix(marker, prefix, delimiter); cp != "" {
+		// Every key under the marker's own common prefix rolls up into it, which a page already returned.
+		after = cp + string(utf8.MaxRune)
+	}
+	var last, lastCP string
 	size := 0
-	for _, o := range objs {
-		key := deref(o.Key)
-		if key <= marker {
-			continue
+	for {
+		items, more, lerr := sub.ListAfter(ctx, prefix, after, int(limit)-len(p.contents)-len(p.prefixes))
+		if lerr != nil {
+			return listPage{}, mapBlobErr(lerr)
 		}
-		cp := ""
-		if delimiter != "" {
-			if before, _, ok := strings.Cut(strings.TrimPrefix(key, prefix), delimiter); ok {
-				cp = prefix + before + delimiter
-				if cp <= marker || cp == last {
-					continue
+		for _, it := range items {
+			key := it.Key
+			// Only the leading segment is authorized: golden/… is not under a Prefix of gold.
+			if seg, _ := splitKey(key); seg != segment {
+				if key > segment+"/" {
+					return p, nil
 				}
+				continue
+			}
+			cp := commonPrefix(key, prefix, delimiter)
+			if cp != "" && (cp <= marker || cp == last) {
+				continue
+			}
+			o := s3response.Object{
+				Key:          ptr(key),
+				Size:         ptr(it.Size),
+				LastModified: ptr(it.ModTime),
+				ETag:         backend.GetPtrFromString(objectETag(it.MD5)),
+				StorageClass: awstypes.ObjectStorageClassStandard,
+			}
+			n, err := entryLen(o, cp)
+			if err != nil {
+				return listPage{}, err
+			}
+			// The entry must fit with its name again as the next marker; the first one always goes, so the listing advances.
+			count := int32(len(p.contents) + len(p.prefixes))
+			if count == limit || (count > 0 && size+2*n > maxListXML) {
+				p.truncated = true
+				p.next = last
+				return p, nil
+			}
+			size += n
+			if cp != "" {
+				p.prefixes = append(p.prefixes, awstypes.CommonPrefix{Prefix: ptr(cp)})
+				last, lastCP = cp, cp
+			} else {
+				p.contents = append(p.contents, o)
+				last = key
 			}
 		}
-		n, err := entryLen(o, cp)
-		if err != nil {
-			return listPage{}, err
+		if !more {
+			return p, nil
 		}
-		// The entry must fit with its name again as the next marker; the first one always goes, so the listing advances.
-		count := int32(len(p.contents) + len(p.prefixes))
-		if count == limit || (count > 0 && size+2*n > maxListXML) {
+		if int32(len(p.contents)+len(p.prefixes)) == limit {
 			p.truncated = true
 			p.next = last
 			return p, nil
 		}
-		size += n
-		if cp != "" {
-			p.prefixes = append(p.prefixes, awstypes.CommonPrefix{Prefix: ptr(cp)})
-			last = cp
-		} else {
-			p.contents = append(p.contents, o)
-			last = key
+		if len(items) > 0 {
+			after = items[len(items)-1].Key
+		}
+		if lastCP != "" && strings.HasPrefix(after, lastCP) {
+			after = lastCP + string(utf8.MaxRune)
 		}
 	}
-	return p, nil
+}
+
+// commonPrefix is the common prefix key rolls up into under prefix with delimiter, or "" when it rolls up
+// into none: no delimiter, key outside prefix, or no delimiter in the rest.
+func commonPrefix(key, prefix, delimiter string) string {
+	if delimiter == "" || !strings.HasPrefix(key, prefix) {
+		return ""
+	}
+	before, _, ok := strings.Cut(key[len(prefix):], delimiter)
+	if !ok {
+		return ""
+	}
+	return prefix + before + delimiter
 }
 
 // entryLen is the size of a listing entry as versitygw encodes the page with encoding/xml: the
@@ -390,13 +410,9 @@ func pageSize(maxKeys *int32) int32 {
 // S3 Prefix's leading segment selects the sub-domain; the rest filters within it.
 func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s3response.ListObjectsV2Result, error) {
 	bucket := deref(in.Bucket)
-	objs, err := b.listing(ctx, authz.ActionS3Read, bucket, deref(in.Prefix))
-	if err != nil {
-		return s3response.ListObjectsV2Result{}, err
-	}
 	limit := pageSize(in.MaxKeys)
 	marker := max(deref(in.StartAfter), deref(in.ContinuationToken))
-	p, err := paginate(objs, deref(in.Prefix), deref(in.Delimiter), marker, limit)
+	p, err := b.list(ctx, authz.ActionS3Read, bucket, deref(in.Prefix), deref(in.Delimiter), marker, limit)
 	if err != nil {
 		return s3response.ListObjectsV2Result{}, err
 	}
@@ -418,12 +434,8 @@ func (b *be) ListObjectsV2(ctx context.Context, in *awss3.ListObjectsV2Input) (s
 // ListObjects is the V1 listing (ADR-0080), same semantics as V2 with Marker.
 func (b *be) ListObjects(ctx context.Context, in *awss3.ListObjectsInput) (s3response.ListObjectsResult, error) {
 	bucket := deref(in.Bucket)
-	objs, err := b.listing(ctx, authz.ActionS3Read, bucket, deref(in.Prefix))
-	if err != nil {
-		return s3response.ListObjectsResult{}, err
-	}
 	limit := pageSize(in.MaxKeys)
-	p, err := paginate(objs, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
+	p, err := b.list(ctx, authz.ActionS3Read, bucket, deref(in.Prefix), deref(in.Delimiter), deref(in.Marker), limit)
 	if err != nil {
 		return s3response.ListObjectsResult{}, err
 	}
