@@ -62,15 +62,21 @@ type WorkflowReconciler struct {
 	mat       *Materializer
 	contracts ContractResolver // F65: reads step I/O contracts from OCI metadata (nil ⇒ the gate is skipped)
 	log       *slog.Logger
+	// contractRequeue is workflow.artifactPollInterval (ADR-0163).
+	contractRequeue time.Duration
 }
 
 // NewWorkflowReconciler builds the Workflow reconciler over a Materializer + a ContractResolver (the F65
-// typed-edge gate, ADR-0098). A nil ContractResolver skips the gate (materialization-only).
-func NewWorkflowReconciler(s store.Store, m *Materializer, contracts ContractResolver, log *slog.Logger) *WorkflowReconciler {
+// typed-edge gate, ADR-0098). A nil ContractResolver skips the gate (materialization-only). artifactPollInterval
+// re-checks a Workflow whose step artifact is not pushed; 0 ⇒ contractRequeue.
+func NewWorkflowReconciler(s store.Store, m *Materializer, contracts ContractResolver, log *slog.Logger, artifactPollInterval time.Duration) *WorkflowReconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &WorkflowReconciler{store: s, mat: m, contracts: contracts, log: log.With("component", "workflow.reconcile")}
+	if artifactPollInterval <= 0 {
+		artifactPollInterval = contractRequeue
+	}
+	return &WorkflowReconciler{store: s, mat: m, contracts: contracts, log: log.With("component", "workflow.reconcile"), contractRequeue: artifactPollInterval}
 }
 
 // Reconcile materializes one Workflow's owned resources, then runs the F65 typed-edge contract gate:
@@ -109,7 +115,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	case errors.Is(cerr, errArtifactNotReady):
 		// A step image is not pushed yet — requeue AFTER a backoff (not a hot loop; each attempt does
 		// registry metadata I/O), leaving status untouched so there is no spurious mismatch (ADR-0098).
-		return controller.Result{RequeueAfter: contractRequeue}, nil
+		return controller.Result{RequeueAfter: r.contractRequeue}, nil
 	case cerr != nil:
 		var mm *mismatchError
 		if !errors.As(cerr, &mm) {

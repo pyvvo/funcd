@@ -55,6 +55,8 @@ type Deps struct {
 	Publisher Publisher    // where a firing emits its named CloudEvent (required)
 	Blob      *BlobWatcher // ADR-0119: the poll watcher a `blob:` source registers on; nil ⇒ no blob support
 	Logger    *slog.Logger // default slog.Default()
+	// BucketRecheckInterval is eventing.bucketRecheckInterval (ADR-0163); 0 ⇒ bucketRecheckInterval.
+	BucketRecheckInterval time.Duration
 }
 
 // Source is the EventSource reconciler + the registered named-event timer set. A firing PUBLISHES a named
@@ -65,6 +67,7 @@ type Source struct {
 	publisher Publisher
 	blob      *BlobWatcher // ADR-0119: nil ⇒ blob sources cannot be registered
 	logger    *slog.Logger
+	recheck   time.Duration // re-check of a blob source's Bucket
 
 	mu     sync.Mutex
 	timers map[eventKey]*timerEntry
@@ -94,6 +97,10 @@ func NewSource(d Deps) (*Source, error) {
 		blob:      d.Blob,
 		logger:    logger.With("component", "eventing"),
 		timers:    map[eventKey]*timerEntry{},
+		recheck:   d.BucketRecheckInterval,
+	}
+	if s.recheck <= 0 {
+		s.recheck = bucketRecheckInterval
 	}
 	if d.Blob != nil {
 		d.Blob.SetHooks(WatchHooks{Exists: s.sourceExists, SaveFailing: s.setSaveFailing})
@@ -156,7 +163,7 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		if fault.KindOf(err) == fault.NotFound {
 			s.deregisterBlob(ns, name)
 			nrErr := s.setBlobNotReady(ctx, es, "BucketNotFound", fmt.Sprintf("bucket %q not found in namespace %q", es.Spec.Blob.Bucket, ns))
-			return controller.Result{RequeueAfter: bucketRecheckInterval}, nrErr
+			return controller.Result{RequeueAfter: s.recheck}, nrErr
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
 	}
@@ -168,7 +175,7 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileBlob", "set eventsource ready")
 		}
 	}
-	return controller.Result{RequeueAfter: bucketRecheckInterval}, nil
+	return controller.Result{RequeueAfter: s.recheck}, nil
 }
 
 // normalizedBlob returns es's blob source with the ADR-0119 defaults applied to a copy. es is written back

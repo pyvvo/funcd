@@ -8,7 +8,7 @@ import (
 )
 
 // BootTimeout is how long the reconciler lets a replica run before readiness judges it never ready (ADR-0030 §4b).
-const BootTimeout = bootTimeout
+const BootTimeout = defaultBootTimeout
 
 // ErrRevisionStampFailed is the error a pass returns when its Revision cannot be stamped (ADR-0172).
 var ErrRevisionStampFailed = errRevisionStampFailed

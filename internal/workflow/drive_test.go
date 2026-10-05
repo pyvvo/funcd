@@ -111,7 +111,7 @@ func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatche
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
-	ctrl.Register(v1.KindWorkflowRun.GVK(), NewRunReconciler(s, eng, nil, log))
+	ctrl.Register(v1.KindWorkflowRun.GVK(), NewRunReconciler(s, eng, nil, log, 0))
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -658,7 +658,7 @@ func TestTerminalStatusWaitsForGoroutineExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
-	rr, req := NewRunReconciler(s, eng, nil, nil), runReq("run-t")
+	rr, req := NewRunReconciler(s, eng, nil, nil, 0), runReq("run-t")
 	if _, err := rr.Reconcile(ctx, req); err != nil {
 		t.Fatalf("start pass: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestCancelBeforeFirstRecordWaitsForGoroutine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
-	rr, req := NewRunReconciler(s, eng, nil, nil), runReq("run-c")
+	rr, req := NewRunReconciler(s, eng, nil, nil, 0), runReq("run-c")
 	if _, err := rr.Reconcile(ctx, req); err != nil {
 		t.Fatalf("start pass: %v", err)
 	}
@@ -722,7 +722,7 @@ func TestWaitedRunEndsReadyAfterFastExit(t *testing.T) {
 		t.Fatalf("engine: %v", err)
 	}
 	runs.gate = func() bool { _, live := eng.live("default", "run-w"); return live }
-	rr, req := NewRunReconciler(s, eng, nil, nil), runReq("run-w")
+	rr, req := NewRunReconciler(s, eng, nil, nil, 0), runReq("run-w")
 	if _, err := rr.Reconcile(ctx, req); err != nil {
 		t.Fatalf("wait pass: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestIssue658_WaitedRunEndsReadyWhenGoroutineExitsMidPass(t *testing.T) {
 		t.Fatalf("engine: %v", err)
 	}
 	runs.gate = func() bool { _, live := eng.live("default", "run-w"); return live }
-	rr, req := NewRunReconciler(s, eng, nil, nil), runReq("run-w")
+	rr, req := NewRunReconciler(s, eng, nil, nil, 0), runReq("run-w")
 	if _, err := rr.Reconcile(ctx, req); err != nil {
 		t.Fatalf("wait pass: %v", err)
 	}

@@ -69,7 +69,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, rberr
 	}
 	if refRequeue {
-		return r.holdNotReady(ctx, cs, "BucketNotFound", refMsg, 2*time.Second)
+		return r.holdNotReady(ctx, cs, "BucketNotFound", refMsg, r.referentPoll)
 	}
 
 	// Resolve the engine env (the bindings ADR-0087 injects) BEFORE converging. A secret/config
@@ -80,7 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		// No ConfigMap or Secret event reconciles a CatalogService, so a binding applied later is found only by a requeue.
 		var requeue time.Duration
 		if fault.KindOf(berr) == fault.NotFound {
-			requeue = 2 * time.Second
+			requeue = r.referentPoll
 		}
 		return r.holdNotReady(ctx, cs, "BindingResolveFailed", berr.Error(), requeue)
 	}
@@ -173,7 +173,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		// readiness probe yet) — re-converge + re-probe soon until Ready, the same re-poll the Function
 		// reconciler does while a worker boots (ADR-0030). Without this the CatalogService would stay
 		// Pending until an unrelated watch event, never auto-progressing to Ready.
-		return controller.Result{RequeueAfter: 2 * time.Second}, nil
+		return controller.Result{RequeueAfter: r.enginePoll}, nil
 	}
 	// ADR-0142: come back after the supervision period, so Converge recreates an engine that died with no write.
 	return controller.Result{RequeueAfter: r.period}, nil

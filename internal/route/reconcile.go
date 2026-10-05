@@ -41,6 +41,10 @@ type Deps struct {
 	// node-private catalog route without clobbering the replace-all edge table.
 	Routes router.EntrySetter
 	Logger *slog.Logger
+	// ReferentPollInterval and ResyncInterval are controller.referentPollInterval and controller.routeResyncInterval
+	// (ADR-0163); 0 ⇒ backendRequeue and resyncPeriod.
+	ReferentPollInterval time.Duration
+	ResyncInterval       time.Duration
 }
 
 // Reconciler drives Route → programmed edge router.
@@ -48,6 +52,9 @@ type Reconciler struct {
 	store  store.Store
 	routes router.EntrySetter
 	logger *slog.Logger
+	// backendRequeue and resync are the requeues while a backend is missing and otherwise.
+	backendRequeue time.Duration
+	resync         time.Duration
 }
 
 // NewReconciler builds the Route reconciler.
@@ -62,7 +69,14 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if l == nil {
 		l = slog.Default()
 	}
-	return &Reconciler{store: d.Store, routes: d.Routes, logger: l.With("component", "route")}, nil
+	r := &Reconciler{store: d.Store, routes: d.Routes, logger: l.With("component", "route"), backendRequeue: d.ReferentPollInterval, resync: d.ResyncInterval}
+	if r.backendRequeue <= 0 {
+		r.backendRequeue = backendRequeue
+	}
+	if r.resync <= 0 {
+		r.resync = resyncPeriod
+	}
+	return r, nil
 }
 
 type routeKey struct {
@@ -105,9 +119,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	case !ok:
 		return controller.Result{}, nil // deleted; the table was already reprogrammed without it
 	case res.backendMissing:
-		return controller.Result{RequeueAfter: backendRequeue}, nil
+		return controller.Result{RequeueAfter: r.backendRequeue}, nil
 	default:
-		return controller.Result{RequeueAfter: resyncPeriod}, nil
+		return controller.Result{RequeueAfter: r.resync}, nil
 	}
 }
 

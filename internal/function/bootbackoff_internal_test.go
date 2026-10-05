@@ -20,7 +20,7 @@ import (
 )
 
 func testBootBackoff(initial, limit time.Duration) *bootBackoff {
-	return newBootBackoff(initial, limit, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return newBootBackoff(initial, limit, defaultBootTimeout, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 // crashed is replica 0 of a worker created at, ended as ex.

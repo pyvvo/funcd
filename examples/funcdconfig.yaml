@@ -56,6 +56,8 @@ server:
   #   dnsForwarderPort: 0         # DNS forwarder host port; 0 ⇒ no egress gateway. default: 0
   #   dnsResolver: ""             # upstream resolver host:port; required when egress is on. default: ""
   #   internalAllow:              # node-service host:port addresses workers may reach. default: none
+  #   workerSyncInterval: 2s      # egress WorkerIndex sync cadence (ADR-0163). default: 2s
+  # shutdownTimeout: 15s          # HTTP, Sensor and workflow-run drain at shutdown. default: 15s; it + runtime.process.stopGrace (or containerd's 10s) + the 5s close must fit the unit's TimeoutStopSec (30s)
 
 # --- storage: the blob+bus substrate (ADR-0043) + the data root --------------------------------
 storage:
@@ -88,12 +90,17 @@ storage:
 #   retention: 720h               # how long a terminal run is kept. default: 720h
 #   payloadLimit: 262144          # max run input / step output bytes. default: 262144 (256 KiB)
 #   maxStepsInFlight: 64          # function-step calls in flight across all runs; 0 = no cap. default: 64
+#   artifactPollInterval: 5s      # re-check of a Workflow whose step artifact is not pushed (ADR-0163). default: 5s
+#   defaultRetryBackoff: 0s       # first retry gap of a step with no retry.backoff, doubled up to 1h. default: 0s (none)
 # eventing:                       # Sensor delivery reliability (ADR-0118)
 #   deliveryAttempts: 3           # attempts before a failed action is dead-lettered. default: 3
 #   maxDeliveriesInFlight: 32     # delivery workers across all targets (ADR-0156). default: 32
 #   maxInFlightPerTarget: 4       # deliveries in flight to one Function or Workflow. default: 4
 #   maxQueuedPerSensor: 4096      # undelivered deliveries per Sensor; more are dead-lettered. default: 4096
 #   blobPollInterval: 15s         # poll cadence of blob: EventSources (ADR-0119). default: 15s
+#   bucketRecheckInterval: 15s    # re-check of every blob EventSource's Bucket (ADR-0163). default: 15s
+#   deliveryBackoffInitial: 100ms # first Sensor delivery retry wait, doubled. default: 100ms
+#   deliveryBackoffMax: 10s       # cap of that wait; at least the initial wait. default: 10s (or the initial wait when larger)
 #   deadletter:
 #     dataDir: ""                 # dead-letter-queue Badger dir. default: <dataDir>/deadletter
 #     retention: 720h             # how long a parked entry is kept. default: 720h
@@ -102,6 +109,8 @@ storage:
 # invoke:                         # function invocation (ADR-0147, ADR-0151)
 #   maxNestedInFlight: 10         # nested (fn-to-fn) calls in flight to one Function; 0 = default 10; cannot be disabled
 #   defaultTimeout: 60s           # how long an external invoke waits for its response to start when the Function sets no spec.timeout; at most 1h. default: 60s
+#   activationTimeout: 30s        # longest cold-start hold of a wake, then 503 (ADR-0163). default: 30s
+#   reclaimInterval: 30s          # idle-reclaim (scale-to-zero) cadence. default: 30s
 
 # --- auth: control-plane and edge credentials (ADR-0028, ADR-0171) -----------------------------
 auth:
@@ -122,6 +131,11 @@ runtime:
   mode: process                   # process | containerd. default: process (embedded shim; containerd = prod lane)
   bootBackoffInitial: 10s         # wait before a worker that crashed while booting is created again (ADR-0160). default: 10s
   bootBackoffMax: 5m              # the wait doubles per crash in a row up to this. default: 5m (or the initial wait when larger)
+  # supervisionPeriod: 10s        # steady re-check of a Ready Function or CatalogService; crash replacement (ADR-0163). default: 10s
+  # bootTimeout: 1m               # a replica not ready this long after creation is stopped; above invoke.activationTimeout. default: 1m
+  # drainGrace: 30s               # longest drain of a demoted revision. default: 30s
+  # handOutSettle: 2s             # idle-after-hand-out wait; at most drainGrace. default: 2s
+  # drainPollInterval: 1s         # longest gap between drain passes. default: 1s
   process:
     stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; server.shutdownTimeout + stopGrace + 5s must fit TimeoutStopSec
   # containerd:                   # used only when mode: containerd
@@ -169,10 +183,15 @@ log:
 # --- catalog: the per-CatalogService query proxies (ADR-0137) ----------------------------------
 # catalog:
 #   proxyHost: ""                 # host the proxies publish to functions; a node address under containerd. default: "" ⇒ 127.0.0.1
+#   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
+#   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 
 # --- controller: the platform controllers (ADR-0170) --------------------------------------------
 # controller:
 #   gcSweepInterval: 5m           # owner garbage collector sweep period; positive. default: 5m
+#   retryBackoffMax: 1s           # cap of the failed-reconcile and re-Watch retry; at least 5ms (ADR-0163). default: 1s
+#   referentPollInterval: 2s      # re-check of an object waiting for a referent. default: 2s
+#   routeResyncInterval: 10s      # re-check of every live Route. default: 10s
 
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:

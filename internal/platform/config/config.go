@@ -103,7 +103,11 @@ type Config struct {
 			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
 			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
 			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:","`
+			// WorkerSyncInterval is the egress WorkerIndex sync cadence (ADR-0163), a positive Go duration.
+			WorkerSyncInterval string `json:"workerSyncInterval,omitempty" env:"FUNCD_NETWORK_WORKER_SYNC_INTERVAL"`
 		} `json:"network,omitempty"`
+		// ShutdownTimeout bounds the HTTP, Sensor and workflow-run drain at shutdown (ADR-0163), a positive Go duration.
+		ShutdownTimeout string `json:"shutdownTimeout,omitempty" env:"FUNCD_SHUTDOWN_TIMEOUT"`
 	} `json:"server,omitempty"`
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`
@@ -158,6 +162,13 @@ type Config struct {
 		// again (ADR-0160): positive Go durations, the max at least the initial wait.
 		BootBackoffInitial string `json:"bootBackoffInitial,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_INITIAL"`
 		BootBackoffMax     string `json:"bootBackoffMax,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_MAX"`
+		// The supervision, boot and drain times (ADR-0163): positive Go durations, bootTimeout above
+		// invoke.activationTimeout and handOutSettle at most drainGrace.
+		SupervisionPeriod string `json:"supervisionPeriod,omitempty" env:"FUNCD_RUNTIME_SUPERVISION_PERIOD"`
+		BootTimeout       string `json:"bootTimeout,omitempty" env:"FUNCD_RUNTIME_BOOT_TIMEOUT"`
+		DrainGrace        string `json:"drainGrace,omitempty" env:"FUNCD_RUNTIME_DRAIN_GRACE"`
+		HandOutSettle     string `json:"handOutSettle,omitempty" env:"FUNCD_RUNTIME_HAND_OUT_SETTLE"`
+		DrainPollInterval string `json:"drainPollInterval,omitempty" env:"FUNCD_RUNTIME_DRAIN_POLL_INTERVAL"`
 		// Process tunes the process driver (ADR-0167): StopGrace is the wait after SIGTERM before SIGKILL for a stop,
 		// the shutdown close and the boot reap, a Go duration with 0 < d <= 10s.
 		Process struct {
@@ -179,6 +190,10 @@ type Config struct {
 	// (ADR-0170), a positive Go duration.
 	Controller struct {
 		GCSweepInterval string `json:"gcSweepInterval,omitempty" env:"FUNCD_CONTROLLER_GC_SWEEP_INTERVAL"`
+		// The retry and requeue times (ADR-0163): positive Go durations, retryBackoffMax at least 5ms.
+		RetryBackoffMax      string `json:"retryBackoffMax,omitempty" env:"FUNCD_CONTROLLER_RETRY_BACKOFF_MAX"`
+		ReferentPollInterval string `json:"referentPollInterval,omitempty" env:"FUNCD_CONTROLLER_REFERENT_POLL_INTERVAL"`
+		RouteResyncInterval  string `json:"routeResyncInterval,omitempty" env:"FUNCD_CONTROLLER_ROUTE_RESYNC_INTERVAL"`
 	} `json:"controller,omitempty"`
 	Log struct {
 		Format string `json:"format,omitempty" env:"FUNCD_LOG_FORMAT" validate:"oneof=json text"`
@@ -220,6 +235,9 @@ type Config struct {
 	// process-runtime/dev default, shared loopback).
 	Catalog struct {
 		ProxyHost string `json:"proxyHost,omitempty" env:"FUNCD_CATALOG_PROXY_HOST"`
+		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
+		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_CATALOG_ENGINE_POLL_INTERVAL"`
+		EngineProbeTimeout string `json:"engineProbeTimeout,omitempty" env:"FUNCD_CATALOG_ENGINE_PROBE_TIMEOUT"`
 	} `json:"catalog,omitempty"`
 
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
@@ -235,6 +253,10 @@ type Config struct {
 		PayloadLimit       int64  `json:"payloadLimit,omitempty" env:"FUNCD_WORKFLOW_PAYLOAD_LIMIT" validate:"min=0"`
 		// MaxStepsInFlight bounds the function-step calls in flight across all runs (ADR-0146); 0 ⇒ no cap.
 		MaxStepsInFlight int `json:"maxStepsInFlight,omitempty" env:"FUNCD_WORKFLOW_MAX_STEPS_IN_FLIGHT" validate:"min=0"`
+		// ArtifactPollInterval re-checks a Workflow whose step artifact is not pushed; DefaultRetryBackoff is the first
+		// retry gap of a step with no retry.backoff, doubled up to 1h; 0 ⇒ none (ADR-0163).
+		ArtifactPollInterval string `json:"artifactPollInterval,omitempty" env:"FUNCD_WORKFLOW_ARTIFACT_POLL_INTERVAL"`
+		DefaultRetryBackoff  string `json:"defaultRetryBackoff,omitempty" env:"FUNCD_WORKFLOW_DEFAULT_RETRY_BACKOFF"`
 		// DataDir is the run-state Badger directory. Empty ⇒ derived as <Storage.DataDir>/workflow in
 		// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
 		DataDir string `json:"dataDir,omitempty" env:"FUNCD_WORKFLOW_DATA_DIR"`
@@ -263,6 +285,11 @@ type Config struct {
 		// BlobPollInterval is the cadence a `blob:` EventSource's prefixes are List-polled for new objects
 		// (ADR-0119, F83). A Go duration ("15s"); one cadence for all blob sources in V1.
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
+		// BucketRecheckInterval re-checks every blob EventSource's Bucket; DeliveryBackoffInitial/Max pace the Sensor
+		// delivery retry, an empty max following max(10s, initial) (ADR-0163).
+		BucketRecheckInterval  string `json:"bucketRecheckInterval,omitempty" env:"FUNCD_EVENTING_BUCKET_RECHECK_INTERVAL"`
+		DeliveryBackoffInitial string `json:"deliveryBackoffInitial,omitempty" env:"FUNCD_EVENTING_DELIVERY_BACKOFF_INITIAL"`
+		DeliveryBackoffMax     string `json:"deliveryBackoffMax,omitempty" env:"FUNCD_EVENTING_DELIVERY_BACKOFF_MAX"`
 	} `json:"eventing,omitempty"`
 
 	// Invoke tunes function invocation. MaxNestedInFlight caps the nested (fn-to-fn) calls in flight to one
@@ -272,6 +299,9 @@ type Config struct {
 	Invoke struct {
 		MaxNestedInFlight int    `json:"maxNestedInFlight,omitempty" env:"FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT" validate:"min=0"`
 		DefaultTimeout    string `json:"defaultTimeout,omitempty" env:"FUNCD_INVOKE_DEFAULT_TIMEOUT"`
+		// ActivationTimeout is the longest cold-start hold of a wake; ReclaimInterval the idle-reclaim cadence (ADR-0163).
+		ActivationTimeout string `json:"activationTimeout,omitempty" env:"FUNCD_INVOKE_ACTIVATION_TIMEOUT"`
+		ReclaimInterval   string `json:"reclaimInterval,omitempty" env:"FUNCD_INVOKE_RECLAIM_INTERVAL"`
 	} `json:"invoke,omitempty"`
 
 	// Site tunes the declarative static web app reconciler (ADR-0139, FEAT-0003/F103). DefaultIndex is
@@ -298,14 +328,28 @@ func defaults() Config {
 	c.Server.ListenAddr = "0.0.0.0:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
 	c.Server.Limits.MaxKeys = 4096
+	c.Server.ShutdownTimeout = "15s"
+	c.Server.Network.WorkerSyncInterval = "2s"
 	c.Storage.Mode = "file"
 	c.Storage.DataDir = "/var/lib/funcd"
 	c.Auth.Namespaces = []string{"default"}
 	c.Runtime.Mode = "process"
 	c.Runtime.BootBackoffInitial = "10s"
+	c.Runtime.SupervisionPeriod = "10s"
+	c.Runtime.BootTimeout = "1m"
+	c.Runtime.DrainGrace = "30s"
+	c.Runtime.HandOutSettle = "2s"
+	c.Runtime.DrainPollInterval = "1s"
 	c.Runtime.Process.StopGrace = "3s"
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
 	c.Controller.GCSweepInterval = "5m"
+	c.Controller.RetryBackoffMax = "1s"
+	c.Controller.ReferentPollInterval = "2s"
+	c.Controller.RouteResyncInterval = "10s"
+	c.Catalog.EnginePollInterval = "2s"
+	c.Catalog.EngineProbeTimeout = "2s"
+	c.Invoke.ActivationTimeout = "30s"
+	c.Invoke.ReclaimInterval = "30s"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"
 	c.Runtime.Containerd.SubnetCIDR = "10.63.0.0/16"
 	c.Runtime.Containerd.ImagePrefix = DefaultImagePrefix
@@ -325,6 +369,8 @@ func defaults() Config {
 	c.Workflow.Retention = "720h"
 	c.Workflow.PayloadLimit = 256 << 10
 	c.Workflow.MaxStepsInFlight = 64
+	c.Workflow.ArtifactPollInterval = "5s"
+	c.Workflow.DefaultRetryBackoff = "0s"
 	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
 	// per-namespace cap of 1000, swept periodically.
 	c.Eventing.DeliveryAttempts = 3
@@ -336,6 +382,8 @@ func defaults() Config {
 	c.Eventing.Deadletter.MaxEntries = 1000
 	// Blob EventSource poll cadence (ADR-0119): 15s default.
 	c.Eventing.BlobPollInterval = "15s"
+	c.Eventing.BucketRecheckInterval = "15s"
+	c.Eventing.DeliveryBackoffInitial = "100ms"
 	// Site default index document (ADR-0139): the web convention.
 	c.Site.DefaultIndex = "index.html"
 	return c

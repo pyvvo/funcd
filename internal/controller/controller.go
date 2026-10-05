@@ -53,6 +53,9 @@ type Deps struct {
 	Store   store.Store
 	Logger  *slog.Logger
 	Workers int // number of worker goroutines; <1 defaults to 1
+	// RetryBackoffMax caps the failed-reconcile and re-Watch retry (controller.retryBackoffMax, ADR-0163); 0 ⇒
+	// maxBackoff.
+	RetryBackoffMax time.Duration
 }
 
 // Controller is the reconcile engine.
@@ -83,13 +86,17 @@ func New(d Deps) (*Controller, error) {
 	if workers < 1 {
 		workers = 1
 	}
+	retryMax := d.RetryBackoffMax
+	if retryMax <= 0 {
+		retryMax = maxBackoff
+	}
 	return &Controller{
 		store:       d.Store,
 		logger:      logger.With("component", "controller"),
 		workers:     workers,
 		reconcilers: map[v1.GroupVersionKind]Reconciler{},
 		mappers:     map[v1.GroupVersionKind][]MapFunc{},
-		queue:       newQueue(baseBackoff, maxBackoff),
+		queue:       newQueue(baseBackoff, retryMax),
 	}, nil
 }
 

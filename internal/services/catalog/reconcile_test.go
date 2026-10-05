@@ -341,7 +341,7 @@ func TestScenarioCrashedCatalogEngineRestarts(t *testing.T) {
 	res, err = r.Reconcile(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, v1.PhasePending, get().Status.Phase, "the recreated engine is still starting")
-	require.Equal(t, 2*time.Second, res.RequeueAfter)
+	require.Equal(t, period, res.RequeueAfter, "the engine wait is min(enginePollInterval, supervisionPeriod) (ADR-0163 Decision 7)")
 
 	prov.status.Ready = true
 	res, err = r.Reconcile(ctx, req)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"reflect"
 	"strings"
 	"time"
 
@@ -599,4 +600,75 @@ func checkCredential(op string, i int, cr Credential) error {
 		return fault.Invalidf(op, "credentials[%d]: unknown role %q (want admin, developer or viewer)", i, cr.Role)
 	}
 	return nil
+}
+
+// Pacing holds the retry, requeue, supervision, wake, drain and probe times of the daemon config (ADR-0163). A zero
+// field keeps today's value.
+type Pacing struct {
+	RetryBackoffMax, ReferentPollInterval, RouteResyncInterval, SupervisionPeriod, BootTimeout  time.Duration
+	DrainGrace, HandOutSettle, DrainPollInterval, EnginePollInterval, EngineProbeTimeout        time.Duration
+	ArtifactPollInterval, DefaultRetryBackoff, BucketRecheckInterval, DeliveryBackoffInitial    time.Duration
+	DeliveryBackoffMax, ActivationTimeout, ReclaimInterval, ShutdownTimeout, WorkerSyncInterval time.Duration
+}
+
+// The defaults WithPacing checks its orderings against: the components' own zero defaults.
+const (
+	minRetryBackoffMax            = 5 * time.Millisecond
+	defaultRetryBackoffMax        = time.Second
+	defaultBootTimeout            = time.Minute
+	defaultActivationTimeout      = 30 * time.Second
+	defaultDrainGrace             = 30 * time.Second
+	defaultHandOutSettle          = 2 * time.Second
+	defaultDeliveryBackoffInitial = 100 * time.Millisecond
+	defaultDeliveryBackoffMax     = 10 * time.Second
+	defaultWorkerSyncInterval     = 2 * time.Second
+	maxDefaultRetryBackoff        = time.Hour
+)
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
+}
+
+// deliveryBackoffMax is the effective Sensor retry cap: a zero DeliveryBackoffMax is max(10s, the initial wait).
+func (p Pacing) deliveryBackoffMax() time.Duration {
+	if p.DeliveryBackoffMax > 0 {
+		return p.DeliveryBackoffMax
+	}
+	return max(defaultDeliveryBackoffMax, orDefault(p.DeliveryBackoffInitial, defaultDeliveryBackoffInitial))
+}
+
+// WithPacing sets the pacing times (ADR-0163). A negative field, or the five orderings of Decision 5 broken on the
+// effective values (a zero field read as its default; a zero DeliveryBackoffMax is max(10s, DeliveryBackoffInitial)),
+// ⇒ fault.Invalid naming the field.
+func WithPacing(p Pacing) Option {
+	return func(c *config) error {
+		const op = "funcd.WithPacing"
+		v := reflect.ValueOf(p)
+		for i := range v.NumField() {
+			if d := time.Duration(v.Field(i).Int()); d < 0 {
+				return fault.Invalidf(op, "Pacing.%s %s must not be negative", v.Type().Field(i).Name, d)
+			}
+		}
+		retryMax := orDefault(p.RetryBackoffMax, defaultRetryBackoffMax)
+		boot, activation := orDefault(p.BootTimeout, defaultBootTimeout), orDefault(p.ActivationTimeout, defaultActivationTimeout)
+		settle, grace := orDefault(p.HandOutSettle, defaultHandOutSettle), orDefault(p.DrainGrace, defaultDrainGrace)
+		initial := orDefault(p.DeliveryBackoffInitial, defaultDeliveryBackoffInitial)
+		switch {
+		case retryMax < minRetryBackoffMax:
+			return fault.Invalidf(op, "Pacing.RetryBackoffMax %s is below the %s retry base", retryMax, minRetryBackoffMax)
+		case boot <= activation:
+			return fault.Invalidf(op, "Pacing.BootTimeout %s must be more than ActivationTimeout %s", boot, activation)
+		case settle > grace:
+			return fault.Invalidf(op, "Pacing.HandOutSettle %s must not exceed DrainGrace %s", settle, grace)
+		case p.DefaultRetryBackoff > maxDefaultRetryBackoff:
+			return fault.Invalidf(op, "Pacing.DefaultRetryBackoff %s is above %s", p.DefaultRetryBackoff, maxDefaultRetryBackoff)
+		case p.DeliveryBackoffMax > 0 && p.DeliveryBackoffMax < initial:
+			return fault.Invalidf(op, "Pacing.DeliveryBackoffMax %s is below DeliveryBackoffInitial %s", p.DeliveryBackoffMax, initial)
+		}
+		c.pacing = p
+		return nil
+	}
 }

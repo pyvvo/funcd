@@ -198,7 +198,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 			v.ready = 1
 		case m.State == memberFailed && m.Error == loadTimedOut:
 			c := r.boot.count(runtime.NewInstanceID(fn.Namespace, fn.Name, v1.ObjectName(fn.Status.CurrentRevision), 0), in.CreatedAt,
-				"the handler did not load within "+bootTimeout.String())
+				"the handler did not load within "+r.bootTimeout.String())
 			v.crashLoop, v.retryAt = c.message, r.boot.reread(c, r.clock.Now())
 		case m.State == memberFailed && !v.serving:
 			v.shapeFailed, v.loadErr = true, m.Error
@@ -274,7 +274,7 @@ func (r *Reconciler) poolSilent(ctx context.Context, key pooling.PoolKey, insts 
 		if last.Before(in.CreatedAt) {
 			last = in.CreatedAt
 		}
-		return r.clock.Now().Sub(last) >= bootTimeout
+		return r.clock.Now().Sub(last) >= r.bootTimeout
 	}
 	return false
 }
@@ -503,7 +503,7 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manife
 	r.setPoolMembers(key.Namespace, poolName, names)
 	env := maps.Clone(shared)
 	env["FUNCD_POOL_MANIFEST"] = manifestPath
-	env["FUNCD_POOL_LOAD_TIMEOUT_MS"] = strconv.FormatInt(bootTimeout.Milliseconds(), 10)
+	env["FUNCD_POOL_LOAD_TIMEOUT_MS"] = strconv.FormatInt(max(r.bootTimeout.Milliseconds(), 1), 10)
 	if r.invokeSockets != nil {
 		sock, serr := r.invokeSockets.PoolSocketFor(key.Namespace, poolName, names)
 		if serr != nil {

@@ -88,6 +88,20 @@ type ReconcilerDeps struct {
 
 	// SupervisionPeriod is the requeue of a Ready CatalogService (ADR-0142); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
+	// ReferentPollInterval re-checks a service waiting for a Bucket or a binding (controller.referentPollInterval,
+	// ADR-0163); EnginePollInterval re-checks an engine not answering its probe yet (catalog.enginePollInterval),
+	// bounded by SupervisionPeriod. 0 ⇒ 2s.
+	ReferentPollInterval time.Duration
+	EnginePollInterval   time.Duration
+}
+
+const defaultPollInterval = 2 * time.Second
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
 }
 
 // Reconciler is the controller.Reconciler for KindCatalogService (ADR-0086/0087): present ⇒
@@ -105,6 +119,8 @@ type Reconciler struct {
 	proxy        *cataloggw.Manager
 	routes       router.EntrySetter
 	period       time.Duration // steady-state requeue (ADR-0142)
+	referentPoll time.Duration
+	enginePoll   time.Duration
 }
 
 // NewReconciler builds the CatalogService reconciler. Store + Provider are required.
@@ -144,6 +160,8 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		proxy:        d.Proxy,
 		routes:       d.Routes,
 		period:       period,
+		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
+		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 	}, nil
 }
 

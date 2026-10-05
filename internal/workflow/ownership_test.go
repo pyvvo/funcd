@@ -150,7 +150,7 @@ func TestReconcileNotOwnedIsNotReadyAndRequeues(t *testing.T) {
 	for _, period := range []time.Duration{0, 3 * time.Second} {
 		s := newStore(t)
 		m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, period)
-		r := NewWorkflowReconciler(s, m, nil, nil)
+		r := NewWorkflowReconciler(s, m, nil, nil, 0)
 		ctx := context.Background()
 		storedWorkflow(t, s, "a", []string{"x"}, storeKV("shared", v1.DeletionDelete))
 		_, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: "a"})

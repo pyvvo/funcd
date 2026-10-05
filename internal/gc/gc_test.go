@@ -453,7 +453,7 @@ func TestScenarioUpgradeRefusesOlderStoreAndCollectorKeepsIt(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, workflow.MarkKVStoresOnce(ctx, st))
-	r := workflow.NewWorkflowReconciler(st, workflow.NewMaterializer(st, fixedRuntime{}, nil, 0), nil, nil)
+	r := workflow.NewWorkflowReconciler(st, workflow.NewMaterializer(st, fixedRuntime{}, nil, 0), nil, nil, 0)
 	_, err = r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: ns, Name: "w"})
 	require.NoError(t, err)
 	got, err := st.Get(ctx, v1.KindWorkflow.GVK(), ns, "w")
