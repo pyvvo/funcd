@@ -99,6 +99,26 @@ func TestScenarioDeleteReclaims(t *testing.T) {
 	require.Equal(t, []string{"default/gone/"}, d.dropped, "delete reclaims the store prefix")
 }
 
+// The start sweep drops the prefix of a store that no longer exists, once, and leaves a live store and the keys
+// of other KV users (not <namespace>/<store>/) alone.
+func TestIssue708_ReclaimDeletedDropsOnlyDeletedStores(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	_, err := st.Create(ctx, mkKVStore("live", v1.KVTable{Name: "t"}))
+	require.NoError(t, err)
+	d := &recPrefixManager{keys: []string{
+		"_eventing/blobwatch/default/src/ev",
+		"default/gone/t/a",
+		"default/gone/u/b",
+		"default/live/t/a",
+	}}
+	r, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: st, KV: d})
+	require.NoError(t, err)
+
+	require.NoError(t, r.ReclaimDeleted(ctx))
+	require.Equal(t, []string{"default/gone/"}, d.dropped)
+}
+
 // scenario: table-removal-protected-and-reclaimed (reclaim half) — a table removed from spec.tables[]
 // but still holding data is reclaimed via DropPrefix(<ns>/<store>/<table>/); the kept table's data is
 // left intact.

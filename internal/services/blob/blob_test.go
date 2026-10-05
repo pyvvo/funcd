@@ -12,6 +12,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	iblob "github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	svcblob "github.com/pyvvo/funcd/internal/services/blob"
 )
 
@@ -157,6 +158,43 @@ func TestListExcludesSiblingPrefixSharingName(t *testing.T) {
 	keys, err := f.List(ctx, "default", "fn", "files", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"a"}, keys)
+}
+
+// TestIssue709_EmptyKeyIsTheFolderMarker: the empty key is the bound prefix's folder marker p/ (the S3 key
+// p/), not the bare prefix p (the S3 object p): it leaves the object p alone, and on a file substrate it
+// does not block writes under the prefix.
+func TestIssue709_EmptyKeyIsTheFolderMarker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("leaves the object named by the prefix alone", func(t *testing.T) {
+		t.Parallel()
+		bkt := newMapBucket()
+		bkt.m["p"] = []byte("OBJECT")
+		f := newFacade(t, bkt, s3PDP{readOK: true, writeOK: true})
+		require.NoError(t, f.Put(ctx, "default", "fn", "files", "", []byte("MARKER")))
+		require.Equal(t, []string{"p", "p/"}, sortedKeys(bkt))
+		require.Equal(t, []byte("OBJECT"), bkt.m["p"])
+		got, found, err := f.Get(ctx, "default", "fn", "files", "")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, []byte("MARKER"), got)
+		require.NoError(t, f.Delete(ctx, "default", "fn", "files", ""))
+		require.Equal(t, []string{"p"}, sortedKeys(bkt))
+	})
+
+	t.Run("file substrate writes under the marker", func(t *testing.T) {
+		t.Parallel()
+		file, err := gocloud.Open(ctx, gocloud.FileURL(t.TempDir()))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = file.Close() })
+		f := newFacade(t, file, s3PDP{readOK: true, writeOK: true})
+		require.NoError(t, f.Put(ctx, "default", "fn", "files", "", nil))
+		require.NoError(t, f.Put(ctx, "default", "fn", "files", "x.parquet", []byte("rows")), "a write under the marker")
+		keys, err := f.List(ctx, "default", "fn", "files", "")
+		require.NoError(t, err)
+		require.Equal(t, []string{"", "x.parquet"}, keys)
+	})
 }
 
 // scenario: blob-unbound-forbidden — an alias the function did not declare is default-deny (Forbidden),

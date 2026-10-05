@@ -222,14 +222,13 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMultipartUploadInput) (s3response.CompleteMultipartUploadResult, string, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	bucket := deref(in.Bucket)
-	prefix, object := splitKey(deref(in.Key))
+	bucket, key := deref(in.Bucket), deref(in.Key)
+	prefix, _ := splitKey(key)
 	sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 	if err != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", err
 	}
-	target := uploadTarget{ns: pr.namespace, bucket: bucket, key: deref(in.Key)}
-	key := blobKey(prefix, object)
+	target := uploadTarget{ns: pr.namespace, bucket: bucket, key: key}
 	id := deref(in.UploadId)
 	data, opts, aerr := b.mp.assemble(id, target, in.MultipartUpload)
 	if aerr != nil {

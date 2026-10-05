@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -95,6 +96,49 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), op, "status write-back")
 	}
 	return controller.Result{}, nil
+}
+
+// ReclaimDeleted drops the data of every <ns>/<store>/ prefix whose KVStore no longer exists. Reconcile reclaims
+// a store only when it sees the store NotFound, which a delete committed before a crash or a stop never reaches
+// (issue #708, ADR-0170 "also across a crash"). Run it before the controller and the control plane start, so no
+// store of the same name is created meanwhile. A key whose first two segments are not DNS labels belongs to
+// another user of the KV substrate (the eventing watermarks) and is left alone.
+func (r *Reconciler) ReclaimDeleted(ctx context.Context) error {
+	const op = "services.kv.ReclaimDeleted"
+	if r.kv == nil {
+		return nil
+	}
+	keys, err := r.kv.List(ctx, "")
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "list keys")
+	}
+	checked := map[string]bool{}
+	var errs []error
+	for _, k := range keys {
+		parts := strings.SplitN(k, "/", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		ns, name := v1.NamespaceName(parts[0]), v1.ObjectName(parts[1])
+		sp := storePrefix(ns, name)
+		if checked[sp] || ns.Validate() != nil || name.Validate() != nil {
+			continue
+		}
+		checked[sp] = true
+		_, gerr := r.store.Get(ctx, v1.KindKVStore.GVK(), ns, name)
+		if fault.KindOf(gerr) != fault.NotFound {
+			if gerr != nil {
+				errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get kvstore %s/%s", ns, name))
+			}
+			continue
+		}
+		if derr := r.kv.DropPrefix(sp); derr != nil {
+			errs = append(errs, fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for %s/%s", ns, name))
+			continue
+		}
+		r.logger.InfoContext(ctx, "reclaimed the data of a deleted KV store", "namespace", ns, "store", name)
+	}
+	return errors.Join(errs...)
 }
 
 // reclaimOrphanTables drops the data of any table prefix present on disk under <ns>/<store>/ but no
