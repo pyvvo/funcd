@@ -660,34 +660,86 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	}
 	// keyed by the node platform too: an index materializes a different bundle per platform (ADR-0145)
 	cacheDir := filepath.Join(m.artifactDir, sanitizeDigest(digest)+"-"+m.node.OS()+"-"+m.node.Arch())
-	if entries, derr := os.ReadDir(cacheDir); derr == nil && len(entries) > 0 {
-		// A multi-file bundle (ADR-0089) leaves an entry sidecar on the miss path; on a hit its
-		// entry is authoritative (entries[0] is non-deterministic across a bundle's many files). A
-		// single-file cache has no sidecar → fall back to the lone NON-dotfile regular file. Dotfiles
-		// (.funcd-entry, .funcd-contract.json — ADR-0123) are metadata, never the handler, so the
-		// resolver skips them; the delivered contract sidecar can never displace the handler. A
-		// directory is never the handler either: Python writes __pycache__/ beside it on import.
-		if entry := bundleEntryFromCache(cacheDir); entry != "" {
-			root, aerr := filepath.Abs(cacheDir)
-			if aerr != nil {
-				return "", fault.Wrapf(aerr, fault.Internal, op, "resolve cache dir")
-			}
-			// The sidecar is cache content: a cache filled before titles were checked may hold one
-			// that leaves the cache dir.
-			return safeJoin(op, root, entry)
-		}
-		for _, e := range entries {
-			if !strings.HasPrefix(e.Name(), ".") && e.Type().IsRegular() {
-				return filepath.Join(cacheDir, e.Name()), nil // cached single-file (immutable per digest)
-			}
-		}
-		// Only dotfiles cached (no handler) — fall through to Pull to re-materialize.
+	if path, ok, err := cachedArtifact(op, cacheDir); ok {
+		return path, err
 	}
-	path, perr := Pull(ctx, ref, digest, cacheDir, m.node)
-	if perr != nil {
-		return "", fault.Wrapf(perr, fault.KindOf(perr), op, "materialize %s/%s", fn.Namespace, fn.Name)
+	if err := fillCache(ctx, op, ref, digest, cacheDir, m.node); err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
-	return path, nil
+	path, ok, err := cachedArtifact(op, cacheDir)
+	if !ok {
+		return "", fault.Internalf(op, "artifact cache %q holds no handler after a pull", cacheDir)
+	}
+	return path, err
+}
+
+// pulledMarker, appended to a cache dir's path, names the file that marks the dir as filled by a completed pull. It
+// lives beside the dir, so no bundle layer can carry it.
+const pulledMarker = ".pulled"
+
+// cachedArtifact resolves the handler in cacheDir; ok is false unless a completed pull filled the dir and it holds one.
+// A multi-file bundle (ADR-0089) leaves an entry sidecar, which is authoritative (entries[0] is non-deterministic
+// across a bundle's many files). A single-file cache has no sidecar → the lone NON-dotfile regular file. Dotfiles
+// (.funcd-entry, .funcd-contract.json — ADR-0123) are metadata, never the handler, so the delivered contract sidecar
+// can never displace it. A directory is never the handler either: Python writes __pycache__/ beside it on import.
+func cachedArtifact(op, cacheDir string) (path string, ok bool, err error) {
+	if _, serr := os.Stat(cacheDir + pulledMarker); serr != nil {
+		return "", false, nil
+	}
+	entries, derr := os.ReadDir(cacheDir)
+	if derr != nil {
+		return "", false, nil
+	}
+	if entry := bundleEntryFromCache(cacheDir); entry != "" {
+		root, aerr := filepath.Abs(cacheDir)
+		if aerr != nil {
+			return "", true, fault.Wrapf(aerr, fault.Internal, op, "resolve cache dir")
+		}
+		// The sidecar is cache content: a cache filled before titles were checked may hold one
+		// that leaves the cache dir.
+		path, err = safeJoin(op, root, entry)
+		return path, true, err
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") && e.Type().IsRegular() {
+			return filepath.Join(cacheDir, e.Name()), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// fillCache pulls the artifact into a temporary dir beside cacheDir and moves it into place only once the pull has
+// verified the digest and delivered the contract, then marks it pulled. A failed or corrupted pull therefore leaves
+// nothing a later call serves, and a dir no completed pull marked (one an older daemon left) is replaced.
+func fillCache(ctx context.Context, op, ref, digest, cacheDir string, node v1.OCIPlatform) error {
+	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "create artifact cache")
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(cacheDir), filepath.Base(cacheDir)+".pull-*")
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "create pull dir")
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	// Container-readable, as Pull makes the dir it creates (MkdirTemp makes it 0700).
+	if err := os.Chmod(tmp, 0o755); err != nil { //nolint:gosec // non-secret RO code; the container user must traverse it
+		return fault.Wrapf(err, fault.Internal, op, "open pull dir")
+	}
+	if _, err := Pull(ctx, ref, digest, tmp, node); err != nil {
+		return err
+	}
+	if _, ok, _ := cachedArtifact(op, cacheDir); ok {
+		return nil // a concurrent call filled it first; keep the dir a worker may already use
+	}
+	if err := os.RemoveAll(cacheDir); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "remove unmarked cache dir")
+	}
+	if err := os.Rename(tmp, cacheDir); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "move pull into cache")
+	}
+	if err := os.WriteFile(cacheDir+pulledMarker, nil, 0o600); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "mark cache dir pulled")
+	}
+	return nil
 }
 
 // Resolve resolves an OCI artifact ref (its tag) to the manifest digest (ADR-0035), so the
