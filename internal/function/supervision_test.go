@@ -713,3 +713,151 @@ func TestScenarioDeletedAndReappliedFunctionStartsFresh(t *testing.T) {
 	creates, _ := h.rt.counts()
 	require.Equal(t, 1, creates)
 }
+
+// gatedIdle is the idleTimeout of the gated scale-to-zero Functions of the ADR-0185 tests.
+const gatedIdle = time.Minute
+
+// bindMissing binds fn to prefix raw of Bucket missing, which the tests apply only when the gate should clear.
+func bindMissing(fn *v1.Function) {
+	fn.Spec.Blob = []v1.FunctionBlob{{Alias: "data", Bucket: "missing", Prefix: "raw"}}
+}
+
+// createGated creates a scale-to-zero Function bound to the absent Bucket missing and reconciles it to
+// Pending/BucketNotFound (ADR-0121 Decision 2).
+func (h *shimHarness) createGated(t *testing.T, name string, replicas int) {
+	t.Helper()
+	h.create(t, name, func(fn *v1.Function) {
+		fn.Spec.Replicas = replicas
+		fn.Spec.Scaling.IdleTimeout = gatedIdle
+		bindMissing(fn)
+	})
+	h.reconcile(t, name)
+	h.requireGated(t, name)
+}
+
+// requireGated requires name to be held Pending by the data-reference gate.
+func (h *shimHarness) requireGated(t *testing.T, name string) {
+	t.Helper()
+	require.Equal(t, v1.PhasePending, h.getFn(t, name).Status.Phase)
+	h.requireCondition(t, name, "Ready", v1.ConditionFalse, "BucketNotFound")
+}
+
+// reclaimRounds runs four rounds of {idle reclaim; clock +2m; reconcile} and requires the gated name Pending and
+// unwritten after every reclaim and every reconcile.
+func (h *shimHarness) reclaimRounds(t *testing.T, a *activator.Activator, clk *clock.Manual, name string) {
+	t.Helper()
+	rv := h.getFn(t, name).ResourceVersion
+	for i := range 4 {
+		require.NoError(t, a.ReclaimIdle(context.Background()))
+		h.requireGated(t, name)
+		require.Equal(t, rv, h.getFn(t, name).ResourceVersion, "idle reclaim writes nothing (round %d)", i)
+		clk.Advance(2 * gatedIdle)
+		h.reconcile(t, name)
+		h.requireGated(t, name)
+		require.Equal(t, rv, h.getFn(t, name).ResourceVersion, "the gate's pass writes nothing (round %d)", i)
+	}
+}
+
+// applyMissingBucket applies Bucket missing with the prefix bindMissing binds.
+func (h *shimHarness) applyMissingBucket(t *testing.T) {
+	t.Helper()
+	h.createObj(t, v1.KindBucket, "missing", func(o v1.Object) { o.(*v1.Bucket).Spec.Prefixes = []v1.BucketPrefix{{Name: "raw"}} })
+}
+
+// scenario: gate-held-function-stays-pending (ADR-0185, issue #728) — idle reclaim past idleTimeout leaves a
+// scale-to-zero Function the data-reference gate holds Pending/BucketNotFound, and neither reclaim nor the gate's next
+// pass writes it.
+func TestScenarioGateHeldFunctionStaysPending(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.createGated(t, "gated", 0)
+	clk := clock.NewManual(time.Now())
+	h.reclaimRounds(t, h.activator(t, clk), clk, "gated")
+}
+
+// scenario: gate-held-function-quiescent-at-reclaim-cadence (ADR-0185, ADR-0047) — over 12 reclaim ticks 30 s apart,
+// with the gate's passes between them, idle reclaim never writes a gated Function.
+func TestScenarioGateHeldFunctionQuiescentAtReclaimCadence(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.createGated(t, "gated", 0)
+	clk := clock.NewManual(time.Now())
+	a := h.activator(t, clk)
+	writes := 0
+	for range 12 {
+		rv := h.getFn(t, "gated").ResourceVersion
+		require.NoError(t, a.ReclaimIdle(context.Background()))
+		if h.getFn(t, "gated").ResourceVersion != rv {
+			writes++
+		}
+		for range 15 {
+			h.reconcile(t, "gated")
+		}
+		clk.Advance(30 * time.Second)
+	}
+	require.Zero(t, writes, "idle reclaim writes in 12 ticks")
+	h.requireGated(t, "gated")
+}
+
+// scenario: gate-clears-to-idle (ADR-0185) — once the Bucket a gated replicas: 0 Function waits for is applied, the
+// reconciler writes Idle/NoReplicas and starts no worker.
+func TestScenarioGateClearsToIdle(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.createGated(t, "gated", 0)
+	clk := clock.NewManual(time.Now())
+	h.reclaimRounds(t, h.activator(t, clk), clk, "gated")
+
+	h.applyMissingBucket(t)
+	h.reconcile(t, "gated")
+	fn := h.getFn(t, "gated")
+	require.Equal(t, v1.PhaseIdle, fn.Status.Phase)
+	require.Zero(t, fn.Status.Replicas)
+	h.requireCondition(t, "gated", "Ready", v1.ConditionFalse, "NoReplicas")
+	creates, _ := h.rt.counts()
+	require.Zero(t, creates, "no worker runs")
+}
+
+// scenario: gate-clears-to-ready (ADR-0185) — once the Bucket a gated replicas: 1 scale-to-zero Function waits for is
+// applied, the reconciler boots one worker and writes Ready; idle reclaim records it on its first tick and writes Idle
+// on the first tick past idleTimeout.
+func TestScenarioGateClearsToReady(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.createGated(t, "gated", 1)
+
+	h.applyMissingBucket(t)
+	h.reconcile(t, "gated")
+	fn := h.getFn(t, "gated")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase)
+	require.Equal(t, 1, fn.Status.Replicas)
+	creates, _ := h.rt.counts()
+	require.Equal(t, 1, creates, "one worker boots")
+
+	clk := clock.NewManual(time.Now())
+	a := h.activator(t, clk)
+	require.NoError(t, a.ReclaimIdle(context.Background()))
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "gated").Status.Phase, "the first tick only records the Function")
+	clk.Advance(2 * gatedIdle)
+	require.NoError(t, a.ReclaimIdle(context.Background()))
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "gated").Status.Phase, "the tick past idleTimeout reclaims it")
+}
+
+// scenario: sleeping-function-gate-fires (ADR-0185) — a spec update that binds an Idle scale-to-zero Function to an
+// absent Bucket moves it to Pending/BucketNotFound once; idle reclaim and the gate's later passes write nothing.
+func TestScenarioSleepingFunctionGateFires(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	h.create(t, "sleepy", func(fn *v1.Function) {
+		fn.Spec.Replicas = 0
+		fn.Spec.Scaling.IdleTimeout = gatedIdle
+	})
+	h.reconcile(t, "sleepy")
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "sleepy").Status.Phase)
+
+	h.apply(t, "sleepy", bindMissing)
+	h.reconcile(t, "sleepy")
+	h.requireGated(t, "sleepy")
+	clk := clock.NewManual(time.Now())
+	h.reclaimRounds(t, h.activator(t, clk), clk, "sleepy")
+}
