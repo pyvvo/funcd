@@ -493,3 +493,57 @@ dev:
 		})
 	}
 }
+
+// funcdctl.yaml gets the resource-manifest number handling (#416): a plain scalar that YAML reads as a number
+// keeps its text when it lands in a string field, so `funcdctl dev` hands the handler VERSION=1.10, not 1.1.
+// A contract side is a json.RawMessage, so its numbers stay numbers.
+func TestIssue699_ManifestNumberLikeTextInStringFieldKeepsText(t *testing.T) {
+	const body = `runtime: nodejs22
+handler: handle
+bindings:
+  blob:
+    - alias: b
+      bucket: bk
+      prefix: 0755
+contract:
+  input:
+    type: number
+    maximum: 1.10
+  output:
+    type: "null"
+dev:
+  catalog:
+    lake:
+      catalog:
+        bucket: bk
+        prefix: 0x1F
+  config:
+    app:
+      VERSION: 1.10
+      MODE: 0755
+      HEX: 0x1F
+      EXP: 1e3
+      PORT: 8080
+`
+	m, err := sdk.LoadManifest(writeManifest(t, body))
+	require.NoError(t, err)
+
+	t.Run("dev.config", func(t *testing.T) {
+		require.Equal(t, map[string]string{
+			"VERSION": "1.10",
+			"MODE":    "0755",
+			"HEX":     "0x1F",
+			"EXP":     "1e3",
+			"PORT":    "8080",
+		}, m.Dev.Config["app"])
+	})
+	t.Run("bindings.blob prefix", func(t *testing.T) {
+		require.Equal(t, "0755", m.Bindings.Blob[0].Prefix)
+	})
+	t.Run("dev.catalog prefix", func(t *testing.T) {
+		require.Equal(t, "0x1F", m.Dev.Catalog["lake"].Catalog.Prefix)
+	})
+	t.Run("contract keeps numbers", func(t *testing.T) {
+		require.JSONEq(t, `{"type":"number","maximum":1.1}`, string(m.Contract.Input))
+	})
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"reflect"
 
 	yamlv3 "go.yaml.in/yaml/v3"
 	"sigs.k8s.io/yaml"
@@ -132,7 +133,8 @@ func LoadManifest(path string) (*Manifest, error) {
 // parseManifest decodes funcdctl.yaml bytes into a Manifest and structurally validates it. sigs.k8s.io/yaml
 // accepts YAML and JSON (JSON is valid YAML) and round-trips through the json tags, so json.RawMessage
 // contract sides receive their compact JSON bytes. Like DecodeManifests, keys and values keep their YAML 1.2 text
-// (quoteStrings, #63) and an unknown key is rejected, not dropped (#64).
+// (quoteStrings, #63), a number-like scalar bound for a string field keeps its text (quoteTextScalars, #416, #699)
+// and an unknown key is rejected, not dropped (#64).
 func parseManifest(op, path string, data []byte) (*Manifest, error) {
 	var doc yamlv3.Node
 	if err := yamlv3.Unmarshal(data, &doc); err != nil {
@@ -140,6 +142,7 @@ func parseManifest(op, path string, data []byte) (*Manifest, error) {
 	}
 	if len(doc.Content) > 0 {
 		quoteStrings(&doc)
+		quoteTextScalars(&doc, reflect.TypeOf(Manifest{}))
 		raw, err := yamlv3.Marshal(&doc)
 		if err != nil {
 			return nil, fault.Invalidf(op, "re-encode manifest %q: %v", path, err)
