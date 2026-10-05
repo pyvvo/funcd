@@ -33,15 +33,23 @@ func TestSDKKindPaths_MatchServerRoutes(t *testing.T) {
 	t.Parallel()
 	paths := controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers()).OpenAPI().Paths
 	c := &Client{}
+	// The builders refuse the {namespace} and {name} templates, which are not DNS labels (issue #698): build with
+	// labels, then put the templates back.
+	route := strings.NewReplacer("/namespaces/ns/", "/namespaces/{namespace}/")
 	for _, k := range v1.AllKinds() {
-		col, err := c.collectionURL(k, "{namespace}")
+		col, err := c.collectionURL(k, "ns")
 		if err != nil {
 			t.Fatalf("collectionURL(%s): %v", k, err)
 		}
-		item, err := c.itemURL(k, "{namespace}", "{name}")
+		item, err := c.itemURL(k, "ns", "name")
 		if err != nil {
 			t.Fatalf("itemURL(%s): %v", k, err)
 		}
+		if item != col+"/name" {
+			t.Fatalf("itemURL(%s) = %q, want %q", k, item, col+"/name")
+		}
+		col = route.Replace(col)
+		item = col + "/{name}"
 		for _, r := range []struct {
 			path    string
 			method  string

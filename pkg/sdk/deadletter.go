@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -17,8 +18,11 @@ func (c *Client) DeadLetters(ctx context.Context, ns v1.NamespaceName) ([]deadle
 	if ns == "" {
 		return nil, fault.Invalidf(op, "namespace is required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/deadletters"
-	body, err := c.do(ctx, http.MethodGet, u, nil)
+	u, err := c.namespaceURL(ns)
+	if err != nil {
+		return nil, err
+	}
+	body, err := c.do(ctx, http.MethodGet, u+"/deadletters", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +41,10 @@ func (c *Client) DeadLetter(ctx context.Context, ns v1.NamespaceName, id string)
 	if ns == "" || id == "" {
 		return deadletter.DeadLetter{}, fault.Invalidf(op, "namespace and id are required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/deadletters/" + id
+	u, err := c.deadLetterURL(ns, id)
+	if err != nil {
+		return deadletter.DeadLetter{}, err
+	}
 	body, err := c.do(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return deadletter.DeadLetter{}, err
@@ -57,8 +64,11 @@ func (c *Client) ReplayDeadLetter(ctx context.Context, ns v1.NamespaceName, id s
 	if ns == "" || id == "" {
 		return fault.Invalidf(op, "namespace and id are required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/deadletters/" + id + "/replay"
-	_, err := c.do(ctx, http.MethodPost, u, nil)
+	u, err := c.deadLetterURL(ns, id)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, u+"/replay", nil)
 	return err
 }
 
@@ -69,7 +79,20 @@ func (c *Client) DiscardDeadLetter(ctx context.Context, ns v1.NamespaceName, id 
 	if ns == "" || id == "" {
 		return fault.Invalidf(op, "namespace and id are required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/deadletters/" + id
-	_, err := c.do(ctx, http.MethodDelete, u, nil)
+	u, err := c.deadLetterURL(ns, id)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodDelete, u, nil)
 	return err
+}
+
+// deadLetterURL builds the path of a dead letter. The id is opaque, not a DNS label, so it is escaped to stay one
+// path segment (issue #698).
+func (c *Client) deadLetterURL(ns v1.NamespaceName, id string) (string, error) {
+	u, err := c.namespaceURL(ns)
+	if err != nil {
+		return "", err
+	}
+	return u + "/deadletters/" + url.PathEscape(id), nil
 }

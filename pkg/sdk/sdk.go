@@ -240,18 +240,34 @@ func (c *Client) collectionURL(kind v1.Kind, ns v1.NamespaceName) (string, error
 		if ns == "" {
 			return "", fault.Invalidf("sdk", "kind %q is namespaced; a namespace is required", kind)
 		}
-		return c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/" + d.plural, nil
+		nsURL, err := c.namespaceURL(ns)
+		if err != nil {
+			return "", err
+		}
+		return nsURL + "/" + d.plural, nil
 	}
 	return c.baseURL + apiPrefix + "/" + d.plural, nil
 }
 
-// itemURL builds the named path for a kind.
+// itemURL builds the named path for a kind. The name must be a DNS label: any other text could add a path
+// segment, a query or a fragment to the URL, and so reach another object (issue #698).
 func (c *Client) itemURL(kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) (string, error) {
 	col, err := c.collectionURL(kind, ns)
 	if err != nil {
 		return "", err
 	}
+	if err := name.Validate(); err != nil {
+		return "", err
+	}
 	return col + "/" + string(name), nil
+}
+
+// namespaceURL builds the path of namespace ns, which must be a DNS label for the same reason.
+func (c *Client) namespaceURL(ns v1.NamespaceName) (string, error) {
+	if err := ns.Validate(); err != nil {
+		return "", err
+	}
+	return c.baseURL + apiPrefix + "/namespaces/" + string(ns), nil
 }
 
 // do executes an HTTP request, returning the 2xx body or a typed fault.Error.
