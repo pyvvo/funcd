@@ -315,7 +315,7 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 }
 
 // ensureRoute creates the owned Route (always stamped with the OwnerReference) or updates its spec to
-// the compiled desired state when it drifted; an unchanged spec is left alone.
+// the compiled desired state and its group to the Site's when either drifted; an unchanged Route is left alone.
 func (r *Reconciler) ensureRoute(ctx context.Context, s *v1.Site, rt *v1.Route, digest, index string) (*v1.Route, error) {
 	spec := compileRoute(s, digest, index)
 	if rt == nil {
@@ -329,10 +329,10 @@ func (r *Reconciler) ensureRoute(ctx context.Context, s *v1.Site, rt *v1.Route, 
 		}
 		return created.(*v1.Route), nil
 	}
-	if reflect.DeepEqual(rt.Spec, spec) {
+	if reflect.DeepEqual(rt.Spec, spec) && rt.ResourceGroup == s.ResourceGroup {
 		return rt, nil
 	}
-	rt.Spec = spec
+	rt.Spec, rt.ResourceGroup = spec, s.ResourceGroup
 	updated, uerr := r.store.Update(ctx, rt)
 	if uerr != nil {
 		return nil, fault.Wrapf(uerr, fault.KindOf(uerr), op, "update route %q", s.Name)

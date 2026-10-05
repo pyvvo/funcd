@@ -504,9 +504,9 @@ func (m *Materializer) ensureFunction(ctx context.Context, wf *v1.Workflow, fn *
 			return err
 		}
 	}
-	owners := fn.OwnerReferences
+	owners, group := fn.OwnerReferences, fn.ResourceGroup
 	fn.ObjectMeta = cur.ObjectMeta // preserve UID/RV
-	fn.OwnerReferences = owners
+	fn.OwnerReferences, fn.ResourceGroup = owners, group
 	fn.Spec.KV = kv        // kv is applied in the patch phase
 	fn.Status = cur.Status // the Function reconciler owns the status, which tracks a redeploy (ADR-0143)
 	if _, err := m.store.Update(ctx, fn); err != nil {
@@ -548,9 +548,10 @@ func (m *Materializer) ensureKVStore(ctx context.Context, wf *v1.Workflow, st *v
 	if !marked(cur.OwnerReferences, wf) {
 		return "", kvNotOwned(st.Name, wf)
 	}
-	owners := st.OwnerReferences
+	owners, group := st.OwnerReferences, st.ResourceGroup
 	st.ObjectMeta = cur.ObjectMeta // preserve UID/RV
 	st.OwnerReferences = owners    // re-derived from the current deletion policy (ADR-0094, #149)
+	st.ResourceGroup = group       // a retain store counts as a member of its group, so it follows a moved Workflow (#722)
 	st.Status = cur.Status         // the KVStore reconciler owns the status (ADR-0073)
 	if _, err := m.store.Update(ctx, st); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "update kvstore %q", st.Name)
