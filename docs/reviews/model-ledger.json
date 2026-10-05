@@ -9553,5 +9553,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-758-fix-claude-opus-5-5-w16f.md",
     "notes": "Minor(model): TestCallTrackerFailedRoundTripEndsTheCall still dials a freed ephemeral port (dial-only, microsecond window, outside the decision's scope) and the commit does not mention it; Minor(model): the proof of the window was not committed as its own test. The regression test plus the existing holder tests prove it anyway."
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "790",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-790-fix-claude-opus-5-5-w16a.md",
+    "notes": "No findings. Revert overlay fails 2 vs 42 uploads (the issue's reason); 3/3 mutants killed (ChooseKey, Restore cursor, head advance); race/vet/lint clean on internal/kvstore; no sibling exporter (DLQ/metastore/workflow do not ship incrementally, CDC cursor only moves on data writes, funclog has no cursor)."
   }
 ]
