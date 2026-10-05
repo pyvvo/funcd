@@ -1101,7 +1101,7 @@ func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName
 	if st := specStep(spec, step); st != nil && st.Function != nil && st.Function.Ref != "" {
 		return st.Function.Ref
 	}
-	return materializedStepName(workflow, step)
+	return v1.StepFunctionName(workflow, step)
 }
 
 // dispatchStep invokes one step with retry, sending it stepInput. It reads the run's

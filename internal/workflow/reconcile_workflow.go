@@ -372,14 +372,7 @@ func controlledByUID(refs []v1.OwnerReference, wf *v1.Workflow) bool {
 
 // materializedName is the owned Function's name: <workflow>-<step>.
 func materializedName(wf *v1.Workflow, step v1.ObjectName) v1.ObjectName {
-	return materializedStepName(wf.Name, step)
-}
-
-// materializedStepName is the owned Function's name for a step, given the workflow name:
-// <workflow>-<step>. The engine uses it to resolve an image step's dispatch target without
-// the Workflow object in hand.
-func materializedStepName(workflow, step v1.ObjectName) v1.ObjectName {
-	return v1.ObjectName(string(workflow) + "-" + string(step))
+	return v1.StepFunctionName(wf.Name, step)
 }
 
 func ownerRef(wf *v1.Workflow) v1.OwnerReference {
