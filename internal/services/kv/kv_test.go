@@ -200,7 +200,7 @@ func TestScenarioPerFunctionPrincipal(t *testing.T) {
 }
 
 // scenario: value-over-cap-rejected — a put exceeding the store's maxValueBytes (or over-long key) is
-// Invalid, before the write reaches the driver (after authorization).
+// PayloadTooLarge (ADR-0148), before the write reaches the driver (after authorization).
 func TestScenarioValueOverCapRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -211,13 +211,13 @@ func TestScenarioValueOverCapRejected(t *testing.T) {
 	f := newFacade(t, b, pdp)
 
 	require.NoError(t, f.Put(ctx, "default", "fn", "small", "ok", []byte("abcd")), "at the cap is allowed")
-	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "ok", []byte("abcde"))), "over value cap ⇒ Invalid")
-	require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, "default", "fn", "small", "abcd", []byte("x"))), "over key cap ⇒ Invalid")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", "fn", "small", "ok", []byte("abcde"))), "over value cap ⇒ PayloadTooLarge")
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, "default", "fn", "small", "abcd", []byte("x"))), "over key cap ⇒ PayloadTooLarge")
 }
 
 // TestIssue377_DeclaredKeyCapIsStorable — a maxKeyBytes a KVStore passes Validate with is a cap the durable
 // engine stores: a key of exactly that size, under the longest <ns>/<store>/<table>/ prefix, goes through the
-// facade into Badger, and one byte more is Invalid before it reaches the driver.
+// facade into Badger, and one byte more is PayloadTooLarge before it reaches the driver.
 func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -244,8 +244,8 @@ func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 		require.NoError(t, err)
 		require.NoErrorf(t, f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes), []byte("v")),
 			"store cap %d bytes passed Validate, so a key of that size must be stored", capBytes)
-		require.Equal(t, fault.Invalid, fault.KindOf(f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes+1), []byte("v"))),
-			"a key over the store cap is Invalid")
+		require.Equal(t, fault.PayloadTooLarge, fault.KindOf(f.Put(ctx, ns, "fn", "b", strings.Repeat("k", capBytes+1), []byte("v"))),
+			"a key over the store cap is PayloadTooLarge")
 		stored++
 	}
 	require.Positive(t, stored, "at least one cap must be accepted and stored")
@@ -264,7 +264,8 @@ func (m rawMeta) Get(_ context.Context, gvk v1.GroupVersionKind, _ v1.NamespaceN
 
 // TestIssue461_StoredOverLimitCapsAreClamped — a KVStore persisted before #377/#169 can hold caps above
 // MaxKeyBytesLimit/MaxValueBytesLimit. The resolved binding clamps them, so an over-limit key or value is
-// Invalid at the facade instead of reaching Badger (Internal) or the local API's put buffer.
+// PayloadTooLarge at the facade instead of reaching Badger (Internal) or the local API's put buffer; a get
+// or delete of an over-limit key is PayloadTooLarge too (ADR-0148).
 func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -283,9 +284,43 @@ func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	require.NoError(t, err)
 
 	err = f.Put(ctx, "default", "fn", "b", strings.Repeat("k", 70000), []byte("v"))
-	require.Equalf(t, fault.Invalid, fault.KindOf(err), "a 70000-byte key is over MaxKeyBytesLimit: %.200v", err)
+	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a 70000-byte key is over MaxKeyBytesLimit: %.200v", err)
+	_, _, err = f.Get(ctx, "default", "fn", "b", strings.Repeat("k", 70000))
+	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a get of a 70000-byte key: %.200v", err)
+	err = f.Delete(ctx, "default", "fn", "b", strings.Repeat("k", 70000))
+	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a delete of a 70000-byte key: %.200v", err)
 	err = f.Put(ctx, "default", "fn", "b", "k", make([]byte, v1.MaxValueBytesLimit+1))
-	require.Equalf(t, fault.Invalid, fault.KindOf(err), "a value over MaxValueBytesLimit: %.200v", err)
+	require.Equalf(t, fault.PayloadTooLarge, fault.KindOf(err), "a value over MaxValueBytesLimit: %.200v", err)
 	require.NoError(t, f.Put(ctx, "default", "fn", "b", strings.Repeat("k", v1.MaxKeyBytesLimit), []byte("v")),
 		"a key at MaxKeyBytesLimit is stored")
+}
+
+// scenario: kv-lowered-key-cap-keeps-keys — a key stored under maxKeyBytes 4096 stays readable and deletable
+// after the cap is lowered to 1024: Get and Delete check only v1.MaxKeyBytesLimit (ADR-0148).
+func TestScenarioKVLoweredKeyCapKeepsKeys(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	engine := memory.New()
+	facade := func(maxKeyBytes int) *kv.Facade {
+		b := fakeResolver{m: map[string]kv.Binding{
+			bkey("fn", "b"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: maxKeyBytes},
+		}}
+		f, err := kv.NewFacade(kv.FacadeDeps{KV: engine, Resolver: b, Authorizer: allowAll{}})
+		require.NoError(t, err)
+		return f
+	}
+	key := strings.Repeat("k", 2000)
+	require.NoError(t, facade(4096).Put(ctx, "default", "fn", "b", key, []byte("v")))
+
+	lowered := facade(1024)
+	got, found, err := lowered.Get(ctx, "default", "fn", "b", key)
+	require.NoError(t, err)
+	require.True(t, found, "a key stored under the higher cap is still readable")
+	require.Equal(t, []byte("v"), got)
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(lowered.Put(ctx, "default", "fn", "b", key, []byte("w"))),
+		"the lowered cap still bounds a rewrite")
+	require.NoError(t, lowered.Delete(ctx, "default", "fn", "b", key))
+	_, found, err = lowered.Get(ctx, "default", "fn", "b", key)
+	require.NoError(t, err)
+	require.False(t, found, "the delete removed the key")
 }

@@ -3,10 +3,12 @@ package local_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 
@@ -169,4 +171,57 @@ func TestIssue169_DeclaredValueCapIsServable(t *testing.T) {
 		served++
 	}
 	require.Positive(t, served, "at least one cap must be accepted and served")
+}
+
+// requireProblem asserts rec is an RFC 9457 problem of the given status and type whose detail contains detail.
+func requireProblem(t *testing.T, rec *httptest.ResponseRecorder, status int, typ, detail string) {
+	t.Helper()
+	require.Equal(t, status, rec.Code, rec.Body.String())
+	var p fault.Problem
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+	require.Equal(t, typ, p.Type)
+	require.Contains(t, p.Detail, detail)
+}
+
+const payloadTooLarge = "urn:funcd:problem:payload-too-large"
+
+// scenario: kv-value-over-store-cap — a context.kv.put of a value one byte over the store's maxValueBytes
+// answers 413 naming the cap (ADR-0148).
+func TestScenarioKVValueOverStoreCap(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn", maxValueBytes: 100}, kvPDP{readOK: true, owner: "fn"})
+	require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/k", strings.Repeat("x", 100)).Code)
+	requireProblem(t, do(t, h, http.MethodPut, "/kv/b/k", strings.Repeat("x", 101)), http.StatusRequestEntityTooLarge, payloadTooLarge, "(100 bytes)")
+}
+
+// scenario: kv-key-over-store-cap — a put of a key one byte over the store's maxKeyBytes (1024) answers 413.
+func TestScenarioKVKeyOverStoreCap(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/kv/b/"+strings.Repeat("k", 1024), "v").Code)
+	requireProblem(t, do(t, h, http.MethodPut, "/kv/b/"+strings.Repeat("k", 1025), "v"), http.StatusRequestEntityTooLarge, payloadTooLarge, "(1024 bytes)")
+}
+
+// scenario: kv-key-over-hard-limit — a get, put or delete of a key one byte over v1.MaxKeyBytesLimit answers
+// 413, never 404, 400 or 500: the put trips the store cap, get and delete the storable-key limit.
+func TestScenarioKVKeyOverHardLimit(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	path := "/kv/b/" + strings.Repeat("k", v1.MaxKeyBytesLimit+1)
+	for _, tc := range []struct{ method, body, limit string }{
+		{http.MethodGet, "", "(64000 bytes)"},
+		{http.MethodPut, "v", "(1024 bytes)"},
+		{http.MethodDelete, "", "(64000 bytes)"},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			requireProblem(t, do(t, h, tc.method, path, tc.body), http.StatusRequestEntityTooLarge, payloadTooLarge, tc.limit)
+		})
+	}
+}
+
+// scenario: local-api-invalid-stays-400 — a context.kv.put body that breaks off mid-read for a non-size reason
+// is malformed input: 400 of type invalid, not 413 (ADR-0148).
+func TestScenarioLocalAPIInvalidStays400(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	body := io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(io.ErrUnexpectedEOF))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/kv/b/k", body))
+	requireProblem(t, rec, http.StatusBadRequest, "urn:funcd:problem:invalid", "read request body")
 }

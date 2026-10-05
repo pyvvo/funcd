@@ -45,8 +45,9 @@ type Request struct {
 }
 
 // Admission reviews a write before it is persisted. Deterministic and side-effect-free.
-// A Validating admission returns req.Object on allow, or a fault error (Invalid/Forbidden/Conflict)
-// on deny. A Mutating admission returns the object to carry forward, or a fault error.
+// A Validating admission returns req.Object on allow, or a fault error
+// (Invalid/Forbidden/Conflict/PayloadTooLarge) on deny. A Mutating admission returns the object
+// to carry forward, or a fault error.
 type Admission interface {
 	// Name identifies the admission in errors and ordering (stable, kebab-case).
 	Name() string

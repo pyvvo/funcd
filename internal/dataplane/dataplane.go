@@ -169,7 +169,7 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 		if rerr != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(rerr, &tooLarge) {
-				fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", maxNormalizeBytes))
+				fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", tooLarge.Limit))
 			} else {
 				fault.WriteProblem(w, fault.Invalidf(op, "reading request body: %v", rerr))
 			}
@@ -248,6 +248,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	proxy.Transport = s.transport
 	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	proxy.ErrorHandler = func(w http.ResponseWriter, pr *http.Request, perr error) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(perr, &tooLarge) {
+			fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", tooLarge.Limit))
+			return
+		}
 		logger.WarnContext(pr.Context(), "edge upstream call failed", "error", perr)
 		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream unavailable"))
 	}

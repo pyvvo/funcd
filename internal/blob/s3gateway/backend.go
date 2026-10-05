@@ -149,6 +149,8 @@ func mapBlobErr(err error) error {
 		return accessDenied()
 	case fault.Invalid:
 		return s3err.GetAPIError(s3err.ErrInvalidRequest)
+	case fault.PayloadTooLarge:
+		return s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	default:
 		return s3err.GetAPIError(s3err.ErrInternalError)
 	}

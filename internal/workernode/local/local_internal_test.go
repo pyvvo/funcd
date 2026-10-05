@@ -12,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
+// scenario: local-api-body-over-limit (ADR-0148)
 // Issue #172: a body over a local-API MaxBytesReader cap is 413 payload-too-large (as on the data plane,
 // ADR-0134), not 400 invalid. The cap fires before the resolver, invoker or port is reached.
 func TestIssue172_OverCapBodyIs413(t *testing.T) {

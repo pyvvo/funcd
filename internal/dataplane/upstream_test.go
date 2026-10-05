@@ -3,6 +3,7 @@ package dataplane_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"log/slog"
@@ -17,9 +18,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/shape"
 	"github.com/pyvvo/funcd/internal/gateway"
@@ -283,6 +286,50 @@ func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 			require.Contains(t, rec.Body.String(), "urn:funcd:problem:unavailable")
 			require.NotContains(t, rec.Body.String(), tc.hidden, "the problem detail must not name the upstream address")
 			require.Contains(t, logs.String(), tc.hidden, "the cause stays in the log")
+		})
+	}
+}
+
+// scenario: edge-chunked-body-over-cap — behind the edge's limit.Chain (MaxBodyBytes 1024), a 64 KiB chunked
+// body to an edge upstream answers 413, not 503, and a 2 KiB chunked body to /function/<name> answers 413
+// naming the 1024-byte cap that tripped, not maxNormalizeBytes (ADR-0148).
+func TestScenarioEdgeChunkedBodyOverCap(t *testing.T) {
+	t.Parallel()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+	rtr := router.New()
+	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+	}}))
+	st := store.New(memory.New())
+	seedFunction(t, st, "echo")
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	h := limit.Chain(limit.Config{MaxBodyBytes: 1024})(dataplane.Handler(st, act, rtr, nil, nil, nil))
+
+	for _, tc := range []struct {
+		name, path string
+		size       int
+	}{
+		{"upstream", "/catalog/lake/q", 64 << 10},
+		{"function", "/function/echo", 2 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A MultiReader has no known length, so the request is chunked (ContentLength -1).
+			req := httptest.NewRequest(http.MethodPost, tc.path, io.MultiReader(strings.NewReader(strings.Repeat("x", tc.size))))
+			require.Equal(t, int64(-1), req.ContentLength)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code, rec.Body.String())
+			var p fault.Problem
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+			require.Equal(t, "urn:funcd:problem:payload-too-large", p.Type)
+			require.Contains(t, p.Detail, "exceeds 1024 bytes")
 		})
 	}
 }

@@ -46,7 +46,7 @@ func (capFakeBlob) SignedURL(context.Context, v1.NamespaceName, v1.ObjectName, s
 	return "", nil
 }
 
-// scenario: blob-size-cap — a put whose body exceeds maxBlobBytes is rejected (the http.MaxBytesReader
+// scenario: blob-size-cap — a put whose body exceeds maxBlobBytes is 413 (the http.MaxBytesReader
 // guard fires in the handler before Put is called). The over-cap body is STREAMED (not allocated).
 func TestScenarioBlobSizeCap(t *testing.T) {
 	mux := http.NewServeMux()
@@ -55,7 +55,7 @@ func TestScenarioBlobSizeCap(t *testing.T) {
 	over := httptest.NewRequest(http.MethodPut, "/blob/b/obj", io.LimitReader(zeroReader{}, maxBlobBytes+1))
 	overRec := httptest.NewRecorder()
 	mux.ServeHTTP(overRec, over)
-	require.GreaterOrEqual(t, overRec.Code, 400, "an over-cap put is rejected (4xx)")
+	require.Equal(t, http.StatusRequestEntityTooLarge, overRec.Code, "an over-cap put is 413")
 
 	within := httptest.NewRequest(http.MethodPut, "/blob/b/ok", strings.NewReader("ok"))
 	withinRec := httptest.NewRecorder()

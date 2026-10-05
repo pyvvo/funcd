@@ -27,8 +27,8 @@ type KV interface {
 
 // registerKV adds the KV verbs to mux — GET/PUT/DELETE /kv/{binding}/{key...} and GET /kv/{binding} (list,
 // ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0073). Errors are RFC
-// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over-cap/bad input → 422, engine error → 500;
-// a body over maxKVBytes → 413).
+// 9457 (the Facade's binding/owner denial → 403, missing key → 404, over a cap → 413, bad input → 400,
+// engine error → 500).
 func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function

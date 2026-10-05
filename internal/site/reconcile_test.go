@@ -51,7 +51,6 @@ type harness struct {
 	ctx    context.Context
 	st     store.Store
 	shared *recorder
-	capped func(blob.Bucket, int64) blob.Bucket
 	layout string
 	r      *site.Reconciler
 }
@@ -61,7 +60,7 @@ func newHarness(t *testing.T) *harness {
 	ctx := context.Background()
 	shared, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
-	h := &harness{t: t, ctx: ctx, st: store.New(memory.New()), shared: &recorder{Bucket: shared}, capped: blob.Capped,
+	h := &harness{t: t, ctx: ctx, st: store.New(memory.New()), shared: &recorder{Bucket: shared},
 		layout: filepath.Join(t.TempDir(), "layout")}
 	h.r = site.New(site.Deps{Store: h.st, Buckets: h.resolve})
 	return h
@@ -72,7 +71,7 @@ func (h *harness) resolve(n v1.NamespaceName, b string) (blob.Bucket, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return h.capped(blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/"), obj.(*v1.Bucket).Spec.MaxObjectBytes), true
+	return blob.Capped(blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/"), obj.(*v1.Bucket).Spec.MaxObjectBytes), true
 }
 
 // push writes files into a dir and pushes it as a site artifact under tag, returning the digest.
@@ -615,57 +614,42 @@ func TestScenarioExplicitNamespaceStillRequiresHost(t *testing.T) {
 	require.Contains(t, readyCond(t, s).Message, "HostRequired")
 }
 
-// tooLarge is blob.Capped refusing with the size kind fault.PayloadTooLarge instead of Forbidden.
-type tooLarge struct{ blob.Bucket }
-
-func (b tooLarge) Put(ctx context.Context, key string, data []byte) error {
-	if err := b.Bucket.Put(ctx, key, data); err != nil {
-		return fault.Wrapf(err, fault.PayloadTooLarge, "test.tooLarge", "put %q", key)
-	}
-	return nil
-}
-
 // A bundle object over the Bucket's maxObjectBytes fails every retry until the spec or the Bucket changes:
-// the Site reports the object and the cap (NotReady MaterializeFailed) instead of failing the reconcile
-// into a hot retry, whether the cap refuses with Forbidden or with PayloadTooLarge; a change to that
-// Bucket re-runs only the Sites declaring it.
+// blob.Capped refuses it with PayloadTooLarge (ADR-0148), and the Site reports the object and the cap
+// (NotReady MaterializeFailed) instead of failing the reconcile into a hot retry; a change to that Bucket
+// re-runs only the Sites declaring it.
 func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
-	for name, capped := range map[string]func(blob.Bucket, int64) blob.Bucket{
-		"Forbidden":       blob.Capped,
-		"PayloadTooLarge": func(inner blob.Bucket, maxBytes int64) blob.Bucket { return tooLarge{blob.Capped(inner, maxBytes)} },
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := newHarness(t)
-			h.capped = capped
-			digest := h.push("v1", map[string]string{"index.html": "<title>A</title>", "big.bin": strings.Repeat("x", 100)})
-			pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
-			pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
-			pre.Spec.MaxObjectBytes = 64
-			_, err := h.st.Create(h.ctx, pre)
-			require.NoError(t, err)
-			h.seedSite("bi", "v1", nil)
-			h.seedSite("other", "v1", func(s *v1.Site) { s.Spec.Bucket.Name = "elsewhere"; s.Spec.Prefix = "other" })
+	h := newHarness(t)
+	digest := h.push("v1", map[string]string{"index.html": "<title>A</title>", "big.bin": strings.Repeat("x", 100)})
+	pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
+	pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
+	pre.Spec.MaxObjectBytes = 64
+	_, err := h.st.Create(h.ctx, pre)
+	require.NoError(t, err)
+	view, ok := h.resolve(ns, bucket)
+	require.True(t, ok)
+	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(view.Put(h.ctx, "probe", make([]byte, 65))), "blob.Capped refuses with PayloadTooLarge")
+	h.seedSite("bi", "v1", nil)
+	h.seedSite("other", "v1", func(s *v1.Site) { s.Spec.Bucket.Name = "elsewhere"; s.Spec.Prefix = "other" })
 
-			res := h.reconcile("bi")
-			require.Zero(t, res.RequeueAfter)
-			s := h.site("bi")
-			c := readyCond(t, s)
-			require.Equal(t, "MaterializeFailed", c.Reason)
-			require.Contains(t, c.Message, "bi/"+slug(digest)+"/big.bin")
-			require.Contains(t, c.Message, "maxObjectBytes (64)")
-			require.NotEqual(t, s.Generation, s.Status.ObservedGeneration, "a failed generation stays unobserved")
-			require.False(t, h.exists("bi/"+slug(digest)+"/index.html"))
-			_, gerr := h.st.Get(h.ctx, v1.KindRoute.GVK(), ns, "bi")
-			require.Error(t, gerr, "nothing is served")
+	res := h.reconcile("bi")
+	require.Zero(t, res.RequeueAfter)
+	s := h.site("bi")
+	c := readyCond(t, s)
+	require.Equal(t, "MaterializeFailed", c.Reason)
+	require.Contains(t, c.Message, "bi/"+slug(digest)+"/big.bin")
+	require.Contains(t, c.Message, "maxObjectBytes (64)")
+	require.NotEqual(t, s.Generation, s.Status.ObservedGeneration, "a failed generation stays unobserved")
+	require.False(t, h.exists("bi/"+slug(digest)+"/index.html"))
+	_, gerr := h.st.Get(h.ctx, v1.KindRoute.GVK(), ns, "bi")
+	require.Error(t, gerr, "nothing is served")
 
-			b := h.bucket()
-			b.Spec.MaxObjectBytes = 1024
-			raised, err := h.st.Update(h.ctx, b)
-			require.NoError(t, err)
-			require.Equal(t, []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: ns, Name: "bi"}}, h.r.MapBucket(h.ctx, raised))
-			h.deploy("bi")
-		})
-	}
+	b := h.bucket()
+	b.Spec.MaxObjectBytes = 1024
+	raised, err := h.st.Update(h.ctx, b)
+	require.NoError(t, err)
+	require.Equal(t, []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: ns, Name: "bi"}}, h.r.MapBucket(h.ctx, raised))
+	h.deploy("bi")
 }
 
 // A bundle entry the file substrate cannot store under its key (fault.Invalid: a name past the OS limit

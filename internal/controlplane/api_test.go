@@ -291,3 +291,24 @@ func TestScenarioSiteSchemaRequiresIngress(t *testing.T) {
 		t.Fatalf("with spec.ingress: want 2xx, got %d: %s", resp.Code, resp.Body.String())
 	}
 }
+
+// ===== scenario: control-plane-body-over-cap (ADR-0148) =====
+// A body over huma's 1 MiB MaxBodyBytes answers funcd's PayloadTooLarge problem, not huma's about:blank.
+func TestScenarioControlPlaneBodyOverCap(t *testing.T) {
+	ta := humatest.Wrap(t, controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers()))
+	body := strings.NewReader(`{"metadata":{"name":"` + strings.Repeat("x", 1<<20) + `"}}`)
+	resp := ta.Post("/apis/funcd.io/v1alpha1/namespaces/my-ns/functions", "Content-Type: application/json", body)
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d: %.300s", resp.Code, resp.Body.String())
+	}
+	if ct := resp.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Errorf("want application/problem+json, got %q", ct)
+	}
+	var p fault.Problem
+	if err := json.Unmarshal(resp.Body.Bytes(), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != "urn:funcd:problem:payload-too-large" || p.Title != "Content Too Large" || p.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want funcd's payload-too-large problem, got %+v", p)
+	}
+}

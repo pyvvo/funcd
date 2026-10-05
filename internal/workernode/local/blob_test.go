@@ -151,3 +151,14 @@ func TestScenarioBlobAuthzDenied(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, do(t, hRead, http.MethodGet, "/blob/b/k?sign=1&method=PUT", "").Code, "a PUT-sign needs s3::write")
 	require.Equal(t, http.StatusOK, do(t, hRead, http.MethodGet, "/blob/b/k?sign=1", "").Code, "a GET-sign needs only s3::read")
 }
+
+// scenario: blob-over-bucket-object-cap — a context.blob.put of 17 bytes into a Bucket with maxObjectBytes 16
+// answers 413 naming the cap and stores nothing (ADR-0148).
+func TestScenarioBlobOverBucketObjectCap(t *testing.T) {
+	inner := newBlobMapBucket()
+	h := blobHandler(t, "default", s3TestPDP{readOK: true, writeOK: true}, iblob.Capped(inner, 16))
+
+	requireProblem(t, do(t, h, http.MethodPut, "/blob/b/big.bin", strings.Repeat("x", 17)), http.StatusRequestEntityTooLarge, payloadTooLarge, "maxObjectBytes (16)")
+	require.Empty(t, inner.m, "nothing is stored")
+	require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/blob/b/ok.bin", strings.Repeat("x", 16)).Code)
+}

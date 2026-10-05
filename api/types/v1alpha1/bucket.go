@@ -23,7 +23,7 @@ type BucketSpec struct {
 	// single-writer Owner. Prefix names are unique within the bucket (so a prefix has exactly one owner
 	// by construction). Empty ⇒ a bucket with no writable sub-domains.
 	Prefixes []BucketPrefix `json:"prefixes"`
-	// MaxObjectBytes is the per-object resource policy on THIS bucket (a write past it ⇒ Forbidden);
+	// MaxObjectBytes is the per-object resource policy on THIS bucket (a write past it ⇒ PayloadTooLarge);
 	// 0 ⇒ unset (no per-bucket cap; the daemon-wide s3gateway.maxUploadBytes still applies).
 	MaxObjectBytes int64 `json:"maxObjectBytes,omitempty" minimum:"0"`
 }
