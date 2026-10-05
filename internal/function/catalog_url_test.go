@@ -32,6 +32,7 @@ import (
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
 // allowCatalogQuery is a PDP that allows every catalog::query, so the scenarios test the URL, not the policy.
@@ -273,9 +274,13 @@ func requireDialRefused(t *testing.T, url string) {
 	require.True(t, errors.Is(err, syscall.ECONNREFUSED), "the listener at %s is closed, got %v", url, err)
 }
 
-// readyPair applies lake and reader and brings both to Ready in run r; it returns reader's URL and token.
+// readyPair applies lake and reader and brings both to Ready in run r; it returns reader's URL and token. lake's
+// listener is bound first on a freeport port: the tests that free it and bind or dial it again would lose an ephemeral
+// one to another test process's :0 bind (#758).
 func readyPair(t *testing.T, r *catalogRun) (url, token string) {
 	t.Helper()
+	_, _, err := r.mgr.Listen("default", "lake", freeport.Port(t))
+	require.NoError(t, err)
 	r.w.applyCatalog(t)
 	r.w.applyFunction(t, "reader", true)
 	r.catalogUntilReady(t)

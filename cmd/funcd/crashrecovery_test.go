@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -157,13 +159,11 @@ func pidsOf(entries []procreg.Entry) []int {
 	return out
 }
 
+// freeAddr returns a free freeport address: the restarted daemon binds it again, and another test process's :0 bind
+// could take an ephemeral one in between (#758).
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return addr
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(freeport.Port(t)))
 }
 
 // scenario: crash-restart-leaves-desired-workers — a daemon killed with SIGKILL and restarted on the same data dir
