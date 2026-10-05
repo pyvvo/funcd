@@ -433,6 +433,10 @@ func (b *brokenSockets) SocketFor(_ v1.NamespaceName, name v1.ObjectName) (strin
 	return "/run/test/" + string(name) + ".sock", nil
 }
 
+func (b *brokenSockets) PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, _ []v1.ObjectName) (string, error) {
+	return b.SocketFor(ns, pool)
+}
+
 func (*brokenSockets) Remove(v1.NamespaceName, v1.ObjectName) {}
 
 // Issue #358: a local API socket that cannot be provisioned keeps the Function from going Ready, with a reason naming

@@ -96,24 +96,28 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 
 	t.Run("no-secrets-returns-nil", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{})
-		env, err := r.resolveBindingEnv(context.Background(), sampleFn(), false)
+		env, err := r.resolveBindingEnv(context.Background(), sampleFn())
 		require.NoError(t, err)
 		require.Nil(t, env)
 	})
 	t.Run("not-configured-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, nil) // no resolver wired
-		_, err := r.resolveBindingEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn)
 		require.Error(t, err)
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	})
 	t.Run("pooled-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{env: map[string]string{"API_KEY": "x"}})
-		_, err := r.resolveBindingEnv(context.Background(), fn, true) // pooled
-		require.Error(t, err, "a pooled function cannot inject secrets into its shared worker")
+		pooled := sampleFn()
+		pooled.Spec.Secrets = []v1.ObjectName{"api-creds"}
+		pooled.Spec.Pooling.Worker = "agents"
+		env, err := r.resolveBindingEnv(context.Background(), pooled)
+		require.NoError(t, err, "a pooled member resolves its secrets like a solo one")
+		require.Equal(t, "x", env["API_KEY"])
 	})
 	t.Run("resolver-error-propagates", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{err: fault.Forbiddenf("test", "denied")})
-		_, err := r.resolveBindingEnv(context.Background(), fn, false)
+		_, err := r.resolveBindingEnv(context.Background(), fn)
 		require.Error(t, err)
 		require.Equal(t, fault.Forbidden, fault.KindOf(err))
 	})

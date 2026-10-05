@@ -36,7 +36,7 @@ func TestScenarioConfigInjectsEnv(t *testing.T) {
 	r := newShimReconciler(t, nil) // config needs no secret resolver
 	createCM(t, r, "default", "tuning", map[string]string{"DUCKDB_THREADS": "4"})
 
-	env, err := r.resolveBindingEnv(context.Background(), configFn("tuning"), false)
+	env, err := r.resolveBindingEnv(context.Background(), configFn("tuning"))
 	require.NoError(t, err)
 	require.Equal(t, "4", env["DUCKDB_THREADS"], "the ConfigMap value is injected as env")
 
@@ -53,7 +53,7 @@ func TestScenarioConfigThenSecretOrder(t *testing.T) {
 
 	fn := configFn("tuning")
 	fn.Spec.Secrets = []v1.ObjectName{"creds"}
-	env, err := r.resolveBindingEnv(context.Background(), fn, false)
+	env, err := r.resolveBindingEnv(context.Background(), fn)
 	require.NoError(t, err)
 	require.Equal(t, "from-secret", env["SHARED"], "the secret overrides the config default (config-then-secret)")
 	require.Equal(t, "c", env["ONLY_CFG"], "a config-only key survives")
@@ -64,29 +64,33 @@ func TestScenarioConfigThenSecretOrder(t *testing.T) {
 func TestScenarioConfigMissingFailsClosed(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	_, err := r.resolveBindingEnv(context.Background(), configFn("nope"), false)
+	_, err := r.resolveBindingEnv(context.Background(), configFn("nope"))
 	require.Error(t, err)
 	require.True(t, errors.Is(err, envresolve.ErrConfig), "a missing ConfigMap is a config-side failure")
 	require.False(t, errors.Is(err, envresolve.ErrSecret))
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "the underlying store NotFound kind survives")
 }
 
-// scenario: pooled-config-solo-gated — a pooled function declaring spec.config (no secrets) fails
-// closed: per-function env can't isolate in a shared pooled worker (the gate flips to config-OR-secrets).
+// scenario: pooled-config-solo-gated — a pooled function declaring spec.config and spec.secrets resolves both like a
+// solo one: each member's own pass resolves its bindings, with no pooled gate.
 func TestScenarioPooledConfigSoloGated(t *testing.T) {
 	t.Parallel()
-	r := newShimReconciler(t, nil)
+	r := newShimReconciler(t, fakeResolver{env: map[string]string{"TOKEN": "s"}})
 	createCM(t, r, "default", "tuning", map[string]string{"DUCKDB_THREADS": "4"})
-	_, err := r.resolveBindingEnv(context.Background(), configFn("tuning"), true) // pooled
-	require.Error(t, err, "a pooled config-only function is gated closed")
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	fn := configFn("tuning")
+	fn.Spec.Pooling.Worker = "agents"
+	fn.Spec.Secrets = []v1.ObjectName{"creds"}
+	env, err := r.resolveBindingEnv(context.Background(), fn)
+	require.NoError(t, err, "a pooled member resolves its config and secrets")
+	require.Equal(t, "4", env["DUCKDB_THREADS"])
+	require.Equal(t, "s", env["TOKEN"])
 }
 
 // A config-only function with neither config nor secrets still returns (nil, nil) — no gate trips.
 func TestBindingEnvEmptyReturnsNil(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	env, err := r.resolveBindingEnv(context.Background(), sampleFn(), false)
+	env, err := r.resolveBindingEnv(context.Background(), sampleFn())
 	require.NoError(t, err)
 	require.Nil(t, env)
 }

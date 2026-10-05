@@ -56,8 +56,9 @@ type FunctionSpec struct {
 	// invokes only: links and steps keep their own limits (ADR-0151).
 	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"3600000000000"`
 	// Pooling is the per-function worker-pooling opt-in (ADR-0046, F28). Empty ⇒ solo (own
-	// worker, the default). Functions sharing (namespace, runtime, Pooling.Worker) co-locate
-	// as handlers in one worker_threads pool worker.
+	// worker, the default). Functions sharing (namespace, runtime, Pooling.Worker) and the same
+	// access (bindings, owned data, grants) co-locate as handlers in one pool worker; status.pool
+	// names it.
 	Pooling Pooling `json:"pooling,omitempty"`
 	// Secrets names the Secret resources in this function's namespace whose Data is injected
 	// into the worker as env vars at materialization (ADR-0057, F15 last mile). Each named
@@ -71,8 +72,7 @@ type FunctionSpec struct {
 	// NON-sensitive config (a plain store read, no PDP). Config is merged BEFORE Secrets, so a
 	// bound Secret overrides a config default. Reserved FUNCD_* keys are never overridable.
 	// Empty ⇒ no config injection. Fails closed (not Ready, ConfigResolveFailed) if a named
-	// ConfigMap is missing. Pooled functions may not declare Config (per-function env can't
-	// isolate in a shared worker) — same gate as Secrets.
+	// ConfigMap is missing.
 	Config []ObjectName `json:"config,omitempty"`
 	// Links declares synchronous fn-to-fn RPC dependencies (ADR-0064, F33): each binds a local
 	// alias to a target Function in this namespace, callable from the handler as
@@ -181,6 +181,8 @@ type FunctionStatus struct {
 	// the time of that switch (ADR-0143); both are cleared together.
 	DrainingRevision string     `json:"drainingRevision,omitempty"`
 	DrainingSince    *time.Time `json:"drainingSince,omitempty"`
+	// Pool is the pool worker a pooled Function runs in, "<runtime>/<worker>/<access>"; empty when solo.
+	Pool string `json:"pool,omitempty"`
 }
 
 // GroupVersionKind returns the constant GVK for Function.

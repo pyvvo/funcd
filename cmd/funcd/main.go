@@ -838,7 +838,8 @@ func processShimOptions(ctx context.Context, cfg config.Config, logger *slog.Log
 	if werr := os.WriteFile(poolPath, shimnode.Pool, 0o600); werr != nil {
 		return nil, fmt.Errorf("extract pool shim to %s: %w", poolPath, werr)
 	}
-	opts = append(opts, funcd.WithRuntimeShim(node, shimPath), funcd.WithPoolShim(node, poolPath))
+	opts = append(opts, funcd.WithRuntimeShim(node, shimPath), funcd.WithPoolShim(node, poolPath),
+		funcd.WithPoolManifestDir(filepath.Join(cfg.Storage.DataDir, "pool")))
 
 	// Optional second curated language — the Python shim (ADR-0049). If a python3 is present and can
 	// import the extracted shim package (it needs Python ≥3.12 and fastjsonschema, ADR-0123), register

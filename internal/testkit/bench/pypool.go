@@ -129,6 +129,10 @@ func MeasurePythonPool(ctx context.Context, python, soloEntry, poolHostEntry str
 	if err != nil {
 		return PyPoolComparison{}, err
 	}
+	if err := waitPoolMembers(ctx, poolPort); err != nil {
+		stopShim(poolCmd)
+		return PyPoolComparison{}, err
+	}
 	time.Sleep(500 * time.Millisecond) // let the K subinterpreters settle before sampling RSS
 	rss := rssMB(poolCmd.Process.Pid)
 	// Spread the load ACROSS the K handlers (one in-flight each) — the realistic pool workload (many

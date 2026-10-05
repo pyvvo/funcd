@@ -72,6 +72,7 @@ type wireRecord struct {
 	TraceID string            `json:"trace_id"`
 	SpanID  string            `json:"span_id"`
 	Source  string            `json:"funcd.source"`
+	Member  string            `json:"funcd.member"` // the pooled Function that wrote it; empty from a solo worker
 }
 
 // ndjsonReader decodes Path B: one JSON record per line.

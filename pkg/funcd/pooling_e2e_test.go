@@ -116,7 +116,7 @@ func (h *poolHarness) phase(t *testing.T, name string) v1.Phase {
 }
 
 // poolWorkers counts the running pool worker processes (instances whose synthetic name is
-// prefixed "__pool__"); one per (namespace, runtime, worker-id).
+// prefixed "__pool__"); one per (namespace, runtime, worker-id, access).
 func (h *poolHarness) poolWorkers(t *testing.T) int {
 	t.Helper()
 	insts, err := h.rt.List(context.Background(), "default")
@@ -285,9 +285,9 @@ func (h *poolHarness) poolWorkerPID(t *testing.T, worker string) int {
 	t.Helper()
 	insts, err := h.rt.List(context.Background(), "default")
 	require.NoError(t, err)
-	want := "__pool__nodejs22__" + worker
+	want := "__pool__nodejs22__" + worker + "__"
 	for _, in := range insts {
-		if string(in.Name) == want && in.State == runtime.StateRunning {
+		if strings.HasPrefix(string(in.Name), want) && in.State == runtime.StateRunning {
 			return in.PID
 		}
 	}

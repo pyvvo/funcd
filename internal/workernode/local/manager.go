@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -21,7 +22,8 @@ import (
 // Manager provisions one per-function worker-node local API listener (ADR-0064), lazily and
 // idempotently: SocketFor(ns, name) ensures a UDS listener for that caller is serving and returns
 // its path — the reconciler sets it as FUNCD_INVOKE_SOCKET so the caller's shim can dial
-// context.invoke. The caller Ref is fixed per listener (connection-scoped identity). Close() stops
+// context.invoke. The caller Ref is fixed per listener (connection-scoped identity); a pool worker's
+// listener (PoolSocketFor) serves each request as the pool member it names in MemberHeader. Close() stops
 // every listener. This is the same-node (process/containerd) provisioning; the V2 multi-node lattice
 // is a transport swap behind the Invoker.
 type Manager struct {
@@ -38,16 +40,20 @@ type Manager struct {
 	serves sync.WaitGroup // one per srv.Serve goroutine; Close waits for them (issue #433)
 	mu     sync.Mutex
 	closed bool
-	active map[string]*serving // "ns/name" → its listener
+	active map[string]*serving // "ns/name" (a Function or a pool worker) → its listener
 }
 
-// serving is one function's running local API listener.
+// serving is one function's or one pool worker's running local API listener.
 type serving struct {
-	path   string
-	srv    *http.Server
-	cancel context.CancelFunc // closes srv
-	done   chan struct{}      // closed once srv.Serve returns, so its listener is closed
+	path    string
+	srv     *http.Server
+	cancel  context.CancelFunc // closes srv
+	done    chan struct{}      // closed once srv.Serve returns, so its listener is closed
+	members *poolMembers       // nil for a single function's listener
 }
+
+// MemberHeader names, on every request to a pool worker's local API, the pool member it is made for.
+const MemberHeader = "X-Funcd-Member"
 
 // NewManager builds a Manager serving sockets under dir. invoker is the (possibly late-bound)
 // data-plane forwarder; store backs link resolution; authz (nil-able) is the invoke PDP (ADR-0075)
@@ -77,23 +83,104 @@ func (m *Manager) SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, er
 	if s, ok := m.active[key]; ok {
 		return s.path, nil
 	}
+	s, err := m.bind(op, key, m.handlerFor(Ref{Namespace: ns, Function: name}), nil)
+	if err != nil {
+		return "", err
+	}
+	return s.path, nil
+}
+
+// PoolSocketFor ensures the local API of the pool worker named pool is serving and returns its socket
+// path, which every member's process shares. A request naming one of members in MemberHeader is served
+// as that member's Ref, as its own SocketFor listener would serve it (invoke, KV, blob); any other
+// request, one with no MemberHeader included, is refused 403 before any port is called. A repeated call
+// keeps the path and replaces the member set, as members join and leave the pool. Remove(ns, pool) stops it.
+func (m *Manager) PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error) {
+	const op = "workernode.local.PoolSocketFor"
+	key := string(ns) + "/" + string(pool)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return "", fault.Unavailablef(op, "the local API manager is closed")
+	}
+	if s, ok := m.active[key]; ok {
+		if s.members == nil {
+			return "", fault.Conflictf(op, "%s is a function's local API, not a pool's", key)
+		}
+		s.members.set(ns, members, m.handlerFor)
+		return s.path, nil
+	}
+	pm := &poolMembers{key: key, logger: m.logger}
+	pm.set(ns, members, m.handlerFor)
+	s, err := m.bind(op, key, pm, pm)
+	if err != nil {
+		return "", err
+	}
+	return s.path, nil
+}
+
+// handlerFor builds the local API handler that serves caller.
+func (m *Manager) handlerFor(caller Ref) http.Handler {
+	return NewHandler(caller, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
+}
+
+// bind starts serving h on key's socket and records it in active. The caller holds mu.
+func (m *Manager) bind(op, key string, h http.Handler, members *poolMembers) (*serving, error) {
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "create socket dir %q", m.dir)
+		return nil, fault.Wrapf(err, fault.Unavailable, op, "create socket dir %q", m.dir)
 	}
 	path := filepath.Join(m.dir, sockName(key))
-	h := NewHandler(Ref{Namespace: ns, Function: name}, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
 	sctx, scancel := context.WithCancel(m.ctx) // child of m.ctx: cancelled by Remove OR Close
 	ln, srv, err := listen(sctx, op, path, h, m.logger)
 	if err != nil {
 		scancel()
-		return "", err
+		return nil, err
 	}
-	s := &serving{path: path, srv: srv, cancel: scancel, done: make(chan struct{})}
+	s := &serving{path: path, srv: srv, cancel: scancel, done: make(chan struct{}), members: members}
 	m.active[key] = s
 	m.serves.Add(1)
 	go m.serve(key, s, func() error { return srv.Serve(ln) })
 	m.logger.Debug("serving worker-node local API", "function", key, "socket", path)
-	return path, nil
+	return s, nil
+}
+
+// poolMembers serves a pool worker's local API: each request as the member it names. The member set is
+// swapped whole, so a request reads one consistent set without taking Manager.mu.
+type poolMembers struct {
+	key      string
+	logger   *slog.Logger
+	handlers atomic.Pointer[map[v1.ObjectName]http.Handler]
+}
+
+// set replaces the member set, keeping the handler of a member that stays. The caller holds Manager.mu.
+func (p *poolMembers) set(ns v1.NamespaceName, members []v1.ObjectName, build func(Ref) http.Handler) {
+	prev := p.handlers.Load()
+	next := make(map[v1.ObjectName]http.Handler, len(members))
+	for _, name := range members {
+		if prev != nil {
+			if h, ok := (*prev)[name]; ok {
+				next[name] = h
+				continue
+			}
+		}
+		next[name] = build(Ref{Namespace: ns, Function: name})
+	}
+	p.handlers.Store(&next)
+}
+
+func (p *poolMembers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	names := r.Header.Values(MemberHeader)
+	var h http.Handler
+	if len(names) == 1 && names[0] != "" {
+		h = (*p.handlers.Load())[v1.ObjectName(names[0])]
+	}
+	if h == nil {
+		p.logger.Warn("local API call refused: no pool member named", "pool", p.key, "member", names)
+		fault.WriteProblem(w, fault.Forbiddenf("workernode.local.pool",
+			"the request must name one member of pool %s in %s", p.key, MemberHeader))
+		return
+	}
+	h.ServeHTTP(w, r)
 }
 
 // serve runs s's server (srv.Serve on its listener) until it stops. A stop other than Close or Remove is
@@ -115,10 +202,11 @@ func (m *Manager) serve(key string, s *serving, run func() error) {
 	s.cancel()
 }
 
-// Remove stops + deletes the local API listener for (ns, name), if any — called when the Function is
-// deleted, so the socket lifecycle tracks the resource (controller-driven, not leaked). It returns once
-// the listener is closed: closing a Unix listener unlinks its path, which a Function re-created under the
-// same name binds again (issue #491). It holds mu until then, so a concurrent SocketFor binds after it.
+// Remove stops + deletes the local API listener for (ns, name), a Function's or a pool worker's, if any —
+// called when the Function or the pool is deleted, so the socket lifecycle tracks the resource
+// (controller-driven, not leaked). It returns once the listener is closed: closing a Unix listener unlinks
+// its path, which a Function re-created under the same name binds again (issue #491). It holds mu until
+// then, so a concurrent SocketFor binds after it.
 func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {
 	key := string(ns) + "/" + string(name)
 	m.mu.Lock()

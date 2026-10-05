@@ -15,6 +15,7 @@ import (
 
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -88,11 +89,20 @@ func TestOpenWorkersServeWithTheInstanceToken(t *testing.T) {
 				port = got.Port
 				return serr == nil && port > 0
 			}, 20*time.Second, 20*time.Millisecond, "the shim listens")
-			resp, err := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+path, "application/json", strings.NewReader(`{}`))
-			require.NoError(t, err)
-			body, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			require.Equal(t, http.StatusOK, resp.StatusCode, "%s", body)
+			// A pool host listens before its members finish loading, so the first calls may find the member loading.
+			var status int
+			var body []byte
+			assert.Eventually(t, func() bool {
+				resp, perr := http.Post("http://127.0.0.1:"+strconv.Itoa(port)+path, "application/json", strings.NewReader(`{}`))
+				if perr != nil {
+					return false
+				}
+				body, _ = io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				status = resp.StatusCode
+				return status == http.StatusOK
+			}, 20*time.Second, 20*time.Millisecond, "the shim serves")
+			require.Equal(t, http.StatusOK, status, "%s", body)
 
 			b, err := os.ReadFile(filepath.Join(state, "workers.json"))
 			require.NoError(t, err)

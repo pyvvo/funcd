@@ -10,8 +10,10 @@ package function
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -60,6 +62,9 @@ type ShapeValidator interface {
 // nil ⇒ fn-to-fn links are off (the env var is unset; invoke fails closed in the shim).
 type InvokeSocketProvider interface {
 	SocketFor(ns v1.NamespaceName, name v1.ObjectName) (string, error)
+	// PoolSocketFor provisions the one local API socket of pool worker `pool`, on which each call names its member;
+	// members is the set it serves, replaced on every call.
+	PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members []v1.ObjectName) (string, error)
 	// Remove stops + deletes the function's local API listener (called from teardown on delete, so
 	// the socket lifecycle tracks the Function resource — controller-driven, not leaked).
 	Remove(ns v1.NamespaceName, name v1.ObjectName)
@@ -109,6 +114,9 @@ type Deps struct {
 	PoolShimsByFamily map[string][]string
 	// PoolLimit caps handlers per pool worker (ADR-0046 Decision 3); 0 ⇒ the default (16).
 	PoolLimit int
+	// PoolManifestDir holds the pool workers' manifests, which carry member credentials: a 0700 dir funcd owns,
+	// emptied by NewReconciler. Empty ⇒ a private temp dir NewReconciler creates and Close removes.
+	PoolManifestDir string
 
 	// Secrets resolves a function's bound Secret names → an env-var map injected into the
 	// worker (ADR-0057, F15 last mile). nil ⇒ secret injection disabled: a function declaring
@@ -262,6 +270,13 @@ type Reconciler struct {
 	// reconciles of sibling members of the same pool.
 	poolMu   sync.Mutex
 	poolSigs map[pooling.PoolKey]string
+	// poolSets is each pool worker's member set ("ns/worker" → names), recorded before it is created; poolLive is when
+	// each pool worker last answered its liveness. Both guarded by poolMu.
+	poolSets map[string][]v1.ObjectName
+	poolLive map[pooling.PoolKey]time.Time
+	// poolManifestDir holds the pool manifests; ownManifestDir is set when NewReconciler created it, for Close.
+	poolManifestDir string
+	ownManifestDir  bool
 
 	// supervisionPeriod is the steady-state requeue and the replacement backoff (ADR-0142).
 	supervisionPeriod time.Duration
@@ -322,6 +337,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	manifestDir, ownManifestDir, err := preparePoolManifestDir(d.PoolManifestDir)
+	if err != nil {
+		return nil, err
+	}
 	limit := d.PoolLimit
 	if limit <= 0 {
 		limit = defaultPoolLimit
@@ -366,6 +385,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolShimsByFamily:   d.PoolShimsByFamily,
 		poolLimit:           limit,
 		poolSigs:            map[pooling.PoolKey]string{},
+		poolSets:            map[string][]v1.ObjectName{},
+		poolLive:            map[pooling.PoolKey]time.Time{},
+		poolManifestDir:     manifestDir,
+		ownManifestDir:      ownManifestDir,
 		supervisionPeriod:   period,
 		boot:                newBootBackoff(bootInitial, bootMax, logger.With("component", "function")),
 		calls:               d.Calls,
@@ -406,6 +429,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// all run, the pass writes nothing and comes back after the supervision period.
 	if r.steadyState(ctx, fn) {
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
+	}
+
+	// status.pool names the pool fn's access puts it in, before any gate; a key that moved leaves its old pool to
+	// reclaim once no Function has that key.
+	var idx accessIndex
+	if r.pooled(fn) {
+		if idx, err = r.accessIn(ctx, fn.Namespace); err != nil {
+			return controller.Result{}, err
+		}
+	}
+	pool := ""
+	if key, ok := r.poolKeyFor(fn, idx); ok {
+		pool = key.String()
+	}
+	if pool != fn.Status.Pool {
+		fn.Status.Pool = pool
+		if err := r.reclaimOrphanPools(ctx, fn.Namespace); err != nil {
+			return controller.Result{}, err
+		}
 	}
 
 	// ADR-0143 Decision 4.1: drain a demoted revision and retire revisions that never served, before the gates, so a
@@ -463,7 +505,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// joins a shared pool worker by (namespace, runtime, worker-id). A REJECTED (over-cap)
 	// member is held NotReady with a PoolFull condition and gets no worker and no route; it
 	// comes back on the supervision period, since a slot frees without a write to its object.
-	assign, err := r.assign(ctx, fn)
+	assign, err := r.assign(ctx, fn, idx)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -478,13 +520,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 
 	// 3c. secret injection gate (ADR-0057, F15 last mile): resolve the function's bound secrets
 	// into an env map BEFORE provisioning any worker. A PDP-deny / missing Secret / unconfigured
-	// resolver / pooled function fails the function CLOSED (not Ready, SecretResolveFailed, no
-	// worker) — never a worker started with the secret absent. Mirrors the artifact-unresolved gate.
-	secretEnv, serr := r.resolveBindingEnv(ctx, fn, assign.Pooled)
+	// resolver fails the function CLOSED (not Ready, SecretResolveFailed, no worker) — never a worker
+	// started with the secret absent. A pooled member resolves its own, like a solo one.
+	secretEnv, serr := r.resolveBindingEnv(ctx, fn)
 	if serr != nil {
 		// Side-attributed reason (ADR-0093 §4): a config-side failure (missing ConfigMap) reports
-		// ConfigResolveFailed; every other case (secret PDP-deny / missing / unconfigured, or the
-		// pooled gate) reports SecretResolveFailed. One envresolve.ResolveEnv call, two reasons.
+		// ConfigResolveFailed; every other case (secret PDP-deny / missing / unconfigured) reports
+		// SecretResolveFailed. One envresolve.ResolveEnv call, two reasons.
 		reason := "SecretResolveFailed"
 		if errors.Is(serr, envresolve.ErrConfig) {
 			reason = "ConfigResolveFailed"
@@ -529,7 +571,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// revision, moving the calls from the serving revision to the current one once it is ready (ADR-0143).
 	var v verdict
 	if assign.Pooled {
-		v, err = r.convergePooled(ctx, fn, assign)
+		v, err = r.convergePooled(ctx, fn, assign, secretEnv, catalogEnv, idx)
 	} else {
 		v, err = r.convergeSolo(ctx, fn, pinned, secretEnv, catalogEnv)
 		if errors.Is(err, runtime.ErrImageUnavailable) {
@@ -631,7 +673,7 @@ type verdict struct {
 	// replica count M.
 	currentCrashLoop string
 	desired          int
-	pooled           bool // the verdict is a pooled member's (ADR-0046)
+	pooled           bool // a pooled member, judged on its pool host's /health/members (ADR-0046)
 }
 
 // holdsFailed reports whether a pass that started Failed leaves the status as read (ADR-0169): no worker of the judged
@@ -771,6 +813,9 @@ func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 		}
 		return r.supervisionPeriod
 	}
+	if v.pooled && v.crashLoop != "" { // a member whose load timed out stays failed until its pool's next start
+		return max(v.retryAt.Sub(now), time.Millisecond)
+	}
 	switch phase {
 	case v1.PhaseDeploying: // shim booting — re-poll readiness soon; a replica in its backoff — at its deadline
 		if v.running == 0 && !v.retryAt.IsZero() {
@@ -837,7 +882,7 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if rc, ok := fn.Status.Conditions.Get(condReady); ok && rc.Reason != "" {
 		return false
 	}
-	if _, pooled := r.poolKeyFor(fn); pooled {
+	if r.pooled(fn) {
 		return false
 	}
 	c := fn.Status.CurrentRevision
@@ -1556,7 +1601,11 @@ func (r *Reconciler) upstreamForFn(ctx context.Context, fn *v1.Function) string 
 	// poolKeyFor already gates on a pool host existing for the runtime family (ADR-0050), so route
 	// to the shared pool worker whenever it returns a key — NOT only for the node poolShimCommand
 	// (a python* pool has only a python host configured, so a node-host check would mis-route it solo).
-	if key, ok := r.poolKeyFor(fn); ok {
+	if r.pooled(fn) {
+		key, ok := pooling.ParsePool(fn.Namespace, fn.Status.Pool)
+		if !ok {
+			return ""
+		}
 		return r.upstreamOf(ctx, fn.Namespace, poolInstanceName(key), "")
 	}
 	return r.upstreamOf(ctx, fn.Namespace, fn.Name, servingRevision(fn))
@@ -1696,10 +1745,12 @@ func (r *Reconciler) loadError(ctx context.Context, id runtime.InstanceID) strin
 // notReadyError is why a replica that ran for bootTimeout without becoming ready failed.
 func notReadyError() string { return "the handler did not become ready within " + bootTimeout.String() }
 
-// The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044).
+// The health endpoints a shim and a pool host serve (ADR-0030 §4b, ADR-0044); a pool host also reports each
+// member's state.
 const (
 	readinessPath = "/health/readiness"
 	livenessPath  = "/health/liveness"
+	membersPath   = "/health/members"
 )
 
 // probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
@@ -1719,6 +1770,30 @@ func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path s
 	}
 	defer httpx.CloseBody(resp.Body)
 	return resp.StatusCode == http.StatusOK
+}
+
+// probeMembers issues GET /health/members against a pool host and decodes its 200 answer.
+func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) ([]memberHealth, bool) {
+	host := ip
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(pctx, http.MethodGet, fmt.Sprintf("http://%s:%d%s", host, port, membersPath), nil)
+	if err != nil {
+		return nil, false
+	}
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer httpx.CloseBody(resp.Body)
+	var members []memberHealth
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&members) != nil {
+		return nil, false
+	}
+	return members, true
 }
 
 // Endpoints returns the production activator.Endpoints (the seam ADR-0016 deferred to P-M):
@@ -1744,7 +1819,7 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 		return "", false, nil
 	}
 	up := e.r.upstreamForFn(ctx, f)
-	if _, pooled := e.r.poolKeyFor(f); pooled && up != "" {
+	if e.r.pooled(f) && up != "" {
 		up += "/function/" + string(f.Name)
 	}
 	ready := f.Status.Phase == v1.PhaseReady && up != ""
@@ -1796,7 +1871,7 @@ func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 		if r.shimFor(rt) != nil {
 			return "", false
 		}
-		if _, pooled := r.poolKeyFor(fn); pooled {
+		if r.pooled(fn) {
 			return "", false
 		}
 		cause = "no shim is registered for it"

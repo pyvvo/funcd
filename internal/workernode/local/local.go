@@ -1,7 +1,8 @@
 // Package local is the per-sandbox worker-node local API (ADR-0064): an HTTP-over-UDS surface the
 // runtime shim calls for the synchronous fn-to-fn invoke verb (context.invoke). One listener per
 // sandbox; the caller Ref is fixed at provisioning, so identity is connection-scoped — a request
-// body can never name a different caller. No published SDK — reached only through the built-in shim.
+// body can never name a different caller. A pool worker's listener serves the pool's members, each
+// request as the member it names in the X-Funcd-Member header. No published SDK — reached only through the built-in shim.
 //
 // It nests under the blueprint's internal/workernode node-agent component.
 package local

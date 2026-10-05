@@ -2,7 +2,9 @@ package function_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -59,6 +61,8 @@ type fakeRuntime struct {
 	exits     map[runtime.InstanceID]runtime.Exit
 	listened  map[runtime.InstanceID]bool
 	startExit map[runtime.InstanceID]runtime.Exit
+	// memberStates overrides a pool member's /health/members entry (state, error); every other member reads ready.
+	memberStates map[string][2]string
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -75,7 +79,54 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		listened:  map[runtime.InstanceID]bool{},
 		startExit: map[runtime.InstanceID]runtime.Exit{},
 		imageErr:  map[string]error{},
+
+		memberStates: map[string][2]string{},
 	}
+}
+
+// setMember sets the /health/members entry of pool member name.
+func (f *fakeRuntime) setMember(name, state, errText string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.memberStates[name] = [2]string{state, errText}
+}
+
+// serveMembers answers a pool host's GET /health/members: every member of the pool manifests the fake runs, ready
+// unless setMember says otherwise.
+func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
+	f.mu.Lock()
+	var paths []string
+	for _, s := range f.specs {
+		if p := s.Env["FUNCD_POOL_MANIFEST"]; p != "" {
+			paths = append(paths, p)
+		}
+	}
+	states := maps.Clone(f.memberStates)
+	f.mu.Unlock()
+	out := []map[string]string{}
+	seen := map[string]bool{}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var rows []struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(data, &rows)
+		for _, row := range rows {
+			if seen[row.Name] {
+				continue
+			}
+			seen[row.Name] = true
+			e := map[string]string{"name": row.Name, "state": "ready"}
+			if st, ok := states[row.Name]; ok {
+				e["state"], e["error"] = st[0], st[1]
+			}
+			out = append(out, e)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
@@ -257,6 +308,10 @@ func (f *fakeRuntime) serveRevision(t *testing.T, rev v1.ObjectName, status int)
 		mu.Lock()
 		code := cur
 		mu.Unlock()
+		if r.URL.Path == "/health/members" {
+			f.serveMembers(w)
+			return
+		}
 		if r.URL.Path == "/health/readiness" {
 			w.WriteHeader(code)
 			return
@@ -350,7 +405,12 @@ type shimHarness struct {
 
 func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...func(*function.Deps)) *shimHarness {
 	t.Helper()
+	var rt *fakeRuntime
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health/members" {
+			rt.serveMembers(w)
+			return
+		}
 		if r.URL.Path == "/health/readiness" {
 			w.WriteHeader(readyStatus)
 			return
@@ -367,7 +427,7 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	require.NoError(t, os.WriteFile(artifact, []byte("export function handle() {}\n"), 0o600))
 
 	st := store.New(memory.New())
-	rt := newFakeRuntime(host, port)
+	rt = newFakeRuntime(host, port)
 	rt.failed = runtimeFailed
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)

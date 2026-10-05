@@ -30,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -40,11 +41,12 @@ import (
 
 // shimRig is an embedded platform on the process driver that runs functions on the embedded language shims,
 // solo and pooled, pulled from an OCI layout with the contract `funcdctl push` stores. It holds the blob
-// bucket the captured function logs land in and counts the host's unreadable-record warnings.
+// bucket the captured function logs land in, the runtime, and counts the host's unreadable-record warnings.
 type shimRig struct {
 	c          *sdk.Client
 	dp         string
 	bucket     blob.Bucket
+	rt         runtime.Runtime
 	layout     string
 	unreadable *atomic.Int64
 }
@@ -52,6 +54,27 @@ type shimRig struct {
 // newShimRig boots the rig with the Node shims and, when python is not "", the Python shims for the python*
 // family. Node-gated.
 func newShimRig(t *testing.T, python string, extra ...funcd.Option) *shimRig {
+	t.Helper()
+	h, opts := shimRigBase(t, python)
+	p, err := funcd.New(append(opts, extra...)...)
+	require.NoError(t, err)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("platform Run did not return after cancel")
+		}
+	})
+	h.connect(t, p)
+	return h
+}
+
+// shimRigBase builds a rig's fresh substrate and the options that assemble its platform.
+func shimRigBase(t *testing.T, python string) (*shimRig, []funcd.Option) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -67,11 +90,12 @@ func newShimRig(t *testing.T, python string, extra ...funcd.Option) *shimRig {
 		unreadable: unreadable,
 		next:       slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}),
 	})
+	rt := process.New()
 	opts := []funcd.Option{
 		funcd.WithBlob(bucket),
 		funcd.WithBus(messaging),
 		funcd.WithStore(store.New(memory.New())),
-		funcd.WithRuntime(process.New()),
+		funcd.WithRuntime(rt),
 		funcd.WithGateway(embedded.New()),
 		funcd.WithListenAddr("127.0.0.1:0"),
 		funcd.WithDataPlaneAddr("127.0.0.1:0"),
@@ -89,22 +113,15 @@ func newShimRig(t *testing.T, python string, extra ...funcd.Option) *shimRig {
 			funcd.WithRuntimeShimFor("python", python, shimEntry),
 			funcd.WithPoolShimFor("python", python, poolEntry))
 	}
-	p, err := funcd.New(append(opts, extra...)...)
-	require.NoError(t, err)
-	runCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- p.Run(runCtx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(15 * time.Second):
-			t.Error("platform Run did not return after cancel")
-		}
-	})
+	return &shimRig{bucket: bucket, rt: rt, layout: t.TempDir(), unreadable: unreadable}, opts
+}
+
+// connect points the rig's clients at running platform p.
+func (h *shimRig) connect(t *testing.T, p *funcd.Platform) {
+	t.Helper()
 	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
 	require.NoError(t, err)
-	return &shimRig{c: c, dp: "http://" + p.DataPlaneAddr(), bucket: bucket, layout: t.TempDir(), unreadable: unreadable}
+	h.c, h.dp = c, "http://"+p.DataPlaneAddr()
 }
 
 // shortDataDir is a platform dir outside t.TempDir(), whose macOS path overruns the Unix socket path limit
@@ -174,6 +191,7 @@ type shimFn struct {
 	worker            string
 	timeout           time.Duration
 	links             []v1.FunctionLink
+	change            func(*v1.Function)
 }
 
 func nodeFn(src string) shimFn   { return shimFn{runtime: "nodejs22", ext: ".mjs", src: src} }
@@ -182,6 +200,9 @@ func pythonFn(src string) shimFn { return shimFn{runtime: "python314", ext: ".py
 func (f shimFn) pooled(worker string) shimFn { f.worker = worker; return f }
 
 func (f shimFn) withTimeout(d time.Duration) shimFn { f.timeout = d; return f }
+
+// with sets change to edit the Function before it is applied.
+func (f shimFn) with(change func(*v1.Function)) shimFn { f.change = change; return f }
 
 func (f shimFn) withContract(input, output string) shimFn {
 	f.input, f.output = input, output
@@ -214,6 +235,9 @@ func (h *shimRig) deploy(t *testing.T, name string, f shimFn) {
 	fn.Spec.Pooling.Worker = f.worker
 	fn.Spec.Timeout = f.timeout
 	fn.Spec.Links = f.links
+	if f.change != nil {
+		f.change(fn)
+	}
 	_, err = h.c.Apply(context.Background(), fn)
 	require.NoError(t, err)
 }
