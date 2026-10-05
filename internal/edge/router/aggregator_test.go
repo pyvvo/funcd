@@ -457,3 +457,17 @@ func TestScenario_verdict_restart_stable(t *testing.T) {
 	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "im", "cf"))
 	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "im", "root"))
 }
+
+// "/api" and "/api/" Prefix claims serve the same subtree, so two namespaces claiming them conflict.
+func TestIssue701_TrailingSlashPrefixClaimsSamePath(t *testing.T) {
+	t.Parallel()
+	rtr := router.New()
+	a := router.NewAggregator(rtr, nil, nil, nil)
+
+	v := set(t, a, "routes", fnEntry("a", "x", "/api"), fnEntry("b", "y", "/api/"))
+	require.Empty(t, v[0].Reason, "a/x wins the lexical tie-break")
+	require.Equal(t, "RouteConflict", v[1].Reason, "/api/ claims the same subtree as /api")
+	m, ok := rtr.Resolve("any", "/api/users", "GET")
+	require.True(t, ok)
+	require.Equal(t, v1.ObjectName("x"), m.Function)
+}

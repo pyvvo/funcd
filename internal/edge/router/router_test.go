@@ -137,3 +137,25 @@ func TestHostsAccessor(t *testing.T) {
 	)
 	require.Equal(t, []string{"a.com"}, r.Hosts(), "only distinct non-empty hosts")
 }
+
+// A Prefix rule's trailing slash is not significant: "/api/" roots the same subtree as "/api" and strips
+// the same prefix. An Exact rule keeps its slash.
+func TestIssue701_TrailingSlashPrefixMatchesSubtree(t *testing.T) {
+	r := prog(t, router.Entry{Namespace: "default", Rules: []router.CompiledRule{rule("/api/", false, "api-fn")}})
+	for _, p := range []string{"/api/users", "/api/users/1", "/api", "/api/"} {
+		m, ok := r.Resolve("any", p, "GET")
+		require.True(t, ok, "Prefix /api/ must match %q", p)
+		require.Equal(t, v1.ObjectName("api-fn"), m.Function)
+		require.Equal(t, "/api", m.StripPrefix, "strip for %q", p)
+	}
+	_, ok := r.Resolve("any", "/apix", "GET")
+	require.False(t, ok, "the prefix stays segment-aware")
+
+	ex := prog(t, router.Entry{Namespace: "default", Rules: []router.CompiledRule{rule("/api/", true, "api-fn")}})
+	_, ok = ex.Resolve("any", "/api/", "GET")
+	require.True(t, ok)
+	for _, p := range []string{"/api", "/api/users"} {
+		_, ok = ex.Resolve("any", p, "GET")
+		require.False(t, ok, "Exact /api/ must not match %q", p)
+	}
+}

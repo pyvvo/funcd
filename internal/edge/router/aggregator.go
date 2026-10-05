@@ -297,7 +297,7 @@ func claimKey(host, path string) string { return host + "\x00" + path }
 // method sets that intersect (an empty set is every method). An owner never conflicts with itself.
 func firstConflict(held map[string][]heldClaim, e Entry) (Owner, bool) {
 	for _, r := range e.Rules {
-		for _, h := range held[claimKey(e.Host, r.Path)] {
+		for _, h := range held[claimKey(e.Host, matchedPath(r))] {
 			if h.owner != e.Owner && methodsIntersect(h.methods, r.Methods) {
 				return h.owner, true
 			}
@@ -308,7 +308,7 @@ func firstConflict(held map[string][]heldClaim, e Entry) (Owner, bool) {
 
 func hold(held map[string][]heldClaim, e Entry) {
 	for _, r := range e.Rules {
-		k := claimKey(e.Host, r.Path)
+		k := claimKey(e.Host, matchedPath(r))
 		held[k] = append(held[k], heldClaim{methods: r.Methods, owner: e.Owner})
 	}
 }
