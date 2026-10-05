@@ -34,6 +34,8 @@ type Entry struct {
 	Host      string      // exact; "" matches any host
 	Auth      v1.AuthMode // the Route's edge auth stance (ADR-0113); "" ⇒ inherit the namespace default
 	Rules     []CompiledRule
+	// Owner is the object the entry belongs to; required by the Aggregator, Owner.Namespace equal to Namespace.
+	Owner Owner
 }
 
 // CompiledRule is one path rule ready to match.

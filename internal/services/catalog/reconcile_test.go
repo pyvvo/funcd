@@ -17,7 +17,9 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/route"
 	"github.com/pyvvo/funcd/internal/secrets"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
@@ -609,3 +611,147 @@ func TestIssue77_MissingBindingRecoversWhenApplied(t *testing.T) {
 //   - tenant-isolation              — A's endpoint reading B's bucket → 403 (the F47 keypair, cryptographic).
 //   - arbitrary-url-confined        — a non-funcd URL is refused by the shim lockdown.
 //   - catalog-persists-across-restart — the catalog (loaded from blob) survives a replica restart.
+
+// edgeHarness is a store, a real edge aggregator and router, the Route reconciler and a catalog reconciler with
+// a Ready engine behind a real PEP proxy; NotifyFunc records owners so run can re-run them as the controller does.
+type edgeHarness struct {
+	st       store.Store
+	rtr      router.Router
+	prov     *fakeProvider
+	routes   *route.Reconciler
+	catalogs *catalogsvc.Reconciler
+	notified []router.Owner
+}
+
+func newEdgeHarness(t *testing.T, modes router.ModeFunc) *edgeHarness {
+	t.Helper()
+	h := &edgeHarness{st: store.New(storemem.New()), rtr: router.New()}
+	agg := router.NewAggregator(h.rtr, modes, func(o router.Owner) { h.notified = append(h.notified, o) }, nil)
+	var err error
+	h.routes, err = route.NewReconciler(route.Deps{Store: h.st, Routes: agg})
+	require.NoError(t, err)
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, h.st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	h.prov = &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	h.catalogs = newReconciler(t, h.st, h.prov, func(d *catalogsvc.ReconcilerDeps) {
+		d.Proxy = mgr
+		d.Routes = agg
+	})
+	seedCatalogBucket(t, h.st)
+	return h
+}
+
+// run reconciles req, then every owner the aggregator asked to re-run, until none is left.
+func (h *edgeHarness) run(t *testing.T, req controller.Request) {
+	t.Helper()
+	queue := []controller.Request{req}
+	for len(queue) > 0 {
+		r := queue[0]
+		queue = queue[1:]
+		var err error
+		if r.GVK == v1.KindRoute.GVK() {
+			_, err = h.routes.Reconcile(context.Background(), r)
+		} else {
+			_, err = h.catalogs.Reconcile(context.Background(), r)
+		}
+		require.NoError(t, err)
+		for _, o := range h.notified {
+			queue = append(queue, controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})
+		}
+		h.notified = nil
+	}
+}
+
+func (h *edgeHarness) condition(t *testing.T, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, ct v1.ConditionType) v1.Condition {
+	t.Helper()
+	obj, err := h.st.Get(context.Background(), gvk, ns, name)
+	require.NoError(t, err)
+	var conds v1.Conditions
+	switch o := obj.(type) {
+	case *v1.Route:
+		conds = o.Status.Conditions
+	case *v1.CatalogService:
+		conds = o.Status.Conditions
+	}
+	c, ok := conds.Get(ct)
+	require.True(t, ok, "%s %s/%s has %s", gvk.Kind, ns, name, ct)
+	return c
+}
+
+// TestScenario_catalog_loses_to_earlier_route covers scenario: catalog-loses-to-earlier-route — Route a/r and
+// CatalogService default/lake on (h, /q), reconciled in either order: the Route serves the claim and is Ready, the
+// catalog reports IngressReady=False (RouteConflict naming Route a/r) and stays Ready.
+func TestScenario_catalog_loses_to_earlier_route(t *testing.T) {
+	routeReq := controller.Request{GVK: v1.KindRoute.GVK(), Namespace: "a", Name: "r"}
+	catalogReq := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
+	for name, order := range map[string][]controller.Request{
+		"route-first":   {routeReq, catalogReq},
+		"catalog-first": {catalogReq, routeReq},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newEdgeHarness(t, nil)
+			fn := &v1.Function{}
+			fn.TypeMeta = v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}
+			fn.Name, fn.Namespace, fn.ResourceGroup = "fn", "a", "rg1"
+			fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file:///tmp/x"
+			_, err := h.st.Create(ctx, fn)
+			require.NoError(t, err)
+			rt := &v1.Route{}
+			rt.TypeMeta = v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}
+			rt.Name, rt.Namespace, rt.ResourceGroup = "r", "a", "rg1"
+			rt.Spec = v1.RouteSpec{Host: "h", Rules: []v1.RouteRule{{Path: "/q", Backend: v1.RouteBackend{Function: "fn"}}}}
+			_, err = h.st.Create(ctx, rt)
+			require.NoError(t, err)
+			cs := mkCatalogService("lake")
+			cs.Spec.Ingress = &v1.CatalogIngress{Host: "h", PathPrefix: "/q"}
+			_, err = h.st.Create(ctx, cs)
+			require.NoError(t, err)
+
+			for _, req := range order {
+				h.run(t, req)
+			}
+
+			m, ok := h.rtr.Resolve("h", "/q", "GET")
+			require.True(t, ok)
+			require.Equal(t, v1.NamespaceName("a"), m.Namespace)
+			require.Equal(t, v1.ObjectName("fn"), m.Function, "/q on h reaches a/r's Function")
+			require.Equal(t, v1.ConditionTrue, h.condition(t, v1.KindRoute.GVK(), "a", "r", "Ready").Status)
+			ing := h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "IngressReady")
+			require.Equal(t, v1.ConditionFalse, ing.Status)
+			require.Equal(t, "RouteConflict", ing.Reason)
+			require.Contains(t, ing.Message, "Route a/r")
+			require.Equal(t, v1.ConditionTrue, h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "Ready").Status)
+		})
+	}
+}
+
+// TestScenario_catalog_host_required_explicit covers scenario: catalog-host-required-explicit — a host-less
+// catalog ingress in an explicit-mode namespace gets no edge entry and IngressReady=False (HostRequired), while
+// the catalog stays Ready and its engine keeps serving the functions bound to it.
+func TestScenario_catalog_host_required_explicit(t *testing.T) {
+	ctx := context.Background()
+	h := newEdgeHarness(t, func(context.Context, v1.NamespaceName) (v1.ExposureMode, error) {
+		return v1.ExposureExplicit, nil
+	})
+	h.run(t, controller.Request{GVK: v1.KindRoute.GVK()})
+	cs := mkCatalogService("lake")
+	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/q"}
+	_, err := h.st.Create(ctx, cs)
+	require.NoError(t, err)
+
+	h.run(t, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"})
+
+	_, ok := h.rtr.Resolve("any", "/q", "GET")
+	require.False(t, ok, "no edge entry exists for the catalog")
+	ing := h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "IngressReady")
+	require.Equal(t, v1.ConditionFalse, ing.Status)
+	require.Equal(t, "HostRequired", ing.Reason)
+	require.Equal(t, v1.ConditionTrue, h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "Ready").Status)
+	obj, err := h.st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	endpoint := obj.(*v1.CatalogService).Status.Endpoint
+	require.NotEmpty(t, endpoint, "spec.catalogs consumers still get the proxy endpoint")
+	require.NotEqual(t, "10.63.0.7:8080", endpoint, "the endpoint is the PEP proxy, not the engine")
+	require.Empty(t, h.prov.tornDown, "the engine is not torn down")
+}
