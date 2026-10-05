@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -422,4 +423,101 @@ func TestIssue174_ReplayRecordsInvocation(t *testing.T) {
 	ready, failed = invocationsByPhase(t, st)
 	require.Equal(t, 1, ready, "a successful replay records a Ready Invocation")
 	require.Equal(t, 2, failed)
+}
+
+// gateInvoker fails while failing is set; otherwise it holds each call until release, then fails if failAfter is set.
+type gateInvoker struct {
+	failing   atomic.Bool
+	failAfter atomic.Bool
+	calls     atomic.Int32
+	entered   chan struct{}
+	release   chan struct{}
+}
+
+func (g *gateInvoker) Invoke(context.Context, v1.NamespaceName, v1.ObjectName, eventing.CloudEvent) error {
+	if g.failing.Load() {
+		return fault.Unavailablef("test.invoke", "target down")
+	}
+	g.calls.Add(1)
+	g.entered <- struct{}{}
+	<-g.release
+	if g.failAfter.Load() {
+		return fault.Unavailablef("test.invoke", "target still down")
+	}
+	return nil
+}
+
+// A replay holds its dead letter from the read to the final delete or re-park: a second replay of the same id
+// while one is in flight is refused rather than delivered again, and a discard or a retention sweep made while a
+// failing replay is in flight is not undone by the re-park (issue #721).
+func TestIssue721_ReplayClaimsDeadLetter(t *testing.T) {
+	setup := func(t *testing.T) (*gateInvoker, deadletter.Store, *sensor.Reconciler, string) {
+		t.Helper()
+		g := &gateInvoker{entered: make(chan struct{}, 2), release: make(chan struct{})}
+		g.failing.Store(true)
+		st, fan, dlq, r := dlqHarness(t, g, 1)
+		createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")},
+			[]v1.Action{{Name: "notify", On: "d", Function: "mailer"}})
+		_, err := r.Reconcile(context.Background(), reqOf("s"))
+		require.NoError(t, err)
+		fire(t, fan, "git", "push", "")
+		require.Eventually(t, func() bool { return len(dlqList(t, dlq, "team-a")) == 1 }, 3*time.Second, 20*time.Millisecond)
+		g.failing.Store(false)
+		return g, dlq, r, dlqList(t, dlq, "team-a")[0].ID
+	}
+	startReplay := func(t *testing.T, g *gateInvoker, r *sensor.Reconciler, id string, errs chan<- error) {
+		t.Helper()
+		go func() { errs <- r.Replay(context.Background(), "team-a", id) }()
+		select {
+		case <-g.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the replay never reached the target")
+		}
+	}
+
+	t.Run("concurrent-replays-deliver-once", func(t *testing.T) {
+		g, dlq, r, id := setup(t)
+		errs := make(chan error, 2)
+		startReplay(t, g, r, id, errs)
+		go func() { errs <- r.Replay(context.Background(), "team-a", id) }()
+		var got []error
+		select {
+		case err := <-errs:
+			got = append(got, err)
+		case <-g.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the second replay neither returned nor reached the target")
+		}
+		close(g.release)
+		for len(got) < 2 {
+			got = append(got, <-errs)
+		}
+		require.Equal(t, int32(1), g.calls.Load(), "one dead letter must reach the target once")
+		require.Equal(t, fault.Conflict, fault.KindOf(got[0]), "the overlapping replay is refused: %v", got[0])
+		require.NoError(t, got[1])
+		require.Empty(t, dlqList(t, dlq, "team-a"))
+	})
+
+	evictions := map[string]func(deadletter.Store, string) error{
+		"discard-during-failing-replay-stays-discarded": func(dlq deadletter.Store, id string) error {
+			return dlq.Delete(context.Background(), "team-a", id)
+		},
+		"sweep-during-failing-replay-stays-evicted": func(dlq deadletter.Store, _ string) error {
+			_, err := dlq.SweepExpired(context.Background(), time.Nanosecond, 0)
+			return err
+		},
+	}
+	for name, evict := range evictions {
+		t.Run(name, func(t *testing.T) {
+			g, dlq, r, id := setup(t)
+			g.failAfter.Store(true)
+			errs := make(chan error, 1)
+			startReplay(t, g, r, id, errs)
+			require.NoError(t, evict(dlq, id))
+			require.Empty(t, dlqList(t, dlq, "team-a"))
+			close(g.release)
+			require.Error(t, <-errs, "the replay's delivery failed")
+			require.Zero(t, len(dlqList(t, dlq, "team-a")), "a dead letter removed during a failing replay must stay removed")
+		})
+	}
 }

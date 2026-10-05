@@ -44,6 +44,20 @@ func (s *store) Put(_ context.Context, dl deadletter.DeadLetter) error {
 	return nil
 }
 
+func (s *store) Update(_ context.Context, dl deadletter.DeadLetter) error {
+	cp, err := deadletter.Clone(dl)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "clone dead letter %q", dl.ID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.recs[dl.Namespace][dl.ID]; !ok {
+		return fault.NotFoundf(op, "dead letter %q/%q not found", dl.Namespace, dl.ID)
+	}
+	s.recs[dl.Namespace][dl.ID] = cp
+	return nil
+}
+
 func (s *store) Get(_ context.Context, ns v1.NamespaceName, id string) (deadletter.DeadLetter, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

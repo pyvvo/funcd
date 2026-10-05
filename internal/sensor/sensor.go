@@ -95,6 +95,11 @@ type sensorKey struct {
 	name v1.ObjectName
 }
 
+type deadLetterKey struct {
+	ns v1.NamespaceName
+	id string
+}
+
 // Reconciler owns KindSensor (ADR-0109).
 type Reconciler struct {
 	store   store.Store
@@ -107,8 +112,9 @@ type Reconciler struct {
 	maxDeliveriesInFlight int              // ADR-0156: the delivery workers
 	retry                 *retryQueue      // ADR-0156: the bounded delivery queue every attempt runs on
 
-	mu   sync.Mutex
-	subs map[sensorKey]*subEntry
+	mu        sync.Mutex
+	subs      map[sensorKey]*subEntry
+	replaying map[deadLetterKey]struct{} // the dead letters a Replay holds, so one id is delivered once at a time
 }
 
 // NewReconciler builds the Sensor reconciler. Store/Subscriber/Invoker are required; DeadLetters +
@@ -145,6 +151,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		maxDeliveriesInFlight: workers,
 		retry:                 newRetryQueue(d.DeliveryBackoffInitial, d.DeliveryBackoffMax, d.MaxInFlightPerTarget, d.MaxQueuedPerSensor),
 		subs:                  map[sensorKey]*subEntry{},
+		replaying:             map[deadLetterKey]struct{}{},
 	}, nil
 }
 
@@ -361,14 +368,20 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 // Replay performs ONE synchronous delivery attempt of a stored DeadLetter's CloudEvent through the LIVE
 // Sensor's action path (ADR-0118 §3) — it does NOT re-enter the async bounded-retry loop. The replay is an
 // action-delivery, so it records its Invocation (Ready or Failed). On success the entry is Deleted and nil
-// returned; on failure the entry is re-Put with Attempts reset (never lost) and the delivery error
-// returned, marked as re-parked once the re-Put succeeded. A missing DeadLetter / Sensor / action ⇒
-// NotFound (the operator discards).
+// returned; on failure the entry is re-parked with Attempts reset (never lost) and the delivery error
+// returned, marked as re-parked once the re-park succeeded. The re-park only updates an entry that still
+// exists, so a discard or a retention sweep made during the delivery stays in effect. A missing DeadLetter /
+// Sensor / action ⇒ NotFound (the operator discards); a replay of an id already being replayed ⇒ Conflict.
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
 	if r.deadletters == nil {
 		return fault.Unavailablef("sensor.Replay", "dead-lettering is not enabled")
 	}
+	release, err := r.claimReplay(deadLetterKey{ns, id})
+	if err != nil {
+		return err
+	}
+	defer release()
 	dl, err := r.deadletters.Get(ctx, ns, id) // NotFound propagates
 	if err != nil {
 		return err
@@ -396,13 +409,31 @@ func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string)
 		dl.Attempts = 0 // reset — a fresh attempt count for the re-parked entry
 		dl.Reason = derr.Error()
 		dl.FailedAt = time.Now().UTC()
-		if perr := r.deadletters.Put(ctx, dl); perr != nil {
-			r.logger.WarnContext(ctx, "re-park after failed replay failed", "sensor", dl.Sensor, "id", id, "error", perr)
+		if perr := r.deadletters.Update(ctx, dl); perr != nil {
+			if fault.KindOf(perr) != fault.NotFound { // NotFound: discarded or swept during the delivery
+				r.logger.WarnContext(ctx, "re-park after failed replay failed", "sensor", dl.Sensor, "id", id, "error", perr)
+			}
 			return derr
 		}
 		return fault.Wrapf(derr, fault.KindOf(derr), "sensor.Replay", "delivery failed (entry re-parked)")
 	}
 	return r.deadletters.Delete(ctx, ns, id)
+}
+
+// claimReplay marks a dead letter as being replayed, or returns Conflict if a Replay already holds it. The
+// returned release ends the claim.
+func (r *Reconciler) claimReplay(k deadLetterKey) (release func(), err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, held := r.replaying[k]; held {
+		return nil, fault.Conflictf("sensor.Replay", "dead letter %q/%q is already being replayed", k.ns, k.id)
+	}
+	r.replaying[k] = struct{}{}
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		delete(r.replaying, k)
+	}, nil
 }
 
 // findAction returns the Sensor action named `name` on the live spec (ADR-0118 replay resolves the current

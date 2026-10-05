@@ -12,7 +12,7 @@ import (
 
 // Contract exercises the deadletter.Store port against a driver. Every driver's test runs it (ADR-0002
 // shared contract suite), so badger and memory are held to one behavior: roundtrip, not-found, list
-// newest-first + namespace scope, delete (idempotent), no-aliasing, and the retention sweep (TTL + per-ns
+// newest-first + namespace scope, update (existing only), delete (idempotent), no-aliasing, and the retention sweep (TTL + per-ns
 // cap). It is the `retention-evicts`, `discard-removes` and `driver-independent` store-level evidence.
 func Contract(t *testing.T, newStore func(t *testing.T) Store) {
 	t.Helper()
@@ -47,6 +47,28 @@ func Contract(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 		if string(got.Payload) != `{"specversion":"1.0","id":"e1"}` {
 			t.Fatalf("payload not preserved: %s", got.Payload)
+		}
+	})
+
+	t.Run("update-replaces-only-an-existing-record", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Update(ctx, mk("ns", "01UPD", time.Unix(1, 0).UTC())); fault.KindOf(err) != fault.NotFound {
+			t.Fatalf("Update of an absent record: want NotFound, got %v", err)
+		}
+		if _, err := s.Get(ctx, "ns", "01UPD"); fault.KindOf(err) != fault.NotFound {
+			t.Fatal("Update must not create an absent record")
+		}
+		dl := mk("ns", "01UPD", time.Unix(1, 0).UTC())
+		if err := s.Put(ctx, dl); err != nil {
+			t.Fatal(err)
+		}
+		dl.Attempts, dl.Reason = 0, "again"
+		if err := s.Update(ctx, dl); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		got, err := s.Get(ctx, "ns", "01UPD")
+		if err != nil || got.Attempts != 0 || got.Reason != "again" {
+			t.Fatalf("Update did not replace the record: %+v, %v", got, err)
 		}
 	})
 

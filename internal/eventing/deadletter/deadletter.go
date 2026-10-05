@@ -39,8 +39,11 @@ type DeadLetter struct {
 // Store is the dead-letter queue port (ADR-0002 §1) — bus-driver-independent. Records are engine-owned
 // operational data, not a CRD. Implementations are the single source of truth for parked failures.
 type Store interface {
-	// Put creates or replaces a dead-letter record (replace is how replay re-parks on repeat failure).
+	// Put creates or replaces a dead-letter record.
 	Put(ctx context.Context, dl DeadLetter) error
+	// Update replaces an existing record, or returns fault.NotFound if it is absent: replay re-parks with it,
+	// so a discard or a retention sweep made during the replay stays in effect.
+	Update(ctx context.Context, dl DeadLetter) error
 	// List returns a namespace's dead letters, newest first (ID descending).
 	List(ctx context.Context, ns v1.NamespaceName) ([]DeadLetter, error)
 	// Get returns one record, or fault.NotFound if absent.
