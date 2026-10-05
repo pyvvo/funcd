@@ -13,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -55,6 +56,7 @@ type Deps struct {
 	Publisher Publisher    // where a firing emits its named CloudEvent (required)
 	Blob      *BlobWatcher // ADR-0119: the poll watcher a `blob:` source registers on; nil ⇒ no blob support
 	Logger    *slog.Logger // default slog.Default()
+	Clock     clock.Clock  // ADR-0182: the timer seed and the Run loop read it; default clock.System()
 	// BucketRecheckInterval is eventing.bucketRecheckInterval (ADR-0163); 0 ⇒ bucketRecheckInterval.
 	BucketRecheckInterval time.Duration
 }
@@ -67,6 +69,7 @@ type Source struct {
 	publisher Publisher
 	blob      *BlobWatcher // ADR-0119: nil ⇒ blob sources cannot be registered
 	logger    *slog.Logger
+	clock     clock.Clock
 	recheck   time.Duration // re-check of a blob source's Bucket
 
 	mu     sync.Mutex
@@ -96,8 +99,12 @@ func NewSource(d Deps) (*Source, error) {
 		publisher: d.Publisher,
 		blob:      d.Blob,
 		logger:    logger.With("component", "eventing"),
+		clock:     d.Clock,
 		timers:    map[eventKey]*timerEntry{},
 		recheck:   d.BucketRecheckInterval,
+	}
+	if s.clock == nil {
+		s.clock = clock.System()
 	}
 	if s.recheck <= 0 {
 		s.recheck = bucketRecheckInterval
@@ -132,7 +139,7 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
 		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 	}
-	s.registerTimer(req.Namespace, req.Name, es.Spec.Timer)
+	s.registerTimer(req.Namespace, req.Name, es.CreationTime, es.Spec.Timer)
 	_, blobCond := es.Status.Conditions.Get(condReady) // left by an earlier blob kind; a timer source has none
 	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
 	if es.Status.Phase != v1.PhaseReady || blobCond || seenCond {
@@ -199,8 +206,10 @@ func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason
 }
 
 // registerTimer (re)registers every named event of a timer source, preserving lastFire when the interval
-// is unchanged (a frequent reconcile can't starve firing), and prunes events removed from the spec.
-func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, t *v1.TimerSource) {
+// is unchanged (a frequent reconcile can't starve firing), and prunes events removed from the spec. A new or
+// re-intervaled entry is seeded on the creation grid created + k×interval (ADR-0182), so its schedule survives
+// a daemon restart; a grid point passed while the daemon was down is skipped.
+func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, created time.Time, t *v1.TimerSource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	want := make(map[eventKey]bool, len(t.Events))
@@ -211,13 +220,27 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, t *v1.
 		if e, ok := s.timers[k]; ok && e.interval == ev.Interval {
 			continue // unchanged — keep its lastFire
 		}
-		s.timers[k] = &timerEntry{interval: ev.Interval, lastFire: time.Now()}
+		s.timers[k] = &timerEntry{interval: ev.Interval, lastFire: gridFloor(created, s.clock.Now(), ev.Interval)}
 	}
 	for k := range s.timers { // prune events dropped from the spec
 		if k.ns == ns && k.source == source && !want[k] {
 			delete(s.timers, k)
 		}
 	}
+}
+
+// gridFloor returns the largest created + k×interval (k any integer) that is not after now. A zero created
+// returns now: store.Create always sets CreationTime, so only a direct test call passes zero.
+func gridFloor(created, now time.Time, interval time.Duration) time.Time {
+	if created.IsZero() {
+		return now
+	}
+	since := now.Sub(created)
+	k := since / interval
+	if since%interval < 0 {
+		k-- // round toward −∞ so the seed never lies after now, also when now is before created
+	}
+	return created.Add(k * interval)
 }
 
 // deregisterTimers removes every named timer event of one EventSource (delete / loses its timer kind).
@@ -308,7 +331,7 @@ func (s *Source) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			for _, k := range s.dueTimers(time.Now()) {
+			for _, k := range s.dueTimers(s.clock.Now()) {
 				if err := s.Fire(ctx, k.ns, k.source, k.event); err != nil {
 					s.logger.WarnContext(ctx, "timer publish failed", "eventsource", k.source, "event", k.event, "error", err)
 				}
