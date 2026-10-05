@@ -164,45 +164,65 @@ func TestMapCatalogServiceMapsConsumers(t *testing.T) {
 		h.r.MapCatalogService(context.Background(), cs))
 }
 
-// ADR-0162 Scope, the pooled gap: a pooled consumer whose catalog goes not Ready after it served stops serving. The
-// gate fails with CatalogNotReady, and gateFailed counts only workers named after the Function, so the pool worker,
-// though it runs and the member's /health/members entry reads ready, is not counted: the member turns Pending with
-// Ready=False and no replica, and is not handed out. It pins today's behavior; #690 inverts it.
-func TestPooledConsumerStopsServingOnCatalogNotReady(t *testing.T) {
+// Issue #690, ADR-0161 Decision 2 with ADR-0158: a served pooled member whose gate fails, any gate and not only the
+// catalog's, keeps serving through its pool worker while its /health/members entry reads ready, and turns Degraded once
+// the entry does not.
+func TestIssue690_PooledMemberServesThroughAFailedGate(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
-	t.Cleanup(proxies.Shutdown)
-	_, _, err := proxies.Listen("default", "lake", 0)
-	require.NoError(t, err)
-	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool, func(d *function.Deps) { d.CatalogProxies = proxies })
-	storeReadyCatalog(t, h.st)
-	h.create(t, "member", func(fn *v1.Function) {
-		bindLake(fn)
-		fn.Spec.Pooling.Worker = "w1"
-	})
-	h.reconcile(t, "member")
-	fn := h.getFn(t, "member")
-	require.Equal(t, v1.PhaseReady, fn.Status.Phase)
-	require.Equal(t, 1, fn.Status.Replicas)
-	_, ready := h.upstream(t, "member")
-	require.True(t, ready)
+	for name, tc := range map[string]struct {
+		reason string
+		bind   func(*v1.Function)
+		fail   func(*testing.T, *shimHarness)
+	}{
+		"catalog-not-ready": {reason: "CatalogNotReady", bind: bindLake, fail: func(t *testing.T, h *shimHarness) {
+			obj, err := h.st.Get(context.Background(), v1.KindCatalogService.GVK(), "default", "lake")
+			require.NoError(t, err)
+			cs := obj.(*v1.CatalogService)
+			cs.Status.Phase = v1.PhasePending
+			_, err = h.st.Update(context.Background(), cs)
+			require.NoError(t, err)
+		}},
+		"config-missing": {
+			reason: "ConfigResolveFailed",
+			bind:   func(fn *v1.Function) { fn.Spec.Config = []v1.ObjectName{"app"} },
+			fail:   func(t *testing.T, h *shimHarness) { h.deleteConfigMap(t, "app") },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
+			t.Cleanup(proxies.Shutdown)
+			_, _, err := proxies.Listen("default", "lake", 0)
+			require.NoError(t, err)
+			h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool, func(d *function.Deps) { d.CatalogProxies = proxies })
+			storeReadyCatalog(t, h.st)
+			h.configMap(t, "app")
+			h.create(t, "member", func(fn *v1.Function) {
+				tc.bind(fn)
+				fn.Spec.Pooling.Worker = "w1"
+			})
+			h.reconcile(t, "member")
+			require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
 
-	obj, err := h.st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
-	require.NoError(t, err)
-	cs := obj.(*v1.CatalogService)
-	cs.Status.Phase = v1.PhasePending
-	_, err = h.st.Update(ctx, cs)
-	require.NoError(t, err)
-	h.reconcile(t, "member")
+			tc.fail(t, h)
+			res := h.reconcile(t, "member")
+			fn := h.getFn(t, "member")
+			require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the pool worker serves the member")
+			require.Equal(t, 1, fn.Status.Replicas)
+			require.Equal(t, testPeriod, res.RequeueAfter)
+			h.requireCondition(t, "member", "Ready", v1.ConditionTrue, "")
+			h.requireCondition(t, "member", "RevisionReady", v1.ConditionFalse, tc.reason)
+			require.Len(t, h.routes(t), 1, "the member keeps its route")
+			_, ready := h.upstream(t, "member")
+			require.True(t, ready, "the member is handed out")
 
-	h.requireNotServing(t, "member", v1.PhasePending, "CatalogNotReady")
-	_, ready = h.upstream(t, "member")
-	require.False(t, ready, "the member is not handed out")
-	insts, err := h.rt.List(ctx, "default")
-	require.NoError(t, err)
-	require.Len(t, insts, 1)
-	require.Empty(t, insts[0].Revision, "the one worker is the pool worker")
-	require.Equal(t, runtime.StateRunning, insts[0].State, "the pool worker still runs")
-	require.True(t, insts[0].Listened)
+			h.rt.setMember("member", "loading", "")
+			h.reconcile(t, "member")
+			fn = h.getFn(t, "member")
+			require.Equal(t, v1.PhaseDegraded, fn.Status.Phase, "the pool worker runs but the member's entry is not ready")
+			require.Zero(t, fn.Status.Replicas)
+			h.requireCondition(t, "member", "Ready", v1.ConditionFalse, "Restarting")
+			h.requireCondition(t, "member", "RevisionReady", v1.ConditionFalse, tc.reason)
+		})
+	}
 }

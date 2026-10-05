@@ -731,10 +731,10 @@ type gateFailure struct {
 	requeue         time.Duration // the gate's requeue when nothing serves (0 = none)
 }
 
-// gateFailed records a gate failure by the serving revision's workers (ADR-0161 Decision 2): while one listens and the
-// Function was Ready it stays Ready with their count; while one runs it is Degraded; otherwise the gate's own writes
-// apply. While a worker of the serving revision runs, the current revision's workers stop if it is not the serving one
-// (ADR-0143 Decision 4.6) and the pass returns after the period.
+// gateFailed records a gate failure by the serving revision's workers, a pooled member's pool worker (ADR-0161 Decision
+// 2): while one listens and the Function was Ready it stays Ready with their count; while one runs it is Degraded;
+// otherwise the gate's own writes apply. While a worker of the serving revision runs, a solo Function's current
+// revision's workers stop if it is not the serving one (ADR-0143 Decision 4.6) and the pass returns after the period.
 func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, drainAfter time.Duration) (controller.Result, error) {
 	const op = "function.Reconcile"
 	gen := fn.Generation
@@ -757,7 +757,7 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		return controller.Result{}, err
 	}
 	if running >= 1 {
-		if c := fn.Status.CurrentRevision; c != fn.Status.ServingRevision {
+		if c := fn.Status.CurrentRevision; c != fn.Status.ServingRevision && !r.pooled(fn) {
 			if err := r.stopRevision(ctx, fn, v1.ObjectName(c)); err != nil {
 				return controller.Result{}, err
 			}
@@ -1060,50 +1060,53 @@ func (r *Reconciler) listening(in runtime.Instance) bool {
 // listeningCount is the number of listening workers of fn's serving revision (else its current one), or of its pool
 // worker while fn's own /health/members entry reads ready (ADR-0158).
 func (r *Reconciler) listeningCount(ctx context.Context, fn *v1.Function) (int, error) {
-	name, rev := fn.Name, servingRevision(fn)
-	key, pooled := pooling.PoolKey{}, r.pooled(fn)
-	if pooled {
-		k, ok := pooling.ParsePool(fn.Namespace, fn.Status.Pool)
-		if !ok {
-			return 0, nil
-		}
-		key, name, rev = k, poolInstanceName(k), ""
-	}
-	insts, err := r.namedInstances(ctx, fn.Namespace, name)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, in := range insts {
-		if in.Revision == rev && r.listening(in) {
-			n++
-		}
-	}
-	if pooled && n > 0 && r.materializer != nil {
-		if _, m, ok := r.memberIn(ctx, key, insts, fn.Name); !ok || m.State != memberReady {
-			return 0, nil
-		}
-	}
-	return n, nil
+	_, n, err := r.countWorkers(ctx, fn, servingRevision(fn))
+	return n, err
 }
 
-// servingWorkers counts the running and the listening workers of status.servingRevision, with no fallback.
+// servingWorkers counts the running and the listening workers of status.servingRevision, with no fallback, as
+// countWorkers does.
 func (r *Reconciler) servingWorkers(ctx context.Context, fn *v1.Function) (running, listening int, err error) {
 	s := v1.ObjectName(fn.Status.ServingRevision)
 	if s == "" {
 		return 0, 0, nil
 	}
-	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	return r.countWorkers(ctx, fn, s)
+}
+
+// countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of its pool
+// worker, which runs for fn only while its /health/members lists fn and listens for it only while that entry reads
+// ready (ADR-0158).
+func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (running, listening int, err error) {
+	name := fn.Name
+	key, pooled := pooling.PoolKey{}, r.pooled(fn)
+	if pooled {
+		k, ok := pooling.ParsePool(fn.Namespace, fn.Status.Pool)
+		if !ok {
+			return 0, 0, nil
+		}
+		key, name, rev = k, poolInstanceName(k), ""
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, name)
 	if err != nil {
 		return 0, 0, err
 	}
 	for _, in := range insts {
-		if in.Revision != s || in.State != runtime.StateRunning {
+		if in.Revision != rev || in.State != runtime.StateRunning {
 			continue
 		}
 		running++
 		if r.listening(in) {
 			listening++
+		}
+	}
+	if pooled && running > 0 && r.materializer != nil {
+		_, m, ok := r.memberIn(ctx, key, insts, fn.Name)
+		if !ok {
+			return 0, 0, nil
+		}
+		if m.State != memberReady {
+			listening = 0
 		}
 	}
 	return running, listening, nil
