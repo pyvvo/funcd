@@ -84,7 +84,7 @@ func (d driver) Authorize(ctx context.Context, req auth.Request) (auth.Decision,
 	if err != nil {
 		return auth.Decision{}, fault.Wrapf(err, fault.KindOf(err), op, "resolve entities")
 	}
-	ps, err := d.policies.Get(ctx)
+	ps, err := d.policies.For(ctx, principal.Namespace, resource.Namespace)
 	if err != nil {
 		return auth.Decision{}, fault.Wrapf(err, fault.KindOf(err), op, "load policy set")
 	}
@@ -106,13 +106,32 @@ func (d driver) Authorize(ctx context.Context, req auth.Request) (auth.Decision,
 
 	decision, diag := cedar.Authorize(ps, em, cedarReq)
 	allowed := bool(decision)
-	reason := "cedar default-deny: no permitting policy"
-	if allowed {
-		reason = "cedar: permitted"
-	} else if len(diag.Errors) > 0 {
-		reason = "cedar: denied (" + diag.Errors[0].String() + ")"
+	reason := "cedar: permitted"
+	if !allowed {
+		reason = denyReason(diag, sameNamespace(principal.Namespace, resource.Namespace))
 	}
 	d.logger.Debug("cedar decision",
 		"principal", pUID.String(), "action", string(req.Action), "resource", rUID.String(), "allowed", allowed)
 	return auth.Decision{Allowed: allowed, Reason: reason}, nil
+}
+
+// denyReason explains a deny (ADR-0177 Decision 4): a matched forbid first (on Deny cedar-go's Reasons
+// holds the forbids, collected in set-iteration order, so the lowest PolicyID is named for a stable
+// reason), then an evaluation error, then the missing permit.
+func denyReason(diag cedar.Diagnostic, sameNS bool) string {
+	if len(diag.Reasons) > 0 {
+		id := diag.Reasons[0].PolicyID
+		for _, r := range diag.Reasons[1:] {
+			id = min(id, r.PolicyID)
+		}
+		return "cedar: forbidden by policy " + string(id)
+	}
+	if len(diag.Errors) > 0 {
+		return "cedar: denied (" + diag.Errors[0].String() + ")"
+	}
+	const noPermit = "cedar default-deny: no permitting policy"
+	if !sameNS {
+		return noPermit + " (cross-namespace request: built-in policies only)"
+	}
+	return noPermit
 }
