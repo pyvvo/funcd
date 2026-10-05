@@ -32,3 +32,10 @@ func (s RefusingStore) Update(ctx context.Context, obj v1.Object) (v1.Object, er
 	}
 	return s.Store.Update(ctx, obj)
 }
+
+// PoolLiveLen is how many pool keys r holds a liveness time for.
+func PoolLiveLen(r *Reconciler) int {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	return len(r.poolLive)
+}

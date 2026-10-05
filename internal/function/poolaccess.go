@@ -196,13 +196,6 @@ func (r *Reconciler) setPoolMembers(ns v1.NamespaceName, worker v1.ObjectName, m
 	r.poolSets[poolSetKey(ns, worker)] = slices.Clone(members)
 }
 
-// forgetPoolMembers drops a reclaimed pool worker's member set.
-func (r *Reconciler) forgetPoolMembers(ns v1.NamespaceName, worker v1.ObjectName) {
-	r.poolMu.Lock()
-	defer r.poolMu.Unlock()
-	delete(r.poolSets, poolSetKey(ns, worker))
-}
-
 // PoolMembers is a snapshot of the member set last recorded for pool worker `worker` in ns: its names and a lookup
 // over them. ok is false when none is recorded.
 func (r *Reconciler) PoolMembers(ns v1.NamespaceName, worker v1.ObjectName) (members []v1.ObjectName, isMember func(name string) bool, ok bool) {
