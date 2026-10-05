@@ -598,3 +598,32 @@ func TestInvokeDefaultTimeoutConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2m", c.Invoke.DefaultTimeout)
 }
+
+// scenario: invalid-delivery-setting-refused (ADR-0156) — each delivery queue size is at least 1 and the
+// per-target cap at most the workers; a bad value fails the load naming its key.
+func TestScenarioInvalidDeliverySettingRefused(t *testing.T) {
+	for _, tc := range []struct {
+		yaml, key, value string
+	}{
+		{"maxInFlightPerTarget: 40", "eventing.maxInFlightPerTarget", "40"},
+		{"maxDeliveriesInFlight: 2", "eventing.maxInFlightPerTarget", "4"},
+		{"maxDeliveriesInFlight: 0", "eventing.maxDeliveriesInFlight", "0"},
+	} {
+		t.Run(tc.yaml, func(t *testing.T) {
+			_, err := config.Load(writeCfg(t, "eventing:\n  "+tc.yaml+"\n"), config.Flags{})
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+			require.ErrorContains(t, err, `config key "`+tc.key+`" has invalid value "`+tc.value+`"`)
+		})
+	}
+	t.Run("FUNCD_EVENTING_MAX_QUEUED_PER_SENSOR=0", func(t *testing.T) {
+		t.Setenv("FUNCD_EVENTING_MAX_QUEUED_PER_SENSOR", "0")
+		_, err := config.Load("", config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.ErrorContains(t, err, `config key "eventing.maxQueuedPerSensor" has invalid value "0"`)
+	})
+	t.Run("defaults", func(t *testing.T) {
+		c, err := config.Load("", config.Flags{})
+		require.NoError(t, err)
+		require.Equal(t, []int{32, 4, 4096}, []int{c.Eventing.MaxDeliveriesInFlight, c.Eventing.MaxInFlightPerTarget, c.Eventing.MaxQueuedPerSensor})
+	})
+}

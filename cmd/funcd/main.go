@@ -357,7 +357,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	if cfg.Storage.Mode != "memory" {
 		deadletterDir = cfg.Eventing.Deadletter.DataDir
 	}
-	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries))
+	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries),
+		funcd.WithSensorDelivery(cfg.Eventing.MaxDeliveriesInFlight, cfg.Eventing.MaxInFlightPerTarget, cfg.Eventing.MaxQueuedPerSensor))
 
 	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
 	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, true)

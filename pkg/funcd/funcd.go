@@ -261,6 +261,10 @@ type config struct {
 	deliveryAttempts     int
 	deadletterRetention  time.Duration
 	deadletterMaxEntries int
+	// The Sensor delivery queue sizes (ADR-0156, WithSensorDelivery); 0 ⇒ the sensor defaults (32, 4, 4096).
+	sensorMaxDeliveriesInFlight int
+	sensorMaxInFlightPerTarget  int
+	sensorMaxQueuedPerSensor    int
 
 	// Blob EventSource poll watcher (ADR-0119, F83): the platform-wide cadence a `blob:` source's prefixes
 	// are List-polled for new objects. 0 ⇒ the 15s default.
@@ -766,12 +770,15 @@ func (p *Platform) buildControlPlane() error {
 	// — start a WorkflowRun / invoke a Function (via the re-created invoke/wake logic), with bounded retry
 	// before dead-lettering. It subscribes to fanout.
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
-		Store:            c.store,
-		Subscriber:       fanout,
-		Invoker:          &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 30*time.Second)},
-		DeadLetters:      dlq,
-		DeliveryAttempts: c.deliveryAttempts,
-		Logger:           p.logger,
+		Store:                 c.store,
+		Subscriber:            fanout,
+		Invoker:               &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 30*time.Second)},
+		DeadLetters:           dlq,
+		DeliveryAttempts:      c.deliveryAttempts,
+		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,
+		MaxInFlightPerTarget:  c.sensorMaxInFlightPerTarget,
+		MaxQueuedPerSensor:    c.sensorMaxQueuedPerSensor,
+		Logger:                p.logger,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")

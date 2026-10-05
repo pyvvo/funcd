@@ -2,7 +2,8 @@
 // Sensor's named event dependencies to the ADR-0108 in-process Fanout and, on a firing, runs the matching
 // kind-keyed actions — start a WorkflowRun (`workflow:`) or invoke a Function (`function:`) — projecting
 // the firing CloudEvent into the target's input via the F73 engine, and recording an Invocation per action.
-// It owns only KindSensor (one-reconciler-per-gvk, ADR-0015). Stateless in V1: every firing is independent.
+// It owns only KindSensor (one-reconciler-per-gvk, ADR-0015). Stateless in V1, except that a Sensor's firings
+// share its bounded delivery queue (ADR-0156).
 package sensor
 
 import (
@@ -10,9 +11,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +36,13 @@ const op = "sensor"
 
 // defaultDeliveryAttempts is the platform-wide bounded-retry cap before an action-delivery is dead-lettered.
 const defaultDeliveryAttempts = 3
+
+// The delivery queue sizes when Deps leaves them unset (ADR-0156 §10, the eventing.* config defaults).
+const (
+	defaultMaxDeliveriesInFlight = 32
+	defaultMaxInFlightPerTarget  = 4
+	defaultMaxQueuedPerSensor    = 4096
+)
 
 const condReady = v1.ConditionType("Ready")
 
@@ -59,7 +69,12 @@ type Deps struct {
 	// DeliveryAttempts is the bounded-retry cap before an action-delivery is dead-lettered (ADR-0118);
 	// 0 ⇒ the default (3). Ignored when DeadLetters is nil.
 	DeliveryAttempts int
-	Logger           *slog.Logger
+	// MaxDeliveriesInFlight (workers), MaxInFlightPerTarget and MaxQueuedPerSensor size the delivery queue
+	// (ADR-0156); a value < 1 ⇒ its default (32, 4, 4096). Ignored when DeadLetters is nil.
+	MaxDeliveriesInFlight int
+	MaxInFlightPerTarget  int
+	MaxQueuedPerSensor    int
+	Logger                *slog.Logger
 }
 
 // subEntry is a Sensor's live subscription bookkeeping (ADR-0109 B1 idempotency): the cancels for its
@@ -83,9 +98,10 @@ type Reconciler struct {
 	invoker Invoker
 	logger  *slog.Logger
 
-	deadletters      deadletter.Store // ADR-0118: the DLQ (nil ⇒ dead-lettering off)
-	deliveryAttempts int              // ADR-0118: bounded-retry cap before dead-lettering
-	retry            *retryQueue      // ADR-0118: the rate-limited action-delivery retry queue
+	deadletters           deadletter.Store // ADR-0118: the DLQ (nil ⇒ dead-lettering off)
+	deliveryAttempts      int              // ADR-0118: bounded-retry cap before dead-lettering
+	maxDeliveriesInFlight int              // ADR-0156: the delivery workers
+	retry                 *retryQueue      // ADR-0156: the bounded delivery queue every attempt runs on
 
 	mu   sync.Mutex
 	subs map[sensorKey]*subEntry
@@ -111,15 +127,20 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if attempts <= 0 {
 		attempts = defaultDeliveryAttempts
 	}
+	workers := d.MaxDeliveriesInFlight
+	if workers < 1 {
+		workers = defaultMaxDeliveriesInFlight
+	}
 	return &Reconciler{
-		store:            d.Store,
-		subr:             d.Subscriber,
-		invoker:          d.Invoker,
-		logger:           l.With("component", "sensor"),
-		deadletters:      d.DeadLetters,
-		deliveryAttempts: attempts,
-		retry:            newRetryQueue(retryBaseDelay, retryMaxDelay),
-		subs:             map[sensorKey]*subEntry{},
+		store:                 d.Store,
+		subr:                  d.Subscriber,
+		invoker:               d.Invoker,
+		logger:                l.With("component", "sensor"),
+		deadletters:           d.DeadLetters,
+		deliveryAttempts:      attempts,
+		maxDeliveriesInFlight: workers,
+		retry:                 newRetryQueue(retryBaseDelay, retryMaxDelay, d.MaxInFlightPerTarget, d.MaxQueuedPerSensor),
+		subs:                  map[sensorKey]*subEntry{},
 	}, nil
 }
 
@@ -147,7 +168,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 
 	// Subscription idempotency (B1): a resync with an unchanged generation is a no-op; a spec change
-	// cancels-and-replaces so a firing invokes each dependency's callback exactly once.
+	// cancels-and-replaces so a firing invokes each dependency's callback exactly once, and withdraws the
+	// queued deliveries the change made stale (ADR-0156 §8).
 	r.mu.Lock()
 	if e, present := r.subs[k]; present && e.uid == se.UID && e.generation == se.Generation {
 		r.mu.Unlock() // already subscribed for this generation — nothing to do
@@ -156,6 +178,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			for _, c := range e.cancels {
 				c()
 			}
+			keep := keepActions(se)
+			if e.uid != se.UID {
+				keep = nil
+			}
+			r.retry.withdraw(k, keep)
 		}
 		r.subs[k] = &subEntry{uid: se.UID, generation: se.Generation, cancels: r.subscribe(se)}
 		r.mu.Unlock()
@@ -169,7 +196,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	return controller.Result{}, nil
 }
 
-// cancelAll cancels a Sensor's subscriptions and forgets it (delete / static defect).
+// cancelAll cancels a Sensor's subscriptions, withdraws its queued deliveries and forgets it (delete /
+// static defect).
 func (r *Reconciler) cancelAll(k sensorKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -178,6 +206,15 @@ func (r *Reconciler) cancelAll(k sensorKey) {
 			c()
 		}
 		delete(r.subs, k)
+	}
+	r.retry.withdraw(k, nil)
+}
+
+// keepActions keeps the deliveries whose action se still declares unchanged in every field: a delivery
+// carries the action as of its subscribe, so any other one would reach a target the Sensor no longer names.
+func keepActions(se *v1.Sensor) func(v1.Action) bool {
+	return func(a v1.Action) bool {
+		return slices.ContainsFunc(se.Spec.Do, func(b v1.Action) bool { return reflect.DeepEqual(a, b) })
 	}
 }
 
@@ -203,10 +240,11 @@ func (r *Reconciler) subscribe(se *v1.Sensor) []func() {
 	return cancels
 }
 
-// runAction executes one action on a firing (ADR-0109 + ADR-0118). It delivers the action inline once; on
-// a terminal delivery error, with dead-lettering enabled, the unit is handed to the bounded-retry loop and
-// the Invocation is recorded at the TERMINAL outcome (success-after-retries or DLQ) — one per
-// action-delivery. With DeadLetters nil the pre-ADR behavior stands: one attempt, one Invocation.
+// runAction executes one action on a firing (ADR-0109 + ADR-0156). With dead-lettering enabled it only
+// enqueues the delivery, so a slow target never holds the publisher: a worker makes every attempt, and the
+// Invocation is recorded at the TERMINAL outcome (success-after-retries or DLQ) — one per action-delivery.
+// A delivery the queue refuses is parked at once. With DeadLetters nil the pre-ADR behavior stands: one
+// inline attempt, one Invocation.
 func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.ResourceGroupName, sensor, source, event v1.ObjectName, a v1.Action, ev eventing.CloudEvent) {
 	d := delivery{ns: ns, rg: rg, sensor: sensor, source: source, event: event, action: a, ce: ev, firedAt: time.Now().UTC()}
 	if r.deadletters == nil { // dead-lettering disabled — one attempt, one Invocation (pre-ADR-0118)
@@ -219,7 +257,12 @@ func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.R
 		}
 		return
 	}
-	r.attemptDelivery(ctx, newRetryID(), d, 1) // inline attempt #1; retries run async on the retry queue
+	switch err := r.retry.enqueue(newRetryID(), d); {
+	case errors.Is(err, errDropped):
+		r.logger.WarnContext(ctx, "sensor delivery dropped after shutdown", "sensor", sensor, "action", a.Name)
+	case err != nil:
+		r.park(ctx, d, 0, err)
+	}
 }
 
 // deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun with it
@@ -241,10 +284,10 @@ func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
 	return nil
 }
 
-// attemptDelivery performs delivery attempt `attempt` of a unit and drives its terminal handling: on
-// success it records a Ready Invocation and forgets the key; on failure past DeliveryAttempts it
-// dead-letters (Store.Put) + records a Failed Invocation and forgets the key; otherwise it re-enqueues the
-// unit on the retry queue with backoff. Invoked from the inline firing (attempt 1) and each retry worker.
+// attemptDelivery performs delivery attempt `attempt` of a unit on a worker and drives its terminal
+// handling: on success it records a Ready Invocation; on failure past DeliveryAttempts it parks the unit with
+// its error; otherwise it reschedules the unit with backoff, or parks it when the queue refuses (shut down:
+// its error; withdrawn by a Sensor change: the sensor-changed Reason). Every terminal outcome forgets the unit.
 func (r *Reconciler) attemptDelivery(ctx context.Context, id string, d delivery, attempt int) {
 	err := r.deliver(ctx, d)
 	if err == nil {
@@ -252,14 +295,30 @@ func (r *Reconciler) attemptDelivery(ctx context.Context, id string, d delivery,
 		r.retry.forget(id)
 		return
 	}
-	if attempt >= r.deliveryAttempts { // retries exhausted — park it + record the terminal Failed line
-		r.deadLetter(ctx, d, attempt, err)
-		r.recordTerminal(ctx, d, err)
+	if attempt >= r.deliveryAttempts {
+		r.park(ctx, d, attempt, err)
 		r.retry.forget(id)
-		r.logger.WarnContext(ctx, "sensor action dead-lettered", "sensor", d.sensor, "action", d.action.Name, "attempts", attempt, "error", err)
 		return
 	}
-	r.retry.reschedule(id, d, attempt) // schedule attempt+1 after per-key backoff
+	ok, stale := r.retry.reschedule(id, attempt)
+	if ok {
+		return
+	}
+	if stale {
+		err = changedReason(d)
+	}
+	r.park(ctx, d, attempt, err)
+	r.retry.forget(id)
+}
+
+// park dead-letters a delivery with the attempts made and a Reason, records a Failed Invocation with the same
+// text and logs it (ADR-0156 §5). It writes on a context shutdown cannot cancel: the metastore refuses a
+// cancelled one.
+func (r *Reconciler) park(ctx context.Context, d delivery, attempts int, reason error) {
+	ctx = context.WithoutCancel(ctx)
+	r.deadLetter(ctx, d, attempts, reason)
+	r.recordTerminal(ctx, d, reason)
+	r.logger.WarnContext(ctx, "sensor action dead-lettered", "sensor", d.sensor, "action", d.action.Name, "attempts", attempts, "error", reason)
 }
 
 // deadLetter parks a terminally-undeliverable unit in the DLQ (ADR-0118): a fresh ULID id, the full

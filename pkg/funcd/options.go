@@ -197,6 +197,30 @@ func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Du
 	}
 }
 
+// WithSensorDelivery sizes the Sensor delivery queue every attempt runs on (ADR-0156): maxInFlight delivery
+// workers, at most maxInFlightPerTarget attempts in flight to one Function or Workflow, and at most
+// maxQueuedPerSensor undelivered deliveries per Sensor (one more is dead-lettered at once). Each must be at
+// least 1 and the per-target cap at most maxInFlight, else Invalid. Without this option: 32, 4, 4096.
+func WithSensorDelivery(maxInFlight, maxInFlightPerTarget, maxQueuedPerSensor int) Option {
+	return func(c *config) error {
+		const op = "funcd.WithSensorDelivery"
+		switch {
+		case maxInFlight < 1:
+			return fault.Invalidf(op, "eventing.maxDeliveriesInFlight %d must be at least 1", maxInFlight)
+		case maxInFlightPerTarget < 1:
+			return fault.Invalidf(op, "eventing.maxInFlightPerTarget %d must be at least 1", maxInFlightPerTarget)
+		case maxInFlightPerTarget > maxInFlight:
+			return fault.Invalidf(op, "eventing.maxInFlightPerTarget %d exceeds eventing.maxDeliveriesInFlight %d", maxInFlightPerTarget, maxInFlight)
+		case maxQueuedPerSensor < 1:
+			return fault.Invalidf(op, "eventing.maxQueuedPerSensor %d must be at least 1", maxQueuedPerSensor)
+		}
+		c.sensorMaxDeliveriesInFlight = maxInFlight
+		c.sensorMaxInFlightPerTarget = maxInFlightPerTarget
+		c.sensorMaxQueuedPerSensor = maxQueuedPerSensor
+		return nil
+	}
+}
+
 // WithBlobPollInterval sets the platform-wide cadence at which a `blob:` EventSource's prefixes are
 // List-polled for new objects (ADR-0119, F83). A duration ≤ 0 ⇒ the 15s default. One cadence for all blob
 // sources in V1 (a per-source override is an open question).

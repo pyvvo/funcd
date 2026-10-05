@@ -1,7 +1,8 @@
 // Package deadletter is the eventing dead-letter queue PORT (ADR-0118, F85): the durable park for a
-// Sensor action-delivery that failed past the bounded retry cap. It is deliberately BUS-DRIVER-INDEPENDENT
-// — the same store serves the in-memory and NATS buses, so the reliability guarantee never hinges on a
-// JetStream feature (this package imports NO bus). Records are engine-minted, high-volume operational data
+// Sensor action-delivery that failed past the bounded retry cap, or that was parked before its attempts ran
+// out (ADR-0156: the Sensor's queue was full, the Sensor changed, or the daemon shut down). It is deliberately
+// BUS-DRIVER-INDEPENDENT — the same store serves the in-memory and NATS buses, so the reliability guarantee
+// never hinges on a JetStream feature (this package imports NO bus). Records are engine-minted, high-volume operational data
 // (like the ADR-0094 run store), NOT a CRD: they live in a dedicated Badger instance surfaced by a read +
 // replay/discard control-plane surface, never the metastore.
 //
@@ -18,9 +19,9 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// DeadLetter is a terminally-undeliverable Sensor action, parked for inspection/replay. It carries the full
-// firing CloudEvent (Payload) so replay can re-inject it verbatim, plus the provenance to re-find the action
-// on the LIVE Sensor spec. It is built from the Sensor's in-memory delivery unit (the dependency's
+// DeadLetter is a terminally-undeliverable Sensor action, or one parked before its attempts ran out (ADR-0156),
+// kept for inspection/replay. It carries the full firing CloudEvent (Payload) so replay can re-inject it
+// verbatim, plus the provenance to re-find the action on the LIVE Sensor spec. It is built from the Sensor's in-memory delivery unit (the dependency's
 // source/event tuple), never by re-parsing the CloudEvent.
 type DeadLetter struct {
 	ID        string           `json:"id"`        // ULID — time-sortable within a namespace (cheap cap eviction)
@@ -30,8 +31,8 @@ type DeadLetter struct {
 	Event     v1.ObjectName    `json:"event"`     // the event name — from the delivery unit's dependency tuple
 	Action    string           `json:"action"`    // the Sensor action name (do[].name)
 	Payload   json.RawMessage  `json:"payload"`   // the full CloudEvent JSON (re-injected verbatim on replay)
-	Attempts  int              `json:"attempts"`  // delivery attempts made before dead-lettering
-	Reason    string           `json:"reason"`    // the terminal delivery error
+	Attempts  int              `json:"attempts"`  // delivery attempts made before dead-lettering (0 if never attempted)
+	Reason    string           `json:"reason"`    // the terminal delivery error, or the park reason (ADR-0156)
 	FailedAt  time.Time        `json:"failedAt"`  //
 }
 

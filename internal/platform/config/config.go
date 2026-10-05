@@ -223,10 +223,16 @@ type Config struct {
 	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The dead-letter
 	// queue is its own dedicated Badger instance at Deadletter.DataDir (default <Storage.DataDir>/deadletter;
 	// in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries
-	// (per-namespace count cap) drive the periodic retention sweep.
+	// (per-namespace count cap) drive the periodic retention sweep. MaxDeliveriesInFlight (the delivery
+	// workers), MaxInFlightPerTarget and MaxQueuedPerSensor size the Sensor delivery queue (ADR-0156); each is
+	// at least 1 and the per-target cap at most the workers. MaxDeliveriesInFlight is declared before
+	// MaxInFlightPerTarget so a bad worker count is the error reported, not the cap's cross-field check.
 	Eventing struct {
-		DeliveryAttempts int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS" validate:"min=0"`
-		Deadletter       struct {
+		DeliveryAttempts      int `json:"deliveryAttempts,omitempty" env:"FUNCD_EVENTING_DELIVERY_ATTEMPTS" validate:"min=0"`
+		MaxDeliveriesInFlight int `json:"maxDeliveriesInFlight,omitempty" env:"FUNCD_EVENTING_MAX_DELIVERIES_IN_FLIGHT" validate:"min=1"`
+		MaxInFlightPerTarget  int `json:"maxInFlightPerTarget,omitempty" env:"FUNCD_EVENTING_MAX_IN_FLIGHT_PER_TARGET" validate:"min=1,ltefield=MaxDeliveriesInFlight"`
+		MaxQueuedPerSensor    int `json:"maxQueuedPerSensor,omitempty" env:"FUNCD_EVENTING_MAX_QUEUED_PER_SENSOR" validate:"min=1"`
+		Deadletter            struct {
 			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
 			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES" validate:"min=0"`
 			// DataDir is the DLQ's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
@@ -297,6 +303,10 @@ func defaults() Config {
 	// Eventing DLQ (ADR-0118): 3 delivery attempts before dead-lettering; parked entries kept 720h with a
 	// per-namespace cap of 1000, swept periodically.
 	c.Eventing.DeliveryAttempts = 3
+	// Sensor delivery queue (ADR-0156): 32 workers, 4 in flight per target, 4096 undelivered per Sensor.
+	c.Eventing.MaxDeliveriesInFlight = 32
+	c.Eventing.MaxInFlightPerTarget = 4
+	c.Eventing.MaxQueuedPerSensor = 4096
 	c.Eventing.Deadletter.Retention = "720h"
 	c.Eventing.Deadletter.MaxEntries = 1000
 	// Blob EventSource poll cadence (ADR-0119): 15s default.
