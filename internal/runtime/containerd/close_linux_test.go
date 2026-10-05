@@ -116,6 +116,7 @@ func TestStop_KeepsWorkerOnLoadError(t *testing.T) {
 		Revision:  "stop-1",
 		Image:     "funcd/stop:latest",
 		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+		OwnerKind: v1alpha1.KindFunction,
 	}
 	ctrs := &memContainers{records: map[string]containers.Container{}}
 	snap := &memSnapshotter{rootfs: t.TempDir(), keys: map[string]bool{layer.String(): true}}
@@ -170,6 +171,7 @@ func (f *closeFixture) create(t *testing.T, d *driver, ns v1alpha1.NamespaceName
 		Revision:  name + "-1",
 		Image:     f.image,
 		LogPath:   filepath.Join(t.TempDir(), "worker.log"),
+		OwnerKind: v1alpha1.KindFunction,
 	}
 	_, err := d.Create(leases.WithLease(context.Background(), "close"), spec)
 	require.NoError(t, err)

@@ -363,6 +363,7 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, manife
 	spec := runtime.WorkerSpec{
 		Namespace: key.Namespace,
 		Name:      poolName,
+		OwnerKind: v1.KindFunction,
 		Replica:   0,
 		Image:     key.Runtime,
 		Command:   r.poolHostFor(v1.RuntimeName(key.Runtime)), // node pool.mjs, or python pool.py (ADR-0050)
@@ -457,7 +458,7 @@ func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName
 		}
 	}
 	for _, in := range insts {
-		if declared[in.Name] || !strings.HasPrefix(string(in.Name), poolInstancePrefix) {
+		if in.OwnerKind != v1.KindFunction || declared[in.Name] || !strings.HasPrefix(string(in.Name), poolInstancePrefix) {
 			continue
 		}
 		if err := r.retire(ctx, in); err != nil {

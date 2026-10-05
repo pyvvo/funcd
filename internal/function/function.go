@@ -1187,10 +1187,11 @@ func (r *Reconciler) servingWorkerRuns(ctx context.Context, fn *v1.Function) (bo
 	return false, nil
 }
 
-// namedInstances returns the runtime instances whose Name matches `name` in ns. For a solo
+// namedInstances returns the Function workers whose Name matches `name` in ns. For a solo
 // function this is its replicas; for a pool worker `name` is the synthetic pool name
 // (poolInstanceName) — the shared worker has its own instance identity, distinct from any
-// member's, so a member's solo lookups never collide with the pool (ADR-0046).
+// member's, so a member's solo lookups never collide with the pool (ADR-0046). Another kind's
+// worker of the same name, a CatalogService engine, is never one of them (ADR-0152).
 func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) ([]runtime.Instance, error) {
 	all, err := r.runtime.List(ctx, ns)
 	if err != nil {
@@ -1198,7 +1199,7 @@ func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, na
 	}
 	out := make([]runtime.Instance, 0, len(all))
 	for _, in := range all {
-		if in.Name == name {
+		if in.OwnerKind == v1.KindFunction && in.Name == name {
 			out = append(out, in)
 		}
 	}
@@ -1735,6 +1736,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
 			Name:      fn.Name,
+			OwnerKind: v1.KindFunction,
 			Replica:   replica,
 			Image:     r.imageFor(string(fn.Spec.Runtime)),
 			Mounts:    mounts,
@@ -1759,6 +1761,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
 			Name:      fn.Name,
+			OwnerKind: v1.KindFunction,
 			Replica:   replica,
 			Image:     string(fn.Spec.Runtime),
 			Command:   r.shimFor(fn.Spec.Runtime), // node by default; python* → the python shim (ADR-0049)
@@ -1768,6 +1771,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 	return runtime.WorkerSpec{
 		Namespace: fn.Namespace,
 		Name:      fn.Name,
+		OwnerKind: v1.KindFunction,
 		Replica:   replica,
 		Image:     string(fn.Spec.Runtime),
 		// Legacy placeholder (no Materializer): a long-lived process stands in for the

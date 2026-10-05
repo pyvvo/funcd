@@ -58,6 +58,7 @@ type Mount struct {
 type WorkerSpec struct {
 	Namespace v1alpha1.NamespaceName
 	Name      v1alpha1.ObjectName
+	OwnerKind v1alpha1.Kind       // the kind whose reconciler created the worker; required (ADR-0152)
 	Revision  v1alpha1.ObjectName // the Revision this worker runs (ADR-0143); "" outside the Function lifecycle
 	Replica   int
 	Image     string            // runtime image (containerd driver)
@@ -73,6 +74,7 @@ type Instance struct {
 	ID        InstanceID
 	Namespace v1alpha1.NamespaceName
 	Name      v1alpha1.ObjectName
+	OwnerKind v1alpha1.Kind       // as created (ADR-0152)
 	Revision  v1alpha1.ObjectName // as created (ADR-0143)
 	Replica   int
 	PID       int
@@ -86,7 +88,9 @@ type Instance struct {
 // Errors are api/fault; every method is ctx-first; the port imports no container
 // library. Implementations are internal-plane only — functions never call them.
 type Runtime interface {
-	// Create makes a worker from spec without starting it.
+	// Create makes a worker from spec without starting it. An empty spec.OwnerKind is fault.Invalid; an ID held by an
+	// instance of another OwnerKind, even when that instance has exited, or on containerd by a leftover container
+	// labelled with another kind, is fault.Conflict (ADR-0152).
 	Create(ctx context.Context, spec WorkerSpec) (Instance, error)
 	// Start runs the worker's process.
 	Start(ctx context.Context, id InstanceID) error

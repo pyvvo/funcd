@@ -63,6 +63,9 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 	if len(spec.Command) == 0 {
 		return runtime.Instance{}, fault.Invalidf(op, "spec.Command must not be empty for the process driver")
 	}
+	if spec.OwnerKind == "" {
+		return runtime.Instance{}, fault.Invalidf(op, "spec.OwnerKind must not be empty")
+	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 
 	d.mu.Lock()
@@ -70,6 +73,9 @@ func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Ins
 	// An exited instance is replaced (ADR-0142), as containerd allows once Stop has deleted the container,
 	// so a replica can be re-created after it stopped or crashed. The replaced instance's files go with it.
 	old, replace := d.instances[id]
+	if replace && old.spec.OwnerKind != spec.OwnerKind {
+		return runtime.Instance{}, fault.Conflictf(op, "instance %q is held by a %s worker", id, old.spec.OwnerKind)
+	}
 	if replace && !old.state.Terminal() {
 		return runtime.Instance{}, fault.Conflictf(op, "instance %q already exists", id)
 	}
@@ -346,6 +352,7 @@ func (d *driver) snapshotLocked(id runtime.InstanceID, inst *instance) runtime.I
 		ID:        id,
 		Namespace: inst.spec.Namespace,
 		Name:      inst.spec.Name,
+		OwnerKind: inst.spec.OwnerKind,
 		Revision:  inst.spec.Revision,
 		Replica:   inst.spec.Replica,
 		PID:       inst.pid,

@@ -32,6 +32,7 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		return runtime.WorkerSpec{
 			Namespace: "default",
 			Name:      v1alpha1.ObjectName(name),
+			OwnerKind: v1alpha1.KindFunction,
 			Replica:   0,
 			Image:     defaultImage,
 			Command:   command,
@@ -240,6 +241,77 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.Equal(t, fault.Conflict, fault.KindOf(rt.Remove(ctx, inst.ID)), "a restarted instance is running")
 		require.NoError(t, rt.Stop(ctx, inst.ID))
 		require.NoError(t, rt.Remove(ctx, inst.ID))
+	})
+
+	// ADR-0152: a worker reports the kind that created it from Create, Status and List.
+	t.Run("worker-owner-kind-round-trips", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		spec := specOf(t, "owner", []string{"sleep", "30"})
+		spec.OwnerKind = v1alpha1.KindCatalogService
+		inst, err := rt.Create(ctx, spec)
+		require.NoError(t, err)
+		require.Equal(t, v1alpha1.KindCatalogService, inst.OwnerKind)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+
+		got, err := rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.Equal(t, v1alpha1.KindCatalogService, got.OwnerKind)
+		list, err := rt.List(ctx, "default")
+		require.NoError(t, err)
+		found := false
+		for _, in := range list {
+			if in.ID == inst.ID {
+				found = true
+				require.Equal(t, v1alpha1.KindCatalogService, in.OwnerKind)
+			}
+		}
+		require.True(t, found, "List reports the instance")
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+	})
+
+	// ADR-0152: every creator names the kind it creates a worker for.
+	t.Run("worker-owner-kind-required", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		spec := specOf(t, "ownerless", []string{"sleep", "30"})
+		spec.OwnerKind = ""
+		_, err := rt.Create(ctx, spec)
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		_, err = rt.Status(ctx, runtime.NewInstanceID("default", "ownerless", "", 0))
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "a refused Create keeps no instance")
+	})
+
+	// ADR-0152: an ID held by another kind's worker, live or exited, is never replaced; the same kind still replaces
+	// its own exited worker (ADR-0142).
+	t.Run("worker-id-of-another-kind-conflicts", func(t *testing.T) {
+		ctx := context.Background()
+		rt := newRuntime(t)
+		t.Cleanup(func() { _ = rt.Close() })
+
+		inst, err := rt.Create(ctx, specOf(t, "shared", []string{"sleep", "30"}))
+		require.NoError(t, err)
+		require.NoError(t, rt.Start(ctx, inst.ID))
+		other := specOf(t, "shared", []string{"sleep", "30"})
+		other.OwnerKind = v1alpha1.KindCatalogService
+		_, err = rt.Create(ctx, other)
+		require.Equal(t, fault.Conflict, fault.KindOf(err), "a live worker of another kind holds the ID")
+		got, err := rt.Status(ctx, inst.ID)
+		require.NoError(t, err)
+		require.Equal(t, v1alpha1.KindFunction, got.OwnerKind)
+		require.Equal(t, runtime.StateRunning, got.State, "the refused Create leaves the worker running")
+
+		require.NoError(t, rt.Stop(ctx, inst.ID))
+		_, err = rt.Create(ctx, other)
+		require.Equal(t, fault.Conflict, fault.KindOf(err), "an exited worker of another kind still holds the ID")
+		again, err := rt.Create(ctx, specOf(t, "shared", []string{"sleep", "30"}))
+		require.NoError(t, err, "the same kind replaces its exited worker")
+		require.Equal(t, inst.ID, again.ID)
+		require.Equal(t, v1alpha1.KindFunction, again.OwnerKind)
 	})
 
 	t.Run("instance-not-found", func(t *testing.T) {

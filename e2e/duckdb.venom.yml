@@ -188,3 +188,118 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ENGINE_MOVED=yes"              # the engine really came back on a new IP
           - result.systemout ShouldContainSubstring "ENDPOINT_SAME=yes"             # yet the published proxy URL did not change
+
+  # ADR-0152: a Function and a CatalogService share the name `lake`; each reconciler manages only its own kind's workers.
+  - name: same-name-function-and-catalog-stay-ready — Function lake deploys and scales beside CatalogService lake, which keeps its engine
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            [ -n "$pid" ] || exit 1
+            echo "$pid" > /tmp/lake-engine-pid
+            sed -e "s/^  name: catalog-reader/  name: lake/" /opt/lane/consumer.yaml > /tmp/lake-function.yaml
+            printf "  blob:\n    - alias: gold\n      bucket: lakehouse\n      prefix: gold\n" >> /tmp/lake-function.yaml
+            funcdctl apply -f /tmp/lake-function.yaml >/dev/null
+            echo "ENGINE_PID=$(cat /tmp/lake-engine-pid)"'
+        info: "applied Function lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            fn=$(funcdctl get function lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            [ "$fn" = Ready ] || exit 1
+            sed -e "s/^  replicas: 1/  replicas: 2/" /tmp/lake-function.yaml > /tmp/lake-function-2.yaml
+            funcdctl apply -f /tmp/lake-function-2.yaml >/dev/null
+            echo "FUNCTION=$fn"'
+        retry: 60
+        delay: 2
+        info: "Function lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FUNCTION=Ready"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            label() { sudo ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
+            phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
+            fn=$(funcdctl get function lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"replicas\",0))")
+            pid=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            [ "$pid" = "$(cat /tmp/lake-engine-pid)" ] && same=yes || same=no
+            echo "FUNCTION=$fn CATALOG=$(phase catalogservice lake) ENGINE_SAME=$same ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0)"'
+        retry: 60
+        delay: 2
+        info: "after scaling Function lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FUNCTION=Ready 2"
+          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "ENGINE_SAME=yes"
+          - result.systemout ShouldContainSubstring "ENGINE_LABEL=CatalogService"
+          - result.systemout ShouldContainSubstring "FUNCTION_LABEL=Function"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 20
+        delay: 2
+        info: "catalog-reader beside Function lake → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[42]]"
+
+  - name: owner-kind-across-daemon-restart — after a hard daemon restart both lakes return, each on workers labelled with its own kind
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            systemctl is-active -q funcd-demo && exit 1
+            sudo systemctl reset-failed funcd-demo 2>/dev/null
+            sudo systemd-run --unit funcd-demo /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            label() { sudo ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
+            phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
+            echo "FUNCTION=$(phase function lake) CATALOG=$(phase catalogservice lake) ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0)"'
+        retry: 60
+        delay: 2
+        info: "after the daemon restart → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FUNCTION=Ready"
+          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "ENGINE_LABEL=CatalogService"
+          - result.systemout ShouldContainSubstring "FUNCTION_LABEL=Function"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 30
+        delay: 2
+        info: "catalog-reader after the daemon restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[42]]"

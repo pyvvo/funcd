@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/runtimecontract"
@@ -35,7 +36,7 @@ func TestCreateRejectsLiveInstance(t *testing.T) {
 	ctx := context.Background()
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	spec := runtime.WorkerSpec{Namespace: "default", Name: "live", Command: []string{"sleep", "30"}, LogPath: filepath.Join(t.TempDir(), "w.log")}
+	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}, LogPath: filepath.Join(t.TempDir(), "w.log")}
 
 	inst, err := rt.Create(ctx, spec)
 	require.NoError(t, err)
@@ -76,6 +77,7 @@ func TestIssue45_WorkerEndReclaimsSubprocesses(t *testing.T) {
 			t.Cleanup(func() { _ = rt.Close() })
 			inst, err := rt.Create(ctx, runtime.WorkerSpec{
 				Namespace: "default",
+				OwnerKind: v1alpha1.KindFunction,
 				Name:      "spawner",
 				Command:   []string{"sh", "-c", `sleep 600 & echo $! > "$PIDFILE"; wait`},
 				Env:       map[string]string{"PIDFILE": pidFile},
@@ -114,7 +116,7 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 	ctx := context.Background()
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	spec := runtime.WorkerSpec{Namespace: "default", Name: "crasher", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}}
+	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "crasher", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}}
 	files := func() []string {
 		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*"))
 		require.NoError(t, err)
@@ -144,7 +146,7 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	ctx := context.Background()
 	rt := process.New()
 	t.Cleanup(func() { _ = rt.Close() })
-	spec := runtime.WorkerSpec{Namespace: "default", Name: "live", Command: []string{"sleep", "30"}}
+	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}}
 	logs := func() []string {
 		got, err := filepath.Glob(filepath.Join(tmp, "funcd-worker-*.log"))
 		require.NoError(t, err)
@@ -176,9 +178,9 @@ func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
 	rt := process.New()
 	callerLog := filepath.Join(t.TempDir(), "caller.log")
 	specs := []runtime.WorkerSpec{
-		{Namespace: "default", Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
-		{Namespace: "default", Name: "exited", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}},
-		{Namespace: "default", Name: "own-log", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}, LogPath: callerLog},
+		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
+		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "exited", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}},
+		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "own-log", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}, LogPath: callerLog},
 	}
 	for _, spec := range specs {
 		inst, err := rt.Create(ctx, spec)
@@ -214,6 +216,7 @@ func TestWorkerEnvExcludesDaemonEnvironment(t *testing.T) {
 	t.Cleanup(func() { _ = rt.Close() })
 	inst, err := rt.Create(ctx, runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "envdump",
 		Command:   []string{"sh", "-c", `env > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"; sleep 30`},
 		Env:       map[string]string{"OUT": out, "SPEC_VAR": "from-spec"},

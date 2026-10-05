@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
 	"github.com/pyvvo/funcd/internal/runtime/runtimecontract"
@@ -60,6 +61,7 @@ func TestIssue40_RestartReclaimsLeftoverWorker(t *testing.T) {
 	ctx := context.Background()
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue40",
 		Revision:  "issue40-1",
 		Image:     "docker.io/library/busybox:1.36",

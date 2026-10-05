@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
@@ -52,6 +53,7 @@ func TestIssue370_CreateUsesConfiguredSnapshotter(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue370",
 		Revision:  "issue370-1",
 		Image:     "funcd/issue370:latest",
@@ -138,6 +140,7 @@ func TestIssue456_CreateUnpacksPresentImage(t *testing.T) {
 
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue456",
 		Revision:  "issue456-1",
 		Image:     "funcd/issue456:latest",
@@ -171,6 +174,7 @@ func TestIssue493_CreateFindsImportedCuratedImage(t *testing.T) {
 	cs, layer, manifest := fakeImage(t)
 	spec := runtime.WorkerSpec{
 		Namespace: "default",
+		OwnerKind: v1alpha1.KindFunction,
 		Name:      "issue493",
 		Revision:  "issue493-1",
 		Image:     "funcd/runtime-nodejs22:latest",

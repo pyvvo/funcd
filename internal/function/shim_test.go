@@ -67,9 +67,15 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 }
 
 func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
+	if spec.OwnerKind == "" {
+		return runtime.Instance{}, fault.Invalidf("fake.Create", "spec.OwnerKind must not be empty")
+	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if held, ok := f.specs[id]; ok && held.OwnerKind != spec.OwnerKind {
+		return runtime.Instance{}, fault.Conflictf("fake.Create", "instance %q is held by a %s worker", id, held.OwnerKind)
+	}
 	if st, ok := f.state[id]; ok && !st.Terminal() {
 		return runtime.Instance{}, fault.Conflictf("fake.Create", "instance %q already exists", id)
 	}
@@ -154,8 +160,8 @@ func (f *fakeRuntime) Close() error { return nil }
 func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	spec := f.specs[id]
 	in := runtime.Instance{
-		ID: id, Namespace: spec.Namespace, Name: spec.Name, Revision: spec.Revision, Replica: spec.Replica,
-		State: f.state[id], CreatedAt: f.created[id],
+		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
+		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id],
 	}
 	if in.State == runtime.StateRunning && !f.held[id] {
 		in.IP = f.ip
@@ -182,6 +188,7 @@ func (f *fakeRuntime) forget() {
 	clear(f.state)
 	clear(f.created)
 	clear(f.stopped)
+	clear(f.held)
 }
 
 // exit marks replica 0 of name — of whichever revision runs it — as exited in state st, created age ago (a crash of a
