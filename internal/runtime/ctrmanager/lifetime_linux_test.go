@@ -23,7 +23,9 @@ func TestIssue630_ContainerdOutlivesEnsureContextUntilClose(t *testing.T) {
 	if err := syscall.Mkfifo(ready, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fake := fmt.Sprintf("#!/bin/sh\ntrap 'kill $!; : > %q; exit 0' INT\n: > %q\nsleep 30 >/dev/null 2>&1 & wait\n", closed, ready)
+	// The fake closes containerd's log pipe at once: the goroutine that copies it runs in the bubble, and
+	// synctest.Wait would wait for it until the fake exits.
+	fake := fmt.Sprintf("#!/bin/sh\nexec >/dev/null 2>&1\ntrap 'kill $!; : > %q; exit 0' INT\n: > %q\nsleep 30 & wait\n", closed, ready)
 	if err := os.WriteFile(filepath.Join(bin, "containerd"), []byte(fake), 0o700); err != nil {
 		t.Fatal(err)
 	}

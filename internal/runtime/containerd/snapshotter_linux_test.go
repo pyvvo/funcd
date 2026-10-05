@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -268,10 +270,13 @@ func writeBlob(t *testing.T, cs content.Store, mediaType string, b []byte) ocisp
 type memSnapshotter struct {
 	snapshots.Snapshotter
 	rootfs string
+	mu     sync.Mutex
 	keys   map[string]bool
 }
 
 func (s *memSnapshotter) Prepare(ctx context.Context, key, parent string, _ ...snapshots.Opt) ([]mount.Mount, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if parent != "" && !s.keys[parent] {
 		return nil, fmt.Errorf("parent snapshot %s does not exist: %w", parent, errdefs.ErrNotFound)
 	}
@@ -283,6 +288,8 @@ func (s *memSnapshotter) Prepare(ctx context.Context, key, parent string, _ ...s
 }
 
 func (s *memSnapshotter) Stat(_ context.Context, key string) (snapshots.Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.keys[key] {
 		return snapshots.Info{}, fmt.Errorf("snapshot %s: %w", key, errdefs.ErrNotFound)
 	}
@@ -290,6 +297,8 @@ func (s *memSnapshotter) Stat(_ context.Context, key string) (snapshots.Info, er
 }
 
 func (s *memSnapshotter) Commit(_ context.Context, name, key string, _ ...snapshots.Opt) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.keys[key] {
 		return fmt.Errorf("snapshot %s: %w", key, errdefs.ErrNotFound)
 	}
@@ -303,6 +312,8 @@ func (s *memSnapshotter) Mounts(context.Context, string) ([]mount.Mount, error) 
 }
 
 func (s *memSnapshotter) Remove(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.keys[key] {
 		return fmt.Errorf("snapshot %s: %w", key, errdefs.ErrNotFound)
 	}
@@ -343,10 +354,24 @@ func (uncompressedApplier) Apply(_ context.Context, desc ocispec.Descriptor, _ [
 
 type memContainers struct {
 	containers.Store
-	records map[string]containers.Container
+	mu        sync.Mutex
+	records   map[string]containers.Container
+	getErr    error // when set, every Get fails with it
+	deleteErr error // when set, every Delete fails with it
+}
+
+func (s *memContainers) List(context.Context, ...string) ([]containers.Container, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Collect(maps.Values(s.records)), nil
 }
 
 func (s *memContainers) Get(_ context.Context, id string) (containers.Container, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.getErr != nil {
+		return containers.Container{}, s.getErr
+	}
 	c, ok := s.records[id]
 	if !ok {
 		return containers.Container{}, fmt.Errorf("container %q: %w", id, errdefs.ErrNotFound)
@@ -355,11 +380,18 @@ func (s *memContainers) Get(_ context.Context, id string) (containers.Container,
 }
 
 func (s *memContainers) Create(_ context.Context, c containers.Container) (containers.Container, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.records[c.ID] = c
 	return c, nil
 }
 
 func (s *memContainers) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if _, ok := s.records[id]; !ok {
 		return fmt.Errorf("container %q: %w", id, errdefs.ErrNotFound)
 	}
@@ -399,7 +431,9 @@ type createdTasks struct {
 	mu      sync.Mutex
 	stopped map[string]chan struct{} // per live task, closed by the kill that stops it
 	killed  []string
+	signal  map[string]uint32 // the first signal each task got
 	deleted []string
+	getErr  error // when set, every Get fails with it
 }
 
 func (f *createdTasks) Create(_ context.Context, req *tasksapi.CreateTaskRequest, _ ...grpc.CallOption) (*tasksapi.CreateTaskResponse, error) {
@@ -415,6 +449,9 @@ func (f *createdTasks) Create(_ context.Context, req *tasksapi.CreateTaskRequest
 func (f *createdTasks) Get(_ context.Context, req *tasksapi.GetRequest, _ ...grpc.CallOption) (*tasksapi.GetResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	stopped, ok := f.stopped[req.ContainerID]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "task %q not found", req.ContainerID)
@@ -441,6 +478,12 @@ func (f *createdTasks) Kill(_ context.Context, req *tasksapi.KillRequest, _ ...g
 		close(stopped)
 	}
 	f.killed = append(f.killed, req.ContainerID)
+	if f.signal == nil {
+		f.signal = map[string]uint32{}
+	}
+	if _, ok := f.signal[req.ContainerID]; !ok {
+		f.signal[req.ContainerID] = req.Signal
+	}
 	return &ptypes.Empty{}, nil
 }
 

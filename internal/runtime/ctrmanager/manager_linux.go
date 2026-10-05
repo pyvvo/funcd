@@ -5,9 +5,11 @@ package ctrmanager
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -105,7 +107,13 @@ func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 	)
 	// Prepend BinDir to PATH so the runc-v2 shim + crun (laid down beside containerd) are found.
 	cmd.Env = append(os.Environ(), "PATH="+BinDir()+":"+os.Getenv("PATH"))
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	// Its own process group, so a signal to funcd's group (a terminal's Ctrl-C) does not stop containerd before
+	// funcd's runtime Close has stopped the workers in it; Close stops containerd after that. A terminal treats that
+	// group as a background job, so containerd logs through a pipe that funcd copies to its stderr: under
+	// `stty tostop` a write to the terminal would stop it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out := struct{ io.Writer }{os.Stderr}
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "start private containerd")
 	}
@@ -149,7 +157,7 @@ func (m *privateManager) Close() error {
 	if m.started && m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Signal(os.Interrupt)
 		done := make(chan struct{})
-		go func() { _, _ = m.cmd.Process.Wait(); close(done) }()
+		go func() { _ = m.cmd.Wait(); close(done) }()
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):

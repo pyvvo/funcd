@@ -193,8 +193,8 @@ func teardownContainers(rt runtime.Runtime, ns string) {
 		empties := 0
 		for range 20 {
 			n, err := sw.Sweep(ctx, v1.NamespaceName(ns))
-			if err != nil {
-				return
+			if err != nil && n == 0 {
+				return // containerd unreachable; a container it failed to discard is retried by the next pass
 			}
 			if n == 0 {
 				if empties++; empties >= 2 {

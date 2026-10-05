@@ -10,6 +10,7 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,6 +42,13 @@ import (
 // stopGrace is how long Stop waits after SIGTERM before sending SIGKILL.
 const stopGrace = 10 * time.Second
 
+// closeGrace is Close's SIGTERM grace: shorter than stopGrace so the stop fits Shutdown's closeTimeout and the log
+// Routes and telemetry still flush after it (issue #453).
+const closeGrace = 3 * time.Second
+
+// nsPrefix prefixes a funcd namespace's containerd namespace.
+const nsPrefix = "funcd-"
+
 // runcShim is the containerd runtime-v2 shim; ociRuntimeBinary selects crun as
 // the OCI runtime (C-based — lower per-worker RSS than the Go runc; drop-in
 // OCI-compatible via the shim's BinaryName).
@@ -61,6 +70,11 @@ type Config struct {
 	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
 	// nil ⇒ none may.
 	Pullable func(ref string) bool
+
+	// Private marks Socket as funcd's private managed containerd (ADR-0054): no other owner runs workers in it, so
+	// Close may sweep every funcd namespace in it. An external containerd may hold another daemon's or a bench's
+	// workers (ADR-0055), so there Close stops only the workers this driver runs.
+	Private bool
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -218,7 +232,7 @@ func writeWorkerResolv(stateDir, subnetCIDR string) (string, error) {
 }
 
 func (d *driver) nsCtx(ctx context.Context, ns v1alpha1.NamespaceName) context.Context {
-	return namespaces.WithNamespace(ctx, "funcd-"+string(ns))
+	return namespaces.WithNamespace(ctx, nsPrefix+string(ns))
 }
 
 func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
@@ -412,29 +426,44 @@ func (d *driver) Start(ctx context.Context, id runtime.InstanceID) error {
 }
 
 func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
+	return d.stop(ctx, id, stopGrace)
+}
+
+// stop sends the worker's task SIGTERM, then SIGKILL after grace, and releases the worker once its container is gone.
+// It keeps the worker and returns the error when it cannot load the task or delete the container, since the worker may
+// still run.
+func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Duration) error {
 	const op = "runtime.containerd.Stop"
 	sb, nctx, err := d.lookup(ctx, id, op)
 	if err != nil {
 		return err
 	}
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
-	if err != nil {
+	if errdefs.IsNotFound(err) {
 		d.markReleased(sb)
 		return nil // already gone — idempotent
 	}
+	if err != nil {
+		return mapErr(err, op, "load container %q", sb.ctrID)
+	}
 	task, err := container.Task(nctx, nil)
-	if err == nil {
+	switch {
+	case err == nil:
 		_ = task.Kill(nctx, syscall.SIGTERM)
 		select {
 		case <-waitTask(nctx, task):
-		case <-time.After(stopGrace):
+		case <-time.After(grace):
 			_ = task.Kill(nctx, syscall.SIGKILL)
 			<-waitTask(nctx, task)
 		}
 		_, _ = task.Delete(nctx)
+	case !errdefs.IsNotFound(err):
+		return mapErr(err, op, "load task %q", sb.ctrID)
 	}
 	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
-	_ = container.Delete(nctx, containerd.WithSnapshotCleanup)
+	if err := container.Delete(nctx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
+		return mapErr(err, op, "delete container %q", sb.ctrID)
+	}
 	closeLogChannel(sb) // close the Path B UDS listener + remove its dir (ADR-0081)
 	d.markReleased(sb)
 	return nil
@@ -489,7 +518,8 @@ func closeLogChannel(sb *worker) {
 // shim exits, so orphaned containerd-shim-runc-v2 processes are reaped), tearing down CNI
 // best-effort from the container labels (an orphan's netns died with its process), and deleting the
 // container + its snapshot (the source of the "<id>-snap already exists" collision). It is the
-// recovery primitive that makes `funcd bench --containerd` cleanly re-runnable; idempotent.
+// recovery primitive that makes `funcd bench --containerd` cleanly re-runnable; idempotent. It reports every
+// container it could not discard.
 func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, error) {
 	const op = "runtime.containerd.Sweep"
 	nctx := d.nsCtx(ctx, ns)
@@ -497,8 +527,11 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 	if err != nil {
 		return 0, mapErr(err, op, "list containers")
 	}
+	var errs []error
 	for _, c := range cs {
-		_ = d.discard(nctx, c)
+		if err := d.discard(nctx, c); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, mapErr(err, op, "discard container %q", c.ID()))
+		}
 		d.mu.Lock()
 		for id, sb := range d.instances {
 			if sb.ctrID == c.ID() {
@@ -508,19 +541,23 @@ func (d *driver) Sweep(ctx context.Context, ns v1alpha1.NamespaceName) (int, err
 		}
 		d.mu.Unlock()
 	}
-	return len(cs), nil
+	return len(cs), errors.Join(errs...)
 }
 
 // discard kills a container's task, tears its CNI attachment down from its labels (the netns died with its task) and
-// deletes it with its snapshot.
+// deletes it with its snapshot. It keeps a container whose task it cannot load, since that task may still run.
 func (d *driver) discard(nctx context.Context, c containerd.Container) error {
-	if task, terr := c.Task(nctx, nil); terr == nil {
+	task, err := c.Task(nctx, nil)
+	switch {
+	case err == nil:
 		_ = task.Kill(nctx, syscall.SIGKILL)
 		select {
 		case <-waitTask(nctx, task):
 		case <-time.After(stopGrace):
 		}
 		_, _ = task.Delete(nctx)
+	case !errdefs.IsNotFound(err):
+		return err
 	}
 	if labels, lerr := c.Labels(nctx); lerr == nil {
 		_, cniID := workerNames(labels["funcd/namespace"], labels["funcd/name"], labels["funcd/revision"], labels["funcd/replica"])
@@ -627,8 +664,47 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 	return out, nil
 }
 
+// Close stops every worker Stop has not released, all at once so shutdown takes one closeGrace however many ignore
+// SIGTERM, and releases the client. On the private containerd it also sweeps every funcd namespace, which catches the
+// workers an earlier hard-killed run left behind: no driver tracks them and the private containerd keeps them running.
+// A worker left running would serve on after the daemon stops, outside the egress fence (ADR-0115), so Close reports
+// every worker it could not stop and Shutdown then keeps the fence.
 func (d *driver) Close() error {
-	return d.client.Close()
+	d.mu.Lock()
+	var live []runtime.InstanceID
+	for id, sb := range d.instances {
+		if !sb.released {
+			live = append(live, id)
+		}
+	}
+	d.mu.Unlock()
+	errs := make([]error, len(live), len(live)+2)
+	var wg sync.WaitGroup
+	for i, id := range live {
+		wg.Go(func() { errs[i] = d.stop(context.Background(), id, closeGrace) })
+	}
+	wg.Wait()
+	if d.cfg.Private {
+		errs = append(errs, d.sweepAll(context.Background()))
+	}
+	return errors.Join(append(errs, d.client.Close())...)
+}
+
+// sweepAll sweeps every funcd containerd namespace at once.
+func (d *driver) sweepAll(ctx context.Context) error {
+	names, err := d.client.NamespaceService().List(ctx)
+	if err != nil {
+		return mapErr(err, "runtime.containerd.Close", "list namespaces")
+	}
+	errs := make([]error, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		if ns, ok := strings.CutPrefix(name, nsPrefix); ok {
+			wg.Go(func() { _, errs[i] = d.Sweep(ctx, v1alpha1.NamespaceName(ns)) })
+		}
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // lookup resolves an instance id to its worker + namespaced context.

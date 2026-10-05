@@ -30,9 +30,10 @@ func TestOneServiceInstallPrint(t *testing.T) {
 		}
 	}
 	// ONE service: there must be no separate containerd unit reference as a [Unit]/[Service]
-	// block — containerd is funcd's managed child, surfaced via KillMode=control-group.
-	if !strings.Contains(unit, "KillMode=control-group") {
-		t.Fatalf("printed unit must reap the managed containerd child (KillMode=control-group)\n---\n%s", unit)
+	// block — containerd is funcd's managed child. KillMode=mixed signals funcd alone on stop, so it stops its
+	// workers before containerd, and then reaps the child with the rest of the control group.
+	if !strings.Contains(unit, "KillMode=mixed") {
+		t.Fatalf("printed unit must stop funcd before its managed containerd child (KillMode=mixed)\n---\n%s", unit)
 	}
 	if strings.Count(unit, "ExecStart=") != 1 {
 		t.Fatalf("want exactly one service (one ExecStart), got %d\n---\n%s", strings.Count(unit, "ExecStart="), unit)
