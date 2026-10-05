@@ -834,3 +834,41 @@ func TestScenarioPooledMissingRevisionLeftOut(t *testing.T) {
 	require.NotContains(t, rec.digests(), "sha256:B", "nothing runs at B")
 	require.Equal(t, 2, res.count(), "nothing is resolved after the deploy")
 }
+
+// A reclaimed pool worker's liveness goes with its other state, so a pool key that stops existing (its last member
+// deleted, or moved to another worker id) leaves no entry behind.
+func TestIssue724_ReclaimedPoolForgetsLiveness(t *testing.T) {
+	t.Parallel()
+	t.Run("member deleted", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+		for i := range 3 {
+			name, worker := "m"+strconv.Itoa(i), "w"+strconv.Itoa(i)
+			h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = worker })
+			h.reconcile(t, name)
+			h.reconcile(t, name)
+			require.Equal(t, v1.PhaseReady, h.getFn(t, name).Status.Phase)
+			require.Equal(t, 1, function.PoolLiveLen(h.r), "the pool answered its probe")
+
+			require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", v1.ObjectName(name), ""))
+			h.reconcile(t, name)
+			require.Empty(t, h.rt.revisionStates(poolOf(worker)), "the pool is reclaimed")
+			require.Zero(t, function.PoolLiveLen(h.r), "the reclaimed pool's liveness is forgotten")
+		}
+	})
+	t.Run("member moved", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+		h.create(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w0" })
+		h.reconcile(t, "m")
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "m").Status.Phase)
+
+		h.apply(t, "m", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+		h.reconcile(t, "m")
+		h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseReady, h.getFn(t, "m").Status.Phase)
+		require.Empty(t, h.rt.revisionStates(poolOf("w0")), "the old pool is reclaimed")
+		require.Equal(t, 1, function.PoolLiveLen(h.r), "only the new pool's liveness is kept")
+	})
+}

@@ -662,8 +662,7 @@ func (r *Reconciler) reclaimOrphanPools(ctx context.Context, ns v1.NamespaceName
 		if err := r.retire(ctx, in); err != nil {
 			return err
 		}
-		r.forgetPoolSigOf(ns, in.Name)
-		r.forgetPoolMembers(ns, in.Name)
+		r.forgetPool(ns, in.Name)
 		if r.invokeSockets != nil {
 			r.invokeSockets.Remove(ns, in.Name)
 		}
@@ -729,15 +728,22 @@ func (r *Reconciler) forgetPoolSig(key pooling.PoolKey) {
 	delete(r.poolSigs, key)
 }
 
-// forgetPoolSigOf forgets the signature of the pool worker named name in ns.
-func (r *Reconciler) forgetPoolSigOf(ns v1.NamespaceName, name v1.ObjectName) {
+// forgetPool drops all r keeps for the reclaimed pool worker named name in ns: its signature, liveness and member set.
+func (r *Reconciler) forgetPool(ns v1.NamespaceName, name v1.ObjectName) {
+	ofPool := func(key pooling.PoolKey) bool { return key.Namespace == ns && poolInstanceName(key) == name }
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
 	for key := range r.poolSigs {
-		if key.Namespace == ns && poolInstanceName(key) == name {
+		if ofPool(key) {
 			delete(r.poolSigs, key)
 		}
 	}
+	for key := range r.poolLive {
+		if ofPool(key) {
+			delete(r.poolLive, key)
+		}
+	}
+	delete(r.poolSets, poolSetKey(ns, name))
 }
 
 // ownedByMe reports whether fi belongs to this process's user.
