@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — Capture, Wire contract, harness body/attrs, Config comment, Open question: unbounded records.
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Dependencies & I/O, Consumes: a pooled record is stored under its host-checked member (funcd.member).
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after three judge passes — signal-generic narrowed to the pipeline,
   Sink concurrency contract, loss-free qualified to freeze/teardown, `internal/platform/config` path, and the
   per-language harness capture contract added. **Reviewing → Implemented 2026-06-29** — review **pass**, see

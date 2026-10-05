@@ -1,6 +1,7 @@
 # ADR-0093: Function ConfigMap consumption (`spec.config`) + one unified env-resolver
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — the pooled gate: a pooled Function declaring spec.config or spec.secrets no longer fails closed.
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: **ACCEPT**, sound + faithful to the code + cycle-free, 0
   Blockers/0 Majors; folded 3 Minors [the resolve-trigger + pooled gate flip to config-OR-secrets; sentinel
   `ErrConfig`/`ErrSecret` so the reconciler attributes `ConfigResolveFailed` vs `SecretResolveFailed` from one

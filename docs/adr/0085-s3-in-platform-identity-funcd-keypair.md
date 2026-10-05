@@ -1,6 +1,8 @@
 # ADR-0085: In-platform S3 identity — funcd-managed per-function keypair via an in-process IAM
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Constraints, cannot-forge-peer premise, Alternatives, Consequences: pool mates can read each other's keypairs.
+- **Superseded in part by**: [ADR-0175](0175-engine-is-its-own-principal.md) (2026-10-05) — fixed in-platform key format and decoding a key to (ns, fn): the key carries the owner kind.
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after one judge pass — **no Blockers; the security model was verified
   end-to-end against real versitygw v1.6.0** [SigV4 → `CheckValidSignature(…, account.Secret, …)` against
   `IAMService.GetUserAccount`'s returned secret ⇒ a function can sign only as itself]. Folded the two Majors

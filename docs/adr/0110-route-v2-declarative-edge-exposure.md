@@ -1,6 +1,7 @@
 # ADR-0110: Route v2 — declarative edge exposure + the namespace exposure model (F79)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0176](0176-one-collision-rule-for-every-edge-source.md) (2026-10-05) — Decisions 3, 4 and 6: the edge aggregator applies HostRequired/RouteConflict to every source; no host-less /function/ claim.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

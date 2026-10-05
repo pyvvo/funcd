@@ -1,6 +1,7 @@
 # ADR-0074: Cedar authorization for resource access — per-function principals, Policy resources, KV first
 
 - **Status**: Implemented (2026-06-23)
+- **Superseded in part by**: [ADR-0177](0177-a-policy-governs-only-its-namespace.md) (2026-10-05) — Decisions 3-4: one cached PolicySet per namespace plus a built-ins-only set; a Policy governs only its namespace.
 - **Date**: 2026-06-23 (judged 2026-06-23, cedar-go facts WebFetch-verified — Apache-2.0/pure-Go/v1.8.0 +
   entities-with-parents/PolicySet/Authorize. No Blockers; folded 2 Majors: made the system **genuinely
   default-deny** (dropped the shipped seed read-permit; examples carry their own read `Policy`; the coarse-read

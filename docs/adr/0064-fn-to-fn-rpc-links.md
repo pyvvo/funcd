@@ -1,6 +1,7 @@
 # ADR-0064: Declarative synchronous function-to-function RPC (links) over a worker-node local API
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decision 3 and checklist: on a pool socket the caller is the member named in X-Funcd-Member, checked.
 - **Date**: 2026-06-21 (Accepted + **Implemented 2026-06-21** — review pass, see docs/reviews/adr-0064-implementation-claude-opus-4-8.md; post-judge: moved contract validation to the **target's shim**
   (the daemon-side `Invoke` forwards via the in-process `Handler.ServeHTTP` and **propagates** the shim's
   422/500 rather than re-validating — the daemon holds no per-function validator) [Major]; named the acyclic

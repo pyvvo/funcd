@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — blob-size-cap scenario, put bullet, Invalid→422 map, checklist: over-cap ⇒ 413/422.
+- **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Constraints, DoD, checklist: on a pool socket the caller is the member named in X-Funcd-Member, checked.
 - **Implemented**: 2026-07-12 — review gate (claude-opus-4-8) **pass**: all builds/lint/tests green on both tags
   plus the Node (50) and Python (79) shim suites; the facade's authz shape matches `s3gateway.authorize`
   byte-for-byte with a Function principal, the legacy no-`Action` facade is gone, and every Scenario maps to a

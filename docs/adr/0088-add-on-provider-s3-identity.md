@@ -1,6 +1,7 @@
 # ADR-0088: Add-on provider identity in the F47/Cedar authorization model
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0175](0175-engine-is-its-own-principal.md) (2026-10-05) — Function-first precedence and the name-based principal UID: a provider engine is its own principal, looked up by kind.
 - **Date**: 2026-07-01 (accepted + implemented 2026-07-01 — review `pass` ([scorecard](../reviews/adr-0088-implementation-claude-opus-4-8.md)); judge: judge: sound, verified against the real code (the in-platform keypair principal is a name-based `Function:ns/name` UID, `auth.go:43`; the policy is principal-agnostic; the prefix-owner UID is name-based) — no Blocker/Major; one documented Minor (name-collision precedence → Function-first))
 - **Deciders**: green-0-rabbit
 - **Tags**: add-on-provider, s3, cedar, authorization, identity, blob, lakehouse

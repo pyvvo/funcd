@@ -1,6 +1,7 @@
 # ADR-0140: Path-mounted `Site` — `ingress.path` (F104)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0176](0176-one-collision-rule-for-every-edge-source.md) (2026-10-05) — line 108: a host-less claim may no longer shadow /function/.
 - **Date**: 2026-09-27 (**Implemented 2026-09-27** — review pass (claude-opus-5): 11/11 scenarios, the
   in-process e2e and the s3 containerd lane (8/8, two sites on one listener) green, with no router,
   data-plane or static-handler change; **Accepted 2026-09-27** — judge pass folded: `Validate` now checks the RESOLVED
