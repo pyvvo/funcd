@@ -1,0 +1,36 @@
+# ADR-0113: a Namespace whose edgeDefaults make every Route in it authenticated, applied with the admin token
+# (ADR-0171). The Route sets no auth of its own, so it takes the namespace default.
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: team-guarded
+spec:
+  edgeDefaults:
+    auth:
+      mode: authenticated
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: guarded-echo
+  namespace: team-guarded
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1
+---
+apiVersion: funcd.io/v1alpha1
+kind: Route
+metadata:
+  name: guarded-echo
+  namespace: team-guarded
+  resourceGroup: rg1
+spec:
+  rules:
+    - path: /guarded
+      backend:
+        function: guarded-echo

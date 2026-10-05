@@ -18,6 +18,9 @@
 #             static web app dir pushed with --site, ADR-0139).
 #   apply   — `funcdctl apply -f` order in the guest (after the pushes).
 #   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s).
+#   tokens  — ADR-0171 static credentials, name → token. Before funcd starts, the guest writes each to
+#             /etc/funcd/tokens/<name> (root, 0600) for the lane funcdconfig's auth.credentials; its funcdctl then
+#             applies and probes with the `developer` token. Absent = the built-in dev token.
 #   venom   — the host-side Venom suite the recipe runs once the VM is up.
 
 env-echo:
@@ -32,7 +35,9 @@ env-echo:
     - function.yaml
     - route.yaml
     - secure-route.yaml
-    - funcdconfig.yaml
+    # ADR-0171: the example's daemon config with auth.credentials in place of auth.token
+    - from: e2e/fixtures/env-echo-funcdconfig.yaml
+      to: funcdconfig.yaml
     # ADR-0143: the redeploy fixtures the Venom suite applies mid-suite
     - from: e2e/fixtures/env-echo-config-v2.yaml
       to: env-echo-config-v2.yaml
@@ -45,6 +50,14 @@ env-echo:
     # ADR-0149: a runtime with no image, applied last by the Venom suite
     - from: e2e/fixtures/ruby3-echo.yaml
       to: ruby3-echo.yaml
+    # ADR-0110 and ADR-0113: the Namespaces the Venom suite applies last, with the admin token
+    - from: e2e/fixtures/env-echo-explicit-namespace.yaml
+      to: env-echo-explicit-namespace.yaml
+    - from: e2e/fixtures/env-echo-edge-defaults.yaml
+      to: env-echo-edge-defaults.yaml
+  tokens:
+    admin: env-echo-lane-admin
+    developer: env-echo-lane-developer
   push:
     - artifact: env-echo.mjs
       ref: env-echo

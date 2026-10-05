@@ -27,7 +27,20 @@ provision:
       mkdir -p "$d" /var/lib/funcd/data
       rm -rf "$reg"
       tar xzf /mnt/funcd-deps/lane.tgz -C "$d"   # staged files + lanes.yaml + a LANE marker
-      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      # ADR-0171: write the lane's `tokens` (root, 0600) before funcd reads them; funcdctl takes the developer one.
+      token=$(python3 - <<'PY'
+      import os, yaml
+      d = "/opt/lane"
+      tokens = yaml.safe_load(open(d + "/lanes.yaml"))[open(d + "/LANE").read().strip()].get("tokens", {})
+      for name, token in tokens.items():
+          os.makedirs("/etc/funcd/tokens", mode=0o700, exist_ok=True)
+          fd = os.open("/etc/funcd/tokens/" + name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          os.write(fd, token.encode())
+          os.close(fd)
+      print(tokens.get("developer", "funcd-dev-token"))
+      PY
+      )
+      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN="$token"
       systemd-run --unit funcd-demo /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
       curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
       # DATA-DRIVEN deploy: read this lane's section and run its push(es) then its apply order.
@@ -72,12 +85,14 @@ probes:
     script: |
       #!/bin/bash
       set -eu -o pipefail
-      export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+      export FUNCD_SERVER=http://127.0.0.1:8080
       python3 - <<'PY'
-      import json, subprocess, sys, time, yaml
+      import json, os, subprocess, sys, time, yaml
       d = "/opt/lane"
       lane = open(d + "/LANE").read().strip()
-      r = yaml.safe_load(open(d + "/lanes.yaml"))[lane]["ready"]
+      spec = yaml.safe_load(open(d + "/lanes.yaml"))[lane]
+      os.environ["FUNCD_TOKEN"] = spec.get("tokens", {}).get("developer", "funcd-dev-token")
+      r = spec["ready"]
       kind, names, tries = r["kind"], r["names"], int(r.get("tries", 60))
       def phase(n):
           out = subprocess.run(["funcdctl", "get", kind, n, "-n", "default", "-o", "json"],

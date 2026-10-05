@@ -8,13 +8,18 @@
 #      and shared=from-secret (the key present in both: the Secret wins, config-then-secrets order).
 # It also proves ADR-0143's redeploy on containerd: a spec change switches revisions with no failed call, and a
 # revision that cannot run leaves the serving one answering. Then it kills the daemon and starts it again: the
-# serving revision answers again (issue 40). Last, a Function on a runtime with no image is RuntimeUnavailable (ADR-0149).
+# serving revision answers again (issue 40). A Function on a runtime with no image is RuntimeUnavailable (ADR-0149).
+# Last, the admin token from auth.credentials (ADR-0171) applies an explicit Namespace whose Function serves only
+# through its host Route (ADR-0110), and a Namespace whose edgeDefaults make its Route authenticated (ADR-0113).
 # The http step hits the VM's forwarded 127.0.0.1 data plane; the exec step reads phase in-VM via limactl.
 name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
 
 vars:
   filler: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+  # the lane's `tokens` in scripts/lanes.yaml, listed in auth.credentials (e2e/fixtures/env-echo-funcdconfig.yaml)
+  devtoken: env-echo-lane-developer
+  admintoken: env-echo-lane-admin
 
 testcases:
   - name: env-echo is Ready (both config + secret bindings resolved)
@@ -23,7 +28,7 @@ testcases:
       # (fail-closed: an unresolved ConfigMap/Secret would hold it out of Ready).
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
             funcdctl get function env-echo -n default -o json \
             | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"]["phase"])'
         retry: 30
@@ -60,7 +65,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
             funcdctl get route env-echo -n default -o json \
             | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
         retry: 30
@@ -100,13 +105,13 @@ testcases:
 
   # ADR-0113 (F77): the edge authn PEP. The `secure-echo` Route marks /secure `authenticated`
   # (server.auth.edge is on). An anonymous request is 401'd BEFORE the activator; a request bearing
-  # the dev token (developer scoped to `default`) is authorized by the delegated PDP and served. The
+  # the developer token (scoped to `default`) is authorized by the delegated PDP and served. The
   # default namespace stays `open`, so the earlier /echo + /function/env-echo cases are unaffected.
   - name: F77 edge authn PEP — /secure is 401 anonymous, served with a bearer (ADR-0113)
     steps:
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} \
             funcdctl get route secure-echo -n default -o json \
             | python3 -c 'import sys,json;d=json.load(sys.stdin);c={x["type"]:x["status"] for x in d.get("status",{}).get("conditions",[])};print("READY="+c.get("Ready",""))'
         retry: 30
@@ -128,7 +133,7 @@ testcases:
         url: "{{.dp}}/secure"
         headers:
           content-type: application/json
-          Authorization: "Bearer funcd-dev-token"
+          Authorization: "Bearer {{.devtoken}}"
         body: '{"data":null}'
         retry: 15
         delay: 2
@@ -239,7 +244,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             read -r task pid < /tmp/env-echo-before
             now=$(sudo ctr --address $sock -n funcd-default task ls | awk -v t="$task" "\$1==t && \$3==\"RUNNING\"{print \$2}")
@@ -263,7 +268,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl apply -f /opt/lane/env-echo-config-v2.yaml >/dev/null
             funcdctl apply -f /opt/lane/env-echo-v2.yaml >/dev/null
             seen=0
@@ -300,7 +305,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             tasks=$(sudo ctr --address $sock -n funcd-default task ls | awk "\$1 ~ /^env-echo-/ {print \$1}" | sort | paste -sd, -)
             ctrs=$(sudo ctr --address $sock -n funcd-default containers ls -q | grep "^env-echo-" | sort | paste -sd, -)
@@ -319,14 +324,14 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl apply -f /opt/lane/env-echo-badtag.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"RevisionReady\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",SERVING=\"+s.get(\"servingRevision\",\"\")+\",REVISION=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\"))"'
         retry: 15
         delay: 2
@@ -350,14 +355,14 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl apply -f /opt/lane/env-echo-badhandler.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get function env-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"RevisionReady\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",SERVING=\"+s.get(\"servingRevision\",\"\")+\",REVISION=\"+r.get(\"status\",\"\")+\"/\"+r.get(\"reason\",\"\"))"'
         retry: 30
         delay: 2
@@ -418,14 +423,14 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl apply -f /opt/lane/ruby3-echo.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get function ruby3-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",READY=\"+r.get(\"reason\",\"\")+\",MESSAGE=\"+r.get(\"message\",\"\"))"'
         retry: 15
         delay: 2
@@ -438,7 +443,112 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl delete function ruby3-echo -n default'
         assertions:
           - result.code ShouldEqual 0
+
+  # ADR-0110 + ADR-0171: only an admin creates a Namespace. In the explicit Namespace the host Route serves the
+  # Function, and the by-name path is refused before any wake.
+  - name: explicit-namespace — the admin token applies an explicit Namespace, and its Function serves through its host Route only
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/env-echo-explicit-namespace.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
+            fn=$(funcdctl get function explicit-echo -n team-explicit -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            route=$(funcdctl get route explicit-echo -n team-explicit -o json | python3 -c "import sys,json;c={x[\"type\"]:x[\"status\"] for x in json.load(sys.stdin).get(\"status\",{}).get(\"conditions\",[])};print(c.get(\"Ready\",\"\"))")
+            echo "FUNCTION=$fn,ROUTE=$route"'
+        retry: 30
+        delay: 2
+        info: "explicit-echo status → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual FUNCTION=Ready,ROUTE=True
+      - type: http
+        method: POST
+        url: "{{.dp}}/hello"
+        headers:
+          Host: explicit.example.com
+          content-type: application/json
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "host-routed invoke → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/explicit-echo"
+        headers:
+          X-Funcd-Namespace: team-explicit
+          content-type: application/json
+        body: '{"data":null}'
+        info: "by-name invoke in the explicit namespace → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 404
+          - result.body ShouldContainSubstring "namespace is explicit"
+
+  # ADR-0113 + ADR-0171: the Route sets no auth, so the namespace's edgeDefaults make it authenticated. The developer
+  # token is scoped to `default`, so the PDP refuses it here; the admin token spans every namespace.
+  - name: edge-defaults — a Route in a Namespace with authenticated edgeDefaults is 401 anonymous, 403 out of scope, served with the admin token
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
+            funcdctl apply -f /opt/lane/env-echo-edge-defaults.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
+            fn=$(funcdctl get function guarded-echo -n team-guarded -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            route=$(funcdctl get route guarded-echo -n team-guarded -o json | python3 -c "import sys,json;c={x[\"type\"]:x[\"status\"] for x in json.load(sys.stdin).get(\"status\",{}).get(\"conditions\",[])};print(c.get(\"Ready\",\"\"))")
+            echo "FUNCTION=$fn,ROUTE=$route"'
+        retry: 30
+        delay: 2
+        info: "guarded-echo status → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual FUNCTION=Ready,ROUTE=True
+      # retry/delay covers the router taking the Ready Route; until then /guarded is 404.
+      - type: http
+        method: POST
+        url: "{{.dp}}/guarded"
+        headers:
+          content-type: application/json
+        body: '{"data":null}'
+        retry: 10
+        delay: 1
+        info: "anonymous /guarded → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 401
+      - type: http
+        method: POST
+        url: "{{.dp}}/guarded"
+        headers:
+          content-type: application/json
+          Authorization: "Bearer {{.devtoken}}"
+        body: '{"data":null}'
+        info: "/guarded with the developer token → {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 403
+      - type: http
+        method: POST
+        url: "{{.dp}}/guarded"
+        headers:
+          content-type: application/json
+          Authorization: "Bearer {{.admintoken}}"
+        body: '{"data":null}'
+        retry: 15
+        delay: 2
+        info: "/guarded with the admin token → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
