@@ -186,6 +186,32 @@ func TestIssue159_ListObjectsHonoursListingParams(t *testing.T) {
 	require.False(t, *v1rest.IsTruncated)
 }
 
+// A listing authorizes the leading segment of the S3 Prefix, so it must return only keys in that
+// sub-domain: a principal bound to gold sees nothing of golden, whose name merely starts with gold.
+func TestListObjectsExcludeSiblingPrefixSharingName(t *testing.T) {
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket)
+	for _, k := range []string{"gold/a.parquet", "golden/secret.parquet"} {
+		g.seed(t, "default", "lakehouse", k, []byte("x"))
+	}
+	c := g.client(t, "default", "analytics")
+	ctx := context.Background()
+
+	for _, prefix := range []string{"gold", "gold/"} {
+		v2, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: ptrS("lakehouse"), Prefix: ptrS(prefix)})
+		require.NoError(t, err)
+		require.Equal(t, []string{"gold/a.parquet"}, objectKeys(v2.Contents), "V2 Prefix=%q", prefix)
+
+		v1list, err := c.ListObjects(ctx, &awss3.ListObjectsInput{Bucket: ptrS("lakehouse"), Prefix: ptrS(prefix)})
+		require.NoError(t, err)
+		require.Equal(t, []string{"gold/a.parquet"}, objectKeys(v1list.Contents), "V1 Prefix=%q", prefix)
+	}
+
+	delim, err := c.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: ptrS("lakehouse"), Prefix: ptrS("gold"), Delimiter: ptrS("/")})
+	require.NoError(t, err)
+	require.Empty(t, delim.Contents)
+	require.Equal(t, []string{"gold/"}, commonPrefixes(delim.CommonPrefixes))
+}
+
 // A listing page whose XML would pass versitygw's 4 MiB response cap pages on instead of answering 500:
 // S3-length keys made of '&' encode five times longer, so a page of 1000 keys, or of their 1000 common
 // prefixes, is over 5 MiB.
