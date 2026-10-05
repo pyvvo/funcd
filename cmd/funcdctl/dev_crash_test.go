@@ -11,8 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -65,6 +69,16 @@ func savedWorkers(t *testing.T, stateDir string) []procreg.Entry {
 	return live
 }
 
+// reapAtCleanup kills, at test end, every worker a `funcdctl dev` run registered in stateDir and left running.
+func reapAtCleanup(t *testing.T, stateDir string) {
+	t.Cleanup(func() {
+		if r, err := procreg.Open(stateDir, "workers"); err == nil {
+			_, _ = r.Reap(context.Background(), time.Second)
+			_ = r.Close()
+		}
+	})
+}
+
 // devRestartReaps kills a `funcdctl dev` run with SIGKILL and starts it again on the same state: the first run's
 // worker is reaped and the new run's replica serves. It returns the project dir.
 func devRestartReaps(t *testing.T, mode, root string) string {
@@ -77,12 +91,7 @@ func devRestartReaps(t *testing.T, mode, root string) string {
 	cfg, _ := crashConfig(spec)
 	state, err := devStateDir(cfg, dir)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		if r, err := procreg.Open(state, "workers"); err == nil {
-			_, _ = r.Reap(context.Background(), time.Second)
-			_ = r.Close()
-		}
-	})
+	reapAtCleanup(t, state)
 
 	first := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
 	first.Env = append(os.Environ(), devCrashEnv+"="+spec)
@@ -161,4 +170,77 @@ func TestDevStateDir(t *testing.T) {
 	abs, err := devStateDir(devConfig{cacheDir: cache}, wd)
 	require.NoError(t, err)
 	require.Equal(t, abs, rel, "a relative project dir is keyed by its absolute path")
+}
+
+// devHangupEnv makes a re-executed test binary run the `funcdctl dev` command on "<persist-to>\n<project>" until a
+// signal stops it.
+const devHangupEnv = "FUNCDCTL_TEST_DEV_HANGUP"
+
+// A hangup (a closed terminal or a dropped SSH session) stops `funcdctl dev` as SIGINT and SIGTERM do: the platform
+// stops, its worker, which runs in its own process group and never sees the hangup, exits, and the shim temp dir is
+// removed.
+func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
+	if spec := os.Getenv(devHangupEnv); spec != "" {
+		persistTo, dir, _ := strings.Cut(spec, "\n")
+		root := newRootCmd(io.Discard)
+		root.SetArgs([]string{"dev", dir, "--persist", "--persist-to", persistTo})
+		require.NoError(t, root.Execute())
+		return
+	}
+	requireRuntime(t)
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return {}; }\n",
+	})
+	persistTo, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(persistTo) })
+	state := filepath.Join(persistTo, "process")
+	reapAtCleanup(t, state)
+	out, err := os.Create(filepath.Join(t.TempDir(), "dev.out"))
+	require.NoError(t, err)
+	defer func() { _ = out.Close() }()
+	t.Cleanup(func() {
+		if t.Failed() {
+			logs, _ := os.ReadFile(out.Name())
+			t.Logf("dev output:\n%s", logs)
+		}
+	})
+
+	// A forked child gets the default action for a signal this process handles, so it does not inherit the ignored
+	// hangup of a test run under nohup.
+	guard := make(chan os.Signal, 1)
+	signal.Notify(guard, syscall.SIGHUP)
+	defer signal.Stop(guard)
+
+	child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	child.Env = append(os.Environ(), devHangupEnv+"="+persistTo+"\n"+dir)
+	child.Stdout, child.Stderr = out, out
+	require.NoError(t, child.Start())
+	var waitErr error
+	exited := make(chan struct{})
+	go func() { waitErr = child.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = child.Process.Kill(); <-exited })
+
+	var workers []procreg.Entry
+	require.Eventually(t, func() bool { workers = savedWorkers(t, state); return len(workers) == 1 }, 60*time.Second,
+		50*time.Millisecond, "dev starts its worker")
+	argv, err := exec.Command("ps", "-ww", "-o", "command=", "-p", strconv.Itoa(workers[0].PID)).Output()
+	require.NoError(t, err)
+	args := strings.Fields(string(argv))
+	i := slices.IndexFunc(args, func(a string) bool { return strings.Contains(a, "funcdctl-dev-shim") })
+	require.GreaterOrEqual(t, i, 0, "the worker runs no dev shim: %s", argv)
+	shimDir := filepath.Dir(args[i])
+	t.Cleanup(func() { _ = os.RemoveAll(shimDir) })
+
+	require.NoError(t, child.Process.Signal(syscall.SIGHUP))
+	select {
+	case <-exited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("dev did not stop on a hangup")
+	}
+	assert.Eventually(t, func() bool { return !procreg.Owned(workers[0]) }, 5*time.Second, 50*time.Millisecond,
+		"the hangup left the worker running")
+	assert.NoError(t, waitErr, "dev did not stop gracefully on a hangup")
+	assert.NoDirExists(t, shimDir, "the hangup left the dev shim temp dir")
 }

@@ -19,6 +19,7 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/testkit/bench"
 )
@@ -300,7 +301,7 @@ func runContainerdLane(ctx context.Context, out io.Writer, c benchConfig) error 
 	// container teardown + the Manager.Close below run (graceful cleanup), instead of the process
 	// being killed mid-run and orphaning the managed containerd + its container shims (which would
 	// make the next `funcd bench --containerd` collide on the same container ids).
-	ctx, stop := signal.NotifyContext(ctx, stopSignals()...)
+	ctx, stop := signal.NotifyContext(ctx, stopsignal.Signals()...)
 	defer stop()
 
 	// ADR-0054 runtime Manager: ExternalSocket "" ⇒ a privately-managed containerd + embedded
