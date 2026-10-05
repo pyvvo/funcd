@@ -104,10 +104,11 @@ func (h *storeHandlers) liveMarker(ctx context.Context, ns v1.NamespaceName, ref
 }
 
 // refuseMigrationRecord keeps the KVStore marker migration's completion record out of the API, so no principal
-// can pre-create it to skip the migration or delete it to re-run it (ADR-0180 Decision 4). deleteObjIf applies
-// it to every delete, a forced ResourceGroup delete's members included.
-func refuseMigrationRecord(ns v1.NamespaceName, name v1.ObjectName) error {
-	if ns == workflow.KVMigrationNamespace && name == workflow.KVMigrationRecord {
+// can pre-create it to skip the migration or delete it to re-run it (ADR-0180 Decision 4). createObj, replaceObjIf
+// and deleteObjIf run it right after authorization, so a denied caller gets 403 (ADR-0018 C3); deleteObjIf's
+// call covers a forced ResourceGroup delete's members too.
+func refuseMigrationRecord(kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
+	if kind == v1.KindConfigMap && ns == workflow.KVMigrationNamespace && name == workflow.KVMigrationRecord {
 		return fault.Conflictf("controlplane.ConfigMap", "configmap %s/%s is reserved for the platform", ns, name)
 	}
 	return nil

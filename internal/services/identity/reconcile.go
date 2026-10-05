@@ -142,7 +142,7 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 	}
 	rotate := gerr != nil || reissue || id.Spec.Rotate > id.Status.ObservedRotate
 	if !rotate {
-		return nil // secret already issued for this rotation generation
+		return r.restampSecret(ctx, existing.(*v1.Secret), id) // secret already issued for this rotation generation
 	}
 	secret, err := randomSecret()
 	if err != nil {
@@ -170,6 +170,7 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 		return cerr
 	}
 	sec := existing.(*v1.Secret) // rotate or re-issue → update in place (preserve UID/RV)
+	sec.ResourceGroup = id.ResourceGroup
 	sec.OwnerReferences = []v1.OwnerReference{ownerRef(id)}
 	sec.Spec.Data = data
 	if sec.Spec.Type == "" {
@@ -177,6 +178,16 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 	}
 	_, uerr := r.store.Update(ctx, sec)
 	return uerr
+}
+
+// restampSecret moves an issued Secret to its Identity's ResourceGroup without rotating it (#722).
+func (r *Reconciler) restampSecret(ctx context.Context, sec *v1.Secret, id *v1.Identity) error {
+	if sec.ResourceGroup == id.ResourceGroup {
+		return nil
+	}
+	sec.ResourceGroup = id.ResourceGroup
+	_, err := r.store.Update(ctx, sec)
+	return err
 }
 
 // secretControl reports whether sec's controller ref names id's kind and name, and whether it carries id's UID.

@@ -538,3 +538,39 @@ func TestReadToken(t *testing.T) {
 	_, err = readToken(strings.NewReader(""))
 	require.ErrorContains(t, err, "no token")
 }
+
+// Issue #717: the auth.token / auth.namespaces shorthand is trimmed the way a token file is, so a token that loads
+// authenticates; a value no request can use refuses startup naming the key, never the token.
+func TestIssue717_ShorthandTrimsOrRefusesUnusableValues(t *testing.T) {
+	for _, c := range []struct {
+		name, body, ns string
+		env            [2]string
+	}{
+		{name: "FUNCD_TOKEN-trailing-space", env: [2]string{"FUNCD_TOKEN", "probetok "}, ns: "default"},
+		{name: "block-scalar-token", body: "auth:\n  token: |\n    probetok\n", ns: "default"},
+		{name: "FUNCD_AUTH_NAMESPACES-space-after-comma", body: "auth:\n  token: probetok\n", env: [2]string{"FUNCD_AUTH_NAMESPACES", "default, team-a"}, ns: "team-a"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+			cfg, err := loadConfig(t, shortDataDir(t), c.body)
+			require.NoError(t, err)
+			_, err = startCredPlatform(t, cfg).client(t, "probetok").Apply(context.Background(), functionObj(c.ns, "api"))
+			require.NoError(t, err, "a shorthand token that loads authenticates in its namespaces")
+		})
+	}
+	dev := tokenFile(t, t.TempDir(), "dev", devAToken, 0o600)
+	for _, c := range []startCase{
+		{name: "whitespace-token", env: [2]string{"FUNCD_TOKEN", " \t"}, key: "auth.token (FUNCD_TOKEN)"},
+		{name: "two-line-token", env: [2]string{"FUNCD_TOKEN", "probe\ntok"}, key: "auth.token (FUNCD_TOKEN)"},
+		{name: "empty-namespaces", body: "auth:\n  namespaces: []\n", key: "auth.namespaces (FUNCD_AUTH_NAMESPACES)"},
+		{name: "empty-namespace-entries", env: [2]string{"FUNCD_AUTH_NAMESPACES", ","}, key: "auth.namespaces (FUNCD_AUTH_NAMESPACES)"},
+		{name: "credentials-empty-namespace-entry", body: "auth:\n  credentials:\n" + entry(dev, "developer") + "      namespaces:\n        - \"\"\n", key: "auth.credentials[0].namespaces"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := requireRefused(t, c, &syncBuf{})
+			require.NotContains(t, err.Error(), "probe", "a token value reached an error")
+		})
+	}
+}

@@ -202,3 +202,44 @@ func TestScenarioMigrationRecordGuarded(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before.GetObjectMeta().ResourceVersion, after.GetObjectMeta().ResourceVersion, "the record is unchanged")
 }
+
+// A caller the PDP denies gets 403 on every verb on the migration record, as on any other name; only an
+// authorized caller meets the ADR-0180 guard's 409.
+func TestIssue719_MigrationRecordGuardRunsAfterAuthorization(t *testing.T) {
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: rbac.New(),
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{
+			"dev-token":        {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+			"view-token":       {Subject: "view", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
+			"sys-viewer-token": {Subject: "sysview", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{workflow.KVMigrationNamespace}},
+		}),
+	})
+	require.NoError(t, err)
+	require.NoError(t, workflow.MarkKVStoresOnce(context.Background(), st))
+	body, err := json.Marshal(&v1.ConfigMap{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap},
+		ObjectMeta: v1.ObjectMeta{Name: workflow.KVMigrationRecord, Namespace: workflow.KVMigrationNamespace, ResourceGroup: "x"},
+		Spec:       v1.ConfigMapSpec{Data: map[string]string{"a": "b"}},
+	})
+	require.NoError(t, err)
+	base := fmt.Sprintf("/apis/funcd.io/v1alpha1/namespaces/%s/configmaps", workflow.KVMigrationNamespace)
+	item := base + "/" + string(workflow.KVMigrationRecord)
+
+	for _, token := range []string{"dev-token", "view-token", "sys-viewer-token"} {
+		for _, req := range []struct {
+			method, path string
+			body         []byte
+		}{
+			{http.MethodPost, base, body},
+			{http.MethodPut, item, body},
+			{http.MethodDelete, item, nil},
+		} {
+			t.Run(token+"/"+req.method, func(t *testing.T) {
+				rec := do(t, srv, req.method, req.path, token, req.body)
+				require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+			})
+		}
+	}
+}

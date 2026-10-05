@@ -323,3 +323,45 @@ func controllerRefs(refs []v1.OwnerReference) int {
 	}
 	return n
 }
+
+// #722: a Workflow moved to another ResourceGroup takes its step Functions and its retain KVStore along, so
+// the store, which no controller owns, stops being a member of the old group (ADR-0170 Decision 7).
+func TestIssue722_GroupMoveRestampsChildren(t *testing.T) {
+	s := newStore(t)
+	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
+	ctx := context.Background()
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "w", Namespace: "default", ResourceGroup: "team", UID: "uid-w"},
+		Spec: v1.WorkflowSpec{
+			KV: []v1.WorkflowKVStore{{Name: "keep", Tables: []v1.KVTable{{Name: "t", Owner: "s1"}}}},
+			Steps: []v1.WorkflowStep{{Name: "s1", Function: &v1.FunctionStep{
+				Image: "oci:x", KV: []v1.FunctionKV{{Alias: "c", Store: "keep", Table: "t"}},
+			}}},
+		},
+	}
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("first materialize: %v", err)
+	}
+	wf.ResourceGroup = "other"
+	if err := m.Materialize(ctx, wf); err != nil {
+		t.Fatalf("re-materialize: %v", err)
+	}
+	fn, err := s.Get(ctx, v1.KindFunction.GVK(), "default", "w-s1")
+	if err != nil {
+		t.Fatalf("get function: %v", err)
+	}
+	kv, err := s.Get(ctx, v1.KindKVStore.GVK(), "default", "keep")
+	if err != nil {
+		t.Fatalf("get kvstore: %v", err)
+	}
+	if g := fn.GetObjectMeta().ResourceGroup; g != "other" {
+		t.Errorf("step function group = %q, want other", g)
+	}
+	if g := kv.GetObjectMeta().ResourceGroup; g != "other" {
+		t.Errorf("retain kvstore group = %q, want other (with no controller ref it stays a member of the old group)", g)
+	}
+	if b := fn.(*v1.Function).Spec.KV; len(b) != 1 || b[0].Store != "keep" {
+		t.Errorf("kv binding after the move = %+v, want the keep binding", b)
+	}
+}

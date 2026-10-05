@@ -103,6 +103,9 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	} else {
 		m.GenerateName = ""
 	}
+	if err := refuseMigrationRecord(kind, obj.GetObjectMeta().Namespace, obj.GetObjectMeta().Name); err != nil {
+		return nil, err
+	}
 	unlock, err := h.lockFor(ctx, kind, admission.Create, obj.GetObjectMeta().Namespace)
 	if err != nil {
 		return nil, err
@@ -190,6 +193,9 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 // that object's resourceVersion, so the guard's verdict holds for the write.
 func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object, guard func(context.Context, v1.Object) error) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbUpdate, kind, ns); err != nil {
+		return nil, err
+	}
+	if err := refuseMigrationRecord(kind, ns, name); err != nil {
 		return nil, err
 	}
 	meta := obj.GetObjectMeta()
@@ -308,10 +314,8 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
 	}
-	if kind == v1.KindConfigMap {
-		if err := refuseMigrationRecord(ns, name); err != nil {
-			return err
-		}
+	if err := refuseMigrationRecord(kind, ns, name); err != nil {
+		return err
 	}
 	unlock, err := h.lockFor(ctx, kind, admission.Delete, ns)
 	if err != nil {
@@ -757,9 +761,6 @@ func (h *storeHandlers) GetConfigMap(ctx context.Context, ns v1.NamespaceName, n
 }
 
 func (h *storeHandlers) CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
-	if err := refuseMigrationRecord(cfg.Namespace, cfg.Name); err != nil {
-		return v1.ConfigMap{}, err
-	}
 	o, err := h.createObj(ctx, v1.KindConfigMap, &cfg)
 	if err != nil {
 		return v1.ConfigMap{}, err
@@ -780,9 +781,6 @@ func (h *storeHandlers) ListConfigMaps(ctx context.Context, ns v1.NamespaceName)
 }
 
 func (h *storeHandlers) ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
-	if err := refuseMigrationRecord(ns, name); err != nil {
-		return v1.ConfigMap{}, err
-	}
 	o, err := h.replaceObj(ctx, v1.KindConfigMap, ns, name, &cfg)
 	if err != nil {
 		return v1.ConfigMap{}, err

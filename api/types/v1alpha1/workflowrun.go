@@ -54,13 +54,35 @@ type ReplaySeed struct {
 }
 
 // WorkflowRunStatus is the coarse mirror of engine run state (Badger is the truth):
-// the run phase (via the embedded Status) plus per-step summaries.
+// the run phase plus per-step summaries.
 type WorkflowRunStatus struct {
 	Status `json:",inline"`
-	Steps  []RunStepStatus `json:"steps,omitempty"`
+	// Phase shadows the embedded Status.Phase: a run has its own phases (ADR-0094), not the resource ones.
+	Phase RunPhase        `json:"phase,omitempty"`
+	Steps []RunStepStatus `json:"steps,omitempty"`
 	// TraceID is the run's W3C trace (ADR-0102), mirrored from the engine record (ADR-0100) so
 	// `describe` shows it and `funcdctl workflow logs <run>` (ADR-0106) resolves a run to its logs.
 	TraceID string `json:"traceId,omitempty"` // 32 lowercase hex; empty ⇒ a legacy/traceless run
+}
+
+// RunPhase is a run's execution phase (ADR-0094): Pending → Running ⇄ Paused → Succeeded | Failed | Cancelled.
+type RunPhase string
+
+const (
+	RunPending   RunPhase = "Pending"
+	RunRunning   RunPhase = "Running"
+	RunPaused    RunPhase = "Paused"
+	RunSucceeded RunPhase = "Succeeded"
+	RunFailed    RunPhase = "Failed"
+	RunCancelled RunPhase = "Cancelled"
+)
+
+// Schema carries RunPhase's enum into the generated OpenAPI (ADR-0048).
+func (RunPhase) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(
+		string(RunPending), string(RunRunning), string(RunPaused),
+		string(RunSucceeded), string(RunFailed), string(RunCancelled),
+	)
 }
 
 // RunStepStatus is one step's coarse execution state, including the ADR-0100 troubleshooting facts
@@ -101,7 +123,8 @@ func (StepPhase) Schema(huma.Registry) *huma.Schema {
 // GroupVersionKind returns the constant GVK for WorkflowRun.
 func (r *WorkflowRun) GroupVersionKind() GroupVersionKind { return KindWorkflowRun.GVK() }
 
-// GetStatus returns the embedded Status for the controller's write-back seam.
+// GetStatus returns the embedded Status for the controller's write-back seam. Its Phase is unused: the run
+// phase is WorkflowRunStatus.Phase, which shadows it.
 func (r *WorkflowRun) GetStatus() *Status { return &r.Status.Status }
 
 // Validate enforces the WorkflowRunSpec rules JSON Schema can't express (ADR-0094):

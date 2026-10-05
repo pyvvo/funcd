@@ -683,3 +683,14 @@ func TestSite_UnstorableObjectKeyIsNotReadyNotRetried(t *testing.T) {
 		})
 	}
 }
+
+// #722: a Site moved to another ResourceGroup takes its owned Route along, though the Route spec is unchanged.
+func TestIssue722_GroupMoveRestampsRoute(t *testing.T) {
+	h := newHarness(t)
+	h.push("v1", siteA())
+	h.seedSite("bi", "v1", nil)
+	h.deploy("bi")
+	h.apply("bi", func(s *v1.Site) { s.ResourceGroup = "other" })
+	h.reconcile("bi")
+	require.Equal(t, v1.ResourceGroupName("other"), h.route("bi").ResourceGroup)
+}

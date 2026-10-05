@@ -23,12 +23,7 @@ const maxTokenFileBytes = 4096
 func credentialOption(cfg config.Config, log *slog.Logger) (funcd.Option, error) {
 	const op = "credentialOption"
 	if cfg.Auth.Credentials == nil {
-		token := cfg.Auth.Token
-		if token == "" {
-			token = funcd.DevToken
-			log.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
-		}
-		return funcd.WithDevAuth(token, cfg.Auth.Namespaces...), nil
+		return devAuthOption(cfg, log)
 	}
 	creds := make([]funcd.Credential, 0, len(cfg.Auth.Credentials))
 	first := make(map[string]int, len(cfg.Auth.Credentials))
@@ -36,13 +31,16 @@ func credentialOption(cfg config.Config, log *slog.Logger) (funcd.Option, error)
 	for i, e := range cfg.Auth.Credentials {
 		key := fmt.Sprintf("auth.credentials[%d]", i)
 		nss := e.Namespaces
+		var err error
 		switch {
-		case nss != nil && len(nss) == 0:
-			return nil, fault.Invalidf(op, "config key %q is empty: omit it for default", key+".namespaces")
 		case e.Role == "admin" && nss != nil:
 			return nil, fault.Invalidf(op, "config key %q is set on an admin, which spans every namespace: remove it", key+".namespaces")
 		case e.Role != "admin" && nss == nil:
 			nss = []string{"default"}
+		case e.Role != "admin":
+			if nss, err = namespaceList(key+".namespaces", nss); err != nil {
+				return nil, err
+			}
 		}
 		token, err := readTokenFile(key+".tokenFile", e.TokenFile)
 		if err != nil {
@@ -61,6 +59,42 @@ func credentialOption(cfg config.Config, log *slog.Logger) (funcd.Option, error)
 	log.Info("funcd: static credentials loaded",
 		"admin", perRole["admin"], "developer", perRole["developer"], "viewer", perRole["viewer"])
 	return funcd.WithCredentials(creds...), nil
+}
+
+// devAuthOption maps the auth.token shorthand to WithDevAuth, holding its token and namespaces to the token-file
+// rules so a value no request can use refuses startup (#717).
+func devAuthOption(cfg config.Config, log *slog.Logger) (funcd.Option, error) {
+	const op = "devAuthOption"
+	token := funcd.DevToken
+	if cfg.Auth.Token == "" {
+		log.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
+	} else {
+		t, err := parseToken(cfg.Auth.Token)
+		if err != nil {
+			return nil, fault.Invalidf(op, "config key %q %v", "auth.token (FUNCD_TOKEN)", err)
+		}
+		token = t
+	}
+	nss, err := namespaceList("auth.namespaces (FUNCD_AUTH_NAMESPACES)", cfg.Auth.Namespaces)
+	if err != nil {
+		return nil, err
+	}
+	return funcd.WithDevAuth(token, nss...), nil
+}
+
+// namespaceList returns the namespaces at key with surrounding whitespace trimmed, refusing an empty list or entry.
+func namespaceList(key string, nss []string) ([]string, error) {
+	const op = "namespaceList"
+	if len(nss) == 0 {
+		return nil, fault.Invalidf(op, "config key %q is empty: omit it for default", key)
+	}
+	out := make([]string, len(nss))
+	for i, n := range nss {
+		if out[i] = strings.TrimSpace(n); out[i] == "" {
+			return nil, fault.Invalidf(op, "config key %q has an empty entry at index %d: remove it", key, i)
+		}
+	}
+	return out, nil
 }
 
 // readTokenFile opens path read-only and non-blocking (a FIFO never stalls startup), checks the opened file, and
@@ -86,7 +120,7 @@ func readTokenFile(key, path string) (string, error) {
 	return token, nil
 }
 
-// readToken reads at most maxTokenFileBytes and returns the one token, ASCII whitespace trimmed.
+// readToken reads at most maxTokenFileBytes and returns its one token (parseToken).
 func readToken(r io.Reader) (string, error) {
 	b, err := io.ReadAll(io.LimitReader(r, maxTokenFileBytes+1))
 	if err != nil {
@@ -95,7 +129,12 @@ func readToken(r io.Reader) (string, error) {
 	if len(b) > maxTokenFileBytes {
 		return "", fmt.Errorf("is larger than %d bytes", maxTokenFileBytes)
 	}
-	token := strings.Trim(string(b), " \t\n\v\f\r")
+	return parseToken(string(b))
+}
+
+// parseToken returns the one token in s, ASCII whitespace trimmed.
+func parseToken(s string) (string, error) {
+	token := strings.Trim(s, " \t\n\v\f\r")
 	if token == "" {
 		return "", errors.New("holds no token (empty or whitespace only)")
 	}

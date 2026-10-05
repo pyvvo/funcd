@@ -76,7 +76,7 @@ type ReconcilerDeps struct {
 	ImageFor func(runtime string) string
 	// Proxy runs the per-CatalogService node-private catalog PEP proxy (ADR-0137, ADR-0162): every pass Listens on
 	// the recorded status.proxyPort, the Ready branch Ensures the proxy fronts the engine and publishes ITS url as
-	// Status.Endpoint (internal functions inject the proxy, not the engine), a missing binding Suspends it, and a
+	// Status.Endpoint (internal functions inject the proxy, not the engine), a not-Ready pass Suspends it, and a
 	// delete Releases it, closing it only once no Function binds the catalog. nil ⇒ no internal PEP proxy (the
 	// engine address is published directly, the pre-ADR-0137 posture) — kept nil-safe for the in-memory/unit path.
 	Proxy *cataloggw.Manager

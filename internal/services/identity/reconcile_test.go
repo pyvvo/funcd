@@ -177,3 +177,22 @@ func TestScenarioIdentityTokenRotation(t *testing.T) {
 	_, ok = keys.PrincipalFor(t1)
 	require.False(t, ok, "the rotated-out token is refused")
 }
+
+// #722: an Identity moved to another ResourceGroup takes its credential Secret along, without rotating it.
+func TestIssue722_GroupMoveRestampsSecret(t *testing.T) {
+	t.Parallel()
+	st, r := setup(t)
+	newIdentity(t, st, "data", "mover")
+	reconcile(t, r, "data", "mover")
+	before := getSecret(t, st, "data", "mover").Spec.Data
+
+	id := getIdentity(t, st, "data", "mover")
+	id.ResourceGroup = "other"
+	_, err := st.Update(context.Background(), id)
+	require.NoError(t, err)
+	reconcile(t, r, "data", "mover")
+
+	sec := getSecret(t, st, "data", "mover")
+	require.Equal(t, v1.ResourceGroupName("other"), sec.ResourceGroup)
+	require.Equal(t, before, sec.Spec.Data, "a group move does not rotate the credential")
+}

@@ -11,16 +11,14 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// Run phases (ADR-0094): Pending → Running ⇄ Paused → Succeeded | Failed | Cancelled.
-// They are stored in the generic WorkflowRun.status.phase (string-backed Phase); the
-// engine writes them and they are never user-validated against the generic enum.
+// Run phases (ADR-0094), declared with their OpenAPI enum as v1.RunPhase.
 const (
-	runPending   v1.Phase = v1.PhasePending
-	runRunning   v1.Phase = "Running"
-	runPaused    v1.Phase = "Paused"
-	runSucceeded v1.Phase = "Succeeded"
-	runFailed    v1.Phase = v1.PhaseFailed
-	runCancelled v1.Phase = "Cancelled"
+	runPending   = v1.RunPending
+	runRunning   = v1.RunRunning
+	runPaused    = v1.RunPaused
+	runSucceeded = v1.RunSucceeded
+	runFailed    = v1.RunFailed
+	runCancelled = v1.RunCancelled
 )
 
 // stepNode is one step's static shape plus its live execution state within a run.
@@ -202,7 +200,7 @@ func (rs *runState) pendingToSkip() []*stepNode {
 // runPhase derives the run phase from the DAG steps. Any Failed step ⇒ Failed
 // (fail-fast). All terminal and none Failed ⇒ Succeeded (Skipped steps are fine).
 // A Cancelled step ⇒ the run is Cancelled. Otherwise Running.
-func (rs *runState) runPhase() v1.Phase {
+func (rs *runState) runPhase() v1.RunPhase {
 	allTerminal, anyFailed, anyCancelled := true, false, false
 	for _, name := range rs.dagSteps() {
 		switch rs.steps[name].phase {

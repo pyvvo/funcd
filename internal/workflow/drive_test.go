@@ -183,7 +183,7 @@ func getRunObj(t *testing.T, s store.Store, name v1.ObjectName) *v1.WorkflowRun 
 	return obj.(*v1.WorkflowRun)
 }
 
-func runPhaseIs(t *testing.T, s store.Store, name v1.ObjectName, want v1.Phase) func() bool {
+func runPhaseIs(t *testing.T, s store.Store, name v1.ObjectName, want v1.RunPhase) func() bool {
 	return func() bool { return getRunObj(t, s, name).Status.Phase == want }
 }
 
