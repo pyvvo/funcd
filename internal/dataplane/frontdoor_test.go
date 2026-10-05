@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/dataplane"
+	"github.com/pyvvo/funcd/internal/edge/limit"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -73,6 +74,12 @@ func seedFn(t *testing.T, st store.Store, ns, name string) {
 // upstream's last-seen path recorder.
 func frontDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry) (http.Handler, store.Store, *spyScaler, *string) {
 	t.Helper()
+	return limitedFrontDoor(t, warm, entries, nil)
+}
+
+// limitedFrontDoor is frontDoor with the key: function rate step lim (ADR-0164).
+func limitedFrontDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry, lim *limit.TargetLimiter) (http.Handler, store.Store, *spyScaler, *string) {
+	t.Helper()
 	var gotPath string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -85,7 +92,7 @@ func frontDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Ent
 	require.NoError(t, err)
 	rtr := router.New()
 	require.NoError(t, rtr.Program(context.Background(), entries))
-	return dataplane.Handler(st, act, rtr, nil, nil, 0, nil), st, scaler, &gotPath
+	return dataplane.Handler(st, act, rtr, nil, lim, nil, 0, nil), st, scaler, &gotPath
 }
 
 func do(t *testing.T, h http.Handler, method, host, path string, nsHeader string) *http.Response {

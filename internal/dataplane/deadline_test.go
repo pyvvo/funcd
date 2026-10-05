@@ -65,7 +65,7 @@ func deadlineDataPlane(t *testing.T, ep activator.Endpoints, sc activator.Scaler
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: ep, Scaler: sc})
 	require.NoError(t, err)
-	return dataplane.Handler(st, act, rtr, nil, nil, d, nil), st
+	return dataplane.Handler(st, act, rtr, nil, nil, nil, d, nil), st
 }
 
 func timedCall(h http.Handler, target string) (*httptest.ResponseRecorder, time.Duration) {

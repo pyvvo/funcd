@@ -259,13 +259,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 
 	// Ingress protection (ADR-0112, F75): opt-in rate/size/concurrency limits on the data-plane chain.
 	if l := cfg.Server.Limits; l.RatePerMin > 0 || l.MaxBodyBytes > 0 || l.MaxInFlight > 0 {
-		opts = append(opts, funcd.WithLimits(limit.Config{
-			RatePerMin:   l.RatePerMin,
-			Burst:        l.Burst,
-			Key:          limit.Key(l.Key),
-			MaxBodyBytes: l.MaxBodyBytes,
-			MaxInFlight:  l.MaxInFlight,
-		}))
+		opts = append(opts, funcd.WithLimits(limitsConfig(cfg)))
 	}
 
 	// Edge authn PEP (ADR-0113, F77): opt-in per-target auth-stance enforcement on the data plane.
@@ -560,6 +554,19 @@ func parseDuration(key, s string, def time.Duration, zeroOK bool) (time.Duration
 		want = "a non-negative"
 	}
 	return 0, fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s Go duration, e.g. 30s)", key, s, want)
+}
+
+// limitsConfig maps server.limits to the data-plane limiter's Config (ADR-0112, ADR-0164).
+func limitsConfig(cfg config.Config) limit.Config {
+	l := cfg.Server.Limits
+	return limit.Config{
+		RatePerMin:   l.RatePerMin,
+		Burst:        l.Burst,
+		Key:          limit.Key(l.Key),
+		MaxBodyBytes: l.MaxBodyBytes,
+		MaxInFlight:  l.MaxInFlight,
+		MaxKeys:      l.MaxKeys,
+	}
 }
 
 // buildStore constructs the metastore, activating ADR-0022's at-rest encryptor for Secret values
