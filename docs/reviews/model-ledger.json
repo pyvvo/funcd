@@ -8773,5 +8773,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-676-fix-claude-opus-5-5-w12c.md",
     "notes": "No findings. The fix reuses scopeEntity.named() to type-check the entity of an is-in scope. The revert overlay fails for the reported reason, the test passes under -race, 3 of 3 mutants were killed, and vet and lint are clean. Observation, not scored: the type after `is` is still unchecked, which is outside this issue's scope."
+  },
+  {
+    "date": "2026-10-05",
+    "issue": "690",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 10,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-690-fix-claude-opus-5-5-w13p.md",
+    "notes": "Minor(model): the pooled exemption from the C!=S stop in gateFailed is untested (mutant m1 survives, near-equivalent because stopRevision lists only fn.Name workers); Minor(model): countWorkers treats a pool worker that does not answer /health/members, or does not list the member, as not running (the gate's Pending) rather than running (Degraded), and no test covers that case."
   }
 ]
