@@ -88,7 +88,7 @@ func (b *backup) Ship(ctx context.Context) (uint64, error) {
 	}
 	prefix := fmt.Sprintf("inc/%020d", since)
 	w := b.newChunkWriter(ctx, prefix)
-	to, berr := b.db.Backup(w, since)
+	to, berr := b.export(w, since)
 	if berr != nil {
 		return since, fault.Internalf(op, "badger backup since %d: %v", since, berr)
 	}
@@ -126,7 +126,7 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 	}
 	prefix := fmt.Sprintf("base/%020d", at)
 	w := b.newChunkWriter(ctx, prefix)
-	to, berr := b.db.Backup(w, 0)
+	to, berr := b.export(w, 0)
 	if berr != nil {
 		return fault.Internalf(op, "badger full backup: %v", berr)
 	}
@@ -144,7 +144,8 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 	return nil
 }
 
-// Restore reconstructs the instance from the latest base then each incremental, in version order. Idempotent
+// Restore reconstructs the instance from the latest base then each incremental, in version order, and sets
+// the cursor to the chain's head so a ship from the restored instance continues the chain. Idempotent
 // (Badger Load is last-writer-wins per key-version). Run into a fresh instance.
 func (b *backup) Restore(ctx context.Context) error {
 	const op = "kvbadger.backup.Restore"
@@ -160,12 +161,28 @@ func (b *backup) Restore(ctx context.Context) error {
 			return err
 		}
 	}
+	head := uint64(0)
+	if man.Base != nil {
+		head = man.Base.To
+	}
 	for _, s := range man.Incs {
 		if err := b.loadSegment(ctx, s); err != nil {
 			return err
 		}
+		head = s.To
 	}
-	return nil
+	return b.setCursor(ctx, head)
+}
+
+// export streams every version >= since to w and returns the highest version exported. It leaves out the
+// backup's own cursor: each cursor write is a new version, so exporting it made every idle tick ship a
+// segment (#790).
+func (b *backup) export(w io.Writer, since uint64) (uint64, error) {
+	s := b.db.NewStream()
+	s.LogPrefix = "kvbadger.backup"
+	s.SinceTs = since
+	s.ChooseKey = func(item *badger.Item) bool { return string(item.Key()) != backupCursorKey }
+	return s.Backup(w, since)
 }
 
 func (b *backup) loadSegment(ctx context.Context, s segment) error {
