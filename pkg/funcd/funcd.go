@@ -1194,12 +1194,8 @@ func (p *Platform) Run(ctx context.Context) error {
 	if p.cfg.tlsSpec != nil {
 		const top = "funcd.Run.tls"
 		spec := *p.cfg.tlsSpec
-		if spec.StorageDir == "" {
-			base := p.cfg.artifactDir
-			if base == "" {
-				base = os.TempDir()
-			}
-			spec.StorageDir = filepath.Join(base, "funcd-tls")
+		if spec.StorageDir == "" && p.cfg.artifactDir != "" {
+			spec.StorageDir = filepath.Join(p.cfg.artifactDir, "funcd-tls")
 		}
 		prov, terr := edgetls.New(spec, p.logger)
 		if terr != nil {

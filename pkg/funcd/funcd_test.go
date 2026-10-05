@@ -224,6 +224,34 @@ func TestIssue489_RunShutsDownOnSetupError(t *testing.T) {
 	}
 }
 
+// A selfsigned TLS platform with no StorageDir and no artifact store fails Run with Invalid, instead of
+// keeping its TLS key in the shared, predictable <os.TempDir()>/funcd-tls that another local user can
+// create first and fill with a key pair of their own.
+func TestRunRefusesTLSWithoutStorageDir(t *testing.T) {
+	tmp, err := os.MkdirTemp("", "ftls")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
+
+	p, err := New(InMemory(), WithoutLogCompaction(), WithInvokeSocketDir(tmp), WithTLS(edgetls.Spec{Hosts: []string{"127.0.0.1"}}))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		_, serr := os.Stat(filepath.Join(tmp, "funcd-tls", "key.pem"))
+		t.Fatalf("Run served TLS without a storage dir (key in the shared temp dir: %t)", serr == nil)
+	}
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "storage dir")
+	require.NoDirExists(t, filepath.Join(tmp, "funcd-tls"))
+}
+
 // WithNodePlatform (ADR-0145) sets the platform the scheduler and the materializer share; the default is the
 // daemon's own, and a malformed one is refused.
 func TestWithNodePlatform(t *testing.T) {

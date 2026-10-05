@@ -326,6 +326,8 @@ func WithDataPlaneAddr(addr string) Option {
 // WithTLS enables TLS termination (ADR-0111, F74) on BOTH listeners (control-plane + data-plane) via
 // ServeTLS — funcd keeps its own http.Servers (no handover). The zero Mode defaults to `selfsigned`
 // (stdlib, offline, generated+persisted). Omit it entirely for plaintext (the back-compat default).
+// selfsigned and acme persist key material under spec.StorageDir, which defaults to
+// <artifact store>/funcd-tls; with neither set, Run fails with fault.Invalid.
 func WithTLS(spec edgetls.Spec) Option {
 	return func(c *config) error { s := spec; c.tlsSpec = &s; return nil }
 }
