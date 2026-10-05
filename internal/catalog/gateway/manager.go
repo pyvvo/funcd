@@ -150,6 +150,18 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 	return url, nil
 }
 
+// URL returns the published URL of the proxy running for a catalog, and false when none runs: a restarted daemon
+// runs none until Ensure binds one on a new port, so a URL stored before the restart is dead (#662).
+func (m *Manager) URL(ns v1.NamespaceName, name v1.ObjectName) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mp, ok := m.servers[managerKey(ns, name)]
+	if !ok {
+		return "", false
+	}
+	return m.publishURL(mp.listener.Addr()), true
+}
+
 // Remove stops and forgets the proxy for a catalog (ADR-0137 teardown path). Idempotent: removing an
 // unknown catalog is a no-op.
 func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {

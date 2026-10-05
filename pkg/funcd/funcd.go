@@ -691,6 +691,7 @@ func (p *Platform) buildControlPlane() error {
 		S3Gateway:            s3Injection,
 		CatalogMaster:        master, // ADR-0137: per-function catalog token derivation (same master as S3)
 		CatalogExtensionDir:  c.catalogExtensionDir,
+		CatalogProxies:       catalogMgr,
 		Secrets:              secretResolver,
 	})
 	if err != nil {

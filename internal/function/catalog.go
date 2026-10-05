@@ -21,7 +21,8 @@ import (
 // env — the caller holds the function Ready=False/CatalogNotReady and requeues. Readiness is the
 // catalog's Phase, not a non-empty status.endpoint: while the engine starts, the catalog reconciler
 // publishes the raw engine address there, and injecting it would bypass the PEP proxy (the engine
-// then rejects the per-function token). Only a Ready catalog publishes the proxy URL. Returns (nil,
+// then rejects the per-function token). Only a Ready catalog publishes the proxy URL, and with
+// catalogProxies set it must also be the URL of the proxy this daemon runs now (#662). Returns (nil,
 // false, nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through
@@ -59,6 +60,13 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 		// empty, or the raw engine address while the engine starts. Requeue in both cases.
 		if cs.Status.Phase != v1.PhaseReady || cs.Status.Endpoint == "" {
 			return nil, true, nil
+		}
+		// A Ready status can outlive its proxy: after a daemon restart it holds the old proxy's URL until the
+		// catalog's first pass ensures a new proxy on a new port (#662). Wait for that URL.
+		if r.catalogProxies != nil {
+			if url, live := r.catalogProxies.URL(fn.Namespace, bnd.Catalog); !live || url != cs.Status.Endpoint {
+				return nil, true, nil
+			}
 		}
 		alias := strings.ToUpper(bnd.Alias)
 		out["FUNCD_CATALOG_"+alias+"_URL"] = cs.Status.Endpoint // the node-private catalog PEP proxy (ADR-0137)
