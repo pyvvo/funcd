@@ -2302,12 +2302,11 @@ components:
         phase:
           enum:
             - Pending
-            - Deploying
-            - Ready
-            - Idle
-            - Degraded
+            - Running
+            - Paused
+            - Succeeded
             - Failed
-            - Terminating
+            - Cancelled
           type: string
         steps:
           items:

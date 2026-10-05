@@ -50,7 +50,7 @@ type Record struct {
 	// an ordinary run. The record is otherwise a normal checkpoint.
 	SourceRun  v1.ObjectName `json:"sourceRun,omitempty"`
 	SourceFrom v1.ObjectName `json:"sourceFrom,omitempty"`
-	Phase      v1.Phase      `json:"phase"`
+	Phase      v1.RunPhase   `json:"phase"`
 	Paused     bool          `json:"paused,omitempty"`
 	Steps      []StepState   `json:"steps,omitempty"`
 	StartedAt  int64         `json:"startedAt,omitempty"`
@@ -91,7 +91,7 @@ type StepState struct {
 // and retention GC).
 func (r *Record) Terminal() bool {
 	switch r.Phase {
-	case "Succeeded", v1.PhaseFailed, "Cancelled":
+	case v1.RunSucceeded, v1.RunFailed, v1.RunCancelled:
 		return true
 	default:
 		return false

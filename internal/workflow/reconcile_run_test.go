@@ -276,7 +276,7 @@ func TestRunReconcilerPause(t *testing.T) {
 // Issue #419: a pause that arrives after the run finished (its terminal status write lost a conflict, so
 // status.phase is not terminal yet) mirrors the run's own phase and emits its root span (ADR-0103).
 func TestIssue419_PauseOfFinishedRunMirrorsItsPhase(t *testing.T) {
-	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+	for _, phase := range []v1.RunPhase{runSucceeded, runFailed} {
 		t.Run(string(phase), func(t *testing.T) {
 			ctx := context.Background()
 			s := newStore(t)

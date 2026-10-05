@@ -114,7 +114,7 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		return controller.Result{}, nil
 	}
 	// Cancel wins over a concurrent pause.
-	var fallback v1.Phase
+	var fallback v1.RunPhase
 	switch {
 	case run.Spec.Cancel:
 		if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
@@ -211,7 +211,7 @@ func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started 
 // syncStatus mirrors the run record into WorkflowRun.status (ADR-0146 Decision 4: the only status writer).
 // With no record of its own, a cancel or pause sets fallback. A terminal phase, from the record or the
 // fallback, is written only once the run's goroutine exited: its exit enqueues the run again.
-func (r *RunReconciler) syncStatus(ctx context.Context, run *v1.WorkflowRun, before []byte, fallback v1.Phase) (controller.Result, error) {
+func (r *RunReconciler) syncStatus(ctx context.Context, run *v1.WorkflowRun, before []byte, fallback v1.RunPhase) (controller.Result, error) {
 	rec, err := r.engine.runs.Get(ctx, run.Namespace, run.Name)
 	switch {
 	case fault.KindOf(err) == fault.NotFound || err == nil && foreignRecord(rec, run.UID):
@@ -521,7 +521,7 @@ func (r *RunReconciler) deleteRun(ctx context.Context, rec *runstate.Record) err
 	return err
 }
 
-func isRunTerminal(p v1.Phase) bool {
+func isRunTerminal(p v1.RunPhase) bool {
 	switch p {
 	case runSucceeded, runFailed, runCancelled:
 		return true

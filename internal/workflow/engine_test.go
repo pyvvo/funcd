@@ -675,7 +675,7 @@ func TestCancelTerminatesRun(t *testing.T) {
 
 // A cancel on a terminal run is ignored (WorkflowRunSpec.Cancel): the run keeps its phase and steps.
 func TestIssue395_CancelLeavesTerminalRunUnchanged(t *testing.T) {
-	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+	for _, phase := range []v1.RunPhase{runSucceeded, runFailed} {
 		t.Run(string(phase), func(t *testing.T) {
 			rs, _ := badger.New(badger.Config{InMemory: true})
 			t.Cleanup(func() { _ = rs.Close() })
@@ -702,7 +702,7 @@ func TestIssue395_CancelLeavesTerminalRunUnchanged(t *testing.T) {
 // Issue #419: a pause on a terminal run is ignored, as a cancel is (#395): the run keeps its phase and
 // is not marked paused.
 func TestIssue419_PauseLeavesTerminalRunUnchanged(t *testing.T) {
-	for _, phase := range []v1.Phase{runSucceeded, runFailed} {
+	for _, phase := range []v1.RunPhase{runSucceeded, runFailed} {
 		t.Run(string(phase), func(t *testing.T) {
 			rs, _ := badger.New(badger.Config{InMemory: true})
 			t.Cleanup(func() { _ = rs.Close() })

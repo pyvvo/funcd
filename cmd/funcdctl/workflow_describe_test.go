@@ -15,7 +15,7 @@ func TestRenderRunDescribe(t *testing.T) {
 	a := &cli{out: &buf}
 	run := &v1.WorkflowRun{}
 	run.Name = "run-1"
-	run.Status.Phase = v1.PhaseFailed
+	run.Status.Phase = v1.RunFailed
 	run.Status.TraceID = "0123456789abcdef0123456789abcdef"
 	run.Status.Steps = []v1.RunStepStatus{
 		{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 1_000_000_000, EndedAt: 1_500_000_000},
@@ -44,7 +44,7 @@ func TestRenderRunDescribeNoTrace(t *testing.T) {
 	a := &cli{out: &buf}
 	run := &v1.WorkflowRun{}
 	run.Name = "run-2"
-	run.Status.Phase = v1.PhasePending
+	run.Status.Phase = v1.RunPending
 	if err := a.renderRunDescribe(run); err != nil {
 		t.Fatalf("renderRunDescribe: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestRenderRunDescribeReplayProvenance(t *testing.T) {
 	a := &cli{out: &buf}
 	run := &v1.WorkflowRun{}
 	run.Name = "src-r-ab12"
-	run.Status.Phase = v1.PhaseFailed
+	run.Status.Phase = v1.RunFailed
 	run.Spec.Replay = &v1.ReplaySeed{Run: "src", From: "score"}
 	if err := a.renderRunDescribe(run); err != nil {
 		t.Fatalf("renderRunDescribe: %v", err)
@@ -80,7 +80,7 @@ func TestIssue120_DescribeShowsRunFailureReason(t *testing.T) {
 	a := &cli{out: &buf}
 	run := &v1.WorkflowRun{}
 	run.Name = "run-3"
-	run.Status.Phase = v1.PhaseFailed
+	run.Status.Phase = v1.RunFailed
 	run.Status.Steps = []v1.RunStepStatus{{Name: "a", Phase: v1.StepPending}}
 	run.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionFalse, Reason: "InputSchemaMismatch", Message: `"day" (want string) is missing`})
 	if err := a.renderRunDescribe(run); err != nil {
