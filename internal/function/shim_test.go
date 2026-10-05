@@ -51,6 +51,9 @@ type fakeRuntime struct {
 	held    map[runtime.InstanceID]bool // a held instance runs without an endpoint, so it is never ready
 	stopped map[runtime.InstanceID]bool // Stop released it, so Remove may forget it, as on the real drivers
 	log     string                      // the captured stdout+stderr Logs returns for every instance
+	// ADR-0149: a Create of an image in imageErr fails with its error; attempts counts every Create call.
+	imageErr map[string]error
+	attempts int
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -59,10 +62,11 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		state:   map[runtime.InstanceID]runtime.State{},
 		created: map[runtime.InstanceID]time.Time{},
 		ip:      ip, port: port,
-		revPort: map[v1.ObjectName]int{},
-		failRev: map[v1.ObjectName]bool{},
-		held:    map[runtime.InstanceID]bool{},
-		stopped: map[runtime.InstanceID]bool{},
+		revPort:  map[v1.ObjectName]int{},
+		failRev:  map[v1.ObjectName]bool{},
+		held:     map[runtime.InstanceID]bool{},
+		stopped:  map[runtime.InstanceID]bool{},
+		imageErr: map[string]error{},
 	}
 }
 
@@ -73,6 +77,10 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.attempts++
+	if err := f.imageErr[spec.Image]; err != nil {
+		return runtime.Instance{}, err
+	}
 	if held, ok := f.specs[id]; ok && held.OwnerKind != spec.OwnerKind {
 		return runtime.Instance{}, fault.Conflictf("fake.Create", "instance %q is held by a %s worker", id, held.OwnerKind)
 	}
@@ -396,7 +404,7 @@ func TestScenarioShimLaunchesWithArtifactAndHandler(t *testing.T) {
 
 // newContainerHarness wires the reconciler in container mode (ADR-0032): EndpointNetnsFixedPort
 // + ImageFor, over the fake runtime + a controllable readiness endpoint.
-func newContainerHarness(t *testing.T, readyStatus int) *shimHarness {
+func newContainerHarness(t *testing.T, readyStatus int, opts ...func(*function.Deps)) *shimHarness {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health/readiness" {
@@ -419,12 +427,16 @@ func newContainerHarness(t *testing.T, readyStatus int) *shimHarness {
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
 	gw := embedded.New()
-	r, err := function.NewReconciler(function.Deps{
+	deps := function.Deps{
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
 		Materializer: function.NewFileMaterializer(),
 		EndpointMode: function.EndpointNetnsFixedPort,
 		ImageFor:     func(rtName string) string { return "funcd/runtime-" + rtName + ":latest" },
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
 	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact}
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
+	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -419,10 +420,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return r.gateFailed(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, drainAfter)
 	}
 
-	// 3a. runtime gate (issue #371): in process mode a python-family Function that no registered python shim would run
-	// fails here, before pooling's assign, rather than under the node shim, which cannot load its handler.
+	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the CatalogService
+	// engine image, fails here, before pooling's assign. An absent containerd image fails at Create instead (step 4).
 	if msg, missing := r.runtimeUnavailable(fn); missing {
-		return r.gateFailed(ctx, fn, gateFailure{reason: "RuntimeUnavailable", message: msg, readyMessage: msg, phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
+		return r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, zeroReplicas: true}, drainAfter)
 	}
 
 	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
@@ -498,6 +499,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		v, err = r.convergePooled(ctx, fn, assign)
 	} else {
 		v, err = r.convergeSolo(ctx, fn, pinned, secretEnv, catalogEnv)
+		if errors.Is(err, runtime.ErrImageUnavailable) {
+			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
+			// periodic pass tries the Create again, so an image that appears recovers the Function.
+			msg := withoutOp(err)
+			return r.gateFailed(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed, zeroReplicas: true, requeue: r.supervisionPeriod}, drainAfter)
+		}
 	}
 	if err != nil {
 		return controller.Result{}, err
@@ -505,7 +512,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	return r.finish(ctx, fn, v, drainAfter)
 }
 
-// gateFailure is a gate that stopped the latest generation before converge (ADR-0143 Decision 4.6).
+// withoutOp is err's text without the op of its outermost fault.Error.
+func withoutOp(err error) string {
+	var fe *fault.Error
+	if errors.As(err, &fe) {
+		return strings.TrimPrefix(err.Error(), fe.Op+": ")
+	}
+	return err.Error()
+}
+
+// gateFailure is a gate that stopped the latest generation before converge, or at a worker create inside it (ADR-0143
+// Decision 4.6, ADR-0149 Decision 4).
 type gateFailure struct {
 	reason, message string        // RevisionReady's reason and message
 	readyMessage    string        // the message the gate writes on Ready when nothing serves
@@ -765,6 +782,9 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 	sc := fn.Spec.Scaling
 	if sc.MinReplicas == 0 { // scale-to-zero enabled
+		if r.awaitsImage(fn) {
+			return maxInt(1, fn.Spec.Replicas)
+		}
 		switch fn.Status.Phase {
 		case v1.PhaseDeploying, v1.PhaseReady, v1.PhaseDegraded: // woken, serving, or repairing (ADR-0142) — stay up
 			// until the activator's idle-reclaim writes Idle. Without keeping Ready up, the
@@ -778,6 +798,16 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 		}
 	}
 	return maxInt(fn.Spec.Replicas, sc.MinReplicas)
+}
+
+// awaitsImage reports a containerd-mode Function that failed because its runtime image is absent. Each periodic pass
+// checks the image again, so it counts as woken: rewriting it Idle would stop the re-check (ADR-0149 Decision 5).
+func (r *Reconciler) awaitsImage(fn *v1.Function) bool {
+	if r.materializer == nil || r.endpointMode != EndpointNetnsFixedPort || fn.Status.Phase != v1.PhaseFailed {
+		return false
+	}
+	rc, ok := fn.Status.Conditions.Get(condReady)
+	return ok && rc.Reason == reasonRuntimeUnavailable
 }
 
 // convergeSolo converges a solo Function's revisions and judges them (ADR-0143 Decision 4). With nothing serving, or
@@ -1028,6 +1058,9 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 		spec.Revision = rev
 		inst, cerr := r.runtime.Create(ctx, spec)
+		if errors.Is(cerr, runtime.ErrImageUnavailable) {
+			return revisionPass{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "%s", unavailablePrefix(tmpl.Spec.Runtime))
+		}
 		if cerr != nil {
 			return revisionPass{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create worker")
 		}
@@ -1585,13 +1618,17 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 
 // shimFor selects the shim launch prefix for a function's runtime (ADR-0049): the longest
 // registered family prefix that matches fn.Spec.Runtime (e.g. "python" → the python shim), else
-// the default ShimCommand (node). One daemon can thus run several curated languages; the rest of
-// the worker spec (env, portfile, readiness) is identical regardless of which shim is chosen.
+// the default ShimCommand for a node-family runtime; nil for any other runtime, which no shim on
+// this node runs (ADR-0149 Decision 1). The rest of the worker spec (env, portfile, readiness) is
+// identical regardless of which shim is chosen.
 func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
 	if cmd := r.familyShim(rt); cmd != nil {
 		return cmd
 	}
-	return r.shimCommand
+	if isNodeFamily(rt) {
+		return r.shimCommand
+	}
+	return nil
 }
 
 // familyShim is the shim of the longest registered family prefix that matches rt; nil when none does.
@@ -1605,17 +1642,37 @@ func (r *Reconciler) familyShim(rt v1.RuntimeName) []string {
 	return cmd
 }
 
-// runtimeUnavailable reports a process-mode python-family Function that neither a registered python runtime shim nor,
-// for a pooling member, a python pool host would run (issue #371): shimFor would launch it with the node default.
+// reasonRuntimeUnavailable is the reason of a Function whose runtime this node cannot serve (ADR-0149 Decision 4).
+const reasonRuntimeUnavailable = "RuntimeUnavailable"
+
+// runtimeUnavailable is the runtime gate (ADR-0149 Decision 2). In process mode a runtime is unavailable when no shim
+// runs it and the Function does not pool on a host of its own (issue #371); in containerd mode the CatalogService
+// engine image is not a function runtime. The legacy mode without a Materializer is never gated.
 func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 	rt := fn.Spec.Runtime
-	if r.materializer == nil || r.endpointMode != EndpointLoopback || !isPythonFamily(rt) || r.familyShim(rt) != nil {
+	var cause string
+	switch {
+	case r.materializer == nil:
+		return "", false
+	case r.endpointMode == EndpointLoopback:
+		if r.shimFor(rt) != nil {
+			return "", false
+		}
+		if _, pooled := r.poolKeyFor(fn); pooled {
+			return "", false
+		}
+		cause = "no shim is registered for it"
+	case r.endpointMode == EndpointNetnsFixedPort && rt == catalogsvc.DuckDBRuntime:
+		cause = "it is the CatalogService engine image, not a function runtime"
+	default:
 		return "", false
 	}
-	if _, pooled := r.poolKeyFor(fn); pooled {
-		return "", false
-	}
-	return fmt.Sprintf("runtime %q is not available on this node: no python shim is registered", rt), true
+	return unavailablePrefix(rt) + ": " + cause, true
+}
+
+// unavailablePrefix is the message prefix of every RuntimeUnavailable outcome (ADR-0149 Decision 4).
+func unavailablePrefix(rt v1.RuntimeName) string {
+	return fmt.Sprintf("runtime %q is not available on this node", rt)
 }
 
 // addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial the per-sandbox worker-node
@@ -1669,6 +1726,12 @@ func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
 // whose vendored deps import via PYTHONPATH (ADR-0089). It mirrors shimFor's family-prefix match.
 func isPythonFamily(rt v1.RuntimeName) bool {
 	return strings.HasPrefix(string(rt), "python")
+}
+
+// isNodeFamily reports whether rt is a node-family runtime (e.g. "nodejs22"), the only family the default shim and pool
+// host serve (ADR-0149 Decision 1).
+func isNodeFamily(rt v1.RuntimeName) bool {
+	return strings.HasPrefix(string(rt), "node")
 }
 
 // addBundleEnv sets the generic bundle env (ADR-0089) into a worker's env: FUNCD_BUNDLE_DIR names

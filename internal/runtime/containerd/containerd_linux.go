@@ -761,7 +761,8 @@ func (d *driver) snapshotter() string {
 // the configured snapshotter lacks its layers; if it is absent and a curated embedded tar exists
 // for the ref, it imports the embed into this namespace (NO registry pull — ADR-0054) and unpacks
 // it; any other ref is pulled only when Config.Pullable allows it (an ImageOverride or a custom
-// imagePrefix), else it is a fault.NotFound.
+// imagePrefix). A ref it may not pull, and a pull that finds no such image, wrap runtime.ErrImageUnavailable
+// (ADR-0149 Decision 3); any other pull failure keeps its mapErr kind.
 func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.Image, error) {
 	name := normalizedRef(ref) // Import stores a curated tar under it, and Pull must resolve it
 	image, err := d.client.GetImage(nctx, ref)
@@ -806,11 +807,14 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 	}
 
 	if d.cfg.Pullable == nil || !d.cfg.Pullable(ref) {
-		return nil, fault.NotFoundf(op, "runtime image %q is not embedded; set runtime.containerd.imageOverride or imagePrefix to pull it", ref)
+		return nil, fault.Wrapf(runtime.ErrImageUnavailable, fault.NotFound, op, "runtime image %q is not embedded; set runtime.containerd.imageOverride for its runtime to pull it", ref)
 	}
 	image, err = d.client.Pull(nctx, name, containerd.WithPullUnpack,
 		containerd.WithPullSnapshotter(d.snapshotter()))
 	if err != nil {
+		if imageAbsent(err) {
+			return nil, fault.Wrapf(fmt.Errorf("%w: %w", runtime.ErrImageUnavailable, err), fault.NotFound, op, "pull image %q", ref)
+		}
 		return nil, mapErr(err, op, "pull image %q", ref)
 	}
 	return image, nil

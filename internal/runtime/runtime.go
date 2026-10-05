@@ -11,12 +11,17 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 )
+
+// ErrImageUnavailable is wrapped, with kind fault.NotFound, by a driver's Create when the worker image is absent: a
+// ref the driver may not pull, or a pull that finds no such image (ADR-0149 Decision 3).
+var ErrImageUnavailable = errors.New("image is not available")
 
 // InstanceID identifies one worker instance (a function replica).
 type InstanceID string

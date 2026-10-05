@@ -92,7 +92,7 @@ func TestIssue371_PythonFunctionWithoutPythonShimIsRuntimeUnavailable(t *testing
 			require.Equal(t, v1.PhaseFailed, h.getFn(t, "py-fn").Status.Phase)
 			ready := h.condition(t, "py-fn", "Ready")
 			require.Equal(t, "RuntimeUnavailable", ready.Reason)
-			require.Equal(t, `runtime "python314" is not available on this node: no python shim is registered`, ready.Message)
+			require.Equal(t, `runtime "python314" is not available on this node: no shim is registered for it`, ready.Message)
 			creates, _ := h.rt.counts()
 			require.Zero(t, creates, "no worker is created under another language's shim")
 		})

@@ -51,8 +51,9 @@ var tarFile = map[string]string{
 // gzip one). The curated export may be gzip-compressed (e.g. `docker save`-style output): if the
 // embedded bytes start with the gzip magic, Tar transparently wraps them in a gzip.Reader so the
 // caller always sees a plain tar. ok==false means "no embedded tar for this runtime" — the driver
-// then falls through to ImageOverride/Pull; a runtime in neither embed nor override is the
-// caller's NotFound (never a silent miss). The returned reader is independent per call.
+// then pulls the ref only when the operator chose its registry (an imageOverride entry or a custom
+// imagePrefix); any other ref, and a pull that finds no image, is the driver's NotFound wrapping
+// runtime.ErrImageUnavailable (ADR-0149), never a silent miss. The returned reader is independent per call.
 func Tar(runtime string) (r io.Reader, ok bool) {
 	name, known := tarFile[runtime]
 	if !known {
