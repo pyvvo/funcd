@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -221,6 +222,7 @@ func TestResolveImage_DefaultPrefixRuntimeIsNotPulled(t *testing.T) {
 
 	_, err := d.resolveImage(context.Background(), "create", mapping.ImageFor(config.DefaultImagePrefix)("deno"))
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "a default-prefix runtime with no embedded image: %v", err)
+	require.ErrorIs(t, err, runtime.ErrImageUnavailable)
 	require.ErrorContains(t, err, "imageOverride")
 	require.Zero(t, pulls.n, "a default-prefix ref must never reach Pull")
 }
@@ -234,6 +236,30 @@ func TestResolveImage_OverrideRefIsPulled(t *testing.T) {
 	_, err := d.resolveImage(context.Background(), "create", mapping.ImageFor(config.DefaultImagePrefix)("deno"))
 	require.ErrorIs(t, err, errPullRecorded)
 	require.Equal(t, 1, pulls.n, "an imageOverride ref must reach Pull")
+}
+
+// ADR-0149 Decision 3: a pull that fails with a NotFound wraps the absent-image sentinel as a fault.NotFound; any other
+// failure keeps its kind and no sentinel, so the reconciler retries it.
+func TestADR0149_ResolveImageClassifiesPullErrors(t *testing.T) {
+	const ref = "ghcr.io/example/runtime-ruby3:1"
+	mapping := ctrmanager.Config{ImageOverride: map[string]string{"ruby3": ref}}
+	for name, tc := range map[string]struct {
+		err    error
+		absent bool
+		kind   fault.Kind
+	}{
+		"not found":   {fmt.Errorf("%s: %w", ref, errdefs.ErrNotFound), true, fault.NotFound},
+		"unavailable": {fmt.Errorf("registry: %w", errdefs.ErrUnavailable), false, fault.Unavailable},
+	} {
+		d, pulls := pullDriver(t, mapping.Pullable(config.DefaultImagePrefix))
+		pulls.err = tc.err
+
+		_, err := d.resolveImage(context.Background(), "create", mapping.ImageFor(config.DefaultImagePrefix)("ruby3"))
+		require.Equal(t, 1, pulls.n, name)
+		require.ErrorIs(t, err, tc.err, name)
+		require.Equal(t, tc.absent, errors.Is(err, runtime.ErrImageUnavailable), "%s: %v", name, err)
+		require.Equal(t, tc.kind, fault.KindOf(err), name)
+	}
 }
 
 // pullDriver returns a driver whose client has no image and counts the pulls it starts.
@@ -251,15 +277,19 @@ func pullDriver(t *testing.T, pullable func(string) bool) (*driver, *leaseCounte
 var errPullRecorded = fmt.Errorf("pull recorded, not run: %w", errdefs.ErrUnavailable)
 
 // leaseCounter counts the pulls of a client whose context carries no lease: client.Pull creates a lease before it
-// resolves the ref, and resolveImage takes no other lease for an image that is not embedded. It fails the lease, so
-// the pull stops there.
+// resolves the ref, and resolveImage takes no other lease for an image that is not embedded. It fails the lease with
+// err (errPullRecorded when nil), so the pull stops there.
 type leaseCounter struct {
 	leases.Manager
-	n int
+	n   int
+	err error
 }
 
 func (c *leaseCounter) Create(context.Context, ...leases.Opt) (leases.Lease, error) {
 	c.n++
+	if c.err != nil {
+		return leases.Lease{}, c.err
+	}
 	return leases.Lease{}, errPullRecorded
 }
 

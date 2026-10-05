@@ -227,9 +227,11 @@ func WithGateway(g gateway.Gateway) Option {
 }
 
 // WithRuntimeShim enables real function execution (ADR-0030): cmd is the launch prefix
-// for the runtime shim (e.g. "node", "/opt/funcd/shim.mjs"), to which the reconciler
-// appends the artifact + handler via the environment. With no shim configured the
-// reconciler runs the legacy placeholder (no execution).
+// for the node-family default shim (e.g. "node", "/opt/funcd/shim.mjs"), to which the
+// reconciler appends the artifact + handler via the environment. It runs only a runtime
+// that starts with "node"; any other runtime needs its own WithRuntimeShimFor, else it is
+// Failed with RuntimeUnavailable (ADR-0149). With no shim configured the reconciler runs
+// the legacy placeholder (no execution).
 func WithRuntimeShim(cmd ...string) Option {
 	return func(c *config) error { c.runtimeShim = cmd; return nil }
 }
@@ -249,10 +251,12 @@ func WithRuntimeShimFor(runtimeFamily string, cmd ...string) Option {
 	}
 }
 
-// WithPoolShim enables worker pooling (ADR-0046): cmd is the launch prefix for the pooled
-// worker_threads host (e.g. "node", "/opt/funcd/pool.mjs"). A function declaring
-// spec.pooling.worker then co-locates with same-(namespace, runtime, worker-id) peers in one
-// pool worker, launched with this command + the FUNCD_POOL_MANIFEST of its admitted members.
+// WithPoolShim enables worker pooling (ADR-0046): cmd is the launch prefix for the node-family
+// default pooled worker_threads host (e.g. "node", "/opt/funcd/pool.mjs"), which hosts only a
+// runtime that starts with "node" (ADR-0149); another family pools only on its own
+// WithPoolShimFor host. A function declaring spec.pooling.worker then co-locates with
+// same-(namespace, runtime, worker-id) peers in one pool worker, launched with this command +
+// the FUNCD_POOL_MANIFEST of its admitted members.
 // With no pool shim configured pooling is off and every function runs solo (the default).
 // New refuses it together with WithContainerExecution, where every function runs solo (ADR-0173).
 func WithPoolShim(cmd ...string) Option {

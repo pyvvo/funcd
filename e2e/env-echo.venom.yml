@@ -7,8 +7,8 @@
 #   2. the injected values reach the RUNNING handler — config=prod (ConfigMap), secret=s3cr3t (Secret),
 #      and shared=from-secret (the key present in both: the Secret wins, config-then-secrets order).
 # It also proves ADR-0143's redeploy on containerd: a spec change switches revisions with no failed call, and a
-# revision that cannot run leaves the serving one answering. Last, it kills the daemon and starts it again: the
-# serving revision answers again (issue 40).
+# revision that cannot run leaves the serving one answering. Then it kills the daemon and starts it again: the
+# serving revision answers again (issue 40). Last, a Function on a runtime with no image is RuntimeUnavailable (ADR-0149).
 # The http step hits the VM's forwarded 127.0.0.1 data plane; the exec step reads phase in-VM via limactl.
 name: env-echo config+secret env injection (ADR-0093/0057, containerd lane)
 
@@ -410,3 +410,35 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.config ShouldEqual staging
+
+  # ADR-0149: ruby3 has no embedded image and the default prefix allows no pull, so the Function is Failed with
+  # RuntimeUnavailable after its first Create, and no registry is called.
+  - name: missing-image-containerd — a runtime with no image is Failed with RuntimeUnavailable
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl apply -f /opt/lane/ruby3-echo.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl get function ruby3-echo -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];r=([c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"Ready\"] or [{}])[0];print(\"PHASE=\"+s.get(\"phase\",\"\")+\",READY=\"+r.get(\"reason\",\"\")+\",MESSAGE=\"+r.get(\"message\",\"\"))"'
+        retry: 15
+        delay: 2
+        info: "status of the ruby3 Function → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PHASE=Failed,READY=RuntimeUnavailable,"
+          - result.systemout ShouldContainSubstring "funcd/runtime-ruby3:latest"
+          - result.systemout ShouldContainSubstring "is not embedded"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token
+            funcdctl delete function ruby3-echo -n default'
+        assertions:
+          - result.code ShouldEqual 0

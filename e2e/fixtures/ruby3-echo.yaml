@@ -1,0 +1,15 @@
+# ADR-0149: the env-echo artifact on a runtime with no embedded image — under the default image prefix it is Failed
+# with RuntimeUnavailable, and no registry is called.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: ruby3-echo
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: ruby3
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:env-echo
+  replicas: 1
+  scaling:
+    minReplicas: 1
