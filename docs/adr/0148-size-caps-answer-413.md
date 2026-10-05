@@ -1,6 +1,6 @@
 # ADR-0148: Size caps answer 413 wherever funcd enforces one; malformed input stays 400
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: errors, rfc9457, size-cap, local-api, kv, blob, s3, workflow, edge, control-plane

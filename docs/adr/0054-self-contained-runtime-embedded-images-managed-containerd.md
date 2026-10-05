@@ -1,6 +1,7 @@
 # ADR-0054: Self-contained runtime — embed curated images + privately manage containerd/crun (the k3s model)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0149](0149-runtime-availability.md) (2026-10-05) — Decision 2: only an --image override pulls; neither-embed-nor-override is NotFound.
 - **Date**: 2026-06-18 (**Accepted 2026-06-18** · **Implemented 2026-06-18** — judge: no Blockers (the heavy trade-offs — ~150 MB binary, funcd
   supervising containerd, superseding ADR-0032, custom-Python maintenance — confirmed as the decider's deliberate,
   blueprint-backed choice, not defects). Folded 1 Major + 3 Minors: **M1** the node-base change supersedes **ADR-0039** (its

@@ -1,6 +1,6 @@
 # ADR-0155: Worker HTTP pools — one constructor for node-local calls, one pool per caller, no proxy
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: data-plane, workflow, eventing, catalog, http, sustainability

@@ -1,6 +1,7 @@
 # ADR-0138: External edge exposure of the `catalog::query` PEP proxy, via a Route-v2 upstream backend + edge aggregator
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Contracts data-plane comment: ErrorHandler ⇒ fault.Unavailable for over-cap bodies.
 - **Implemented**: 2026-07-14 — review **pass** ([scorecard](../reviews/adr-0138-implementation-claude-opus-4-8.md)):
   the external `catalog::query` edge is live + green + e2e-proven on real containerd. A node-private **Upstream**
   backend on the Route-v2 edge router + an **edge-route aggregator** (sole-writer, `-race`-clean, failure-atomic)

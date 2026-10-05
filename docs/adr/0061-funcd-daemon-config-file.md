@@ -1,6 +1,8 @@
 # ADR-0061: funcd daemon config file — `funcdconfig.yaml` (kubeconfig-style operator config)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Scope Out scaling/activator intervals: adds activationTimeout, reclaimInterval keys.
+- **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — WithDevAuth(Token, Namespaces...) applies only while auth.credentials is absent.
 - **Date**: 2026-06-19
 - **Deciders**: green-0-rabbit
 - **Tags**: operability, config, daemon, packaging, cli

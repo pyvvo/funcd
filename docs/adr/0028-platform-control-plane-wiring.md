@@ -1,6 +1,8 @@
 # ADR-0028: Platform control-plane wiring — make `funcd.Run` serve + reconcile
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Open question graceful-shutdown timeout value: now server.shutdownTimeout.
+- **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Scope Out/Consequences/Open question: multi-role tokens moved from V2 to V1.
 - **Date**: 2026-06-15 (**Implemented 2026-06-15** · **Accepted 2026-06-15** after judge pass — no Blockers. The judge verified every wired
   constructor against its real signature, confirmed the bind-at-`New` decision + the honest data-plane
   deferral, and that `run-reconciles-function-to-ready` is testable in pure-Go CI (the process runtime's

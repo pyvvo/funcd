@@ -1,6 +1,6 @@
 # ADR-0163: Retry, requeue and supervision times in the daemon config
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: config, operability, controller, supervision, runtime, eventing, workflow

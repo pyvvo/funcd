@@ -1,6 +1,6 @@
 # ADR-0171: Static credential list — admin, developer and viewer tokens from the daemon config
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: auth, rbac, config, control-plane, edge, daemon

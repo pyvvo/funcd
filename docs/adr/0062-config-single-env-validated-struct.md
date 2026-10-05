@@ -1,6 +1,7 @@
 # ADR-0062: Unify config loading into one env-validated struct (caarlos0/env)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Every key FUNCD_*-overridable: auth.credentials has no env var.
 - **Date**: 2026-06-20
 - **Deciders**: green-0-rabbit
 - **Tags**: operability, config, daemon, refactor

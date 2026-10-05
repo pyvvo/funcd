@@ -1,6 +1,6 @@
 # ADR-0167: Process worker crash recovery — a saved worker registry, reaped at boot
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, process-driver, containerd, crash-only, config

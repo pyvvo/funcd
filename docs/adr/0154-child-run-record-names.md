@@ -1,6 +1,6 @@
 # ADR-0154: Child run record names — `<parentRun>.<step>`, never a WorkflowRun's name
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, sub-workflow, run-state, replay, naming

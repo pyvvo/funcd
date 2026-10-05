@@ -1,6 +1,7 @@
 # ADR-0098: Typed workflow edges — the static contract-check gate (F65)
 
 - **Status**: Implemented (2026-07-06)
+- **Superseded in part by**: [ADR-0166](0166-workflow-branch-and-void-typing.md) (2026-10-05) — Decision 1: fan-in checked against the one all-branch composite schema.
 - **Date**: 2026-07-06 (accepted 2026-07-06 via /adr-batch; judged — folded 1 Major (the `ContractResolver` returned a digest `artifact.Inspect` doesn't provide → named the thin `artifact.InspectContract` helper) + 2 Minors (single-leaf output is verbatim not wrapped; admission allows when the parent workflow is absent/not-cached, run-start is the backstop))
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, contracts, type-checking, reconcile-gate, admission, performance

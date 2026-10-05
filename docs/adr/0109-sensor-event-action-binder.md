@@ -1,6 +1,7 @@
 # ADR-0109: Sensor — the reusable event→action binder (F69, delivering F68)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0156](0156-sensor-delivery-isolation.md) (2026-10-05) — Decision 3 Fanout callback runs delivery steps; independent-firings claim, scenario, checklist.
 - **Date**: 2026-07-07
 - **Implemented**: 2026-07-07
 - **Deciders**: green-0-rabbit

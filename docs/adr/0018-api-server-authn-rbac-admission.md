@@ -1,6 +1,8 @@
 # ADR-0018: API server — authn, namespace RBAC, admission + the `auth.Authorizer` PDP (`internal/controlplane` + `internal/auth`)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Decision 2 viewer rule: viewer may now not read the Secret kind.
+- **Superseded in part by**: [ADR-0172](0172-revision-integrity.md) (2026-10-05) — Purpose and Scope: store-backed Handlers CRUD all 15 kinds, 75 methods.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** — review **pass** (0 model-attributed findings; 1 minor
   attributed to ADR-0005's huma `,inline` quirk), see docs/reviews/adr-0018-implementation-claude-opus-4-8.md;
   DoD 6/6, 8 scenarios + ADR-0005's tests pass, no new deps. **Reviewing 2026-06-14** — implemented:

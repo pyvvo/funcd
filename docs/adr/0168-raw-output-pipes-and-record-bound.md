@@ -1,6 +1,6 @@
 # ADR-0168: Raw output through two pipes funcd reads, and a bound on one log record
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: observability, logs, runtime, process, containerd, shim, funclog

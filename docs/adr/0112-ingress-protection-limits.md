@@ -1,6 +1,7 @@
 # ADR-0112: Ingress protection — rate limit, body-size cap, concurrency ceiling (F75)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Decision §3: no clean 413 on the chunked branch (clean-413 half only).
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

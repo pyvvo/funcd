@@ -1,6 +1,7 @@
 # ADR-0118: Eventing dead-letter queue — bounded retry, then a bus-independent DLQ (F85)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0156](0156-sensor-delivery-isolation.md) (2026-10-05) — Decision 2 inline attempt 1 + retry workers; Decision 6 shutdown drain; DeadLetter scope; workaround.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Implemented**: 2026-07-10

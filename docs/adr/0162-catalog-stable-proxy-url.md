@@ -1,6 +1,6 @@
 # ADR-0162: A stable catalog proxy URL — a consumer's catalog URL survives a delete and a daemon restart
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: catalog, proxy, function, supervision, restart, status

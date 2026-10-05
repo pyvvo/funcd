@@ -1,6 +1,6 @@
 # ADR-0174: A revision that never booted is Unknown, not Ready
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (drafted from issue #610; judged twice by three lenses)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, status, conditions, scale-to-zero, redeploy

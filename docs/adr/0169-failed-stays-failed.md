@@ -1,6 +1,6 @@
 # ADR-0169: Failed stays Failed — a Function leaves Failed only by a new spec or a retry that starts a worker
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, activator, scale-to-zero, status, supervision, crash-recovery

@@ -1,6 +1,7 @@
 # ADR-0045: Compute vocabulary — `sandbox` → `worker` (the process), `Worker` → `worker node` (the compute node)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — Contracts: WorkerSpec.LogPath field (now removed).
 - **Date**: 2026-06-16 (**Implemented 2026-06-16** — review **pass** (re-review after folding the `DeleteWorker` Major + the
   REST-path/operationId + blueprint-layout Minors), see docs/reviews/adr-0045-implementation-claude-opus-4-8.md; DoD 7/7,
   both grep gates clean, behavior-preserving (`go test ./...` green, unchanged assertions). **Reviewing 2026-06-16** —

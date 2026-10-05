@@ -1,6 +1,7 @@
 # ADR-0113: Edge authn PEP — authenticate the data-plane caller, delegate to the PDP (F77)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Scope Out non-namespace-scoped identities as V2: admin token passes in V1.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

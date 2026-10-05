@@ -1,6 +1,7 @@
 # ADR-0063: Control-plane admission framework (a two-phase admission pipeline)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Contracts Admission doc comment: deny kinds (Invalid/Forbidden/Conflict) gain PayloadTooLarge.
 - **Date**: 2026-06-21 (Accepted + **Implemented 2026-06-21** — review pass, see
   docs/reviews/adr-0063-implementation-claude-opus-4-8.md; post-judge: wired + scenario-tested `Request.Old`/`Identity` so
   the F33 consumer gets real values [Major]; `replaceObj` reuses its pre-update `Get` for `Old`; spy-admission

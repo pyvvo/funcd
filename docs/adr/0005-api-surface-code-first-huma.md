@@ -1,6 +1,7 @@
 # ADR-0005: API surface — code-first via huma (generated OpenAPI)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0172](0172-revision-integrity.md) (2026-10-05) — Decision §2, Contracts, plan, checklist: CRUD registered for all 15 kinds.
 - **Date**: 2026-06-14 (revised same day after judge review: the `api/fault`→huma error bridge is
   pinned to `internal/controlplane` so `api/fault` stays stdlib-only; the generated client has its
   own wire DTOs — huma emits no `x-go-type`; deterministic spec canonicalization; huma now explicitly

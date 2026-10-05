@@ -1,6 +1,6 @@
 # ADR-0161: Truthful Function Ready — every failed pass writes the status, and only listening workers get calls
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-05)
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, resolver, activator, crash-recovery

@@ -1,6 +1,7 @@
 # ADR-0041: Data-plane upstream connection pooling — activator + gateway (refines ADR-0029/0016)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0155](0155-worker-http-pools.md) (2026-10-05) — Upstream transport settings: Proxy becomes nil, constructor moves to httpx.NodeTransport.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** · **Implemented 2026-06-16** — judge: right diagnosis + fix, advance as-is. **Scope completed during
   implementation** (pre-commit): tracing showed the **activator** (not the gateway driver) is the data-plane hot path the
   bench hits, so the fix + this ADR cover **both** data-plane reverse proxies; added the **multi-tenancy & security**

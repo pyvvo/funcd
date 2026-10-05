@@ -1,6 +1,7 @@
 # ADR-0119: Object-store EventSource — a `blob:` source kind (reactive ingestion, F83)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0157](0157-blob-event-seen-list.md) (2026-10-05) — Decision §3 cursor/new-object rule, Watermark/Cursor contracts, §5 never-drops, sizing.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Reviewing**: 2026-07-10

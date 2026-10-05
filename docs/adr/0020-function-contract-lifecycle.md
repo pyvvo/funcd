@@ -1,6 +1,8 @@
 # ADR-0020: Function contract & lifecycle — the Function reconciler (`internal/function`)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0161](0161-truthful-function-ready.md) (2026-10-05) — §2 step 5 Replicas=<running> and §3 Upstream ready on Running instance.
+- **Superseded in part by**: [ADR-0172](0172-revision-integrity.md) (2026-10-05) — C2: reconciler never mutates a stamped Revision (now spec only).
 - **Superseded (partial, scoped)**: the `ArtifactRef` type + the `spec.artifact` field (`.uri`/`.digest`) are flattened by [ADR-0097](0097-function-image-flatten.md) to `spec.image` + `spec.imageDigest` (`RevisionSpec` too) — a rename, no behavior change. Everything else here (the CloudEvents contract, the reconciler, the shape gate, the Revision lifecycle) **stands unchanged**; this ADR keeps status `Implemented`.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** — review pass (zero findings), see docs/reviews/adr-0020-implementation-claude-opus-4-8.md; DoD 7/7, 8 scenarios race-clean. **Reviewing 2026-06-14** — implemented: `internal/function` (the Function lifecycle
   reconciler: Revision stamp → effective-replica converge honoring the activator wake Phase → shape gate →
