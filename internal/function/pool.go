@@ -177,8 +177,10 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // members (ADR-0046 Decision 6), and judges the member by its own entry in the pool host's /health/members, as a solo
 // replica is judged by its readiness: ready → ready, and the serving revision follows the current one (ADR-0143
 // Decision 8); loading, restarting, no entry or no answer → not ready; failed with "load timed out" → a boot crash
-// loop, read again at its backoff deadline; any other failure before serving → a shape failure, retried after the supervision period. The pool worker is
-// judged on its own liveness (ensurePool), never on a member's state.
+// loop, read again at its backoff deadline; any other failure before the current revision serves → a shape failure,
+// retried after the supervision period. The pool host holds the member at its current revision only, so its failure is
+// a crash under repair only while that revision is the serving one (ADR-0143 Decision 5). The pool worker is judged on
+// its own liveness (ensurePool), never on a member's state.
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, secretEnv, catalogEnv map[string]string, idx accessIndex) (verdict, error) {
 	pass, err := r.ensurePool(ctx, a.Key, fn, secretEnv, catalogEnv, idx)
 	if err != nil {
@@ -192,6 +194,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		v.ready = pass.running // legacy mode: no shim to ask (ADR-0020)
 	} else {
 		in, m, ok := r.memberState(ctx, a.Key, fn.Name)
+		servesCurrent := v.serving && servingRevision(fn) == v1.ObjectName(fn.Status.CurrentRevision)
 		switch {
 		case !ok:
 		case m.State == memberReady:
@@ -200,7 +203,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 			c := r.boot.count(runtime.NewInstanceID(fn.Namespace, fn.Name, v1.ObjectName(fn.Status.CurrentRevision), 0), in.CreatedAt,
 				"the handler did not load within "+r.bootTimeout.String())
 			v.crashLoop, v.retryAt = c.message, r.boot.reread(c, r.clock.Now())
-		case m.State == memberFailed && !v.serving:
+		case m.State == memberFailed && !servesCurrent:
 			v.shapeFailed, v.loadErr = true, m.Error
 		}
 	}
