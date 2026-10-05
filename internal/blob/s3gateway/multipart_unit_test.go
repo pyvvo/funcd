@@ -32,25 +32,26 @@ func TestIssue30_AbandonedMultipartUploadExpires(t *testing.T) {
 	clk := &settableClock{t: time.Unix(1_700_000_000, 0)}
 	m := newMultipartStore()
 	m.clock = clk
+	at := uploadTarget{ns: "default", bucket: "lakehouse", key: "bronze/a.parquet"}
 
-	abandoned := m.create("lakehouse", "bronze/a.parquet")
-	require.NoError(t, m.putPart(abandoned, 1, []byte("held"), 1024))
-	live := m.create("lakehouse", "bronze/b.parquet")
+	abandoned := m.create(at)
+	require.NoError(t, m.putPart(abandoned, at, 1, []byte("held"), 1024))
+	live := m.create(at)
 
 	clk.t = clk.t.Add(multipartIdleExpiry / 2)
-	idle := m.create("lakehouse", "bronze/c.parquet")
+	idle := m.create(at)
 
 	clk.t = clk.t.Add(multipartIdleExpiry/2 - time.Second)
-	require.NoError(t, m.putPart(live, 1, []byte("fresh"), 1024))
+	require.NoError(t, m.putPart(live, at, 1, []byte("fresh"), 1024))
 
 	clk.t = clk.t.Add(2 * time.Second)
-	m.create("lakehouse", "bronze/d.parquet")
+	m.create(at)
 
-	_, ok := m.parts(abandoned)
+	_, ok := m.parts(abandoned, at)
 	require.False(t, ok, "an upload idle past multipartIdleExpiry must be dropped")
-	_, ok = m.parts(live)
+	_, ok = m.parts(live, at)
 	require.True(t, ok, "a part within the window refreshes it, even when the upload was created before it")
-	_, ok = m.parts(idle)
+	_, ok = m.parts(idle, at)
 	require.True(t, ok, "an upload created within the window is kept")
 }
 

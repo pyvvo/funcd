@@ -3,9 +3,10 @@ package s3gateway
 import (
 	"context"
 	"crypto/md5" //nolint:gosec // ETag is an S3 content fingerprint, not a security primitive
+	"crypto/rand"
 	"encoding/hex"
 	"sort"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/versity/versitygw/s3err"
 	"github.com/versity/versitygw/s3response"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	authz "github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
@@ -30,15 +32,22 @@ const multipartIdleExpiry = time.Hour
 type multipartStore struct {
 	mu      sync.Mutex
 	uploads map[string]*upload // uploadID → buffered parts
-	next    uint64
 	clock   clock.Clock
 }
 
-type upload struct {
+// uploadTarget is what an upload is bound to: the creator's namespace and the bucket and key
+// it was created for. S3 scopes an upload id to its bucket and key, and a bucket name resolves
+// per namespace (ADR-0080 tenancy), so an id names no upload outside its own target.
+type uploadTarget struct {
+	ns          v1.NamespaceName
 	bucket, key string
-	parts       map[int32][]byte
-	size        int64     // the sum of the buffered parts' lengths
-	touched     time.Time // the last Create or UploadPart
+}
+
+type upload struct {
+	target  uploadTarget
+	parts   map[int32][]byte
+	size    int64     // the sum of the buffered parts' lengths
+	touched time.Time // the last Create or UploadPart
 }
 
 func newMultipartStore() *multipartStore {
@@ -47,7 +56,7 @@ func newMultipartStore() *multipartStore {
 
 // create starts an upload and drops the abandoned ones: a new upload is the only way the
 // number of buffered uploads grows, so sweeping here keeps it to the recently active ones.
-func (m *multipartStore) create(bucket, key string) string {
+func (m *multipartStore) create(t uploadTarget) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock.Now()
@@ -56,19 +65,29 @@ func (m *multipartStore) create(bucket, key string) string {
 			delete(m.uploads, id)
 		}
 	}
-	m.next++
-	id := "funcd-mpu-" + strconv.FormatUint(m.next, 10)
-	m.uploads[id] = &upload{bucket: bucket, key: key, parts: map[int32][]byte{}, touched: now}
+	id := "funcd-mpu-" + rand.Text()
+	// The request's strings alias fiber's reused buffers; the binding outlives the request.
+	t = uploadTarget{ns: v1.NamespaceName(strings.Clone(string(t.ns))), bucket: strings.Clone(t.bucket), key: strings.Clone(t.key)}
+	m.uploads[id] = &upload{target: t, parts: map[int32][]byte{}, touched: now}
 	return id
+}
+
+// get returns the upload id names when it is bound to t. The caller holds m.mu.
+func (m *multipartStore) get(id string, t uploadTarget) (*upload, bool) {
+	u, ok := m.uploads[id]
+	if !ok || u.target != t {
+		return nil, false
+	}
+	return u, true
 }
 
 // putPart buffers part num, replacing an earlier part of that number. It fails closed with
 // EntityTooLarge when the upload's total would pass maxUpload (ADR-0080), so an upload never
 // holds more than the cap.
-func (m *multipartStore) putPart(id string, num int32, data []byte, maxUpload int64) error {
+func (m *multipartStore) putPart(id string, t uploadTarget, num int32, data []byte, maxUpload int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	u, ok := m.uploads[id]
+	u, ok := m.get(id, t)
 	if !ok {
 		return s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
@@ -85,10 +104,10 @@ func (m *multipartStore) putPart(id string, num int32, data []byte, maxUpload in
 // assemble concatenates the parts the client listed, in its order (S3
 // CompleteMultipartUpload): part numbers must ascend and each must be buffered with a
 // matching ETag; unlisted parts are dropped. It does NOT delete the upload (Complete does).
-func (m *multipartStore) assemble(id string, mpu *awstypes.CompletedMultipartUpload) ([]byte, error) {
+func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.CompletedMultipartUpload) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	u, ok := m.uploads[id]
+	u, ok := m.get(id, t)
 	if !ok {
 		return nil, s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
@@ -115,12 +134,21 @@ func (m *multipartStore) assemble(id string, mpu *awstypes.CompletedMultipartUpl
 	return buf, nil
 }
 
-func (m *multipartStore) abort(id string) { m.mu.Lock(); delete(m.uploads, id); m.mu.Unlock() }
-
-func (m *multipartStore) parts(id string) ([]s3response.Part, bool) {
+// abort drops the upload when it is bound to t and reports whether it did.
+func (m *multipartStore) abort(id string, t uploadTarget) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	u, ok := m.uploads[id]
+	if _, ok := m.get(id, t); !ok {
+		return false
+	}
+	delete(m.uploads, id)
+	return true
+}
+
+func (m *multipartStore) parts(id string, t uploadTarget) ([]s3response.Part, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.get(id, t)
 	if !ok {
 		return nil, false
 	}
@@ -145,10 +173,11 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 	bucket := deref(in.Bucket)
 	key := deref(in.Key)
 	prefix, _ := splitKey(key)
-	if _, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix); err != nil {
+	_, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	if err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
-	id := b.mp.create(bucket, key)
+	id := b.mp.create(uploadTarget{ns: pr.namespace, bucket: bucket, key: key})
 	return s3response.InitiateMultipartUploadResult{Bucket: bucket, Key: key, UploadId: id}, nil
 }
 
@@ -157,8 +186,10 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	ctx, end := b.opContext(ctx)
 	defer end()
 	bucket := deref(in.Bucket)
-	prefix, _ := splitKey(deref(in.Key))
-	if _, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix); err != nil {
+	key := deref(in.Key)
+	prefix, _ := splitKey(key)
+	_, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	if err != nil {
 		return nil, err
 	}
 	data, rerr := b.readCapped(in.Body)
@@ -169,7 +200,7 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	if in.PartNumber != nil {
 		num = *in.PartNumber
 	}
-	if perr := b.mp.putPart(deref(in.UploadId), num, data, b.maxUpload); perr != nil {
+	if perr := b.mp.putPart(deref(in.UploadId), uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, num, data, b.maxUpload); perr != nil {
 		return nil, perr
 	}
 	return &awss3.UploadPartOutput{ETag: ptr(etag(data))}, nil
@@ -183,27 +214,28 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	defer end()
 	bucket := deref(in.Bucket)
 	prefix, object := splitKey(deref(in.Key))
-	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 	if err != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", err
 	}
+	target := uploadTarget{ns: pr.namespace, bucket: bucket, key: deref(in.Key)}
 	key := blobKey(prefix, object)
 	if cerr := createOnly(ctx, sub, key, in.IfNoneMatch); cerr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", cerr
 	}
 	id := deref(in.UploadId)
-	data, aerr := b.mp.assemble(id, in.MultipartUpload)
+	data, aerr := b.mp.assemble(id, target, in.MultipartUpload)
 	if aerr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", aerr
 	}
 	if int64(len(data)) > b.maxUpload {
-		b.mp.abort(id)
+		b.mp.abort(id, target)
 		return s3response.CompleteMultipartUploadResult{}, "", s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
 	if perr := sub.Put(ctx, key, data); perr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", mapBlobErr(perr)
 	}
-	b.mp.abort(id)
+	b.mp.abort(id, target)
 	return s3response.CompleteMultipartUploadResult{
 		Bucket: in.Bucket,
 		Key:    in.Key,
@@ -215,11 +247,16 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 func (b *be) AbortMultipartUpload(ctx context.Context, in *awss3.AbortMultipartUploadInput) error {
 	ctx, end := b.opContext(ctx)
 	defer end()
-	prefix, _ := splitKey(deref(in.Key))
-	if _, _, err := b.authorize(ctx, authz.ActionS3Write, deref(in.Bucket), prefix); err != nil {
+	bucket := deref(in.Bucket)
+	key := deref(in.Key)
+	prefix, _ := splitKey(key)
+	_, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	if err != nil {
 		return err
 	}
-	b.mp.abort(deref(in.UploadId))
+	if !b.mp.abort(deref(in.UploadId), uploadTarget{ns: pr.namespace, bucket: bucket, key: key}) {
+		return s3err.GetAPIError(s3err.ErrNoSuchUpload)
+	}
 	return nil
 }
 
@@ -228,15 +265,17 @@ func (b *be) ListParts(ctx context.Context, in *awss3.ListPartsInput) (s3respons
 	ctx, end := b.opContext(ctx)
 	defer end()
 	bucket := deref(in.Bucket)
-	prefix, _ := splitKey(deref(in.Key))
-	if _, _, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix); err != nil {
+	key := deref(in.Key)
+	prefix, _ := splitKey(key)
+	_, pr, err := b.authorize(ctx, authz.ActionS3Read, bucket, prefix)
+	if err != nil {
 		return s3response.ListPartsResult{}, err
 	}
-	parts, ok := b.mp.parts(deref(in.UploadId))
+	parts, ok := b.mp.parts(deref(in.UploadId), uploadTarget{ns: pr.namespace, bucket: bucket, key: key})
 	if !ok {
 		return s3response.ListPartsResult{}, s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
-	return s3response.ListPartsResult{Bucket: bucket, Key: deref(in.Key), UploadID: deref(in.UploadId), Parts: parts}, nil
+	return s3response.ListPartsResult{Bucket: bucket, Key: key, UploadID: deref(in.UploadId), Parts: parts}, nil
 }
 
 // etag is the S3 ETag of data in its wire form: the MD5 hex in double quotes (an RFC 9110
