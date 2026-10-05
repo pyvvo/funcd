@@ -97,7 +97,7 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 		for _, r := range e.Rules {
 			rows = append(rows, compiled{
 				host:      e.Host,
-				path:      r.Path,
+				path:      matchedPath(r),
 				exact:     r.Exact,
 				methods:   r.Methods,
 				namespace: e.Namespace,
@@ -174,4 +174,16 @@ func matchPath(path, prefix string, exact bool) bool {
 		return true
 	}
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+// matchedPath is the path a rule is matched, stripped and claimed by. A Prefix rule's trailing slash is not
+// significant ("/api/" roots the same subtree as "/api", as in Gateway API), so it is dropped; "/" stays.
+func matchedPath(r CompiledRule) string {
+	if r.Exact {
+		return r.Path
+	}
+	if p := strings.TrimRight(r.Path, "/"); p != "" {
+		return p
+	}
+	return "/"
 }
