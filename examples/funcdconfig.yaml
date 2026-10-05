@@ -82,7 +82,7 @@ storage:
 #   cdc:                          # change feed to the bus (ADR-0068); engine: badger only
 #     enabled: false              # default: false
 #     sink: ""                    # bus subject; required when enabled. default: ""
-#     retention: 24h              # change-log retention. default: 24h
+#     retention: 24h              # how long the feed's stream keeps a change. default: 24h
 # workflow:                       # workflow engine (ADR-0094)
 #   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
 #   defaultStepTimeout: 300s      # per-step invocation timeout. default: 300s

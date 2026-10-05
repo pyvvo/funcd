@@ -7,7 +7,10 @@
 // storage, pure-Go) lives in internal/bus/nats.
 package bus
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Subject is a typed NATS subject (dot-delimited; namespaced as ns.<namespace>.…).
 type Subject string
@@ -22,10 +25,12 @@ type Bus interface {
 	Close() error
 }
 
-// StreamConfig declares a durable JetStream stream capturing the given subjects.
+// StreamConfig declares a durable JetStream stream capturing the given subjects. MaxAge bounds how long the
+// stream keeps a message; zero sets no age limit.
 type StreamConfig struct {
 	Name     string
 	Subjects []Subject
+	MaxAge   time.Duration
 }
 
 // ConsumeConfig declares a durable consumer on a stream for a subject filter.
