@@ -1,6 +1,8 @@
 # ADR-0050: Python worker pooling — a subinterpreter pool host (the Python analog of ADR-0044)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0149](0149-runtime-availability.md) (2026-10-05) — Decision 3: else the default node poolShimCommand pool host.
+- **Superseded in part by**: [ADR-0173](0173-container-execution-runs-solo.md) (2026-10-05) — Decision 4 and the Consequences sentence: the curated image delivers pooled Python in container mode.
 - **Date**: 2026-06-17 (**Implemented 2026-06-17** — review re-run: both prior findings fixed; InterpreterPoolExecutor refactor preserves the behavioral contract; Go + Python 3.14 suites green.) (**Accepted 2026-06-17** — judge: no Blockers. Folded its 1 Major (Decision 3 / the Go seam now
   name the *real* gate — the `shimByFamily` runtime-shim exclusion merged in `e787fa2` — and specify the **inversion** to
   pool-host inclusion, not a `poolShimCommand` edit) + 2 Minors (the homebox-runs-3.9 honesty caveat; 3.14 stated as a

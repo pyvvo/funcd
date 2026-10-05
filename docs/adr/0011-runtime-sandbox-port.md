@@ -12,6 +12,8 @@
 - **Superseded in part by**: [ADR-0045](0045-rename-sandbox-to-worker.md) (2026-06-16) — **naming only**: `SandboxSpec` →
   `WorkerSpec` and the "sandbox" execution-unit term → "worker" (the design here is unchanged; read this ADR for the port,
   ADR-0045 for the names; "sandbox" in this frozen text ≡ "worker").
+- **Superseded in part by**: [ADR-0167](0167-process-worker-crash-recovery.md) (2026-10-05) — Decision 2: Status/List read an in-memory registry only (now also saved).
+- **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — sandbox-logs-captured, Scope, Decisions 1-3, Contracts LogPath, plan, checklist: worker log file.
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, sandbox, containerd, crun, runc, process, netns, port, data-plane
 - **Realizes**: [FEAT-0000/F12](../feat/0000-feat-v1.md) (function runtime behind the `runtime.Runtime` port)

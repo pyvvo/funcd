@@ -1,6 +1,7 @@
 # ADR-0114: Edge middleware — observability (F76) + shaping (F78)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0165](0165-fn-to-fn-trace-propagation.md) (2026-10-05) — edge observability (trace, RED metrics, access log) wrapping internal fn-to-fn calls.
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

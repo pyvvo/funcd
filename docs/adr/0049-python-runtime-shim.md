@@ -1,6 +1,7 @@
 # ADR-0049: The Python reference shim — stdlib HTTP + a hand-rolled RFC 8927 validator, uv-managed typed package
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0149](0149-runtime-availability.md) (2026-10-05) — Decision 7: non-python runtimes fall back to the default node shim.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** · **Implemented 2026-06-16** — judge: no Blockers/Majors (contract fidelity exact, dispatch seam minimal
   and matches the code, scope at one altitude). Folded its 2 Minors: `python311`→`python312` (repo convention), and a
   **license correction that became a design change** — the judge flagged the `jtd` transitive-dep claim; verifying it

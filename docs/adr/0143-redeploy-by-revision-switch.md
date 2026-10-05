@@ -1,6 +1,12 @@
 # ADR-0143: Redeploy by revision switch — the new revision boots beside the running one and takes the calls once ready
 
 - **Status**: Implemented (2026-10-02)
+- **Superseded in part by**: [ADR-0160](0160-worker-exit-reason.md) (2026-10-05) — Decision 4.5: which failed first-boot C replica is kept.
+- **Superseded in part by**: [ADR-0161](0161-truthful-function-ready.md) (2026-10-05) — Decisions 4.3, 4.6, 6 and checklist: S running worker keeps Ready.
+- **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — Decision 7 and checklist: "calls only runtime.Status" plus one Get per binding.
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — DrainGrace/HandOutSettle defaults and Decision 4.7 min(1 s) bound become runtime keys.
+- **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — Contracts: WorkerSpec.LogPath in the revision-switch spec.
+- **Superseded in part by**: [ADR-0174](0174-never-booted-revision-is-unknown.md) (2026-10-05) — Decision 3: RevisionReady values (adds Unknown/NotStarted before first ready replica).
 - **Date**: 2026-10-02 (redrafted the same day after the judge: the old revision's workers now stop after the switch
   — a `drainingRevision` keeps the passes full until they are gone; every caller of a worker is counted, not only the
   activator; a gate failure of the new revision no longer takes the old one down; a crash of an old worker and a

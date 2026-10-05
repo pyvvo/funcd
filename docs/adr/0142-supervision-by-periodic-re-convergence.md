@@ -1,6 +1,11 @@
 # ADR-0142: Supervision by periodic re-convergence — a crashed worker or engine comes back without a write
 
 - **Status**: Implemented (2026-10-01)
+- **Superseded in part by**: [ADR-0160](0160-worker-exit-reason.md) (2026-10-05) — Decisions 3, 4 (solo Failed/Stopped rows), 5, 7 and first-boot ShapeInvalid checklist.
+- **Superseded in part by**: [ADR-0161](0161-truthful-function-ready.md) (2026-10-05) — Decision 3 steady-state Running check; Decision 4 row Running | keep.
+- **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — Decision 3 steady-state sentence, Contracts row, checklist, Consequence: catalog Get conjunct.
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 2 no config key, Decision 9 requeue bound: now runtime.supervisionPeriod.
+- **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — Decision 4 rows "none -> create" and "Created -> start": failed Start restarts.
 - **Date**: 2026-09-30 (redrafted the same day: an independent re-judge found that the first draft's replacement
   could not work on containerd and that a steady-state requeue would multiply in the engine; the self-acceptance
   was withdrawn before any commit or code, at the decider's choice. The second re-judge found no Blocker and asked

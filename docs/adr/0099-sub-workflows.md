@@ -1,6 +1,8 @@
 # ADR-0099: Sub-workflows — a `workflow:` step runs a child workflow (F70)
 
 - **Status**: Implemented (2026-07-06)
+- **Superseded in part by**: [ADR-0146](0146-workflowrun-drive-model.md) (2026-10-05) — Cancel half of Blocking child workaround: parent cancel now reaches child mid-flight.
+- **Superseded in part by**: [ADR-0154](0154-child-run-record-names.md) (2026-10-05) — Decision §2: nested child run name `<parentRun>-<step>` (separator becomes `.`).
 - **Date**: 2026-07-06 (accepted 2026-07-06 via /adr-batch; design spiked before drafting; judged — folded 1 Major (the `ChildResolver` conflated execution with reconcile-time typing → the reconciler reads the child's `status.contract` from the store it already has; `ChildResolver` is the engine's execution seam only) + 2 Minors (depth threaded internally so ADR-0098's `Execute` variadic is untouched; the cycle walk uses a visited-set))
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, composition, sub-workflow, engine, typed-edges

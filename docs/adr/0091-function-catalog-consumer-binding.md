@@ -5,6 +5,7 @@
   injection** (the engine URL + shared `QUACK_TOKEN`) is replaced, by a catalog-proxy URL + a per-function MAC-authenticated
   token behind a per-caller `catalog::query` Cedar PEP. This ADR's `spec.catalogs` **binding surface, admission, and its
   FEAT-0003/F61 row all stand** (F61 is *not* repointed). ADR-0091's own deferred `egress::connect` grant is unaffected.
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 3 catalog-wait RequeueAfter 2s: now controller.referentPollInterval.
 - **Implemented**: 2026-07-01 — review **pass** (0 Blockers/0 Majors), see
   [scorecard](../reviews/adr-0091-implementation-claude-opus-4-8.md). `Function.spec.catalogs` + `Validate()`;
   `internal/function/catalog.go` `resolveCatalogEnv`/`addCatalogEnv` (**direct** env write — the judge's M1 —

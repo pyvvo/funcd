@@ -1,6 +1,7 @@
 # ADR-0107: Run replay — re-run a finished run from a chosen step (F71)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0154](0154-child-run-record-names.md) (2026-10-05) — Decision §5 child record `<replay>-<step>`; Scope/§5 standalone child replay through the API.
 - **Date**: 2026-07-07
 - **Implemented**: 2026-07-07
 - **Deciders**: green-0-rabbit

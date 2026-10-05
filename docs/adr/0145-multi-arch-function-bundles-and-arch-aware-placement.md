@@ -1,6 +1,7 @@
 # ADR-0145: Multi-arch function bundles — an OCI image index per function, chosen per node, and arch-aware placement
 
 - **Status**: Implemented (2026-10-02)
+- **Superseded in part by**: [ADR-0161](0161-truthful-function-ready.md) (2026-10-05) — Decision 5: Ready kept with serving revision; errors not written to status.
 - **Date**: 2026-10-02 (revised the same day after the judge: ADR-0017's totality is superseded in part, not refined;
   the gate has a fixed position and literal outcome; pooled members are gated and excluded from their pool; the act
   workflow reaches Docker through its own socket and no bind mount; explicit parameters replace the internal options.

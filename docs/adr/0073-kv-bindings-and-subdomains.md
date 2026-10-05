@@ -1,6 +1,7 @@
 # ADR-0073: KV resource model — Function-declared bindings + KVStore sub-domains (supersedes ADR-0072)
 
 - **Status**: Implemented (2026-06-23)
+- **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Decision §4 per-op caps → Invalid; value-over-cap-rejected Then-clause.
 - **Date**: 2026-06-22 (judged 2026-06-22 — sound supersede, no Blockers; folded 2 Majors: specified the
   **table-removal lifecycle** (deletion-protection on Update + reconciler `DropPrefix(<store>/<table>/)`) and
   fixed the **owner admission** (single-owner is structural via unique table names; the admission is

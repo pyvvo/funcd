@@ -1,6 +1,7 @@
 # ADR-0096: Workflow step model (`function{image|ref}` · `builtin{wait|pass}` · `workflow`) + engine-native built-in steps
 
 - **Status**: Implemented (2026-07-06)
+- **Superseded in part by**: [ADR-0146](0146-workflowrun-drive-model.md) (2026-10-05) — Cancel half of step-boundary rule for wait; Reconcile-unchanged and no-execution-model-change clauses.
 - **Date**: 2026-07-06 (accepted 2026-07-06 via /adr-batch; judged — reshaped to the three kind-keyed structs, the paused-excluding run-timeout fix folded, plus three Minors: params-vs-builtin semantics, explicit onFailure migration, and the scoped-supersession clarification. Revised 2026-07-06 on decider direction: a `wait` is a **plain blocking builtin step** — no special `Waiting` phase, no yield/`RequeueAfter` park, no `wakeAt`; it runs in-engine to its deadline like any other step. The step model reshape and the `pass` transform are unchanged.)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, orchestration, step-model, built-in-steps, timers, goja

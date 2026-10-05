@@ -1,6 +1,7 @@
 # ADR-0035: Resolve the artifact tag → digest at Revision stamp (no manual pinning)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0172](0172-revision-integrity.md) (2026-10-05) — Decision 3: re-resolve the tag when no Revision exists for the generation.
 - **Date**: 2026-06-15 (**Implemented 2026-06-16** — review pass: deploy-without-digest works (resolved+pinned in the immutable Revision, spec stays digest-free), tag-move-does-not-drift, explicit-digest honored, unresolvable→Failed; B1/M1/M2 folded + verified; no new dependency. **Accepted 2026-06-15** after judge pass — no Blockers left open. Folded **B1**
   (state the materialize mechanism — copy the pinned digest onto `fn.Spec.Artifact.Digest` in memory, never
   persisted, so the frozen `Materialize(ctx,fn)` reads it), **M1** (resolve only on the Revision-create path;
