@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/http/httptrace"
 	"net/textproto"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -812,6 +813,41 @@ func TestIssue417_EdgeHeadersSurviveUpstream1xx(t *testing.T) {
 			require.Equal(t, "https://app.example", resp.Header.Get("Access-Control-Allow-Origin"))
 			require.Contains(t, resp.Header.Values("Vary"), "Origin")
 			require.NotEmpty(t, resp.Header.Get("X-Request-Id"))
+		})
+	}
+}
+
+// A worker that refuses the connection, or whose upstream is malformed, is answered with a fixed problem
+// detail: the dial error and the upstream name the worker's address, so they go to the log only, never
+// to the client.
+func TestWorkerFailureProblemHidesWorkerAddress(t *testing.T) {
+	t.Parallel()
+	backend := httptest.NewServer(http.NotFoundHandler())
+	backend.Close()
+
+	for _, tc := range []struct {
+		name     string
+		upstream string
+		hidden   string
+		status   int
+	}{
+		{name: "an unreachable worker", upstream: backend.URL, hidden: strings.TrimPrefix(backend.URL, "http://"), status: http.StatusServiceUnavailable},
+		{name: "a malformed worker upstream", upstream: "10.63.0.7:8080", hidden: "10.63.0.7", status: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var logs bytes.Buffer
+			a := newActivator(t, activator.Deps{
+				Endpoints: &fakeEndpoints{upstream: tc.upstream, ready: true},
+				Scaler:    &fakeScaler{},
+				Logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+			})
+
+			rec := serve(a, activator.FunctionRef{Namespace: "default", Name: "stopped"})
+
+			require.Equal(t, tc.status, rec.Code)
+			require.NotContains(t, rec.Body.String(), tc.hidden, "the problem detail must not name the worker address")
+			require.Contains(t, logs.String(), tc.hidden, "the cause stays in the log")
 		})
 	}
 }

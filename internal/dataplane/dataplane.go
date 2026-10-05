@@ -226,12 +226,13 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Ma
 // the CatalogService's catalog::query PEP proxy. The matched rule prefix is stripped so the upstream
 // is addressed at its own root, mirroring the gateway's PathPrefix strip. Streaming-native
 // (httputil.ReverseProxy). The upstream is trusted (set only by an in-daemon reconciler, never a user
-// Route) and does its own authz, so no edge PEP runs here. A malformed upstream is a 502 (a
-// reconciler bug, not a client error).
+// Route) and does its own authz, so no edge PEP runs here. A malformed or failed upstream is a 503
+// whose detail names no address: the upstream is an in-daemon listener, so the cause stays in the log.
 func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
 	target, err := url.Parse(m.Upstream)
 	if err != nil || target.Scheme == "" || target.Host == "" {
-		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream %q is not a valid URL", m.Upstream))
+		s.logger.WarnContext(r.Context(), "edge upstream is not a valid URL", "upstream", m.Upstream)
+		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream is misconfigured"))
 		return
 	}
 	if t, ok := observ.TargetFrom(r.Context()); ok {
@@ -247,7 +248,7 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	proxy.ErrorHandler = func(w http.ResponseWriter, pr *http.Request, perr error) {
 		logger.WarnContext(pr.Context(), "edge upstream call failed", "error", perr)
-		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream unreachable: %v", perr))
+		fault.WriteProblem(w, fault.Unavailablef(op, "edge upstream unavailable"))
 	}
 	activator.KeepEdgeHeaders(proxy, w)
 	// Address the upstream at its own root: replace the request path with the stripped remainder

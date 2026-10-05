@@ -245,3 +245,44 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 	get()
 	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the data plane's")
 }
+
+// A failed or misconfigured edge upstream answers the client with a fixed 503 detail: the dial error
+// and the upstream URL name an in-daemon listener, so they go to the log only, never to the client.
+func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
+	t.Parallel()
+	stopped := httptest.NewServer(http.NotFoundHandler())
+	stopped.Close()
+	stoppedHost := strings.TrimPrefix(stopped.URL, "http://")
+
+	for _, tc := range []struct {
+		name     string
+		upstream string
+		hidden   string
+	}{
+		{name: "an unreachable upstream", upstream: stopped.URL, hidden: stoppedHost},
+		{name: "a malformed upstream", upstream: "10.63.0.7:8080", hidden: "10.63.0.7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rtr := router.New()
+			require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
+				Namespace: "default",
+				Auth:      v1.AuthOpen,
+				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
+			}}))
+			st := store.New(memory.New())
+			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+			require.NoError(t, err)
+			var logs bytes.Buffer
+			h := dataplane.Handler(st, act, rtr, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			require.Contains(t, rec.Body.String(), "urn:funcd:problem:unavailable")
+			require.NotContains(t, rec.Body.String(), tc.hidden, "the problem detail must not name the upstream address")
+			require.Contains(t, logs.String(), tc.hidden, "the cause stays in the log")
+		})
+	}
+}
