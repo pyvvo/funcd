@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0154](0154-child-run-record-names.md) (2026-10-05) — Decision §5 child record `<replay>-<step>`; Scope/§5 standalone child replay through the API.
+- **Superseded in part by**: [ADR-0189](0189-workflow-run-pins-child-tree.md) (2026-10-05) — Decision §5 (lines 155-158), Contracts widening (lines 238-241) and the replay-set workaround (lines 169-172): a replay-set child runs its pin, gated for drift.
 - **Date**: 2026-07-07
 - **Implemented**: 2026-07-07
 - **Deciders**: green-0-rabbit

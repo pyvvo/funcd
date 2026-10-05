@@ -1,6 +1,7 @@
 # ADR-0134: Gateway-normalized invoke body — the edge builds the CloudEvent
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0181](0181-edge-forwards-bodiless-upgrades.md) (2026-10-05) — Decision lines 113-114, Contracts Wiring lines 176-177, Definition of done lines 211-212 and checklist line 220: a bodiless upgrade request is forwarded without the envelope.
 - **Date**: 2026-07-13 (**Implemented 2026-07-13** — review pass (claude-opus-4-8): `normalizeInvokeBody`
   (`internal/dataplane/normalize.go`, four-branch rule) + the `serveFunction` external-only normalization
   land; the five scenarios are named passing tests (`normalize_test.go` + `normalize_e2e_test.go`);

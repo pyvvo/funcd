@@ -1,6 +1,7 @@
 # ADR-0149: Runtime availability — an unserved runtime is reported unavailable
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0186](0186-containerd-clean-slate-at-boot.md) (2026-10-05) — Decision 2 "a stored image is used as is" (lines 110-111), on the private containerd only: a stored image lasts one funcd run.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, shim, function, containerd, process

@@ -1,6 +1,7 @@
 # ADR-0023: Eventing core — CloudEvents normalization + timer EventSources (`internal/eventing`)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0182](0182-timer-schedule-anchored-on-creation.md) (2026-10-05) — Decision §2 timer ticking (lines 138-139): a timer's phase is anchored on the EventSource's creationTimestamp.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** · **Accepted 2026-06-14** after judge pass — no Blockers. Folded the judge's **Major**:
   the invoker can't wake a scaled-to-zero function via the read-only `activator.Endpoints`, so V1 honestly
   **invokes running functions**, **records** a not-ready trigger (`Invocation` + `fault.Unavailable`, never a

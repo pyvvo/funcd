@@ -1,6 +1,7 @@
 # ADR-0163: Retry, requeue and supervision times in the daemon config
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Contracts row runtime.bootTimeout (line 155): counted from the last successful Start.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: config, operability, controller, supervision, runtime, eventing, workflow

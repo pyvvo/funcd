@@ -6,6 +6,7 @@
 - **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — Decision 3 steady-state sentence, Contracts row, checklist, Consequence: catalog Get conjunct.
 - **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 2 no config key, Decision 9 requeue bound: now runtime.supervisionPeriod.
 - **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — Decision 4 rows "none -> create" and "Created -> start": failed Start restarts.
+- **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 4 Stopped/Failed replace row (line 141): the period counts from the last successful Start.
 - **Date**: 2026-09-30 (redrafted the same day: an independent re-judge found that the first draft's replacement
   could not work on containerd and that a steady-state requeue would multiply in the engine; the self-acceptance
   was withdrawn before any commit or code, at the decider's choice. The second re-judge found no Blocker and asked
