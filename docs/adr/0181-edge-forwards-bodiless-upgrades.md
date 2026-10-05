@@ -1,6 +1,6 @@
 # ADR-0181: The edge forwards a bodiless upgrade request untouched, and an idle tunnel closes
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, data-plane, websocket, invocation, cloudevent, size-cap, idle-timeout

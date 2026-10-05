@@ -1,6 +1,6 @@
 # ADR-0182: Timer schedules anchored on the EventSource's creation time
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, eventsource, timer, restart

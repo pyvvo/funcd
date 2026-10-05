@@ -1,6 +1,6 @@
 # ADR-0185: Idle reclaim skips a Pending Function — a gate-held Function stays Pending
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0192](0192-asleep-function-gate-stops-worker.md) (2026-10-05) — Decision 2 line 109: an asleep Function whose gate clears goes Idle instead of booting.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit

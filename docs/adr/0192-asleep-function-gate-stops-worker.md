@@ -1,6 +1,6 @@
 # ADR-0192: A gate on an asleep Function stops its worker, and the Function stays asleep until a call
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: function, activator, scale-to-zero, status, quiescence, supervision

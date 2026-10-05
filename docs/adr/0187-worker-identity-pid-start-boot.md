@@ -1,6 +1,6 @@
 # ADR-0187: Worker identity — pid, start time and boot, never the worker's own argv
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, process-driver, crash-only
