@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network/egress"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -389,10 +391,8 @@ func TestIssue94_FailedNewReleasesResources(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = busy.Close() })
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	controlAddr := free.Addr().String()
-	require.NoError(t, free.Close())
+	// The test binds controlAddr again after New, and another test process's :0 bind could take an ephemeral port (#758).
+	controlAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(freeport.Port(t)))
 
 	persist := []Option{
 		WithWorkflow(t.TempDir(), time.Second, 0, 1, 0),

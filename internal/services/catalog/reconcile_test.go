@@ -25,6 +25,7 @@ import (
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 	storemem "github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
 // fakeProvider is a provider.Runtime double: it records the ProviderSpec it was Converge'd with and
@@ -785,7 +786,8 @@ func bindsLake(fn *v1.Function) {
 
 // TestReconcileRecordsProxyPort: every pass with the proxy wired records the listener's port before its branch writes
 // the status, and a new run binds that port again. Not parallel, nor its subtests: a port bound in parallel could take
-// the recorded port between one run's Shutdown and the next run's rebind.
+// the recorded port between one run's Shutdown and the next run's rebind. The first run's listener is bound on a
+// freeport port before the pass, as another test process's :0 bind could take an ephemeral one in between (#758).
 func TestReconcileRecordsProxyPort(t *testing.T) {
 	cases := map[string]struct {
 		status provider.ProviderStatus
@@ -805,23 +807,23 @@ func TestReconcileRecordsProxyPort(t *testing.T) {
 			}
 			_, err := st.Create(ctx, mkCatalogService("lake"))
 			require.NoError(t, err)
-			port := 0
+			port := freeport.Port(t)
 			for run := range 2 {
 				mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+				if run == 0 {
+					_, _, err = mgr.Listen("default", "lake", port)
+					require.NoError(t, err)
+				}
 				r := newReconciler(t, st, &fakeProvider{status: tc.status}, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
 				reconcileOnce(t, r, "lake")
 				obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
 				require.NoError(t, gerr)
 				cs := obj.(*v1.CatalogService)
 				require.Equal(t, tc.phase, cs.Status.Phase)
-				require.NotZero(t, cs.Status.ProxyPort)
+				require.Equal(t, port, cs.Status.ProxyPort, "the pass records the listener's port; a new run binds it again")
 				url, ok := mgr.ProxyURL("default", "lake")
 				require.True(t, ok)
 				require.Equal(t, "127.0.0.1:"+strconv.Itoa(cs.Status.ProxyPort), url)
-				if run == 1 {
-					require.Equal(t, port, cs.Status.ProxyPort, "a new run binds the recorded port again")
-				}
-				port = cs.Status.ProxyPort
 				mgr.Shutdown()
 			}
 		})

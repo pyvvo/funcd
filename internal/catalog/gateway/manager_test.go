@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
 // dialTimeout bounds the post-Remove reachability probe (a closed listener refuses fast).
@@ -284,18 +285,20 @@ func statusAt(t *testing.T, url string) int {
 
 // TestManagerListenRebindsRecordedPort: a new run binds the port the previous run recorded, answering 503 until
 // Ensure targets the engine; a second Listen in the same run keeps the listener. Not parallel: a port bound in parallel
-// could take the recorded port between the first run's Shutdown and the rebind.
+// could take the recorded port between the first run's Shutdown and the rebind, and a freeport port, not an ephemeral
+// one: another test process's :0 bind could take that (#758).
 func TestManagerListenRebindsRecordedPort(t *testing.T) {
 	first := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
-	port, moved, err := first.Listen("data", "lake", 0)
+	port := freeport.Port(t)
+	bound, moved, err := first.Listen("data", "lake", port)
 	require.NoError(t, err)
 	require.False(t, moved)
-	require.NotZero(t, port)
+	require.Equal(t, port, bound)
 	first.Shutdown()
 
 	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(mgr.Shutdown)
-	bound, moved, err := mgr.Listen("data", "lake", port)
+	bound, moved, err = mgr.Listen("data", "lake", port)
 	require.NoError(t, err)
 	require.False(t, moved)
 	require.Equal(t, port, bound)
