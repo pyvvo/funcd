@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -453,4 +454,54 @@ func TestIssue125_ApplyCannotReplaceRunSpec(t *testing.T) {
 	require.NoError(t, err, "re-applying the same run spec is admitted")
 	setRunSpec(t, c, "dur-4", func(s *v1.WorkflowRunSpec) { s.Paused = true })
 	require.True(t, getRun(t, c, "dur-4").Spec.Paused, "pause still patches spec.paused")
+}
+
+// scenario: workflow-step-broken-handler-stays-failed (ADR-0169) — a step Function whose handler throws at import is
+// Failed (ShapeInvalid) and stays so a supervision period after the run; every dispatch fails at once, and the run fails
+// naming the state.
+func TestScenarioWorkflowStepBrokenHandlerStaysFailed(t *testing.T) {
+	c, _ := shimPlatformOCI(t)
+	src, layout := t.TempDir(), t.TempDir()
+	writeStep(t, src, "boom", "throw new Error(\"boom at import\");\nexport const handle = async () => ({});\n")
+	img := pushStepImage(t, layout, src, "boom")
+
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "broken", Namespace: "default", ResourceGroup: "rg1"},
+		Spec: v1.WorkflowSpec{
+			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated},
+			Steps:   []v1.WorkflowStep{{Name: "boom", Function: &v1.FunctionStep{Image: img}}},
+		},
+	}
+	_, err := c.Apply(context.Background(), wf)
+	require.NoError(t, err)
+	run := &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "broken-1", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "broken", Input: json.RawMessage(`{}`)},
+	}
+	_, err = c.Apply(context.Background(), run)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		obj, gerr := c.Get(context.Background(), v1.KindWorkflowRun, "default", "broken-1")
+		return gerr == nil && obj.(*v1.WorkflowRun).Status.Phase == "Failed"
+	}, 30*time.Second, 200*time.Millisecond, "the run fails")
+	got := getRun(t, c, "broken-1")
+	require.Len(t, got.Status.Steps, 1)
+	require.Contains(t, got.Status.Steps[0].Error, "is Failed (ShapeInvalid)", "the run names the step Function's state")
+
+	stepFailed := func() {
+		t.Helper()
+		obj, gerr := c.Get(context.Background(), v1.KindFunction, "default", "broken-boom")
+		require.NoError(t, gerr)
+		fn := obj.(*v1.Function)
+		require.Equal(t, v1.PhaseFailed, fn.Status.Phase)
+		shape, ok := fn.Status.Conditions.Get("ShapeValid")
+		require.True(t, ok)
+		require.Equal(t, v1.ConditionFalse, shape.Status)
+	}
+	stepFailed()
+	time.Sleep(controller.SupervisionPeriod + 2*time.Second)
+	stepFailed()
 }

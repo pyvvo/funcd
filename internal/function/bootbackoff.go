@@ -3,9 +3,12 @@ package function
 import (
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -54,12 +57,15 @@ type bootBackoff struct {
 	logger         *slog.Logger
 }
 
-// bootCrash is one replica's crash loop: how many boot crashes in a row, the CreatedAt of the instance last counted,
-// and the status message that crash gave.
+// bootCrash is one replica's crash loop: how many boot crashes and Start failures in a row, the CreatedAt of the
+// instance last counted, and the status message that crash gave.
 type bootCrash struct {
 	count   int
 	counted time.Time
 	message string
+
+	startErr   error     // the last Start or worker-spec error, until the replica starts (ADR-0169)
+	startAfter time.Time // when that replica may be started again
 }
 
 func newBootBackoff(initial, limit time.Duration, logger *slog.Logger) *bootBackoff {
@@ -122,6 +128,69 @@ func (b *bootBackoff) reset(id runtime.InstanceID) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.crashes, id)
+}
+
+// startResult records starting replica id at now: a non-nil err counts a failure, remembers err and returns
+// now + wait(count); nil clears startErr and startAfter (the count stays until the replica listens), zero time.
+func (b *bootBackoff) startResult(id runtime.InstanceID, now time.Time, err error) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c, ok := b.crashes[id]
+	if err == nil {
+		if ok && c.startErr != nil {
+			c.startErr, c.startAfter = nil, time.Time{}
+			b.crashes[id] = c
+		}
+		return time.Time{}
+	}
+	c.count++
+	c.startErr, c.startAfter = err, now.Add(b.wait(c.count))
+	b.crashes[id] = c
+	return c.startAfter
+}
+
+// held reports whether replica id still waits out a Start failure at now: its startAfter and startErr (zero/nil if not).
+func (b *bootBackoff) held(id runtime.InstanceID, now time.Time) (time.Time, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c, ok := b.crashes[id]
+	if !ok || c.startErr == nil || !now.Before(c.startAfter) {
+		return time.Time{}, nil
+	}
+	return c.startAfter, c.startErr
+}
+
+// forget drops every entry whose ID starts with prefix: "<ns>/<name>/", or "<ns>/<name>/<rev>/" (the trailing '/'
+// keeps revision fn-1 from matching fn-10).
+func (b *bootBackoff) forget(prefix string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id := range b.crashes {
+		if strings.HasPrefix(string(id), prefix) {
+			delete(b.crashes, id)
+		}
+	}
+}
+
+// forgetStale drops every entry under prefix "<ns>/<name>/" whose revision is none of live: a replaced revision's
+// replica that never got an instance (a worker-spec failure) has no worker for retire to reset (ADR-0169 Decision 4).
+func (b *bootBackoff) forgetStale(prefix string, live ...string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id := range b.crashes {
+		rest, ok := strings.CutPrefix(string(id), prefix)
+		if !ok {
+			continue
+		}
+		if rev, _, ok := strings.Cut(rest, "/"); ok && !slices.Contains(live, rev) {
+			delete(b.crashes, id)
+		}
+	}
+}
+
+// backoffPrefix is the bootBackoff key prefix of every replica of Function name in ns (runtime.NewInstanceID).
+func backoffPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
+	return string(ns) + "/" + string(name) + "/"
 }
 
 // describeExit says how a replica ended, for the status message and the log.

@@ -13,8 +13,11 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/activator/storescaler"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 )
@@ -309,13 +312,16 @@ func (c *createCounter) Create(ctx context.Context, spec runtime.WorkerSpec) (ru
 }
 
 // Issue #73: a worker that cannot start (its interpreter is missing) ends Failed with a reason naming the start error,
-// and a later pass starts the same instances again instead of replacing them, writing nothing while it still fails.
+// and a pass after its growing wait starts the same instances again instead of replacing them (ADR-0169), writing
+// nothing while it still fails.
 func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	t.Parallel()
 	rt := &createCounter{Runtime: process.New()}
 	t.Cleanup(func() { _ = rt.Close() })
+	sf := &startFailer{Runtime: rt}
+	clk := clock.NewManual(time.Now())
 	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
-		d.Runtime = rt
+		d.Runtime, d.Clock = sf, clk
 		d.ShimCommand = []string{"/nonexistent/bin/node", "/opt/funcd/shim.mjs"}
 	})
 	h.createFn(t, "calm")
@@ -334,13 +340,22 @@ func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	require.Equal(t, "StartFailed", ready.Reason)
 	require.Contains(t, ready.Message, "/nonexistent/bin/node")
 	require.Equal(t, v1.ConditionUnknown, h.shapeValid(t, "calm"), "a worker that cannot start is not a shape failure, and nothing loaded the generation (ADR-0174)")
-	require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
+	require.Positive(t, res.RequeueAfter)
+	require.LessOrEqual(t, res.RequeueAfter, testPeriod, "a start failure is retried after its wait")
+	starts := sf.starts.Load()
 
 	rv := fn.ResourceVersion
 	res = h.reconcile(t, "calm")
+	require.Equal(t, starts, sf.starts.Load(), "a pass inside the wait starts nothing")
+	require.Equal(t, rv, h.getFn(t, "calm").ResourceVersion, "a pass inside the wait writes nothing")
+	require.Positive(t, res.RequeueAfter)
+	require.LessOrEqual(t, res.RequeueAfter, testPeriod)
+
+	clk.Advance(testPeriod)
+	h.reconcile(t, "calm")
+	require.Equal(t, starts+2, sf.starts.Load(), "both replicas are started again once the wait ends")
 	require.EqualValues(t, 2, rt.creates.Load(), "the instances that failed to start are started again, not replaced")
 	require.Equal(t, rv, h.getFn(t, "calm").ResourceVersion, "a repeated start failure writes nothing")
-	require.Equal(t, testPeriod, res.RequeueAfter)
 }
 
 // readinessListFailer fails List when the reconciler's readiness judgment calls it, so the pass's earlier Lists succeed.
@@ -448,9 +463,11 @@ func TestIssue358_SocketFailureBlocksReady(t *testing.T) {
 			require.Contains(t, ready.Message, "permission denied")
 			creates, _ := h.rt.counts()
 			require.Zero(t, creates, "no worker starts without its local API socket")
-			require.Equal(t, testPeriod, res.RequeueAfter, "the pass retries")
+			require.Positive(t, res.RequeueAfter, "the pass retries")
+			require.LessOrEqual(t, res.RequeueAfter, testPeriod, "after the growing wait (ADR-0169)")
 
 			sockets.broken.Store(false)
+			time.Sleep(testPeriod)
 			h.reconcile(t, "lonely")
 			require.Equal(t, v1.PhaseReady, h.getFn(t, "lonely").Status.Phase)
 			spec, ok := h.rt.specFor("lonely")
@@ -458,4 +475,252 @@ func TestIssue358_SocketFailureBlocksReady(t *testing.T) {
 			require.NotEmpty(t, spec.Env["FUNCD_INVOKE_SOCKET"])
 		})
 	}
+}
+
+// startFailer fails each Start while failing is set, before the runtime it wraps sees it, and counts every Start.
+type startFailer struct {
+	runtime.Runtime
+	failing atomic.Bool
+	starts  atomic.Int32
+}
+
+func (s *startFailer) Start(ctx context.Context, id runtime.InstanceID) error {
+	s.starts.Add(1)
+	if s.failing.Load() {
+		return fault.Unavailablef("test.Start", "exec: %q: executable file not found in $PATH", "node")
+	}
+	return s.Runtime.Start(ctx, id)
+}
+
+// wrap puts s in front of the harness runtime.
+func (s *startFailer) wrap(d *function.Deps) { s.Runtime, d.Runtime = d.Runtime, s }
+
+// activator is the data path's activator over the reconciler's Endpoints and the store scaler, on clk.
+func (h *shimHarness) activator(t *testing.T, clk clock.Clock) *activator.Activator {
+	t.Helper()
+	a, err := activator.New(activator.Deps{
+		Store: h.st, Endpoints: h.r.Endpoints(), Scaler: storescaler.New(h.st), Clock: clk, ActivationTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	return a
+}
+
+// refusedAtOnce calls name through a and requires the call to be refused within a second, naming the Failed reason.
+func refusedAtOnce(t *testing.T, a *activator.Activator, name, reason string) {
+	t.Helper()
+	begin := time.Now()
+	_, err := a.Wake(context.Background(), activator.FunctionRef{Namespace: "default", Name: v1.ObjectName(name)})
+	requireRefused(t, err, name, reason)
+	require.Less(t, time.Since(begin), time.Second, "the call is refused at once, not held")
+}
+
+// requireRefused requires err to be the 503 a call to a Failed Function gets (ADR-0169 Decision 5).
+func requireRefused(t *testing.T, err error, name, reason string) {
+	t.Helper()
+	require.Error(t, err)
+	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+	require.Contains(t, err.Error(), "function default/"+name+" is Failed ("+reason+")")
+}
+
+// phaseIs reports whether name is in phase p, false on a read error, for polling from another goroutine.
+func (h *shimHarness) phaseIs(name string, p v1.Phase) bool {
+	obj, err := h.st.Get(context.Background(), v1.KindFunction.GVK(), "default", v1.ObjectName(name))
+	if err != nil {
+		return false
+	}
+	fn, ok := obj.(*v1.Function)
+	return ok && fn.Status.Phase == p
+}
+
+// reclaimPastIdle runs idle reclaim twice, the clock moved past idle after each, so a Function a's tracker first sees
+// in the first run is claimed in the second.
+func reclaimPastIdle(t *testing.T, a *activator.Activator, clk *clock.Manual, idle time.Duration) {
+	t.Helper()
+	for range 2 {
+		require.NoError(t, a.ReclaimIdle(context.Background()))
+		clk.Advance(2 * idle)
+	}
+}
+
+// scenario: broken-handler-stays-failed (ADR-0169) — a woken scale-to-zero Function whose handler cannot load gets the
+// call refused once the pass writes Failed; it stays Failed with the load error, and a second call is refused at once
+// with no worker created or started.
+func TestScenarioBrokenHandlerStaysFailed(t *testing.T) {
+	t.Parallel()
+	const loadErr = `funcd-shim: shape error: export "handle" is not a function`
+	sf := &startFailer{}
+	h := newShimHarness(t, http.StatusOK, true, withPeriod, sf.wrap)
+	h.rt.setLog(loadErr + "\n")
+	h.create(t, "broken", func(fn *v1.Function) { fn.Spec.Replicas = 0 })
+	h.reconcile(t, "broken")
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "broken").Status.Phase)
+	a := h.activator(t, clock.NewManual(time.Now()))
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.Wake(context.Background(), activator.FunctionRef{Namespace: "default", Name: "broken"})
+		errc <- err
+	}()
+	require.Eventually(t, func() bool { return h.phaseIs("broken", v1.PhaseDeploying) }, 5*time.Second, 5*time.Millisecond, "the call wakes it")
+	h.reconcile(t, "broken")
+	select {
+	case err := <-errc:
+		requireRefused(t, err, "broken", "ShapeInvalid")
+	case <-time.After(time.Second):
+		t.Fatal("the call is not refused within a second of the pass writing Failed")
+	}
+
+	rv := h.getFn(t, "broken").ResourceVersion
+	for range 3 {
+		require.Zero(t, h.reconcile(t, "broken").RequeueAfter, "a shape failure is not retried")
+	}
+	fn := h.getFn(t, "broken")
+	require.Equal(t, rv, fn.ResourceVersion, "a repeated pass writes nothing")
+	require.Equal(t, v1.PhaseFailed, fn.Status.Phase)
+	shape := h.condition(t, "broken", "ShapeValid")
+	require.Equal(t, v1.ConditionFalse, shape.Status)
+	require.Equal(t, loadErr, shape.Message)
+	rr := h.condition(t, "broken", "RevisionReady")
+	require.Equal(t, v1.ConditionFalse, rr.Status)
+	require.Equal(t, "ShapeInvalid", rr.Reason)
+
+	refusedAtOnce(t, a, "broken", "ShapeInvalid")
+	creates, _ := h.rt.counts()
+	require.Equal(t, 1, creates, "the broken worker is not created again")
+	require.EqualValues(t, 1, sf.starts.Load(), "the broken worker is not started again")
+}
+
+// scenario: fixed-spec-recovers-scale-to-zero-function (ADR-0169) — a fixed spec applied to a Failed scale-to-zero
+// Function makes it Ready with no call, and Idle, its worker stopped, after idleTimeout with no call.
+func TestScenarioFixedSpecRecoversScaleToZeroFunction(t *testing.T) {
+	t.Parallel()
+	const idle = time.Minute
+	h := newShimHarness(t, http.StatusOK, true, withPeriod)
+	h.create(t, "fixme", func(fn *v1.Function) {
+		fn.Spec.Replicas = 0
+		fn.Spec.Scaling.IdleTimeout = idle
+	})
+	h.reconcile(t, "fixme")
+	h.setPhase(t, "fixme", v1.PhaseDeploying)
+	h.reconcile(t, "fixme")
+	h.reconcile(t, "fixme")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "fixme").Status.Phase)
+
+	h.rt.setFailing(false)
+	h.apply(t, "fixme", func(fn *v1.Function) { fn.Spec.Handler = "handleFixed" })
+	h.reconcile(t, "fixme")
+	fn := h.getFn(t, "fixme")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the fixed spec boots with no call")
+	spec, ok := h.rt.specFor("fixme")
+	require.True(t, ok)
+	require.Equal(t, "handleFixed", spec.Env["FUNCD_HANDLER"])
+
+	clk := clock.NewManual(time.Now())
+	reclaimPastIdle(t, h.activator(t, clk), clk, idle)
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "fixme").Status.Phase)
+	h.reconcile(t, "fixme")
+	fn = h.getFn(t, "fixme")
+	require.Equal(t, v1.PhaseIdle, fn.Status.Phase)
+	require.Zero(t, fn.Status.Replicas)
+	require.Equal(t, runtime.StateStopped, h.rt.revisionStates("fixme")["fixme-2"][0], "the worker is stopped")
+}
+
+// scenario: idle-reclaim-skips-failed (ADR-0169) — idle reclaim past idleTimeout leaves a Failed (ShapeInvalid)
+// Function Failed, and a call to it is refused at once.
+func TestScenarioIdleReclaimSkipsFailed(t *testing.T) {
+	t.Parallel()
+	const idle = time.Minute
+	h := newShimHarness(t, http.StatusOK, true, withPeriod)
+	h.create(t, "broken", func(fn *v1.Function) { fn.Spec.Scaling.IdleTimeout = idle })
+	h.reconcile(t, "broken")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "broken").Status.Phase)
+
+	clk := clock.NewManual(time.Now())
+	a := h.activator(t, clk)
+	reclaimPastIdle(t, a, clk, idle)
+	h.reconcile(t, "broken")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "broken").Status.Phase, "idle reclaim never moves a Failed Function")
+	refusedAtOnce(t, a, "broken", "ShapeInvalid")
+	creates, _ := h.rt.counts()
+	require.Equal(t, 1, creates)
+}
+
+// scenario: start-failure-retried-with-growing-wait (ADR-0169) — a woken scale-to-zero Function whose worker cannot
+// start is Failed/StartFailed and is started again after 20, 40, 80 and 80 ms, never sooner, with each requeue the
+// remaining wait; a call meanwhile is refused at once and starts nothing. Once the cause is gone the next retry makes it
+// Ready, and Idle after idleTimeout.
+func TestScenarioStartFailureRetriedWithGrowingWait(t *testing.T) {
+	t.Parallel()
+	const idle = time.Minute
+	clk := clock.NewManual(time.Now())
+	sf := &startFailer{}
+	sf.failing.Store(true)
+	h := newShimHarness(t, http.StatusOK, false, sf.wrap, func(d *function.Deps) {
+		d.BootBackoffInitial, d.BootBackoffMax, d.Clock = 20*time.Millisecond, 80*time.Millisecond, clk
+	})
+	h.create(t, "stuck", func(fn *v1.Function) {
+		fn.Spec.Replicas = 0
+		fn.Spec.Scaling.IdleTimeout = idle
+	})
+	h.reconcile(t, "stuck")
+	h.setPhase(t, "stuck", v1.PhaseDeploying)
+	a := h.activator(t, clk)
+
+	res := h.reconcile(t, "stuck")
+	for i, wait := range []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 80 * time.Millisecond} {
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "stuck").Status.Phase, i)
+		require.Equal(t, "StartFailed", h.condition(t, "stuck", "Ready").Reason, i)
+		require.Equal(t, wait, res.RequeueAfter, "the pass comes back when the wait ends (%d)", i)
+		starts, rv := sf.starts.Load(), h.getFn(t, "stuck").ResourceVersion
+
+		clk.Advance(wait - time.Millisecond)
+		res = h.reconcile(t, "stuck")
+		require.Equal(t, time.Millisecond, res.RequeueAfter, "the remaining wait (%d)", i)
+		require.Equal(t, rv, h.getFn(t, "stuck").ResourceVersion, "a pass inside the wait writes nothing (%d)", i)
+		refusedAtOnce(t, a, "stuck", "StartFailed")
+		require.Equal(t, starts, sf.starts.Load(), "no Start inside the wait, from a pass or a call (%d)", i)
+
+		clk.Advance(time.Millisecond)
+		res = h.reconcile(t, "stuck")
+		require.Equal(t, starts+1, sf.starts.Load(), "started again once the wait ends (%d)", i)
+	}
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "stuck").Status.Phase)
+
+	sf.failing.Store(false)
+	clk.Advance(res.RequeueAfter)
+	h.reconcile(t, "stuck")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "stuck").Status.Phase, "the next retry serves once the cause is gone")
+	creates, _ := h.rt.counts()
+	require.Equal(t, 1, creates, "the replica that could not start is started, not replaced")
+
+	reclaimPastIdle(t, a, clk, idle)
+	h.reconcile(t, "stuck")
+	fn := h.getFn(t, "stuck")
+	require.Equal(t, v1.PhaseIdle, fn.Status.Phase, "a started Function is reclaimed as usual")
+	require.Zero(t, fn.Status.Replicas)
+}
+
+// scenario: deleted-and-reapplied-function-starts-fresh (ADR-0169) — a Function whose worker spec failed once (its
+// per-name local API socket) is deleted and re-applied with the same name; the first pass creates and starts its
+// replica, with no StartFailed status left over.
+func TestScenarioDeletedAndReappliedFunctionStartsFresh(t *testing.T) {
+	t.Parallel()
+	sockets := &brokenSockets{}
+	sockets.broken.Store(true)
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) { d.InvokeSockets = sockets })
+	h.createFn(t, "phoenix")
+	h.reconcile(t, "phoenix")
+	require.Equal(t, "StartFailed", h.condition(t, "phoenix", "Ready").Reason)
+
+	require.NoError(t, h.st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "phoenix", ""))
+	h.reconcile(t, "phoenix")
+	sockets.broken.Store(false)
+	h.createFn(t, "phoenix")
+	h.reconcile(t, "phoenix")
+
+	fn := h.getFn(t, "phoenix")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the first pass creates and starts the replica")
+	require.Empty(t, h.condition(t, "phoenix", "Ready").Reason, "no StartFailed is left over")
+	creates, _ := h.rt.counts()
+	require.Equal(t, 1, creates)
 }

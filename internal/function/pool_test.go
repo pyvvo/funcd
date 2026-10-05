@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/dataplane"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/sensor"
@@ -412,7 +413,7 @@ func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
 	res := h.reconcile(t, "hang")
 	require.Equal(t, v1.PhaseFailed, h.getFn(t, "hang").Status.Phase)
 	require.Contains(t, h.condition(t, "hang", "ShapeValid").Message, "did not become ready")
-	require.Zero(t, res.RequeueAfter, "a Failed member is not polled again")
+	require.Equal(t, controller.SupervisionPeriod, res.RequeueAfter, "a pooled shape failure is judged again after the period (ADR-0169)")
 }
 
 // Issue #422: a serving pooled member whose new pool worker runs but never becomes ready is not re-probed every 200 ms
@@ -490,6 +491,40 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 			require.Equal(t, creates+1, after, "created again once the backoff has passed")
 		})
 	}
+}
+
+// scenario: pooled-failed-member-never-idle (ADR-0169) — a woken scale-to-zero member whose pool worker cannot load is
+// never Idle over two periods of passes and an idle reclaim past idleTimeout, and a call while it is Failed is refused
+// at once.
+func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
+	t.Parallel()
+	const idle = time.Minute
+	h := newShimHarness(t, http.StatusOK, true, withNodePool, withPeriod)
+	h.create(t, "m", func(fn *v1.Function) {
+		fn.Spec.Pooling.Worker = "adr0169"
+		fn.Spec.Replicas = 0
+		fn.Spec.Scaling.IdleTimeout = idle
+	})
+	h.reconcile(t, "m")
+	require.Equal(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase)
+	h.setPhase(t, "m", v1.PhaseDeploying)
+	h.reconcile(t, "m")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "the pool worker cannot load")
+
+	for i := range 2 {
+		res := h.reconcile(t, "m")
+		require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "period %d", i)
+		require.Positive(t, res.RequeueAfter, "the pool worker is tried again (period %d)", i)
+		require.LessOrEqual(t, res.RequeueAfter, testPeriod)
+		time.Sleep(testPeriod)
+	}
+	clk := clock.NewManual(time.Now())
+	a := h.activator(t, clk)
+	reclaimPastIdle(t, a, clk, idle)
+	h.reconcile(t, "m")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "m").Status.Phase, "never Idle")
+	require.Equal(t, v1.ConditionFalse, h.shapeValid(t, "m"))
+	refusedAtOnce(t, a, "m", "ShapeInvalid")
 }
 
 // Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
