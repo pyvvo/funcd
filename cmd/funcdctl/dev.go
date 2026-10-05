@@ -72,6 +72,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
+	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
@@ -137,7 +138,7 @@ func (a *cli) devCmd() *cobra.Command {
 			if cfg.printEnv {
 				return a.printDevEnv(path, entry, cfg)
 			}
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(cmd.Context(), stopsignal.Signals()...)
 			defer stop()
 
 			inst, err := a.startDev(ctx, path, entry, cfg)

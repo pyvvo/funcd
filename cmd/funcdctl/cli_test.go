@@ -480,3 +480,18 @@ func TestCLIRevisionIsReadOnly(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), readOnly)
 }
+
+// funcdctl delete of a name that is not a DNS label must fail, not delete the object the name's prefix names and
+// report success.
+func TestIssue698_DeleteRefusesNameThatIsNotALabel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := newClient(t)
+	mkfn(ctx, t, c)
+	var out bytes.Buffer
+	err := execCLI(&out, c, "delete", "function", "fn1#zzz", "-n", "team-a")
+	_, gerr := c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+	require.NoError(t, gerr, "delete fn1#zzz deleted fn1: err=%v out=%q", err, out.String())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "delete fn1#zzz: err=%v out=%q", err, out.String())
+	require.NotContains(t, out.String(), "deleted")
+}

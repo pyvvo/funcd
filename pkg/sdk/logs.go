@@ -28,7 +28,11 @@ func (c *Client) Logs(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 	if ns == "" || fn == "" {
 		return nil, fault.Invalidf(op, "namespace and function are required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/functions/" + string(fn) + "/logs"
+	u, err := c.itemURL(v1.KindFunction, ns, fn)
+	if err != nil {
+		return nil, err
+	}
+	u += "/logs"
 	q := url.Values{}
 	if o.Since != "" {
 		q.Set("since", o.Since)
@@ -64,7 +68,11 @@ func (c *Client) RunLogs(ctx context.Context, ns v1.NamespaceName, run v1.Object
 	if ns == "" || run == "" {
 		return nil, fault.Invalidf(op, "namespace and run are required")
 	}
-	u := c.baseURL + apiPrefix + "/namespaces/" + string(ns) + "/workflowruns/" + string(run) + "/logs"
+	u, err := c.itemURL(v1.KindWorkflowRun, ns, run)
+	if err != nil {
+		return nil, err
+	}
+	u += "/logs"
 	q := url.Values{}
 	if o.Since != "" {
 		q.Set("since", o.Since)
