@@ -141,7 +141,9 @@ func TestReconcile_catalogservice_uses_provider_runtime(t *testing.T) {
 	seedCatalogBucket(t, st) // ADR-0121: reconcile-time bucket-existence gate needs the bound Bucket present
 	prov := &fakeProvider{}
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
-		d.Derive = func(ns, name string) (string, string) { return "AKIA-" + name, "secret-" + name }
+		d.Derive = func(kind v1.Kind, _, name string) (string, string) {
+			return "AKIA-" + string(kind) + "-" + name, "secret-" + name
+		}
 		d.S3Endpoint = "http://10.63.0.1:9000"
 	})
 	_, err := st.Create(ctx, mkCatalogService("lake",
@@ -159,7 +161,7 @@ func TestReconcile_catalogservice_uses_provider_runtime(t *testing.T) {
 	require.Nil(t, spec.Route, "internal-only in V1 — no ingress route programmed")
 
 	// env: the ADR-0085 keypair (derived over the provider identity) + catalog key + quack port.
-	require.Equal(t, "AKIA-lake", spec.Env["AWS_ACCESS_KEY_ID"])
+	require.Equal(t, "AKIA-CatalogService-lake", spec.Env["AWS_ACCESS_KEY_ID"], "the engine key is derived over its CatalogService identity")
 	require.Equal(t, "secret-lake", spec.Env["AWS_SECRET_ACCESS_KEY"])
 	require.Equal(t, "us-east-1", spec.Env["AWS_REGION"])
 	require.Equal(t, "http://10.63.0.1:9000", spec.Env["AWS_ENDPOINT_URL_S3"])

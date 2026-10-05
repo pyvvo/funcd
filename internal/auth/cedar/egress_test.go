@@ -201,6 +201,7 @@ func TestEgress_CollapseFunctionCountIndependent(t *testing.T) {
 			text := pols[0].Spec.Cedar
 			require.Equal(t, 3, strings.Count(text, "permit ("), "N rules ⇒ N permits, independent of function count")
 			require.Equal(t, 3, strings.Count(text, `principal.namespace == "acme"`), "every permit is namespace-scoped")
+			require.Equal(t, 3, strings.Count(text, `principal is Function`), "every whole-namespace permit is for Functions only")
 			require.NotContains(t, text, `Function::`, "the whole-namespace collapse uses no Function:: head")
 		})
 	}

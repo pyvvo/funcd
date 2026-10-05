@@ -255,8 +255,8 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService
 	return nil
 }
 
-// engineEnv assembles the engine's environment (ADR-0087): the ADR-0085 per-fn S3 keypair (derived
-// over the PROVIDER identity ns/cs.Name), AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the
+// engineEnv assembles the engine's environment (ADR-0087): the ADR-0085 S3 keypair (derived
+// over the CatalogService identity, ADR-0175), AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the
 // catalog's s3:// key), FUNCD_QUACK_PORT, and the resolved spec.secrets (the Quack token) +
 // spec.config (DUCKDB_*) Data keys — merged with reserved-FUNCD_-key precedence. A secret/config
 // resolution failure is returned (the caller fails the service closed).
@@ -267,10 +267,10 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 		"FUNCD_QUACK_PORT":       strconv.Itoa(enginePort),
 		"FUNCD_DUCKLAKE_CATALOG": catalogURI(cs.Spec.Catalog),
 	}
-	// The ADR-0085 per-fn S3 keypair, derived over the PROVIDER identity (ns, cs.Name) — so the
-	// engine's S3 reach is scoped to its own bindings (the Bucket prefix owner == cs.Name).
+	// The engine signs as CatalogService::"<ns>/<cs.Name>" (ADR-0175): its reads are its own spec.blob
+	// bindings, and it writes a prefix only where the S3 PEP resolves it as that prefix's writer.
 	if r.derive != nil && len(cs.Spec.Blob) > 0 {
-		access, secret := r.derive(string(cs.Namespace), string(cs.Name))
+		access, secret := r.derive(v1.KindCatalogService, string(cs.Namespace), string(cs.Name))
 		env["AWS_ACCESS_KEY_ID"] = access
 		env["AWS_SECRET_ACCESS_KEY"] = secret
 	}

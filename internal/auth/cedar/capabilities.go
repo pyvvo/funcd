@@ -298,7 +298,8 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 		"resourceGroup": cedartypes.String(bkt.ResourceGroup),
 	}
 	// writers is the set of principals authorized to WRITE this prefix (ADR-0136 generalized single-writer):
-	// the legacy owner (a Function ref — back-compat) PLUS any writer-role RolesAssignment grants. An empty
+	// the legacy owner (a Function ref — back-compat), the same-named CatalogService when it binds the prefix and
+	// no Function holds the name (ADR-0175), PLUS any writer-role RolesAssignment grants. An empty
 	// writers ⇒ the forbid fires (owner-less/unassigned ⇒ unwritable, default-deny). Type-agnostic: a role
 	// grant can make an external Identity a writer.
 	// The single `owner` attr is kept (back-compat for user policies that compare `principal ==
@@ -309,6 +310,9 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 			ownerUID := functionUID(bkt.Namespace, pfx.Owner)
 			prefixAttrs["owner"] = ownerUID
 			writerVals = append(writerVals, ownerUID)
+			if catalogServiceOwnsPrefix(ctx, r, bkt.Namespace, pfx.Owner, resource.Name, resource.Path) {
+				writerVals = append(writerVals, catalogServiceUID(bkt.Namespace, pfx.Owner))
+			}
 			break
 		}
 	}
@@ -326,6 +330,30 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 		Attributes: cedartypes.NewRecord(prefixAttrs),
 	}
 	return em, true, nil
+}
+
+// catalogServiceOwnsPrefix reports whether the prefix owner name resolves to a CatalogService writer
+// (ADR-0175 Decision 6): CatalogService owner exists, its spec.blob binds (bucket, prefix), and no Function
+// owner exists. Every lookup that errors or misses answers false; a Function lookup error other than
+// NotFound counts as "a Function may exist".
+func catalogServiceOwnsPrefix(ctx context.Context, r MetaReader, ns v1.NamespaceName, owner, bucket v1.ObjectName, prefix string) bool {
+	if _, err := r.Get(ctx, v1.KindFunction.GVK(), ns, owner); fault.KindOf(err) != fault.NotFound {
+		return false
+	}
+	obj, err := r.Get(ctx, v1.KindCatalogService.GVK(), ns, owner)
+	if err != nil {
+		return false
+	}
+	cs, ok := obj.(*v1.CatalogService)
+	if !ok {
+		return false
+	}
+	for _, b := range cs.Spec.Blob {
+		if b.Bucket == bucket && b.Prefix == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 // CatalogCapability is the catalog::query capability (ADR-0137): spec.catalogs → the `catalogBindings`
@@ -374,14 +402,18 @@ func catalogResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (
 	return em, true, nil
 }
 
-// FunctionPrincipalSource resolves the principal's backing *v1.Function (the primary source, ADR-0074).
+// FunctionPrincipalSource resolves a Function principal's backing *v1.Function (ADR-0074); a principal of
+// any other type is not its own (ADR-0175).
 func FunctionPrincipalSource() PrincipalSource {
 	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
 		const op = "cedar.FunctionPrincipalSource"
+		if p.Type != v1.KindFunction {
+			return nil, false, nil
+		}
 		obj, err := r.Get(ctx, v1.KindFunction.GVK(), p.Namespace, p.Name)
 		if err != nil {
 			if fault.KindOf(err) == fault.NotFound {
-				return nil, false, nil // defer to the next source (CatalogService fallback)
+				return nil, false, nil
 			}
 			return nil, false, fault.Wrapf(err, fault.Internal, op, "get function %q", p.Name)
 		}
@@ -393,12 +425,15 @@ func FunctionPrincipalSource() PrincipalSource {
 	}
 }
 
-// CatalogServicePrincipalSource is the ADR-0088 fallback: resolve a *v1.CatalogService when no Function
-// of this name exists (Function-first). A provider is a first-class S3 principal — its spec.blob are its
+// CatalogServicePrincipalSource resolves a CatalogService principal's backing *v1.CatalogService (ADR-0088,
+// ADR-0175): an engine is its own principal, never a same-named Function. Its spec.blob are its
 // blobBindings; it has no links/kv.
 func CatalogServicePrincipalSource() PrincipalSource {
 	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
 		const op = "cedar.CatalogServicePrincipalSource"
+		if p.Type != v1.KindCatalogService {
+			return nil, false, nil
+		}
 		obj, err := r.Get(ctx, v1.KindCatalogService.GVK(), p.Namespace, p.Name)
 		if err != nil {
 			if fault.KindOf(err) == fault.NotFound {

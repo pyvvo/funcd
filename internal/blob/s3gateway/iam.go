@@ -1,11 +1,11 @@
 // Package s3gateway is the funcd S3-protocol frontend over the blob.Bucket
-// substrate (ADR-0080), with in-platform identity via funcd-managed per-function
+// substrate (ADR-0080), with in-platform identity via funcd-managed per-principal
 // SigV4 keypairs resolved by an in-process versitygw auth.IAMService (ADR-0085).
 //
-// AuthN: every in-platform function gets a DETERMINISTIC keypair derived from a
-// node-local master secret over its (namespace, function) Ref — funcd injects it
-// into the sandbox env; the function never chooses its secret and cannot derive a
-// peer's. AuthZ: every backend op is a PEP on the cedar PDP (s3::read / s3::write),
+// AuthN: every in-platform Function and CatalogService engine gets a DETERMINISTIC
+// keypair derived from a node-local master secret over its (kind, namespace, name)
+// (ADR-0175) — funcd injects it into the sandbox env; the worker never chooses its
+// secret and cannot derive a peer's. AuthZ: every backend op is a PEP on the cedar PDP (s3::read / s3::write),
 // exactly the spec.blob binding-as-grant model of slice 2.
 package s3gateway
 
@@ -19,6 +19,7 @@ import (
 	"github.com/versity/versitygw/auth"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // accessKeyPrefix marks a funcd-derived (in-platform) access key. A key without it
@@ -35,21 +36,40 @@ const refSeparator = "\x00"
 //nolint:gochecknoglobals // an effectively-const codec handle (stdlib pattern)
 var accessEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// Keypair is a function's deterministic S3 credentials (ADR-0085). Pure value; no I/O.
+// Keypair is a principal's deterministic S3 credentials (ADR-0085). Pure value; no I/O.
 type Keypair struct{ AccessKey, SecretKey string }
 
-// DeriveKeypair returns the stable per-(namespace, function) keypair (ADR-0085):
-//   - AccessKey = "FUNCD" + base32-noPad-upper(ns + "\x00" + fn) — decodable to the
-//     Ref via decodeAccess; not secret (knowing it grants nothing).
-//   - SecretKey = base64( HMAC-SHA256(master, "s3:"+ns+"/"+fn) ) — only the holder of
-//     master can compute it, so a function cannot forge a peer's secret.
+// Owner-kind codes an in-platform access key carries (ADR-0175).
+const (
+	kindCodeFunction       = "F"
+	kindCodeCatalogService = "C"
+)
+
+// kindCode returns the access-key code of kind; "" for a kind that holds no in-platform key, which
+// decodeAccess refuses.
+func kindCode(kind v1.Kind) string {
+	switch kind {
+	case v1.KindFunction:
+		return kindCodeFunction
+	case v1.KindCatalogService:
+		return kindCodeCatalogService
+	default:
+		return ""
+	}
+}
+
+// DeriveKeypair returns the stable per-(kind, namespace, name) keypair (ADR-0085, ADR-0175):
+//   - AccessKey = "FUNCD" + base32-noPad-upper(code + "\x00" + ns + "\x00" + name), code "F" for a Function and
+//     "C" for a CatalogService — decodable via decodeAccess; not secret (knowing it grants nothing).
+//   - SecretKey = base64( HMAC-SHA256(master, "s3:" + kind + ":" + ns + "/" + name) ) — the full kind is in the
+//     MAC input, so a Function cannot compute the secret of a same-named CatalogService.
 //
-// Pure and deterministic: the same (master, ns, fn) always yields the same keypair,
-// across daemon restarts (deterministic-across-restart). No storage, no rotation.
-func DeriveKeypair(master []byte, ns, fn string) Keypair {
-	access := accessKeyPrefix + accessEncoding.EncodeToString([]byte(ns+refSeparator+fn))
+// Pure and deterministic: the same (master, kind, ns, name) always yields the same keypair, across daemon
+// restarts. No storage, no rotation.
+func DeriveKeypair(master []byte, kind v1.Kind, ns, name string) Keypair {
+	access := accessKeyPrefix + accessEncoding.EncodeToString([]byte(kindCode(kind)+refSeparator+ns+refSeparator+name))
 	mac := hmac.New(sha256.New, master)
-	_, _ = mac.Write([]byte("s3:" + ns + "/" + fn))
+	_, _ = mac.Write([]byte("s3:" + string(kind) + ":" + ns + "/" + name))
 	secret := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	return Keypair{AccessKey: access, SecretKey: secret}
 }
@@ -84,21 +104,28 @@ func DecodeIdentityAccess(access string) (ns, name string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-// decodeAccess maps an in-platform access key back to its Ref (ADR-0085). ok=false
-// for a non-funcd (external) access key, or a malformed one.
-func decodeAccess(access string) (ns, fn string, ok bool) {
+// decodeAccess maps an in-platform access key back to its (kind, ns, name) (ADR-0175). ok=false for a
+// non-funcd (external) access key, a malformed one, or a pre-ADR-0175 two-part key.
+func decodeAccess(access string) (kind v1.Kind, ns, name string, ok bool) {
 	if !strings.HasPrefix(access, accessKeyPrefix) {
-		return "", "", false
+		return "", "", "", false
 	}
 	raw, err := accessEncoding.DecodeString(strings.TrimPrefix(access, accessKeyPrefix))
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	parts := strings.SplitN(string(raw), refSeparator, 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+	parts := strings.SplitN(string(raw), refSeparator, 3)
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return "", "", "", false
 	}
-	return parts[0], parts[1], true
+	switch parts[0] {
+	case kindCodeFunction:
+		return v1.KindFunction, parts[1], parts[2], true
+	case kindCodeCatalogService:
+		return v1.KindCatalogService, parts[1], parts[2], true
+	default:
+		return "", "", "", false
+	}
 }
 
 // ExternalKeys is the funcd store of issued external scoped keypairs — the one
@@ -121,15 +148,15 @@ type iam struct {
 var _ auth.IAMService = (*iam)(nil)
 
 // GetUserAccount resolves an access key to its versitygw account (ADR-0085): an
-// in-platform access decodes to (ns, fn) and the secret is RE-DERIVED; an external
+// in-platform access decodes to (kind, ns, name) and the secret is RE-DERIVED; an external
 // access is looked up in the store. The returned Secret is what versitygw checks the
 // SigV4 signature against — deriving it here is precisely what makes a function able
 // to sign only as itself. Existence/authorization is NOT decided here (the Cedar PEP
 // in the backend is the real gate); a decodable access for a missing function still
 // yields a derivable secret the attacker cannot produce.
 func (s *iam) GetUserAccount(access string) (auth.Account, error) {
-	if ns, fn, ok := decodeAccess(access); ok {
-		kp := DeriveKeypair(s.master, ns, fn)
+	if kind, ns, name, ok := decodeAccess(access); ok {
+		kp := DeriveKeypair(s.master, kind, ns, name)
 		return auth.Account{Access: access, Secret: kp.SecretKey, Role: auth.RoleUser}, nil
 	}
 	if s.external != nil {

@@ -40,7 +40,8 @@ const (
 )
 
 // defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
-// (kv, invoke, s3) + the two default principal sources (Function-first, CatalogService-fallback). The
+// (kv, invoke, s3) + the two default principal sources (Function, CatalogService; each resolves only its
+// own principal type, ADR-0175). The
 // schema vocabulary (KnownAction/KnownEntityType), the built-in PolicySet (Builtins), and the default
 // EntityProvider are all assembled from it — replacing the hand-listed curatedActions/curatedEntityTypes
 // maps. A new capability registers here (or in a consumer's own Registry) with no shared-code edit. The

@@ -67,8 +67,8 @@ func (p registryProvider) EntitiesFor(ctx context.Context, principal, resource a
 		Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(principal.Namespace)}),
 	}
 
-	// Resolve the principal's backing object via the ordered sources (Function-first, CatalogService
-	// fallback). The first ok wins; none ⇒ the bare principal above stands (default-deny).
+	// Resolve the principal's backing object via the sources, each of which resolves only its own principal
+	// type (ADR-0175). The first ok wins; none ⇒ the bare principal above stands (default-deny).
 	var obj PrincipalObject
 	for _, src := range p.reg.sources {
 		o, ok, serr := src(ctx, p.r, principal)
@@ -144,8 +144,9 @@ func principalMeta(obj PrincipalObject) (v1.NamespaceName, v1.ResourceGroupName)
 // --- The driver request-path UID mappers (cedar.go builds the cedar Request from these) ------------
 
 // principalUID maps a principal EntityRef to its Cedar UID. A Function is the in-platform,
-// connection-scoped principal (KV/invoke/blob); an S3Identity is the external SigV4 principal
-// (ADR-0080). Any other type is an Internal fault (a wiring bug).
+// connection-scoped principal (KV/invoke/blob); a CatalogService is its engine's principal (ADR-0175);
+// an S3Identity is the external SigV4 principal (ADR-0080). Any other type is an Internal fault (a
+// wiring bug).
 func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 	switch p.Type {
 	case v1.KindFunction:
@@ -154,8 +155,10 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 		return s3IdentityUID(p.Namespace, p.Name), nil
 	case v1.KindIdentity:
 		return identityUID(p.Namespace, p.Name), nil
+	case v1.KindCatalogService:
+		return catalogServiceUID(p.Namespace, p.Name), nil
 	default:
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, S3Identity, Identity)", p.Type)
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, CatalogService, S3Identity, Identity)", p.Type)
 	}
 }
 

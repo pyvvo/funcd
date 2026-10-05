@@ -316,7 +316,7 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load master: %v", err)
 	}
-	kp := s3gateway.DeriveKeypair(master, "default", "writer")
+	kp := s3gateway.DeriveKeypair(master, v1.KindFunction, "default", "writer")
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithCredentialsProvider(awscreds.NewStaticCredentialsProvider(kp.AccessKey, kp.SecretKey, "")),

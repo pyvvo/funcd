@@ -176,7 +176,7 @@ func TestScenarioE2ESite(t *testing.T) {
 	// 403 for the bound Function (its binding grants read only) and for the external Identity (no writer
 	// role); a read of the bound prefix by the Function still works (the binding is a read grant).
 	key := "bi/" + strings.ReplaceAll(digestB, ":", "-") + "/index.html"
-	kp := s3gateway.DeriveKeypair([]byte(siteMaster), siteNS, "uploader")
+	kp := s3gateway.DeriveKeypair([]byte(siteMaster), v1.KindFunction, siteNS, "uploader")
 	fnClient := s3Client(t, "http://"+s3Addr, kp.AccessKey, kp.SecretKey)
 	_, err = fnClient.PutObject(ctx, &awss3.PutObjectInput{Bucket: aws.String("reports"), Key: aws.String(key), Body: bytes.NewReader([]byte("defaced"))})
 	require.Equal(t, http.StatusForbidden, s3Status(err), "a bound Function cannot write the site prefix: %v", err)
