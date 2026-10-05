@@ -79,7 +79,8 @@ type StaticBackend struct {
 	// Bucket is the Bucket in THIS Route's namespace whose objects are served (binding-as-grant:
 	// the Route reads only this declared Bucket; the reconciler validates it exists → BucketNotFound).
 	Bucket ObjectName `json:"bucket"`
-	// Prefix is the key prefix within the Bucket that roots the site (e.g. "bi/"); "" ⇒ the bucket root.
+	// Prefix is the key prefix within the Bucket that roots the site; it ends with "/" (e.g. "bi/") so it
+	// never also matches a sibling prefix; "" ⇒ the bucket root.
 	Prefix string `json:"prefix,omitempty"`
 	// Index is the document served for "/" / a directory / (when SPA) a miss. Default "index.html".
 	Index string `json:"index,omitempty"`
@@ -191,7 +192,7 @@ func (r *Route) Validate() error {
 
 // validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120): each rule sets exactly
 // one of backend.function / backend.static. A function arm keeps the DNS-1123 label check; a static
-// arm requires a DNS-1123 bucket, a relative index, and (M2) rejects public + an explicit
+// arm requires a DNS-1123 bucket, a "/"-terminated prefix, a relative index, and (M2) rejects public + an explicit
 // `authenticated` Route stance — a contradiction (public must never override an explicit authenticated).
 func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
 	hasFn := rule.Backend.Function != ""
@@ -208,6 +209,9 @@ func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
 	st := rule.Backend.Static
 	if !dnsLabel.MatchString(string(st.Bucket)) {
 		return fault.Invalidf(op, "spec.rules[%d].backend.static.bucket %q is not a valid DNS-1123 label", i, st.Bucket)
+	}
+	if st.Prefix != "" && !strings.HasSuffix(st.Prefix, "/") {
+		return fault.Invalidf(op, "spec.rules[%d].backend.static.prefix %q must end with '/'", i, st.Prefix)
 	}
 	if strings.HasPrefix(st.Index, "/") {
 		return fault.Invalidf(op, "spec.rules[%d].backend.static.index %q must be a relative path (no leading '/')", i, st.Index)
