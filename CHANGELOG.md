@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0](https://github.com/pyvvo/funcd/compare/v0.6.2...v0.7.0) (2026-10-05)
+
+
+### Features
+
+* **blob:** seek S3 listing pages from the marker; file:// keeps all keys ([#782](https://github.com/pyvvo/funcd/issues/782)) ([7f3163b](https://github.com/pyvvo/funcd/commit/7f3163b13794276b744839c78fd65701e8939de9))
+* **dataplane:** forward a bodiless upgrade untouched and close an idle tunnel (ADR-0181) ([#780](https://github.com/pyvvo/funcd/issues/780)) ([2a327dd](https://github.com/pyvvo/funcd/commit/2a327dd27e061608658304400e07aa3b3c462f91))
+* **edge:** end a data-plane response whose client accepts no data for 60 s ([#795](https://github.com/pyvvo/funcd/issues/795)) ([5b661b9](https://github.com/pyvvo/funcd/commit/5b661b9d9b4639209ad224f7a3f00f9a6df76c87))
+* **s3gateway:** bound buffered multipart parts and copies by one daemon-wide budget ([#786](https://github.com/pyvvo/funcd/issues/786)) ([8505f47](https://github.com/pyvvo/funcd/commit/8505f47b76276f61d3f2ed190d22e782d0124607))
+* **workflow:** a run pins its child workflow tree at start (ADR-0189) ([#784](https://github.com/pyvvo/funcd/issues/784)) ([282b6f3](https://github.com/pyvvo/funcd/commit/282b6f3ccbfbd8324fb2e379fa08a4bb83e101b4))
+* **workflow:** a run stays bound to the revision it started with (ADR-0190) ([#799](https://github.com/pyvvo/funcd/issues/799)) ([a9865ed](https://github.com/pyvvo/funcd/commit/a9865edf2b79ef58781d9cfeb23b40291c9d26bf))
+
+
+### Bug Fixes
+
+* **activator:** leave a gate-held Pending Function out of idle reclaim ([#783](https://github.com/pyvvo/funcd/issues/783)) ([85ebe6c](https://github.com/pyvvo/funcd/commit/85ebe6c1037ad6b039257656904ea6e1fd83b055))
+* **eventing:** keep timer schedules across daemon restarts ([#781](https://github.com/pyvvo/funcd/issues/781)) ([71d490a](https://github.com/pyvvo/funcd/commit/71d490aff16a2c898c516078f74f635505e935d9))
+* **function:** count the boot timeout and crash waits from the last successful Start ([#788](https://github.com/pyvvo/funcd/issues/788)) ([53c7b6f](https://github.com/pyvvo/funcd/commit/53c7b6f53ea9a9f97af5f34a1ca67d4b742a871a))
+* **function:** stop an asleep Function's worker when a gate fails and keep it asleep until a call ([#792](https://github.com/pyvvo/funcd/issues/792)) ([b9c5682](https://github.com/pyvvo/funcd/commit/b9c56823de1a345940f3c527c5fe9ccc20862da4))
+* **kvstore:** stop an idle KV backup from shipping its own cursor every tick ([#793](https://github.com/pyvvo/funcd/issues/793)) ([633881f](https://github.com/pyvvo/funcd/commit/633881f0ead857b0cf5b70f41e8cf5fcefc20a5f))
+* **procreg:** reap a crashed run's worker that rewrote its own argv ([#787](https://github.com/pyvvo/funcd/issues/787)) ([8679ca7](https://github.com/pyvvo/funcd/commit/8679ca701a9f3f2c3b216caef63ebddb0b27fb6d))
+* **runtime:** clear an earlier run's containerd images and namespaces at boot ([#785](https://github.com/pyvvo/funcd/issues/785)) ([fa3e8b1](https://github.com/pyvvo/funcd/commit/fa3e8b172b1b3bc9ec402e9eaa60802704e3b6b6))
+
 ## [0.6.2](https://github.com/pyvvo/funcd/compare/v0.6.1...v0.6.2) (2026-10-05)
 
 
