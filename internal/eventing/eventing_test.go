@@ -2,7 +2,11 @@ package eventing_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +16,8 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/kvstore"
+	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -309,4 +315,293 @@ func TestIssue148_StatusMatchesCurrentSpec(t *testing.T) {
 			require.False(t, ok, "a timer source keeps no blob Ready condition, got %+v", cond)
 		})
 	}
+}
+
+// scriptLister is a BucketLister scripted per Bucket, filtered by prefix.
+type scriptLister struct {
+	mu   sync.Mutex
+	objs map[v1.ObjectName][]blob.Attributes
+}
+
+func (l *scriptLister) set(bucket v1.ObjectName, objs ...blob.Attributes) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.objs == nil {
+		l.objs = map[v1.ObjectName][]blob.Attributes{}
+	}
+	l.objs[bucket] = objs
+}
+
+func (l *scriptLister) List(_ context.Context, _ v1.NamespaceName, bucket v1.ObjectName, prefix string) ([]blob.Attributes, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []blob.Attributes
+	for _, o := range l.objs[bucket] {
+		if strings.HasPrefix(o.Key, prefix) {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+// blobRig is a Source + BlobWatcher over a memory store, a scripted lister and a KV-backed watermark.
+type blobRig struct {
+	st      store.Store
+	kv      kvstore.KV
+	lister  *scriptLister
+	pub     *capturePublisher
+	watcher *eventing.BlobWatcher
+	src     *eventing.Source
+}
+
+func newBlobRig(t *testing.T, marks eventing.Watermark) *blobRig {
+	t.Helper()
+	r := &blobRig{st: newStore(), kv: kvmemory.New(), lister: &scriptLister{}, pub: &capturePublisher{}}
+	if marks == nil {
+		wm, err := eventing.NewKVWatermark(r.kv)
+		require.NoError(t, err)
+		marks = wm
+	}
+	var err error
+	r.watcher, err = eventing.NewBlobWatcher(r.lister, r.pub, marks, time.Second, nil)
+	require.NoError(t, err)
+	r.src, err = eventing.NewSource(eventing.Deps{Store: r.st, Publisher: &capturePublisher{}, Blob: r.watcher})
+	require.NoError(t, err)
+	return r
+}
+
+func (r *blobRig) reconcile(t *testing.T, name string) {
+	t.Helper()
+	_, err := r.src.Reconcile(context.Background(), reqOf(name))
+	require.NoError(t, err)
+}
+
+func (r *blobRig) poll() { r.watcher.PollOnce(context.Background()) }
+
+func (r *blobRig) records(t *testing.T, source string) []string {
+	t.Helper()
+	keys, err := r.kv.List(context.Background(), "_eventing/blobwatch/team-a/"+source+"/")
+	require.NoError(t, err)
+	return keys
+}
+
+// fired lists "<bucket>/<key>" of every published blob event, in order.
+func (r *blobRig) fired(t *testing.T) []string {
+	t.Helper()
+	r.pub.mu.Lock()
+	defer r.pub.mu.Unlock()
+	out := make([]string, 0, len(r.pub.events))
+	for _, ev := range r.pub.events {
+		var d eventing.BlobEventData
+		require.NoError(t, json.Unmarshal(ev.Data, &d))
+		out = append(out, d.Bucket+"/"+d.Key)
+	}
+	return out
+}
+
+func (r *blobRig) update(t *testing.T, name string, edit func(es *v1.EventSource)) {
+	t.Helper()
+	es := getSource(t, r.st, name)
+	edit(es)
+	_, err := r.st.Update(context.Background(), es)
+	require.NoError(t, err)
+}
+
+func deleteObject(t *testing.T, st store.Store, kind v1.Kind, name string) {
+	t.Helper()
+	cur, err := st.Get(context.Background(), kind.GVK(), "team-a", v1.ObjectName(name))
+	require.NoError(t, err)
+	require.NoError(t, st.Delete(context.Background(), kind.GVK(), "team-a", v1.ObjectName(name), cur.GetObjectMeta().ResourceVersion))
+}
+
+func object(key string) blob.Attributes {
+	return blob.Attributes{Key: key, Size: 1, ModTime: time.Unix(1759536000, 0).UTC()}
+}
+
+// scenario: re-point-back-fills
+func TestScenarioRePointBackFills(t *testing.T) {
+	t.Parallel()
+	t.Run("prefix", func(t *testing.T) {
+		t.Parallel()
+		r := newBlobRig(t, nil)
+		createBucket(t, r.st, "raw")
+		r.lister.set("raw", object("drop/a.parquet"), object("other/b.parquet"))
+		createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+		r.reconcile(t, "drops")
+		r.poll()
+		r.update(t, "drops", func(es *v1.EventSource) { es.Spec.Blob.Events[0].Prefix = "other/" })
+		r.reconcile(t, "drops")
+		r.poll()
+		require.Equal(t, []string{"raw/drop/a.parquet", "raw/other/b.parquet"}, r.fired(t))
+	})
+	t.Run("bucket", func(t *testing.T) {
+		t.Parallel()
+		r := newBlobRig(t, nil)
+		createBucket(t, r.st, "raw")
+		createBucket(t, r.st, "raw2")
+		r.lister.set("raw", object("drop/a.parquet"))
+		r.lister.set("raw2", object("drop/a.parquet"))
+		createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+		r.reconcile(t, "drops")
+		r.poll()
+		r.update(t, "drops", func(es *v1.EventSource) { es.Spec.Blob.Bucket = "raw2" })
+		r.reconcile(t, "drops")
+		r.poll()
+		require.Equal(t, []string{"raw/drop/a.parquet", "raw2/drop/a.parquet"}, r.fired(t))
+	})
+}
+
+// scenario: re-create-back-fills
+func TestScenarioReCreateBackFills(t *testing.T) {
+	t.Parallel()
+	for name, reconcileDelete := range map[string]bool{"two reconciles": true, "one reconcile": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newBlobRig(t, nil)
+			createBucket(t, r.st, "raw")
+			r.lister.set("raw", object("drop/a.parquet"))
+			createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+			r.reconcile(t, "drops")
+			r.poll()
+
+			deleteObject(t, r.st, v1.KindEventSource, "drops")
+			if reconcileDelete {
+				r.reconcile(t, "drops")
+			}
+			createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+			r.reconcile(t, "drops")
+			r.poll()
+			require.Equal(t, []string{"raw/drop/a.parquet", "raw/drop/a.parquet"}, r.fired(t))
+		})
+	}
+}
+
+// scenario: source-delete-deletes-record
+func TestScenarioSourceDeleteDeletesRecord(t *testing.T) {
+	t.Parallel()
+	r := newBlobRig(t, nil)
+	createBucket(t, r.st, "raw")
+	r.lister.set("raw", object("drop/a.parquet"))
+	createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"}, v1.BlobEvent{Name: "other", Prefix: "other/"})
+	r.reconcile(t, "drops")
+	r.poll()
+	require.Len(t, r.records(t, "drops"), 2)
+
+	deleteObject(t, r.st, v1.KindEventSource, "drops")
+	r.reconcile(t, "drops")
+	require.Empty(t, r.records(t, "drops"))
+	require.Equal(t, 0, r.watcher.ActiveWatches())
+}
+
+// scenario: kind-change-deletes-record
+func TestScenarioKindChangeDeletesRecord(t *testing.T) {
+	t.Parallel()
+	r := newBlobRig(t, nil)
+	createBucket(t, r.st, "raw")
+	r.lister.set("raw", object("drop/a.parquet"), object("drop/b.parquet"))
+	createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+	r.reconcile(t, "drops")
+	r.poll()
+	require.NotEmpty(t, r.records(t, "drops"))
+
+	blobSpec := getSource(t, r.st, "drops").Spec.Blob
+	r.update(t, "drops", func(es *v1.EventSource) {
+		es.Spec.Blob, es.Spec.Timer = nil, &v1.TimerSource{Events: []v1.TimerEvent{timerEvent("tick", time.Minute)}}
+	})
+	r.reconcile(t, "drops")
+	require.Empty(t, r.records(t, "drops"))
+
+	r.update(t, "drops", func(es *v1.EventSource) { es.Spec.Blob, es.Spec.Timer = blobSpec, nil })
+	r.reconcile(t, "drops")
+	r.poll()
+	require.Len(t, r.fired(t), 4, "back to blob:, every object fires")
+}
+
+// scenario: bucket-miss-keeps-record
+func TestScenarioBucketMissKeepsRecord(t *testing.T) {
+	t.Parallel()
+	r := newBlobRig(t, nil)
+	createBucket(t, r.st, "raw")
+	r.lister.set("raw", object("drop/a.parquet"))
+	createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+	r.reconcile(t, "drops")
+	r.poll()
+
+	deleteObject(t, r.st, v1.KindBucket, "raw")
+	r.reconcile(t, "drops")
+	require.Equal(t, 0, r.watcher.ActiveWatches())
+	require.NotEmpty(t, r.records(t, "drops"), "a missing Bucket keeps the record")
+
+	createBucket(t, r.st, "raw")
+	r.reconcile(t, "drops")
+	r.poll()
+	require.Len(t, r.fired(t), 1, "the returning Bucket fires nothing again")
+}
+
+// scenario: start-sweep-deletes-orphans
+func TestScenarioStartSweepDeletesOrphans(t *testing.T) {
+	t.Parallel()
+	r := newBlobRig(t, nil)
+	wm, err := eventing.NewKVWatermark(r.kv)
+	require.NoError(t, err)
+	rec := eventing.SeenList{Bucket: "raw", Prefix: "drop/", Seen: map[string]string{"drop/a": "1-1"}}
+	for _, src := range []v1.ObjectName{"drops", "drops2"} {
+		require.NoError(t, wm.Save(context.Background(), "team-a", src, "arrived", rec))
+	}
+	createBlobSource(t, r.st, "drops2", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.watcher.Run(ctx) }()
+	require.Eventually(t, func() bool { return len(r.records(t, "drops")) == 0 }, 5*time.Second, 5*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-stopped, context.Canceled)
+	require.Len(t, r.records(t, "drops2"), 1, "a source the store holds keeps its records")
+}
+
+// failingSave is a MemWatermark whose Save fails while fail is set.
+type failingSave struct {
+	*eventing.MemWatermark
+	fail atomic.Bool
+}
+
+func (f *failingSave) Save(ctx context.Context, ns v1.NamespaceName, source, event v1.ObjectName, s eventing.SeenList) error {
+	if f.fail.Load() {
+		return errors.New("value too large")
+	}
+	return f.MemWatermark.Save(ctx, ns, source, event, s)
+}
+
+// scenario: save-failure-visible
+func TestScenarioSaveFailureVisible(t *testing.T) {
+	t.Parallel()
+	wm := &failingSave{MemWatermark: eventing.NewMemWatermark()}
+	r := newBlobRig(t, wm)
+	createBucket(t, r.st, "raw")
+	r.lister.set("raw", object("drop/a.parquet"))
+	createBlobSource(t, r.st, "drops", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+	r.reconcile(t, "drops")
+
+	wm.fail.Store(true)
+	r.poll()
+	cond, ok := getSource(t, r.st, "drops").Status.Conditions.Get("SeenListSaved")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "SaveFailed", cond.Reason)
+	require.Equal(t, "arrived: value too large", cond.Message)
+
+	wm.fail.Store(false)
+	r.poll()
+	_, ok = getSource(t, r.st, "drops").Status.Conditions.Get("SeenListSaved")
+	require.False(t, ok, "a successful Save removes the condition")
+
+	wm.fail.Store(true)
+	r.lister.set("raw", object("drop/a.parquet"), object("drop/b.parquet"))
+	r.poll()
+	_, ok = getSource(t, r.st, "drops").Status.Conditions.Get("SeenListSaved")
+	require.True(t, ok)
+	deleteObject(t, r.st, v1.KindBucket, "raw")
+	r.reconcile(t, "drops")
+	_, ok = getSource(t, r.st, "drops").Status.Conditions.Get("SeenListSaved")
+	require.False(t, ok, "the BucketNotFound status write removes the condition")
 }

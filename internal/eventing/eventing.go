@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,9 @@ const runTick = 25 * time.Millisecond
 // condReady is the EventSource readiness condition type (ADR-0119): a blob source with a missing Bucket is
 // NotReady with a reason, mirroring the Route BackendNotFound pattern.
 const condReady = v1.ConditionType("Ready")
+
+// condSeenListSaved is False with reason SaveFailed while a blob event's record cannot be saved (ADR-0157).
+const condSeenListSaved = v1.ConditionType("SeenListSaved")
 
 // bucketRecheckInterval requeues every blob source so a Bucket created or deleted after the EventSource is
 // picked up without an external trigger: no Bucket event reaches this reconciler (ADR-0119: missing bucket ⇒
@@ -83,23 +88,28 @@ func NewSource(d Deps) (*Source, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Source{
+	s := &Source{
 		store:     d.Store,
 		publisher: d.Publisher,
 		blob:      d.Blob,
 		logger:    logger.With("component", "eventing"),
 		timers:    map[eventKey]*timerEntry{},
-	}, nil
+	}
+	if d.Blob != nil {
+		d.Blob.SetHooks(WatchHooks{Exists: s.sourceExists, SaveFailing: s.setSaveFailing})
+	}
+	return s, nil
 }
 
 // Reconcile owns KindEventSource (ADR-0108): it registers every named event of a `timer:` source
-// (→ Ready), deregisters on delete, and registers nothing for a source with no timer kind.
+// (→ Ready), deregisters on delete, and registers nothing for a source with no timer kind. A deleted or
+// non-blob source has its blob records purged (ADR-0157).
 func (s *Source) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	obj, err := s.store.Get(ctx, v1.KindEventSource.GVK(), req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			s.deregisterSource(req.Namespace, req.Name) // delete → stop ticking
-			return controller.Result{}, nil
+			s.deregisterTimers(req.Namespace, req.Name)
+			return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 		}
 		return controller.Result{}, err
 	}
@@ -113,18 +123,21 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 	s.deregisterBlob(req.Namespace, req.Name) // not (any longer) a blob source: stop watching
 	if es.Spec.Timer == nil {
 		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
-		return controller.Result{}, nil
+		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 	}
 	s.registerTimer(req.Namespace, req.Name, es.Spec.Timer)
 	_, blobCond := es.Status.Conditions.Get(condReady) // left by an earlier blob kind; a timer source has none
-	if es.Status.Phase != v1.PhaseReady || blobCond {
+	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
+	if es.Status.Phase != v1.PhaseReady || blobCond || seenCond {
 		es.Status.Phase = v1.PhaseReady
-		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condReady })
+		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool {
+			return c.Type == condReady || c.Type == condSeenListSaved
+		})
 		if _, err := s.store.Update(ctx, es); err != nil {
 			return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.Reconcile", "set eventsource ready")
 		}
 	}
-	return controller.Result{}, nil
+	return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 }
 
 // reconcileBlob owns the `blob:` source branch (ADR-0119): it resolves the watched Bucket, registers the
@@ -147,7 +160,7 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
 	}
-	s.blob.Register(ns, name, normalizedBlob(es))
+	s.blob.Register(ns, name, es.UID, normalizedBlob(es))
 	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || es.Status.Phase != v1.PhaseReady {
 		es.Status.Phase = v1.PhaseReady
 		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
@@ -171,6 +184,7 @@ func normalizedBlob(es *v1.EventSource) *v1.BlobSource {
 func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason, msg string) error {
 	es.Status.Phase = v1.PhasePending
 	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: es.Generation})
+	es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
 	if _, err := s.store.Update(ctx, es); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "set eventsource not-ready")
 	}
@@ -199,12 +213,6 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, t *v1.
 	}
 }
 
-// deregisterSource removes every registration (timer + blob) of one EventSource — used on delete.
-func (s *Source) deregisterSource(ns v1.NamespaceName, source v1.ObjectName) {
-	s.deregisterTimers(ns, source)
-	s.deregisterBlob(ns, source)
-}
-
 // deregisterTimers removes every named timer event of one EventSource (delete / loses its timer kind).
 func (s *Source) deregisterTimers(ns v1.NamespaceName, source v1.ObjectName) {
 	s.mu.Lock()
@@ -221,6 +229,56 @@ func (s *Source) deregisterBlob(ns v1.NamespaceName, source v1.ObjectName) {
 	if s.blob != nil {
 		s.blob.Deregister(ns, source)
 	}
+}
+
+// purgeBlob deregisters a source's blob events and deletes their records (ADR-0157 Decision 5; nil watcher ⇒
+// no-op). Its error is returned by Reconcile so the request is retried.
+func (s *Source) purgeBlob(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
+	if s.blob == nil {
+		return nil
+	}
+	return s.blob.Purge(ctx, ns, source)
+}
+
+// sourceExists is the start sweep's store lookup (ADR-0157 Decision 8).
+func (s *Source) sourceExists(ctx context.Context, src SourceRef) (bool, error) {
+	_, err := s.store.Get(ctx, v1.KindEventSource.GVK(), src.Namespace, src.Name)
+	if err == nil {
+		return true, nil
+	}
+	if fault.KindOf(err) == fault.NotFound {
+		return false, nil
+	}
+	return false, err
+}
+
+// setSaveFailing sets SeenListSaved False/SaveFailed naming each failing event, or removes it when none fails
+// (ADR-0157 Decision 9).
+func (s *Source) setSaveFailing(ctx context.Context, src SourceRef, failing map[v1.ObjectName]error) error {
+	obj, err := s.store.Get(ctx, v1.KindEventSource.GVK(), src.Namespace, src.Name)
+	if err != nil {
+		return err
+	}
+	es, ok := obj.(*v1.EventSource)
+	if !ok {
+		return fault.Internalf("eventing.setSaveFailing", "unexpected type %T", obj)
+	}
+	if len(failing) == 0 {
+		if _, ok := es.Status.Conditions.Get(condSeenListSaved); !ok {
+			return nil
+		}
+		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
+	} else {
+		msgs := make([]string, 0, len(failing))
+		for _, ev := range slices.Sorted(maps.Keys(failing)) {
+			msgs = append(msgs, fmt.Sprintf("%s: %v", ev, failing[ev]))
+		}
+		es.Status.Conditions.Set(v1.Condition{Type: condSeenListSaved, Status: v1.ConditionFalse, Reason: "SaveFailed", Message: strings.Join(msgs, "; "), ObservedGeneration: es.Generation})
+	}
+	if _, err := s.store.Update(ctx, es); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), "eventing.setSaveFailing", "set eventsource %s condition", condSeenListSaved)
+	}
+	return nil
 }
 
 // Fire performs one deterministic tick of a named event: build its CloudEvent and publish it. A
