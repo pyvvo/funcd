@@ -93,8 +93,9 @@ func (r *Registry) Delete(id string) error {
 }
 
 // Reap ends every saved process that is still ours: SIGTERM to each owned process group, up to grace for all of them
-// together, then SIGKILL to the ones still alive. It deletes every entry's files, owned or not, and empties the
-// registry. killed counts the process groups it signalled.
+// together, then SIGKILL to the ones still alive. A group whose leader exits gets SIGKILL at once, as a worker's exit
+// does (ADR-0011 C4): its other members outlive the leader, and its pgid is not reused while one lives. It deletes
+// every entry's files, owned or not, and empties the registry. killed counts the process groups it signalled.
 func (r *Registry) Reap(ctx context.Context, grace time.Duration) (killed int, err error) {
 	var owned []Entry
 	for _, e := range r.entries {
@@ -112,7 +113,13 @@ func (r *Registry) Reap(ctx context.Context, grace time.Duration) (killed int, e
 		case <-ctx.Done():
 		case <-deadline.C:
 		case <-tick.C:
-			alive = slices.DeleteFunc(alive, func(e Entry) bool { return !Owned(e) })
+			alive = slices.DeleteFunc(alive, func(e Entry) bool {
+				if Owned(e) {
+					return false
+				}
+				_ = unix.Kill(-e.PGID, unix.SIGKILL)
+				return true
+			})
 			continue
 		}
 		for _, e := range alive {
