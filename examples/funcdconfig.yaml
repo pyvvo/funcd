@@ -87,6 +87,7 @@ storage:
 #   defaultRetry: 1               # per-step attempt cap when a step declares no retry. default: 1
 #   retention: 720h               # how long a terminal run is kept. default: 720h
 #   payloadLimit: 262144          # max run input / step output bytes. default: 262144 (256 KiB)
+#   maxStepsInFlight: 64          # function-step calls in flight across all runs; 0 = no cap. default: 64
 # eventing:                       # Sensor delivery reliability (ADR-0118)
 #   deliveryAttempts: 3           # attempts before a failed action is dead-lettered. default: 3
 #   maxDeliveriesInFlight: 32     # delivery workers across all targets (ADR-0156). default: 32

@@ -181,6 +181,17 @@ func WithDefaultInvokeTimeout(d time.Duration) Option {
 	}
 }
 
+// WithWorkflowMaxStepsInFlight sets workflow.maxStepsInFlight (ADR-0146); default 64, 0 means no cap.
+func WithWorkflowMaxStepsInFlight(n int) Option {
+	return func(c *config) error {
+		if n < 0 {
+			return fault.Invalidf("funcd.WithWorkflowMaxStepsInFlight", "maxStepsInFlight %d is negative", n)
+		}
+		c.workflowMaxStepsInFlight = n
+		return nil
+	}
+}
+
 // WithDeadLetterQueue tunes the eventing DLQ + bounded action-delivery retry (ADR-0118, F85). The DLQ is
 // always wired; without this option it runs in memory with the daemon config's defaults (720h retention, a
 // per-namespace cap of 1000, three delivery attempts). This option sets its persistence + tunables: dataDir

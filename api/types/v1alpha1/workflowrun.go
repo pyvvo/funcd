@@ -29,10 +29,11 @@ type WorkflowRunSpec struct {
 	// (set by `funcdctl workflow pause`, cleared by `resume`). Ignored once the run is already
 	// terminal: the run keeps its phase.
 	Paused bool `json:"paused,omitempty"`
-	// Cancel requests cancellation (ADR-0094): a declarative one-way intent, the same shape
+	// Cancel requests cancellation (ADR-0094, ADR-0146): a declarative one-way intent, the same shape
 	// as Paused. Set by `funcdctl workflow cancel`, it is observed by the run reconciler on
-	// the controller workqueue (never a synchronous endpoint) which abandons in-flight work
-	// and terminates the run Cancelled. Ignored once the run is already terminal.
+	// the controller workqueue (never a synchronous endpoint), which closes the in-flight step calls
+	// (their late results are discarded), dispatches nothing more, runs no onFailure and terminates
+	// the run Cancelled. Ignored once the run is already terminal.
 	Cancel bool `json:"cancel,omitempty"`
 	// Replay seeds this run from a finished source run's checkpoint (ADR-0107): the engine copies the
 	// source's pinned spec/contract/input + the terminal steps outside the replay set, then re-runs
@@ -70,7 +71,8 @@ type RunStepStatus struct {
 	Attempts int        `json:"attempts,omitempty"`
 	Revision string     `json:"revision,omitempty"`
 	// StartedAt/EndedAt (unix nanos) give the step duration; Error is the raw step-level failure
-	// cause, capped (Failed steps only) — the full text lives in the step's span + logs (ADR-0106).
+	// cause, capped — the full text lives in the step's span + logs (ADR-0106) — on a Failed step, or
+	// the cancel on a step that was running when the run was cancelled (ADR-0146).
 	StartedAt int64  `json:"startedAt,omitempty"`
 	EndedAt   int64  `json:"endedAt,omitempty"`
 	Error     string `json:"error,omitempty"`

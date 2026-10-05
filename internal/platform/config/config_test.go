@@ -305,6 +305,23 @@ func TestIssue343_WorkflowPayloadLimitDefault256KiB(t *testing.T) {
 	require.Equal(t, int64(1<<20), c.Workflow.PayloadLimit, "an explicit cap overrides the default")
 }
 
+// workflow.maxStepsInFlight defaults to 64 (ADR-0146); the env key sets it, 0 included (no cap), and a
+// negative value is rejected.
+func TestWorkflowMaxStepsInFlight(t *testing.T) {
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 64, c.Workflow.MaxStepsInFlight)
+
+	t.Setenv("FUNCD_WORKFLOW_MAX_STEPS_IN_FLIGHT", "0")
+	c, err = config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, 0, c.Workflow.MaxStepsInFlight, "0 is the no-cap off switch")
+
+	t.Setenv("FUNCD_WORKFLOW_MAX_STEPS_IN_FLIGHT", "-1")
+	_, err = config.Load("", config.Flags{})
+	require.Error(t, err)
+}
+
 //go:embed config.go
 var configSource string
 

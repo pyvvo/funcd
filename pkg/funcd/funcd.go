@@ -104,6 +104,8 @@ const (
 	defaultWorkflowRetention    = 720 * time.Hour
 	defaultWorkflowRetry        = 1
 	defaultWorkflowPayloadLimit = 256 << 10
+	// defaultWorkflowMaxStepsInFlight is workflow.maxStepsInFlight's default (ADR-0146).
+	defaultWorkflowMaxStepsInFlight = 64
 	// The eventing DLQ bounds when WithDeadLetterQueue is not given: the daemon config's eventing.deadletter.*
 	// defaults (ADR-0118), so a dead letter is evicted the same way in dev and in production.
 	defaultDeadletterRetention  = 720 * time.Hour
@@ -234,6 +236,8 @@ type config struct {
 	workflowRetention    time.Duration
 	workflowDefaultRetry int
 	workflowPayloadLimit int64
+	// workflowMaxStepsInFlight bounds the function-step calls in flight across all runs (ADR-0146); 0 ⇒ no cap.
+	workflowMaxStepsInFlight int
 	// workflowContracts overrides the F65 typed-edge ContractResolver (ADR-0098). Empty ⇒ the production
 	// OCI-metadata resolver. Set by `funcdctl dev` (ADR-0125) where a from-source step has no OCI artifact
 	// to inspect, so the OCI resolver can never resolve a file:// bundle's contract.
@@ -331,6 +335,7 @@ type Platform struct {
 	invokeTmpDir      string                  // the temp socket dir New created (no WithInvokeSocketDir); removed by Shutdown
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
 	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
+	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
 	deadLetters          deadletter.Store          // eventing DLQ (ADR-0118); closed on shutdown
@@ -366,6 +371,8 @@ func New(opts ...Option) (_ *Platform, err error) {
 		deadletterRetention:  defaultDeadletterRetention,
 		deadletterMaxEntries: defaultDeadletterMaxEntries,
 		invokeDefaultTimeout: v1.DefaultInvokeTimeout,
+
+		workflowMaxStepsInFlight: defaultWorkflowMaxStepsInFlight,
 	}
 	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
@@ -908,15 +915,22 @@ func (p *Platform) buildControlPlane() error {
 	wfEngine, eerr := workflow.New(workflow.Deps{
 		Runs:     runs,
 		Dispatch: wfDispatcher,
-		Config:   workflow.Config{DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit},
+		Config: workflow.Config{
+			DefaultMaxAttempts: maxAttempts, DefaultStepTimeout: c.workflowStepTimeout, PayloadLimit: c.workflowPayloadLimit,
+			MaxStepsInFlight: c.workflowMaxStepsInFlight,
+		},
 		Children: childResolver{c.store}, // ADR-0099: resolve a child workflow's spec for a `workflow:` step
 		Traces:   traceSink,              // ADR-0104: the engine emits the run-root span for inline sub-workflow child runs
-		Logger:   p.logger,
+		Notify: func(ns v1.NamespaceName, name v1.ObjectName) { // ADR-0146: the run reconciler mirrors the run
+			ctrl.Enqueue(controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: ns, Name: name})
+		},
+		Logger: p.logger,
 	})
 	if eerr != nil {
 		return fault.Wrapf(eerr, fault.KindOf(eerr), op, "build workflow engine")
 	}
 	p.workflowRetention = c.workflowRetention
+	p.workflowEngine = wfEngine
 	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger)
 	wfContracts := workflow.ContractResolver(contractResolver{})
 	if c.workflowContracts != nil {
@@ -1206,6 +1220,13 @@ func (p *Platform) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			p.runWorkflowRetention(ctx)
+		}()
+	}
+	if p.workflowEngine != nil { // ADR-0146: the run goroutines, drained within the shutdown bound before Shutdown
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.workflowEngine.Run(ctx, shutdownTimeout)
 		}()
 	}
 	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel, within the shutdown bound)

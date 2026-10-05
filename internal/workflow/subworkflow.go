@@ -33,6 +33,8 @@ type ChildWorkflowResolver interface {
 // inline (a recursive execute at depth+1) with the step's flowing input, and return its run output. A
 // non-Succeeded child fails the step (the cause propagates → fail-fast fails the parent run). The child's
 // steps stop with the parent's (stop); its record, onFailure handler and run span use the parent run's ctx.
+// A parent cancel reaches the child through stop and ends it Cancelled; the drain halts it without a terminal
+// record and the parent's step returns to Pending (ADR-0146).
 func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, child v1.ObjectName, n *stepNode, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (json.RawMessage, error) {
 	if e.children == nil {
 		return nil, fault.Invalidf(engineOp, "sub-workflow step %q: no child resolver configured", n.name)

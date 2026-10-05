@@ -53,11 +53,63 @@ func createRun(t *testing.T, s store.Store, name string, spec v1.WorkflowRunSpec
 	}
 }
 
-// reconcileRun reconciles the WorkflowRun name in "default", fails the test on a reconcile error and
+// settleRun reconciles req until two passes in a row saw no live run goroutine, wrote nothing and asked for no
+// requeue: the synchronous view the reconcile had before ADR-0146, where each pass that starts or finds a
+// goroutine waits for its exit and reconciles again, as the enqueue on its exit would.
+func settleRun(ctx context.Context, rr *RunReconciler, req controller.Request) (controller.Result, error) {
+	quiet := 0
+	for range 100 {
+		rv := runVersion(ctx, rr, req)
+		res, err := rr.Reconcile(ctx, req)
+		if err != nil {
+			return res, err
+		}
+		waited, err := awaitExit(rr.engine, req.Namespace, req.Name)
+		if err != nil {
+			return res, err
+		}
+		if waited || res.Requeue || runVersion(ctx, rr, req) != rv {
+			quiet = 0
+			continue
+		}
+		if quiet++; quiet == 2 {
+			return res, nil
+		}
+	}
+	return controller.Result{}, fault.Internalf("test", "run %s did not settle", req.Name)
+}
+
+// runVersion is the resourceVersion of the run req names, "" when it is gone.
+func runVersion(ctx context.Context, rr *RunReconciler, req controller.Request) string {
+	obj, err := rr.store.Get(ctx, v1.KindWorkflowRun.GVK(), req.Namespace, req.Name)
+	if err != nil {
+		return ""
+	}
+	return obj.GetObjectMeta().ResourceVersion
+}
+
+// awaitExit waits until the run has no live goroutine, reporting whether it had one; a goroutine still live
+// after 10 s is an error.
+func awaitExit(e *Engine, ns v1.NamespaceName, name v1.ObjectName) (bool, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	waited := false
+	for {
+		if _, live := e.live(ns, name); !live {
+			return waited, nil
+		}
+		if time.Now().After(deadline) {
+			return waited, fault.Internalf("test", "run %s/%s: its goroutine did not exit within 10s", ns, name)
+		}
+		waited = true
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// reconcileRun settles the WorkflowRun name in "default", fails the test on a reconcile error and
 // returns the result with the re-read run.
 func reconcileRun(t *testing.T, ctx context.Context, rr *RunReconciler, s store.Store, name v1.ObjectName) (controller.Result, *v1.WorkflowRun) {
 	t.Helper()
-	res, err := rr.Reconcile(ctx, runReq(string(name)))
+	res, err := settleRun(ctx, rr, runReq(string(name)))
 	if err != nil {
 		t.Fatalf("Reconcile %s: %v", name, err)
 	}
@@ -78,7 +130,7 @@ func TestRunReconcilerDrivesAndLinks(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
 	rr := NewRunReconciler(s, eng, nil, nil)
 
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "orders-01"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "orders-01"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
@@ -121,7 +173,7 @@ func TestRunReconcilerCancel(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
 	rr := NewRunReconciler(s, eng, nil, nil)
 
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-c"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-c"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-c")
@@ -176,7 +228,7 @@ func TestRevisionPinnedMidRunRepush(t *testing.T) {
 	})
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-x"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-x"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
@@ -209,7 +261,7 @@ func TestRunReconcilerPause(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
 	rr := NewRunReconciler(s, eng, nil, nil)
 
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-p"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-p"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-p")
@@ -247,7 +299,7 @@ func TestIssue419_PauseOfFinishedRunMirrorsItsPhase(t *testing.T) {
 			sink := &fakeTraceSink{}
 			rr := NewRunReconciler(s, eng, sink, nil)
 
-			if _, err := rr.Reconcile(ctx, runReq("run-419")); err != nil {
+			if _, err := settleRun(ctx, rr, runReq("run-419")); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
 			rec, _ := eng.runs.Get(ctx, "default", "run-419")
@@ -292,19 +344,21 @@ func TestIssue119_StatusMirroredWhileRunning(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: gate})
 	rr := NewRunReconciler(s, eng, nil, nil)
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-1"})
-		done <- err
-	}()
+	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "run-1"}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 	<-gate.entered
+	if _, err := rr.Reconcile(ctx, req); err != nil { // the pass a record write enqueues mirrors it
+		t.Fatalf("Reconcile: %v", err)
+	}
 	runObj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-1")
 	mid := runObj.(*v1.WorkflowRun).Status
 	wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
 	midLinks := wfObj.(*v1.Workflow).Status.Runs
 	rec, _ := rstate.Get(ctx, "default", "run-1")
 	close(gate.release)
-	if err := <-done; err != nil {
+	if _, err := settleRun(ctx, rr, req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
@@ -347,7 +401,7 @@ func TestIssue116_OversizeRecordFailsRunOnce(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: 1 << 20}})
 	rr := NewRunReconciler(s, eng, nil, nil)
 	for range 3 {
-		_, _ = rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "fat-1"})
+		_, _ = settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "fat-1"})
 	}
 
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "fat-1")
@@ -403,7 +457,7 @@ func TestIssue306_OversizeFirstRecordFailsRunOnce(t *testing.T) {
 			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: 1 << 20}})
 			rr := NewRunReconciler(s, eng, nil, nil)
 			for range 3 {
-				if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
+				if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
 					t.Fatalf("Reconcile = %v, want the run ended Failed, not requeued", err)
 				}
 			}
@@ -446,7 +500,7 @@ func TestIssue120_RunFailureReasonInStatus(t *testing.T) {
 	rr := NewRunReconciler(s, eng, nil, nil)
 	status := func(t *testing.T, name v1.ObjectName) v1.WorkflowRunStatus {
 		t.Helper()
-		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+		if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
 			t.Fatalf("Reconcile %s: %v", name, err)
 		}
 		obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", name)
@@ -564,7 +618,7 @@ func TestIssue420_WhenOnOptionalOutputFieldFollowsDefaultsRule(t *testing.T) {
 	f := newFake() // a returns {}: y is absent and must bind to its default "d"
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
@@ -604,7 +658,7 @@ func TestIssue494_WhenOnDefaultedInputFieldBindsDefault(t *testing.T) {
 	f := newFake()
 	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
 	rr := NewRunReconciler(s, eng, nil, nil)
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "defaulted-1"}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	got, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "defaulted-1")
@@ -751,7 +805,7 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: limit}})
 			rr := NewRunReconciler(s, eng, nil, nil)
 			for range 2 {
-				if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
+				if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "big-1"}); err != nil {
 					t.Fatalf("Reconcile returned %v (a requeue), want the run to fail", err)
 				}
 			}
@@ -796,7 +850,7 @@ func TestIssue447_RunStartFailureReasonNamesCause(t *testing.T) {
 			t.Cleanup(func() { _ = rstate.Close() })
 			f := newFake()
 			eng, _ := New(Deps{Runs: rstate, Dispatch: f, Config: Config{PayloadLimit: tc.limit}})
-			if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "wf-1"}); err != nil {
+			if _, err := settleRun(ctx, NewRunReconciler(s, eng, nil, nil), controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "wf-1"}); err != nil {
 				t.Fatalf("Reconcile = %v, want the run ended Failed", err)
 			}
 			obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "wf-1")
@@ -822,7 +876,7 @@ func TestIssue67_RunCountsSurviveRunDeletion(t *testing.T) {
 	run := func(name v1.ObjectName) {
 		t.Helper()
 		seedRun(t, s, string(name), "wf", `{}`)
-		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+		if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
 			t.Fatalf("Reconcile %s: %v", name, err)
 		}
 	}
@@ -857,7 +911,7 @@ func TestIssue67_SweepDeletesExpiredWorkflowRuns(t *testing.T) {
 	}
 	for name, ended := range map[v1.ObjectName]time.Time{"old": base, "fresh": base.Add(40 * time.Hour)} {
 		seedRun(t, s, string(name), "wf", `{}`)
-		if _, err := at(ended).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+		if _, err := settleRun(ctx, at(ended), controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
 			t.Fatalf("Reconcile %s: %v", name, err)
 		}
 	}
@@ -1006,7 +1060,7 @@ func TestIssue346_SweepFailsClosedOnRecordFault(t *testing.T) {
 	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
 	t.Cleanup(func() { _ = rstate.Close() })
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base)})
-	if _, err := NewRunReconciler(s, eng, nil, nil).Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "done"}); err != nil {
+	if _, err := settleRun(ctx, NewRunReconciler(s, eng, nil, nil), controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "done"}); err != nil {
 		t.Fatalf("Reconcile done: %v", err)
 	}
 	before, err := rstate.Get(ctx, "default", "done")
@@ -1044,7 +1098,7 @@ func TestIssue182_StatusRunsListsActiveRunsNewestFirst(t *testing.T) {
 		if _, err := s.Create(ctx, run); err != nil {
 			t.Fatalf("create run %s: %v", name, err)
 		}
-		if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
+		if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: name}); err != nil {
 			t.Fatalf("Reconcile %s: %v", name, err)
 		}
 	}
@@ -1069,7 +1123,7 @@ func TestIssue307_RecreatedRunExecutesItsOwnInput(t *testing.T) {
 	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
 
 	seedRun(t, s, "re-1", "wf", `{"try":1}`)
-	if _, err := rr.Reconcile(ctx, req); err != nil {
+	if _, err := settleRun(ctx, rr, req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
@@ -1077,7 +1131,7 @@ func TestIssue307_RecreatedRunExecutesItsOwnInput(t *testing.T) {
 	}
 	f.failing["a"] = true
 	seedRun(t, s, "re-1", "wf", `{"try":2}`)
-	if _, err := rr.Reconcile(ctx, req); err != nil {
+	if _, err := settleRun(ctx, rr, req); err != nil {
 		t.Fatalf("Reconcile the re-created run: %v", err)
 	}
 
@@ -1104,7 +1158,7 @@ func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
 	req := controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "re-1"}
 
 	seedRun(t, s, "re-1", "wf", `{"try":1}`)
-	if _, err := at(base).Reconcile(ctx, req); err != nil {
+	if _, err := settleRun(ctx, at(base), req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
@@ -1119,7 +1173,7 @@ func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
 	if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1"); err != nil {
 		t.Fatalf("the sweep must keep the re-created WorkflowRun: %v", err)
 	}
-	if _, err := later.Reconcile(ctx, req); err != nil {
+	if _, err := settleRun(ctx, later, req); err != nil {
 		t.Fatalf("Reconcile the re-created run: %v", err)
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1")
@@ -1143,7 +1197,7 @@ func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
 	eng, _ := New(Deps{Runs: rstate, Dispatch: newFake()})
 	rr := NewRunReconciler(s, eng, nil, nil)
 	for i := range 2 {
-		res, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "loop-1"})
+		res, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "loop-1"})
 		if err != nil {
 			t.Fatalf("Reconcile %d: %v", i, err)
 		}
@@ -1167,7 +1221,7 @@ func TestIssue444_NotFoundSubworkflowFailureMirroredInSameReconcile(t *testing.T
 	seedRun(t, s, "parent-1", "parent", `{}`)
 	rr := NewRunReconciler(s, childEngine(t, newFake(), fakeChildren{}, Config{}), nil, nil)
 
-	if _, err := rr.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "parent-1"}); err != nil {
+	if _, err := settleRun(ctx, rr, controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: "default", Name: "parent-1"}); err != nil {
 		t.Fatalf("Reconcile = %v, want nil: a run failure is a terminal outcome, not a reconcile error", err)
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "parent-1")

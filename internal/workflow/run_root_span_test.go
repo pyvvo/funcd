@@ -64,7 +64,7 @@ func TestRunSpanOnSuccess(t *testing.T) {
 	eng := engineWith(t, newFake())
 	rr := NewRunReconciler(s, eng, sink, nil)
 
-	if _, err := rr.Reconcile(ctx, runReq("orders-01")); err != nil {
+	if _, err := settleRun(ctx, rr, runReq("orders-01")); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if sink.count() != 1 {
@@ -103,7 +103,7 @@ func TestRunSpanOnFailure(t *testing.T) {
 	f.permanent["a"] = true // permanent 4xx → the run fails
 	rr := NewRunReconciler(s, engineWith(t, f), sink, nil)
 
-	_, _ = rr.Reconcile(ctx, runReq("orders-f")) // a run failure is a terminal outcome, not a reconcile error
+	_, _ = settleRun(ctx, rr, runReq("orders-f")) // a run failure is a terminal outcome, not a reconcile error
 	if sink.count() != 1 {
 		t.Fatalf("emitted %d spans, want 1", sink.count())
 	}
@@ -136,7 +136,7 @@ func TestRunSpanOnCancel(t *testing.T) {
 	})
 	rr := NewRunReconciler(s, eng, sink, nil)
 
-	if _, err := rr.Reconcile(ctx, runReq("orders-c")); err != nil {
+	if _, err := settleRun(ctx, rr, runReq("orders-c")); err != nil {
 		t.Fatalf("Reconcile(cancel): %v", err)
 	}
 	if sink.count() != 1 {
@@ -165,7 +165,7 @@ func TestRunSpanOnContractReject(t *testing.T) {
 	f := newFake()
 	rr := NewRunReconciler(s, engineWith(t, f), sink, nil)
 
-	_, _ = rr.Reconcile(ctx, runReq("orders-r"))
+	_, _ = settleRun(ctx, rr, runReq("orders-r"))
 	if sink.count() != 1 {
 		t.Fatalf("contract-reject emitted %d spans, want 1", sink.count())
 	}
@@ -186,8 +186,8 @@ func TestRunSpanOnce(t *testing.T) {
 	sink := &fakeTraceSink{}
 	rr := NewRunReconciler(s, engineWith(t, newFake()), sink, nil)
 
-	_, _ = rr.Reconcile(ctx, runReq("orders-1x")) // → Succeeded, emits once
-	_, _ = rr.Reconcile(ctx, runReq("orders-1x")) // terminal → short-circuits, no emit
+	_, _ = settleRun(ctx, rr, runReq("orders-1x")) // → Succeeded, emits once
+	_, _ = settleRun(ctx, rr, runReq("orders-1x")) // terminal → short-circuits, no emit
 	if sink.count() != 1 {
 		t.Fatalf("emitted %d spans across two reconciles, want exactly 1", sink.count())
 	}
@@ -201,7 +201,7 @@ func TestRunSpanNoSink(t *testing.T) {
 	seedRun(t, s, "orders-n", "orders", `{}`)
 	rr := NewRunReconciler(s, engineWith(t, newFake()), nil, nil) // nil sink
 
-	if _, err := rr.Reconcile(ctx, runReq("orders-n")); err != nil {
+	if _, err := settleRun(ctx, rr, runReq("orders-n")); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "orders-n")
