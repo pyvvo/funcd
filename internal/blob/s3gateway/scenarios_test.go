@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -497,6 +498,82 @@ func TestIssue30_MultipartTotalCappedAtUploadPart(t *testing.T) {
 	})
 	require.NoError(t, err, "the upload holds only the accepted part, within the cap")
 	require.Len(t, mustGet(t, g, "default", "lakehouse", "bronze/capped.parquet"), maxUpload)
+}
+
+// TestMultipartUploadIsBoundToItsNamespaceBucketAndKey: an upload id works only for the
+// namespace, bucket and key it was created for (ADR-0080 tenancy default-deny; S3 scopes an
+// upload id to its bucket and key). A principal in another namespace that is authorized on
+// its own bucket, even one with the same name and key, gets NoSuchUpload for every multipart
+// op on the victim's id, and so does the creator on another key; the upload itself stays intact.
+func TestMultipartUploadIsBoundToItsNamespaceBucketAndKey(t *testing.T) {
+	meta := lakehouseMeta()
+	meta.fns["default/etl-svc"].Spec.Blob = []v1.FunctionBlob{{Alias: "bronze", Bucket: "lakehouse", Prefix: "bronze"}}
+	meta.fns["evil/attacker"] = &v1.Function{
+		ObjectMeta: v1.ObjectMeta{Name: "attacker", Namespace: "evil", ResourceGroup: "rg1"},
+		Spec:       v1.FunctionSpec{Blob: []v1.FunctionBlob{{Alias: "loot", Bucket: "lakehouse", Prefix: "bronze"}}},
+	}
+	meta.buckets["evil/lakehouse"] = &v1.Bucket{
+		ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "evil", ResourceGroup: "rg1"},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "bronze", Owner: "attacker"}}},
+	}
+	g := newGateway(t, meta, fixedPolicies{rev: "0"}, nil, memBucket)
+	ctx := context.Background()
+	victim := g.client(t, "default", "etl-svc")
+	attacker := g.client(t, "evil", "attacker")
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/payroll.parquet")
+
+	create, err := victim.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key})
+	require.NoError(t, err)
+	one := int32(1)
+	part, err := victim.UploadPart(ctx, &awss3.UploadPartInput{
+		Bucket: bucket, Key: key, UploadId: create.UploadId, PartNumber: &one, Body: strings.NewReader("SECRET-ROWS"),
+	})
+	require.NoError(t, err)
+	done := &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{ETag: part.ETag, PartNumber: &one}}}
+
+	noSuchUpload := func(op string, err error) {
+		t.Helper()
+		if assert.Error(t, err, "%s on another target's upload must fail", op) {
+			assert.Equal(t, 404, statusCode(err), "%s: %v", op, err)
+			assert.ErrorContains(t, err, "NoSuchUpload", op)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		c      *awss3.Client
+		bucket *string
+		key    *string
+	}{
+		{"another namespace, same bucket and key names", attacker, bucket, key},
+		{"another namespace, another key", attacker, bucket, ptrS("bronze/loot.parquet")},
+		{"the creator, another key", victim, bucket, ptrS("bronze/other.parquet")},
+	} {
+		_, err = tc.c.ListParts(ctx, &awss3.ListPartsInput{Bucket: tc.bucket, Key: tc.key, UploadId: create.UploadId})
+		noSuchUpload(tc.name+": ListParts", err)
+		two := int32(2)
+		_, err = tc.c.UploadPart(ctx, &awss3.UploadPartInput{
+			Bucket: tc.bucket, Key: tc.key, UploadId: create.UploadId, PartNumber: &two, Body: strings.NewReader("INJECTED"),
+		})
+		noSuchUpload(tc.name+": UploadPart", err)
+		_, err = tc.c.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+			Bucket: tc.bucket, Key: tc.key, UploadId: create.UploadId, MultipartUpload: done,
+		})
+		noSuchUpload(tc.name+": CompleteMultipartUpload", err)
+		_, err = tc.c.AbortMultipartUpload(ctx, &awss3.AbortMultipartUploadInput{Bucket: tc.bucket, Key: tc.key, UploadId: create.UploadId})
+		noSuchUpload(tc.name+": AbortMultipartUpload", err)
+	}
+
+	_, err = victim.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{
+		Bucket: bucket, Key: key, UploadId: create.UploadId, MultipartUpload: done,
+	})
+	require.NoError(t, err, "the victim's upload survives the other targets' attempts")
+	require.Equal(t, "SECRET-ROWS", string(mustGet(t, g, "default", "lakehouse", "bronze/payroll.parquet")))
+	for _, k := range []string{"bronze/payroll.parquet", "bronze/loot.parquet"} {
+		ok, xerr := g.buckets["evil/lakehouse"].Exists(ctx, k)
+		require.NoError(t, xerr)
+		require.False(t, ok, "no victim bytes land in the other namespace's bucket at %s", k)
+	}
+	require.Regexp(t, `^funcd-mpu-[A-Z2-7]{26}$`, *create.UploadId, "an upload id is random, not a counter another tenant can guess")
 }
 
 // TestIssue157_BucketOpsHonorBindings: HeadBucket succeeds only for a caller bound to the
