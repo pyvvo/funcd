@@ -197,6 +197,21 @@ func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, 
 	return err
 }
 
+// HandoverKVStore makes workflow the owner of the kept KVStore store, so that Workflow binds it again (ADR-0178).
+// The caller needs KVStore update and delete and Workflow get in ns.
+func (c *Client) HandoverKVStore(ctx context.Context, ns v1.NamespaceName, store, workflow v1.ObjectName) error {
+	itemURL, err := c.itemURL(v1.KindKVStore, ns, store)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]v1.ObjectName{"workflow": workflow})
+	if err != nil {
+		return fault.Internalf("sdk.HandoverKVStore", "marshal: %v", err)
+	}
+	_, err = c.do(ctx, http.MethodPost, itemURL+"/handover", body)
+	return err
+}
+
 // DeleteOption tunes a Delete.
 type DeleteOption func(*deleteOptions)
 

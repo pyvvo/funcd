@@ -20,9 +20,11 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/workflow"
 )
 
 const ns v1.NamespaceName = "default"
@@ -66,10 +68,15 @@ func create(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName, owne
 	obj := object(t, kind, name)
 	if owner != nil {
 		om := owner.GetObjectMeta()
-		obj.GetObjectMeta().OwnerReferences = []v1.OwnerReference{{
+		ref := v1.OwnerReference{
 			ObjectRef: v1.ObjectRef{Kind: owner.GroupVersionKind().Kind, Namespace: om.Namespace, Name: om.Name},
 			UID:       om.UID, Controller: true,
-		}}
+		}
+		obj.GetObjectMeta().OwnerReferences = []v1.OwnerReference{ref}
+		if kind == v1.KindKVStore { // the materializer marks every store it makes (ADR-0178)
+			ref.Controller = false
+			obj.GetObjectMeta().OwnerReferences = append(obj.GetObjectMeta().OwnerReferences, ref)
+		}
 	}
 	out, err := st.Create(context.Background(), obj)
 	require.NoError(t, err, "create %s/%s", kind, name)
@@ -149,7 +156,10 @@ func TestCollectNamespaceIsScopedToItsNamespace(t *testing.T) {
 	other := object(t, v1.KindKVStore, "wf-state")
 	om := other.GetObjectMeta()
 	om.Namespace = "other"
-	om.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindWorkflow, Name: "wf"}, UID: wf.GetObjectMeta().UID, Controller: true}}
+	ref := v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: v1.KindWorkflow, Name: "wf"}, UID: wf.GetObjectMeta().UID}
+	marker := ref
+	ref.Controller = true
+	om.OwnerReferences = []v1.OwnerReference{ref, marker}
 	_, err := st.Create(context.Background(), other)
 	require.NoError(t, err)
 	del(t, st, v1.KindWorkflow, "wf")
@@ -309,6 +319,7 @@ func writers() map[string][]gc.Pair {
 		"internal/services/identity/reconcile.go": {{Owner: v1.KindIdentity, Child: v1.KindSecret}},
 		"internal/site/reconcile.go":              {{Owner: v1.KindSite, Child: v1.KindRoute}},
 		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}},
+		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
 	}
 }
 
@@ -410,4 +421,55 @@ func BenchmarkSweep(b *testing.B) {
 	for b.Loop() {
 		require.NoError(b, c.CollectNamespace(context.Background(), ""))
 	}
+}
+
+type fixedRuntime struct{}
+
+func (fixedRuntime) Runtime(context.Context, string) (v1.RuntimeName, error) { return "nodejs22", nil }
+
+// scenario: upgrade-refuses-older-store-and-collector-keeps-it — a user's store older than w, which the previous
+// materializer gave w's controller ref, stays unmarked at upgrade, w is refused, and the collector keeps it.
+func TestScenarioUpgradeRefusesOlderStoreAndCollectorKeepsIt(t *testing.T) {
+	st := store.New(memory.New())
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	user := object(t, v1.KindKVStore, "shared").(*v1.KVStore)
+	user.Spec.Tables = []v1.KVTable{{Name: "t"}}
+	_, err := st.Create(ctx, user)
+	require.NoError(t, err)
+	time.Sleep(2 * time.Millisecond)
+	wf := object(t, v1.KindWorkflow, "w").(*v1.Workflow)
+	wf.Spec.Steps = []v1.WorkflowStep{{Name: "s1", Function: &v1.FunctionStep{Image: "oci:s1"}}}
+	wf.Spec.KV = []v1.WorkflowKVStore{{Name: "shared", Deletion: v1.DeletionDelete, Tables: []v1.KVTable{{Name: "t"}}}}
+	obj, err := st.Create(ctx, wf)
+	require.NoError(t, err)
+	wf = obj.(*v1.Workflow)
+	cur, err := st.Get(ctx, v1.KindKVStore.GVK(), ns, "shared")
+	require.NoError(t, err)
+	cur.GetObjectMeta().OwnerReferences = []v1.OwnerReference{{
+		ObjectRef: v1.ObjectRef{Kind: v1.KindWorkflow, Namespace: ns, Name: "w"}, UID: wf.UID, Controller: true, BlockOwnerDeletion: true,
+	}}
+	prev, err := st.Update(ctx, cur)
+	require.NoError(t, err)
+
+	require.NoError(t, workflow.MarkKVStoresOnce(ctx, st))
+	r := workflow.NewWorkflowReconciler(st, workflow.NewMaterializer(st, fixedRuntime{}, nil, 0), nil, nil)
+	_, err = r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: ns, Name: "w"})
+	require.NoError(t, err)
+	got, err := st.Get(ctx, v1.KindWorkflow.GVK(), ns, "w")
+	require.NoError(t, err)
+	ready, ok := got.(*v1.Workflow).Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, ready.Status)
+	require.Equal(t, "KVStoreNotOwned", ready.Reason)
+	after, err := st.Get(ctx, v1.KindKVStore.GVK(), ns, "shared")
+	require.NoError(t, err)
+	require.Equal(t, prev.GetObjectMeta().ResourceVersion, after.GetObjectMeta().ResourceVersion, "no write")
+
+	del(t, st, v1.KindWorkflow, "w")
+	c := newCollector(t, st, 0)
+	for range 2 {
+		require.NoError(t, c.CollectNamespace(ctx, ns))
+	}
+	require.True(t, exists(t, st, v1.KindKVStore, "shared"), "an unmarked store is never collected")
 }

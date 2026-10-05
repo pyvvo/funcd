@@ -613,6 +613,26 @@ func registerKVStore(api huma.API, h Handlers) {
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 		return nil, wrapFaultError(h.DeleteKVStore(ctx, in.Namespace, in.Name))
 	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "handoverKVStore", Method: http.MethodPost, Path: base + "/{name}/handover",
+		Tags: []string{"KVStore"},
+	}, func(ctx context.Context, in *struct {
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      KVStoreHandover
+	}) (*kvStoreOutput, error) {
+		item, err := h.HandoverKVStore(ctx, in.Namespace, in.Name, in.Body.Workflow)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &kvStoreOutput{Body: item}, nil
+	})
+}
+
+// KVStoreHandover is the handover request body: the Workflow that becomes the store's owner.
+type KVStoreHandover struct {
+	Workflow v1.ObjectName `json:"workflow"`
 }
 
 // ===== Bucket (namespaced) — ADR-0080 =====
