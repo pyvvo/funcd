@@ -36,7 +36,7 @@ type Spec struct {
 	KeyFile    string   // provided: PEM key
 	Email      string   // acme: ACME account email
 	CADir      string   // acme: ACME directory URL (empty ⇒ Let's Encrypt; a Pebble URL in tests)
-	StorageDir string   // persistence dir (self-signed cert / acme accounts+certs)
+	StorageDir string   // persistence dir (self-signed cert / acme accounts+certs); required by selfsigned and acme
 }
 
 // Provider builds the *tls.Config funcd attaches to its http.Servers (no listener handover).
@@ -55,6 +55,9 @@ type Provider interface {
 func New(spec Spec, logger *slog.Logger) (Provider, error) {
 	switch spec.Mode {
 	case "", ModeSelfSigned:
+		if spec.StorageDir == "" {
+			return nil, fault.Invalidf("edgetls.New", "mode selfsigned requires a storage dir")
+		}
 		return static.New(true, "", "", spec.StorageDir, logger), nil
 	case ModeProvided:
 		if spec.CertFile == "" || spec.KeyFile == "" {
@@ -64,6 +67,9 @@ func New(spec Spec, logger *slog.Logger) (Provider, error) {
 	case ModeACME:
 		if spec.Email == "" {
 			return nil, fault.Invalidf("edgetls.New", "mode acme requires an account email")
+		}
+		if spec.StorageDir == "" {
+			return nil, fault.Invalidf("edgetls.New", "mode acme requires a storage dir")
 		}
 		return acme.New(spec.Email, spec.CADir, spec.StorageDir, logger)
 	default:
