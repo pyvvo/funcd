@@ -1,6 +1,6 @@
 # ADR-0190: A workflow run is bound to the revision it started with
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, engine, revisions, pinning, activator, pooling, gc
