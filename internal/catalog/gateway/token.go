@@ -7,14 +7,16 @@
 // A Quack token is a BARE BEARER credential (unlike an S3 access key, which is inert without the SigV4
 // secret), so the internal per-function token must be unforgeable on its own. It is a standard HS256 JWT
 // (go-jose) signed with the node master: DeriveCatalogToken signs it, PrincipalFor verifies the signature
-// (alg pinned to HS256) before trusting its {ns, fn} claims. The external Identity gets a minted, random,
-// rotatable token resolved by a store lookup (the ADR-0088 IdentityAccessKey analog).
+// (alg pinned to HS256) before trusting its {ns, fn} claims. The external Identity gets a minted token: its
+// public access key id (ADR-0135), ".", and a random, rotatable part. The prefix names the owner, so the
+// lookup is two store reads (ADR-0153), the shape of the Identity's S3 credential lookup.
 package gateway
 
 import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -22,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -43,6 +46,31 @@ const tokenAlg = jose.HS256
 // under (written by the identity reconciler, ADR-0135/0137). It is the query-path analog of the SigV4
 // secretAccessKey key.
 const catalogTokenSecretKey = "catalogToken"
+
+// identityTokenSep joins an Identity catalog token's owner prefix and its random part (ADR-0153).
+const identityTokenSep = "."
+
+// randomPartLen is the length of randomSecret's output: standard base64 of 32 bytes.
+const randomPartLen = 44
+
+// IdentityCatalogToken builds an Identity's catalog token (ADR-0153): its access key id, ".", random.
+func IdentityCatalogToken(ns v1.NamespaceName, name v1.ObjectName, random string) string {
+	return s3gateway.IdentityAccessKey(string(ns), string(name)) + identityTokenSep + random
+}
+
+// decodeIdentityCatalogToken returns the owner a token's prefix names. ok=false: not an Identity token.
+func decodeIdentityCatalogToken(token string) (v1.NamespaceName, v1.ObjectName, bool) {
+	prefix, random, found := strings.Cut(token, identityTokenSep)
+	if !found || len(random) != randomPartLen {
+		return "", "", false
+	}
+	ns, name, ok := s3gateway.DecodeIdentityAccess(prefix)
+	if !ok || v1.NamespaceName(ns).Validate() != nil || v1.ObjectName(name).Validate() != nil ||
+		s3gateway.IdentityAccessKey(ns, name) != prefix {
+		return "", "", false
+	}
+	return v1.NamespaceName(ns), v1.ObjectName(name), true
+}
 
 // fnClaims is the per-function catalog token's payload — the Function principal. NO iat/exp: the token is
 // deterministic (re-derived each reconcile, stable across daemon restarts; rotation = master rotation),
@@ -74,13 +102,14 @@ func DeriveCatalogToken(master []byte, ns v1.NamespaceName, fn v1.ObjectName) (s
 // s3gateway.principalFor, with the JWT signature standing in for SigV4's per-request possession proof.
 type CatalogKeys interface {
 	// PrincipalFor resolves token to its principal. First: verify it as an HS256 JWT signed with the node
-	// master (a forged {ns, fn} fails the signature) ⇒ a Function principal. Else: a store lookup of a
-	// minted per-Identity token ⇒ an Identity principal. Else: default-deny (ok=false).
+	// master (a forged {ns, fn} fails the signature) ⇒ a Function principal. Else: decode the owner an
+	// Identity token's prefix names and read that Identity and its Secret (two Gets) ⇒ an Identity
+	// principal. Else: default-deny (ok=false).
 	PrincipalFor(token string) (auth.EntityRef, bool)
 }
 
 // macKeys is the production CatalogKeys (ADR-0137): a node master (for the per-function JWT verify) plus
-// the metastore (for the minted per-Identity token lookup). A nil store ⇒ Function-only resolution.
+// the metastore (for the per-Identity token's two-Get lookup). A nil store ⇒ Function-only resolution.
 type macKeys struct {
 	master []byte
 	store  store.Store
@@ -93,7 +122,7 @@ func NewCatalogKeys(master []byte, s store.Store) CatalogKeys {
 	return &macKeys{master: master, store: s}
 }
 
-// PrincipalFor implements CatalogKeys. Verify-JWT ⇒ Function; else store lookup ⇒ Identity; else deny.
+// PrincipalFor implements CatalogKeys. Verify-JWT ⇒ Function; else owner lookup ⇒ Identity; else deny.
 func (k *macKeys) PrincipalFor(token string) (auth.EntityRef, bool) {
 	if ref, ok := k.functionFor(token); ok {
 		return ref, true
@@ -125,39 +154,40 @@ func (k *macKeys) functionFor(token string) (auth.EntityRef, bool) {
 	return auth.EntityRef{Type: v1.KindFunction, Namespace: v1.NamespaceName(c.NS), Name: v1.ObjectName(c.Fn)}, true
 }
 
-// identityFor resolves a minted per-Identity catalog token by scanning the metastore's Identities and
-// constant-time-matching each one's credential Secret's catalogToken (the ADR-0088 IdentityAccessKey
-// analog — the minted token is opaque, so it is index-free by store scan). A deleted Identity/Secret
-// naturally stops resolving (ok=false), like storeExternalKeys. It has no context (the resolver seam), so
-// it reads with context.Background().
+// identityFor resolves an Identity catalog token in two store reads (ADR-0153): it decodes the owner the
+// prefix names, refusing with no read a token that does not carry a canonical owner, then compares the
+// whole token with that Identity's stored catalogToken in constant time. The prefix grants nothing on its
+// own. A deleted Identity/Secret stops resolving, like storeExternalKeys. It has no context (the resolver
+// seam), so it reads with context.Background().
 func (k *macKeys) identityFor(token string) (auth.EntityRef, bool) {
+	ns, name, ok := decodeIdentityCatalogToken(token)
+	if !ok {
+		return auth.EntityRef{}, false
+	}
 	ctx := context.Background()
-	lst, err := k.store.List(ctx, v1.KindIdentity.GVK(), store.ListOptions{})
+	idObj, err := k.store.Get(ctx, v1.KindIdentity.GVK(), ns, name)
 	if err != nil {
 		return auth.EntityRef{}, false
 	}
-	want := []byte(token)
-	for _, obj := range lst.Items {
-		id, ok := obj.(*v1.Identity)
-		if !ok {
-			continue
-		}
-		secretName := id.Spec.CredentialSecretName
-		if secretName == "" {
-			secretName = id.Name
-		}
-		secObj, gerr := k.store.Get(ctx, v1.KindSecret.GVK(), id.Namespace, secretName)
-		if gerr != nil {
-			continue
-		}
-		sec, isSecret := secObj.(*v1.Secret)
-		if !isSecret {
-			continue
-		}
-		raw, has := sec.Spec.Data[catalogTokenSecretKey]
-		if has && len(raw) > 0 && hmac.Equal(raw, want) {
-			return auth.EntityRef{Type: v1.KindIdentity, Namespace: id.Namespace, Name: id.Name}, true
-		}
+	id, isIdentity := idObj.(*v1.Identity)
+	if !isIdentity {
+		return auth.EntityRef{}, false
 	}
-	return auth.EntityRef{}, false
+	secretName := id.Spec.CredentialSecretName
+	if secretName == "" {
+		secretName = id.Name
+	}
+	secObj, err := k.store.Get(ctx, v1.KindSecret.GVK(), id.Namespace, secretName)
+	if err != nil {
+		return auth.EntityRef{}, false
+	}
+	sec, isSecret := secObj.(*v1.Secret)
+	if !isSecret {
+		return auth.EntityRef{}, false
+	}
+	stored := sec.Spec.Data[catalogTokenSecretKey]
+	if len(stored) == 0 || !hmac.Equal(stored, []byte(token)) {
+		return auth.EntityRef{}, false
+	}
+	return auth.EntityRef{Type: v1.KindIdentity, Namespace: id.Namespace, Name: id.Name}, true
 }

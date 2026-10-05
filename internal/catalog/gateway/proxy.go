@@ -30,7 +30,7 @@ type EngineTarget struct {
 
 // handshakeHeadMax is how much of a request body the proxy reads before it decides: the handshake
 // preamble, the token field's header and length, and a token far longer than any funcd issues (a JWT
-// over {ns, fn}, or a 44-byte minted Identity token). A longer token does not parse as a handshake and is
+// over {ns, fn}, or an Identity token of at most 255 bytes). A longer token does not parse as a handshake and is
 // forwarded un-swapped, which the engine rejects (fail-closed, as for any non-handshake body).
 const handshakeHeadMax = preambleLen + tokenHdrLen + binary.MaxVarintLen64 + 4<<10
 

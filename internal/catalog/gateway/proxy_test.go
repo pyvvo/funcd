@@ -357,7 +357,7 @@ func TestCatalogProxy_DeniesCrossNamespaceCaller(t *testing.T) {
 	}
 	createObj(t, st, fn("victim", "reader"))
 	createObj(t, st, fn("attacker", "thief"))
-	const minted = "MINTED-ATTACKER-IDENTITY-CATALOG-TOKEN"
+	minted := IdentityCatalogToken("attacker", "mallory", testRandomPart(t))
 	createObj(t, st, &v1.Identity{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindIdentity.GVK().APIVersion(), Kind: v1.KindIdentity},
 		ObjectMeta: v1.ObjectMeta{Name: "mallory", Namespace: "attacker", ResourceGroup: "rg1"},
