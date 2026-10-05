@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// startTimeout bounds how long Ensure waits for the private containerd socket to come up
+// startTimeout bounds how long Ensure waits for the private containerd to listen on its socket
 // before declaring the daemon unhealthy.
 const startTimeout = 30 * time.Second
 
@@ -90,9 +91,10 @@ func isExecutable(path string) bool {
 }
 
 // startContainerd launches the containerd child on the private socket + data-root and waits
-// for the socket to appear (a healthy daemon). containerd is resolved from funcd's BinDir first
-// (ADR-0056), and the child runs with BinDir prepended to its PATH so containerd finds
-// containerd-shim-runc-v2 + crun there. ctx bounds only that wait: the child runs until Close, so the
+// for it to listen on the socket (a healthy daemon). A socket file is not enough: containerd
+// listens only once its plugins are up, and one that died uncleanly leaves its file behind.
+// containerd is resolved from funcd's BinDir first (ADR-0056), and the child runs with BinDir
+// prepended to its PATH so containerd finds containerd-shim-runc-v2 + crun there. ctx bounds only that wait: the child runs until Close, so the
 // callers' teardown can still use it after their context is cancelled (a bench Ctrl-C).
 func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 	bin, err := resolveBin("containerd")
@@ -121,7 +123,8 @@ func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 
 	deadline := time.Now().Add(startTimeout)
 	for time.Now().Before(deadline) {
-		if _, statErr := os.Stat(m.socket); statErr == nil {
+		if conn, dialErr := net.Dial("unix", m.socket); dialErr == nil {
+			_ = conn.Close()
 			return nil
 		}
 		select {
@@ -130,7 +133,7 @@ func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return fault.Unavailablef(op, "private containerd did not create %q within %s", m.socket, startTimeout)
+	return fault.Unavailablef(op, "private containerd did not listen on %q within %s", m.socket, startTimeout)
 }
 
 // layDownCrun ensures crun (the OCI runtime the runc-v2 shim execs) is present. crun is
