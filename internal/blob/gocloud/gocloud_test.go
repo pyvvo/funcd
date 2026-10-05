@@ -176,6 +176,41 @@ func TestIssue375_EscapeSequenceKeysNeverAlias(t *testing.T) {
 	}
 }
 
+// TestEmptyKeyIsInvalidOnTheFileBackend: an empty key names the bucket root, not an object, so every
+// keyed call on a file bucket refuses it as fault.Invalid, while List with an empty prefix still
+// lists every key.
+func TestEmptyKeyIsInvalidOnTheFileBackend(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	b, err := gocloud.Open(ctx, "file://"+dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+	rr, ok := b.(blob.RangeReader)
+	require.True(t, ok)
+
+	_, getErr := b.Get(ctx, "")
+	_, existsErr := b.Exists(ctx, "")
+	_, rangeErr := rr.GetRange(ctx, "", 0, -1)
+	for op, err := range map[string]error{
+		"Get":      getErr,
+		"Exists":   existsErr,
+		"GetRange": rangeErr,
+		"Put":      b.Put(ctx, "", []byte("v")),
+		"Delete":   b.Delete(ctx, ""),
+	} {
+		assert.Equal(t, fault.Invalid, fault.KindOf(err), "%s(%q): %v", op, "", err)
+	}
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+
+	require.NoError(t, b.Put(ctx, "k", []byte("v")))
+	items, err := b.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, "k", items[0].Key)
+}
+
 // TestIssue459_ListFindsKeysUnderEscapedPrefixes: fileblob stores a key under its escaped path
 // ("a//b/c" in "a/__0x2f__b/c") but starts its List walk at the raw, cleaned directory part of the
 // prefix, so a prefix holding "//", "../", a control rune or a trailing "/" — mid-path or at the
