@@ -90,14 +90,15 @@ func isExecutable(path string) bool {
 // startContainerd launches the containerd child on the private socket + data-root and waits
 // for the socket to appear (a healthy daemon). containerd is resolved from funcd's BinDir first
 // (ADR-0056), and the child runs with BinDir prepended to its PATH so containerd finds
-// containerd-shim-runc-v2 + crun there.
+// containerd-shim-runc-v2 + crun there. ctx bounds only that wait: the child runs until Close, so the
+// callers' teardown can still use it after their context is cancelled (a bench Ctrl-C).
 func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 	bin, err := resolveBin("containerd")
 	if err != nil {
 		return fault.Wrapf(err, fault.Unavailable, op,
 			"bundled containerd not found in funcd's bin dir or on PATH; `funcd install` lays it down, or pass --containerd <socket>")
 	}
-	cmd := exec.CommandContext(ctx, bin,
+	cmd := exec.Command(bin,
 		"--address", m.socket,
 		"--root", filepath.Join(m.cfg.DataRoot, "root"),
 		"--state", filepath.Join(m.cfg.DataRoot, "state"),
