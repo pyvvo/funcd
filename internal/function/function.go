@@ -290,15 +290,15 @@ type Reconciler struct {
 	poolShimCommand   []string
 	poolShimsByFamily map[string][]string // runtime-family prefix → pool-host command (ADR-0050)
 	poolLimit         int
-	// poolSigs is the per-pool-key last-applied manifest signature, the state that makes pool
-	// rebuilds idempotent (restart only on a manifest diff). Guarded by poolMu for concurrent
-	// reconciles of sibling members of the same pool.
-	poolMu   sync.Mutex
-	poolSigs map[pooling.PoolKey]string
-	// poolSets is each pool worker's member set ("ns/worker" → names), recorded before it is created; poolLive is when
-	// each pool worker last answered its liveness. Both guarded by poolMu.
-	poolSets map[string][]v1.ObjectName
-	poolLive map[pooling.PoolKey]time.Time
+	// poolDrains is when the drain of each key's old pool workers started (ADR-0190 Decision 8); poolHolds is the
+	// manifest each key's pool workers were last built to hold; poolSets is each pool worker's member set ("ns/worker" →
+	// names), recorded before it is created; poolLive is when each key's pool worker last answered its liveness. All
+	// guarded by poolMu, for concurrent reconciles of sibling members of the same pool.
+	poolMu     sync.Mutex
+	poolDrains map[pooling.PoolKey]poolDrain
+	poolHolds  map[pooling.PoolKey]poolHold
+	poolSets   map[string][]v1.ObjectName
+	poolLive   map[pooling.PoolKey]poolLiveness
 	// poolManifestDir holds the pool manifests; ownManifestDir is set when NewReconciler created it, for Close.
 	poolManifestDir string
 	ownManifestDir  bool
@@ -444,9 +444,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolShimCommand:     d.PoolShimCommand,
 		poolShimsByFamily:   d.PoolShimsByFamily,
 		poolLimit:           limit,
-		poolSigs:            map[pooling.PoolKey]string{},
+		poolDrains:          map[pooling.PoolKey]poolDrain{},
+		poolHolds:           map[pooling.PoolKey]poolHold{},
 		poolSets:            map[string][]v1.ObjectName{},
-		poolLive:            map[pooling.PoolKey]time.Time{},
+		poolLive:            map[pooling.PoolKey]poolLiveness{},
 		poolManifestDir:     manifestDir,
 		ownManifestDir:      ownManifestDir,
 		supervisionPeriod:   period,
@@ -632,7 +633,9 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	// revision, moving the calls from the serving revision to the current one once it is ready (ADR-0143).
 	var v verdict
 	if assign.Pooled {
-		v, err = r.convergePooled(ctx, fn, assign, env.secret, env.catalog, idx)
+		var poolAfter time.Duration
+		v, poolAfter, err = r.convergePooled(ctx, fn, assign, env.secret, env.catalog, idx)
+		drainAfter = earliest(drainAfter, poolAfter)
 	} else {
 		v, err = r.convergeSolo(ctx, fn, pinned, env.secret, env.catalog)
 		if errors.Is(err, runtime.ErrImageUnavailable) {
@@ -1233,9 +1236,9 @@ func (r *Reconciler) servingWorkers(ctx context.Context, fn *v1.Function) (runni
 	return r.countWorkers(ctx, fn, s)
 }
 
-// countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of its pool
-// worker, which runs for fn only while its /health/members lists fn and listens for it only while that entry reads
-// ready (ADR-0158).
+// countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of the pool
+// worker the resolver hands out (servingPool, else the newest running one), which runs for fn only while its
+// /health/members lists fn and listens for it only while that entry reads ready (ADR-0158).
 func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (running, listening int, err error) {
 	name := fn.Name
 	key, pooled := pooling.PoolKey{}, r.pooled(fn)
@@ -1249,6 +1252,16 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 	insts, err := r.namedInstances(ctx, fn.Namespace, name)
 	if err != nil {
 		return 0, 0, err
+	}
+	if pooled {
+		w, ok := r.servingPool(insts)
+		if !ok {
+			w, ok = newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning })
+		}
+		insts = nil
+		if ok {
+			insts, rev = []runtime.Instance{w}, w.Revision
+		}
 	}
 	for _, in := range insts {
 		if in.Revision != rev || in.State != runtime.StateRunning {
@@ -1934,7 +1947,7 @@ func (r *Reconciler) convergeHeld(ctx context.Context, fn *v1.Function, env *bou
 	for _, obj := range res.Items {
 		rev, ok := obj.(*v1.Revision)
 		if !ok || rev.Status.Phase == "" || !v1.ControlledBy(rev.OwnerReferences, v1.KindFunction, fn.UID) ||
-			rev.Name == v1.ObjectName(fn.Status.CurrentRevision) || rev.Name == v1.ObjectName(fn.Status.ServingRevision) {
+			!activator.HeldRevision(fn, activator.FunctionRef{Revision: rev.Name, UID: fn.UID}) {
 			continue
 		}
 		revs = append(revs, rev)
@@ -2395,9 +2408,9 @@ func (r *Reconciler) programAllRoutes(ctx context.Context) error {
 	return r.gateway.ProgramRoutes(ctx, routes)
 }
 
-// upstreamForFn returns a function's upstream URL: the pool worker's address for a pooled
-// function (resolved by its pool key, not by Instance.Name, since the worker is shared —
-// ADR-0046 Decision 5), or a listening worker of its serving revision (ADR-0143, ADR-0161). "" if none listens.
+// upstreamForFn returns a function's upstream URL: the address of the pool worker servingPool picks for a pooled
+// function (resolved by its pool key, not by Instance.Name, since the worker is shared — ADR-0046 Decision 5; ADR-0190
+// Decision 8), or a listening worker of its serving revision (ADR-0143, ADR-0161). "" if none listens.
 func (r *Reconciler) upstreamForFn(ctx context.Context, fn *v1.Function) (string, error) {
 	// poolKeyFor already gates on a pool host existing for the runtime family (ADR-0050), so route
 	// to the shared pool worker whenever it returns a key — NOT only for the node poolShimCommand
@@ -2407,9 +2420,41 @@ func (r *Reconciler) upstreamForFn(ctx context.Context, fn *v1.Function) (string
 		if !ok {
 			return "", nil
 		}
-		return r.upstreamOf(ctx, fn.Namespace, poolInstanceName(key), "")
+		insts, err := r.namedInstances(ctx, fn.Namespace, poolInstanceName(key))
+		if err != nil {
+			return "", err
+		}
+		if w, ok := r.servingPool(insts); ok {
+			return instanceURL(fn.Namespace, w.Name, w), nil
+		}
+		return "", nil
 	}
 	return r.upstreamOf(ctx, fn.Namespace, fn.Name, servingRevision(fn))
+}
+
+// pinnedPoolUpstream returns the address of the newest listening pool worker of fn's key that holds the manifest last
+// built for the key, while that manifest holds fn at rev's code; "" otherwise. An old pool worker, which may hold fn's
+// previous code, is never handed out for a pinned call (ADR-0190 Decisions 4 and 8).
+func (r *Reconciler) pinnedPoolUpstream(ctx context.Context, fn *v1.Function, rev *v1.Revision) (string, error) {
+	key, ok := pooling.ParsePool(fn.Namespace, fn.Status.Pool)
+	if !ok {
+		return "", nil
+	}
+	r.poolMu.Lock()
+	hold, held := r.poolHolds[key]
+	r.poolMu.Unlock()
+	if !held || hold.codes[fn.Name] != (memberCode{image: rev.Spec.Image, digest: rev.Spec.ImageDigest, handler: rev.Spec.Handler}) {
+		return "", nil
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, poolInstanceName(key))
+	if err != nil {
+		return "", err
+	}
+	cur, _ := splitPool(insts, hold.sig)
+	if w, ok := r.servingPool(cur); ok {
+		return instanceURL(fn.Namespace, w.Name, w), nil
+	}
+	return "", nil
 }
 
 // servingRevision is the Revision whose workers receive a solo Function's calls: servingRevision, or the current
@@ -2643,7 +2688,8 @@ func (e endpoints) Upstream(ctx context.Context, fn activator.FunctionRef) (stri
 }
 
 // pinned resolves a ref pinned to one revision (ADR-0190 Decision 4): a listening worker of exactly that revision
-// through upstreamOf, or the pool worker while the pinned revision is a pooled member's current one. A Function that is
+// through upstreamOf, or, while the pinned revision is a pooled member's current one, a pool worker that holds it
+// (pinnedPoolUpstream). A Function that is
 // gone or has another UID, or a Revision that is gone or another Function's, is fault.NotFound naming the pin; nothing
 // falls back to the serving revision. A pinned revision that is not the serving one is ready once a worker listens.
 func (e endpoints) pinned(ctx context.Context, ref activator.FunctionRef, obj v1.Object, err error) (string, bool, error) {
@@ -2673,7 +2719,7 @@ func (e endpoints) pinned(ctx context.Context, ref activator.FunctionRef, obj v1
 	}
 	var up string
 	if e.r.pooled(f) && string(ref.Revision) == f.Status.CurrentRevision {
-		if up, _ = e.r.upstreamForFn(ctx, f); up != "" {
+		if up, _ = e.r.pinnedPoolUpstream(ctx, f, rev); up != "" {
 			up += "/function/" + string(f.Name)
 		}
 	} else {

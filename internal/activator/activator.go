@@ -56,11 +56,12 @@ func (fn FunctionRef) reclaims() []FunctionRef {
 // paused run holds disk, never RAM (ADR-0190 Decision 10).
 const heldIdleTimeout = 5 * time.Minute
 
-// HeldRevision reports whether ref is pinned to a revision of f other than its current and serving ones (ADR-0190
-// Decision 6): a wake of it is a demand on that Revision, and its Revision.status, not f's phase, judges it.
+// HeldRevision reports whether ref is pinned to a revision of f other than its current and serving ones, or, for a pooled
+// f, other than its current one, which alone its pool holds (ADR-0190 Decisions 6 and 8): a wake of it is a demand on
+// that Revision, which runs solo, and its Revision.status, not f's phase, judges it.
 func HeldRevision(f *v1.Function, ref FunctionRef) bool {
 	rev := string(ref.Revision)
-	return rev != "" && f.UID == ref.UID && rev != f.Status.CurrentRevision && rev != f.Status.ServingRevision
+	return rev != "" && f.UID == ref.UID && rev != f.Status.CurrentRevision && (f.Status.Pool != "" || rev != f.Status.ServingRevision)
 }
 
 // Endpoints resolves a function's currently-ready upstream. P-M/scheduler provide the

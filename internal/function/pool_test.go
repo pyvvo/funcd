@@ -508,10 +508,13 @@ func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 		require.Equal(t, v1.PhaseDeploying, h.getFn(t, "stall").Status.Phase)
 
 		h.rt.exitRevision(pool, "", 0, runtime.StateRunning, time.Hour)
+		before := h.rt.poolWorkers("default", pool)
+		require.Len(t, before, 1)
 		creates, _ := h.rt.counts()
 		h.reconcile(t, "stall")
 		after, _ := h.rt.counts()
 		require.Equal(t, creates+1, after, "the silent pool worker is created again")
+		require.Equal(t, before, h.rt.poolWorkers("default", pool), "in place: no second pool worker beside it")
 	})
 	t.Run("answered recently", func(t *testing.T) {
 		t.Parallel()
@@ -746,10 +749,9 @@ func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
 		require.NoError(t, err)
 	}
 	manifestOf := func(ns v1.NamespaceName) (path, data string) {
-		h.rt.mu.Lock()
-		spec, ok := h.rt.specs[runtime.NewInstanceID(ns, pool, "", 0)]
-		h.rt.mu.Unlock()
-		require.True(t, ok, "%s's pool worker exists", ns)
+		ids := h.rt.poolWorkers(ns, pool)
+		require.NotEmpty(t, ids, "%s's pool worker exists", ns)
+		spec := h.rt.specOf(ids[len(ids)-1])
 		path = spec.Env["FUNCD_POOL_MANIFEST"]
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -773,7 +775,9 @@ func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
 	reconcile("team-b")
 	requireOwnMembers("after both pools came up")
 
-	crashed := runtime.NewInstanceID("team-a", pool, "", 0)
+	ids := h.rt.poolWorkers("team-a", pool)
+	require.Len(t, ids, 1)
+	crashed := ids[0]
 	h.rt.mu.Lock()
 	h.rt.state[crashed] = runtime.StateFailed
 	h.rt.created[crashed] = time.Now().Add(-controller.SupervisionPeriod)
