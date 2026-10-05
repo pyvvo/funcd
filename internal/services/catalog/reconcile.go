@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -41,7 +42,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			// catalog PEP proxy (ADR-0137), then tear the engine down via the provider-runtime (all
 			// idempotent).
 			if r.routes != nil {
-				if rerr := r.routes.Set(ctx, catalogRouteSource(req.Namespace, req.Name), nil); rerr != nil {
+				if _, rerr := r.routes.Set(ctx, catalogRouteSource(req.Namespace, req.Name), nil); rerr != nil {
 					return controller.Result{}, fault.Wrapf(rerr, fault.KindOf(rerr), op, "retract catalog ingress route %s/%s", req.Namespace, req.Name)
 				}
 			}
@@ -205,11 +206,12 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.CatalogService, re
 }
 
 // syncIngressRoute reconciles this catalog's OPT-IN external edge entry (ADR-0138). When spec.ingress
-// is set AND a proxy URL is known (Ready + proxy wired), it programs an edge-router entry whose
-// Upstream is the PEP PROXY (http://<proxyURL>, never the engine) — served as an open reverse-proxy
-// backend, since the proxy does its own catalog::query PEP. Otherwise it clears the catalog's edge
-// source (not exposed, not Ready, or no proxy). The aggregator drops/keeps only this source's
-// partition, so user Routes are untouched. No-op when no aggregator is wired (the in-memory/dev path).
+// is set AND a proxy URL is known (Ready + proxy wired), it Sets an edge-router entry whose Upstream is
+// the PEP PROXY (http://<proxyURL>, never the engine) — served as an open reverse-proxy backend, since
+// the proxy does its own catalog::query PEP — and reports the aggregator's verdict as IngressReady
+// (ADR-0176); a refused entry is not programmed while Ready and the engine stay as they are. Otherwise
+// it clears the catalog's edge source: IngressReady=False (CatalogNotReady) when spec.ingress is set,
+// no IngressReady when it is not. No-op when no aggregator is wired (the in-memory/dev path).
 func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService, proxyURL string) error {
 	const op = "services.catalog.syncIngressRoute"
 	if r.routes == nil {
@@ -217,8 +219,14 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService
 	}
 	src := catalogRouteSource(cs.Namespace, cs.Name)
 	if cs.Spec.Ingress == nil || proxyURL == "" {
-		if rerr := r.routes.Set(ctx, src, nil); rerr != nil {
+		if _, rerr := r.routes.Set(ctx, src, nil); rerr != nil {
 			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "clear catalog ingress route %s", src)
+		}
+		if cs.Spec.Ingress == nil {
+			cs.Status.Conditions = slices.DeleteFunc(cs.Status.Conditions, func(c v1.Condition) bool { return c.Type == condIngressReady })
+		} else {
+			cs.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionFalse, Reason: "CatalogNotReady",
+				Message: "the catalog is not Ready or has no proxy URL"})
 		}
 		return nil
 	}
@@ -230,9 +238,19 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService
 			Path:     cs.Spec.Ingress.PathPrefix,
 			Upstream: "http://" + proxyURL, // the catalog::query PEP proxy — external query authorized like internal
 		}},
+		Owner: router.Owner{Kind: v1.KindCatalogService, Namespace: cs.Namespace, Name: cs.Name},
 	}
-	if rerr := r.routes.Set(ctx, src, []router.Entry{entry}); rerr != nil {
+	verdicts, rerr := r.routes.Set(ctx, src, []router.Entry{entry})
+	if rerr != nil {
 		return fault.Wrapf(rerr, fault.KindOf(rerr), op, "program catalog ingress route %s", src)
+	}
+	if len(verdicts) != 1 {
+		return fault.Internalf(op, "edge aggregator returned %d verdicts for 1 entry of %s", len(verdicts), src)
+	}
+	if v := verdicts[0]; v.Reason != "" {
+		cs.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionFalse, Reason: v.Reason, Message: v.Message})
+	} else {
+		cs.Status.Conditions.Set(v1.Condition{Type: condIngressReady, Status: v1.ConditionTrue, Reason: "Programmed"})
 	}
 	return nil
 }

@@ -16,14 +16,26 @@ import (
 
 func setup(t *testing.T) (context.Context, store.Store, router.Router, *route.Reconciler) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, st, rtr, _, rec := setupAggregator(t, nil)
+	return ctx, st, rtr, rec
+}
+
+// setupAggregator wires the reconciler to an edge aggregator over rtr (ADR-0138) that reads namespace modes
+// from st (ADR-0176); the test Resolves against rtr, the live table the aggregator Programs.
+func setupAggregator(t *testing.T, notify router.NotifyFunc) (context.Context, store.Store, router.Router, *router.Aggregator, *route.Reconciler) {
+	t.Helper()
 	st := store.New(memory.New())
 	rtr := router.New()
-	// ADR-0138: the reconciler writes through the edge aggregator; rtr is the underlying table the
-	// aggregator Programs and the test Resolves against (same live table).
-	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: router.NewAggregator(rtr, nil)})
+	agg := router.NewAggregator(rtr, func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+		obj, err := st.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+		if err != nil {
+			return "", err
+		}
+		return obj.(*v1.Namespace).Spec.DefaultExposure, nil
+	}, notify, nil)
+	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: agg})
 	require.NoError(t, err)
-	return ctx, st, rtr, rec
+	return context.Background(), st, rtr, agg, rec
 }
 
 func seedFunction(t *testing.T, st store.Store, ns v1.NamespaceName, name string) {
@@ -306,4 +318,35 @@ func TestIssue102_StaticRouteNotReadyAfterBucketDeleted(t *testing.T) {
 	require.Equal(t, "BucketNotFound", reason)
 	_, ok := rtr.Resolve("any", "/", "GET")
 	require.False(t, ok, "a static Route whose Bucket is gone is not programmed")
+}
+
+// scenario: route-loses-to-earlier-catalog (ADR-0176) — CatalogService a/c and Route b/r on one claim: the
+// catalog serves it and the Route is NotReady (RouteConflict) naming the catalog.
+func TestScenario_route_loses_to_earlier_catalog(t *testing.T) {
+	var notified []router.Owner
+	ctx, st, rtr, agg, rec := setupAggregator(t, func(o router.Owner) { notified = append(notified, o) })
+	cat := router.Entry{
+		Namespace: "a",
+		Host:      "h",
+		Rules:     []router.CompiledRule{{Path: "/q", Upstream: "http://catalog-proxy"}},
+		Owner:     router.Owner{Kind: v1.KindCatalogService, Namespace: "a", Name: "c"},
+	}
+	_, err := agg.Set(ctx, "catalog/a/c", []router.Entry{cat})
+	require.NoError(t, err)
+
+	seedFunction(t, st, "b", "fn")
+	seedRoute(t, st, "b", "r", "h", "/q", "fn")
+	reconcile(t, rec, "b", "r")
+
+	obj, err := st.Get(ctx, v1.KindRoute.GVK(), "b", "r")
+	require.NoError(t, err)
+	cond, ok := obj.(*v1.Route).Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, cond.Status)
+	require.Equal(t, "RouteConflict", cond.Reason)
+	require.Contains(t, cond.Message, "CatalogService a/c")
+	m, ok := rtr.Resolve("h", "/q", "GET")
+	require.True(t, ok)
+	require.Equal(t, "http://catalog-proxy", m.Upstream, "the catalog serves the claim")
+	require.Equal(t, []router.Owner{cat.Owner}, notified, "the catalog, held until the Route table loaded, is re-run")
 }

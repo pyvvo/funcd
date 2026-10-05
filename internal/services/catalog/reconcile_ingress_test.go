@@ -29,15 +29,19 @@ func newRecordingRoutes() *recordingRoutes {
 	return &recordingRoutes{bySource: make(map[string][]router.Entry)}
 }
 
-func (r *recordingRoutes) Set(_ context.Context, source string, entries []router.Entry) error {
+func (r *recordingRoutes) Set(_ context.Context, source string, entries []router.Entry) ([]router.Verdict, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(entries) == 0 {
 		delete(r.bySource, source)
-		return nil
+		return nil, nil
 	}
 	r.bySource[source] = entries
-	return nil
+	verdicts := make([]router.Verdict, len(entries))
+	for i, e := range entries {
+		verdicts[i] = router.Verdict{Owner: e.Owner}
+	}
+	return verdicts, nil
 }
 
 func (r *recordingRoutes) get(source string) []router.Entry {
@@ -95,6 +99,8 @@ func TestReconcile_ExternalRouteTargetsProxy(t *testing.T) {
 	require.Len(t, got[0].Rules, 1)
 	require.Equal(t, "/catalog/lake", got[0].Rules[0].Path)
 	require.Equal(t, "lake.example", got[0].Host)
+	require.Equal(t, router.Owner{Kind: v1.KindCatalogService, Namespace: "default", Name: "lake"}, got[0].Owner)
+	require.Equal(t, v1.ConditionTrue, ingressReady(t, st).Status, "the programmed entry reports IngressReady=True")
 
 	csObj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
 	require.NoError(t, err)
@@ -120,6 +126,10 @@ func TestReconcile_NotExposedNoRoute(t *testing.T) {
 	reconcileLake(t, r)
 
 	require.Empty(t, routes.get(lakeRouteSource), "an unexposed catalog programs no edge entry (internal-only, back-compat)")
+	obj, err := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	_, has := obj.(*v1.CatalogService).Status.Conditions.Get("IngressReady")
+	require.False(t, has, "no spec.ingress, no IngressReady")
 }
 
 // TestReconcile_ExternalTeardown covers scenario: catalog-external-teardown — deleting an exposed
@@ -202,6 +212,18 @@ func TestIssue103_NotReadyRetractsEdgeEntry(t *testing.T) {
 			require.Equal(t, v1.ConditionFalse, cond.Status)
 			require.Equal(t, tc.reason, cond.Reason)
 			require.Empty(t, routes.get(lakeRouteSource), "a not-Ready catalog's edge entry is retracted")
+			ing := ingressReady(t, st)
+			require.Equal(t, v1.ConditionFalse, ing.Status)
+			require.Equal(t, "CatalogNotReady", ing.Reason)
 		})
 	}
+}
+
+func ingressReady(t *testing.T, st store.Store) v1.Condition {
+	t.Helper()
+	obj, err := st.Get(context.Background(), v1.KindCatalogService.GVK(), "default", "lake")
+	require.NoError(t, err)
+	c, ok := obj.(*v1.CatalogService).Status.Conditions.Get("IngressReady")
+	require.True(t, ok, "IngressReady is set")
+	return c
 }

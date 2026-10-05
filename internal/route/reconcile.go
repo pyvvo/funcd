@@ -1,8 +1,7 @@
 // Package route reconciles the Route resource (ADR-0110, F79): it validates each Route's
-// backends, applies the multi-tenancy rules (host required in explicit-mode namespaces;
-// deterministic cross-namespace (host,path,method) collision resolution), sets Ready/NotReady,
-// and programs the edge router replace-all from the full Ready-route set — mirroring the
-// Function reconciler's programAllRoutes discipline.
+// backends, Sets every backend-valid Route on the edge aggregator, which applies the claim rules
+// (HostRequired, ReservedPath, RouteConflict) across every edge source (ADR-0176), and sets
+// Ready/NotReady from the aggregator's verdicts.
 package route
 
 import (
@@ -78,16 +77,20 @@ type evalResult struct {
 	message        string
 }
 
-// Reconcile evaluates the whole Route set (deterministic collision resolution), programs the
-// router with the winners, and writes the status of every Route whose evaluation changed it — one
-// Route's change can move another's readiness, and no event enqueues that other Route.
+// Reconcile evaluates the whole Route set, Sets the backend-valid Routes on the edge aggregator, and
+// writes the status of every Route whose evaluation or verdict changed it — one Route's change can
+// move another's readiness, and no event enqueues that other Route.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	routes, results, entries, err := r.evaluate(ctx)
 	if err != nil {
 		return controller.Result{}, err
 	}
-	if err := r.routes.Set(ctx, routeEntrySource, entries); err != nil {
+	verdicts, err := r.routes.Set(ctx, routeEntrySource, entries)
+	if err != nil {
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "program edge router")
+	}
+	for _, v := range verdicts {
+		results[routeKey{v.Owner.Namespace, v.Owner.Name}] = evalResult{ready: v.Reason == "", reason: v.Reason, message: v.Message}
 	}
 	for _, rt := range routes {
 		if !applyStatus(rt, results[routeKey{rt.Namespace, rt.Name}]) {
@@ -108,8 +111,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 }
 
-// evaluate lists every Route, resolves them in (namespace, name) order, and returns the Routes,
-// each one's readiness, and the compiled entries for the Ready ones.
+// evaluate lists every Route in (namespace, name) order and returns the Routes, the result of each
+// one whose backend is missing, and the compiled entries of the others.
 func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]evalResult, []router.Entry, error) {
 	list, err := r.store.List(ctx, v1.KindRoute.GVK(), store.ListOptions{})
 	if err != nil {
@@ -128,44 +131,17 @@ func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]ev
 		return routes[i].Name < routes[j].Name
 	})
 
-	modes := map[v1.NamespaceName]v1.ExposureMode{}
 	results := map[routeKey]evalResult{}
 	entries := []router.Entry{}
-	claimed := map[string]routeKey{} // (host \x00 path \x00 method) → first claimant
-
 	for _, rt := range routes {
-		key := routeKey{rt.Namespace, rt.Name}
-		if reason, message, err := r.firstBackendProblem(ctx, rt); err != nil {
+		reason, message, err := r.firstBackendProblem(ctx, rt)
+		if err != nil {
 			return nil, nil, nil, err
-		} else if reason != "" {
-			results[key] = evalResult{backendMissing: true, reason: reason, message: message}
+		}
+		if reason != "" {
+			results[routeKey{rt.Namespace, rt.Name}] = evalResult{backendMissing: true, reason: reason, message: message}
 			continue
 		}
-		mode, ok := modes[rt.Namespace]
-		if !ok {
-			mode = r.modeOf(ctx, rt.Namespace)
-			modes[rt.Namespace] = mode
-		}
-		if mode == v1.ExposureExplicit && rt.Spec.Host == "" {
-			results[key] = evalResult{reason: "HostRequired", message: "an explicit-mode namespace requires spec.host"}
-			continue
-		}
-		claims := claimsFor(rt)
-		conflict := false
-		for _, ck := range claims {
-			if owner, ok := claimed[ck]; ok && owner != key {
-				conflict = true
-				break
-			}
-		}
-		if conflict {
-			results[key] = evalResult{reason: "RouteConflict", message: "conflicts with an earlier Route on (host, path, method)"}
-			continue
-		}
-		for _, ck := range claims {
-			claimed[ck] = key
-		}
-		results[key] = evalResult{ready: true}
 		entries = append(entries, compile(rt))
 	}
 	return routes, results, entries, nil
@@ -200,18 +176,6 @@ func (r *Reconciler) firstBackendProblem(ctx context.Context, rt *v1.Route) (rea
 	return "", "", nil
 }
 
-// modeOf reads a namespace's normalized exposure mode; an absent Namespace is implicit.
-func (r *Reconciler) modeOf(ctx context.Context, ns v1.NamespaceName) v1.ExposureMode {
-	obj, err := r.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
-	if err != nil {
-		return v1.ExposureImplicit
-	}
-	if n, ok := obj.(*v1.Namespace); ok {
-		return n.Spec.DefaultExposure.Normalized()
-	}
-	return v1.ExposureImplicit
-}
-
 // applyStatus sets rt's Ready condition and phase from res and reports whether they changed.
 func applyStatus(rt *v1.Route, res evalResult) bool {
 	prev, had := rt.Status.Conditions.Get(condReady)
@@ -227,23 +191,7 @@ func applyStatus(rt *v1.Route, res evalResult) bool {
 	return !had || cur != prev || rt.Status.Phase != prevPhase
 }
 
-// claimsFor expands a Route into its (host, path, method) claim keys (methods empty ⇒ all).
-func claimsFor(rt *v1.Route) []string {
-	var keys []string
-	for i := range rt.Spec.Rules {
-		rule := &rt.Spec.Rules[i]
-		methods := rule.Methods
-		if len(methods) == 0 {
-			methods = allHTTPMethods()
-		}
-		for _, m := range methods {
-			keys = append(keys, rt.Spec.Host+"\x00"+rule.Path+"\x00"+string(m))
-		}
-	}
-	return keys
-}
-
-// compile turns a Ready Route into a router.Entry.
+// compile turns a backend-valid Route into a router.Entry.
 func compile(rt *v1.Route) router.Entry {
 	rules := make([]router.CompiledRule, 0, len(rt.Spec.Rules))
 	for i := range rt.Spec.Rules {
@@ -267,9 +215,11 @@ func compile(rt *v1.Route) router.Entry {
 	if rt.Spec.Auth != nil {
 		authMode = rt.Spec.Auth.Mode
 	}
-	return router.Entry{Namespace: rt.Namespace, Host: rt.Spec.Host, Auth: authMode, Rules: rules}
-}
-
-func allHTTPMethods() []v1.HTTPMethod {
-	return []v1.HTTPMethod{v1.MethodGet, v1.MethodHead, v1.MethodPost, v1.MethodPut, v1.MethodPatch, v1.MethodDelete, v1.MethodOptions}
+	return router.Entry{
+		Namespace: rt.Namespace,
+		Host:      rt.Spec.Host,
+		Auth:      authMode,
+		Rules:     rules,
+		Owner:     router.Owner{Kind: v1.KindRoute, Namespace: rt.Namespace, Name: rt.Name},
+	}
 }

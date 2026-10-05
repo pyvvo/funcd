@@ -38,6 +38,10 @@ const enginePort = 8080
 // the provider-runtime reports the engine Ready on its Quack HTTP probe.
 const condReady = "Ready"
 
+// condIngressReady reports whether the edge programs this catalog's spec.ingress entry (ADR-0176): False names
+// the aggregator's reason, or CatalogNotReady while the catalog has no proxy to expose.
+const condIngressReady = v1.ConditionType("IngressReady")
+
 // SecretResolver resolves a service's bound Secret names → an env-var map for engine injection,
 // PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local seam (ADR-0002
 // import discipline) — satisfied by *secrets.Resolver, wired in pkg/funcd. A nil resolver disables

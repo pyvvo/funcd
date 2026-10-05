@@ -313,6 +313,8 @@ type Platform struct {
 	listener    net.Listener
 	addr        string
 
+	routeReconciler *route.Reconciler // Sets the full Route table once before the controller runs (ADR-0176)
+
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
@@ -724,7 +726,24 @@ func (p *Platform) buildControlPlane() error {
 	// PEP proxy entry) each Set only their own source partition; the aggregator unions all sources into
 	// one Program call — so an exposed catalog coexists with user Routes instead of clobbering them. The
 	// data-plane still reads p.edgeRouter directly (Resolve); only writes go through the aggregator.
-	edgeAgg := router.NewAggregator(p.edgeRouter, p.logger)
+	// ADR-0176: it arbitrates every source's claims against the namespace exposure modes and re-runs the
+	// reconciler of each owner whose verdict another source's Set changed.
+	edgeAgg := router.NewAggregator(p.edgeRouter,
+		func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+			obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+			if err != nil {
+				return "", err
+			}
+			n, ok := obj.(*v1.Namespace)
+			if !ok {
+				return "", fault.Internalf(op, "namespace %q is a %T", ns, obj)
+			}
+			return n.Spec.DefaultExposure.Normalized(), nil
+		},
+		func(o router.Owner) {
+			ctrl.Enqueue(controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})
+		},
+		p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
@@ -762,6 +781,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build route reconciler")
 	}
 	ctrl.Register(v1.KindRoute.GVK(), routeReconciler)
+	p.routeReconciler = routeReconciler
 	// ADR-0139 (F103): the Site reconciler materializes a site bundle under a digest-scoped prefix of the
 	// SAME per-namespace Bucket view the S3 frontend and the static handler use (s3BucketFor), then owns
 	// the Bucket + Route it declares inline; its status is derived from the owned Route.
@@ -1120,6 +1140,12 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
 			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"))
 		}
+	}
+
+	// ADR-0176 Decision 6: the edge aggregator holds every catalog entry until "routes" has Set once, and no
+	// Route event follows when no Route exists, so the full Route set is Set here, before the controller runs.
+	if _, err := p.routeReconciler.Reconcile(ctx, controller.Request{GVK: v1.KindRoute.GVK()}); err != nil && ctx.Err() == nil {
+		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "load the Route table"))
 	}
 
 	wg.Add(3)

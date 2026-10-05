@@ -104,6 +104,12 @@ func (c *Controller) Watches(gvk v1.GroupVersionKind, mapFn MapFunc) {
 	c.mappers[gvk] = append(c.mappers[gvk], mapFn)
 }
 
+// Enqueue adds req to the workqueue without blocking, for a change no watch event carries, such as an edge
+// verdict that another source's Set moved (ADR-0176). Safe to call before Run and from a reconcile.
+func (c *Controller) Enqueue(req Request) {
+	c.queue.Add(req)
+}
+
 // Run opens a store Watch per registered or watched gvk (the informer), starts the workers,
 // blocks until ctx is cancelled, then drains the watches and workers — no leak.
 func (c *Controller) Run(ctx context.Context) error {
