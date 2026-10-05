@@ -136,3 +136,14 @@ func TestIssue339_WriteProblemEscapesControlCharacters(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
+
+// ADR-0151: a response deadline is a 504 with its own type, distinct from the 503 of a failed wake.
+func TestDeadlineExceededMapsTo504(t *testing.T) {
+	p := ToProblem(DeadlineExceededf("activator.response-deadline", "default/agent did not start its response within 1s (spec.timeout)"))
+	if p.Status != http.StatusGatewayTimeout || p.Type != "urn:funcd:problem:deadline-exceeded" || p.Title != "Gateway Timeout" {
+		t.Fatalf("DeadlineExceeded maps to %+v", p)
+	}
+	if p.Detail != "activator.response-deadline: default/agent did not start its response within 1s (spec.timeout)" {
+		t.Fatalf("detail = %q", p.Detail)
+	}
+}

@@ -346,6 +346,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		workflowDir = cfg.Workflow.DataDir
 	}
 	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit))
+	// ADR-0151: the response deadline of an external invoke whose Function sets no spec.timeout.
+	invokeTimeout, err := parseDuration("invoke.defaultTimeout", cfg.Invoke.DefaultTimeout, 0, true)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithDefaultInvokeTimeout(invokeTimeout))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).

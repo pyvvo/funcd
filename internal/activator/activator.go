@@ -11,6 +11,7 @@ package activator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"net"
@@ -159,6 +160,7 @@ func New(d Deps) (*Activator, error) {
 	if d.Calls != nil {
 		transport = d.Calls.Wrap(transport)
 	}
+	transport = DeadlineTransport(transport)
 	life, cancel := context.WithCancel(context.Background())
 	return &Activator{
 		store:             d.Store,
@@ -198,7 +200,9 @@ func functionFrom(ctx context.Context) (FunctionRef, bool) {
 // ServeHTTP serves one request: warm → proxy now; cold → single-flight ScaleTo(1),
 // wait for a ready upstream (bounded by ActivationTimeout), then forward. On activation
 // timeout or for a Failed function → 503 problem+json; a request with no FunctionRef in
-// context → 500 problem+json.
+// context → 500 problem+json. A request with a ResponseDeadline gets the DeadlineOp 504 when the
+// deadline passes before the upstream's headers: at once when already past (no wake), during the wake
+// (the shared activation goes on, ADR-0016), or during the call (DeadlineTransport) — ADR-0151.
 func (a *Activator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const op = "activator.ServeHTTP"
 	fn, ok := functionFrom(r.Context())
@@ -206,8 +210,24 @@ func (a *Activator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fault.WriteProblem(w, fault.Internalf(op, "no function in request context"))
 		return
 	}
-	upstream, err := a.Wake(r.Context(), fn)
+	ctx := r.Context()
+	d, bounded := responseDeadlineFrom(ctx)
+	var expired error
+	if bounded {
+		expired = deadlineFault(fn, d)
+		if !time.Now().Before(d.At) {
+			fault.WriteProblem(w, expired)
+			return
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadlineCause(ctx, d.At, expired)
+		defer cancel()
+	}
+	upstream, err := a.Wake(ctx, fn)
 	if err != nil {
+		if bounded && r.Context().Err() == nil && errors.Is(context.Cause(ctx), expired) {
+			err = expired
+		}
 		fault.WriteProblem(w, err)
 		return
 	}
@@ -418,6 +438,10 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	logger := a.logger.With("upstream", upstream)
 	rp.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		if fault.KindOf(perr) == fault.DeadlineExceeded {
+			fault.WriteProblem(w, perr)
+			return
+		}
 		logger.WarnContext(r.Context(), "upstream call failed", "error", perr)
 		fault.WriteProblem(w, fault.Unavailablef(op, "upstream call failed"))
 	}

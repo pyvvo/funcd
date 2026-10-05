@@ -236,10 +236,13 @@ type Config struct {
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
 	} `json:"eventing,omitempty"`
 
-	// Invoke tunes fn-to-fn invoke (ADR-0147). MaxNestedInFlight caps the nested calls in flight to one
-	// Function; 0 ⇒ the default (10). It cannot be disabled.
+	// Invoke tunes function invocation. MaxNestedInFlight caps the nested (fn-to-fn) calls in flight to one
+	// Function (ADR-0147); 0 ⇒ the default (10). It cannot be disabled. DefaultTimeout bounds external invokes
+	// only (ADR-0151): how long one waits for its response to start when the Function sets no spec.timeout; a
+	// link keeps links[].timeout (30 s default). A Go duration; empty or 0 ⇒ 60s, at most 1h.
 	Invoke struct {
-		MaxNestedInFlight int `json:"maxNestedInFlight,omitempty" env:"FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT" validate:"min=0"`
+		MaxNestedInFlight int    `json:"maxNestedInFlight,omitempty" env:"FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT" validate:"min=0"`
+		DefaultTimeout    string `json:"defaultTimeout,omitempty" env:"FUNCD_INVOKE_DEFAULT_TIMEOUT"`
 	} `json:"invoke,omitempty"`
 
 	// Site tunes the declarative static web app reconciler (ADR-0139, FEAT-0003/F103). DefaultIndex is

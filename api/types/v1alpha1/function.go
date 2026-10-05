@@ -20,6 +20,12 @@ type Function struct {
 	Status     FunctionStatus `json:"status,omitempty"`
 }
 
+// The bounds of an external invoke's response deadline (ADR-0151): FunctionSpec.Timeout and invoke.defaultTimeout.
+const (
+	MaxInvokeTimeout     = time.Hour
+	DefaultInvokeTimeout = 60 * time.Second
+)
+
 // FunctionSpec holds the desired state. Behavioral fields are appended by feature ADRs:
 //
 //	runtime               → F12 (runtime port)
@@ -46,6 +52,9 @@ type FunctionSpec struct {
 	// Replicas is the manual replica count (>=0); the effective count also honors Scaling + the
 	// activator's wake (ADR-0016/0020) — F13.
 	Replicas int `json:"replicas,omitempty" minimum:"0" maximum:"15"`
+	// Timeout bounds an external invoke until its response starts; 0 ⇒ invoke.defaultTimeout. External
+	// invokes only: links and steps keep their own limits (ADR-0151).
+	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"3600000000000"`
 	// Pooling is the per-function worker-pooling opt-in (ADR-0046, F28). Empty ⇒ solo (own
 	// worker, the default). Functions sharing (namespace, runtime, Pooling.Worker) co-locate
 	// as handlers in one worker_threads pool worker.
