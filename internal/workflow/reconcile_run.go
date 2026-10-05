@@ -94,8 +94,7 @@ func emitRunSpan(ctx context.Context, sink funclog.TraceSink, rec *runstate.Reco
 func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	obj, err := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
-		r.engine.forget(req.Namespace, req.Name) // a deleted run stops (ADR-0146)
-		return controller.Result{}, nil
+		return controller.Result{}, r.engine.forget(ctx, req.Namespace, req.Name) // a deleted run ends Cancelled (ADR-0146)
 	}
 	if err != nil {
 		return controller.Result{}, err
@@ -135,9 +134,11 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 }
 
 // start starts the run's goroutine, routed as before ADR-0146: a run record ⇒ resume; else spec.replay ⇒
-// replay; else execute. A run that has not started waits while its Workflow is missing (ADR-0121) or the F65
-// gate holds it Ready=False (a WorkflowCycle, a type mismatch). It maps the error a previous goroutine of the
-// run exited with. done reports that the pass ends with res and err, without the status sync.
+// replay; else execute. A run that has not started waits while its Workflow is missing (ADR-0121) or not
+// Ready=True for its current generation (ADR-0146, #756): not checked since it was applied or edited, a step
+// artifact not pushed, or held Ready=False by the F65 gate (a WorkflowCycle, a type mismatch). It maps the
+// error a previous goroutine of the run exited with. done reports that the pass ends with res and err,
+// without the status sync.
 func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before []byte) (res controller.Result, done bool, err error) {
 	rec, err := r.ownRecord(ctx, run)
 	if err != nil {
@@ -154,8 +155,16 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 			res, err := r.wait(ctx, run, before, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
 			return res, true, err
 		}
-		if c, ok := wf.Status.Conditions.Get(condReady); ok && c.Status == v1.ConditionFalse {
-			res, err := r.wait(ctx, run, before, "WorkflowNotReady", fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message))
+		if !ready(wf) {
+			c, ok := wf.Status.Conditions.Get(condReady)
+			msg := fmt.Sprintf("workflow %q is not Ready yet; waiting", wf.Name)
+			switch {
+			case stale(wf):
+				msg = fmt.Sprintf("workflow %q generation %d is not type-checked yet; waiting", wf.Name, wf.Generation)
+			case ok:
+				msg = fmt.Sprintf("workflow %q is not Ready (%s): %s; waiting", wf.Name, c.Reason, c.Message)
+			}
+			res, err := r.wait(ctx, run, before, "WorkflowNotReady", msg)
 			return res, true, err
 		}
 	}
@@ -467,7 +476,36 @@ func (r *RunReconciler) SweepExpired(ctx context.Context, retention time.Duratio
 	if err := r.recordClosedRuns(ctx); err != nil {
 		return 0, err
 	}
+	if err := r.cancelDeletedRuns(ctx); err != nil {
+		return 0, err
+	}
 	return r.engine.SweepExpired(ctx, retention, r.deleteRun)
+}
+
+// cancelDeletedRuns ends Cancelled each open top-level run record whose WorkflowRun is gone, so the record sweep
+// reclaims it: a deletion the reconcile never saw, because the daemon stopped first, is not in the controller's
+// initial list. An inline child run (ADR-0099) has no WorkflowRun; its parent's drive closes it.
+func (r *RunReconciler) cancelDeletedRuns(ctx context.Context) error {
+	recs, err := r.engine.runs.List(ctx, runstate.ListOptions{})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), runOp, "list run records for retention sweep")
+	}
+	for _, rec := range recs {
+		if rec.Terminal() || rec.Depth != 0 {
+			continue
+		}
+		_, gerr := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), rec.Namespace, rec.Name)
+		if gerr == nil {
+			continue
+		}
+		if fault.KindOf(gerr) != fault.NotFound {
+			return fault.Wrapf(gerr, fault.KindOf(gerr), runOp, "get run %q for retention sweep", rec.Name)
+		}
+		if err := r.engine.cancelOrphan(ctx, rec); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), runOp, "cancel the record of deleted run %q", rec.Name)
+		}
+	}
+	return nil
 }
 
 // recordClosedRuns gives each closed WorkflowRun that has no engine record (cancelled before its first
@@ -492,7 +530,7 @@ func (r *RunReconciler) recordClosedRuns(ctx context.Context) error {
 		if fault.KindOf(gerr) != fault.NotFound {
 			return fault.Wrapf(gerr, fault.KindOf(gerr), runOp, "get record of closed run %q", run.Name)
 		}
-		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now}
+		rec := &runstate.Record{Namespace: run.Namespace, Name: run.Name, Workflow: run.Spec.Workflow, Phase: run.Status.Phase, StartedAt: now, UpdatedAt: now, RunUID: run.UID}
 		if err := r.engine.runs.Put(ctx, rec); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), runOp, "record closed run %q", run.Name)
 		}

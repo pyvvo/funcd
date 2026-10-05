@@ -16,11 +16,15 @@ import (
 // fakeContracts is an in-memory ContractResolver: per-image I/O contracts, with a not-pushed set that
 // returns NotFound (so the reconciler exercises the requeue-not-mismatch path).
 type fakeContracts struct {
-	byImage  map[string]v1.WorkflowContract
-	notReady map[string]bool
+	byImage     map[string]v1.WorkflowContract
+	notReady    map[string]bool
+	unavailable map[string]bool
 }
 
 func (f fakeContracts) Contract(_ context.Context, image string) (v1.WorkflowContract, string, error) {
+	if f.unavailable[image] {
+		return v1.WorkflowContract{}, "", fault.Unavailablef("test.contract", "registry unreachable for %q", image)
+	}
 	if f.notReady[image] {
 		return v1.WorkflowContract{}, "", fault.NotFoundf("test.contract", "image %q not pushed", image)
 	}
@@ -67,11 +71,6 @@ func reconcileWith(t *testing.T, s store.Store, r *WorkflowReconciler, spec v1.W
 	}
 	got, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "wf")
 	return got.(*v1.Workflow), res
-}
-
-func ready(wf *v1.Workflow) bool {
-	c, ok := wf.Status.Conditions.Get(condReady)
-	return ok && c.Status == v1.ConditionTrue
 }
 
 func mismatchReason(wf *v1.Workflow) string {

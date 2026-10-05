@@ -184,7 +184,7 @@ func resolveStepFunction(workflow v1.ObjectName, spec *v1.WorkflowSpec, step v1.
 		if s.Function.Ref != "" {
 			return string(s.Function.Ref), nil
 		}
-		return string(workflow) + "-" + string(step), nil // materialized owned function
+		return string(v1.StepFunctionName(workflow, step)), nil // materialized owned function
 	}
 	return "", fault.Invalidf(op, "step %q not found in workflow %q", step, workflow)
 }

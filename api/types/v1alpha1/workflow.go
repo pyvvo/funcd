@@ -224,6 +224,11 @@ type WorkflowRunLinks struct {
 	Cancelled int          `json:"cancelled,omitempty"`
 }
 
+// StepFunctionName is the name of the Function an image step materializes into: <workflow>-<step> (ADR-0094).
+func StepFunctionName(workflow, step ObjectName) ObjectName {
+	return ObjectName(string(workflow) + "-" + string(step))
+}
+
 // GroupVersionKind returns the constant GVK for Workflow.
 func (w *Workflow) GroupVersionKind() GroupVersionKind { return KindWorkflow.GVK() }
 
@@ -231,9 +236,10 @@ func (w *Workflow) GroupVersionKind() GroupVersionKind { return KindWorkflow.GVK
 func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
 
 // Validate enforces the Workflow rules JSON Schema can't express (ADR-0094): the
-// step kind-union, unique step names, dependsOn edge validity + acyclicity, the
-// reserved workflow: kind, the onFailure handler constraints, workflow-owned store
-// owners naming a step, and the declared-contract total-defaults rule. Field-format
+// step kind-union, unique step names, each image step's <workflow>-<step> Function
+// name fitting a DNS label, dependsOn edge validity + acyclicity, the reserved
+// workflow: kind, the onFailure handler constraints, workflow-owned store owners
+// naming a step, and the declared-contract total-defaults rule. Field-format
 // constraints (durations, retry bounds, enums) are schema-enforced at the edge.
 func (w *Workflow) Validate() error {
 	const op = "Workflow.Validate"
@@ -262,6 +268,9 @@ func (w *Workflow) Validate() error {
 		if s.Function != nil {
 			if err := validatePoolingMode(op, s.Function.Pooling); err != nil {
 				return err
+			}
+			if fn := StepFunctionName(w.Name, s.Name); s.Function.Image != "" && !dnsLabel.MatchString(string(fn)) {
+				return fault.Invalidf(op, "step %q: its function name %q (<workflow>-<step>) is longer than 63 bytes", s.Name, fn)
 			}
 		}
 	}

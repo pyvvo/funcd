@@ -2,10 +2,13 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/store"
@@ -363,5 +366,46 @@ func TestIssue722_GroupMoveRestampsChildren(t *testing.T) {
 	}
 	if b := fn.(*v1.Function).Spec.KV; len(b) != 1 || b[0].Store != "keep" {
 		t.Errorf("kv binding after the move = %+v, want the keep binding", b)
+	}
+}
+
+// Issue #710: an image step materializes into the Function <workflow>-<step> (ADR-0094), a DNS label of at most
+// 63 bytes. A Workflow that Validate admits must materialize; a longer combined name is refused, naming the step.
+func TestIssue710_AdmittedWorkflowMaterializesStepFunctions(t *testing.T) {
+	cases := []struct {
+		wf, step int
+		ref      bool
+	}{{31, 31, false}, {40, 40, false}, {63, 63, false}, {40, 40, true}}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("wf%d-step%d-ref%t", c.wf, c.step, c.ref), func(t *testing.T) {
+			fs := &v1.FunctionStep{Image: "oci:x"}
+			if c.ref {
+				fs = &v1.FunctionStep{Ref: "shared"}
+			}
+			step := v1.ObjectName(strings.Repeat("s", c.step))
+			wf := &v1.Workflow{
+				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+				ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(strings.Repeat("w", c.wf)), Namespace: "default", ResourceGroup: "rg1"},
+				Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: step, Function: fs}}},
+			}
+			if err := wf.Validate(); err != nil {
+				if c.ref || c.wf+1+c.step <= 63 {
+					t.Fatalf("a workflow that can materialize was refused: %v", err)
+				}
+				if fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), fmt.Sprintf("step %q", step)) {
+					t.Fatalf("the refusal must be Invalid and name the step: %v", err)
+				}
+				return
+			}
+			s := newStore(t)
+			ctx := context.Background()
+			obj, err := s.Create(ctx, wf)
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if err := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0).Materialize(ctx, obj.(*v1.Workflow)); err != nil {
+				t.Fatalf("an admitted workflow must materialize: %v", err)
+			}
+		})
 	}
 }

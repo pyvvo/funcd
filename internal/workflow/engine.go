@@ -558,6 +558,13 @@ func (e *Engine) Cancel(ctx context.Context, ns v1.NamespaceName, name v1.Object
 	if err != nil {
 		return err
 	}
+	return e.cancelRecord(ctx, rec)
+}
+
+// cancelRecord writes the record of a run with no live goroutine Cancelled: pending and running steps
+// Cancelled (a running one with its end time and the cancel error) and the run Cancelled. A terminal record is
+// left unchanged.
+func (e *Engine) cancelRecord(ctx context.Context, rec *runstate.Record) error {
 	if rec.Terminal() {
 		return nil
 	}
@@ -687,12 +694,36 @@ func (e *Engine) cancelLive(ns v1.NamespaceName, name v1.ObjectName) bool {
 	return ok
 }
 
-// forget cancels the run's live goroutine and drops what an exited one left: its WorkflowRun is gone.
-func (e *Engine) forget(ns v1.NamespaceName, name v1.ObjectName) {
-	e.cancelLive(ns, name)
+// forget stops a run whose WorkflowRun is gone and drops what an exited goroutine left. Cancel ends the run
+// Cancelled through its live goroutine or, with none (a paused run), in its record (ADR-0146 Decision 3).
+func (e *Engine) forget(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	err := e.Cancel(ctx, ns, name)
 	e.mu.Lock()
 	delete(e.exits, runKey{ns, name})
 	e.mu.Unlock()
+	if fault.KindOf(err) == fault.NotFound {
+		return nil
+	}
+	return err
+}
+
+// cancelOrphan ends Cancelled the open record of a top-level run whose WorkflowRun is gone, unless a goroutine
+// drives the name or the record is no longer the one listed (a WorkflowRun re-created under the name deletes
+// it and starts its own). The lock is held across the write so that no start of the name interleaves.
+func (e *Engine) cancelOrphan(ctx context.Context, listed *runstate.Record) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.running[runKey{listed.Namespace, listed.Name}]; ok {
+		return nil
+	}
+	rec, err := e.runs.Get(ctx, listed.Namespace, listed.Name)
+	if fault.KindOf(err) == fault.NotFound || err == nil && rec.RunUID != listed.RunUID {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return e.cancelRecord(ctx, rec)
 }
 
 // Run blocks until ctx ends, then drains (ADR-0146 Decision 6) for at most drain: start refuses, every drive
@@ -1101,7 +1132,7 @@ func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName
 	if st := specStep(spec, step); st != nil && st.Function != nil && st.Function.Ref != "" {
 		return st.Function.Ref
 	}
-	return materializedStepName(workflow, step)
+	return v1.StepFunctionName(workflow, step)
 }
 
 // dispatchStep invokes one step with retry, sending it stepInput. It reads the run's

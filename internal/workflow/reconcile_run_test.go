@@ -18,6 +18,8 @@ import (
 	wbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
+// seedWorkflow creates a Workflow with the given steps, Ready as its reconcile leaves one of untyped steps, so
+// its runs start (#712).
 func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.WorkflowStep) {
 	t.Helper()
 	wf := &v1.Workflow{
@@ -25,9 +27,15 @@ func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.Workflow
 		ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
 		Spec:       v1.WorkflowSpec{Steps: steps},
 	}
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: 1})
 	if _, err := s.Create(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow: %v", err)
 	}
+}
+
+// readyAfterEdit marks wf Ready=True for the generation the Update of its edited spec gives it.
+func readyAfterEdit(wf *v1.Workflow) {
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation + 1})
 }
 
 func seedRun(t *testing.T, s store.Store, name, workflow string, input string) {
@@ -446,6 +454,7 @@ func TestIssue306_OversizeFirstRecordFailsRunOnce(t *testing.T) {
 			wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
 			wf := wfObj.(*v1.Workflow)
 			wf.Spec.OnFailure = "notify"
+			readyAfterEdit(wf)
 			if _, err := s.Update(ctx, wf); err != nil {
 				t.Fatalf("set onFailure: %v", err)
 			}
@@ -581,6 +590,181 @@ func TestIssue122_RunOfNotReadyWorkflowNeverRuns(t *testing.T) {
 		t.Fatalf("typed-1 after its workflow became Ready: phase=%q, want Succeeded", run.Status.Phase)
 	} else if c, _ := run.Status.Conditions.Get(condReady); c.Status == v1.ConditionFalse {
 		t.Fatalf("typed-1 started but still reports Ready=%+v", c)
+	}
+}
+
+// Issue #712: a run of a Workflow with no Ready condition yet (never reconciled, or a step artifact not
+// pushed) waits like one held Ready=False, and the run-start contract gate rejects its input once the
+// Workflow is Ready, whichever of the two was reconciled first.
+func TestIssue712_RunWaitsForWorkflowWithoutReadyCondition(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	unpushed := fakeContracts{notReady: map[string]bool{"oci:p": true}}
+	seedWF(t, s, "pending", nil, fnStep("p", "oci:p"))
+	if wf, res := reconcileByName(t, s, unpushed, "pending"); res.RequeueAfter <= 0 || len(wf.Status.Conditions) != 0 {
+		t.Fatalf("setup: pending requeueAfter=%v conditions=%+v, want a requeue and no condition", res.RequeueAfter, wf.Status.Conditions)
+	}
+	seedWF(t, s, "typed", nil, fnStep("t", "oci:t"))
+	seedRun(t, s, "pending-1", "pending", `{}`)
+	seedRun(t, s, "typed-1", "typed", `{}`)
+
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	rr := NewRunReconciler(s, eng, nil, nil, 0)
+
+	for _, name := range []v1.ObjectName{"pending-1", "typed-1"} {
+		res, run := reconcileRun(t, ctx, rr, s, name)
+		c, _ := run.Status.Conditions.Get(condReady)
+		if run.Status.Phase != runPending || c.Status != v1.ConditionFalse || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 {
+			t.Errorf("%s: phase=%q Ready=%+v requeueAfter=%v, want Pending, Ready=False/WorkflowNotReady and a requeue", name, run.Status.Phase, c, res.RequeueAfter)
+		}
+	}
+	if len(f.order) != 0 {
+		t.Fatalf("runs of workflows without a Ready condition dispatched %v, want nothing", f.order)
+	}
+
+	contracts := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:p": {},
+		"oci:t": {Input: obj(map[string]string{"rows": "string"}, "rows")},
+	}}
+	for _, name := range []string{"pending", "typed"} {
+		if wf, _ := reconcileByName(t, s, contracts, name); !ready(wf) {
+			t.Fatalf("setup: %s is not Ready: %+v", name, wf.Status.Conditions)
+		}
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "pending-1"); run.Status.Phase != runSucceeded {
+		t.Fatalf("pending-1 after its workflow became Ready: phase=%q, want Succeeded", run.Status.Phase)
+	}
+	_, run := reconcileRun(t, ctx, rr, s, "typed-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runFailed || c.Reason != "InputSchemaMismatch" {
+		t.Fatalf("typed-1 with input {} against a contract requiring rows: phase=%q Ready=%+v, want Failed/InputSchemaMismatch", run.Status.Phase, c)
+	}
+	if !slices.Equal(f.order, []v1.ObjectName{"p"}) {
+		t.Fatalf("dispatched %v, want only the step of pending-1", f.order)
+	}
+}
+
+// runRig is a run reconciler over s whose dispatcher records the steps it runs.
+func runRig(t *testing.T, s store.Store) (*RunReconciler, *fakeDispatcher) {
+	t.Helper()
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	return NewRunReconciler(s, eng, nil, nil, 0), f
+}
+
+// editWF appends steps to the stored Workflow name, which bumps its generation and keeps its status.
+func editWF(t *testing.T, s store.Store, name string, steps ...v1.WorkflowStep) {
+	t.Helper()
+	obj, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", v1.ObjectName(name))
+	wf := obj.(*v1.Workflow)
+	wf.Spec.Steps = append(wf.Spec.Steps, steps...)
+	if _, err := s.Update(context.Background(), wf); err != nil {
+		t.Fatalf("edit %s: %v", name, err)
+	}
+}
+
+// Issue #756: an edit that adds a step whose artifact is not pushed withdraws the Ready verdict and the cache
+// of the previous spec, so a new run waits until the edited spec type-checks, then runs every step.
+func TestIssue756_EditedWorkflowNotReadyUntilNewStepResolves(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) {
+		t.Fatalf("setup: wf is not Ready: %+v", wf.Status.Conditions)
+	}
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+
+	unpushed := fakeContracts{byImage: pushed.byImage, notReady: map[string]bool{"oci:b": true}}
+	wf, res := reconcileByName(t, s, unpushed, "wf")
+	if c, _ := wf.Status.Conditions.Get(condReady); res.RequeueAfter <= 0 || c.Status != v1.ConditionFalse || wf.Status.Contract != nil || len(wf.Status.Steps) != 0 || mismatchReason(wf) != "" {
+		t.Fatalf("after the edit: requeueAfter=%v Ready=%+v contract=%v steps=%d mismatch=%q, want a requeue, Ready=False, no cache of the previous spec and no SchemaMismatch",
+			res.RequeueAfter, c, wf.Status.Contract, len(wf.Status.Steps), mismatchReason(wf))
+	}
+
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	rr, f := runRig(t, s)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 0 {
+		t.Fatalf("run of the edited wf: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) || len(wf.Status.Steps) != 2 {
+		t.Fatalf("after the push: Ready=%v steps=%d, want Ready with 2 steps", ready(wf), len(wf.Status.Steps))
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "b"}) {
+		t.Fatalf("run after the push: phase=%q dispatched=%v, want Succeeded with [a b]", run.Status.Phase, f.order)
+	}
+}
+
+// Issue #756: a run reconciled between an edit and the next Workflow reconcile waits, because the Ready verdict
+// belongs to the previous generation; once the edited spec type-checks it runs every step.
+func TestIssue756_RunWaitsForEditedWorkflowUntilReconciled(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) {
+		t.Fatalf("setup: wf is not Ready: %+v", wf.Status.Conditions)
+	}
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	rr, f := runRig(t, s)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 0 {
+		t.Fatalf("run before the wf reconcile: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) || len(wf.Status.Steps) != 2 {
+		t.Fatalf("after the reconcile: Ready=%v steps=%d, want Ready with 2 steps", ready(wf), len(wf.Status.Steps))
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "b"}) {
+		t.Fatalf("run after the reconcile: phase=%q dispatched=%v, want Succeeded with [a b]", run.Status.Phase, f.order)
+	}
+}
+
+// Issue #756: a registry error holds the runs of an edited Workflow, whose Ready verdict is of the previous
+// generation, and not the runs of an unchanged Ready Workflow.
+func TestIssue756_RegistryErrorHoldsOnlyEditedWorkflow(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	down := fakeContracts{byImage: pushed.byImage, unavailable: map[string]bool{"oci:a": true, "oci:b": true}}
+	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), down, nil, 0)
+	req := controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: "wf"}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	reconcileByName(t, s, pushed, "wf")
+	rr, f := runRig(t, s)
+
+	if _, err := r.Reconcile(ctx, req); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("reconcile of the unchanged wf during the outage: err=%v, want Unavailable", err)
+	}
+	seedRun(t, s, "wf-0", "wf", `{}`)
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-0"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a"}) {
+		t.Fatalf("run of the unchanged wf: phase=%q dispatched=%v, want Succeeded with [a]", run.Status.Phase, f.order)
+	}
+
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+	if _, err := r.Reconcile(ctx, req); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("reconcile of the edited wf during the outage: err=%v, want Unavailable", err)
+	}
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 1 {
+		t.Fatalf("run of the edited wf: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing new dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	reconcileByName(t, s, pushed, "wf")
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "a", "b"}) {
+		t.Fatalf("run after the outage: phase=%q dispatched=%v, want Succeeded with [a b] after [a]", run.Status.Phase, f.order)
 	}
 }
 
@@ -787,14 +971,7 @@ func TestIssue181_RunStartGateCapsInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := newStore(t)
-			wf := &v1.Workflow{
-				TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
-				ObjectMeta: v1.ObjectMeta{Name: "wf", Namespace: "default", ResourceGroup: "rg1"},
-				Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{step("a", ""), step("notify", "")}, OnFailure: "notify"},
-			}
-			if _, err := s.Create(ctx, wf); err != nil {
-				t.Fatalf("seed workflow: %v", err)
-			}
+			seedWorkflowSpec(t, s, "wf", v1.WorkflowSpec{Steps: []v1.WorkflowStep{step("a", ""), step("notify", "")}, OnFailure: "notify"})
 			seedRun(t, s, "big-1", "wf", big)
 			rstate, err := wbadger.New(cfg)
 			if err != nil {
@@ -1182,6 +1359,61 @@ func TestIssue307_SweepKeepsRecreatedRun(t *testing.T) {
 	}
 }
 
+// Issue #711: the record the retention sweep writes for a run that closed without one belongs to that
+// run only. A WorkflowRun re-created under its name runs its own input, and the expiry of the old record
+// keeps it.
+func TestIssue711_RecreatedRunIgnoresSweepRecord(t *testing.T) {
+	for name, closeRun := range map[string]func(t *testing.T, s store.Store){
+		"cancelled before its first drive": func(t *testing.T, s store.Store) {
+			createRun(t, s, "re-1", v1.WorkflowRunSpec{Workflow: "wf", Cancel: true, Input: json.RawMessage(`{}`)})
+		},
+		"rejected replay seed": func(t *testing.T, s store.Store) {
+			seedReplay(t, s, "re-1", "absent", "a")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			base := time.Unix(1_700_000_000, 0)
+			s := newStore(t)
+			seedWorkflow(t, s, "wf", step("a", ""))
+			rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+			t.Cleanup(func() { _ = rstate.Close() })
+			f := newFake()
+			at := func(now time.Time) *RunReconciler {
+				eng, _ := New(Deps{Runs: rstate, Dispatch: f, Clock: clock.Fake(now)})
+				return NewRunReconciler(s, eng, nil, nil, 0)
+			}
+			req := runReq("re-1")
+
+			closeRun(t, s)
+			if _, run := reconcileRun(t, ctx, at(base), s, "re-1"); !isRunTerminal(run.Status.Phase) {
+				t.Fatalf("setup: first run phase %q, want a terminal phase", run.Status.Phase)
+			}
+			if n, err := at(base.Add(time.Hour)).SweepExpired(ctx, 24*time.Hour); err != nil || n != 0 {
+				t.Fatalf("setup: SweepExpired = %d, %v; want the closed run recorded, not reclaimed", n, err)
+			}
+			if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1", ""); err != nil {
+				t.Fatalf("delete run: %v", err)
+			}
+			later := at(base.Add(2 * time.Hour))
+			if _, err := later.Reconcile(ctx, req); err != nil {
+				t.Fatalf("Reconcile the deletion: %v", err)
+			}
+
+			seedRun(t, s, "re-1", "wf", `{}`)
+			if _, run := reconcileRun(t, ctx, later, s, "re-1"); run.Status.Phase != runSucceeded || f.calls["a"] != 1 {
+				t.Errorf("re-created run: phase %q, step a dispatched %d times; want Succeeded after one dispatch", run.Status.Phase, f.calls["a"])
+			}
+			if _, err := at(base.Add(25*time.Hour+30*time.Minute)).SweepExpired(ctx, 24*time.Hour); err != nil {
+				t.Fatalf("SweepExpired past the old record's retention: %v", err)
+			}
+			if _, err := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "re-1"); err != nil {
+				t.Errorf("the sweep must keep the re-created WorkflowRun inside its own retention: %v", err)
+			}
+		})
+	}
+}
+
 // Issue #344: a run held Pending because its Workflow is not Ready is listed in the Workflow's
 // status.runs.active (ADR-0094), once, across the wait's re-checks.
 func TestIssue344_WaitingRunListedInStatusRunsActive(t *testing.T) {
@@ -1333,4 +1565,122 @@ func TestScenarioChildExpiryKeepsUserRun(t *testing.T) {
 	if rec := getRecord(t, rstate, "p-sub"); rec.Workflow != "other" {
 		t.Fatalf("record p-sub holds workflow %s, want other", rec.Workflow)
 	}
+}
+
+// Issue #726: deleting a paused WorkflowRun, which has no live goroutine, ends its open run record Cancelled
+// (ADR-0146 Decision 3), so the retention sweep reclaims it as it does the record of a run deleted mid-step.
+func TestIssue726_DeletedPausedRunRecordIsSwept(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""), step("b", ""))
+	seedRun(t, s, "run-p", "wf", `{}`)
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	gate := &stepGate{fakeDispatcher: newFake(), step: "a", entered: make(chan struct{}), release: make(chan struct{})}
+	eng, _ := New(Deps{Runs: rstate, Dispatch: gate, Clock: clock.Fake(base)})
+	rr := NewRunReconciler(s, eng, nil, nil, 0)
+	req := runReq("run-p")
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	<-gate.entered
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "run-p")
+	run := obj.(*v1.WorkflowRun)
+	run.Spec.Paused = true
+	if _, err := s.Update(ctx, run); err != nil {
+		t.Fatalf("pause run: %v", err)
+	}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	close(gate.release)
+	if _, err := settleRun(ctx, rr, req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if rec, err := rstate.Get(ctx, "default", "run-p"); err != nil || rec.Phase != runPaused {
+		t.Fatalf("setup: run record = %+v, %v; want Paused", rec, err)
+	}
+
+	if err := s.Delete(ctx, v1.KindWorkflowRun.GVK(), "default", "run-p", ""); err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile the deletion: %v", err)
+	}
+	rec, err := rstate.Get(ctx, "default", "run-p")
+	if err != nil {
+		t.Fatalf("record of the deleted paused run: %v", err)
+	}
+	if rec.Phase != runCancelled || len(rec.Steps) != 2 || rec.Steps[1].Phase != v1.StepCancelled {
+		t.Fatalf("record of the deleted paused run: phase %s, steps %+v; want Cancelled with step b Cancelled", rec.Phase, rec.Steps)
+	}
+	sweeper, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(base.Add(2 * time.Hour))})
+	if n, err := NewRunReconciler(s, sweeper, nil, nil, 0).SweepExpired(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := rstate.Get(ctx, "default", "run-p"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("record of the deleted paused run after the sweep: %v, want NotFound", err)
+	}
+}
+
+// Issue #726: a deletion the reconcile never saw, because the daemon stopped first, leaves an open run record
+// with no WorkflowRun and no goroutine. The retention sweep ends it Cancelled and reclaims it after retention;
+// it keeps the open record of a run that still exists and of an inline child run, which has no WorkflowRun.
+func TestIssue726_SweepCancelsRecordOfDeletedRun(t *testing.T) {
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	s := newStore(t)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "kept", "wf", `{}`)
+	obj, _ := s.Get(ctx, v1.KindWorkflowRun.GVK(), "default", "kept")
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	open := func(name v1.ObjectName, uid v1.UID, phase v1.RunPhase, depth int) *runstate.Record {
+		return &runstate.Record{
+			Namespace: "default", Name: name, RunUID: uid, Workflow: "wf", Phase: phase, Paused: phase == runPaused, Depth: depth,
+			Spec: spec(step("a", "")), Steps: []runstate.StepState{{Name: "a", Phase: v1.StepRunning, Attempts: 1, StartedAt: base.UnixNano()}},
+			StartedAt: base.UnixNano(), UpdatedAt: base.UnixNano(),
+		}
+	}
+	for _, rec := range []*runstate.Record{
+		open("gone", "uid-1", runRunning, 0),
+		open("kept", obj.GetObjectMeta().UID, runPaused, 0),
+		open("p.sub", "", runRunning, 1),
+	} {
+		if err := rstate.Put(ctx, rec); err != nil {
+			t.Fatalf("seed record %s: %v", rec.Name, err)
+		}
+	}
+	at := func(now time.Time) *RunReconciler {
+		eng, _ := New(Deps{Runs: rstate, Dispatch: newFake(), Clock: clock.Fake(now)})
+		return NewRunReconciler(s, eng, nil, nil, 0)
+	}
+	keepsOpen := func() {
+		t.Helper()
+		for name, phase := range map[v1.ObjectName]v1.RunPhase{"kept": runPaused, "p.sub": runRunning} {
+			if rec, err := rstate.Get(ctx, "default", name); err != nil || rec.Phase != phase {
+				t.Fatalf("record %s = %+v, %v; want it kept %s", name, rec, err, phase)
+			}
+		}
+	}
+
+	if n, err := at(base.Add(30*time.Minute)).SweepExpired(ctx, time.Hour); err != nil || n != 0 {
+		t.Fatalf("SweepExpired inside retention = %d, %v; want 0 runs reclaimed", n, err)
+	}
+	rec, err := rstate.Get(ctx, "default", "gone")
+	if err != nil {
+		t.Fatalf("open record of the deleted run after the sweep: %v", err)
+	}
+	if rec.Phase != runCancelled || rec.Steps[0].Phase != v1.StepCancelled || rec.Steps[0].Error != cancelledStepError {
+		t.Fatalf("open record of the deleted run after the sweep: phase %s, steps %+v; want it Cancelled with step a Cancelled", rec.Phase, rec.Steps)
+	}
+	keepsOpen()
+	if n, err := at(base.Add(2*time.Hour)).SweepExpired(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("SweepExpired past retention = %d, %v; want the deleted run's record reclaimed", n, err)
+	}
+	if _, err := rstate.Get(ctx, "default", "gone"); fault.KindOf(err) != fault.NotFound {
+		t.Fatalf("record of the deleted run after retention: %v, want NotFound", err)
+	}
+	keepsOpen()
 }
