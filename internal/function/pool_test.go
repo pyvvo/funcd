@@ -525,3 +525,57 @@ func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
 	require.Equal(t, rv, h.getFn(t, "m1").ResourceVersion, "a repeated start failure writes nothing")
 	require.Equal(t, testPeriod, res.RequeueAfter)
 }
+
+// Two namespaces that pool one runtime under the same worker id each get their own pool worker, and each pool host
+// loads only its own namespace's members (ADR-0046 Decision 7, ADR-0044 Decision 6): after both come up, and after a
+// dead pool worker is created again by the supervision pass (ADR-0142).
+func TestPoolManifestIsScopedToItsNamespace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	const worker = "tenancy-shared"
+	pool := v1.ObjectName("__pool__nodejs22__" + worker)
+	members := map[v1.NamespaceName]string{"team-a": "a1", "team-b": "b1"}
+	reconcile := func(ns v1.NamespaceName) {
+		_, err := h.r.Reconcile(ctx, controller.Request{GVK: v1.KindFunction.GVK(), Namespace: ns, Name: v1.ObjectName(members[ns])})
+		require.NoError(t, err)
+	}
+	manifestOf := func(ns v1.NamespaceName) (path, data string) {
+		h.rt.mu.Lock()
+		spec, ok := h.rt.specs[runtime.NewInstanceID(ns, pool, "", 0)]
+		h.rt.mu.Unlock()
+		require.True(t, ok, "%s's pool worker exists", ns)
+		path = spec.Env["FUNCD_POOL_MANIFEST"]
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		return path, string(raw)
+	}
+	requireOwnMembers := func(stage string) {
+		t.Helper()
+		pathA, a := manifestOf("team-a")
+		pathB, b := manifestOf("team-b")
+		require.NotContains(t, a, `"b1"`, "%s: team-a's pool loads team-b's code", stage)
+		require.NotContains(t, b, `"a1"`, "%s: team-b's pool loads team-a's code", stage)
+		require.Contains(t, a, `"a1"`, "%s: team-a's pool loads its member", stage)
+		require.Contains(t, b, `"b1"`, "%s: team-b's pool loads its member", stage)
+		require.NotEqual(t, pathA, pathB, "%s: the namespaces share one pool manifest file", stage)
+	}
+
+	for ns, name := range members {
+		h.create(t, name, func(fn *v1.Function) { fn.Namespace = ns; fn.Spec.Pooling.Worker = worker })
+	}
+	reconcile("team-a")
+	reconcile("team-b")
+	requireOwnMembers("after both pools came up")
+
+	crashed := runtime.NewInstanceID("team-a", pool, "", 0)
+	h.rt.mu.Lock()
+	h.rt.state[crashed] = runtime.StateFailed
+	h.rt.created[crashed] = time.Now().Add(-controller.SupervisionPeriod)
+	h.rt.mu.Unlock()
+	creates, _ := h.rt.counts()
+	reconcile("team-a")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates+1, after, "the supervision pass creates team-a's dead pool worker again")
+	requireOwnMembers("after team-a's pool worker was restarted")
+}

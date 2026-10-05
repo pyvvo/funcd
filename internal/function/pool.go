@@ -404,13 +404,15 @@ func (r *Reconciler) startPoolInstance(ctx context.Context, insts []runtime.Inst
 
 // writePoolManifest serializes the manifest to a stable per-key file and returns its path. The
 // pool host reads this file at boot (ADR-0044); a rebuild overwrites it in place before the new
-// worker starts. Per-key (not per-start) so a leftover file can never accumulate unbounded.
+// worker starts. Per-key (not per-start) so a leftover file can never accumulate unbounded. The
+// file lives in a per-namespace directory because poolInstanceName omits the namespace: one shared
+// file would let a pool host load another namespace's members (ADR-0046 Decision 7).
 func writePoolManifest(key pooling.PoolKey, manifest []poolManifestEntry) (string, error) {
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(os.TempDir(), "funcd-pool")
+	dir := filepath.Join(os.TempDir(), "funcd-pool", string(key.Namespace))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
