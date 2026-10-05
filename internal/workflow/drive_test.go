@@ -569,8 +569,8 @@ func TestScenarioDeletedRunStops(t *testing.T) {
 	seedRun(t, s, "run-x", "wf", `{"n":1}`)
 	receive(t, g.entered, "a")
 
-	run := getRunObj(t, s, "run-x")
-	if err := s.Delete(context.Background(), v1.KindWorkflowRun.GVK(), "default", "run-x", run.ResourceVersion); err != nil {
+	// No resourceVersion precondition: the run's reconciler may write its status between a read and this delete.
+	if err := s.Delete(context.Background(), v1.KindWorkflowRun.GVK(), "default", "run-x", ""); err != nil {
 		t.Fatalf("delete run: %v", err)
 	}
 	receive(t, g.ended, "a")
