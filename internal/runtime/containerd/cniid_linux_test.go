@@ -38,6 +38,23 @@ func TestScenario_UnrevisionedCNIIDsDistinctAcrossNamespaces(t *testing.T) {
 	require.Equal(t, [][2]string{{abc, "/proc/1/ns/net"}}, f.cni.removed, "Stop must remove only the stopped worker's attachment")
 }
 
+// Issue 706: the bridge plugin frees a worker's masquerade rules only in a live netns, and the netns goes with the task.
+func TestIssue706_StopSendsCNIDelBeforeTaskStops(t *testing.T) {
+	f := newCNIIDFixture(t)
+	tasks, ok := f.d.client.TaskService().(*createdTasks)
+	require.True(t, ok)
+	cni := &taskStateCNI{recordingCNI: f.cni, tasks: tasks}
+	f.d.cni = cni
+	ctx := leases.WithLease(context.Background(), "issue706")
+	inst, err := f.d.Create(ctx, f.engine(t, "a", "b"))
+	require.NoError(t, err)
+
+	require.NoError(t, f.d.Stop(ctx, inst.ID))
+	require.Equal(t, [][2]string{{"a_b-r0", "/proc/1/ns/net"}}, f.cni.removed)
+	require.Equal(t, [][2]bool{{false, false}}, cni.killedDeleted, "Stop must send the CNI DEL before it kills and deletes the task")
+	require.Equal(t, []string{"b-r0"}, tasks.deleted)
+}
+
 // scenario: leftover-old-form-attachment-released (ADR-0179)
 func TestScenario_LeftoverOldFormAttachmentReleased(t *testing.T) {
 	ctx := leases.WithLease(context.Background(), "leftover")
@@ -170,4 +187,18 @@ func (c *recordingCNI) Remove(_ context.Context, id, path string, _ ...gocni.Nam
 	defer c.mu.Unlock()
 	c.removed = append(c.removed, [2]string{id, path})
 	return nil
+}
+
+// taskStateCNI records, at each Remove, whether the task was already killed and deleted.
+type taskStateCNI struct {
+	*recordingCNI
+	tasks         *createdTasks
+	killedDeleted [][2]bool
+}
+
+func (c *taskStateCNI) Remove(ctx context.Context, id, path string, opts ...gocni.NamespaceOpts) error {
+	c.tasks.mu.Lock()
+	c.killedDeleted = append(c.killedDeleted, [2]bool{len(c.tasks.killed) > 0, len(c.tasks.deleted) > 0})
+	c.tasks.mu.Unlock()
+	return c.recordingCNI.Remove(ctx, id, path, opts...)
 }

@@ -599,8 +599,13 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 		return mapErr(err, op, "load container %q", sb.ctrID)
 	}
 	task, err := container.Task(nctx, nil)
-	switch {
-	case err == nil:
+	if err != nil && !errdefs.IsNotFound(err) {
+		return mapErr(err, op, "load task %q", sb.ctrID)
+	}
+	// The netns goes when the task exits, and without it the bridge plugin's DEL frees the IP but not the masquerade
+	// rules.
+	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
+	if err == nil {
 		_ = task.Kill(nctx, syscall.SIGTERM)
 		select {
 		case <-waitTask(nctx, task):
@@ -615,10 +620,7 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 			}
 		}
 		_, _ = task.Delete(nctx)
-	case !errdefs.IsNotFound(err):
-		return mapErr(err, op, "load task %q", sb.ctrID)
 	}
-	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
 	if err := container.Delete(nctx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
 		return mapErr(err, op, "delete container %q", sb.ctrID)
 	}
