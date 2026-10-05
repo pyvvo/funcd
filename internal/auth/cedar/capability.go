@@ -50,7 +50,8 @@ type Capability struct {
 	// contributes nothing (attr absent) — e.g. kv/invoke for a CatalogService. Zero value ⇒ no binding.
 	PrincipalBinding PrincipalBinding
 	// Builtin is this capability's built-in permit policy text (the .cedar granting the capability when
-	// principal.<attr>.contains(resource)); "" ⇒ no built-in (Policy-only).
+	// principal.<attr>.contains(resource)); "" ⇒ no built-in (Policy-only). Each policy carries a unique
+	// @id annotation, its stable name in a deny reason.
 	Builtin string
 }
 

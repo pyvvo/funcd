@@ -8,6 +8,7 @@
 // permitting built-in, so they stay default-deny (a user Policy must permit a cross-binding read). The
 // `principal has kvBindings` guard makes a function with no spec.kv inert here. A binding grants READ
 // only, never write.
+@id("kv-read-binding")
 permit(principal, action == Action::"kv::read", resource)
   when { principal has kvBindings && principal.kvBindings.contains(resource) };
 
@@ -15,7 +16,9 @@ permit(principal, action == Action::"kv::read", resource)
 // overrides it unless the principal is in the table's `writers` set — the legacy owner (as one entry,
 // back-compat) PLUS any writer-role RolesAssignment grant (so an external Identity can be a writer). An
 // owner-less, writer-less table has no `writers` attr ⇒ the forbid always fires ⇒ read-only (default-deny).
+@id("kv-write-base")
 permit(principal, action == Action::"kv::write", resource);
 
+@id("kv-single-writer")
 forbid(principal, action == Action::"kv::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };

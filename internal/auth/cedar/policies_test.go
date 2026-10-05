@@ -257,3 +257,30 @@ func TestScenario_deny_reason_names_forbid(t *testing.T) {
 	require.False(t, dec.Allowed)
 	require.Equal(t, "cedar: forbidden by policy team-a/revoke#0", dec.Reason)
 }
+
+// A deny by a built-in forbid names the built-in by its @id, whatever its position among the built-ins (#675).
+func TestIssue675_BuiltinDenyNamesStableID(t *testing.T) {
+	t.Parallel()
+	m := twoNamespaces()
+	m.fns["team-a/h"] = &v1.Function{ObjectMeta: v1.ObjectMeta{Name: "h", Namespace: "team-a", ResourceGroup: "rg1"}}
+	ep, err := NewEntityProvider(m)
+	require.NoError(t, err)
+	const want = "cedar: forbidden by policy builtin/kv-single-writer"
+
+	for name, builtins := range map[string]string{
+		"default built-ins": defaultRegistry.Builtins(),
+		"a built-in added first": `@id("added-first")` + "\n" +
+			`permit(principal, action == Action::"link::invoke", resource) when { false };` + "\n" + defaultRegistry.Builtins(),
+	} {
+		a, err := New(Deps{Entities: ep, Policies: &mutableSource{rev: "1"}, Builtins: builtins})
+		require.NoError(t, err)
+		dec := decide(t, a, fnRef("team-a", "h"), auth.ActionKVWrite, itemsRef("team-a"))
+		require.False(t, dec.Allowed, name)
+		require.Equal(t, want, dec.Reason, name)
+	}
+
+	_, _, err = compile(`@id("x") permit(principal, action, resource);`+"\n"+`@id("x") forbid(principal, action, resource);`, nil)
+	require.Error(t, err, "a duplicate built-in @id must not silently replace a policy")
+	_, _, err = compile(`permit(principal, action, resource);`, nil)
+	require.Error(t, err, "a built-in without an @id has no stable name")
+}
