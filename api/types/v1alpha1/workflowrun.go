@@ -63,6 +63,19 @@ type WorkflowRunStatus struct {
 	// TraceID is the run's W3C trace (ADR-0102), mirrored from the engine record (ADR-0100) so
 	// `describe` shows it and `funcdctl workflow logs <run>` (ADR-0106) resolves a run to its logs.
 	TraceID string `json:"traceId,omitempty"` // 32 lowercase hex; empty ⇒ a legacy/traceless run
+	// Pins binds the run to the step Function revisions it started with (ADR-0190): written before the run starts,
+	// they hold those revisions while the run is not terminal.
+	Pins []RevisionPin `json:"pins,omitempty"`
+	// WorkflowUID is the Workflow's UID at start (ADR-0190 Decision 10); empty for a run started before ADR-0190.
+	WorkflowUID UID `json:"workflowUID,omitempty"`
+}
+
+// RevisionPin binds a run to one step Function revision (ADR-0190).
+type RevisionPin struct {
+	Function    ObjectName `json:"function"`
+	FunctionUID UID        `json:"functionUID"`
+	Revision    ObjectName `json:"revision"`
+	ImageDigest string     `json:"imageDigest,omitempty"` // empty only for a file:// artifact
 }
 
 // RunPhase is a run's execution phase (ADR-0094): Pending → Running ⇄ Paused → Succeeded | Failed | Cancelled.

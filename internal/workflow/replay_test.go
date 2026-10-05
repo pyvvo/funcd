@@ -437,7 +437,7 @@ func TestReplayRestampsNeverRunChild(t *testing.T) {
 		t.Fatalf("freshChildren(src, c) = %v, want [enrich] for the never-run call", got)
 	}
 	images := map[v1.ObjectName]map[v1.ObjectName]string{"enrich": {"x": "oci:new"}}
-	rec, err := e.replay(ctx, "default", "rep", "", "wf", v1.ReplaySeed{Run: "src", From: "c"}, nil, images)
+	rec, err := e.replay(ctx, "default", "rep", "", "wf", v1.ReplaySeed{Run: "src", From: "c"}, nil, images, nil)
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("replay: %v, want Succeeded", err)
 	}

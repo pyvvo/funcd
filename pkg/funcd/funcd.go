@@ -806,6 +806,8 @@ func (p *Platform) buildControlPlane() error {
 		p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
+	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
+	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	// a change to what a namespace grants its Functions can move a pooled one to another pool
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
@@ -1595,12 +1597,27 @@ func (r childResolver) ChildWorkflow(ctx context.Context, ns v1.NamespaceName, n
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.
 // The engine only ever dispatches steps of a run's pinned spec to their declared/materialized
 // targets; this gate additionally requires the target to resolve to a real Function, so an
-// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.)
+// unknown target is denied. (Per-run spec-as-grant is enforced structurally by the engine.) A pinned
+// dispatch (ADR-0190) is granted only when the pin names the target and its Revision is still the one
+// pinned: controlled by the pinned Function UID and, except for a file:// artifact, of the pinned digest.
 type storeGranter struct{ store store.Store }
 
-func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName) bool {
-	_, err := g.store.Get(context.Background(), v1.KindFunction.GVK(), ns, target)
-	return err == nil
+func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName, pin *v1.RevisionPin) bool {
+	ctx := context.Background()
+	if pin == nil {
+		_, err := g.store.Get(ctx, v1.KindFunction.GVK(), ns, target)
+		return err == nil
+	}
+	if pin.Function != target {
+		return false
+	}
+	obj, err := g.store.Get(ctx, v1.KindRevision.GVK(), ns, pin.Revision)
+	if err != nil {
+		return false
+	}
+	rev := obj.(*v1.Revision)
+	owner, ok := v1.ControllerOf(rev.OwnerReferences)
+	return ok && owner.Name == target && owner.UID == pin.FunctionUID && rev.Spec.ImageDigest == pin.ImageDigest
 }
 
 // runWorkflowRetention periodically reclaims terminal workflow runs older than the retention horizon,

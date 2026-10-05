@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -112,10 +113,17 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		r.engine.cancelLive(run.Namespace, run.Name)
 		return controller.Result{}, nil
 	}
-	// Cancel wins over a concurrent pause.
+	// Cancel wins over a concurrent pause. A started run whose Workflow is gone or re-created is cancelled too
+	// (ADR-0190 Decision 10), so a re-created namesake never hides the delete.
+	cancel := run.Spec.Cancel
+	if !cancel && run.Status.WorkflowUID != "" {
+		if cancel, err = r.workflowGone(ctx, run); err != nil {
+			return controller.Result{}, err
+		}
+	}
 	var fallback v1.RunPhase
 	switch {
-	case run.Spec.Cancel:
+	case cancel:
 		if err := r.engine.Cancel(ctx, run.Namespace, run.Name); err != nil && fault.KindOf(err) != fault.NotFound {
 			return controller.Result{}, err
 		}
@@ -126,20 +134,37 @@ func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (
 		}
 		fallback = runPaused
 	case !live:
-		if res, done, err := r.start(ctx, run, before); done || err != nil {
+		if res, done, err := r.start(ctx, run, &before); done || err != nil {
 			return res, err
 		}
 	}
-	return r.syncStatus(ctx, run, before, fallback)
+	res, err := r.syncStatus(ctx, run, before, fallback)
+	if err == nil && res == (controller.Result{}) && run.Status.WorkflowUID != "" && !isRunTerminal(run.Status.Phase) {
+		res.RequeueAfter = r.waitRequeue // the Workflow UID check needs no Workflow event (ADR-0190 Decision 10)
+	}
+	return res, err
+}
+
+// workflowGone reports whether a started run's Workflow is deleted or re-created under another UID.
+func (r *RunReconciler) workflowGone(ctx context.Context, run *v1.WorkflowRun) (bool, error) {
+	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
+	if fault.KindOf(err) == fault.NotFound {
+		return true, nil
+	}
+	if err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), runOp, "get workflow %q", run.Spec.Workflow)
+	}
+	return obj.GetObjectMeta().UID != run.Status.WorkflowUID, nil
 }
 
 // start starts the run's goroutine, routed as before ADR-0146: a run record ⇒ resume; else spec.replay ⇒
 // replay; else execute. A run that has not started waits while its Workflow is missing (ADR-0121) or not
 // Ready=True for its current generation (ADR-0146, #756): not checked since it was applied or edited, a step
 // artifact not pushed, or held Ready=False by the F65 gate (a WorkflowCycle, a type mismatch). It maps the
-// error a previous goroutine of the run exited with. done reports that the pass ends with res and err,
-// without the status sync.
-func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before []byte) (res controller.Result, done bool, err error) {
+// error a previous goroutine of the run exited with. A run that starts fresh pins its step Function revisions, and
+// writes them with its Workflow's UID to its status before its goroutine starts (ADR-0190); before is then the
+// written status. done reports that the pass ends with res and err, without the status sync.
+func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before *[]byte) (res controller.Result, done bool, err error) {
 	rec, err := r.ownRecord(ctx, run)
 	if err != nil {
 		return controller.Result{}, true, err
@@ -147,6 +172,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 	var wf *v1.Workflow
 	var pins map[v1.ObjectName]runstate.ChildPin
 	var childImages map[v1.ObjectName]map[v1.ObjectName]string
+	var revPins map[v1.ObjectName]v1.RevisionPin
 	if rec == nil {
 		wfObj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), run.Namespace, run.Spec.Workflow)
 		if err != nil && fault.KindOf(err) != fault.NotFound {
@@ -154,44 +180,60 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 		}
 		wf, _ = wfObj.(*v1.Workflow)
 		if wf == nil {
-			res, err := r.wait(ctx, run, before, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
+			res, err := r.wait(ctx, run, *before, "WorkflowNotFound", fmt.Sprintf("workflow %q not found; waiting", run.Spec.Workflow))
 			return res, true, err
 		}
 		if !ready(wf) {
-			res, err := r.wait(ctx, run, before, "WorkflowNotReady", fmt.Sprintf("workflow %q %s; waiting", wf.Name, notReadyCause(wf)))
+			res, err := r.wait(ctx, run, *before, "WorkflowNotReady", fmt.Sprintf("workflow %q %s; waiting", wf.Name, notReadyCause(wf)))
 			return res, true, err
 		}
 		var tw *treeWait
+		children := pins
 		if run.Spec.Replay == nil {
 			pins, tw, err = r.pinTree(ctx, wf)
+			children = pins
 		} else {
 			childImages, tw, err = r.replayTree(ctx, run.Namespace, *run.Spec.Replay)
+			if err == nil && tw == nil {
+				children, err = r.replayChildren(ctx, run.Namespace, run.Spec.Replay.Run)
+			}
+		}
+		var list []v1.RevisionPin
+		if err == nil && tw == nil {
+			list, tw, err = r.pinRevisions(ctx, wf, children)
 		}
 		if err != nil {
 			return controller.Result{}, true, err
 		}
 		if tw != nil {
-			res, err := r.wait(ctx, run, before, tw.reason, tw.msg)
+			res, err := r.wait(ctx, run, *before, tw.reason, tw.msg)
 			return res, true, err
+		}
+		if res, done, err := r.writePins(ctx, run, before, wf, list); done || err != nil {
+			return res, done, err
+		}
+		revPins = make(map[v1.ObjectName]v1.RevisionPin, len(list))
+		for _, p := range list {
+			revPins[p.Function] = p
 		}
 	}
 	endWait(run)
 	if rec != nil && rec.Terminal() {
 		return controller.Result{}, false, nil
 	}
-	prev, err := r.engine.start(run.UID, run.Namespace, run.Name, r.driveFunc(run, wf, rec != nil, pins, childImages))
+	prev, err := r.engine.start(run.UID, run.Namespace, run.Name, r.driveFunc(run, wf, rec != nil, pins, childImages, revPins))
 	if errors.Is(err, errDraining) || err == nil {
 		return controller.Result{}, false, nil
 	}
 	// A first record over the run store's value limit even without its input is refused on every start.
 	if prev == nil && rec == nil && fault.KindOf(err) == fault.PayloadTooLarge {
-		res, err := r.failUnrecorded(ctx, run, before, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: capErr(err.Error())})
+		res, err := r.failUnrecorded(ctx, run, *before, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "RunRecordTooLarge", Message: capErr(err.Error())})
 		return res, true, err
 	}
 	// ADR-0107: a replay seed rejection (SeedInvalid/DigestDrift) produces no record — fail the run with
 	// a ReplaySeeded=False condition so it terminates (never silently re-reconciles).
 	if prev == nil && run.Spec.Replay != nil && fault.KindOf(err) == fault.Invalid {
-		res, err := r.failUnrecorded(ctx, run, before, v1.Condition{
+		res, err := r.failUnrecorded(ctx, run, *before, v1.Condition{
 			Type: "ReplaySeeded", Status: v1.ConditionFalse,
 			Reason: replayReason(err), Message: capErr(err.Error()),
 		})
@@ -205,7 +247,7 @@ func (r *RunReconciler) start(ctx context.Context, run *v1.WorkflowRun, before [
 // or re-push; covers replay recovery too), else a replay seeded from a source run with the current images of
 // the children it runs fresh, else a fresh execute pinning the ADR-0098 contract for the run-start input gate
 // and the child tree (ADR-0189).
-func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started bool, pins map[v1.ObjectName]runstate.ChildPin, childImages map[v1.ObjectName]map[v1.ObjectName]string) func(context.Context) (*runstate.Record, error) {
+func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started bool, pins map[v1.ObjectName]runstate.ChildPin, childImages map[v1.ObjectName]map[v1.ObjectName]string, revPins map[v1.ObjectName]v1.RevisionPin) func(context.Context) (*runstate.Record, error) {
 	ns, name, uid, replay, input := run.Namespace, run.Name, run.UID, run.Spec.Replay, run.Spec.Input
 	return func(ctx context.Context) (*runstate.Record, error) {
 		if started {
@@ -215,14 +257,140 @@ func (r *RunReconciler) driveFunc(run *v1.WorkflowRun, wf *v1.Workflow, started 
 		if replay != nil {
 			// ADR-0107: seed a replay from the source run's checkpoint + gate on digest drift. A source with no
 			// run record (swept by retention) can never seed it, so that is a seed rejection, not a retry.
-			rec, err := r.engine.replay(ctx, ns, name, uid, wf.Name, *replay, images, childImages)
+			rec, err := r.engine.replay(ctx, ns, name, uid, wf.Name, *replay, images, childImages, revPins)
 			if fault.KindOf(err) == fault.NotFound {
 				err = fault.Wrapf(err, fault.Invalid, runOp, "SeedInvalid: replay source run %q has no run record", replay.Run)
 			}
 			return rec, err
 		}
-		return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: uid, ChildPins: pins})
+		return r.engine.Execute(ctx, ns, name, wf.Name, wf.Spec, input, StartOptions{Contract: wf.Status.Contract, StepImages: images, StepContracts: stepContracts(wf), RunUID: uid, ChildPins: pins, Pins: revPins})
 	}
+}
+
+// writePins writes the run's revision pins and its Workflow's UID to its status before its goroutine starts
+// (ADR-0190 Decision 3): a write conflict requeues without starting. On success before is the written status.
+func (r *RunReconciler) writePins(ctx context.Context, run *v1.WorkflowRun, before *[]byte, wf *v1.Workflow, pins []v1.RevisionPin) (controller.Result, bool, error) {
+	run.Status.Pins, run.Status.WorkflowUID = pins, wf.UID
+	obj, err := r.store.Update(ctx, run)
+	if fault.KindOf(err) == fault.Conflict {
+		return controller.Result{Requeue: true}, true, nil
+	}
+	if err != nil {
+		return controller.Result{}, true, fault.Wrapf(err, fault.KindOf(err), runOp, "write the revision pins of run %q", run.Name)
+	}
+	run.ResourceVersion = obj.GetObjectMeta().ResourceVersion
+	if *before, err = json.Marshal(run.Status); err != nil {
+		return controller.Result{}, true, fault.Wrapf(err, fault.Internal, runOp, "encode run status %q", run.Name)
+	}
+	r.linkRun(ctx, run)
+	return controller.Result{}, false, nil
+}
+
+// replayChildren returns the live specs of the children a replay's source pinned (ADR-0189), so the replay gates and
+// pins their step Functions fresh, as ADR-0107 records the current images. A source that is absent or not terminal
+// has none (the replay rejects it); a child that is gone has no step Function to pin.
+func (r *RunReconciler) replayChildren(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[v1.ObjectName]runstate.ChildPin, error) {
+	src, err := r.engine.runs.Get(ctx, ns, source)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), runOp, "get replay source run %q", source)
+	}
+	if !src.Terminal() || len(src.ChildPins) == 0 {
+		return nil, nil
+	}
+	live := make(map[v1.ObjectName]runstate.ChildPin, len(src.ChildPins))
+	for name := range src.ChildPins {
+		obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, name)
+		if fault.KindOf(err) == fault.NotFound {
+			continue
+		}
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), runOp, "get child workflow %q", name)
+		}
+		live[name] = runstate.ChildPin{Spec: obj.(*v1.Workflow).Spec}
+	}
+	return live, nil
+}
+
+// pinRevisions pins every step Function the run can reach (ADR-0190 Decisions 1 and 2): the steps of wf and of
+// each pinned child, function.ref targets included, each to its currentRevision. The run waits, WorkflowNotReady
+// naming the Function, while one is absent or its currentRevision does not hold its spec's content: the image, the
+// image digest the spec sets, the runtime and the handler, and for a materialized step the step's image. A file://
+// artifact has no digest: the image reference is compared in its place and the pin carries none.
+func (r *RunReconciler) pinRevisions(ctx context.Context, wf *v1.Workflow, children map[v1.ObjectName]runstate.ChildPin) ([]v1.RevisionPin, *treeWait, error) {
+	images := map[v1.ObjectName]string{}
+	var names []v1.ObjectName
+	add := func(workflow v1.ObjectName, spec v1.WorkflowSpec) {
+		for i := range spec.Steps {
+			st := &spec.Steps[i]
+			if st.Function == nil {
+				continue
+			}
+			name := stepTarget(workflow, spec, st.Name)
+			if _, seen := images[name]; !seen {
+				names = append(names, name)
+			}
+			if st.Function.Image != "" {
+				images[name] = st.Function.Image
+			} else if _, ok := images[name]; !ok {
+				images[name] = ""
+			}
+		}
+	}
+	add(wf.Name, wf.Spec)
+	childNames := slices.Sorted(maps.Keys(children))
+	for _, child := range childNames {
+		add(child, children[child].Spec)
+	}
+	pins := make([]v1.RevisionPin, 0, len(names))
+	for _, name := range names {
+		pin, why, err := r.pinFunction(ctx, wf.Namespace, name, images[name])
+		if err != nil {
+			return nil, nil, err
+		}
+		if why != "" {
+			return nil, &treeWait{reason: "WorkflowNotReady", msg: fmt.Sprintf("step function %q %s; waiting", name, why)}, nil
+		}
+		pins = append(pins, pin)
+	}
+	return pins, nil, nil
+}
+
+// pinFunction pins Function name to its currentRevision, or says why the run waits for it.
+func (r *RunReconciler) pinFunction(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, stepImage string) (v1.RevisionPin, string, error) {
+	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), ns, name)
+	if fault.KindOf(err) == fault.NotFound {
+		return v1.RevisionPin{}, "is not found", nil
+	}
+	if err != nil {
+		return v1.RevisionPin{}, "", fault.Wrapf(err, fault.KindOf(err), runOp, "get step function %q", name)
+	}
+	fn := obj.(*v1.Function)
+	if stepImage != "" && fn.Spec.Image != stepImage {
+		return v1.RevisionPin{}, fmt.Sprintf("has image %q, not the step's %q", fn.Spec.Image, stepImage), nil
+	}
+	current := v1.ObjectName(fn.Status.CurrentRevision)
+	if current == "" {
+		return v1.RevisionPin{}, "has no revision yet", nil
+	}
+	robj, err := r.store.Get(ctx, v1.KindRevision.GVK(), ns, current)
+	if fault.KindOf(err) == fault.NotFound {
+		return v1.RevisionPin{}, fmt.Sprintf("revision %q is not found", current), nil
+	}
+	if err != nil {
+		return v1.RevisionPin{}, "", fault.Wrapf(err, fault.KindOf(err), runOp, "get revision %q", current)
+	}
+	rev := robj.(*v1.Revision)
+	if owner, ok := v1.ControllerOf(rev.OwnerReferences); !ok || owner.UID != fn.UID {
+		return v1.RevisionPin{}, fmt.Sprintf("revision %q is not its own yet", current), nil
+	}
+	if rev.Spec.Image != fn.Spec.Image || rev.Spec.Runtime != fn.Spec.Runtime || rev.Spec.Handler != fn.Spec.Handler ||
+		fn.Spec.ImageDigest != "" && rev.Spec.ImageDigest != fn.Spec.ImageDigest {
+		return v1.RevisionPin{}, fmt.Sprintf("current revision %q does not hold its spec yet", current), nil
+	}
+	return v1.RevisionPin{Function: name, FunctionUID: fn.UID, Revision: current, ImageDigest: rev.Spec.ImageDigest}, "", nil
 }
 
 // treeWait is why a run waits for a child Workflow of its tree (ADR-0189): reason WorkflowNotFound or

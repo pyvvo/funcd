@@ -128,6 +128,8 @@ type DispatchRequest struct {
 	// successor can parent on it. Links are the non-primary fan-in predecessors' span-ids (X-Funcd-Span-Links).
 	SpanID string   // 16 hex; "" ⇒ the shim mints its own (direct invoke / additive)
 	Links  []string // 16-hex span-ids, same trace
+	// Revision is Target's pin from the run record (ADR-0190); nil ⇒ by-name dispatch (a pre-ADR-0190 record).
+	Revision *v1.RevisionPin
 }
 
 // permanentError marks a dispatch failure that must not be retried (4xx: contract
@@ -242,6 +244,8 @@ type StartOptions struct {
 	StepContracts map[v1.ObjectName]v1.WorkflowContract
 	RunUID        v1.UID                              // the starting WorkflowRun's uid, stamped on the record; empty for an inline child run
 	ChildPins     map[v1.ObjectName]runstate.ChildPin // the run's child tree; execute copies it onto the record
+	// Pins are the run's step Function revision pins (ADR-0190): execute stores them; a child record gets its subtree's.
+	Pins map[v1.ObjectName]v1.RevisionPin
 }
 
 // Execute runs a workflow synchronously until it is terminal, paused or halted, and returns the record. The
@@ -280,6 +284,7 @@ func (e *Engine) execute(ctx, stop context.Context, ns v1.NamespaceName, runName
 		Contract:      pinned, // pin the derived contract (ADR-0098) — the run-start input check + Resume use it
 		StepContracts: opts.StepContracts,
 		ChildPins:     opts.ChildPins,
+		Pins:          opts.Pins,
 		Depth:         depth, // sub-workflow nesting depth (ADR-0099)
 		TraceID:       traceID,
 		RootSpanID:    rootSpanID,
@@ -356,13 +361,13 @@ func (e *Engine) Resume(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 // Faults: NotFound (source absent); Invalid whose message leads with reason token SeedInvalid or
 // DigestDrift (naming the offending step). The source record is never mutated.
 func (e *Engine) Replay(ctx context.Context, ns v1.NamespaceName, runName, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string) (*runstate.Record, error) {
-	return e.replay(ctx, ns, runName, "", workflow, seed, current, nil)
+	return e.replay(ctx, ns, runName, "", workflow, seed, current, nil, nil)
 }
 
 // replay is Replay stamping the starting WorkflowRun's uid on the new record, as StartOptions.RunUID does
 // for Execute. childImages are the current step images of the pinned children the replay runs fresh,
-// captured once each is Ready (ADR-0189); nil ⇒ no gated child.
-func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, runUID v1.UID, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string, childImages map[v1.ObjectName]map[v1.ObjectName]string) (*runstate.Record, error) {
+// captured once each is Ready (ADR-0189); nil ⇒ no gated child. pins are the replay's fresh revision pins (ADR-0190).
+func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.ObjectName, runUID v1.UID, workflow v1.ObjectName, seed v1.ReplaySeed, current map[v1.ObjectName]string, childImages map[v1.ObjectName]map[v1.ObjectName]string, pins map[v1.ObjectName]v1.RevisionPin) (*runstate.Record, error) {
 	src, err := e.runs.Get(ctx, ns, seed.Run)
 	if err != nil {
 		return nil, err // NotFound (source absent) propagates
@@ -419,7 +424,7 @@ func (e *Engine) replay(ctx context.Context, ns v1.NamespaceName, runName v1.Obj
 		Namespace: ns, Name: runName, RunUID: runUID, Workflow: src.Workflow, Phase: runRunning, Input: src.Input,
 		Spec: spec, Contract: src.Contract, StepContracts: src.StepContracts, Depth: 0,
 		TraceID: traceID, RootSpanID: rootSpanID, RootParentID: "",
-		SourceRun: seed.Run, SourceFrom: seed.From,
+		SourceRun: seed.Run, SourceFrom: seed.From, Pins: pins,
 		StartedAt: e.clock.Now().UnixNano(),
 	}
 	rec.ChildPins = restamp(src.ChildPins, freshChildren(src, seed.From), childImages) // ADR-0189: the source's pins
@@ -1237,6 +1242,19 @@ func stepTarget(workflow v1.ObjectName, spec v1.WorkflowSpec, step v1.ObjectName
 	return v1.StepFunctionName(workflow, step)
 }
 
+// targetPin returns target's revision pin from rec (ADR-0190 Decision 4): nil for a record without pins, which
+// dispatches by name; a record with pins and none for target is Forbidden, so nothing dispatches to latest.
+func targetPin(rec *runstate.Record, target v1.ObjectName) (*v1.RevisionPin, error) {
+	if rec.Pins == nil {
+		return nil, nil
+	}
+	pin, ok := rec.Pins[target]
+	if !ok {
+		return nil, fault.Forbiddenf(engineOp, "run %q has no revision pin for function %q", rec.Name, target)
+	}
+	return &pin, nil
+}
+
 // dispatchStep invokes one step with retry, sending it stepInput. It reads the run's
 // pinned identity + trace context off rec (ADR-0102: every attempt propagates the run's traceparent).
 // Each attempt is persisted on rctx before it goes out on ctx (the ADR-0094 write-ahead intent), so
@@ -1261,6 +1279,13 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 	}
 	first := n.attempts + 1
 	target := stepTarget(workflow, run.spec, n.name)
+	pin, err := targetPin(run.rec, target)
+	if err != nil {
+		run.rs.mu.Lock()
+		n.errMsg = capErr(err.Error())
+		run.rs.mu.Unlock()
+		return nil, Permanent(err)
+	}
 	// ADR-0105: nest the step span under its DAG predecessor. The primary parent is the first (post-implicit-
 	// chaining) dependency's pre-minted span-id; a true root step (no dependency) parents on the run root. The
 	// remaining dependencies become fan-in span links. Same for every attempt (one span-id per step).
@@ -1302,6 +1327,7 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 			Attempt: attempt, Input: stepInput, MaxOutput: e.cfg.PayloadLimit,
 			TraceID: run.rec.TraceID, ParentSpanID: parentSpan, // ADR-0102/0105: run trace + the predecessor edge
 			SpanID: n.spanID, Links: links, // ADR-0105: the step's own span-id + fan-in links
+			Revision: pin,
 		})
 		if cancel != nil {
 			cancel()
@@ -1462,13 +1488,18 @@ func (e *Engine) fail(ctx context.Context, run *activeRun, cause error) (*runsta
 			e.setRunning(h)
 			h.attempts = 1
 		}
-		release, herr := e.acquire(hctx, nil, nil)
+		target := stepTarget(run.rec.Workflow, run.spec, run.spec.OnFailure)
+		pin, herr := targetPin(run.rec, target)
+		var release func()
+		if herr == nil {
+			release, herr = e.acquire(hctx, nil, nil)
+		}
 		if herr == nil {
 			_, herr = e.dispatch.Dispatch(hctx, DispatchRequest{
 				Namespace: run.rec.Namespace, Run: run.rec.Name, Step: run.spec.OnFailure,
-				Target:  stepTarget(run.rec.Workflow, run.spec, run.spec.OnFailure),
-				Attempt: 1, Input: fc, MaxOutput: e.cfg.PayloadLimit,
+				Target: target, Attempt: 1, Input: fc, MaxOutput: e.cfg.PayloadLimit,
 				TraceID: run.rec.TraceID, ParentSpanID: run.rec.RootSpanID, // ADR-0102: the handler joins the run's trace too
+				Revision: pin,
 			})
 			release()
 		}

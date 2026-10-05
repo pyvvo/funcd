@@ -54,6 +54,7 @@ func (e *Engine) runChild(ctx, stop context.Context, parent *runstate.Record, ch
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), engineOp, "resolve child workflow %q", child)
 	}
+	childOpts.Pins = subtreePins(parent.Pins, child, childSpec, childOpts.ChildPins)
 	childInput := e.stepInput(n, input, outputs, specStep(parent.Spec, n.name))
 	childRun := childRunName(parent.Name, n.name)
 	// ADR-0104: the child inherits the parent's trace (one composition = one trace) and nests its run-root
@@ -98,6 +99,39 @@ func subtree(pins map[v1.ObjectName]runstate.ChildPin, spec v1.WorkflowSpec) map
 	out := map[v1.ObjectName]runstate.ChildPin{}
 	for _, r := range pinnedRefs(pins, "", spec, func(v1.ObjectName) bool { return true }, map[v1.ObjectName]bool{}) {
 		out[r.child] = pins[r.child]
+	}
+	return out
+}
+
+// subtreePins returns the revision pins of the step Functions the child workflow's spec and its pinned subtree reach
+// (ADR-0190); nil when the parent record has none.
+func subtreePins(pins map[v1.ObjectName]v1.RevisionPin, workflow v1.ObjectName, spec v1.WorkflowSpec, children map[v1.ObjectName]runstate.ChildPin) map[v1.ObjectName]v1.RevisionPin {
+	if pins == nil {
+		return nil
+	}
+	out := map[v1.ObjectName]v1.RevisionPin{}
+	add := func(workflow v1.ObjectName, spec v1.WorkflowSpec) {
+		for _, fn := range StepFunctions(workflow, spec) {
+			if pin, ok := pins[fn]; ok {
+				out[fn] = pin
+			}
+		}
+	}
+	add(workflow, spec)
+	for name, child := range children {
+		add(name, child.Spec)
+	}
+	return out
+}
+
+// StepFunctions names the Functions spec's function steps dispatch to, the onFailure handler included: an image
+// step's materialized <workflow>-<step>, a ref step's referenced Function (ADR-0190 pins each).
+func StepFunctions(workflow v1.ObjectName, spec v1.WorkflowSpec) []v1.ObjectName {
+	var out []v1.ObjectName
+	for i := range spec.Steps {
+		if spec.Steps[i].Function != nil {
+			out = append(out, stepTarget(workflow, spec, spec.Steps[i].Name))
+		}
 	}
 	return out
 }

@@ -14,6 +14,7 @@ import (
 	cedarauth "github.com/pyvvo/funcd/internal/auth/cedar"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/pooling"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -213,16 +214,31 @@ func (r *Reconciler) PoolMembers(ns v1.NamespaceName, worker v1.ObjectName) (mem
 	return members, func(name string) bool { return byName[name] }, true
 }
 
-// poolLastLive is when the pool worker for key last answered /health/liveness; zero when it has not.
-func (r *Reconciler) poolLastLive(key pooling.PoolKey) time.Time {
-	r.poolMu.Lock()
-	defer r.poolMu.Unlock()
-	return r.poolLive[key]
+// poolLiveness is when a key's pool worker last answered its liveness.
+type poolLiveness struct {
+	worker runtime.InstanceID
+	at     time.Time
 }
 
-// markPoolLive records that the pool worker for key answered at `at`.
-func (r *Reconciler) markPoolLive(key pooling.PoolKey, at time.Time) {
+// poolDrain is the drain of a key's old pool workers: since when worker next of the current manifest listens.
+type poolDrain struct {
+	next  runtime.InstanceID
+	since time.Time
+}
+
+// poolLastLive is when pool worker id of key last answered /health/liveness; zero when it has not.
+func (r *Reconciler) poolLastLive(key pooling.PoolKey, id runtime.InstanceID) time.Time {
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
-	r.poolLive[key] = at
+	if l := r.poolLive[key]; l.worker == id {
+		return l.at
+	}
+	return time.Time{}
+}
+
+// markPoolLive records that pool worker id of key answered at `at`.
+func (r *Reconciler) markPoolLive(key pooling.PoolKey, id runtime.InstanceID, at time.Time) {
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	r.poolLive[key] = poolLiveness{worker: id, at: at}
 }

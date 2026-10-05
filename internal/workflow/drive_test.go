@@ -149,6 +149,7 @@ func seedWorkflowSpec(t *testing.T, s store.Store, name string, sp v1.WorkflowSp
 	if _, err := s.Update(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow %s: %v", name, err)
 	}
+	seedStepFunctions(t, s, wf.Name)
 }
 
 // waitFor polls cond until it holds, failing the test after 10 s.

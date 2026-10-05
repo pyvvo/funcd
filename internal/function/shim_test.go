@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,8 +52,10 @@ type fakeRuntime struct {
 	removed []runtime.InstanceID
 	// ADR-0143: a revision can get its own readiness endpoint, and its Starts can fail.
 	revPort map[v1.ObjectName]int
+	idPort  map[runtime.InstanceID]int // an instance's own endpoint, before revPort
 	failRev map[v1.ObjectName]bool
 	held    map[runtime.InstanceID]bool // a held instance runs without an endpoint, so it is never ready
+	holdNew bool                        // every instance Create makes is held
 	stopped map[runtime.InstanceID]bool // Stop released it, so Remove may forget it, as on the real drivers
 	log     string                      // the captured stdout+stderr Logs returns for every instance
 	// ADR-0149: a Create of an image in imageErr fails with its error; attempts counts every Create call.
@@ -76,6 +79,7 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		started: map[runtime.InstanceID]time.Time{},
 		ip:      ip, port: port,
 		revPort:   map[v1.ObjectName]int{},
+		idPort:    map[runtime.InstanceID]int{},
 		failRev:   map[v1.ObjectName]bool{},
 		held:      map[runtime.InstanceID]bool{},
 		stopped:   map[runtime.InstanceID]bool{},
@@ -155,6 +159,9 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 	f.state[id] = runtime.StateCreated
 	f.created[id] = f.clk.Now()
 	delete(f.started, id)
+	if f.holdNew {
+		f.held[id] = true
+	}
 	delete(f.stopped, id)
 	delete(f.exits, id)
 	delete(f.listened, id)
@@ -231,6 +238,9 @@ func (f *fakeRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
 	if _, ok := f.state[id]; ok && !f.stopped[id] {
 		return fault.Conflictf("fake.Remove", "instance %q has not been stopped", id)
 	}
+	if spec, ok := f.specs[id]; ok && isPoolWorker(spec.Name) {
+		f.removed = append(f.removed, poolAlias(spec))
+	}
 	delete(f.specs, id)
 	delete(f.state, id)
 	delete(f.created, id)
@@ -242,12 +252,24 @@ func (f *fakeRuntime) Remove(_ context.Context, id runtime.InstanceID) error {
 	return nil
 }
 
+// isPoolWorker reports whether name is a pool worker's.
+func isPoolWorker(name v1.ObjectName) bool { return strings.HasPrefix(string(name), "__pool__") }
+
+// poolAlias is the id a test names a pool worker by: its name and replica with no revision, whichever manifest
+// signature its revision slot holds (ADR-0190 Decision 8). hold, exitRevision, wasRemoved and revisionStates take it;
+// a pool worker is served on revPort[""].
+func poolAlias(spec runtime.WorkerSpec) runtime.InstanceID {
+	return runtime.NewInstanceID(spec.Namespace, spec.Name, "", spec.Replica)
+}
+
 func (f *fakeRuntime) Close() error { return nil }
 
 // snapshot builds an Instance; caller holds f.mu. A running instance surfaces the endpoint, and is then Listened.
 func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 	spec := f.specs[id]
-	if f.state[id] == runtime.StateRunning && !f.held[id] {
+	pool := isPoolWorker(spec.Name)
+	held := f.held[id] || (pool && f.held[poolAlias(spec)])
+	if f.state[id] == runtime.StateRunning && !held {
 		f.listened[id] = true
 	}
 	in := runtime.Instance{
@@ -255,10 +277,16 @@ func (f *fakeRuntime) snapshot(id runtime.InstanceID) runtime.Instance {
 		Replica: spec.Replica, State: f.state[id], CreatedAt: f.created[id], StartedAt: f.started[id],
 		Listened: f.listened[id], Exit: f.exits[id],
 	}
-	if in.State == runtime.StateRunning && !f.held[id] {
+	if in.State == runtime.StateRunning && !held {
 		in.IP = f.ip
 		in.Port = f.port
-		if p, ok := f.revPort[spec.Revision]; ok {
+		rev := spec.Revision
+		if pool {
+			rev = ""
+		}
+		if p, ok := f.idPort[id]; ok {
+			in.Port = p
+		} else if p, ok := f.revPort[rev]; ok {
 			in.Port = p
 		}
 	}
@@ -300,11 +328,22 @@ func (f *fakeRuntime) exit(name v1.ObjectName, st runtime.State, age time.Durati
 	}
 }
 
-// exitRevision marks replica i of revision rev of name as exited in state st, created and started age ago.
+// exitRevision marks replica i of revision rev of name as exited in state st, created and started age ago; rev "" of a
+// pool worker is every pool worker of name.
 func (f *fakeRuntime) exitRevision(name, rev v1.ObjectName, i int, st runtime.State, age time.Duration) {
 	id := runtime.NewInstanceID("default", name, rev, i)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if rev == "" && isPoolWorker(name) {
+		for pid, spec := range f.specs {
+			if spec.Namespace == "default" && poolAlias(spec) == id {
+				f.state[pid] = st
+				f.created[pid] = f.clk.Now().Add(-age)
+				f.started[pid] = f.created[pid]
+			}
+		}
+		return
+	}
 	f.state[id] = st
 	f.created[id] = f.clk.Now().Add(-age)
 	f.started[id] = f.created[id]
@@ -363,20 +402,43 @@ func (f *fakeRuntime) failRevision(rev v1.ObjectName, failing bool) {
 	f.failRev[rev] = failing
 }
 
-// revisionStates returns the state of each listed instance of name, by revision and replica.
+// revisionStates returns the state of each listed instance of name, by revision and replica; a pool worker is listed
+// under revision "", the newest one when two hold different manifests.
 func (f *fakeRuntime) revisionStates(name v1.ObjectName) map[v1.ObjectName]map[int]runtime.State {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := map[v1.ObjectName]map[int]runtime.State{}
+	newest := map[int]time.Time{}
 	for id, spec := range f.specs {
 		if spec.Name != name {
 			continue
 		}
-		if out[spec.Revision] == nil {
-			out[spec.Revision] = map[int]runtime.State{}
+		rev := spec.Revision
+		if isPoolWorker(name) {
+			if t, ok := newest[spec.Replica]; ok && t.After(f.created[id]) {
+				continue
+			}
+			rev, newest[spec.Replica] = "", f.created[id]
 		}
-		out[spec.Revision][spec.Replica] = f.state[id]
+		if out[rev] == nil {
+			out[rev] = map[int]runtime.State{}
+		}
+		out[rev][spec.Replica] = f.state[id]
 	}
+	return out
+}
+
+// poolWorkers returns the ids of the listed pool workers name, by creation, oldest first.
+func (f *fakeRuntime) poolWorkers(ns v1.NamespaceName, name v1.ObjectName) []runtime.InstanceID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []runtime.InstanceID
+	for id, spec := range f.specs {
+		if spec.Namespace == ns && spec.Name == name {
+			out = append(out, id)
+		}
+	}
+	slices.SortFunc(out, func(a, b runtime.InstanceID) int { return f.created[a].Compare(f.created[b]) })
 	return out
 }
 

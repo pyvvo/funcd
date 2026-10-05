@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +32,118 @@ func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.Workflow
 	if _, err := s.Create(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow: %v", err)
 	}
+	seedStepFunctions(t, s, wf.Name)
+}
+
+// seedStepFunctions gives every function step of spec its step Function with a current Revision of the step's
+// content, as the materializer and the Function reconciler leave them, so a run pins them (ADR-0190).
+func seedStepFunctions(t *testing.T, s store.Store, workflow v1.ObjectName) {
+	t.Helper()
+	obj, err := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", workflow)
+	if err != nil {
+		t.Fatalf("get workflow %s: %v", workflow, err)
+	}
+	if err := stampStepFunctions(context.Background(), s, obj.(*v1.Workflow)); err != nil {
+		t.Fatalf("seed step functions of %s: %v", workflow, err)
+	}
+}
+
+// stampWorkflows stamps the step Functions of every Workflow in "default", as the Function reconciler would.
+func stampWorkflows(ctx context.Context, s store.Store) error {
+	list, err := s.List(ctx, v1.KindWorkflow.GVK(), store.ListOptions{Namespace: "default"})
+	if err != nil {
+		return err
+	}
+	for _, obj := range list.Items {
+		if err := stampStepFunctions(ctx, s, obj.(*v1.Workflow)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stampStepFunctions makes each function step's Function hold the step image in a current Revision; a ref step's
+// existing Function is left as it is.
+func stampStepFunctions(ctx context.Context, s store.Store, wf *v1.Workflow) error {
+	for i := range wf.Spec.Steps {
+		st := &wf.Spec.Steps[i]
+		if st.Function == nil {
+			continue
+		}
+		name := stepTarget(wf.Name, wf.Spec, st.Name)
+		image := st.Function.Image
+		var owners []v1.OwnerReference
+		if image != "" {
+			owners = []v1.OwnerReference{ownerRef(wf)}
+		} else {
+			if _, err := s.Get(ctx, v1.KindFunction.GVK(), "default", name); err == nil {
+				continue
+			}
+			image = "oci://example/" + string(name) + ":v1"
+		}
+		if _, err := stampFunction(ctx, s, name, image, owners...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedFunctionRevision creates or updates Function name with image and stamps a Revision of it as its current one.
+func seedFunctionRevision(t *testing.T, s store.Store, name v1.ObjectName, image string) *v1.Function {
+	t.Helper()
+	fn, err := stampFunction(context.Background(), s, name, image)
+	if err != nil {
+		t.Fatalf("seed function %s: %v", name, err)
+	}
+	return fn
+}
+
+// stampFunction makes Function name run image from a current Revision of that content, creating what is missing.
+func stampFunction(ctx context.Context, s store.Store, name v1.ObjectName, image string, owners ...v1.OwnerReference) (*v1.Function, error) {
+	var fn *v1.Function
+	if obj, err := s.Get(ctx, v1.KindFunction.GVK(), "default", name); err == nil {
+		fn = obj.(*v1.Function)
+	} else {
+		created, cerr := s.Create(ctx, &v1.Function{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1", OwnerReferences: owners},
+			Spec:       v1.FunctionSpec{Runtime: "nodejs22", Handler: "handle", Image: image},
+		})
+		if cerr != nil {
+			return nil, cerr
+		}
+		fn = created.(*v1.Function)
+	}
+	if fn.Spec.Image != image {
+		fn.Spec.Image = image
+		updated, err := s.Update(ctx, fn)
+		if err != nil {
+			return nil, err
+		}
+		fn = updated.(*v1.Function)
+	}
+	revName := v1.ObjectName(fmt.Sprintf("%s-%d", name, fn.Generation))
+	if fn.Status.CurrentRevision == string(revName) {
+		return fn, nil
+	}
+	ref := v1.ObjectRef{Kind: v1.KindFunction, Namespace: "default", Name: name}
+	rev := &v1.Revision{
+		TypeMeta: v1.TypeMeta{APIVersion: v1.KindRevision.GVK().APIVersion(), Kind: v1.KindRevision},
+		ObjectMeta: v1.ObjectMeta{
+			Name: revName, Namespace: "default", ResourceGroup: "rg1",
+			OwnerReferences: []v1.OwnerReference{{ObjectRef: ref, UID: fn.UID, Controller: true}},
+		},
+		Spec: v1.RevisionSpec{Function: ref, Number: fn.Generation, Runtime: fn.Spec.Runtime, Handler: fn.Spec.Handler, Image: image},
+	}
+	if _, err := s.Create(ctx, rev); err != nil && fault.KindOf(err) != fault.Conflict {
+		return nil, err
+	}
+	fn.Status.CurrentRevision = string(revName)
+	updated, err := s.Update(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	return updated.(*v1.Function), nil
 }
 
 // readyAfterEdit marks wf Ready=True for the generation the Update of its edited spec gives it.
@@ -67,6 +180,9 @@ func createRun(t *testing.T, s store.Store, name string, spec v1.WorkflowRunSpec
 func settleRun(ctx context.Context, rr *RunReconciler, req controller.Request) (controller.Result, error) {
 	quiet := 0
 	for range 100 {
+		if err := stampWorkflows(ctx, rr.store); err != nil {
+			return controller.Result{}, err
+		}
 		rv := runVersion(ctx, rr, req)
 		res, err := rr.Reconcile(ctx, req)
 		if err != nil {
@@ -1743,6 +1859,7 @@ func seedTree(t *testing.T, s store.Store, wfs ...v1.Workflow) {
 		if got, _ := reconcileByName(t, s, treeContracts(), string(wf.Name)); !ready(got) {
 			t.Fatalf("setup: %s is not Ready: %+v", wf.Name, got.Status.Conditions)
 		}
+		seedStepFunctions(t, s, wf.Name)
 	}
 }
 
