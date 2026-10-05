@@ -5,6 +5,7 @@ import (
 	"crypto/md5" //nolint:gosec // ETag is an S3 content fingerprint, not a security primitive
 	"crypto/rand"
 	"encoding/hex"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -22,18 +23,29 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
-// multipartIdleExpiry is how long an upload may go without a part before it counts as
-// abandoned and its buffered parts are dropped: S3 keeps an incomplete upload until it is
-// aborted, but a client that crashed never aborts, and here the parts are daemon RAM.
+// multipartIdleExpiry is how long an upload may go without a part that grows it past its peak
+// before it counts as abandoned and its buffered parts are dropped: S3 keeps an incomplete upload
+// until it is aborted, but a client that crashed never aborts, and here the parts are daemon RAM.
 const multipartIdleExpiry = time.Hour
+
+// multipartBudgetFactor sizes the daemon-wide budget on buffered multipart bytes (ADR-0188): budget =
+// multipartBudgetFactor × maxUpload, and parts may use budget − maxUpload so one full-cap Complete always fits.
+const multipartBudgetFactor = 3
 
 // multipartStore buffers in-flight multipart uploads in memory (ADR-0080 Temporary
 // workarounds): the blob port has no streaming-multipart seam, so parts accumulate
 // and CompleteMultipartUpload assembles them into a single Put, bounded by maxUpload.
+// The parts and the copies Completes assemble share one budget, and each owner a share of
+// it (ADR-0188), so no number of uploads or principals can grow the buffers past it.
 type multipartStore struct {
-	mu      sync.Mutex
-	uploads map[string]*upload // uploadID → buffered parts
-	clock   clock.Clock
+	mu         sync.Mutex
+	uploads    map[string]*upload // uploadID → buffered parts
+	clock      clock.Clock
+	maxUpload  int64                     // s3gateway.maxUploadBytes: the per-upload cap and the per-principal share
+	budget     int64                     // multipartBudgetFactor × maxUpload; 0 = off when that overflows
+	buffered   int64                     // the sum of every upload's size
+	assembling int64                     // the copies held by in-flight Completes
+	owned      map[authz.EntityRef]int64 // each owner's buffered bytes; no entry at 0
 }
 
 // uploadTarget is what an upload is bound to: the creator's namespace and the bucket and key
@@ -45,37 +57,52 @@ type uploadTarget struct {
 }
 
 type upload struct {
-	target  uploadTarget
-	opts    blob.PutOptions // the Content-Type and user metadata of CreateMultipartUpload
-	parts   map[int32][]byte
-	size    int64     // the sum of the buffered parts' lengths
-	touched time.Time // the last Create or UploadPart
+	target     uploadTarget
+	opts       blob.PutOptions // the Content-Type and user metadata of CreateMultipartUpload
+	parts      map[int32][]byte
+	size       int64           // the sum of the buffered parts' lengths
+	touched    time.Time       // the last Create or part that took size past peak
+	peak       int64           // the largest size the upload has held
+	owner      authz.EntityRef // the principal that created the upload
+	completing bool            // a Complete holds this upload's assembled copy; the sweep skips it
 }
 
-func newMultipartStore() *multipartStore {
-	return &multipartStore{uploads: map[string]*upload{}, clock: clock.System()}
+func newMultipartStore(maxUpload int64) *multipartStore {
+	var budget int64
+	if maxUpload <= math.MaxInt64/multipartBudgetFactor {
+		budget = multipartBudgetFactor * maxUpload
+	}
+	return &multipartStore{
+		uploads:   map[string]*upload{},
+		clock:     clock.System(),
+		maxUpload: maxUpload,
+		budget:    budget,
+		owned:     map[authz.EntityRef]int64{},
+	}
 }
 
-// create starts an upload and drops the abandoned ones: a new upload is the only way the
+// create starts an upload owned by owner and drops the abandoned ones: a new upload is the only way the
 // number of buffered uploads grows, so sweeping here keeps it to the recently active ones.
-func (m *multipartStore) create(t uploadTarget, opts blob.PutOptions) string {
+func (m *multipartStore) create(t uploadTarget, owner authz.EntityRef, opts blob.PutOptions) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock.Now()
-	for id, u := range m.uploads {
-		if now.Sub(u.touched) > multipartIdleExpiry {
-			delete(m.uploads, id)
-		}
-	}
+	m.sweep(now)
 	id := "funcd-mpu-" + rand.Text()
-	// The request's strings alias fiber's reused buffers; the binding outlives the request.
+	// The request's strings alias fiber's reused buffers; the binding and the owner outlive the request.
 	t = uploadTarget{ns: v1.NamespaceName(strings.Clone(string(t.ns))), bucket: strings.Clone(t.bucket), key: strings.Clone(t.key)}
+	owner = authz.EntityRef{
+		Type:      v1.Kind(strings.Clone(string(owner.Type))),
+		Namespace: v1.NamespaceName(strings.Clone(string(owner.Namespace))),
+		Name:      v1.ObjectName(strings.Clone(string(owner.Name))),
+		Path:      strings.Clone(owner.Path),
+	}
 	md := make(map[string]string, len(opts.Metadata))
 	for k, v := range opts.Metadata {
 		md[strings.Clone(k)] = strings.Clone(v)
 	}
 	opts = blob.PutOptions{ContentType: strings.Clone(opts.ContentType), Metadata: md}
-	m.uploads[id] = &upload{target: t, opts: opts, parts: map[int32][]byte{}, touched: now}
+	m.uploads[id] = &upload{target: t, opts: opts, parts: map[int32][]byte{}, touched: now, owner: owner}
 	return id
 }
 
@@ -88,30 +115,87 @@ func (m *multipartStore) get(id string, t uploadTarget) (*upload, bool) {
 	return u, true
 }
 
+// sweep drops the uploads idle past multipartIdleExpiry, except one a Complete holds. The caller holds m.mu.
+func (m *multipartStore) sweep(now time.Time) {
+	for id, u := range m.uploads {
+		if !u.completing && now.Sub(u.touched) > multipartIdleExpiry {
+			m.drop(id, u)
+		}
+	}
+}
+
+// drop removes the upload and returns its bytes to buffered and its owner. The caller holds m.mu.
+func (m *multipartStore) drop(id string, u *upload) {
+	delete(m.uploads, id)
+	m.grow(u, -u.size)
+}
+
+// grow adds delta to the upload, buffered and the owner's bytes; an owner at 0 leaves owned. The caller holds m.mu.
+func (m *multipartStore) grow(u *upload, delta int64) {
+	u.size += delta
+	m.buffered += delta
+	if left := m.owned[u.owner] + delta; left != 0 {
+		m.owned[u.owner] = left
+	} else {
+		delete(m.owned, u.owner)
+	}
+}
+
+// partFits reports whether a part growing owner's upload by delta keeps the owner within its share, the parts
+// within budget − maxUpload, and the parts plus the assembled copies within the budget. The caller holds m.mu.
+func (m *multipartStore) partFits(owner authz.EntityRef, delta int64) bool {
+	if delta > m.maxUpload-m.owned[owner] {
+		return false
+	}
+	return m.budget == 0 || (delta <= m.budget-m.maxUpload-m.buffered && delta <= m.budget-m.buffered-m.assembling)
+}
+
+// copyFits reports whether a Complete's copy of n bytes fits beside the parts and the other copies. The caller
+// holds m.mu.
+func (m *multipartStore) copyFits(n int64) bool {
+	return m.budget == 0 || n <= m.budget-m.buffered-m.assembling
+}
+
 // putPart buffers part num, replacing an earlier part of that number. It fails closed with
 // EntityTooLarge when the upload's total would pass maxUpload (ADR-0080), so an upload never
-// holds more than the cap.
-func (m *multipartStore) putPart(id string, t uploadTarget, num int32, data []byte, maxUpload int64) error {
+// holds more than the cap, and with SlowDown when a part that grows the upload does not fit the
+// owner's share or the budget even after a sweep (ADR-0188); a refused part changes nothing.
+func (m *multipartStore) putPart(id string, t uploadTarget, num int32, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u, ok := m.get(id, t)
 	if !ok {
 		return s3err.GetAPIError(s3err.ErrNoSuchUpload)
 	}
-	size := u.size - int64(len(u.parts[num])) + int64(len(data))
-	if size > maxUpload {
+	delta := int64(len(data)) - int64(len(u.parts[num]))
+	if delta > m.maxUpload-u.size {
 		return s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
+	now := m.clock.Now()
+	if delta > 0 && !m.partFits(u.owner, delta) {
+		m.sweep(now)
+		if _, ok := m.get(id, t); !ok {
+			return s3err.GetAPIError(s3err.ErrNoSuchUpload)
+		}
+		if !m.partFits(u.owner, delta) {
+			return s3err.GetAPIError(s3err.ErrSlowDown)
+		}
+	}
 	u.parts[num] = data
-	u.size = size
-	u.touched = m.clock.Now()
+	m.grow(u, delta)
+	// Only growth past the peak keeps an upload alive, so re-sending parts cannot hold the budget forever.
+	if u.size > u.peak {
+		u.peak = u.size
+		u.touched = now
+	}
 	return nil
 }
 
 // assemble concatenates the parts the client listed, in its order (S3
 // CompleteMultipartUpload): part numbers must ascend and each must be buffered with a
 // matching ETag; unlisted parts are dropped. It returns the upload's Put options with the bytes and
-// does NOT delete the upload (Complete does).
+// does NOT delete the upload. The copy counts against the budget and marks the upload completing, so
+// a second Complete of the id answers SlowDown; the caller hands both back with release (ADR-0188).
 func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.CompletedMultipartUpload) ([]byte, blob.PutOptions, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -122,7 +206,7 @@ func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.Compl
 	if mpu == nil || len(mpu.Parts) == 0 {
 		return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrMalformedXML)
 	}
-	var buf []byte
+	var n int64
 	var prev int32
 	for _, p := range mpu.Parts {
 		if p.PartNumber == nil || p.ETag == nil {
@@ -137,19 +221,54 @@ func (m *multipartStore) assemble(id string, t uploadTarget, mpu *awstypes.Compl
 		if !ok || !backend.AreEtagsSame(etag(data), *p.ETag) {
 			return nil, blob.PutOptions{}, s3err.GetInvalidPartErr(id, num, *p.ETag)
 		}
-		buf = append(buf, data...)
+		n += int64(len(data))
+	}
+	if u.completing {
+		return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrSlowDown)
+	}
+	if !m.copyFits(n) {
+		m.sweep(m.clock.Now())
+		if _, ok := m.get(id, t); !ok {
+			return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrNoSuchUpload)
+		}
+		if !m.copyFits(n) {
+			return nil, blob.PutOptions{}, s3err.GetAPIError(s3err.ErrSlowDown)
+		}
+	}
+	u.completing = true
+	m.assembling += n
+	buf := make([]byte, 0, n)
+	for _, p := range mpu.Parts {
+		buf = append(buf, u.parts[*p.PartNumber]...)
 	}
 	return buf, u.opts, nil
 }
 
-// abort drops the upload when it is bound to t and reports whether it did.
+// release hands back the n-byte copy an admitted assemble counted and clears completing; with drop it also
+// drops the upload and returns its parts. An upload aborted meanwhile returns only n.
+func (m *multipartStore) release(id string, t uploadTarget, n int64, drop bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.assembling -= n
+	u, ok := m.get(id, t)
+	if !ok {
+		return
+	}
+	u.completing = false
+	if drop {
+		m.drop(id, u)
+	}
+}
+
+// abort drops the upload when it is bound to t, returning its bytes, and reports whether it did.
 func (m *multipartStore) abort(id string, t uploadTarget) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.get(id, t); !ok {
+	u, ok := m.get(id, t)
+	if !ok {
 		return false
 	}
-	delete(m.uploads, id)
+	m.drop(id, u)
 	return true
 }
 
@@ -186,11 +305,12 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 	if err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
-	id := b.mp.create(uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, blob.PutOptions{ContentType: deref(in.ContentType), Metadata: in.Metadata})
+	id := b.mp.create(uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, pr.ref, blob.PutOptions{ContentType: deref(in.ContentType), Metadata: in.Metadata})
 	return s3response.InitiateMultipartUploadResult{Bucket: bucket, Key: key, UploadId: id}, nil
 }
 
-// UploadPart buffers one part (ADR-0080): s3::write PEP; the upload's total is capped by maxUpload.
+// UploadPart buffers one part (ADR-0080): s3::write PEP; the upload's total is capped by maxUpload, and its
+// owner's parts and the daemon's by the multipart budget (ADR-0188).
 func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.UploadPartOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -209,7 +329,7 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	if in.PartNumber != nil {
 		num = *in.PartNumber
 	}
-	if perr := b.mp.putPart(deref(in.UploadId), uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, num, data, b.maxUpload); perr != nil {
+	if perr := b.mp.putPart(deref(in.UploadId), uploadTarget{ns: pr.namespace, bucket: bucket, key: key}, num, data); perr != nil {
 		return nil, perr
 	}
 	return &awss3.UploadPartOutput{ETag: ptr(etag(data))}, nil
@@ -234,17 +354,20 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	if aerr != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", aerr
 	}
-	if int64(len(data)) > b.maxUpload {
-		b.mp.abort(id, target)
+	n := int64(len(data))
+	if n > b.maxUpload {
+		b.mp.release(id, target, n, true)
 		return s3response.CompleteMultipartUploadResult{}, "", s3err.GetAPIError(s3err.ErrEntityTooLarge)
 	}
 	if cerr := writeConditions(ctx, sub, key, in.IfMatch, in.IfNoneMatch); cerr != nil {
+		b.mp.release(id, target, n, false)
 		return s3response.CompleteMultipartUploadResult{}, "", cerr
 	}
 	if perr := sub.Put(ctx, key, data, opts); perr != nil {
+		b.mp.release(id, target, n, false)
 		return s3response.CompleteMultipartUploadResult{}, "", mapBlobErr(perr)
 	}
-	b.mp.abort(id, target)
+	b.mp.release(id, target, n, true)
 	return s3response.CompleteMultipartUploadResult{
 		Bucket: in.Bucket,
 		Key:    in.Key,
