@@ -108,6 +108,26 @@ func TestWorkflowRunContractAdmission(t *testing.T) {
 	require.NoError(t, err, "a replay run has empty input by design — the contract check is skipped")
 }
 
+// Issue #756: an update keeps the status, so after an edit the cached contract is of the previous generation
+// until the Workflow reconciler type-checks the edited spec. A run is then admitted as for a Workflow with no
+// cached contract (run start is the backstop); the contract of the current generation is still checked.
+func TestIssue756_EditedWorkflowContractOfPreviousGenerationIsNotChecked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	wf := wfWithContract(`{"type":"object","required":["day"],"properties":{"day":{"type":"string"}}}`)
+	wf.Generation = 2
+	wf.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: 1})
+	a := admission.NewWorkflowRunContractAdmission(fakeGetter{wf})
+	req := admission.Request{Operation: admission.Create, GVK: v1.KindWorkflowRun.GVK(), Object: runObj(`{"night":"x"}`)}
+
+	_, err := a.Admit(ctx, req)
+	require.NoError(t, err, "an input of the edited spec is not checked against the previous generation's contract")
+
+	wf.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: 2})
+	_, err = a.Admit(ctx, req)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "the contract of the current generation is checked")
+}
+
 // Issue #125: an Update that changes a WorkflowRun's workflow, input or replay is a second run under a
 // taken name, so it is a Conflict (ADR-0094 duplicate-run-name-rejected); the same spec spelled with other
 // whitespace and a pause/cancel patch are admitted; Create is not handled.

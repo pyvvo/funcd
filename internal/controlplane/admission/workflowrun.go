@@ -83,6 +83,9 @@ func (a workflowRunContract) Admit(ctx context.Context, req Request) (v1.Object,
 	if !ok || wf.Status.Contract == nil || len(wf.Status.Contract.Input) == 0 {
 		return req.Object, nil // not yet Ready / no cached contract — run-start is the backstop
 	}
+	if c, found := wf.Status.Conditions.Get("Ready"); found && c.ObservedGeneration != wf.Generation {
+		return req.Object, nil // an update keeps the contract of an earlier generation, which is not the edited spec's (#756)
+	}
 	if diffs := v1.CheckInput(run.Spec.Input, wf.Status.Contract.Input); len(diffs) > 0 {
 		return nil, fault.Invalidf(op, "run input does not match workflow %q contract (InputSchemaMismatch): %s", run.Spec.Workflow, v1.FieldDiffs(diffs))
 	}

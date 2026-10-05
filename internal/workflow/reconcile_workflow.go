@@ -114,7 +114,14 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	switch {
 	case errors.Is(cerr, errArtifactNotReady):
 		// A step image is not pushed yet — requeue AFTER a backoff (not a hot loop; each attempt does
-		// registry metadata I/O), leaving status untouched so there is no spurious mismatch (ADR-0098).
+		// registry metadata I/O), with no spurious mismatch (ADR-0098). A Ready verdict and cache an update
+		// kept from an earlier generation are withdrawn, so the status shows the edited spec waiting (#756).
+		if c, _ := wf.Status.Conditions.Get(condReady); c.Status == v1.ConditionTrue && stale(wf) {
+			wf.Status.Contract, wf.Status.Steps = nil, nil
+			if uerr := r.notReady(ctx, wf, "ArtifactNotReady", cerr.Error()); uerr != nil {
+				return controller.Result{}, uerr
+			}
+		}
 		return controller.Result{RequeueAfter: r.contractRequeue}, nil
 	case cerr != nil:
 		var mm *mismatchError
@@ -123,13 +130,13 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		}
 		wf.Status.Contract, wf.Status.Steps = contract, steps // cache what resolved
 		wf.Status.Phase = v1.PhasePending
-		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionTrue, Reason: mm.reason, Message: mm.msg})
-		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: mm.reason, Message: mm.msg})
+		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionTrue, Reason: mm.reason, Message: mm.msg, ObservedGeneration: wf.Generation})
+		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: mm.reason, Message: mm.msg, ObservedGeneration: wf.Generation})
 	default:
 		wf.Status.Contract, wf.Status.Steps = contract, steps
 		wf.Status.Phase = v1.PhaseReady
-		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionFalse, Reason: "EdgesTypeChecked"})
-		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked"})
+		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionFalse, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation})
+		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation})
 	}
 	if _, uerr := r.store.Update(ctx, wf); uerr != nil {
 		return controller.Result{}, uerr
@@ -137,15 +144,28 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 	return controller.Result{}, nil
 }
 
+// ready reports whether wf is Ready=True for its current spec. An update keeps the stored status, so a verdict
+// of an earlier generation does not hold for the edited spec (#756).
+func ready(wf *v1.Workflow) bool {
+	c, ok := wf.Status.Conditions.Get(condReady)
+	return ok && c.Status == v1.ConditionTrue && c.ObservedGeneration == wf.Generation
+}
+
+// stale reports whether wf's Ready condition, and the status cached with it, was set for an earlier generation.
+func stale(wf *v1.Workflow) bool {
+	c, ok := wf.Status.Conditions.Get(condReady)
+	return ok && c.ObservedGeneration != wf.Generation
+}
+
 // notReady sets wf Pending with Ready False. It writes only on a change, so a failure that repeats does not
 // re-enqueue wf through its own watch.
 func (r *WorkflowReconciler) notReady(ctx context.Context, wf *v1.Workflow, reason, msg string) error {
 	if c, ok := wf.Status.Conditions.Get(condReady); ok && wf.Status.Phase == v1.PhasePending &&
-		c.Status == v1.ConditionFalse && c.Reason == reason && c.Message == msg {
+		c.Status == v1.ConditionFalse && c.Reason == reason && c.Message == msg && !stale(wf) {
 		return nil
 	}
 	wf.Status.Phase = v1.PhasePending
-	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: wf.Generation})
 	if _, err := r.store.Update(ctx, wf); err != nil && fault.KindOf(err) != fault.Conflict {
 		return err
 	}
@@ -721,8 +741,8 @@ func (r *WorkflowReconciler) childContract(ctx context.Context, ns v1.NamespaceN
 		return v1.WorkflowContract{}, err
 	}
 	cw := obj.(*v1.Workflow)
-	if cw.Status.Contract == nil {
-		return v1.WorkflowContract{}, errArtifactNotReady // the child hasn't derived its contract yet (not Ready)
+	if cw.Status.Contract == nil || stale(cw) {
+		return v1.WorkflowContract{}, errArtifactNotReady // the child hasn't derived its contract for its spec yet
 	}
 	return *cw.Status.Contract, nil
 }

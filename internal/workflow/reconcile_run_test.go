@@ -27,10 +27,15 @@ func seedWorkflow(t *testing.T, s store.Store, name string, steps ...v1.Workflow
 		ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
 		Spec:       v1.WorkflowSpec{Steps: steps},
 	}
-	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked"})
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: 1})
 	if _, err := s.Create(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow: %v", err)
 	}
+}
+
+// readyAfterEdit marks wf Ready=True for the generation the Update of its edited spec gives it.
+func readyAfterEdit(wf *v1.Workflow) {
+	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation + 1})
 }
 
 func seedRun(t *testing.T, s store.Store, name, workflow string, input string) {
@@ -449,6 +454,7 @@ func TestIssue306_OversizeFirstRecordFailsRunOnce(t *testing.T) {
 			wfObj, _ := s.Get(ctx, v1.KindWorkflow.GVK(), "default", "big")
 			wf := wfObj.(*v1.Workflow)
 			wf.Spec.OnFailure = "notify"
+			readyAfterEdit(wf)
 			if _, err := s.Update(ctx, wf); err != nil {
 				t.Fatalf("set onFailure: %v", err)
 			}
@@ -637,6 +643,128 @@ func TestIssue712_RunWaitsForWorkflowWithoutReadyCondition(t *testing.T) {
 	}
 	if !slices.Equal(f.order, []v1.ObjectName{"p"}) {
 		t.Fatalf("dispatched %v, want only the step of pending-1", f.order)
+	}
+}
+
+// runRig is a run reconciler over s whose dispatcher records the steps it runs.
+func runRig(t *testing.T, s store.Store) (*RunReconciler, *fakeDispatcher) {
+	t.Helper()
+	rstate, _ := wbadger.New(wbadger.Config{InMemory: true})
+	t.Cleanup(func() { _ = rstate.Close() })
+	f := newFake()
+	eng, _ := New(Deps{Runs: rstate, Dispatch: f})
+	return NewRunReconciler(s, eng, nil, nil, 0), f
+}
+
+// editWF appends steps to the stored Workflow name, which bumps its generation and keeps its status.
+func editWF(t *testing.T, s store.Store, name string, steps ...v1.WorkflowStep) {
+	t.Helper()
+	obj, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", v1.ObjectName(name))
+	wf := obj.(*v1.Workflow)
+	wf.Spec.Steps = append(wf.Spec.Steps, steps...)
+	if _, err := s.Update(context.Background(), wf); err != nil {
+		t.Fatalf("edit %s: %v", name, err)
+	}
+}
+
+// Issue #756: an edit that adds a step whose artifact is not pushed withdraws the Ready verdict and the cache
+// of the previous spec, so a new run waits until the edited spec type-checks, then runs every step.
+func TestIssue756_EditedWorkflowNotReadyUntilNewStepResolves(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) {
+		t.Fatalf("setup: wf is not Ready: %+v", wf.Status.Conditions)
+	}
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+
+	unpushed := fakeContracts{byImage: pushed.byImage, notReady: map[string]bool{"oci:b": true}}
+	wf, res := reconcileByName(t, s, unpushed, "wf")
+	if c, _ := wf.Status.Conditions.Get(condReady); res.RequeueAfter <= 0 || c.Status != v1.ConditionFalse || wf.Status.Contract != nil || len(wf.Status.Steps) != 0 || mismatchReason(wf) != "" {
+		t.Fatalf("after the edit: requeueAfter=%v Ready=%+v contract=%v steps=%d mismatch=%q, want a requeue, Ready=False, no cache of the previous spec and no SchemaMismatch",
+			res.RequeueAfter, c, wf.Status.Contract, len(wf.Status.Steps), mismatchReason(wf))
+	}
+
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	rr, f := runRig(t, s)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 0 {
+		t.Fatalf("run of the edited wf: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) || len(wf.Status.Steps) != 2 {
+		t.Fatalf("after the push: Ready=%v steps=%d, want Ready with 2 steps", ready(wf), len(wf.Status.Steps))
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "b"}) {
+		t.Fatalf("run after the push: phase=%q dispatched=%v, want Succeeded with [a b]", run.Status.Phase, f.order)
+	}
+}
+
+// Issue #756: a run reconciled between an edit and the next Workflow reconcile waits, because the Ready verdict
+// belongs to the previous generation; once the edited spec type-checks it runs every step.
+func TestIssue756_RunWaitsForEditedWorkflowUntilReconciled(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) {
+		t.Fatalf("setup: wf is not Ready: %+v", wf.Status.Conditions)
+	}
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	rr, f := runRig(t, s)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 0 {
+		t.Fatalf("run before the wf reconcile: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	if wf, _ := reconcileByName(t, s, pushed, "wf"); !ready(wf) || len(wf.Status.Steps) != 2 {
+		t.Fatalf("after the reconcile: Ready=%v steps=%d, want Ready with 2 steps", ready(wf), len(wf.Status.Steps))
+	}
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "b"}) {
+		t.Fatalf("run after the reconcile: phase=%q dispatched=%v, want Succeeded with [a b]", run.Status.Phase, f.order)
+	}
+}
+
+// Issue #756: a registry error holds the runs of an edited Workflow, whose Ready verdict is of the previous
+// generation, and not the runs of an unchanged Ready Workflow.
+func TestIssue756_RegistryErrorHoldsOnlyEditedWorkflow(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	down := fakeContracts{byImage: pushed.byImage, unavailable: map[string]bool{"oci:a": true, "oci:b": true}}
+	r := NewWorkflowReconciler(s, NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0), down, nil, 0)
+	req := controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: "default", Name: "wf"}
+	seedWF(t, s, "wf", nil, fnStep("a", "oci:a"))
+	reconcileByName(t, s, pushed, "wf")
+	rr, f := runRig(t, s)
+
+	if _, err := r.Reconcile(ctx, req); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("reconcile of the unchanged wf during the outage: err=%v, want Unavailable", err)
+	}
+	seedRun(t, s, "wf-0", "wf", `{}`)
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-0"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a"}) {
+		t.Fatalf("run of the unchanged wf: phase=%q dispatched=%v, want Succeeded with [a]", run.Status.Phase, f.order)
+	}
+
+	editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+	if _, err := r.Reconcile(ctx, req); fault.KindOf(err) != fault.Unavailable {
+		t.Fatalf("reconcile of the edited wf during the outage: err=%v, want Unavailable", err)
+	}
+	seedRun(t, s, "wf-1", "wf", `{}`)
+	res, run := reconcileRun(t, ctx, rr, s, "wf-1")
+	if c, _ := run.Status.Conditions.Get(condReady); run.Status.Phase != runPending || c.Reason != "WorkflowNotReady" || res.RequeueAfter <= 0 || len(f.order) != 1 {
+		t.Fatalf("run of the edited wf: phase=%q Ready=%+v requeueAfter=%v dispatched=%v, want Pending, WorkflowNotReady, a requeue and nothing new dispatched",
+			run.Status.Phase, c, res.RequeueAfter, f.order)
+	}
+
+	reconcileByName(t, s, pushed, "wf")
+	if _, run := reconcileRun(t, ctx, rr, s, "wf-1"); run.Status.Phase != runSucceeded || !slices.Equal(f.order, []v1.ObjectName{"a", "a", "b"}) {
+		t.Fatalf("run after the outage: phase=%q dispatched=%v, want Succeeded with [a b] after [a]", run.Status.Phase, f.order)
 	}
 }
 

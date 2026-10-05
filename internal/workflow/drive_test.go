@@ -145,6 +145,7 @@ func seedWorkflowSpec(t *testing.T, s store.Store, name string, sp v1.WorkflowSp
 	obj, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", v1.ObjectName(name))
 	wf := obj.(*v1.Workflow)
 	wf.Spec = sp
+	readyAfterEdit(wf)
 	if _, err := s.Update(context.Background(), wf); err != nil {
 		t.Fatalf("seed workflow %s: %v", name, err)
 	}

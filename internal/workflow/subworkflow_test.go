@@ -195,6 +195,38 @@ func reconcileByName(t *testing.T, s store.Store, c ContractResolver, name strin
 	return got.(*v1.Workflow), res
 }
 
+// Issue #756: a parent type-checks a sub-workflow step against the child's contract for the child's current
+// spec: after an edit of the child it defers until the child is checked again, then sees the edited contract.
+func TestIssue756_ParentDefersOnEditedChild(t *testing.T) {
+	s := newStore(t)
+	fc := fakeContracts{byImage: map[string]v1.WorkflowContract{
+		"oci:c":     {Output: obj(map[string]string{"score": "number"}, "score")},
+		"oci:c2":    {Output: obj(map[string]string{"score": "string"}, "score")},
+		"oci:after": {Input: obj(map[string]string{"score": "number"}, "score")},
+	}}
+	seedWF(t, s, "scorer", nil, fnStep("c", "oci:c"))
+	seedWF(t, s, "parent", nil, subwfStep("sub", "scorer"), fnStep("after", "oci:after", "sub"))
+	reconcileByName(t, s, fc, "scorer")
+	if wf, _ := reconcileByName(t, s, fc, "parent"); !ready(wf) {
+		t.Fatalf("setup: parent is not Ready: %+v", wf.Status.Conditions)
+	}
+
+	got, _ := s.Get(context.Background(), v1.KindWorkflow.GVK(), "default", "scorer")
+	child := got.(*v1.Workflow)
+	child.Spec.Steps[0].Function.Image = "oci:c2"
+	if _, err := s.Update(context.Background(), child); err != nil {
+		t.Fatalf("edit scorer: %v", err)
+	}
+	if wf, res := reconcileByName(t, s, fc, "parent"); res.RequeueAfter <= 0 || mismatchReason(wf) != "" {
+		t.Fatalf("parent of the edited child: requeueAfter=%v mismatch=%q, want a requeue and no SchemaMismatch", res.RequeueAfter, mismatchReason(wf))
+	}
+
+	reconcileByName(t, s, fc, "scorer")
+	if wf, _ := reconcileByName(t, s, fc, "parent"); ready(wf) || mismatchReason(wf) != "EdgeTypeMismatch" {
+		t.Fatalf("parent after the child is checked: ready=%v mismatch=%q, want EdgeTypeMismatch against the edited contract", ready(wf), mismatchReason(wf))
+	}
+}
+
 // scenario: subworkflow-typed-edge-across-boundary — a `workflow:` step's contract is the child's cached
 // status.contract; upstream→sub and sub→downstream edges type-check with F65.
 func TestSubworkflowTypedEdgeAcrossBoundary(t *testing.T) {
