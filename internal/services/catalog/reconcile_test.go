@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -281,8 +282,7 @@ func TestReconcile_ready_publishes_proxy_endpoint(t *testing.T) {
 
 // scenario: catalog-engine-move-keeps-endpoint — the engine comes back on a new netns IP (a crashed
 // instance re-converged): the reconciler re-Ensures the proxy with the new upstream, and Status.Endpoint,
-// the URL consumers were injected with, stays the same. The function reconciler does not watch
-// CatalogService, so a moved endpoint would strand every consumer.
+// the URL consumers were injected with, stays the same: a running worker keeps the env it started with.
 func TestReconcile_engine_move_keeps_proxy_endpoint(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
@@ -756,4 +756,173 @@ func TestScenario_catalog_host_required_explicit(t *testing.T) {
 	require.NotEmpty(t, endpoint, "spec.catalogs consumers still get the proxy endpoint")
 	require.NotEqual(t, "10.63.0.7:8080", endpoint, "the endpoint is the PEP proxy, not the engine")
 	require.Empty(t, h.prov.tornDown, "the engine is not torn down")
+}
+
+// storeFunction stores Function name in ns default with change applied; processed marks its spec processed.
+func storeFunction(t *testing.T, st store.Store, name string, processed bool, change func(*v1.Function)) {
+	t.Helper()
+	obj, ok := v1.NewObject(v1.KindFunction)
+	require.True(t, ok)
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	fn.Spec.Replicas = 1
+	fn.Spec.Runtime = "nodejs22"
+	fn.Spec.Handler = "handle"
+	fn.Spec.Image = "file:///handler.mjs"
+	if processed {
+		fn.Status.ObservedGeneration = 1
+	}
+	if change != nil {
+		change(fn)
+	}
+	_, err := st.Create(context.Background(), fn)
+	require.NoError(t, err)
+}
+
+func bindsLake(fn *v1.Function) {
+	fn.Spec.Catalogs = []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}
+}
+
+// TestReconcileRecordsProxyPort: every pass with the proxy wired records the listener's port before its branch writes
+// the status, and a new run binds that port again. Not parallel, nor its subtests: a port bound in parallel could take
+// the recorded port between one run's Shutdown and the next run's rebind.
+func TestReconcileRecordsProxyPort(t *testing.T) {
+	cases := map[string]struct {
+		status provider.ProviderStatus
+		bucket bool
+		phase  v1.Phase
+	}{
+		"ready":            {status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}, bucket: true, phase: v1.PhaseReady},
+		"engine-not-ready": {status: provider.ProviderStatus{Running: 1, Address: "10.63.0.7:8080"}, bucket: true, phase: v1.PhasePending},
+		"hold-not-ready":   {phase: v1.PhasePending},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			if tc.bucket {
+				seedCatalogBucket(t, st)
+			}
+			_, err := st.Create(ctx, mkCatalogService("lake"))
+			require.NoError(t, err)
+			port := 0
+			for run := range 2 {
+				mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+				r := newReconciler(t, st, &fakeProvider{status: tc.status}, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+				reconcileOnce(t, r, "lake")
+				obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+				require.NoError(t, gerr)
+				cs := obj.(*v1.CatalogService)
+				require.Equal(t, tc.phase, cs.Status.Phase)
+				require.NotZero(t, cs.Status.ProxyPort)
+				url, ok := mgr.ProxyURL("default", "lake")
+				require.True(t, ok)
+				require.Equal(t, "127.0.0.1:"+strconv.Itoa(cs.Status.ProxyPort), url)
+				if run == 1 {
+					require.Equal(t, port, cs.Status.ProxyPort, "a new run binds the recorded port again")
+				}
+				port = cs.Status.ProxyPort
+				mgr.Shutdown()
+			}
+		})
+	}
+}
+
+// failingFunctionList fails every List of Functions.
+type failingFunctionList struct{ store.Store }
+
+func (s failingFunctionList) List(ctx context.Context, gvk v1.GroupVersionKind, opts store.ListOptions) (store.List, error) {
+	if gvk == v1.KindFunction.GVK() {
+		return store.List{}, errors.New("list failed")
+	}
+	return s.Store.List(ctx, gvk, opts)
+}
+
+// TestReconcileDeleteKeepsBoundListener: a deleted catalog's listener is released, not closed, while a Function binds
+// the catalog or the bound-Functions check fails; it closes once none binds it.
+func TestReconcileDeleteKeepsBoundListener(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+	storeFunction(t, st, "reader", true, bindsLake)
+	reconcileOnce(t, r, "lake")
+	url, ok := mgr.ProxyURL("default", "lake")
+	require.True(t, ok)
+
+	require.NoError(t, st.Delete(ctx, v1.KindCatalogService.GVK(), "default", "lake", ""))
+	reconcileOnce(t, r, "lake")
+	got, ok := mgr.ProxyURL("default", "lake")
+	require.True(t, ok, "reader binds lake, so its listener stays")
+	require.Equal(t, url, got)
+	require.Equal(t, []v1.ObjectName{"lake"}, mgr.Released("default"))
+	require.Equal(t, []provider.ProviderRef{{Namespace: "default", Name: "lake"}}, prov.tornDown, "the engine is torn down")
+
+	require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", "reader", ""))
+	failing := newReconciler(t, failingFunctionList{st}, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	_, err = failing.Reconcile(ctx, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"})
+	require.Error(t, err, "a failed bound-Functions check fails the pass")
+	_, ok = mgr.ProxyURL("default", "lake")
+	require.True(t, ok, "and keeps the listener")
+
+	reconcileOnce(t, r, "lake")
+	_, ok = mgr.ProxyURL("default", "lake")
+	require.False(t, ok, "no Function binds lake, so its listener closes")
+}
+
+// TestAnyFunctionBindsCountsSwitchingFunction: a Function binds a catalog it names, and every catalog of its
+// namespace while a worker of an earlier spec may run.
+func TestAnyFunctionBindsCountsSwitchingFunction(t *testing.T) {
+	cases := map[string]struct {
+		processed bool
+		change    func(*v1.Function)
+		want      bool
+	}{
+		"steady":      {processed: true, change: func(fn *v1.Function) { fn.Status.CurrentRevision, fn.Status.ServingRevision = "r1", "r1" }},
+		"other":       {processed: true, change: func(fn *v1.Function) { fn.Spec.Catalogs = []v1.FunctionCatalog{{Alias: "sea", Catalog: "sea"}} }},
+		"binds":       {processed: true, change: bindsLake, want: true},
+		"unprocessed": {want: true},
+		"switching":   {processed: true, change: func(fn *v1.Function) { fn.Status.CurrentRevision, fn.Status.ServingRevision = "r2", "r1" }, want: true},
+		"draining":    {processed: true, change: func(fn *v1.Function) { fn.Status.DrainingRevision = "r1" }, want: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			st := store.New(storemem.New())
+			storeFunction(t, st, "fn", tc.processed, tc.change)
+			binds, err := catalogsvc.AnyFunctionBinds(context.Background(), st, "default", "lake")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, binds)
+			binds, err = catalogsvc.AnyFunctionBinds(context.Background(), st, "ops", "lake")
+			require.NoError(t, err)
+			require.False(t, binds, "only Functions of the catalog's namespace count")
+		})
+	}
+}
+
+// TestMapFunctionMapsReleasedListeners: a Function event maps to the released listeners of its namespace only.
+func TestMapFunctionMapsReleasedListeners(t *testing.T) {
+	st := store.New(storemem.New())
+	fn := &v1.Function{}
+	fn.Name, fn.Namespace = "reader", "default"
+	require.Nil(t, newReconciler(t, st, &fakeProvider{}, nil).MapFunction(context.Background(), fn), "no proxy wired maps nothing")
+
+	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	for _, ref := range []struct {
+		ns   v1.NamespaceName
+		name v1.ObjectName
+	}{{"default", "lake"}, {"default", "kept"}, {"ops", "lake"}} {
+		_, _, err := mgr.Listen(ref.ns, ref.name, 0)
+		require.NoError(t, err)
+	}
+	mgr.Release("default", "lake")
+	mgr.Release("ops", "lake")
+	r := newReconciler(t, st, &fakeProvider{}, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	require.Equal(t, []controller.Request{{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}},
+		r.MapFunction(context.Background(), fn))
 }

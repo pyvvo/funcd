@@ -254,6 +254,9 @@ components:
             - Failed
             - Terminating
           type: string
+        proxyPort:
+          format: int64
+          type: integer
       type: object
     Condition:
       additionalProperties: false

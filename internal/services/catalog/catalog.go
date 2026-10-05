@@ -74,11 +74,11 @@ type ReconcilerDeps struct {
 	// ImageFor maps a curated runtime name → the engine image ref (ADR-0054). nil ⇒ a deterministic
 	// fallback "funcd/runtime-<runtime>" is used.
 	ImageFor func(runtime string) string
-	// Proxy runs the per-CatalogService node-private catalog PEP proxy (ADR-0137): on the Ready
-	// branch the reconciler Ensures a proxy fronting the engine and publishes ITS url as
-	// Status.Endpoint (internal functions inject the proxy, not the engine), Suspends it while a
-	// binding is missing, and Removes it on teardown. nil ⇒ no internal PEP proxy (the engine
-	// address is published directly, the pre-ADR-0137 posture) — kept nil-safe for the in-memory/unit path.
+	// Proxy runs the per-CatalogService node-private catalog PEP proxy (ADR-0137, ADR-0162): every pass Listens on
+	// the recorded status.proxyPort, the Ready branch Ensures the proxy fronts the engine and publishes ITS url as
+	// Status.Endpoint (internal functions inject the proxy, not the engine), a missing binding Suspends it, and a
+	// delete Releases it, closing it only once no Function binds the catalog. nil ⇒ no internal PEP proxy (the
+	// engine address is published directly, the pre-ADR-0137 posture) — kept nil-safe for the in-memory/unit path.
 	Proxy *cataloggw.Manager
 	// Routes contributes this catalog's OPT-IN external ingress entry (source "catalog/<ns>/<name>")
 	// to the shared edge-router aggregator (ADR-0138). When spec.ingress is set and the catalog is

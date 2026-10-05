@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -270,4 +271,108 @@ func TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle(t *testing.T) {
 	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
 	query()
 	require.EqualValues(t, 1, conns.Load(), "closing the default transport's idle connections must not touch the proxy's engine connections")
+}
+
+// statusAt POSTs an empty body to a bare host:port proxy URL and returns the status code.
+func statusAt(t *testing.T, url string) int {
+	t.Helper()
+	resp, err := http.Post("http://"+url, "application/octet-stream", strings.NewReader(""))
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	return resp.StatusCode
+}
+
+// TestManagerListenRebindsRecordedPort: a new run binds the port the previous run recorded, answering 503 until
+// Ensure targets the engine; a second Listen in the same run keeps the listener. Not parallel: a port bound in parallel
+// could take the recorded port between the first run's Shutdown and the rebind.
+func TestManagerListenRebindsRecordedPort(t *testing.T) {
+	first := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	port, moved, err := first.Listen("data", "lake", 0)
+	require.NoError(t, err)
+	require.False(t, moved)
+	require.NotZero(t, port)
+	first.Shutdown()
+
+	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	bound, moved, err := mgr.Listen("data", "lake", port)
+	require.NoError(t, err)
+	require.False(t, moved)
+	require.Equal(t, port, bound)
+	url, ok := mgr.ProxyURL("data", "lake")
+	require.True(t, ok)
+	require.Equal(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), url)
+	require.Equal(t, http.StatusServiceUnavailable, statusAt(t, url), "a listener answers 503 until Ensure targets it")
+
+	again, moved, err := mgr.Listen("data", "lake", 0)
+	require.NoError(t, err)
+	require.False(t, moved)
+	require.Equal(t, port, again, "a listener bound in this run is kept")
+}
+
+// TestManagerListenTakesNewPortWhenTaken: a recorded port another socket holds moves the listener to a new port.
+func TestManagerListenTakesNewPortWhenTaken(t *testing.T) {
+	t.Parallel()
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = holder.Close() })
+	taken := holder.Addr().(*net.TCPAddr).Port
+
+	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	bound, moved, err := mgr.Listen("data", "lake", taken)
+	require.NoError(t, err)
+	require.True(t, moved)
+	require.NotEqual(t, taken, bound)
+	url, ok := mgr.ProxyURL("data", "lake")
+	require.True(t, ok)
+	require.Equal(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(bound)), url)
+}
+
+// TestManagerReleaseKeepsURL: a released listener answers 503 on the same URL and is listed until Listen or Ensure
+// takes it back; Remove closes it.
+func TestManagerReleaseKeepsURL(t *testing.T) {
+	t.Parallel()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(up.Close)
+	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	mgr.Release("data", "lake")
+	require.Empty(t, mgr.Released("data"), "releasing an unknown catalog is a no-op")
+
+	catalog := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	url, err := mgr.Ensure(catalog, up.URL, engineToken)
+	require.NoError(t, err)
+	_, _, err = mgr.Listen("data", "other", 0)
+	require.NoError(t, err)
+	_, _, err = mgr.Listen("ops", "lake", 0)
+	require.NoError(t, err)
+	mgr.Release("ops", "lake")
+
+	mgr.Release("data", "lake")
+	require.Equal(t, http.StatusServiceUnavailable, statusAt(t, url))
+	got, ok := mgr.ProxyURL("data", "lake")
+	require.True(t, ok)
+	require.Equal(t, url, got, "a released listener keeps its URL")
+	require.Equal(t, []v1.ObjectName{"lake"}, mgr.Released("data"))
+
+	_, _, err = mgr.Listen("data", "lake", 0)
+	require.NoError(t, err)
+	require.Empty(t, mgr.Released("data"), "Listen takes a released listener back")
+
+	mgr.Release("data", "lake")
+	again, err := mgr.Ensure(catalog, up.URL, engineToken)
+	require.NoError(t, err)
+	require.Equal(t, url, again)
+	require.Empty(t, mgr.Released("data"), "Ensure takes a released listener back")
+
+	mgr.Release("data", "lake")
+	mgr.Remove("data", "lake")
+	_, ok = mgr.ProxyURL("data", "lake")
+	require.False(t, ok)
+	conn, derr := net.DialTimeout("tcp", url, dialTimeout)
+	if derr == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, derr, "Remove closes the listener")
 }

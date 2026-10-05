@@ -653,8 +653,9 @@ func (p *Platform) buildControlPlane() error {
 	// internal function→catalog queries under the same per-caller, per-query Cedar PEP as blob/kv/S3.
 	// It resolves a presented catalog token (a per-function MAC bearer or a minted per-Identity token)
 	// to its principal via catalogKeys, PEPs catalog::query on the endpoint's CatalogService, and swaps
-	// the caller token for the shared engine token only after an allow. The catalog reconciler Ensures a
-	// proxy per Ready catalog (publishing its url as Status.Endpoint) and Removes it on teardown.
+	// the caller token for the shared engine token only after an allow. The catalog reconciler binds a
+	// listener per catalog on its recorded port and Ensures it fronts the Ready engine (publishing its url as
+	// Status.Endpoint); a deleted catalog's listener closes once no Function binds it (ADR-0162).
 	// bindHost/publishHost: a worker under containerd is in its OWN netns and cannot reach the daemon's
 	// 127.0.0.1, so when c.catalogProxyHost is set (the CNI bridge gateway IP) the proxy binds 0.0.0.0
 	// (netns-reachable) and publishes that host; empty ⇒ 127.0.0.1 both (the process-runtime/dev default).
@@ -879,6 +880,9 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
 	}
 	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
+	// ADR-0162: a consumer's status follows its catalog, and a released listener closes once no Function binds it.
+	ctrl.Watches(v1.KindCatalogService.GVK(), fnReconciler.MapCatalogService)
+	ctrl.Watches(v1.KindFunction.GVK(), catalogReconciler.MapFunction)
 
 	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and
 	// registers it (via storeExternalKeys, wired into s3gateway.Deps.External above).

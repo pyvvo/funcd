@@ -265,14 +265,86 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
 
+  # ADR-0162: a deleted catalog's proxy listener stays bound while catalog-reader binds it, so the re-applied catalog
+  # serves on the same URL and the consumer's worker is not re-created.
+  - name: catalog-recreate-keeps-url — a deleted and re-applied CatalogService keeps its endpoint, and catalog-reader keeps its worker
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-recreate
+            sudo ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"catalog-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-before
+            [ -s /tmp/reader-tasks-before ] || exit 1
+            funcdctl delete catalogservice lake -n default >/dev/null
+            echo "ENDPOINT=$(cat /tmp/lake-endpoint-recreate)"'
+        info: "deleted CatalogService lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get catalogservice lake -n default >/dev/null 2>&1 && exit 1
+            reason=$(funcdctl get function catalog-reader -n default -o json | python3 -c "import sys,json;print(next((c.get(\"reason\",\"\") for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"]==\"RevisionReady\"),\"\"))")
+            [ "$reason" = CatalogNotReady ] || exit 1
+            funcdctl apply -f /opt/lane/catalogservice.yaml >/dev/null
+            echo "READER_REASON=$reason"'
+        retry: 30
+        delay: 2
+        info: "lake gone, re-applied → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "READER_REASON=CatalogNotReady"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            cs=$(funcdctl get catalogservice lake -n default -o json)
+            phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            [ "$phase" = Ready ] || exit 1
+            ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            sudo ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"catalog-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-after
+            [ "$ep" = "$(cat /tmp/lake-endpoint-recreate)" ] && same=yes || same=no
+            cmp -s /tmp/reader-tasks-before /tmp/reader-tasks-after && kept=yes || kept=no
+            echo "CATALOG=$phase ENDPOINT_SAME=$same READER_WORKER_KEPT=$kept ($(cat /tmp/lake-endpoint-recreate) -> $ep)"'
+        retry: 60
+        delay: 2
+        info: "after the re-apply → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "ENDPOINT_SAME=yes"
+          - result.systemout ShouldContainSubstring "READER_WORKER_KEPT=yes"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 20
+        delay: 2
+        info: "catalog-reader after the re-apply → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[42]]"
+
+  # ADR-0162 restart-keeps-catalog-port: the hard restart below also checks that lake keeps its proxy port and endpoint.
   - name: owner-kind-across-daemon-restart — after a hard daemon restart both lakes return, each on workers labelled with its own kind
     steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"'
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])" > /tmp/lake-port-before
+            sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"
+            echo "BEFORE=$(cat /tmp/lake-port-before)"'
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BEFORE=10.63.0.1:"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
@@ -290,7 +362,9 @@ testcases:
             sock=/var/lib/funcd/data/containerd/containerd.sock
             label() { sudo ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
             phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
-            echo "FUNCTION=$(phase function lake) CATALOG=$(phase catalogservice lake) ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0)"'
+            port=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])")
+            [ "$port" = "$(cat /tmp/lake-port-before)" ] && same=yes || same=no
+            echo "FUNCTION=$(phase function lake) CATALOG=$(phase catalogservice lake) ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0) PORT_SAME=$same ($(cat /tmp/lake-port-before) -> $port)"'
         retry: 60
         delay: 2
         info: "after the daemon restart → {{.result.systemout}}"
@@ -298,6 +372,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "FUNCTION=Ready"
           - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "PORT_SAME=yes"
           - result.systemout ShouldContainSubstring "ENGINE_LABEL=CatalogService"
           - result.systemout ShouldContainSubstring "FUNCTION_LABEL=Function"
       - type: http
