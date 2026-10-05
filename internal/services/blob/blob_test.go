@@ -137,6 +137,21 @@ func TestScenarioBlobList(t *testing.T) {
 	require.Equal(t, []string{"bronze/a", "bronze/b"}, keys)
 }
 
+// List stays inside the bound prefix: a substrate key whose prefix only starts with the bound one
+// (pq/… for prefix p) is another prefix's object and never listed, not even for an empty sub-prefix.
+func TestListExcludesSiblingPrefixSharingName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	bkt := newMapBucket()
+	bkt.m["p/a"] = []byte("v")
+	bkt.m["pq/secret"] = []byte("v")
+	f := newFacade(t, bkt, s3PDP{readOK: true})
+
+	keys, err := f.List(ctx, "default", "fn", "files", "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a"}, keys)
+}
+
 // scenario: blob-unbound-forbidden — an alias the function did not declare is default-deny (Forbidden),
 // and a bound alias with no permitting Policy is also denied.
 func TestScenarioBlobUnboundForbidden(t *testing.T) {

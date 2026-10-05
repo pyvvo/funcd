@@ -167,7 +167,7 @@ func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName
 		return nil, err
 	}
 	strip := blobKey(b.Prefix, "") + "/"
-	attrs, err := sub.List(ctx, blobKey(b.Prefix, prefix))
+	attrs, err := sub.List(ctx, strip+prefix)
 	if err != nil {
 		return nil, err
 	}

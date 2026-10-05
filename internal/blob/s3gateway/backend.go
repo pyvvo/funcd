@@ -277,7 +277,9 @@ func (b *be) HeadObject(ctx context.Context, in *awss3.HeadObjectInput) (*awss3.
 	}, nil
 }
 
-// listing collects the objects under a bound prefix that match an optional sub-prefix.
+// listing collects the objects under a bound prefix that match an optional sub-prefix. Only
+// the leading segment is authorized, so a key whose own segment differs (golden/… for a
+// Prefix of gold) belongs to another prefix and is left out.
 func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix string) ([]s3response.Object, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -293,6 +295,9 @@ func (b *be) listing(ctx context.Context, action authz.Action, bucket, keyPrefix
 	out := make([]s3response.Object, 0, len(items))
 	for _, it := range items {
 		k := it.Key
+		if p, _ := splitKey(k); p != prefix {
+			continue
+		}
 		out = append(out, s3response.Object{
 			Key:          ptr(k),
 			Size:         ptr(it.Size),
