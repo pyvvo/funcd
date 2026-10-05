@@ -1103,12 +1103,14 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build static asset handler")
 	}
 	// ADR-0114 (F76/F78): observability wraps outer-than-limit (times the whole hop incl. rejects) but
-	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). Runtime
-	// order: Recover → RequestID → observ → limit → shape → dataplane.Handler.
+	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
+	// bound is outermost, so every byte of every listener response passes it. Runtime order:
+	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
 		c.invokeDefaultTimeout, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
-	dpHandler := gateway.Chain(dpCore, gateway.Recover(p.logger), gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
+	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
+		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
 	// Late-bind the worker-node local API invoker (ADR-0064) to the same chain minus the ingress
 	// limiter and edge observ: ADR-0112 guards the listener, so a nested fn-to-fn invoke never takes its
 	// caller's in-flight slot or rate token (#87); edge signals describe only listener requests, so an
