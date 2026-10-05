@@ -37,6 +37,27 @@ type Ref struct {
 // String renders the ref as "<namespace>/<function>" for logs.
 func (r Ref) String() string { return string(r.Namespace) + "/" + string(r.Function) }
 
+// traceparentHeader is the W3C trace-context header (ADR-0165). The handler carries it in the ctx it
+// passes to Invoker.Invoke, so the Invoker contract (ADR-0064) keeps its signature and a wrapping
+// Invoker (ADR-0147) passes it through.
+const traceparentHeader = "traceparent"
+
+type traceparentKey struct{}
+
+// withTraceparent returns ctx carrying tp; an empty tp leaves ctx unchanged.
+func withTraceparent(ctx context.Context, tp string) context.Context {
+	if tp == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, traceparentKey{}, tp)
+}
+
+// traceparentFrom returns the traceparent withTraceparent put in ctx, "" when absent.
+func traceparentFrom(ctx context.Context) string {
+	tp, _ := ctx.Value(traceparentKey{}).(string)
+	return tp
+}
+
 // Resolver maps (caller, alias) → the link target, applying the link-as-grant rule (default-deny):
 // fault.Forbidden when the caller declares no such link. Same-namespace only (V1.1).
 type Resolver interface {
@@ -121,7 +142,7 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 				return
 			}
 		}
-		out, err := inv.Invoke(r.Context(), target, input, timeout)
+		out, err := inv.Invoke(withTraceparent(r.Context(), r.Header.Get(traceparentHeader)), target, input, timeout)
 		durMs := time.Since(start).Milliseconds()
 		if err != nil {
 			var ue *UpstreamError
