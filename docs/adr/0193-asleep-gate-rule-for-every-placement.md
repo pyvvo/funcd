@@ -1,6 +1,6 @@
 # ADR-0193: One asleep-gate rule for every placement — a pooled member sleeps like a solo Function
 
-- **Status**: Accepted (2026-10-05)
+- **Status**: Implemented (2026-10-05)
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: function, pooling, activator, scale-to-zero, status, quiescence
