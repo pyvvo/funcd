@@ -2,11 +2,15 @@ package badger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
@@ -297,4 +301,78 @@ func TestIssue790_IdleShipUploadsNothing(t *testing.T) {
 	require.NoError(t, ab.Restore(ctx))
 	require.Equal(t, 10, countKeys(again, "k/"))
 	require.Equal(t, 5, countKeys(again, "more/"), "a ship after a restore continues the chain")
+}
+
+// A write committed while an incremental export runs is in that segment or a later one. Each producer of the
+// export's Stream opens its own snapshot, so the cursor must not pass a version that an earlier snapshot
+// could not see.
+func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	const groups, perGroup = 2, 10000
+	// Closing the seed flushes it to a table, whose splits give every export many key ranges.
+	seed, err := openDB(dir, false)
+	require.NoError(t, err)
+	for g := range groups {
+		writeKeys(t, seed, fmt.Sprintf("k/%d/", g), perGroup, 4)
+	}
+	require.NoError(t, seed.Close())
+	src := openRawDB(t, dir)
+	bucket := newFakeBucket()
+	b, err := NewBackup(src, bucket, BackupConfig{ChunkBytes: 1 << 20})
+	require.NoError(t, err)
+	bk := b.(*backup)
+	_, err = bk.Ship(ctx)
+	require.NoError(t, err)
+
+	const writers = 4
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	stopWriters := func() {
+		stop.Store(true)
+		wg.Wait()
+	}
+	t.Cleanup(stopWriters)
+	written := make([][]string, writers)
+	for w := range writers {
+		wg.Go(func() {
+			for seq := 0; !stop.Load(); seq++ {
+				k := fmt.Sprintf("k/%d/%06d-w%d-%d", rand.IntN(groups), rand.IntN(perGroup), w, seq)
+				if err := src.Update(func(txn *badger.Txn) error { return txn.Set([]byte(k), nil) }); err != nil {
+					t.Errorf("write %s: %v", k, err)
+					return
+				}
+				written[w] = append(written[w], k)
+			}
+		})
+	}
+	ships := 0
+	for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); ships++ {
+		_, err := bk.Ship(ctx)
+		require.NoError(t, err)
+	}
+	stopWriters()
+	_, err = bk.Ship(ctx)
+	require.NoError(t, err)
+
+	dst := openRawDB(t, t.TempDir())
+	rb, err := NewBackup(dst, bucket, BackupConfig{})
+	require.NoError(t, err)
+	require.NoError(t, rb.Restore(ctx))
+	missing, total := 0, 0
+	require.NoError(t, dst.View(func(txn *badger.Txn) error {
+		for _, keys := range written {
+			total += len(keys)
+			for _, k := range keys {
+				_, err := txn.Get([]byte(k))
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					missing++
+				} else if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}))
+	require.Zero(t, missing, "%d of %d keys written during %d ships are in no backup segment", missing, total, ships)
 }
