@@ -20,6 +20,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 // fakeBucket is an in-memory blob.Bucket recording puts (count + bytes) and able to inject upload failures
@@ -574,4 +575,124 @@ func TestIssue807_CloseWaitsForRunningRebaseline(t *testing.T) {
 	close(release)
 	require.NoError(t, <-rebased, "the re-baseline finished on an open db")
 	require.NoError(t, <-closed)
+}
+
+// openBackupKV opens the driver on dir through the daemon-facing opener; a nil bucket means DR backup is off.
+func openBackupKV(t *testing.T, dir string, bucket blob.Bucket) (kvstore.KV, Seams) {
+	t.Helper()
+	kv, seams, err := OpenWithSeamsFor(dir, bucket, BackupConfig{}, nil, CDCConfig{},
+		WithSyncWrites(false), WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	return kv, seams
+}
+
+// A key deleted while DR backup is off stays deleted in a restore taken after backup is on again, although
+// the store may hold no version of the deletion (a native DropPrefix, or a delete marker compaction dropped).
+func TestIssue808_DeleteWhileBackupOffStaysDeletedAfterRestore(t *testing.T) {
+	cases := map[string]func(t *testing.T, kv kvstore.KV){
+		"Delete then churn": func(t *testing.T, kv kvstore.KV) {
+			ctx := context.Background()
+			require.NoError(t, kv.Delete(ctx, "s/victim"))
+			val := make([]byte, 4<<10)
+			for i := 0; i < 12000; i++ {
+				require.NoError(t, kv.Put(ctx, fmt.Sprintf("churn/%06d", i), val))
+			}
+		},
+		"native DropPrefix": func(t *testing.T, kv kvstore.KV) {
+			require.NoError(t, kv.(*driver).DropPrefix("s/"))
+		},
+	}
+	for name, deleteVictim := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			bucket := newFakeBucket()
+
+			kv, seams := openBackupKV(t, dir, bucket)
+			require.NoError(t, kv.Put(ctx, "keep", []byte("k")))
+			require.NoError(t, kv.Put(ctx, "s/victim", []byte("v")))
+			_, err := seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			require.NoError(t, kv.(io.Closer).Close())
+
+			kv, seams = openBackupKV(t, dir, nil)
+			require.Nil(t, seams.Backup)
+			deleteVictim(t, kv)
+			require.NoError(t, kv.(io.Closer).Close())
+			// A second open without backup lets compaction run over the deletion.
+			kv, _ = openBackupKV(t, dir, nil)
+			require.NoError(t, kv.(io.Closer).Close())
+
+			kv, seams = openBackupKV(t, dir, bucket)
+			_, err = seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			_, found, err := kv.Get(ctx, "s/victim")
+			require.NoError(t, err)
+			require.False(t, found, "deleted in the live store")
+			require.NoError(t, kv.(io.Closer).Close())
+
+			dst, dseams := openBackupKV(t, t.TempDir(), bucket)
+			t.Cleanup(func() { _ = dst.(io.Closer).Close() })
+			require.NoError(t, dseams.Backup.Restore(ctx))
+			_, found, err = dst.Get(ctx, "keep")
+			require.NoError(t, err)
+			require.True(t, found, "keep restored")
+			_, found, err = dst.Get(ctx, "s/victim")
+			require.NoError(t, err)
+			require.False(t, found, "a key deleted while backup was off came back after the restore")
+		})
+	}
+}
+
+// Only an open without the backup seam ends the chain: a restart with backup on ships an incremental that
+// continues it, while a plain Open in between makes the next Ship re-baseline.
+func TestIssue808_ReopenContinuesChainOnlyWithBackupOn(t *testing.T) {
+	for name, plainOpen := range map[string]bool{"backup stays on": false, "plain Open in between": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			bucket := newFakeBucket()
+			kv, seams := openBackupKV(t, dir, bucket)
+			require.NoError(t, kv.Put(ctx, "a", []byte("1")))
+			to, err := seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			require.NoError(t, kv.(io.Closer).Close())
+			if plainOpen {
+				kv, err = Open(dir, WithSyncWrites(false), WithValueLogGCInterval(0))
+				require.NoError(t, err)
+				require.NoError(t, kv.(io.Closer).Close())
+			}
+
+			kv, seams = openBackupKV(t, dir, bucket)
+			t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+			require.NoError(t, kv.Put(ctx, "b", []byte("2")))
+			_, err = seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			man, err := seams.Backup.(*backup).loadManifest(ctx)
+			require.NoError(t, err)
+			if plainOpen {
+				require.NotNil(t, man.Base, "the next Ship re-baselined")
+				require.Empty(t, man.Incs)
+				return
+			}
+			require.Nil(t, man.Base, "no re-baseline")
+			require.Len(t, man.Incs, 2)
+			require.Equal(t, to, man.Incs[1].Since, "the incremental continues from the cursor")
+		})
+	}
+}
+
+// The first backup ever (no cursor, no chain) ships an incremental since 0, as before.
+func TestIssue808_FirstBackupShipsIncremental(t *testing.T) {
+	ctx := context.Background()
+	kv, seams := openBackupKV(t, t.TempDir(), newFakeBucket())
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	require.NoError(t, kv.Put(ctx, "a", []byte("1")))
+	_, err := seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	man, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.Nil(t, man.Base)
+	require.Len(t, man.Incs, 1)
+	require.Zero(t, man.Incs[0].Since)
 }

@@ -20,7 +20,8 @@ type Seams struct {
 // need the *badger.DB that Open creates — by opening the db first, building each seam (when its builder
 // is non-nil) over that db, then starting the gateway with the seams already attached (so CDC's OnWrite
 // fires on the very first write, with no attach-after-start race). With both builders nil it is exactly
-// Open. The seams' background loops (Backup.Ship cadence, CDC.Tail) are started by the caller.
+// Open. Without a backup seam it drops the backup cursor, so the next backup re-baselines (#808). The seams'
+// background loops (Backup.Ship cadence, CDC.Tail) are started by the caller.
 func OpenWithSeams(
 	dir string,
 	buildBackup func(*badger.DB) (Backup, error),
@@ -48,6 +49,12 @@ func OpenWithSeams(
 			return nil, Seams{}, err
 		}
 		seams.Backup, cfg.backup = b, b
+	}
+	if cfg.backup == nil {
+		if err := dropBackupCursor(db); err != nil {
+			_ = db.Close()
+			return nil, Seams{}, err
+		}
 	}
 	return startDriver(db, cfg), seams, nil
 }
