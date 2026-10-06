@@ -34,6 +34,9 @@ const (
 	defaultChunkBytes = 64 << 20 // 64 MiB
 	backupCursorKey   = Reserved + "backup/cursor"
 	manifestKey       = "manifest.json"
+	// exportNumGo caps the export's producers: each holds its own batch buffers, so Badger's default of 8
+	// multiplies the export's peak heap (ADR-0067 Decision 2: a low Stream.NumGo caps the export RSS).
+	exportNumGo = 1
 )
 
 // BackupConfig configures the opt-in DR backup (ADR-0067). Zero ChunkBytes ⇒ 64 MiB.
@@ -185,6 +188,7 @@ func (b *backup) export(w io.Writer, since uint64) (uint64, error) {
 	s := b.db.NewStream()
 	s.LogPrefix = "kvbadger.backup"
 	s.SinceTs = since
+	s.NumGo = exportNumGo
 	s.ChooseKey = func(item *badger.Item) bool { return string(item.Key()) != backupCursorKey }
 	to, err := s.Backup(w, since)
 	if err != nil {
