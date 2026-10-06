@@ -9928,5 +9928,35 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-805-fix-claude-opus-5-5-w10.md",
     "notes": "No findings. Revert overlay failed 3/3 (Rebaseline 365-526 MiB vs 80 MiB). Fixed: -race x5 and x10 all pass, worst ratio 1.47. Mutant 'remove the NumGo line' fails 3/3; NumGo=4 fails 2/3 and NumGo=2 fails 1/3, because both sit near the 2x margin (a known limit, not scored). Touched package: vet and lint clean."
+  },
+  {
+    "date": "2026-10-06",
+    "issue": "807",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-807-fix-claude-opus-5-5-w11.md",
+    "notes": "pass, no findings; revert overlay fails all 3 TestIssue807 tests for the issue's reason (no base, incs=3), -race x3 green, 3/3 mutants killed (fresh period from start, zero At, Close without loop wait); Rebaseline not split (allowed; #808 does the split); touched-package tests/vet/lint green."
+  },
+  {
+    "date": "2026-10-06",
+    "issue": "808",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-808-fix-claude-opus-5-5-w11.md",
+    "notes": "pass; minor(model): a re-baseline after an off period always names its base base/0 (no cursor), so a second off->on cycle rewrites the live base's parts in place and a crash mid-upload leaves a mixed part set; revert overlay fails both #808 subtests for the issue's reason; 3/3 mutants killed (M2 only by the chain-continuation test, since inc/0 prefix reuse masks it in the regression test); field rename rebaseline->fullEvery touches one RunBackup line #807 also changes (mechanical merge)"
   }
 ]
