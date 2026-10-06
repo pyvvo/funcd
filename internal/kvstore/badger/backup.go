@@ -144,8 +144,10 @@ func (b *backup) rebaseline(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prefix := fmt.Sprintf("base/%020d", at)
 	started := time.Now().UTC()
+	// the start time keeps the name unique: two re-baselines can start at one cursor (none after the store ran
+	// without backup, #808), and a reused name would overwrite the live base's parts before the manifest moves
+	prefix := fmt.Sprintf("base/%020d-%d", at, started.UnixNano())
 	w := b.newChunkWriter(ctx, prefix)
 	to, berr := b.export(w, 0)
 	if berr != nil {

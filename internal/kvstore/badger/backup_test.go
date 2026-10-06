@@ -696,3 +696,60 @@ func TestIssue808_FirstBackupShipsIncremental(t *testing.T) {
 	require.Len(t, man.Incs, 1)
 	require.Zero(t, man.Incs[0].Since)
 }
+
+// A re-baseline never writes into the live base: after backup was off twice, both re-baselines start with no
+// cursor, and a base named after the cursor alone reused the live base's name, so a failure before the
+// manifest moved left the live base holding parts of the unfinished export (#808).
+func TestIssue808_FailedRebaselineLeavesLiveBaseIntact(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	bucket := newFakeBucket()
+	offThenOn := func(key string) (kvstore.KV, Seams) {
+		kv, err := Open(dir, WithSyncWrites(false), WithValueLogGCInterval(0))
+		require.NoError(t, err)
+		require.NoError(t, kv.Put(ctx, key, []byte(key)))
+		require.NoError(t, kv.(io.Closer).Close())
+		return openBackupKV(t, dir, bucket)
+	}
+
+	kv, seams := openBackupKV(t, dir, bucket)
+	require.NoError(t, kv.Put(ctx, "a", []byte("a")))
+	_, err := seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	require.NoError(t, kv.(io.Closer).Close())
+
+	kv, seams = offThenOn("b")
+	_, err = seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	require.NoError(t, kv.(io.Closer).Close())
+	live, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, live.Base)
+	before := map[string][]byte{}
+	bucket.mu.Lock()
+	for i := 0; i < live.Base.Parts; i++ {
+		k := fmt.Sprintf("%s/part-%05d", live.Base.Prefix, i)
+		before[k] = append([]byte(nil), bucket.objs[k]...)
+	}
+	bucket.mu.Unlock()
+
+	kv, seams = offThenOn("c")
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	bucket.failPut = func(key string) error {
+		if key == manifestKey {
+			return errors.New("target down")
+		}
+		return nil
+	}
+	_, err = seams.Backup.Ship(ctx)
+	require.Error(t, err, "the re-baseline fails before the manifest moves")
+
+	man, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.Equal(t, live, man, "the manifest still names the live base")
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	for k, b := range before {
+		require.Equal(t, b, bucket.objs[k], "%s was overwritten by the unfinished re-baseline", k)
+	}
+}
