@@ -60,11 +60,14 @@ func NewBackup(db *badger.DB, bucket blob.Bucket, cfg BackupConfig) (Backup, err
 }
 
 // segment is one exported range of blob parts (a base or an incremental). Parts are part-00000…part-NNNNN.
+// At is when Rebaseline started a base's export; it is zero on an incremental and in a manifest written
+// before the field existed, which reads as an unknown re-baseline time.
 type segment struct {
-	Prefix string `json:"prefix"`
-	Since  uint64 `json:"since"`
-	To     uint64 `json:"to"`
-	Parts  int    `json:"parts"`
+	Prefix string    `json:"prefix"`
+	Since  uint64    `json:"since"`
+	To     uint64    `json:"to"`
+	Parts  int       `json:"parts"`
+	At     time.Time `json:"at,omitzero"`
 }
 
 // manifest is the ordered restore chain: the latest base then the incrementals after it. It is the
@@ -128,6 +131,7 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 		return err
 	}
 	prefix := fmt.Sprintf("base/%020d", at)
+	started := time.Now().UTC()
 	w := b.newChunkWriter(ctx, prefix)
 	to, berr := b.export(w, 0)
 	if berr != nil {
@@ -136,7 +140,7 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	man := manifest{Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts}}
+	man := manifest{Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: started}}
 	if err := b.saveManifest(ctx, man); err != nil {
 		return err
 	}
@@ -396,7 +400,7 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 	}
 	inc := time.NewTicker(interval)
 	defer inc.Stop()
-	reb := time.NewTicker(rebaseline)
+	reb := time.NewTimer(bk.untilRebaseline(ctx, rebaseline))
 	defer reb.Stop()
 	for {
 		select {
@@ -407,9 +411,26 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 				logger.Error("kv backup ship failed", "err", err)
 			}
 		case <-reb.C:
-			if err := bk.Rebaseline(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("kv backup re-baseline failed", "err", err)
+			next := rebaseline // a failed re-baseline retries one period later, never in a loop of full exports
+			if err := bk.Rebaseline(ctx); err != nil {
+				if ctx.Err() == nil {
+					logger.Error("kv backup re-baseline failed", "err", err)
+				}
+			} else {
+				next = bk.untilRebaseline(ctx, rebaseline)
 			}
+			reb.Reset(next)
 		}
 	}
+}
+
+// untilRebaseline returns how long until the next re-baseline is due: one period after the time the manifest's
+// base records, which survives a restart (#807). A manifest without a base or a recorded time, or one that
+// cannot be read, is due now.
+func (b *backup) untilRebaseline(ctx context.Context, period time.Duration) time.Duration {
+	man, err := b.loadManifest(ctx)
+	if err != nil || man.Base == nil || man.Base.At.IsZero() {
+		return 0
+	}
+	return max(time.Until(man.Base.At.Add(period)), 0)
 }

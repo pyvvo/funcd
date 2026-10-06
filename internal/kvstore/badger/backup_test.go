@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"runtime/debug"
@@ -466,4 +467,111 @@ func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
 	t.Logf("peak heap: Rebaseline %d MiB, single-producer export %d MiB", rebaseline>>20, low>>20)
 	require.Less(t, rebaseline, 2*low,
 		"the re-baseline export holds more than one producer's buffers: its Stream.NumGo is not low (ADR-0067 Decision 2)")
+}
+
+// A process that restarts more often than kvstore.backup.rebaseline still re-baselines once a period has passed
+// since the recorded base: three runs of 1.5 s with a 2 s period, a write before each. A later run's base holds
+// that run's write.
+func TestIssue807_RebaselineRunsAcrossRestarts(t *testing.T) {
+	ctx := context.Background()
+	db := openRawDB(t, t.TempDir())
+	bucket := newFakeBucket()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := BackupConfig{Interval: 200 * time.Millisecond, Rebaseline: 2 * time.Second}
+	for run := range 3 {
+		writeKeys(t, db, fmt.Sprintf("run%d/", run), 10, 16)
+		b, err := NewBackup(db, bucket, cfg)
+		require.NoError(t, err)
+		runCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		RunBackup(runCtx, b, logger)
+		cancel()
+	}
+
+	man, err := (&backup{bucket: bucket}).loadManifest(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, man.Base, "no full re-baseline in more than two periods of restarting runs (incs=%d)", len(man.Incs))
+	dst := openRawDB(t, t.TempDir())
+	require.NoError(t, (&backup{db: dst, bucket: bucket}).loadSegment(ctx, *man.Base))
+	require.Equal(t, 10, countKeys(dst, "run1/"), "the base predates the second run: no later run re-baselined")
+}
+
+// At start, RunBackup re-baselines at once when the manifest's base records no time (a manifest written before
+// the field existed), and not when the recorded base is younger than the period.
+func TestIssue807_StartRebaselinesOnlyWhenDue(t *testing.T) {
+	ctx := context.Background()
+	db := openRawDB(t, t.TempDir())
+	bucket := newFakeBucket()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := BackupConfig{Interval: 50 * time.Millisecond, Rebaseline: time.Hour}
+	bk := &backup{db: db, bucket: bucket}
+	require.NoError(t, bk.saveManifest(ctx, manifest{Base: &segment{Prefix: "base/old"}}))
+	current := func() manifest {
+		man, err := bk.loadManifest(ctx)
+		if err != nil {
+			return manifest{}
+		}
+		return man
+	}
+	runUntil := func(done func(manifest) bool, msg string) {
+		b, err := NewBackup(db, bucket, cfg)
+		require.NoError(t, err)
+		runCtx, cancel := context.WithCancel(ctx)
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			RunBackup(runCtx, b, logger)
+		}()
+		defer func() {
+			cancel()
+			<-stopped
+		}()
+		require.Eventually(t, func() bool { return done(current()) }, 10*time.Second, 20*time.Millisecond, msg)
+	}
+
+	writeKeys(t, db, "a/", 10, 16)
+	runUntil(func(m manifest) bool { return m.Base != nil && m.Base.Prefix != "base/old" },
+		"a base with no recorded time was not re-baselined at start")
+	rebased := current().Base.Prefix
+
+	writeKeys(t, db, "b/", 10, 16)
+	runUntil(func(m manifest) bool { return len(m.Incs) > 0 }, "the write after a fresh base was not shipped as an incremental")
+	require.Equal(t, rebased, current().Base.Prefix, "a restart re-baselined although the recorded base is younger than the period")
+}
+
+// RunBackup now re-baselines at start, so a stop soon after a boot finds an export running: the driver's Close
+// waits for it instead of closing the db under it (Badger panics on a closed db).
+func TestIssue807_CloseWaitsForRunningRebaseline(t *testing.T) {
+	ctx := context.Background()
+	bucket := newFakeBucket()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	bucket.failPut = func(key string) error {
+		if strings.Contains(key, "/part-") {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		}
+		return nil
+	}
+	kv, seams, err := OpenWithSeams(t.TempDir(), func(db *badger.DB) (Backup, error) {
+		return NewBackup(db, bucket, BackupConfig{})
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, kv.Put(ctx, "a/b/c", []byte("v")))
+
+	rebased := make(chan error, 1)
+	go func() { rebased <- seams.Backup.(*backup).Rebaseline(ctx) }()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- kv.(io.Closer).Close() }()
+	select {
+	case err := <-closed:
+		close(release)
+		t.Fatalf("Close returned (%v) while a re-baseline was running", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-rebased, "the re-baseline finished on an open db")
+	require.NoError(t, <-closed)
 }
