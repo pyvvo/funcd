@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/pyvvo/funcd/compare/v0.7.2...v0.7.3) (2026-10-06)
+
+
+### Bug Fixes
+
+* **kvstore:** re-baseline the KV backup on schedule and after backup-off runs ([#737](https://github.com/pyvvo/funcd/issues/737)) ([#812](https://github.com/pyvvo/funcd/issues/812)) ([3d5d3ec](https://github.com/pyvvo/funcd/commit/3d5d3ec0b8010cbec2b4aadda806e9302387ed50))
+
 ## [0.7.2](https://github.com/pyvvo/funcd/compare/v0.7.1...v0.7.2) (2026-10-06)
 
 
