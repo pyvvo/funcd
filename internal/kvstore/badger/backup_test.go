@@ -2,11 +2,17 @@ package badger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
@@ -297,4 +303,167 @@ func TestIssue790_IdleShipUploadsNothing(t *testing.T) {
 	require.NoError(t, ab.Restore(ctx))
 	require.Equal(t, 10, countKeys(again, "k/"))
 	require.Equal(t, 5, countKeys(again, "more/"), "a ship after a restore continues the chain")
+}
+
+// A write committed while an incremental export runs is in that segment or a later one. Each producer of the
+// export's Stream opens its own snapshot, so the cursor must not pass a version that an earlier snapshot
+// could not see.
+func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	const groups, perGroup = 2, 10000
+	// Closing the seed flushes it to a table, whose splits give every export many key ranges.
+	seed, err := openDB(dir, false)
+	require.NoError(t, err)
+	for g := range groups {
+		writeKeys(t, seed, fmt.Sprintf("k/%d/", g), perGroup, 4)
+	}
+	require.NoError(t, seed.Close())
+	src := openRawDB(t, dir)
+	bucket := newFakeBucket()
+	b, err := NewBackup(src, bucket, BackupConfig{ChunkBytes: 1 << 20})
+	require.NoError(t, err)
+	bk := b.(*backup)
+	_, err = bk.Ship(ctx)
+	require.NoError(t, err)
+
+	const writers = 4
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	stopWriters := func() {
+		stop.Store(true)
+		wg.Wait()
+	}
+	t.Cleanup(stopWriters)
+	written := make([][]string, writers)
+	for w := range writers {
+		wg.Go(func() {
+			for seq := 0; !stop.Load(); seq++ {
+				k := fmt.Sprintf("k/%d/%06d-w%d-%d", rand.IntN(groups), rand.IntN(perGroup), w, seq)
+				if err := src.Update(func(txn *badger.Txn) error { return txn.Set([]byte(k), nil) }); err != nil {
+					t.Errorf("write %s: %v", k, err)
+					return
+				}
+				written[w] = append(written[w], k)
+			}
+		})
+	}
+	ships := 0
+	for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); ships++ {
+		_, err := bk.Ship(ctx)
+		require.NoError(t, err)
+	}
+	stopWriters()
+	_, err = bk.Ship(ctx)
+	require.NoError(t, err)
+
+	dst := openRawDB(t, t.TempDir())
+	rb, err := NewBackup(dst, bucket, BackupConfig{})
+	require.NoError(t, err)
+	require.NoError(t, rb.Restore(ctx))
+	missing, total := 0, 0
+	require.NoError(t, dst.View(func(txn *badger.Txn) error {
+		for _, keys := range written {
+			total += len(keys)
+			for _, k := range keys {
+				_, err := txn.Get([]byte(k))
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					missing++
+				} else if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}))
+	require.Zero(t, missing, "%d of %d keys written during %d ships are in no backup segment", missing, total, ships)
+}
+
+// partCountingBucket counts the bytes of every uploaded part and drops them, so a heap measurement of an
+// export does not count the fake's own copies. Everything else (the manifest) goes to the embedded fake.
+type partCountingBucket struct {
+	*fakeBucket
+	partBytes int
+}
+
+func (p *partCountingBucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
+	if strings.Contains(key, "/part-") {
+		p.partBytes += len(data)
+		return nil
+	}
+	return p.fakeBucket.Put(ctx, key, data, opts)
+}
+
+// peakHeap runs f and returns how far the Go heap rose above its post-GC level while f ran. A low GC target
+// keeps the sampled heap close to the live heap, so the result does not depend on when the pacer collects.
+func peakHeap(f func()) uint64 {
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	base, top := ms.HeapAlloc, ms.HeapAlloc
+	stop := make(chan struct{})
+	var done sync.WaitGroup
+	done.Add(1)
+	go func() {
+		defer done.Done()
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				top = max(top, m.HeapAlloc)
+			}
+		}
+	}()
+	f()
+	close(stop)
+	done.Wait()
+	return top - base
+}
+
+// A re-baseline exports with one producer (ADR-0067 Decision 2): its peak heap stays near that of a
+// single-producer Stream export of the same store through the same chunk writer, instead of also holding
+// the batch buffers of Badger's default eight producers.
+func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
+	const keys, valLen = 50_000, 256
+	dir := t.TempDir()
+	db, err := openDB(dir, false)
+	require.NoError(t, err)
+	wb := db.NewWriteBatch()
+	val := make([]byte, valLen)
+	for i := 0; i < keys; i++ {
+		require.NoError(t, wb.Set([]byte(fmt.Sprintf("k/%07d", i)), val))
+	}
+	require.NoError(t, wb.Flush())
+	require.NoError(t, db.Close()) // the keys move into tables, as in a long-running instance
+	db = openRawDB(t, dir)
+
+	single := func(w io.Writer) {
+		s := db.NewStream()
+		s.NumGo = 1
+		_, err := s.Backup(w, 0)
+		require.NoError(t, err)
+	}
+	single(io.Discard) // the first export fills Badger's block and index caches; neither measurement counts them
+
+	ctx := context.Background()
+	bucket := &partCountingBucket{fakeBucket: newFakeBucket()}
+	b, err := NewBackup(db, bucket, BackupConfig{ChunkBytes: 1 << 20})
+	require.NoError(t, err)
+	bk := b.(*backup)
+	rebaseline := peakHeap(func() { require.NoError(t, bk.Rebaseline(ctx)) })
+	require.Greater(t, bucket.partBytes, keys*valLen, "the re-baseline exported the whole store")
+	low := peakHeap(func() {
+		w := bk.newChunkWriter(ctx, "single")
+		single(w)
+		require.NoError(t, w.Close())
+	})
+	t.Logf("peak heap: Rebaseline %d MiB, single-producer export %d MiB", rebaseline>>20, low>>20)
+	require.Less(t, rebaseline, 2*low,
+		"the re-baseline export holds more than one producer's buffers: its Stream.NumGo is not low (ADR-0067 Decision 2)")
 }

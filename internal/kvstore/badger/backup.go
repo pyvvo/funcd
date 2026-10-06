@@ -34,6 +34,9 @@ const (
 	defaultChunkBytes = 64 << 20 // 64 MiB
 	backupCursorKey   = Reserved + "backup/cursor"
 	manifestKey       = "manifest.json"
+	// exportNumGo caps the export's producers: each holds its own batch buffers, so Badger's default of 8
+	// multiplies the export's peak heap (ADR-0067 Decision 2: a low Stream.NumGo caps the export RSS).
+	exportNumGo = 1
 )
 
 // BackupConfig configures the opt-in DR backup (ADR-0067). Zero ChunkBytes ⇒ 64 MiB.
@@ -174,15 +177,24 @@ func (b *backup) Restore(ctx context.Context) error {
 	return b.setCursor(ctx, head)
 }
 
-// export streams every version >= since to w and returns the highest version exported. It leaves out the
-// backup's own cursor: each cursor write is a new version, so exporting it made every idle tick ship a
-// segment (#790).
+// export streams every version > since to w and returns the version the cursor may advance to. It leaves out
+// the backup's own cursor: each cursor write is a new version, so exporting it made every idle tick ship a
+// segment (#790). Each Stream producer reads its own, later snapshot, so a version above the read timestamp
+// taken here can be exported while a write below it was missed (#806): the result is capped at that read
+// timestamp, which every producer sees in full, and the next export ships the versions above it again.
 func (b *backup) export(w io.Writer, since uint64) (uint64, error) {
+	snap := b.db.NewTransaction(false)
+	defer snap.Discard()
 	s := b.db.NewStream()
 	s.LogPrefix = "kvbadger.backup"
 	s.SinceTs = since
+	s.NumGo = exportNumGo
 	s.ChooseKey = func(item *badger.Item) bool { return string(item.Key()) != backupCursorKey }
-	return s.Backup(w, since)
+	to, err := s.Backup(w, since)
+	if err != nil {
+		return 0, err
+	}
+	return min(to, snap.ReadTs()), nil
 }
 
 func (b *backup) loadSegment(ctx context.Context, s segment) error {
