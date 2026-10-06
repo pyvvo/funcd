@@ -45,6 +45,14 @@
 | 2026-10-06 | Values | a client-side template: goja `${{ }}` subset typed by a JSON Schema, a `when` per file |
 | 2026-10-06 | A template in a registry | yes, pushable like a Helm chart; the server never pulls it |
 | 2026-10-06 | Lifecycle hooks; App-to-App dependencies | follow-up topics |
+| 2026-10-07 | Template provenance (tags or a field) | none: the App spec is the source, expanded by the platform into its parts |
+| 2026-10-07 | Values required only in some cases | full JSON Schema in `valuesSchema`, `if`/`then` included |
+| 2026-10-07 | Sections for IAM kinds | added later, when an app needs them |
+| 2026-10-07 | Whose rights under a finer RBAC | decided with the IAM work |
+| 2026-10-07 | A re-created App and its kept stores | declarative: `adopt: true` on the `kv` or `buckets` entry |
+| 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
+| 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
+| 2026-10-07 | Cron | one implementation for timers and BackupSchedule, in its own ADR |
 
 ## Context & Need
 
@@ -83,6 +91,11 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   `funcdctl app history todo` lists 1 to 4 with version, phase and time.
 - `scenario: app-child-not-owned` — Function `todo-api` made by hand first ⇒ `Ready=False` `ChildNotOwned` naming
   it; nothing written; that Function unchanged.
+- `scenario: app-adopt-kept-store` — App `todo` deleted (`todo-store` kept, with a key) and applied again: without
+  `adopt` ⇒ `ChildNotOwned` naming `KVStore/todo-store`; with `adopt: true` ⇒ the store is under the new App and
+  the key is intact.
+- `scenario: app-adopt-live-owner-refused` — `adopt: true` on a store a live Workflow holds ⇒ `ChildNotOwned`; the
+  store and its ref unchanged.
 - `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files` while `buckets` declares `todo-files` ⇒
   apply fails (422) naming both fields.
 - `scenario: app-scale-to-zero-not-started` — `todo-api` with `minReplicas: 0`, never called ⇒ `todo-1` current,
@@ -97,9 +110,9 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 
 **In**: kinds `App` and `AppRevision`; the App admission; the reconciler (stamp, apply, readiness, prune, history,
 failure); the GC pairs; the template (`funcdctl app render`, `funcdctl push --template`); `funcdctl app
-history|rollback`; two config keys. **Out**: hooks; App dependencies and nested Apps; automatic rollback; an App
-scope for the DR `BackupSchedule`; sections for IAM kinds (Open question 5); Secrets in an App; apps across
-namespaces; a template pulled by the server.
+history|rollback`; two config keys. **Out**: hooks; App dependencies and nested Apps; automatic rollback; the DR
+`BackupSchedule` (its section and App scope come with the kind); sections for IAM kinds; cron; Secrets in an App;
+apps across namespaces; a template pulled by the server.
 
 ## Constraints & Decision drivers
 
@@ -120,6 +133,9 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | A run kind per rollout, like WorkflowRun | the AppRevision status already records the rollout; hooks will run as WorkflowRuns |
 | Automatic rollback on failure | hides the failed state and can fail itself; ADR-0143 already keeps old Function revisions serving |
 | Names `<app>-<name>`, like step Functions | every reference field would need rewriting; a template adds the prefix when two installs share a namespace |
+| An imperative `handover` command for Apps | the decider wants adoption declared in the App, as an operator does |
+| Automatic adoption by the same App name | the silent same-name takeover ADR-0178 refused for Workflows |
+| Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
 | kapp-controller, Timoni | Kubernetes-only |
 
 ## Decision
@@ -128,20 +144,24 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    (namespaced, read-only like `Revision`, stamped by the platform) is `<app>-<n>`: a frozen copy of an App spec and
    the record of that version's rollout. App names are at most 52 characters, so `<app>-<n>` stays a DNS label.
 2. **Sections**: `kv`, `buckets`, `functions`, `workflows`, `eventSources`, `sensors`, `routes`, `sites`, `catalogs`,
-   `configMaps`. An entry is `name` plus the kind's own spec fields; `kv` and `buckets` entries add `deletion:
-   retain | delete` (default `retain`). Each part takes the App's namespace and resource group and keeps its declared
-   name. A kind gets a section when an App needs it (the planned `BackupSchedule` adds `backupSchedules`). An unknown
-   section is refused: `funcdctl` decodes strictly (`pkg/sdk/sdk.go:430`) and the API schema allows no extra field.
+   `configMaps`. An entry is `name` plus the kind's own spec fields; `kv` and `buckets` entries add `deletion: retain
+   | delete` (default `retain`) and `adopt` (Decision 5). Each part takes the App's namespace and resource group and
+   keeps its declared name. A kind gets a section when an App needs it (the planned `BackupSchedule` adds
+   `backupSchedules`). An unknown section is refused: `funcdctl` decodes strictly (`pkg/sdk/sdk.go:430`) and the API
+   schema allows no extra field.
 3. **Admission** (ADR-0063, Validating) refuses an App before it is stored when a name repeats within a section, an
    entry fails its kind's validation or the admissions a direct apply of it would pass, or two parts would write one
    object: a Site's `bucket.name` naming a bucket of the App, a Workflow's step Function `<workflow>-<step>` or `kv`
-   store named like another part. The error names the field path. Quotas are checked here only: the parts are
-   written in-process, as a Workflow's are.
+   store named like another part. An entry with `adopt: true` also needs its author to hold update and delete rights
+   on that store, the rights `funcdctl kvstore handover` needs (ADR-0178). The error names the field path. Quotas are
+   checked here only: the parts are written in-process, as a Workflow's are.
 4. **Stamp.** When the canonical spec differs from the latest AppRevision's, the platform stamps `<app>-<n+1>` and
    sets `status.latestRevision`. Numbers only grow; an unchanged re-apply stamps nothing; a rollback is a new
    revision.
 5. **Apply.** First every part is checked: one that exists without this App's controller ref (kind, name, UID) stops
-   the pass with `ChildNotOwned` before any write. Then each part is created, or its spec replaced when it differs,
+   the pass with `ChildNotOwned` before any write, except a `kv` or `buckets` entry with `adopt: true` whose store no
+   live owner holds (no controller ref, or one naming an object that no longer exists): the App takes it with its
+   data. A store a live owner holds is never taken. Then each part is created, or its spec replaced when it differs,
    with the App's controller ref; a write the store refuses is `ChildInvalid`. Part status is never written. The App
    re-queues on any change of a part it controls.
 6. **Readiness and current.** A part is *Ready* when its kind has no status (ConfigMap, Bucket) or its `Ready`
@@ -167,14 +187,20 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     applies revision `n`'s spec.
 11. **Authorization.** The App controller writes parts in-process, as the Workflow controller does. Today a principal
     that may write an App in a namespace may write every section kind there (RBAC `developer`), so an App grants
-    nothing its author lacks. A finer RBAC must re-check per kind (Open question 1).
-12. **Backup records** of the planned DR `BackupSchedule` outlive their schedule and the App (kept until their `ttl`
-    or a manual delete). Recorded here for the DR workload-backup ADR.
+    nothing its author lacks. A finer RBAC must re-check per kind; the IAM work that adds per-kind roles decides how.
+12. **Backups.** Once the planned DR `BackupSchedule` exists, an App gets a `backupSchedules` section, and a schedule
+    can take an App as its scope: its KV stores, Buckets and catalogs, the unit of the deferred "one cut per app".
+    `Backup` records outlive their schedule and the App (kept until their `ttl` or a manual delete). The DR
+    workload-backup ADR writes the details.
+13. **Hooks (direction).** An upgrade runs pre-hooks → apply → wait for Ready → switch → post-hooks → prune. A failing
+    pre-hook stops before any write, and a post-hook can still read what the old version used. Hooks run as
+    WorkflowRuns linked from the AppRevision; the hooks topic writes the details.
 
 ## The template and where files live
 
-- **A template** is a directory: `app.yaml` (`name`, `version`, `valuesSchema` as a JSON Schema whose `default`s fill
-  absent values, `when`: file → condition) and `resources/*.yaml`. Each resource file is a fragment of an App spec
+- **A template** is a directory: `app.yaml` (`name`, `version`, `valuesSchema`: any JSON Schema, `if`/`then` included,
+  checked by `santhosh-tekuri/jsonschema`, whose `default`s fill absent values and whose `properties`/`type` type the
+  expressions, `when`: file → condition) and `resources/*.yaml`. Each resource file is a fragment of an App spec
   (sections with entries); `render` concatenates the sections of every file whose `when` holds, in lexical order.
 - **Expressions**: a scalar that is exactly one `${{ … }}` (the ADR-0095 subset) with roots `values` (typed by
   `valuesSchema`) and `app` (`name`, `namespace`, `version`) is evaluated and replaced by its typed result. Other
@@ -221,11 +247,13 @@ type AppSpec struct {
 type AppKVStore struct {
 	Name        ObjectName     `json:"name"`
 	Deletion    DeletionPolicy `json:"deletion,omitempty"` // retain (default) | delete
+	Adopt       bool           `json:"adopt,omitempty"`    // take a kept store no live owner holds
 	KVStoreSpec `json:",inline"`
 }
 type AppBucket struct {
 	Name       ObjectName     `json:"name"`
 	Deletion   DeletionPolicy `json:"deletion,omitempty"`
+	Adopt      bool           `json:"adopt,omitempty"`
 	BucketSpec `json:",inline"`
 }
 type AppFunction struct {
@@ -333,6 +361,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] An unchanged re-apply stamps no AppRevision; AppRevision is read-only at the API and named `<app>-<n>`.
 - [ ] `currentRevision` moves only when no part is Pending; prune runs only after it moves.
 - [ ] A KVStore or Bucket is deleted only when its entry says `deletion: delete`.
+- [ ] A store is adopted only with `adopt: true`, only when no live owner holds it, and only when its author may
+      update and delete it.
 - [ ] `render` leaves expressions without `values`/`app` byte for byte.
 - [ ] The config keys exist with the defaults above.
 
@@ -340,25 +370,22 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 
 **Positive**: one object holds the whole app, and the OpenAPI schema describes every field of it; refused kinds are
 impossible by construction; errors surface at apply; versions, prune and rollback on the server, in the platform's
-revision model; the definition rides the metastore backup; the Workflow pattern, the admission pipeline, the owner
-GC and the goja engine are reused. **Negative**: a kind needs a new App section before an App can hold it; an App
+revision model; the definition rides the metastore backup; the Workflow pattern, the admission pipeline, the owner GC
+and the goja engine are reused. **Negative**: a kind needs a new App section before an App can hold it; an App
 carries its full spec (a few KB per app, at most 1 MiB, the API body cap) and each AppRevision a copy; kinds without
 revisions change at once, so a failed upgrade can leave them on the new spec; stores kept by `deletion: retain` need
-a manual delete. **Risks accepted**: the RBAC equivalence of Decision 11 holds only for today's roles.
+a manual delete or an `adopt: true`. **Risks accepted**: the RBAC equivalence of Decision 11 holds only for today's
+roles.
 
 ## Open questions
 
-1. Finer RBAC: re-check each part as the App's last writer, or as a named Identity (kapp-controller's service
-   account)? → the IAM work that adds per-kind roles.
-2. A re-created App meets its retained stores under the old UID (`ChildNotOwned`): an adopt verb? → the App
-   dependencies topic, or its own ADR.
-3. The DR `BackupSchedule`: an App as its scope, and its `backupSchedules` section → the DR workload-backup ADR.
-4. Hook order against apply, the switch and prune → the hooks topic.
-5. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy): add them when an app needs them?
-6. Provenance: should the App record the template it came from (`todo-app@sha256:…`), as Helm records the chart?
-7. Conditional values (the `stats` image only when analytics is on): JSON Schema `if`/`then` in `valuesSchema`?
-8. Cron: timers are intervals only (100 ms to 24 h), and the planned `BackupSchedule` needs cron too: one cron
-   implementation for both?
+1. Finer RBAC: last writer or a named Identity → the IAM work that adds per-kind roles.
+2. Hooks: their spec, failure handling and timeouts → the hooks topic (the order is Decision 13).
+3. App dependencies: nesting or ordering → its own topic.
+4. Cron for EventSource timers and BackupSchedule, with a time zone (UTC by default) → its own ADR (it changes a
+   shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained).
+5. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
+6. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
 
 ## Example: the to-do app
 
@@ -482,6 +509,21 @@ valuesSchema:
           default: "0 3 * * *"
         target:
           type: string
+  if:                       # analytics on ⇒ the stats image is required
+    required:
+      - analytics
+    properties:
+      analytics:
+        required:
+          - enabled
+        properties:
+          enabled:
+            const: true
+  then:
+    properties:
+      images:
+        required:
+          - stats
 when:
   resources/stats.yaml: ${{ values.analytics.enabled === true }}
   resources/lake.yaml: ${{ values.analytics.enabled === true }}
