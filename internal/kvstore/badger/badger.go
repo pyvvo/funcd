@@ -85,12 +85,8 @@ type driver struct {
 // Open opens (creating if absent) a durable Badger-backed kvstore.KV at dir, starting the single-writer
 // group-commit gateway and the value-log GC. Close drains the gateway, stops GC, and releases the DB.
 func Open(dir string, opts ...Option) (kvstore.KV, error) {
-	cfg := newConfig(opts)
-	db, err := openDB(dir, cfg.sync)
-	if err != nil {
-		return nil, err
-	}
-	return startDriver(db, cfg), nil
+	kv, _, err := OpenWithSeams(dir, nil, nil, opts...)
+	return kv, err
 }
 
 // newConfig applies the options over the defaults (sync on, 5m GC, 256-batch).
@@ -363,6 +359,10 @@ func (d *driver) Close() error {
 		d.wg.Wait()
 		if c, ok := d.cdc.(interface{ release() }); ok { // return the CDC seq lease before closing the db
 			c.release()
+		}
+		if bk, ok := d.backup.(*backup); ok { // Badger panics when an export reads a closed db: let a running Ship or Rebaseline finish
+			bk.loop.Lock()
+			defer bk.loop.Unlock()
 		}
 		if err := d.db.Close(); err != nil {
 			d.closeErr = fault.Internalf("kvbadger.Close", "%v", err)

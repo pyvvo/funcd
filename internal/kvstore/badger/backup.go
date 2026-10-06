@@ -26,7 +26,7 @@ type backup struct {
 	bucket     blob.Bucket
 	chunkBytes int           // max bytes buffered per blob object (bounds re-baseline RSS)
 	interval   time.Duration // incremental cadence
-	rebaseline time.Duration // full re-baseline cadence
+	fullEvery  time.Duration // full re-baseline cadence
 	loop       sync.Mutex    // serializes Ship/Rebaseline — one exporter at a time, never overlapping
 }
 
@@ -56,15 +56,18 @@ func NewBackup(db *badger.DB, bucket blob.Bucket, cfg BackupConfig) (Backup, err
 	if cb <= 0 {
 		cb = defaultChunkBytes
 	}
-	return &backup{db: db, bucket: bucket, chunkBytes: cb, interval: cfg.Interval, rebaseline: cfg.Rebaseline}, nil
+	return &backup{db: db, bucket: bucket, chunkBytes: cb, interval: cfg.Interval, fullEvery: cfg.Rebaseline}, nil
 }
 
 // segment is one exported range of blob parts (a base or an incremental). Parts are part-00000…part-NNNNN.
+// At is when Rebaseline started a base's export; it is zero on an incremental and in a manifest written
+// before the field existed, which reads as an unknown re-baseline time.
 type segment struct {
-	Prefix string `json:"prefix"`
-	Since  uint64 `json:"since"`
-	To     uint64 `json:"to"`
-	Parts  int    `json:"parts"`
+	Prefix string    `json:"prefix"`
+	Since  uint64    `json:"since"`
+	To     uint64    `json:"to"`
+	Parts  int       `json:"parts"`
+	At     time.Time `json:"at,omitzero"`
 }
 
 // manifest is the ordered restore chain: the latest base then the incrementals after it. It is the
@@ -77,17 +80,26 @@ type manifest struct {
 // Ship runs one incremental tick: export every change since the persisted cursor to a fresh blob segment,
 // and advance the cursor ONLY after the manifest + all parts are durably uploaded. A crash/upload failure
 // before that leaves the cursor unchanged, so the next run re-ships the interval (idempotent on restore).
+// A store opened without the backup seam has no cursor (#808): a change made then may have left no version
+// to export (a native DropPrefix, a compacted delete marker), so when a chain exists Ship re-baselines
+// instead of appending to it.
 func (b *backup) Ship(ctx context.Context) (uint64, error) {
 	b.loop.Lock()
 	defer b.loop.Unlock()
 	const op = "kvbadger.backup.Ship"
-	since, err := b.cursor(ctx)
+	since, found, err := b.readCursor(ctx)
 	if err != nil {
 		return 0, err
 	}
 	man, err := b.loadManifest(ctx)
 	if err != nil {
 		return since, err
+	}
+	if !found && (man.Base != nil || len(man.Incs) > 0) {
+		if err := b.rebaseline(ctx); err != nil {
+			return since, err
+		}
+		return b.cursor(ctx)
 	}
 	prefix := fmt.Sprintf("inc/%020d", since)
 	w := b.newChunkWriter(ctx, prefix)
@@ -118,6 +130,11 @@ func (b *backup) Ship(ctx context.Context) (uint64, error) {
 func (b *backup) Rebaseline(ctx context.Context) error {
 	b.loop.Lock()
 	defer b.loop.Unlock()
+	return b.rebaseline(ctx)
+}
+
+// rebaseline is Rebaseline's body; the caller holds b.loop.
+func (b *backup) rebaseline(ctx context.Context) error {
 	const op = "kvbadger.backup.Rebaseline"
 	old, err := b.loadManifest(ctx)
 	if err != nil {
@@ -127,7 +144,10 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prefix := fmt.Sprintf("base/%020d", at)
+	started := time.Now().UTC()
+	// the start time keeps the name unique: two re-baselines can start at one cursor (none after the store ran
+	// without backup, #808), and a reused name would overwrite the live base's parts before the manifest moves
+	prefix := fmt.Sprintf("base/%020d-%d", at, started.UnixNano())
 	w := b.newChunkWriter(ctx, prefix)
 	to, berr := b.export(w, 0)
 	if berr != nil {
@@ -136,7 +156,7 @@ func (b *backup) Rebaseline(ctx context.Context) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	man := manifest{Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts}}
+	man := manifest{Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: started}}
 	if err := b.saveManifest(ctx, man); err != nil {
 		return err
 	}
@@ -222,10 +242,17 @@ func (b *backup) prune(ctx context.Context, old manifest, keepBase string) {
 
 // cursor reads the persisted version watermark (0 if none).
 func (b *backup) cursor(ctx context.Context) (uint64, error) {
+	v, _, err := b.readCursor(ctx)
+	return v, err
+}
+
+// readCursor reads the persisted version watermark and whether one is set.
+func (b *backup) readCursor(ctx context.Context) (uint64, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var v uint64
+	found := false
 	err := b.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(backupCursorKey))
 		if errors.Is(err, badger.ErrKeyNotFound) {
@@ -234,6 +261,7 @@ func (b *backup) cursor(ctx context.Context) (uint64, error) {
 		if err != nil {
 			return err
 		}
+		found = true
 		return item.Value(func(val []byte) error {
 			if len(val) == 8 {
 				v = binary.BigEndian.Uint64(val)
@@ -242,9 +270,28 @@ func (b *backup) cursor(ctx context.Context) (uint64, error) {
 		})
 	})
 	if err != nil {
-		return 0, fault.Internalf("kvbadger.backup.cursor", "%v", err)
+		return 0, false, fault.Internalf("kvbadger.backup.cursor", "%v", err)
 	}
-	return v, nil
+	return v, found, nil
+}
+
+// dropBackupCursor deletes the backup cursor of a store opened without the backup seam, so a later backup
+// does not resume a chain that missed this run's changes (#808): its next Ship re-baselines.
+func dropBackupCursor(db *badger.DB) error {
+	err := db.Update(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte(backupCursorKey))
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return txn.Delete([]byte(backupCursorKey))
+	})
+	if err != nil {
+		return fault.Internalf("kvbadger.Open", "drop backup cursor: %v", err)
+	}
+	return nil
 }
 
 // setCursor persists the version watermark. Written directly (not via the gateway): a reserved key the
@@ -390,13 +437,13 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
-	rebaseline := bk.rebaseline
+	rebaseline := bk.fullEvery
 	if rebaseline <= 0 {
 		rebaseline = 24 * time.Hour
 	}
 	inc := time.NewTicker(interval)
 	defer inc.Stop()
-	reb := time.NewTicker(rebaseline)
+	reb := time.NewTimer(bk.untilRebaseline(ctx, rebaseline))
 	defer reb.Stop()
 	for {
 		select {
@@ -407,9 +454,26 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 				logger.Error("kv backup ship failed", "err", err)
 			}
 		case <-reb.C:
-			if err := bk.Rebaseline(ctx); err != nil && ctx.Err() == nil {
-				logger.Error("kv backup re-baseline failed", "err", err)
+			next := rebaseline // a failed re-baseline retries one period later, never in a loop of full exports
+			if err := bk.Rebaseline(ctx); err != nil {
+				if ctx.Err() == nil {
+					logger.Error("kv backup re-baseline failed", "err", err)
+				}
+			} else {
+				next = bk.untilRebaseline(ctx, rebaseline)
 			}
+			reb.Reset(next)
 		}
 	}
+}
+
+// untilRebaseline returns how long until the next re-baseline is due: one period after the time the manifest's
+// base records, which survives a restart (#807). A manifest without a base or a recorded time, or one that
+// cannot be read, is due now.
+func (b *backup) untilRebaseline(ctx context.Context, period time.Duration) time.Duration {
+	man, err := b.loadManifest(ctx)
+	if err != nil || man.Base == nil || man.Base.At.IsZero() {
+		return 0
+	}
+	return max(time.Until(man.Base.At.Add(period)), 0)
 }

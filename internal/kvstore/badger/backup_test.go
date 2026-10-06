@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"runtime/debug"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/kvstore"
 )
 
 // fakeBucket is an in-memory blob.Bucket recording puts (count + bytes) and able to inject upload failures
@@ -466,4 +468,288 @@ func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
 	t.Logf("peak heap: Rebaseline %d MiB, single-producer export %d MiB", rebaseline>>20, low>>20)
 	require.Less(t, rebaseline, 2*low,
 		"the re-baseline export holds more than one producer's buffers: its Stream.NumGo is not low (ADR-0067 Decision 2)")
+}
+
+// A process that restarts more often than kvstore.backup.rebaseline still re-baselines once a period has passed
+// since the recorded base: three runs of 1.5 s with a 2 s period, a write before each. A later run's base holds
+// that run's write.
+func TestIssue807_RebaselineRunsAcrossRestarts(t *testing.T) {
+	ctx := context.Background()
+	db := openRawDB(t, t.TempDir())
+	bucket := newFakeBucket()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := BackupConfig{Interval: 200 * time.Millisecond, Rebaseline: 2 * time.Second}
+	for run := range 3 {
+		writeKeys(t, db, fmt.Sprintf("run%d/", run), 10, 16)
+		b, err := NewBackup(db, bucket, cfg)
+		require.NoError(t, err)
+		runCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		RunBackup(runCtx, b, logger)
+		cancel()
+	}
+
+	man, err := (&backup{bucket: bucket}).loadManifest(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, man.Base, "no full re-baseline in more than two periods of restarting runs (incs=%d)", len(man.Incs))
+	dst := openRawDB(t, t.TempDir())
+	require.NoError(t, (&backup{db: dst, bucket: bucket}).loadSegment(ctx, *man.Base))
+	require.Equal(t, 10, countKeys(dst, "run1/"), "the base predates the second run: no later run re-baselined")
+}
+
+// At start, RunBackup re-baselines at once when the manifest's base records no time (a manifest written before
+// the field existed), and not when the recorded base is younger than the period.
+func TestIssue807_StartRebaselinesOnlyWhenDue(t *testing.T) {
+	ctx := context.Background()
+	db := openRawDB(t, t.TempDir())
+	bucket := newFakeBucket()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := BackupConfig{Interval: 50 * time.Millisecond, Rebaseline: time.Hour}
+	bk := &backup{db: db, bucket: bucket}
+	require.NoError(t, bk.saveManifest(ctx, manifest{Base: &segment{Prefix: "base/old"}}))
+	current := func() manifest {
+		man, err := bk.loadManifest(ctx)
+		if err != nil {
+			return manifest{}
+		}
+		return man
+	}
+	runUntil := func(done func(manifest) bool, msg string) {
+		b, err := NewBackup(db, bucket, cfg)
+		require.NoError(t, err)
+		runCtx, cancel := context.WithCancel(ctx)
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			RunBackup(runCtx, b, logger)
+		}()
+		defer func() {
+			cancel()
+			<-stopped
+		}()
+		require.Eventually(t, func() bool { return done(current()) }, 10*time.Second, 20*time.Millisecond, msg)
+	}
+
+	writeKeys(t, db, "a/", 10, 16)
+	runUntil(func(m manifest) bool { return m.Base != nil && m.Base.Prefix != "base/old" },
+		"a base with no recorded time was not re-baselined at start")
+	rebased := current().Base.Prefix
+
+	writeKeys(t, db, "b/", 10, 16)
+	runUntil(func(m manifest) bool { return len(m.Incs) > 0 }, "the write after a fresh base was not shipped as an incremental")
+	require.Equal(t, rebased, current().Base.Prefix, "a restart re-baselined although the recorded base is younger than the period")
+}
+
+// RunBackup now re-baselines at start, so a stop soon after a boot finds an export running: the driver's Close
+// waits for it instead of closing the db under it (Badger panics on a closed db).
+func TestIssue807_CloseWaitsForRunningRebaseline(t *testing.T) {
+	ctx := context.Background()
+	bucket := newFakeBucket()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	bucket.failPut = func(key string) error {
+		if strings.Contains(key, "/part-") {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		}
+		return nil
+	}
+	kv, seams, err := OpenWithSeams(t.TempDir(), func(db *badger.DB) (Backup, error) {
+		return NewBackup(db, bucket, BackupConfig{})
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, kv.Put(ctx, "a/b/c", []byte("v")))
+
+	rebased := make(chan error, 1)
+	go func() { rebased <- seams.Backup.(*backup).Rebaseline(ctx) }()
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- kv.(io.Closer).Close() }()
+	select {
+	case err := <-closed:
+		close(release)
+		t.Fatalf("Close returned (%v) while a re-baseline was running", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-rebased, "the re-baseline finished on an open db")
+	require.NoError(t, <-closed)
+}
+
+// openBackupKV opens the driver on dir through the daemon-facing opener; a nil bucket means DR backup is off.
+func openBackupKV(t *testing.T, dir string, bucket blob.Bucket) (kvstore.KV, Seams) {
+	t.Helper()
+	kv, seams, err := OpenWithSeamsFor(dir, bucket, BackupConfig{}, nil, CDCConfig{},
+		WithSyncWrites(false), WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	return kv, seams
+}
+
+// A key deleted while DR backup is off stays deleted in a restore taken after backup is on again, although
+// the store may hold no version of the deletion (a native DropPrefix, or a delete marker compaction dropped).
+func TestIssue808_DeleteWhileBackupOffStaysDeletedAfterRestore(t *testing.T) {
+	cases := map[string]func(t *testing.T, kv kvstore.KV){
+		"Delete then churn": func(t *testing.T, kv kvstore.KV) {
+			ctx := context.Background()
+			require.NoError(t, kv.Delete(ctx, "s/victim"))
+			val := make([]byte, 4<<10)
+			for i := 0; i < 12000; i++ {
+				require.NoError(t, kv.Put(ctx, fmt.Sprintf("churn/%06d", i), val))
+			}
+		},
+		"native DropPrefix": func(t *testing.T, kv kvstore.KV) {
+			require.NoError(t, kv.(*driver).DropPrefix("s/"))
+		},
+	}
+	for name, deleteVictim := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			bucket := newFakeBucket()
+
+			kv, seams := openBackupKV(t, dir, bucket)
+			require.NoError(t, kv.Put(ctx, "keep", []byte("k")))
+			require.NoError(t, kv.Put(ctx, "s/victim", []byte("v")))
+			_, err := seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			require.NoError(t, kv.(io.Closer).Close())
+
+			kv, seams = openBackupKV(t, dir, nil)
+			require.Nil(t, seams.Backup)
+			deleteVictim(t, kv)
+			require.NoError(t, kv.(io.Closer).Close())
+			// A second open without backup lets compaction run over the deletion.
+			kv, _ = openBackupKV(t, dir, nil)
+			require.NoError(t, kv.(io.Closer).Close())
+
+			kv, seams = openBackupKV(t, dir, bucket)
+			_, err = seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			_, found, err := kv.Get(ctx, "s/victim")
+			require.NoError(t, err)
+			require.False(t, found, "deleted in the live store")
+			require.NoError(t, kv.(io.Closer).Close())
+
+			dst, dseams := openBackupKV(t, t.TempDir(), bucket)
+			t.Cleanup(func() { _ = dst.(io.Closer).Close() })
+			require.NoError(t, dseams.Backup.Restore(ctx))
+			_, found, err = dst.Get(ctx, "keep")
+			require.NoError(t, err)
+			require.True(t, found, "keep restored")
+			_, found, err = dst.Get(ctx, "s/victim")
+			require.NoError(t, err)
+			require.False(t, found, "a key deleted while backup was off came back after the restore")
+		})
+	}
+}
+
+// Only an open without the backup seam ends the chain: a restart with backup on ships an incremental that
+// continues it, while a plain Open in between makes the next Ship re-baseline.
+func TestIssue808_ReopenContinuesChainOnlyWithBackupOn(t *testing.T) {
+	for name, plainOpen := range map[string]bool{"backup stays on": false, "plain Open in between": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			bucket := newFakeBucket()
+			kv, seams := openBackupKV(t, dir, bucket)
+			require.NoError(t, kv.Put(ctx, "a", []byte("1")))
+			to, err := seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			require.NoError(t, kv.(io.Closer).Close())
+			if plainOpen {
+				kv, err = Open(dir, WithSyncWrites(false), WithValueLogGCInterval(0))
+				require.NoError(t, err)
+				require.NoError(t, kv.(io.Closer).Close())
+			}
+
+			kv, seams = openBackupKV(t, dir, bucket)
+			t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+			require.NoError(t, kv.Put(ctx, "b", []byte("2")))
+			_, err = seams.Backup.Ship(ctx)
+			require.NoError(t, err)
+			man, err := seams.Backup.(*backup).loadManifest(ctx)
+			require.NoError(t, err)
+			if plainOpen {
+				require.NotNil(t, man.Base, "the next Ship re-baselined")
+				require.Empty(t, man.Incs)
+				return
+			}
+			require.Nil(t, man.Base, "no re-baseline")
+			require.Len(t, man.Incs, 2)
+			require.Equal(t, to, man.Incs[1].Since, "the incremental continues from the cursor")
+		})
+	}
+}
+
+// The first backup ever (no cursor, no chain) ships an incremental since 0, as before.
+func TestIssue808_FirstBackupShipsIncremental(t *testing.T) {
+	ctx := context.Background()
+	kv, seams := openBackupKV(t, t.TempDir(), newFakeBucket())
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	require.NoError(t, kv.Put(ctx, "a", []byte("1")))
+	_, err := seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	man, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.Nil(t, man.Base)
+	require.Len(t, man.Incs, 1)
+	require.Zero(t, man.Incs[0].Since)
+}
+
+// A re-baseline never writes into the live base: after backup was off twice, both re-baselines start with no
+// cursor, and a base named after the cursor alone reused the live base's name, so a failure before the
+// manifest moved left the live base holding parts of the unfinished export (#808).
+func TestIssue808_FailedRebaselineLeavesLiveBaseIntact(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	bucket := newFakeBucket()
+	offThenOn := func(key string) (kvstore.KV, Seams) {
+		kv, err := Open(dir, WithSyncWrites(false), WithValueLogGCInterval(0))
+		require.NoError(t, err)
+		require.NoError(t, kv.Put(ctx, key, []byte(key)))
+		require.NoError(t, kv.(io.Closer).Close())
+		return openBackupKV(t, dir, bucket)
+	}
+
+	kv, seams := openBackupKV(t, dir, bucket)
+	require.NoError(t, kv.Put(ctx, "a", []byte("a")))
+	_, err := seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	require.NoError(t, kv.(io.Closer).Close())
+
+	kv, seams = offThenOn("b")
+	_, err = seams.Backup.Ship(ctx)
+	require.NoError(t, err)
+	require.NoError(t, kv.(io.Closer).Close())
+	live, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, live.Base)
+	before := map[string][]byte{}
+	bucket.mu.Lock()
+	for i := 0; i < live.Base.Parts; i++ {
+		k := fmt.Sprintf("%s/part-%05d", live.Base.Prefix, i)
+		before[k] = append([]byte(nil), bucket.objs[k]...)
+	}
+	bucket.mu.Unlock()
+
+	kv, seams = offThenOn("c")
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	bucket.failPut = func(key string) error {
+		if key == manifestKey {
+			return errors.New("target down")
+		}
+		return nil
+	}
+	_, err = seams.Backup.Ship(ctx)
+	require.Error(t, err, "the re-baseline fails before the manifest moves")
+
+	man, err := seams.Backup.(*backup).loadManifest(ctx)
+	require.NoError(t, err)
+	require.Equal(t, live, man, "the manifest still names the live base")
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	for k, b := range before {
+		require.Equal(t, b, bucket.objs[k], "%s was overwritten by the unfinished re-baseline", k)
+	}
 }
