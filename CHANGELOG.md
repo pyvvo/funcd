@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/pyvvo/funcd/compare/v0.7.1...v0.7.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **kvstore:** make the KV backup export lose no write and use one producer ([#737](https://github.com/pyvvo/funcd/issues/737)) ([#809](https://github.com/pyvvo/funcd/issues/809)) ([85487e4](https://github.com/pyvvo/funcd/commit/85487e4d08892583165efc7fbe77efd5e5becce3))
+
 ## [0.7.1](https://github.com/pyvvo/funcd/compare/v0.7.0...v0.7.1) (2026-10-05)
 
 
