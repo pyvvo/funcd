@@ -9898,5 +9898,35 @@
     "dod_total": 12,
     "report": "docs/reviews/adr-0193-implementation-claude-opus-5-5-3.md",
     "notes": "loop 3 (281b0fb5 on a4f9ef09), rebase onto ADR-0190. The patch is identical to 5095d37f except function.go (idx threaded through heldThenGate; all 9 call sites and the ErrImageUnavailable gateFailed pass it), pool.go (reclaimPool = main's desired==0 branch moved verbatim: stop cur, retire old, endPoolDrain; releasePool splits by poolHolds sig, and with no hold stops all and removes none, which is safe because the next ensurePool retires stale stopped workers; the asleep early return keeps pass.drainAfter) and the new TestMapPoolDisplaced. Release mutants (no-op, no member check) fail TestIssue796 alone and sibling plus the pooled scenarios; the 4 mapper filter mutants each fail a TestMapPoolDisplaced row (closes m2). -race: internal/function, controller and pooling ok; pkg/funcd untagged ok; ADR-0193 scenarios -count=2 ok; ADR-0190 e2e-tagged scenarios (PooledEditIsolated, HeldRevisionWakesSolo, Issue776, BrokenEditSparesOldRun, TwoRevisionsSideBySide) ok, run on their own. Build, vet (darwin and linux), gofmt and lint clean; no identity leak. m1 [model] carried. Observation: the hold split in releasePool is untested (only stop vs remove of an idle key's old worker)."
+  },
+  {
+    "date": "2026-10-06",
+    "issue": "806",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-806-fix-claude-opus-5-5-w10.md",
+    "notes": "Minor (model): export doc comment changed to 'every version > since' but Badger exports versions >= since (harmless, comment only). Revert check FAIL 3/3 on main (288-1786 keys missing); PASS 3/3 with -race; 2/2 mutants killed (snapshot after Backup; max instead of min); kvstore race/vet/lint green."
+  },
+  {
+    "date": "2026-10-06",
+    "issue": "805",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-805-fix-claude-opus-5-5-w10.md",
+    "notes": "No findings. Revert overlay failed 3/3 (Rebaseline 365-526 MiB vs 80 MiB). Fixed: -race x5 and x10 all pass, worst ratio 1.47. Mutant 'remove the NumGo line' fails 3/3; NumGo=4 fails 2/3 and NumGo=2 fails 1/3, because both sit near the 2x margin (a known limit, not scored). Touched package: vet and lint clean."
   }
 ]
