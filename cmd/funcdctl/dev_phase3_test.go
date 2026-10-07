@@ -6,10 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,12 +113,10 @@ func (b *lockedBuffer) String() string {
 // TestIssue428_DevReloadsEditedWorkflow — ADR-0125 boot sequence ("watch files, re-apply on change"): an edit to
 // the workflow file re-applies the Workflow with no restart, and a step whose function is not running warns
 // that a restart is needed.
+// scenario: funcdctl-dev-logs-like-daemon (ADR-0197) — the warning reaches funcdctl's output in NewLogger's text form.
 func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
 	requireNode(t)
 	var logs lockedBuffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	const head = "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: pipeline\n  namespace: default\nspec:\n  steps:\n"
 	step := func(name, stem, dependsOn string) string {
@@ -137,7 +133,8 @@ func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
 		"stepc.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
 		"stepc.mjs":           "export function handle() { return { step: 'c' }; }\n",
 	})
-	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
+	inst, err := tryStartDevTo(t, filepath.Join(dir, "workflow.yaml"), &logs)
+	require.NoError(t, err)
 	require.Equal(t, []string{"stepa"}, inst.functions)
 
 	edited := head + step("a", "stepa", "") + step("b", "stepa", "a") + step("c", "stepc", "b")
@@ -151,8 +148,8 @@ func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
 		steps := obj.(*v1.Workflow).Spec.Steps
 		return len(steps) == 3 && steps[1].Function.Ref == "stepa" && steps[2].Function.Ref == "stepc"
 	}, 20*time.Second, 50*time.Millisecond, "the running dev session applies the edited Workflow")
-	require.True(t, strings.Contains(logs.String(), "restart funcdctl dev") && strings.Contains(logs.String(), "function=stepc"),
-		"a step whose function is not running warns that a restart is needed: %s", logs.String())
+	require.Regexp(t, `(?m)^time=\S+ level=WARN msg="restart funcdctl dev to run a new workflow step function" function=stepc$`,
+		logs.String(), "a step whose function is not running warns that a restart is needed, in NewLogger's text form")
 }
 
 // TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep — ADR-0125 ("watch files, re-apply on change"): a

@@ -72,6 +72,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
@@ -342,6 +343,7 @@ type devInstance struct {
 	blob      blob.Bucket
 	runErr    chan error
 	watchDone chan struct{} // closed when the hot-reload watcher has returned
+	logger    *slog.Logger  // funcdctl dev's own warnings, in the daemon's text form over the cli's out (ADR-0197)
 	cleanup   []func()
 }
 
@@ -375,6 +377,10 @@ func (d *devInstance) unwind(mark int) {
 // caller cancels ctx to stop.
 func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfig) (*devInstance, error) {
 	const op = "funcdctl dev"
+	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatText}, a.out)
+	if err != nil {
+		return nil, err
+	}
 	// Stamp the path before it is read, so an edit to a workflow file racing the boot still reloads it.
 	stamp, _ := fileStamp(path)
 	// Phase 3 (Decision 8): a Workflow CRD is the DAG. Detect it FIRST — a workflow.yaml is not a
@@ -382,7 +388,7 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 	if wf, isWorkflow, derr := detectWorkflow(op, path); derr != nil {
 		return nil, derr
 	} else if isWorkflow {
-		return a.startDevWorkflow(ctx, op, &devWorkflow{path: path, obj: wf, seen: stamp}, cfg)
+		return a.startDevWorkflow(ctx, op, &devWorkflow{path: path, obj: wf, seen: stamp}, cfg, lg.Root())
 	}
 	// Phase 3 (Decision 9): resolve the function set — all `<stem>.funcdctl.yaml` in a dir, one by stem,
 	// or the single generic funcdctl.yaml (the Phase-1/2 path, unchanged).
@@ -390,7 +396,7 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 	if rerr != nil {
 		return nil, rerr
 	}
-	return a.bootDev(ctx, op, pfs, nil, cfg)
+	return a.bootDev(ctx, op, pfs, nil, cfg, lg.Root())
 }
 
 // startDevWorkflow runs a Workflow CRD locally from source (ADR-0125 Decision 8). Each `function.image`
@@ -399,12 +405,12 @@ func (a *cli) startDev(ctx context.Context, path, entryFlag string, cfg devConfi
 // REWRITTEN to dispatch to it by `function.ref` — so the real embedded workflow engine runs the DAG
 // with no OCI pull (the materializer only materializes image steps; a ref step targets an existing
 // Function directly). builtin (wait/pass) and pre-existing ref steps run as-is.
-func (a *cli) startDevWorkflow(ctx context.Context, op string, wf *devWorkflow, cfg devConfig) (*devInstance, error) {
+func (a *cli) startDevWorkflow(ctx context.Context, op string, wf *devWorkflow, cfg devConfig, logger *slog.Logger) (*devInstance, error) {
 	pfs, err := resolveWorkflowPlan(op, wf.path, wf.obj)
 	if err != nil {
 		return nil, err
 	}
-	inst, berr := a.bootDev(ctx, op, pfs, wf, cfg)
+	inst, berr := a.bootDev(ctx, op, pfs, wf, cfg, logger)
 	if berr != nil {
 		return nil, berr
 	}
@@ -529,7 +535,7 @@ func catalogAliases(pfs []plannedFunc) []string {
 // frontend + the durable/ephemeral drivers, then applies the resources, then the Functions, then the
 // Workflow (nil for a function set). Over a durable metastore it then deletes what an earlier session
 // synthesized that the manifests no longer name. It returns once serving; the caller cancels ctx to stop.
-func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig) (_ *devInstance, err error) {
+func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *devWorkflow, cfg devConfig, logger *slog.Logger) (_ *devInstance, err error) {
 	if len(pfs) == 0 {
 		return nil, fault.NotFoundf(op, "no function to run")
 	}
@@ -546,7 +552,7 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	// The durable state dirs change while the session runs, so the hot-reload watcher never walks them.
 	stateDirs := []string{plan.storeDir, plan.kvDir, plan.blobDir, plan.catalogDir}
 
-	inst := &devInstance{runErr: make(chan error, 1)}
+	inst := &devInstance{runErr: make(chan error, 1), logger: logger}
 	for _, pf := range pfs {
 		inst.functions = append(inst.functions, string(pf.name))
 	}
@@ -579,12 +585,12 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 		return nil, cerr
 	}
 	inst.client = client
-	applied, aerr := applyBoot(ctx, op, client, resObjs, fnObjs, wf, plan)
+	applied, aerr := applyBoot(ctx, op, client, resObjs, fnObjs, wf, plan, inst.logger)
 	if aerr != nil {
 		return nil, aerr
 	}
 	inst.watchDone = make(chan struct{})
-	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.watchDone)
+	go watchHandlers(ctx, op, client, handlers, wf, applied, stateDirs, inst.logger, inst.watchDone)
 	return inst, nil
 }
 
@@ -773,7 +779,7 @@ func devCatalogOptions(plan persistPlan, stateDir string, pfs []plannedFunc, ins
 	if plan.catalogDir != "" {
 		catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
 	}
-	catEngine, err := devengine.New(slog.Default(), catOpts...)
+	catEngine, err := devengine.New(inst.logger, catOpts...)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), "funcdctl dev", "start the catalog engine runtime in %s", stateDir)
 	}
@@ -792,7 +798,7 @@ func devCatalogOptions(plan persistPlan, stateDir string, pfs []plannedFunc, ins
 				inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(extRoot) })
 			} else {
 				_ = os.RemoveAll(extRoot)
-				slog.Default().Warn("could not extract catalog extensions for consumers", "err", perr)
+				inst.logger.Warn("could not extract catalog extensions for consumers", "err", perr)
 			}
 		}
 	}
@@ -824,7 +830,7 @@ func checkFixedPorts(op string, cfg devConfig) error {
 // of a workflow run (wf, nil otherwise; it references its step Functions). ADR-0121's reconcile-time existence gate
 // resolves against what is already applied. Over a durable metastore it then prunes what an earlier session
 // synthesized that the manifests no longer name. It returns the resources the hot-reload watcher starts from.
-func applyBoot(ctx context.Context, op string, c *sdk.Client, resObjs, fnObjs []v1.Object, wf *devWorkflow, plan persistPlan) ([]v1.Object, error) {
+func applyBoot(ctx context.Context, op string, c *sdk.Client, resObjs, fnObjs []v1.Object, wf *devWorkflow, plan persistPlan, logger *slog.Logger) ([]v1.Object, error) {
 	firstRes, lastRes, serr := stageResources(ctx, op, c, resObjs)
 	if serr != nil {
 		return nil, serr
@@ -844,7 +850,7 @@ func applyBoot(ctx context.Context, op string, c *sdk.Client, resObjs, fnObjs []
 	if plan.storeDir == "" {
 		return resObjs, nil
 	}
-	stale, lerr := pruneStale(ctx, c, slices.Concat(resObjs, fnObjs, extraObjs))
+	stale, lerr := pruneStale(ctx, c, slices.Concat(resObjs, fnObjs, extraObjs), logger)
 	if lerr != nil {
 		return nil, fault.Wrapf(lerr, fault.KindOf(lerr), op, "prune the objects an earlier session applied")
 	}
@@ -855,7 +861,7 @@ func applyBoot(ctx context.Context, op string, c *sdk.Client, resObjs, fnObjs []
 // reload prunes them (ADR-0125: the manifests are the session's desired state), and returns the ones that stay.
 // Only an object carrying devManagedTag is the session's, so an object the user applied is never deleted. The
 // kinds are listed in apply order, so a Workflow goes before its Functions and a Function before what it binds.
-func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object) ([]v1.Object, error) {
+func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object, logger *slog.Logger) ([]v1.Object, error) {
 	var prev []v1.Object
 	for _, kind := range []v1.Kind{
 		v1.KindKVStore, v1.KindBucket, v1.KindSecret, v1.KindCatalogService, v1.KindConfigMap,
@@ -871,7 +877,7 @@ func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object) ([]v1.O
 			}
 		}
 	}
-	kept := pruneRemoved(ctx, c, prev, desired, true)
+	kept := pruneRemoved(ctx, c, prev, desired, true, logger)
 	return kept[len(desired):], nil
 }
 
