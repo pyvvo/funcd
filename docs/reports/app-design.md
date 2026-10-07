@@ -60,6 +60,7 @@
 | 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | Config | an App defines its ConfigMaps in `configMaps`, or names existing ones |
 | 2026-10-07 | Secrets | declared in the App and its template (name, keys, description) to document what the app needs; the values are managed by the platform, and the App never creates, writes or restores a Secret |
+| 2026-10-07 | Secret keys | required: a Secret can hold several keys, each injected as an env var, so the declaration lists every key the code reads |
 | 2026-10-07 | Hook points | `hooks.preApply` and `hooks.postApply`, on every rollout (install, upgrade, rollback); the call's input names the event |
 | 2026-10-07 | What a hook runs | one call to a Function of the App, recorded as an Invocation; not a Workflow, which would add a second component to debug |
 | 2026-10-07 | What a hook can do | what any Function can: its handler gets the usual context (`kv`, `blob`, `invoke`, `log`, catalog env), scoped by its own bindings |
@@ -1045,9 +1046,10 @@ spec:
         TZ: Europe/Paris
   secrets:                         # declarations only; values managed by the platform
     - name: todo-stripe-key
-      description: Stripe secret key for payments
+      description: Stripe keys for payments and webhooks
       keys:
         - STRIPE_API_KEY
+        - STRIPE_WEBHOOK_SECRET
   tests:
     - name: api-lists-todos
       http:

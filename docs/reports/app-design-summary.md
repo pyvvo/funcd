@@ -77,9 +77,10 @@ Secret in its own `secrets` field.
 # resources/secrets.yaml: what the app needs, never a value
 secrets:
   - name: ${{ app.name + "-stripe-key" }}
-    description: Stripe secret key for payments
+    description: Stripe keys for payments and webhooks
     keys:
       - STRIPE_API_KEY
+      - STRIPE_WEBHOOK_SECRET
 ---
 # resources/settings.yaml: a ConfigMap carries its data, because it is not sensitive
 configMaps:
@@ -97,7 +98,7 @@ functions:
 ```
 
 Outside the App, an operator sets the value with an ordinary Secret, written as in the shipped examples. Until it
-exists with the key `STRIPE_API_KEY`, the App waits with `SecretNotFound` or `SecretKeyMissing`.
+exists with both declared keys, the App waits with `SecretNotFound` or `SecretKeyMissing`.
 
 ```yaml
 apiVersion: funcd.io/v1alpha1
@@ -109,7 +110,8 @@ metadata:
 spec:
   type: Opaque
   data:
-    STRIPE_API_KEY: ZXhhbXBsZS12YWx1ZQ==   # base64, never in the template or the App
+    STRIPE_API_KEY: ZXhhbXBsZS12YWx1ZQ==          # base64, never in the template or the App
+    STRIPE_WEBHOOK_SECRET: ZXhhbXBsZS13ZWJob29r   # a Secret can hold several keys
 ```
 
 ## 4. The components involved
