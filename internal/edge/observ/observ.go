@@ -117,7 +117,7 @@ func Chain(cfg Config, telemetry *observability.Telemetry, logger *slog.Logger) 
 				if cfg.AccessLog {
 					logger.Info("edge request",
 						"method", r.Method, "path", r.URL.Path, "function", fn, "namespace", ns,
-						"status", status, "duration_ms", dur.Milliseconds(),
+						"status", status, "duration", dur,
 						"request_id", gateway.RequestIDFromContext(r.Context()))
 				}
 			}()

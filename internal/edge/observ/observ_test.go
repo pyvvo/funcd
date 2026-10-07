@@ -11,8 +11,11 @@ import (
 	"net/http/httputil"
 	"net/textproto"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -110,7 +113,9 @@ func TestScenarioEdgeSpanAdoptsInbound(t *testing.T) {
 // scenario: access-log-correlated
 func TestScenarioAccessLogCorrelated(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatJSON}, &buf)
+	require.NoError(t, err)
+	logger := lg.Root()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tgt, ok := observ.TargetFrom(r.Context()); ok {
 			tgt.Function = "orders"
@@ -130,6 +135,34 @@ func TestScenarioAccessLogCorrelated(t *testing.T) {
 	require.Contains(t, line, `"function":"orders"`)
 	require.Contains(t, line, `"request_id":"req-123"`)
 	require.Contains(t, line, `"duration_ms"`)
+}
+
+// scenario: edge-access-log-keeps-fraction (ADR-0197) — a request served in under 1 ms logs duration_ms as a number
+// between 0 and 1 with at most three decimals. The bound around serve is the test's own, so a loaded host that
+// stretches it is retried rather than asserted on.
+func TestScenarioEdgeAccessLogKeepsFraction(t *testing.T) {
+	var buf bytes.Buffer
+	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatJSON}, &buf)
+	require.NoError(t, err)
+	mw := observ.Chain(observ.Config{AccessLog: true}, nil, lg.Root())
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { time.Sleep(100 * time.Microsecond) })
+	field := regexp.MustCompile(`"duration_ms":([0-9]+(?:\.[0-9]{1,3})?)[,}]`)
+	for try := 1; ; try++ {
+		buf.Reset()
+		start := time.Now()
+		serve(t, mw, next, httptest.NewRequest("GET", "http://x/orders", nil))
+		if took := time.Since(start); took >= 900*time.Microsecond {
+			require.Less(t, try, 100, "host too loaded: no request of 100 was served in under 900µs (last %s)", took)
+			continue
+		}
+		break
+	}
+	m := field.FindStringSubmatch(buf.String())
+	require.NotNil(t, m, "duration_ms is a JSON number with at most three decimals: %s", buf.String())
+	v, err := strconv.ParseFloat(m[1], 64)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, v, 0.1)
+	require.Less(t, v, 1.0)
 }
 
 // The status recorder forwards Flusher + Hijacker (SSE/WS must not break).
