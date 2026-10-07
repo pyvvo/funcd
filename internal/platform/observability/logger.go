@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // Format selects the slog handler rendering. The empty value is valid and
@@ -80,7 +81,7 @@ func NewLogger(cfg Config, w io.Writer) (*Logger, error) {
 
 	level := new(slog.LevelVar)
 	level.Set(cfg.Level)
-	opts := &slog.HandlerOptions{Level: level}
+	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: ReplaceAttr}
 
 	var base slog.Handler
 	if format == FormatText {
@@ -93,6 +94,15 @@ func NewLogger(cfg Config, w io.Writer) (*Logger, error) {
 		root:  slog.New(traceHandler{inner: base}),
 		level: level,
 	}, nil
+}
+
+// ReplaceAttr is the slog hook every funcd handler sets: it writes a record's own top-level time in the
+// v1alpha1.Timestamp form (ADR-0196). A time-valued attribute, or a time inside a group, is left as it is.
+func ReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
+		return slog.String(slog.TimeKey, v1.NewTimestamp(a.Value.Time()).String())
+	}
+	return a
 }
 
 // Root returns the root logger. Prefer Component for per-component children.
