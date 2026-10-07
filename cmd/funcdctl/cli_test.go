@@ -38,6 +38,13 @@ func execCLI(out io.Writer, c *sdk.Client, args ...string) error {
 // newClient mounts the real control-plane on httptest and returns an SDK client.
 func newClient(t *testing.T) *sdk.Client {
 	t.Helper()
+	c, _ := newClientURL(t)
+	return c
+}
+
+// newClientURL is newClient that also returns the server URL, for a raw HTTP request beside the CLI.
+func newClientURL(t *testing.T) (*sdk.Client, string) {
+	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
@@ -51,7 +58,7 @@ func newClient(t *testing.T) *sdk.Client {
 	t.Cleanup(srv.Close)
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
 	require.NoError(t, err)
-	return c
+	return c, srv.URL
 }
 
 func mkfn(ctx context.Context, t *testing.T, c *sdk.Client) {
