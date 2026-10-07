@@ -6,11 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 )
@@ -61,4 +64,45 @@ func TestScenarioBlobSizeCap(t *testing.T) {
 	withinRec := httptest.NewRecorder()
 	mux.ServeHTTP(withinRec, within)
 	require.Equal(t, http.StatusNoContent, withinRec.Code, "a within-cap put succeeds")
+}
+
+// The signOptsFromQuery contract (ADR-0198 Decisions 2–3): exact methods, the ADR-0194 grammar, whole seconds
+// from 1s to 168h; only an absent parameter takes a default.
+func TestADR0198_SignOptsFromQueryContract(t *testing.T) {
+	ok := map[string]blob.SignOptions{
+		"":                          {Method: blob.SignGet},
+		"method=GET":                {Method: blob.SignGet},
+		"method=PUT":                {Method: blob.SignPut},
+		"method=DELETE":             {Method: blob.SignDelete},
+		"expiry=1s":                 {Method: blob.SignGet, Expiry: time.Second},
+		"expiry=168h":               {Method: blob.SignGet, Expiry: 168 * time.Hour},
+		"expiry=2000ms":             {Method: blob.SignGet, Expiry: 2 * time.Second},
+		"method=PUT&expiry=1h30m5s": {Method: blob.SignPut, Expiry: 90*time.Minute + 5*time.Second},
+	}
+	for raw, want := range ok {
+		q, err := url.ParseQuery(raw)
+		require.NoError(t, err)
+		got, err := signOptsFromQuery(q)
+		require.NoError(t, err, raw)
+		require.Equal(t, want, got, raw)
+	}
+	bad := map[string]string{
+		"method=":               `method "" is not GET, PUT or DELETE`,
+		"method=get":            `method "get" is not GET, PUT or DELETE`,
+		"expiry=":               `expiry "" is not a duration string such as 10m or 1h30m`,
+		"expiry=10":             `expiry "10" is not a duration string such as 10m or 1h30m`,
+		"expiry=999ms":          `expiry "999ms" must be a whole number of seconds from 1s to 168h`,
+		"expiry=168h1s":         `expiry "168h1s" must be a whole number of seconds from 1s to 168h`,
+		"expiry=1s1ms":          `expiry "1s1ms" must be a whole number of seconds from 1s to 168h`,
+		"expiry=0s":             `expiry "0s" must be a whole number of seconds from 1s to 168h`,
+		"method=HEAD&expiry=10": `method "HEAD" is not GET, PUT or DELETE`,
+	}
+	for raw, msg := range bad {
+		q, err := url.ParseQuery(raw)
+		require.NoError(t, err)
+		got, err := signOptsFromQuery(q)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), raw)
+		require.EqualError(t, err, "workernode.local.blob.sign: "+msg)
+		require.Zero(t, got, raw)
+	}
 }

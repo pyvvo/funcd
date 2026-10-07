@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -30,10 +31,14 @@ type Blob interface {
 	SignedURL(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, key string, opts blob.SignOptions) (string, error)
 }
 
+// minSignExpiry and maxSignExpiry bound a presign lifetime (ADR-0198): S3 signs whole seconds; SigV4 caps at 7 days.
+const minSignExpiry, maxSignExpiry = time.Second, 168 * time.Hour
+
 // registerBlob adds the blob verbs to mux — GET/PUT/DELETE /blob/{binding}/{key...}, GET /blob/{binding}
-// (list, ?prefix=…), and GET /blob/{binding}/{key...}?sign=1 (a presigned URL; ?method=GET|PUT|DELETE,
-// ?expiry=<dur>) — routed to b with the sandbox's fixed namespace + function (ADR-0127/0073). Errors are
-// RFC 9457 (binding/owner denial → 403, missing object → 404, over a cap → 413, bad input → 400, engine → 500).
+// (list, ?prefix=…), and GET /blob/{binding}/{key...}?sign=1 (a presigned URL; ?method= exactly GET, PUT or
+// DELETE, ?expiry= an ADR-0194 duration in whole seconds from 1s to 168h, ADR-0198) — routed to b with the
+// sandbox's fixed namespace + function (ADR-0127/0073). Errors are RFC 9457 (binding/owner denial → 403, missing
+// object → 404, over a cap → 413, bad input → 400, engine → 500); a bad method or expiry is 400 before the PDP.
 func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
@@ -43,14 +48,19 @@ func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
 		binding := r.PathValue("binding")
 		key := r.PathValue("key")
 		if r.URL.Query().Get("sign") != "" {
-			url, err := b.SignedURL(r.Context(), ns, fn, binding, key, signOptsFromQuery(r))
+			opts, err := signOptsFromQuery(r.URL.Query())
+			if err != nil {
+				fault.WriteProblem(w, err)
+				return
+			}
+			signed, err := b.SignedURL(r.Context(), ns, fn, binding, key, opts)
 			if err != nil {
 				logger.Warn("blob sign denied/failed", "caller", caller.String(), "binding", binding, "err", err.Error())
 				fault.WriteProblem(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = io.WriteString(w, url)
+			_, _ = io.WriteString(w, signed)
 			return
 		}
 		v, found, err := b.Get(r.Context(), ns, fn, binding, key)
@@ -106,22 +116,30 @@ func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
 	})
 }
 
-// signOptsFromQuery derives blob.SignOptions from the ?method= + ?expiry= query params (a zero/absent
-// method is a GET; a zero/unparseable expiry is the driver's default).
-func signOptsFromQuery(r *http.Request) blob.SignOptions {
-	opts := blob.SignOptions{}
-	switch r.URL.Query().Get("method") {
-	case "PUT":
-		opts.Method = blob.SignPut
-	case "DELETE":
-		opts.Method = blob.SignDelete
-	default:
-		opts.Method = blob.SignGet
-	}
-	if e := r.URL.Query().Get("expiry"); e != "" {
-		if d, err := time.ParseDuration(e); err == nil {
-			opts.Expiry = d
+// signOptsFromQuery reads ?method= and ?expiry= (ADR-0198): an absent method is blob.SignGet, an absent expiry is
+// zero (the driver default), and a present value outside the rules is fault.Invalid.
+func signOptsFromQuery(q url.Values) (blob.SignOptions, error) {
+	const op = "workernode.local.blob.sign"
+	opts := blob.SignOptions{Method: blob.SignGet}
+	if q.Has("method") {
+		switch m := q.Get("method"); m {
+		case string(blob.SignGet), string(blob.SignPut), string(blob.SignDelete):
+			opts.Method = blob.SignMethod(m)
+		default:
+			return blob.SignOptions{}, fault.Invalidf(op, "method %q is not GET, PUT or DELETE", m)
 		}
 	}
-	return opts
+	if !q.Has("expiry") {
+		return opts, nil
+	}
+	e := q.Get("expiry")
+	d, err := v1.ParseDuration(e)
+	if err != nil {
+		return blob.SignOptions{}, fault.Invalidf(op, "expiry %q is not a duration string such as 10m or 1h30m", e)
+	}
+	opts.Expiry = time.Duration(d)
+	if opts.Expiry%time.Second != 0 || opts.Expiry < minSignExpiry || opts.Expiry > maxSignExpiry {
+		return blob.SignOptions{}, fault.Invalidf(op, "expiry %q must be a whole number of seconds from 1s to 168h", e)
+	}
+	return opts, nil
 }
