@@ -99,7 +99,7 @@ func (s *store) SweepExpired(_ context.Context, retention time.Duration, maxPerN
 		// TTL: global horizon — evict entries older than retention.
 		if retention > 0 {
 			for id, dl := range byID {
-				if now.Sub(dl.FailedAt) > retention {
+				if now.Sub(time.Time(dl.FailedAt)) > retention {
 					delete(byID, id)
 					evicted++
 				}

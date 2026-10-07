@@ -181,7 +181,7 @@ func (s *store) SweepExpired(_ context.Context, retention time.Duration, maxPerN
 				return verr
 			}
 			k := it.Item().KeyCopy(nil)
-			byNS[string(dl.Namespace)] = append(byNS[string(dl.Namespace)], entry{key: k, ns: string(dl.Namespace), failedAt: dl.FailedAt})
+			byNS[string(dl.Namespace)] = append(byNS[string(dl.Namespace)], entry{key: k, ns: string(dl.Namespace), failedAt: time.Time(dl.FailedAt)})
 		}
 		return nil
 	})

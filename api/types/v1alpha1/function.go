@@ -191,7 +191,7 @@ type FunctionStatus struct {
 	// DrainingRevision is the Revision demoted at the last switch while any of its workers remain, and DrainingSince
 	// the time of that switch (ADR-0143); both are cleared together.
 	DrainingRevision string     `json:"drainingRevision,omitempty"`
-	DrainingSince    *time.Time `json:"drainingSince,omitempty"`
+	DrainingSince    *Timestamp `json:"drainingSince,omitempty"`
 	// Pool is the pool worker a pooled Function runs in, "<runtime>/<worker>/<access>"; empty when solo.
 	Pool string `json:"pool,omitempty"`
 }

@@ -21,7 +21,7 @@ type Condition struct {
 	Type               ConditionType   `json:"type"`
 	Status             ConditionStatus `json:"status"`
 	ObservedGeneration int64           `json:"observedGeneration,omitempty"`
-	LastTransitionTime time.Time       `json:"lastTransitionTime,omitempty"`
+	LastTransitionTime Timestamp       `json:"lastTransitionTime,omitzero"`
 	Reason             string          `json:"reason,omitempty"`
 	Message            string          `json:"message,omitempty"`
 }
@@ -36,7 +36,7 @@ func (cs *Conditions) Set(c Condition) {
 	for i, existing := range *cs {
 		if existing.Type == c.Type {
 			if existing.Status != c.Status {
-				c.LastTransitionTime = time.Now()
+				c.LastTransitionTime = NewTimestamp(time.Now())
 			} else {
 				c.LastTransitionTime = existing.LastTransitionTime
 			}
@@ -44,7 +44,7 @@ func (cs *Conditions) Set(c Condition) {
 			return
 		}
 	}
-	c.LastTransitionTime = time.Now()
+	c.LastTransitionTime = NewTimestamp(time.Now())
 	*cs = append(*cs, c)
 }
 

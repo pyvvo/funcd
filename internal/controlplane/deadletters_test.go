@@ -60,7 +60,7 @@ func seedDeadLetter(t *testing.T, s deadletter.Store, ns, id string) {
 	t.Helper()
 	require.NoError(t, s.Put(context.Background(), deadletter.DeadLetter{
 		ID: id, Namespace: v1.NamespaceName(ns), Sensor: "s", Source: "git", Event: "push",
-		Action: "notify", Payload: json.RawMessage(`{"specversion":"1.0"}`), Attempts: 3, Reason: "boom", FailedAt: time.Now().UTC(),
+		Action: "notify", Payload: json.RawMessage(`{"specversion":"1.0"}`), Attempts: 3, Reason: "boom", FailedAt: v1.NewTimestamp(time.Now()),
 	}))
 }
 

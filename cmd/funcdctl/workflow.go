@@ -203,7 +203,7 @@ func (a *cli) workflowRunsCmd() *cobra.Command {
 			}
 			// newest first by creation timestamp.
 			sort.SliceStable(runs, func(i, j int) bool {
-				return runs[i].CreationTime.After(runs[j].CreationTime)
+				return time.Time(runs[i].CreationTime).After(time.Time(runs[j].CreationTime))
 			})
 			out := make([]v1.Object, len(runs))
 			for i, r := range runs {
@@ -335,8 +335,8 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 		if s.Attempts > 0 {
 			line += "   attempts: " + strconv.Itoa(s.Attempts)
 		}
-		if s.StartedAt > 0 && s.EndedAt >= s.StartedAt {
-			line += "   duration: " + v1.Duration(time.Duration(s.EndedAt-s.StartedAt).Round(time.Millisecond)).String()
+		if start, end := time.Time(s.StartedAt), time.Time(s.EndedAt); !start.IsZero() && !end.IsZero() && !end.Before(start) {
+			line += "   duration: " + v1.Duration(end.Sub(start)).String()
 		}
 		if s.Error != "" {
 			line += "   error: " + termSafe(s.Error)

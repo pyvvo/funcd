@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -66,7 +65,7 @@ func (a *cli) renderLogLines(lines []logread.Line, output string) error {
 			}
 			continue
 		}
-		line := l.Time.UTC().Format(time.RFC3339) + " [" + termSafe(l.Severity) + "] " + termSafe(l.Replica) + " " + termSafe(l.Body)
+		line := l.Time.String() + " [" + termSafe(l.Severity) + "] " + termSafe(l.Replica) + " " + termSafe(l.Body)
 		if output == "wide" {
 			line += wideSuffix(l.Source, l.Invocation, l.TraceID, l.Attrs)
 		}

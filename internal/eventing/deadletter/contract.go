@@ -21,7 +21,7 @@ func Contract(t *testing.T, newStore func(t *testing.T) Store) {
 	mk := func(ns v1.NamespaceName, id string, at time.Time) DeadLetter {
 		return DeadLetter{
 			ID: id, Namespace: ns, Sensor: "s", Source: "git", Event: "push", Action: "build",
-			Payload: json.RawMessage(`{"specversion":"1.0","id":"e1"}`), Attempts: 3, Reason: "boom", FailedAt: at,
+			Payload: json.RawMessage(`{"specversion":"1.0","id":"e1"}`), Attempts: 3, Reason: "boom", FailedAt: v1.NewTimestamp(at),
 		}
 	}
 

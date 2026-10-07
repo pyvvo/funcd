@@ -350,7 +350,7 @@ func (r *Reconciler) deadLetter(ctx context.Context, d delivery, attempts int, c
 		Payload:   payload,
 		Attempts:  attempts,
 		Reason:    cause.Error(),
-		FailedAt:  time.Now().UTC(),
+		FailedAt:  v1.NewTimestamp(time.Now()),
 	}
 	if perr := r.deadletters.Put(ctx, dl); perr != nil {
 		r.logger.WarnContext(ctx, "dead-letter put failed", "sensor", d.sensor, "action", d.action.Name, "error", perr)
@@ -408,7 +408,7 @@ func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string)
 	if derr != nil {
 		dl.Attempts = 0 // reset — a fresh attempt count for the re-parked entry
 		dl.Reason = derr.Error()
-		dl.FailedAt = time.Now().UTC()
+		dl.FailedAt = v1.NewTimestamp(time.Now())
 		if perr := r.deadletters.Update(ctx, dl); perr != nil {
 			if fault.KindOf(perr) != fault.NotFound { // NotFound: discarded or swept during the delivery
 				r.logger.WarnContext(ctx, "re-park after failed replay failed", "sensor", dl.Sensor, "id", id, "error", perr)
@@ -488,8 +488,8 @@ func (r *Reconciler) record(ctx context.Context, ns v1.NamespaceName, rg v1.Reso
 	inv.Name = v1.ObjectName("inv-" + randHex(10)) // unique per action (a firing runs several)
 	inv.Namespace = ns
 	inv.ResourceGroup = rg
-	inv.Status.StartTime = start
-	inv.Status.EndTime = time.Now().UTC()
+	inv.Status.StartTime = v1.NewTimestamp(start)
+	inv.Status.EndTime = v1.NewTimestamp(time.Now())
 	if actionErr != nil {
 		inv.Status.Error = actionErr.Error()
 		inv.Status.Phase = v1.PhaseFailed

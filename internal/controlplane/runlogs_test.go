@@ -27,7 +27,7 @@ type captureReader struct{ last *logread.Query }
 
 func (c *captureReader) Read(_ context.Context, q logread.Query) ([]logread.Line, error) {
 	*c.last = q
-	return []logread.Line{{Time: time.Unix(0, 1).UTC(), Severity: "INFO", Body: "line", Namespace: q.Namespace, Function: q.Function, TraceID: q.TraceID}}, nil
+	return []logread.Line{{Time: v1.NewTimestamp(time.Unix(0, 1)), Severity: "INFO", Body: "line", Namespace: q.Namespace, Function: q.Function, TraceID: q.TraceID}}, nil
 }
 
 func newRunLogsServer(t *testing.T, seed func(store.Store)) (http.Handler, *logread.Query) {

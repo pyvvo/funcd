@@ -600,7 +600,7 @@ func (b *be) ListBuckets(ctx context.Context, in s3response.ListBucketsInput) (s
 		if ok {
 			res.Buckets.Bucket = append(res.Buckets.Bucket, s3response.ListAllMyBucketsEntry{
 				Name:         string(bkt.Name),
-				CreationDate: bkt.CreationTime,
+				CreationDate: time.Time(bkt.CreationTime),
 			})
 		}
 	}

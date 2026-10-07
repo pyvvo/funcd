@@ -16,6 +16,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 )
@@ -33,7 +34,7 @@ const (
 
 // Line is one log record returned to a caller (the wire + CLI DTO; a friendlier view of compact.Row).
 type Line struct {
-	Time           time.Time       `json:"time"`
+	Time           v1.Timestamp    `json:"time"`
 	Severity       string          `json:"severity"`
 	SeverityNumber int32           `json:"severityNumber"`
 	Body           string          `json:"body"`
@@ -127,7 +128,7 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 		rows = append(rows, more...)
 	}
 
-	lines := make([]Line, 0, len(rows))
+	kept := rows[:0]
 	for _, row := range rows {
 		if q.TraceID != "" && row.TraceID != q.TraceID { // ADR-0106: run-scoped trace filter
 			continue
@@ -135,18 +136,21 @@ func (r *BlobReader) Read(ctx context.Context, q Query) ([]Line, error) {
 		if row.SeverityNumber < q.MinSeverityNumber {
 			continue
 		}
-		t := time.Unix(0, row.TimeUnixNano).UTC()
-		if !q.Since.IsZero() && t.Before(q.Since) {
+		if !q.Since.IsZero() && time.Unix(0, row.TimeUnixNano).Before(q.Since) {
 			continue
 		}
-		lines = append(lines, lineFromRow(row, t))
+		kept = append(kept, row)
 	}
 
-	// Sort ascending by time (stable on equal timestamps), then take the TAIL — the most-recent Limit,
-	// oldest-first (a log tail), never the head/oldest-N.
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Time.Before(lines[j].Time) })
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
+	// Sort ascending on the nanosecond time (stable on equal times), so lines within one millisecond keep their
+	// order once Line.Time truncates them (ADR-0196), then take the TAIL — the most-recent Limit, oldest-first.
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].TimeUnixNano < kept[j].TimeUnixNano })
+	if len(kept) > limit {
+		kept = kept[len(kept)-limit:]
+	}
+	lines := make([]Line, 0, len(kept))
+	for _, row := range kept {
+		lines = append(lines, lineFromRow(row))
 	}
 	return lines, nil
 }
@@ -188,9 +192,9 @@ func (r *BlobReader) readObjects(ctx context.Context, objs []blob.Attributes, wa
 }
 
 // lineFromRow maps a compact.Row (the Parquet/raw schema) to the caller-facing Line DTO.
-func lineFromRow(row compact.Row, t time.Time) Line {
+func lineFromRow(row compact.Row) Line {
 	l := Line{
-		Time:           t,
+		Time:           v1.NewTimestamp(time.Unix(0, row.TimeUnixNano)),
 		Severity:       row.SeverityText,
 		SeverityNumber: row.SeverityNumber,
 		Body:           row.Body,

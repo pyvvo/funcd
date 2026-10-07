@@ -280,7 +280,7 @@ func (w *BlobWatcher) pollOne(ctx context.Context, k eventKey, e watchEntry) err
 			Key:     o.Key,
 			Size:    o.Size,
 			Version: version,
-			Time:    o.ModTime.UTC(),
+			Time:    v1.NewTimestamp(o.ModTime),
 		})
 		if berr != nil {
 			fireErr = berr

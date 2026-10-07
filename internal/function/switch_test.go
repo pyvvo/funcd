@@ -2,6 +2,7 @@ package function_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -388,7 +389,7 @@ func TestNewerApplyDuringDrainDoesNotExtendIt(t *testing.T) {
 	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV3" })
 	h.reconcile(t, "echo")
 	fn := h.getFn(t, "echo")
-	require.Equal(t, since.UnixNano(), fn.Status.DrainingSince.UnixNano(), "the drain keeps its start")
+	require.Equal(t, *since, *fn.Status.DrainingSince, "the drain keeps its start")
 	require.Equal(t, "echo-2", fn.Status.ServingRevision, "no switch while a revision drains")
 
 	time.Sleep(60 * time.Millisecond)
@@ -886,4 +887,33 @@ func TestIssue55_DeleteRecreateInOnePassReplacesTheWorker(t *testing.T) {
 			require.Equal(t, v1.PhaseReady, h.getFn(t, "echo").Status.Phase)
 		})
 	}
+}
+
+// scenario: local-clock-stamps-utc — a revision switch on a reconciler whose clock reads UTC+2 stamps drainingSince
+// in UTC, naming the same instant.
+func TestLocalClockStampsUTC(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 7, 22, 3, 35, 965999999, time.FixedZone("UTC+2", 2*60*60))
+	clk := clock.NewManual(at)
+	calls := activator.NewCallTracker(clk)
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, func(d *function.Deps) {
+		d.Calls = calls
+		d.Clock = clk
+	})
+	h.rt.serveBlockingRevision(t, "echo-1", "revision 1")
+	h.deployReady(t, "echo")
+	up, _ := h.upstream(t, "echo")
+	callInFlight(t, calls, up)
+	h.apply(t, "echo", func(fn *v1.Function) { fn.Spec.Handler = "handleV2" })
+	h.reconcile(t, "echo")
+
+	fn := h.getFn(t, "echo")
+	require.Equal(t, "echo-1", fn.Status.DrainingRevision)
+	require.NotNil(t, fn.Status.DrainingSince)
+	since := time.Time(*fn.Status.DrainingSince)
+	require.Equal(t, time.UTC, since.Location())
+	require.True(t, since.Equal(at.Truncate(time.Millisecond)), "%v names %v", since, at)
+	b, err := json.Marshal(fn.Status)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"drainingSince":"2026-10-07T20:03:35.965Z"`)
 }

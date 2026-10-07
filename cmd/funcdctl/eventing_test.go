@@ -51,7 +51,7 @@ func seedReplayable(t *testing.T, st store.Store, dlq deadletter.Store, id strin
 	require.NoError(t, err)
 	require.NoError(t, dlq.Put(ctx, deadletter.DeadLetter{
 		ID: id, Namespace: "team-a", Sensor: "s", Source: "git", Event: "push", Action: "notify",
-		Payload: payload, Attempts: 3, Reason: "boom", FailedAt: time.Now().UTC(),
+		Payload: payload, Attempts: 3, Reason: "boom", FailedAt: v1.NewTimestamp(time.Now()),
 	}))
 }
 
@@ -95,7 +95,7 @@ func TestIssue175_ReplayReportsReparkOnlyOnDeliveryFailure(t *testing.T) {
 	require.NotContains(t, err.Error(), "re-parked", "a deleted Sensor is not re-parked")
 	after, err := dlq.Get(ctx, "team-a", "01DL")
 	require.NoError(t, err)
-	require.True(t, dl.FailedAt.Equal(after.FailedAt), "the entry is untouched")
+	require.Equal(t, dl.FailedAt, after.FailedAt, "the entry is untouched")
 }
 
 type upstreamWaker string

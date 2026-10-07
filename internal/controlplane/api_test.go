@@ -347,3 +347,35 @@ func TestDurationEdgeRefusesMalformed(t *testing.T) {
 		t.Fatalf("stored spec.timeout = %s (%v): %s", got.Spec.Timeout, err, resp.Body.String())
 	}
 }
+
+// scenario: non-fixed-input-refused — a create body whose metadata.creationTimestamp is not the ADR-0196 form gets a
+// 422 at body.metadata.creationTimestamp naming the form, and nothing is stored; the fixed form is accepted.
+func TestNonFixedInputRefused(t *testing.T) {
+	ta := humatest.Wrap(t, controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers()))
+	const path = "/apis/funcd.io/v1alpha1/namespaces/my-ns/functions"
+	fn := func(name, created string) map[string]interface{} {
+		return map[string]interface{}{
+			"apiVersion": "funcd.io/v1alpha1",
+			"kind":       "Function",
+			"metadata":   map[string]interface{}{"name": name, "namespace": "my-ns", "resourceGroup": "rg1", "creationTimestamp": created},
+			"spec":       map[string]interface{}{"runtime": "nodejs22"},
+		}
+	}
+	for name, created := range map[string]string{
+		"seconds": "2026-10-07T20:03:35Z",
+		"offset":  "2026-10-07T22:03:35.965+02:00",
+		"micros":  "2026-10-07T20:03:35.965123Z",
+	} {
+		resp := ta.Post(path, "Content-Type: application/json", fn(name, created))
+		body := resp.Body.String()
+		if resp.Code != http.StatusUnprocessableEntity || !strings.Contains(body, "body.metadata.creationTimestamp") || !strings.Contains(body, "exactly 3 fractional digits") {
+			t.Fatalf("creationTimestamp %s: want a 422 at body.metadata.creationTimestamp naming the form, got %d: %s", created, resp.Code, body)
+		}
+		if resp := ta.Get(path+"/"+name, "Accept: application/json"); resp.Code != http.StatusNotFound {
+			t.Fatalf("creationTimestamp %s: nothing stored, got %d", created, resp.Code)
+		}
+	}
+	if resp := ta.Post(path, "Content-Type: application/json", fn("fixed", "2026-10-07T20:03:35.965Z")); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
+		t.Fatalf("the fixed form: want accepted, got %d: %s", resp.Code, resp.Body.String())
+	}
+}

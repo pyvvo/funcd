@@ -105,12 +105,12 @@ type RunStepStatus struct {
 	Phase    StepPhase  `json:"phase,omitempty"`
 	Attempts int        `json:"attempts,omitempty"`
 	Revision string     `json:"revision,omitempty"`
-	// StartedAt/EndedAt (unix nanos) give the step duration; Error is the raw step-level failure
+	// StartedAt/EndedAt (ADR-0196) give the step duration; Error is the raw step-level failure
 	// cause, capped — the full text lives in the step's span + logs (ADR-0106) — on a Failed step, or
 	// the cancel on a step that was running when the run was cancelled (ADR-0146).
-	StartedAt int64  `json:"startedAt,omitempty"`
-	EndedAt   int64  `json:"endedAt,omitempty"`
-	Error     string `json:"error,omitempty"`
+	StartedAt Timestamp `json:"startedAt,omitzero"`
+	EndedAt   Timestamp `json:"endedAt,omitzero"`
+	Error     string    `json:"error,omitempty"`
 }
 
 // StepPhase is a step's execution phase within a run.

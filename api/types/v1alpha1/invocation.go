@@ -1,7 +1,5 @@
 package v1alpha1
 
-import "time"
-
 // Invocation is a namespaced, read-only resource representing a single function invocation record.
 // Status-bearing.
 type Invocation struct {
@@ -14,8 +12,8 @@ type Invocation struct {
 // Behavioral fields (retention policy) owned by F16.
 type InvocationStatus struct {
 	Status    `json:",inline"`
-	StartTime time.Time `json:"startTime,omitempty"`
-	EndTime   time.Time `json:"endTime,omitempty"`
+	StartTime Timestamp `json:"startTime,omitzero"`
+	EndTime   Timestamp `json:"endTime,omitzero"`
 	Error     string    `json:"error,omitempty"`
 }
 

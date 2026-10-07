@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
 )
@@ -47,7 +48,7 @@ func TestIssue101_SweepEvictsPastTxnLimit(t *testing.T) {
 			ctx := context.Background()
 			failedAt := time.Now().Add(-tc.age)
 			for i := range n {
-				if err := s.Put(ctx, deadletter.DeadLetter{ID: fmt.Sprintf("%08d", i), Namespace: "default", FailedAt: failedAt}); err != nil {
+				if err := s.Put(ctx, deadletter.DeadLetter{ID: fmt.Sprintf("%08d", i), Namespace: "default", FailedAt: v1.NewTimestamp(failedAt)}); err != nil {
 					t.Fatalf("Put %d: %v", i, err)
 				}
 			}

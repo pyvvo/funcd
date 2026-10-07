@@ -328,7 +328,7 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 		meta.UID = uid
 		meta.Generation = 1
 		meta.ResourceVersion = strconv.FormatUint(rev, 10)
-		meta.CreationTime = time.Now().UTC()
+		meta.CreationTime = v1.NewTimestamp(time.Now())
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
 			return eerr
