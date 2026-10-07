@@ -76,7 +76,7 @@ todo/
 │       ├── lake.yaml             catalogs: todo-lake, when analytics is on
 │       ├── web.yaml              sites: todo-web
 │       ├── settings.yaml         configMaps: todo-settings
-│       ├── secrets.yaml          secrets: todo-stripe-key, declared with its keys, no values
+│       ├── secrets.yaml          secrets: todo-stripe-key, keys only, no value
 │       ├── hooks.yaml            hooks: preApply calls todo-migrate
 │       └── tests.yaml            tests: an HTTP check and a Function call, run on demand
 ├── functions/                    code, pushed with funcdctl push
@@ -90,6 +90,48 @@ todo/
 Secrets are declared in `resources/secrets.yaml` with their names and keys, so the template documents what the app
 needs. Their values are set outside the App, by an operator or as an Identity's credential, and a Function names a
 Secret in its own `secrets` field.
+
+
+**Inside `resources/`: the Secret declaration and its neighbours**
+
+```yaml
+# resources/secrets.yaml: what the app needs, never a value
+secrets:
+  - name: ${{ app.name + "-stripe-key" }}
+    description: Stripe secret key for payments
+    keys:
+      - STRIPE_API_KEY
+---
+# resources/settings.yaml: a ConfigMap carries its data, because it is not sensitive
+configMaps:
+  - name: ${{ app.name + "-settings" }}
+    data:
+      TZ: Europe/Paris
+---
+# resources/api.yaml (excerpt): the Function names both by their declared names
+functions:
+  - name: ${{ app.name + "-api" }}
+    secrets:
+      - ${{ app.name + "-stripe-key" }}
+    config:
+      - ${{ app.name + "-settings" }}
+```
+
+Outside the App, an operator sets the value with an ordinary Secret, written as in the shipped examples. Until it
+exists with the key `STRIPE_API_KEY`, the App waits with `SecretNotFound` or `SecretKeyMissing`.
+
+```yaml
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: todo-stripe-key
+  namespace: team-a
+  resourceGroup: todo
+spec:
+  type: Opaque
+  data:
+    STRIPE_API_KEY: ZXhhbXBsZS12YWx1ZQ==   # base64, never in the template or the App
+```
 
 ## 4. The components involved
 
