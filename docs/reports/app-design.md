@@ -60,7 +60,9 @@
 | 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | Config | an App defines its ConfigMaps in `configMaps`, or names existing ones |
 | 2026-10-07 | Secrets | consumed by name only, as a Workflow step and a Function do; the App never creates, owns or restores a Secret, and rotation belongs to the secrets work (ADR-0057) |
-| 2026-10-07 | Hook points | `hooks.preApply` and `hooks.postApply`, on every rollout (install, upgrade, rollback); the run's input names the event |
+| 2026-10-07 | Hook points | `hooks.preApply` and `hooks.postApply`, on every rollout (install, upgrade, rollback); the call's input names the event |
+| 2026-10-07 | What a hook runs | one call to a Function of the App, recorded as an Invocation; not a Workflow, which would add a second component to debug |
+| 2026-10-07 | What a hook can do | what any Function can: its handler gets the usual context (`kv`, `blob`, `invoke`, `log`, catalog env), scoped by its own bindings |
 | 2026-10-07 | A post-hook fails | the new revision stays current, prune is skipped, the App turns `Degraded` with `HookFailed` |
 | 2026-10-07 | Hooks before a delete | not now: stores are retained by default and a last backup is the DR BackupSchedule's work |
 | 2026-10-07 | Recovering from a failed hook | `funcdctl app retry`, which re-runs the failed hooks and continues the rollout |
@@ -164,14 +166,15 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   is re-created the same way.
 - `scenario: app-paused-keeps-hotfix` — `funcdctl app pause todo`, then a manual edit of `todo-api` ⇒ the edit stays
   and the App shows `Paused=True`; after `funcdctl app resume todo` the declared spec is back within 5 s.
-- `scenario: app-pre-hook-migrates` — `hooks.preApply` names `todo-migrate`, and `todo-api` gets a new image ⇒ the
-  App writes `todo-migrate`, waits until it is Ready, starts a WorkflowRun owned by `todo-4` with input `event:
-  upgrade`, `from: todo-3`, `to: todo-4`, and writes `todo-api` only after the run succeeds.
-- `scenario: app-pre-hook-fails-then-retry` — the migration run fails ⇒ no other part is written, `todo-4` is
-  `Failed` with `HookFailed` naming the run, `todo-3` stays current; after the cause is fixed, `funcdctl app retry
-  todo` starts a new run, and the rollout continues until `todo-4` is current.
+- `scenario: app-pre-hook-migrates` — `hooks.preApply` names Function `todo-migrate`, and `todo-api` gets a new
+  image ⇒ the App writes `todo-migrate`, waits until it serves, calls it once with input `event: upgrade`, `from:
+  todo-3`, `to: todo-4`, records an Invocation owned by `todo-4`, and writes `todo-api` only after the call succeeds;
+  the handler reads and rewrites keys through `context.kv` of its own binding.
+- `scenario: app-pre-hook-fails-then-retry` — the migration call fails ⇒ no other part is written, `todo-4` is
+  `Failed` with `HookFailed` naming the Invocation, `todo-3` stays current; after the cause is fixed, `funcdctl app
+  retry todo` calls it again, and the rollout continues until `todo-4` is current.
 - `scenario: app-post-hook-fails` — a post-hook fails ⇒ `todo-4` is current, the Route it dropped stays (no prune),
-  the App is `Degraded` with `HookFailed`; `funcdctl app retry todo` runs it again, then prune runs and the App is
+  the App is `Degraded` with `HookFailed`; `funcdctl app retry todo` calls it again, then prune runs and the App is
   `Ready`.
 - `scenario: app-test-on-demand` — `funcdctl app test todo` while `/api/todos` answers 500 ⇒ the AppRevision shows
   `Tested=False` naming `api-lists-todos`; the App phase is unchanged; nothing runs the tests by itself.
@@ -210,7 +213,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | A generic `resources: [{kind, metadata, spec}]` list | breaks the Workflow/Site inline pattern; opaque in the OpenAPI schema; refused kinds need a rule instead of construction |
 | Client-side template only, no App kind | no server-side version, prune, app health or hooks |
 | History kept in the App status | not the platform's revision model; the App object would grow with every copy |
-| A run kind per rollout, like WorkflowRun | the AppRevision status already records the rollout; hooks will run as WorkflowRuns |
+| A run kind per rollout, like WorkflowRun | the AppRevision status already records the rollout and its hook calls |
 | Automatic rollback on failure | hides the failed state and can fail itself; ADR-0143 already keeps old Function revisions serving |
 | Names `<app>-<name>`, like step Functions | every reference field would need rewriting; a template adds the prefix when two installs share a namespace |
 | `adopt: true` to take a kept store back | the Workflow's `ref` already says "use an existing object"; an ownership transfer stays explicit (ADR-0178's handover) |
@@ -218,6 +221,9 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
 | An app-wide switch (blue-green of the whole App) | the App does not judge compatibility; the builder pins compatible versions in the published template (decider) |
 | Owned Secrets with generated values | a Secret is consumed by name, as a Workflow step does; self-heal would undo every rotation of an owned one, and rotation belongs to the secrets work (ADR-0057) |
+| Hooks as WorkflowRuns | they add the Workflow engine, its run store and pins as a second component a hook depends on, hard to debug when it is degraded (decider) |
+| Hooks as inline goja scripts | user code inside the control plane, where goja has no memory cap; no libraries and no egress control; could come later for tiny tasks |
+| Hooks as one-shot jobs (Kubernetes Job style) | a new job runner and a run-once mode in both shims, on a path nothing exercises yet |
 | kapp-controller, Timoni | Kubernetes-only |
 
 ## Decision
@@ -266,7 +272,8 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    as in the blueprint's state machine.
 7. **The rollout record** is the AppRevision status: phase `Deploying` → `Ready` or `Failed` (the existing `Phase`
    values), with conditions `Applied`, `ChildrenReady` and `Current`; a replaced revision keeps its phase and turns
-   `Current=False`. There is no run kind; hooks will run as WorkflowRuns linked from it.
+   `Current=False`. There is no run kind; its status also lists the Invocations of
+   its hook calls.
 8. **Failure.** When the latest revision is not current `app.upgradeTimeout` after its stamp, its phase is `Failed`
    and the App phase is `Failed` with reason `ChildNotReady`, naming the first Pending part and its reason.
    `currentRevision` does not move; Functions keep serving their old revision (ADR-0143); kinds without revisions
@@ -294,22 +301,27 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     can take an App as its scope: its KV stores, Buckets and catalogs, the unit of the deferred "one cut per app".
     `Backup` records outlive their schedule and the App (kept until their `ttl` or a manual delete). The DR
     workload-backup ADR writes the details.
-13. **Hooks.** `spec.hooks.preApply` and `spec.hooks.postApply` list Workflows of the App, run in list order on
-    every rollout: install, upgrade and rollback. A hook run is an ordinary WorkflowRun that the App creates
-    in-process, as a Sensor does (`internal/sensor/sensor.go:474`), named with `generateName` (ADR-0133) and owned
-    by the AppRevision: a restarted App finds the run and never starts a second one, and the GC collects it with the
-    revision. Its input is fixed (`AppHookInput`) and is checked against the hook Workflow's contract, as any run
-    input is; its limit is the Workflow's own `spec.timeout`. Before the pre-hooks, the App writes the hook
-    Workflows of the new spec and waits until they are Ready, so the new version's migration runs before any other
-    part changes. A failed or timed-out pre-hook stops the rollout before any other write: the AppRevision is
-    `Failed` with reason `HookFailed` naming the run, and the current revision stays. A failed post-hook keeps the
-    new revision current, skips prune, so the parts the new spec dropped stay, and sets the App `Degraded` with
-    reason `HookFailed`. `funcdctl app retry <app>` re-runs the failed hooks of the latest revision as new runs
-    owned by it and, once they succeed, continues the rollout where it stopped; the AppRevision lists every
-    attempt. Short failures inside a hook stay with the Workflow's step `retry` policy (`workflow.defaultRetry`). A
-    rollback runs the hooks of the spec it applies, and a down migration is the builder's work. A paused App runs no
-    hook. No hook runs before a delete: stores are retained by default, a last backup is the DR BackupSchedule's
-    work, and a delete hook would need finalizers, which funcd does not use today (ADR-0170).
+13. **Hooks.** `spec.hooks.preApply` and `spec.hooks.postApply` list Functions of the App, each called once, in
+    list order, on every rollout: install, upgrade and rollback. The App calls a hook through the Invoker a Sensor
+    action uses (`internal/sensor/sensor.go:55-59`), which wakes a scaled-to-zero Function (ADR-0033), and records
+    the call as an Invocation owned by the AppRevision, as a Sensor records an action (`sensor.go:481-500`): phase
+    `Ready` or `Failed`, start and end times, and the error. The event's data is the fixed `AppHookInput`, which the
+    hook Function's own contract checks (ADR-0090). The handler gets the context every Function gets
+    (`FunctionContext` in the shims: `kv`, `blob`, `invoke`, `log`, plus the catalog URL and token as env),
+    scoped by the bindings declared on the hook Function, so a migration reads and writes through the same SDK as
+    the app's code, and the shims need no change. The call's limit is the Function's own `spec.timeout`. No
+    Workflow, engine or run store is in the path (decider, 2026-10-07: a hook must not depend on another component
+    that can be degraded). Before the pre-hooks, the App writes the hook Functions of the new spec and waits for
+    their `RevisionReady`, so the new version's migration runs before any other part changes. A failed or
+    timed-out pre-hook stops the rollout before any other write: the AppRevision is `Failed` with reason
+    `HookFailed` naming the Invocation, and the current revision stays. A failed post-hook keeps the new revision
+    current, skips prune, so the parts the new spec dropped stay, and sets the App `Degraded` with reason
+    `HookFailed`. `funcdctl app retry <app>` calls the failed hooks of the latest revision again and, once they
+    succeed, continues the rollout where it stopped; the AppRevision lists every call. If funcd restarts during a
+    call, its outcome is unknown and the App calls again: a hook must be safe to repeat. A rollback runs the hooks of
+    the spec it applies, and a down migration is the builder's work. A paused App runs no hook. No hook runs before a
+    delete: stores are retained by default, a last backup is the DR BackupSchedule's work, and a delete hook would
+    need finalizers, which funcd does not use today (ADR-0170).
 14. **Ownership boundaries.** An App installs into any namespace and any resource group: it is a unit of work. A
     Function of App A may bind a store of App B by name: the binding grants read (ADR-0076) and a writer role grants
     write (ADR-0136). The App adds no rule of its own.
@@ -356,16 +368,16 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 |---|---|---|
 | Admission | the spec is checked: sections, names, refs, shared writers, quotas; a refusal stores nothing | unchanged |
 | Stamp | a changed spec gets AppRevision `<app>-<n>` | `Deploying` |
-| Pre-hooks | the hook Workflows of the new spec are written and Ready, then their runs must succeed before any other write | `Deploying` |
+| Pre-hooks | the hook Functions of the new spec are written and serve, then each call must succeed before any other write | `Deploying` |
 | Apply | owned parts are created or updated; `ref` objects are only read | `Deploying` |
 | Wait | every part becomes Ready or NotStarted, and every `ref` exists | `Deploying` |
 | Switch | `currentRevision` moves; the previous revision turns `Current=False` | `Ready` |
-| Post-hooks | runs after the switch, such as data migrations; a failure skips prune | `Ready`, or `Degraded` on a failure |
+| Post-hooks | calls after the switch, such as data migrations; a failure skips prune | `Ready`, or `Degraded` on a failure |
 | Prune | owned parts the spec dropped are deleted; stores follow `deletion` | `Ready` |
 | Failure | the timeout passes before the switch; `currentRevision` stays | `Failed` |
 | Degraded | a part of the current revision stops being Ready, and the App recovers with it | `Degraded` |
 | Rollback | revision `n`'s spec is applied again, as a new revision | `Deploying` |
-| Retry | `funcdctl app retry` re-runs the failed hooks and continues where the rollout stopped | `Deploying` |
+| Retry | `funcdctl app retry` calls the failed hooks again and continues where the rollout stopped | `Deploying` |
 | Test (opt-in) | `funcdctl app test` runs `spec.tests`; the results go on the current AppRevision | unchanged |
 | Delete | the GC deletes owned parts and AppRevisions; stores follow `deletion`; `ref` objects stay | gone |
 | Drift | a part was edited or deleted by hand; the App writes the declared spec back at once | unchanged |
@@ -432,8 +444,8 @@ artifact referenced by `image`).
 
 ## Temporary workarounds
 
-Until hooks are built, a migration or a pre-upgrade backup is a Workflow the operator starts by hand
-(`funcdctl workflow run`) before applying the new spec. Exit: Decision 13 implemented.
+Until hooks are built, a migration or a pre-upgrade backup is run by hand before the new spec is applied, for
+example as a one-step `funcdctl workflow run`. Exit: Decision 13 implemented.
 
 ## Contracts
 
@@ -519,7 +531,7 @@ type AppHooks struct {
 	PostApply []AppHook `json:"postApply,omitempty"`
 }
 type AppHook struct {
-	Workflow ObjectName `json:"workflow"` // a workflow of this App
+	Function ObjectName `json:"function"` // a function of this App, called once
 }
 type AppHookInput struct { // the input of every hook run
 	Event       string     `json:"event"` // install | upgrade | rollback
@@ -531,14 +543,14 @@ type AppHookInput struct { // the input of every hook run
 }
 type AppRevisionStatus struct {
 	Status `json:",inline"`             // phase Deploying|Ready|Failed; Applied, ChildrenReady, Current, Tested
-	Hooks  []AppHookRun    `json:"hooks,omitempty"` // every hook run of this revision, retries included
+	Hooks  []AppHookCall   `json:"hooks,omitempty"` // every hook call of this revision, retries included
 	Tests  []AppTestResult `json:"tests,omitempty"` // the last funcdctl app test
 }
-type AppHookRun struct {
-	Point    string     `json:"point"` // preApply | postApply
-	Workflow ObjectName `json:"workflow"`
-	Run      ObjectName `json:"run"`
-	Phase    RunPhase   `json:"phase"`
+type AppHookCall struct {
+	Point      string     `json:"point"` // preApply | postApply
+	Function   ObjectName `json:"function"`
+	Invocation ObjectName `json:"invocation"` // the record of the call
+	Phase      Phase      `json:"phase"`      // Ready | Failed
 }
 type AppTestResult struct {
 	Name    ObjectName `json:"name"`
@@ -635,8 +647,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] An idle Function (phase `Idle`, `RevisionReady=True`) keeps the App Ready.
 - [ ] No health or dependency check wakes a scaled-to-zero Function.
 - [ ] Nothing runs `spec.tests` except `funcdctl app test`.
-- [ ] A failed pre-hook writes no other part; a failed post-hook skips prune; a restarted App never starts a second
-      run of the same hook.
+- [ ] A failed pre-hook writes no other part; a failed post-hook skips prune; every hook call is recorded as an
+      Invocation owned by its AppRevision; no Workflow is involved in a hook.
 - [ ] No secret value appears in an App, an AppRevision, an App status or a log.
 - [ ] A change to a ConfigMap the App defines gives every Function that uses it a new Revision.
 - [ ] The App never creates, writes or deletes a Secret.
@@ -669,6 +681,8 @@ today's roles.
    storage, their config keys and defaults → the health ADR (it also changes the shim contract).
 8. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
    refuses other impossible settings → this design, when it becomes an ADR.
+9. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
+   has `kv`, `blob`, `invoke` and `log` only → its own decision, with the DR backup API.
 
 ## Example: the to-do app
 
@@ -936,21 +950,24 @@ spec:
       catalogs:
         - alias: lake
           catalog: todo-lake
+    - name: todo-migrate             # a hook (spec.hooks), called once per rollout
+      runtime: nodejs22
+      handler: handle
+      image: registry.example/todo-migrate:1.2.0
+      timeout: 600000000000          # the hook's limit
+      kv:
+        - alias: todos
+          store: todo-store
+          table: todos
   workflows:
     - name: todo-plan
       steps:
         - name: due
           function:
             ref: todo-planner
-    - name: todo-migrate             # a hook (spec.hooks)
-      timeout: 600000000000
-      steps:
-        - name: migrate
-          function:
-            image: registry.example/todo-migrate:1.2.0
   hooks:
     preApply:
-      - workflow: todo-migrate
+      - function: todo-migrate
   eventSources:
     - name: todo-plan-timer
       timer:
