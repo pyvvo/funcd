@@ -4,7 +4,7 @@
 - **Date**: 2026-10-06, refined 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, revisions, admission, gc, templates
-- **Feature rows**: [FEAT-0010](../feat/0010-feat-apps.md) F113 to F122. ADR numbers are assigned when each ADR is
+- **Feature rows**: [FEAT-0010](../feat/0010-feat-apps.md) F113 to F123. ADR numbers are assigned when each ADR is
   drafted.
 - **Relates to**: [ADR-0094](../adr/0094-workflow-engine-core.md) and
   [ADR-0096](../adr/0096-engine-native-builtin-steps.md) (a Workflow declares its KV stores and step Functions
@@ -85,6 +85,7 @@
 | 2026-10-07 | Delete | its own `funcdctl app delete`, which waits and reports what stayed |
 | 2026-10-07 | Version ranges in `images` | npm-style ranges (`^1.0.0`, `~1.2.0`, `>=1.0.0 <2.0.0`), an exact version being one case; push resolves a range to the highest matching tag and writes that version and its digest, as npm writes package-lock.json |
 | 2026-10-07 | A dry run | `funcdctl app deploy --dry-run` lists what a deploy would change and the hooks it would call, and writes nothing |
+| 2026-10-07 | Where the dry run runs | on the server: a dry-run engine for every write (F123), so the admissions that need the store run too; for an App it returns the plan |
 | 2026-10-07 | Images from two registries in one template | not yet; a board card tracks it |
 | 2026-10-07 | A platform mapping of registries for artifact pulls (a Nexus mirror) | skipped for now |
 
@@ -217,6 +218,8 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 - `scenario: app-template-range` — `images.stats: todo-stats:^1.0.0` while the registry holds the tags `1.0.0`,
   `1.0.3` and `2.0.0` ⇒ push writes `todo-stats:1.0.3@sha256:…`; with `^3.0.0` the push fails naming the image and
   the range.
+- `scenario: apply-dry-run-refused` — `funcdctl apply --dry-run -f bucket.yaml` for a Bucket beyond its namespace's
+  bucket quota ⇒ the same refusal as a real apply, naming the `bucket-count` admission; nothing is stored.
 - `scenario: app-deploy-dry-run` — `funcdctl app deploy … --dry-run` with a new image version for `todo-api` and
   Route `todo-legacy` dropped ⇒ prints that AppRevision `todo-5` would be stamped, `Function/todo-api` updated,
   `Route/todo-legacy` pruned and the pre-hook `todo-migrate` called; no object and no AppRevision is written.
@@ -230,11 +233,12 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 
 **In**: kinds `App` and `AppRevision`; the App admission; the reconciler (stamp, apply, readiness, prune, history,
 failure); the GC pairs; the template (`funcdctl app render|deploy`, `funcdctl push --template`); `funcdctl app
-history|rollback|retry|delete`; hooks (`preApply`, `postApply`); two config keys. **Out**: hooks before a delete; App
-dependencies and nested Apps; automatic rollback; the DR `BackupSchedule` (its section and App scope come with the
-kind); sections for IAM kinds; cron; Secret values in an App (the App only declares its Secrets); secret rotation (the
-secrets work, ADR-0057); apps across namespaces; a template pulled by the server; images from two registries in
-one template (a board card); a platform mapping of registries for artifact pulls (skipped for now).
+history|rollback|retry|delete`; the dry-run engine (Decision 19); hooks (`preApply`, `postApply`); two config keys.
+**Out**: hooks before a delete; App dependencies and nested Apps; automatic rollback; the DR `BackupSchedule` (its
+section and App scope come with the kind); sections for IAM kinds; cron; Secret values in an App (the App only
+declares its Secrets); secret rotation (the secrets work, ADR-0057); apps across namespaces; a template pulled by the
+server; images from two registries in one template (a board card); a platform mapping of registries for artifact pulls
+(skipped for now).
 
 ## Constraints & Decision drivers
 
@@ -409,6 +413,15 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     prune, which keeps a rollback complete. This is needed because the environment is set when a worker starts
     (ADR-0093: no hot reload) and no ConfigMap event reconciles a Function (`function.go:678`). A ConfigMap the App
     does not define is not renamed and rolls nothing, as today.
+19. **Dry run (F123).** A create or a replace sent with dry run passes the same strict decoding, validation and
+    admission pipeline as a real write (`admission.Pipeline.Admit`, `internal/controlplane/admission/pipeline.go:62`)
+    and is not stored. The answer is the object as it would be stored, or the refusal the real write would get, such
+    as the bucket quota (`bucket-count`, ADR-0080) or link validity (ADR-0064), which only the server can check because
+    they read the store (`pkg/funcd/funcd.go:1034-1064`). For an App, the answer also carries the plan, computed with
+    the reconciler's own rules: the AppRevision that would be stamped (none for an unchanged spec), each part that
+    would be created, updated or pruned, and the hooks that would be called. Nothing is stamped, written or called.
+    funcd has no dry run today; the engine serves every kind, with `funcdctl apply --dry-run` beside
+    `funcdctl app deploy --dry-run`.
 
 ## Lifecycle
 
@@ -508,7 +521,8 @@ invocations (ADR-0101) and runs (ADR-0102).
     returns at once. The same command deploys, upgrades (a newer template version) and downgrades (an older one).
     `--name` defaults to the template's `name`, and `--resource-group` to the App's name. `--dry-run` renders and
     checks the App, compares it with the App in place, and lists the AppRevision it would stamp, the parts it would
-    create, update or prune, and the hooks it would call; it writes nothing.
+    create, update or prune, and the hooks it would call; it writes nothing. It asks the server (Decision 19), so
+    the App admission and every other admission run as for a real deploy.
   - `funcdctl app render <dir|ref> …` prints the App without applying it, for a review or a GitOps repository.
   - `funcdctl app delete <app> -n <namespace>` deletes the App, waits until the GC has removed its tree, and prints
     what went and which stores stayed (`deletion: retain`); `--no-wait` returns at once.
@@ -697,6 +711,14 @@ func PullTemplate(ctx context.Context, ref, digest, dir string) error
 // internal/expr (additive)
 func NewSchemaResolver(schemas map[string]json.RawMessage, optional map[string]bool) Resolver // moved from internal/workflow
 func (e *Expr) Idents() []string // leading identifiers, read before Check to route an expression
+
+// the dry run (Decision 19, all new): a dryRun query parameter on create and replace
+func DryRun() ApplyOption // pkg/sdk, as Force() is a DeleteOption (pkg/sdk/sdk.go:231)
+type AppPlan struct {
+	Revision string     // the AppRevision that would be stamped; empty for an unchanged spec
+	Parts    []PlanPart // kind, name and action: create, update or prune
+	Hooks    []string   // the hook Functions that would be called, in order
+}
 ```
 
 | Config key | Env | Default | Meaning |
@@ -726,7 +748,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
   `KindAppRevision`, `Validate`, `NewObject`, `AllKinds` and its count test); `pkg/sdk/kinds.go` (plurals;
   `ReadOnlyKind` adds AppRevision).
 - **API**: `internal/controlplane` Handlers, CRUD block, the `stampTypeMeta` switch, routes, `stubs.go`; `just
-  generate`. AppRevision writes are refused at the API, as for Revision.
+  generate`. AppRevision writes are refused at the API, as for Revision. The dry run: a `dryRun` parameter on create
+  and replace that admits and does not store; `sdk.DryRun()`; `funcdctl apply --dry-run`.
 - **Server**: `internal/app/{children,admission,reconcile}.go`; the admission registered in the pipeline; wiring in
   `pkg/funcd` (`ctrl.Register` for App, `ctrl.Watches` per section kind with `app.MapPart`); keys in
   `internal/platform/config/config.go`; pairs in `internal/gc/gc.go`.
@@ -769,7 +792,7 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] Render refuses an undeclared value and an `image` that is not `${{ images.<name> }}`.
 - [ ] `funcdctl app deploy` exits non-zero when the new revision fails or times out.
 - [ ] A range resolves to the highest matching version at push, and a range that no tag satisfies refuses the push.
-- [ ] `funcdctl app deploy --dry-run` writes nothing.
+- [ ] A dry run stores nothing, stamps nothing and calls no hook, and returns the refusal the real write would get.
 - [ ] The config keys exist with the defaults above.
 
 ## Consequences
@@ -798,8 +821,6 @@ today's roles.
    refuses other impossible settings → this design, when it becomes an ADR.
 9. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
    has `kv`, `blob`, `invoke` and `log` only → its own decision, with the DR backup API.
-10. Does `funcdctl app deploy --dry-run` also run the server's App admission, so that a refusal shows before a real
-    deploy? funcd has no dry-run in its API, SDK or CLI today → the F120 ADR.
 
 ## Example: the to-do app
 
