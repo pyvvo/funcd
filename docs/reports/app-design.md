@@ -83,6 +83,10 @@
 | 2026-10-07 | Conditions | per file, in `app.yaml`'s `when` |
 | 2026-10-07 | Deploy, upgrade and downgrade | one `funcdctl app deploy`, which waits and reports (`--no-wait` returns at once); `funcdctl app render` stays for a review |
 | 2026-10-07 | Delete | its own `funcdctl app delete`, which waits and reports what stayed |
+| 2026-10-07 | Version ranges in `images` | npm-style ranges (`^1.0.0`, `~1.2.0`, `>=1.0.0 <2.0.0`), an exact version being one case; push resolves a range to the highest matching tag and writes that version and its digest, as npm writes package-lock.json |
+| 2026-10-07 | A dry run | `funcdctl app deploy --dry-run` lists what a deploy would change and the hooks it would call, and writes nothing |
+| 2026-10-07 | Images from two registries in one template | not yet; a board card tracks it |
+| 2026-10-07 | A platform mapping of registries for artifact pulls (a Nexus mirror) | skipped for now |
 
 ## Context & Need
 
@@ -210,6 +214,12 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   to the tag `1.3.0` is refused.
 - `scenario: app-registry-value` — `-f values/e2e.yaml` sets `registry: oci-layout:///mnt/funcd-deps/apps` ⇒ every
   image renders as `oci-layout:///mnt/funcd-deps/apps/<image>@<digest>`, and the App deploys from that layout.
+- `scenario: app-template-range` — `images.stats: todo-stats:^1.0.0` while the registry holds the tags `1.0.0`,
+  `1.0.3` and `2.0.0` ⇒ push writes `todo-stats:1.0.3@sha256:…`; with `^3.0.0` the push fails naming the image and
+  the range.
+- `scenario: app-deploy-dry-run` — `funcdctl app deploy … --dry-run` with a new image version for `todo-api` and
+  Route `todo-legacy` dropped ⇒ prints that AppRevision `todo-5` would be stamped, `Function/todo-api` updated,
+  `Route/todo-legacy` pruned and the pre-hook `todo-migrate` called; no object and no AppRevision is written.
 - `scenario: app-deploy-waits` — `funcdctl app deploy` of a new template version prints each part's state and exits 0
   once the new AppRevision is current; with an image that never starts it exits non-zero after `app.upgradeTimeout`,
   naming the part.
@@ -223,14 +233,14 @@ failure); the GC pairs; the template (`funcdctl app render|deploy`, `funcdctl pu
 history|rollback|retry|delete`; hooks (`preApply`, `postApply`); two config keys. **Out**: hooks before a delete; App
 dependencies and nested Apps; automatic rollback; the DR `BackupSchedule` (its section and App scope come with the
 kind); sections for IAM kinds; cron; Secret values in an App (the App only declares its Secrets); secret rotation (the
-secrets work, ADR-0057); apps across namespaces; a template pulled by the server; image version ranges; a
-platform mapping of registries for artifact pulls.
+secrets work, ADR-0057); apps across namespaces; a template pulled by the server; images from two registries in
+one template (a board card); a platform mapping of registries for artifact pulls (skipped for now).
 
 ## Constraints & Decision drivers
 
 Follow the shipped precedents: children inline in typed sections (Workflow, Site) and platform-stamped revisions
 (Function). Reuse the admission pipeline, the owner GC, the controller framework and the goja engine; no new runtime
-dependency (one module already in `go.sum` becomes direct for the template). Stateless controller: its state is the
+dependency (two modules already in `go.mod` become direct for the template). Stateless controller: its state is the
 objects. Fail closed and early: a bad part refuses the App at apply. Data safety: an App deletes a KVStore or a
 Bucket only when its entry says `deletion: delete`. The namespace stays the tenancy boundary. Apache-2.0/MIT only.
 
@@ -462,14 +472,21 @@ invocations (ADR-0101) and runs (ADR-0102).
   concatenates the sections of every file whose `when` holds, in lexical order.
 - **`app.yaml`** is a plain client file, like `funcdctl.yaml` (`pkg/sdk/manifest.go:22`): it has no `apiVersion` or
   `kind`, and an unknown key is refused. Its keys are `name`; `version`, required and semver; `registry`, where the
-  images come from, usually `${{ values.registry }}`; `images`, every image the app runs with its fixed version
-  (`api: todo-api:1.0.0`); `valuesSchema`, any JSON Schema, `if`/`then` included; and `when`, file → condition.
-- **Images**: the builder fixes the version of each image in `images`, as a package.json fixes a dependency; version
-  ranges can come later in the same table. An install changes only the registry, through a value with a default: a
+  images come from, usually `${{ values.registry }}`; `images`, every image the app runs with its version or version
+  range (`api: todo-api:1.0.0`); `valuesSchema`, any JSON Schema, `if`/`then` included; and `when`, file → condition.
+- **Images**: the builder sets the version of each image in `images`, as a package.json sets a dependency: an exact
+  version (`todo-api:1.0.0`) or an npm-style range (`todo-api:^1.0.0`, `~1.2.0`, `>=1.0.0 <2.0.0`), parsed with
+  `Masterminds/semver/v3` (MIT, already in `go.mod` as an indirect dependency, the library Helm uses for chart
+  dependency ranges). An install changes only the registry, through a value with a default: a
   Venom lane points the App at a local OCI layout, and a site at its own registry. A fragment names an image only as
   `${{ images.<name> }}`, which renders to `<registry>/<image>`; render refuses any other `image` value.
-- **Pinning**: `funcdctl push --template` resolves each image at the default registry and writes its digest into the
-  pushed `app.yaml` (`todo-api:1.0.0@sha256:…`), as a lockfile does; the copy in git keeps the readable tags. A
+- **Pinning**: `funcdctl push --template` resolves each image at the default registry. A range becomes the highest tag
+  that satisfies it, read from the registry's or the layout's tag list (oras-go v2.6.1:
+  `registry/remote/repository.go:399`, `content/oci/oci.go:350`), and a range that no tag satisfies refuses the push.
+  Push writes the exact version and its digest into the pushed `app.yaml` (`todo-api:1.0.3@sha256:…`), as npm writes
+  package-lock.json; the copy in git keeps the readable versions and ranges. Rendered from a directory, which holds
+  no pins, a range resolves at render to the highest matching tag at the install's registry, and an exact version
+  stays as written. A
   Revision uses an explicit digest as written (ADR-0035), so a moved tag never changes what a template version
   installs, and a copy of an image in another registry keeps its digest.
 - **Values** come only from `-f` files, kept in git; a later file wins, maps merge key by key and lists are replaced.
@@ -489,7 +506,9 @@ invocations (ADR-0101) and runs (ADR-0102).
     renders and applies the App, then waits until its new AppRevision is current, failed or past
     `app.upgradeTimeout`. It prints each part's state as it changes and exits non-zero on a failure; `--no-wait`
     returns at once. The same command deploys, upgrades (a newer template version) and downgrades (an older one).
-    `--name` defaults to the template's `name`, and `--resource-group` to the App's name.
+    `--name` defaults to the template's `name`, and `--resource-group` to the App's name. `--dry-run` renders and
+    checks the App, compares it with the App in place, and lists the AppRevision it would stamp, the parts it would
+    create, update or prune, and the hooks it would call; it writes nothing.
   - `funcdctl app render <dir|ref> …` prints the App without applying it, for a review or a GitOps repository.
   - `funcdctl app delete <app> -n <namespace>` deletes the App, waits until the GC has removed its tree, and prints
     what went and which stores stayed (`deletion: retain`); `--no-wait` returns at once.
@@ -650,7 +669,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 type Template struct {
 	Name, Version string            // Version: semver, the push tag
 	Registry      string            // a literal or a ${{ }} over values
-	Images        map[string]string // name → repo:tag, or repo:tag@digest once pushed
+	Images        map[string]string // name → repo:version or repo:range; repo:version@digest once pushed
 	ValuesSchema  json.RawMessage
 	When          map[string]string // resources/<file> → ${{ }} Condition
 	Files         map[string][]byte // resources/*.yaml by path
@@ -663,7 +682,11 @@ type RenderInput struct {
 }
 func Load(dir string) (*Template, error)
 func Render(t *Template, in RenderInput) (*v1.App, error)
-func Pin(ctx context.Context, t *Template, resolve func(ctx context.Context, ref string) (digest string, err error)) error // at push
+type ImageResolver interface {
+	Tags(ctx context.Context, repo string) ([]string, error) // a registry's or a layout's tags
+	Digest(ctx context.Context, ref string) (string, error)
+}
+func Pin(ctx context.Context, t *Template, r ImageResolver) error // at push: range → highest matching version → digest
 
 // internal/artifact
 const AppTemplateArtifactType = "application/vnd.funcd.app-template.artifact.v1"
@@ -695,7 +718,7 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 
 | Consumes | Exposes |
 |---|---|
-| store: App, AppRevision, parts · the admission pipeline · `internal/controller` (`Watches` per section kind) · config `app.*` · for the template: `internal/expr`, `internal/artifact` (oras), `santhosh-tekuri/jsonschema/v6` (Apache-2.0, v6.0.2, in `go.sum` today) | kinds `App`, `AppRevision` (REST, SDK, OpenAPI) · the App admission · `funcdctl app render|deploy|delete|history|rollback`, `funcdctl push --template` · the template artifact type · GC pairs |
+| store: App, AppRevision, parts · the admission pipeline · `internal/controller` (`Watches` per section kind) · config `app.*` · for the template: `internal/expr`, `internal/artifact` (oras), `santhosh-tekuri/jsonschema/v6` (Apache-2.0, v6.0.2, in `go.sum` today) · `Masterminds/semver/v3` (MIT, v3.5.0, in `go.mod` as indirect today) | kinds `App`, `AppRevision` (REST, SDK, OpenAPI) · the App admission · `funcdctl app render|deploy|delete|history|rollback`, `funcdctl push --template` · the template artifact type · GC pairs |
 
 ## Implementation plan
 
@@ -710,7 +733,7 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - **Template and CLI**: `internal/app/template`; `internal/artifact/template.go`; `schemaResolver` moves to
   `internal/expr/schema.go` (workflow uses it), plus `Idents`; `cmd/funcdctl` `push --template`, `app render`, `app
   deploy`, `app delete`, `app history`, `app rollback`, `app pause`, `app resume`, `app test`, `app retry`;
-  `go.mod` makes `santhosh-tekuri/jsonschema/v6` direct.
+  `go.mod` makes `santhosh-tekuri/jsonschema/v6` and `Masterminds/semver/v3` direct.
 - **Tests**: unit tests for `Children`, the admission (each refusal of Decision 3) and `Render` (typed substitution,
   defaults, `when`, pass-through and mixed expressions, refused values and images); a push/resolve/pull round trip
   that pins every image; one `TestScenarioApp…` per
@@ -745,6 +768,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] A pushed template holds only `app.yaml` and `resources/`, and every image in its `app.yaml` carries a digest.
 - [ ] Render refuses an undeclared value and an `image` that is not `${{ images.<name> }}`.
 - [ ] `funcdctl app deploy` exits non-zero when the new revision fails or times out.
+- [ ] A range resolves to the highest matching version at push, and a range that no tag satisfies refuses the push.
+- [ ] `funcdctl app deploy --dry-run` writes nothing.
 - [ ] The config keys exist with the defaults above.
 
 ## Consequences
@@ -773,13 +798,8 @@ today's roles.
    refuses other impossible settings → this design, when it becomes an ADR.
 9. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
    has `kv`, `blob`, `invoke` and `log` only → its own decision, with the DR backup API.
-10. Version ranges in `images` (`^1.0.0`, `>=1.0.0 <2.0.0`), resolved at push, like npm peer dependencies → later
-    (decider).
-11. A platform setting that maps a registry to a mirror for every artifact pull, as a Nexus setup needs; funcd
-    redirects only runtime images today (`runtime.containerd.imagePrefix`, `internal/platform/config/config.go:321`)
-    → its own decision, outside this design.
-12. `funcdctl app deploy --dry-run`, listing the parts a deploy would write → later, if needed.
-13. Images from two registries in one template → later, if a template needs it.
+10. Does `funcdctl app deploy --dry-run` also run the server's App admission, so that a refusal shows before a real
+    deploy? funcd has no dry-run in its API, SDK or CLI today → the F120 ADR.
 
 ## Example: the to-do app
 
@@ -853,7 +873,7 @@ images:
   api: todo-api:1.0.0
   planner: todo-planner:1.0.0
   migrate: todo-migrate:1.2.0
-  stats: todo-stats:1.0.0
+  stats: todo-stats:^1.0.0
   web: todo-web:1.0.0
 valuesSchema:
   type: object
@@ -919,7 +939,9 @@ when:
   resources/backup.yaml: ${{ values.backup.enabled === true }}
 ```
 
-In the pushed template, push has written each image's digest into `images` (`api: todo-api:1.0.0@sha256:4f1c…`).
+In the pushed template, push has written each image's exact version and digest into `images`
+(`api: todo-api:1.0.0@sha256:4f1c…`, `stats: todo-stats:1.0.3@sha256:…`). Rendered from the directory, as below,
+`^1.0.0` resolves to `1.0.3`, the highest matching tag, and no image carries a digest.
 
 **Template fragments** (`app/resources/store.yaml`, `api.yaml`, `schedule.yaml`)
 
@@ -1041,7 +1063,7 @@ spec:
     - name: todo-stats
       runtime: nodejs22
       handler: handle
-      image: registry.example/todo-stats:1.0.0
+      image: registry.example/todo-stats:1.0.3
       catalogs:
         - alias: lake
           catalog: todo-lake
