@@ -64,7 +64,7 @@ func (e *revisionEnv) applyFlow(t *testing.T, steps ...v1.WorkflowStep) {
 func (e *revisionEnv) flowSteps(t *testing.T, bImg string) []v1.WorkflowStep {
 	t.Helper()
 	return []v1.WorkflowStep{
-		{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "a"), Timeout: time.Minute}},
+		{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "a"), Timeout: v1.Duration(time.Minute)}},
 		{Name: "b", Function: &v1.FunctionStep{Image: bImg}, DependsOn: []v1.ObjectName{"a"}},
 	}
 }
@@ -254,7 +254,7 @@ func TestScenarioRefStepBound(t *testing.T) {
 	s1, s2 := e.bImage(t, "v1"), e.bImage(t, "v2")
 	e.applyShared(t, s1)
 	e.applyFlow(t,
-		v1.WorkflowStep{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "a"), Timeout: time.Minute}},
+		v1.WorkflowStep{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "a"), Timeout: v1.Duration(time.Minute)}},
 		v1.WorkflowStep{Name: "c", Function: &v1.FunctionStep{Ref: "shared"}, DependsOn: []v1.ObjectName{"a"}},
 	)
 	waitMaterializedReady(t, e.c, "flow-a")

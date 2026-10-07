@@ -341,7 +341,7 @@ func TestScenarioPauseLetsInFlightStepFinish(t *testing.T) {
 	s, runs, g := newStore(t), newRunStore(t), newGate()
 	g.block["x"], g.fail["y"] = 1, 1
 	y := retryStep("y", 2, "r")
-	y.Function.Retry.Backoff = time.Hour
+	y.Function.Retry.Backoff = v1.Duration(time.Hour)
 	seedWorkflow(t, s, "wf", step("r", ""), step("x", "", "r"), y, step("z", "", "x"))
 	h := newHarness(t, s, runs, g, Config{}, nil, time.Second, nil)
 	seedRun(t, s, "run-p", "wf", `{}`)

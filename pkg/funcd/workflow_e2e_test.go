@@ -338,7 +338,7 @@ func TestIssue28_StepLongerThan30sHonorsStepTimeout(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "long", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.WorkflowSpec{
 			Pooling: v1.WorkflowPooling{Mode: v1.PoolingIsolated, MinReplicas: 1},
-			Steps:   []v1.WorkflowStep{{Name: "slow", Function: &v1.FunctionStep{Image: img, Timeout: 60 * time.Second}}},
+			Steps:   []v1.WorkflowStep{{Name: "slow", Function: &v1.FunctionStep{Image: img, Timeout: v1.Duration(60 * time.Second)}}},
 		},
 	}
 	_, err := c.Apply(context.Background(), wf)

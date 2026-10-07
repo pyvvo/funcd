@@ -305,7 +305,7 @@ func TestIssue50_IdleStepFunctionScalesToZero(t *testing.T) {
 			if err := act.ReclaimIdle(ctx); err != nil { // seeds the grace window
 				t.Fatalf("ReclaimIdle: %v", err)
 			}
-			clk.advance(scaling.IdleTimeout + time.Second)
+			clk.advance(time.Duration(scaling.IdleTimeout) + time.Second)
 			if err := act.ReclaimIdle(ctx); err != nil {
 				t.Fatalf("ReclaimIdle: %v", err)
 			}

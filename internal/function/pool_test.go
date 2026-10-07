@@ -647,7 +647,7 @@ func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
 		h.create(t, "m", func(fn *v1.Function) {
 			fn.Spec.Pooling.Worker = "adr0169"
 			fn.Spec.Replicas = 0
-			fn.Spec.Scaling.IdleTimeout = idle
+			fn.Spec.Scaling.IdleTimeout = v1.Duration(idle)
 		})
 		h.reconcile(t, "m")
 		require.Equal(t, v1.PhaseIdle, h.getFn(t, "m").Status.Phase)

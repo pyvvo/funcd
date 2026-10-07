@@ -71,7 +71,7 @@ func TestScenarioE2EScheduledWorkflow(t *testing.T) {
 	es := &v1.EventSource{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindEventSource.GVK().APIVersion(), Kind: v1.KindEventSource},
 		ObjectMeta: v1.ObjectMeta{Name: "clock", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.EventSourceSpec{Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "beat", Interval: 300 * time.Millisecond}}}},
+		Spec:       v1.EventSourceSpec{Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "beat", Interval: v1.Duration(300 * time.Millisecond)}}}},
 	}
 	_, err = c.Apply(context.Background(), es)
 	require.NoError(t, err)

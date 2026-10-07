@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -24,6 +25,17 @@ type Function struct {
 const (
 	MaxInvokeTimeout     = time.Hour
 	DefaultInvokeTimeout = 60 * time.Second
+)
+
+// The bounds of the API duration fields, checked by each kind's Validate and named in each field's doc (ADR-0194).
+const (
+	MinTimerInterval   = Duration(100 * time.Millisecond)
+	MaxTimerInterval   = Duration(24 * time.Hour)
+	MaxLinkTimeout     = Duration(5 * time.Minute)
+	MaxIdleTimeout     = Duration(24 * time.Hour)
+	MaxWorkflowTimeout = Duration(168 * time.Hour)
+	MaxStepTimeout     = Duration(24 * time.Hour)
+	MaxRetryBackoff    = Duration(time.Hour)
 )
 
 // FunctionSpec holds the desired state. Behavioral fields are appended by feature ADRs:
@@ -54,7 +66,7 @@ type FunctionSpec struct {
 	Replicas int `json:"replicas,omitempty" minimum:"0" maximum:"15"`
 	// Timeout bounds an external invoke until its response starts; 0 ⇒ invoke.defaultTimeout. External
 	// invokes only: links and steps keep their own limits (ADR-0151).
-	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"3600000000000"`
+	Timeout Duration `json:"timeout,omitempty" doc:"Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout."`
 	// Pooling is the per-function worker-pooling opt-in (ADR-0046, F28). Empty ⇒ solo (own
 	// worker, the default). Functions sharing (namespace, runtime, Pooling.Worker) and the same
 	// access (bindings, owned data, grants) co-locate as handlers in one pool worker; status.pool
@@ -121,9 +133,8 @@ type FunctionLink struct {
 	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 	// Target is the name of a Function in this function's namespace.
 	Target ObjectName `json:"target"`
-	// Timeout bounds the synchronous wait (incl. a cold-start wake); int64 ns, 0 ⇒ platform
-	// default, ≤5m.
-	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"300000000000"`
+	// Timeout bounds the synchronous wait (incl. a cold-start wake).
+	Timeout Duration `json:"timeout,omitempty" doc:"Bounds the synchronous call, a cold-start wake included: 0s to 5m; 0s or unset means the 30s link default."`
 }
 
 // FunctionKV declares one KV binding (ADR-0073, F42): a local alias bound to a (store, table)
@@ -164,9 +175,9 @@ type Pooling struct {
 // (non-negative, MinReplicas ≤ MaxReplicas) is the API server's admission job (P-L/F07);
 // the activator reads these defensively.
 type Scaling struct {
-	MinReplicas int           `json:"minReplicas,omitempty" minimum:"0" maximum:"15"`             // 0 enables scale-to-zero
-	MaxReplicas int           `json:"maxReplicas,omitempty" minimum:"0" maximum:"15"`             // recorded; 1→N enforcement is V3
-	IdleTimeout time.Duration `json:"idleTimeout,omitempty" minimum:"0" maximum:"86400000000000"` // reclaim delay, int64 ns; 0≤≤24h, 0 disables
+	MinReplicas int      `json:"minReplicas,omitempty" minimum:"0" maximum:"15"` // 0 enables scale-to-zero
+	MaxReplicas int      `json:"maxReplicas,omitempty" minimum:"0" maximum:"15"` // recorded; 1→N enforcement is V3
+	IdleTimeout Duration `json:"idleTimeout,omitempty" doc:"The idle time before a worker is reclaimed: 0s to 24h; 0s or unset disables reclaim."`
 }
 
 // FunctionStatus holds the observed state. Behavioral fields appended by F11/F13.
@@ -203,7 +214,7 @@ func (f *Function) isPrincipalObject() {}
 // Function-spec semantic rules JSON Schema can't express (ADR-0046, ADR-0048): Pooling.Worker
 // is a DNS-1123 label when set; the cross-field and conditional-presence checks in
 // FunctionSpec.Validate. Field-local constraints (runtime/handler/uri patterns, replica bounds)
-// are schema-enforced at the edge and are not re-checked here.
+// are schema-enforced at the edge and are not re-checked here; duration bounds are (ADR-0194).
 func (f *Function) Validate() error {
 	if err := validateMeta(f.TypeMeta, &f.ObjectMeta, KindFunction); err != nil {
 		return err
@@ -215,13 +226,25 @@ func (f *Function) Validate() error {
 }
 
 // Validate enforces the FunctionSpec rule JSON Schema can't express (ADR-0048): the Scaling
-// cross-field bound (minReplicas ≤ maxReplicas when maxReplicas > 0). It deliberately does NOT
-// re-check field PRESENCE (runtime/handler/artifact non-empty) — that is the materialization
-// shape gate's job (ADR-0020: NewBasicValidator + the shim write ShapeValid:False and block
-// Ready), and re-checking it here would duplicate a layer (one constraint, one layer). Field
-// FORMAT (handler/digest patterns, replica/duration bounds) is schema-enforced at the edge.
+// cross-field bound (minReplicas ≤ maxReplicas when maxReplicas > 0) and the duration bounds
+// (ADR-0194). It deliberately does NOT re-check field PRESENCE (runtime/handler/artifact non-empty)
+// — that is the materialization shape gate's job (ADR-0020: NewBasicValidator + the shim write
+// ShapeValid:False and block Ready), and re-checking it here would duplicate a layer (one
+// constraint, one layer). Field FORMAT (handler/digest patterns, replica bounds) is schema-enforced
+// at the edge.
 func (s *FunctionSpec) Validate() error {
 	const op = "FunctionSpec.Validate"
+	if err := CheckDuration(op, "spec.timeout", s.Timeout, 0, Duration(MaxInvokeTimeout)); err != nil {
+		return err
+	}
+	if err := CheckDuration(op, "spec.scaling.idleTimeout", s.Scaling.IdleTimeout, 0, MaxIdleTimeout); err != nil {
+		return err
+	}
+	for i := range s.Links {
+		if err := CheckDuration(op, fmt.Sprintf("spec.links[%d].timeout", i), s.Links[i].Timeout, 0, MaxLinkTimeout); err != nil {
+			return err
+		}
+	}
 	if s.Scaling.MaxReplicas > 0 && s.Scaling.MinReplicas > s.Scaling.MaxReplicas {
 		return fault.Invalidf(op, "spec.scaling.minReplicas (%d) must not exceed maxReplicas (%d)",
 			s.Scaling.MinReplicas, s.Scaling.MaxReplicas)

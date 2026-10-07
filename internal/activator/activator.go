@@ -580,7 +580,7 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 			continue // scale-to-zero / reclaim not enabled for this function
 		}
 		if Reclaimable(fn) {
-			a.reclaim(ctx, ref, fn.UID, now, sc.IdleTimeout, func(p FunctionRef) bool { return p.UID == fn.UID && !HeldRevision(fn, p) })
+			a.reclaim(ctx, ref, fn.UID, now, time.Duration(sc.IdleTimeout), func(p FunctionRef) bool { return p.UID == fn.UID && !HeldRevision(fn, p) })
 		}
 	}
 	for _, ref := range a.pinnedRefs() {
@@ -599,7 +599,7 @@ func (a *Activator) ReclaimIdle(ctx context.Context) error {
 		live[ref] = struct{}{}
 		// a held revision is reclaimed whatever the Function's replica floor, which is its current revision's
 		// (ADR-0190 Decision 6)
-		idle := fn.Spec.Scaling.IdleTimeout
+		idle := time.Duration(fn.Spec.Scaling.IdleTimeout)
 		if idle <= 0 {
 			idle = heldIdleTimeout
 		}

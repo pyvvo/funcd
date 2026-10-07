@@ -128,7 +128,7 @@ func (r *pooledRig) member(t *testing.T, name v1.ObjectName, minReplicas int, bi
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = name, "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file://"+r.art
-	fn.Spec.Replicas, fn.Spec.Scaling = minReplicas, v1.Scaling{MinReplicas: minReplicas, IdleTimeout: asleepIdle}
+	fn.Spec.Replicas, fn.Spec.Scaling = minReplicas, v1.Scaling{MinReplicas: minReplicas, IdleTimeout: v1.Duration(asleepIdle)}
 	fn.Spec.Pooling.Worker = "shared"
 	bind(fn)
 	r.apply(t, fn)

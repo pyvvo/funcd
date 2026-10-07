@@ -217,10 +217,11 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, create
 		ev := &t.Events[i]
 		k := eventKey{ns: ns, source: source, event: ev.Name}
 		want[k] = true
-		if e, ok := s.timers[k]; ok && e.interval == ev.Interval {
+		interval := time.Duration(ev.Interval)
+		if e, ok := s.timers[k]; ok && e.interval == interval {
 			continue // unchanged — keep its lastFire
 		}
-		s.timers[k] = &timerEntry{interval: ev.Interval, lastFire: gridFloor(created, s.clock.Now(), ev.Interval)}
+		s.timers[k] = &timerEntry{interval: interval, lastFire: gridFloor(created, s.clock.Now(), interval)}
 	}
 	for k := range s.timers { // prune events dropped from the spec
 		if k.ns == ns && k.source == source && !want[k] {

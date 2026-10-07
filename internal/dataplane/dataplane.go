@@ -224,7 +224,7 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 func (s *Server) responseDeadline(obj v1.Object, received time.Time) activator.ResponseDeadline {
 	limit, source := s.defaultTimeout, "invoke.defaultTimeout"
 	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Timeout > 0 {
-		limit, source = fn.Spec.Timeout, "spec.timeout"
+		limit, source = time.Duration(fn.Spec.Timeout), "spec.timeout"
 	}
 	return activator.ResponseDeadline{At: received.Add(limit), Limit: limit, Source: source}
 }

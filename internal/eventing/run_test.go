@@ -23,7 +23,7 @@ func TestIssue114_TimerFiresOncePerInterval(t *testing.T) {
 			pub := &capturePub{}
 			src, err := NewSource(Deps{Store: store.New(memory.New()), Publisher: pub})
 			require.NoError(t, err)
-			src.registerTimer("team-a", "clock", time.Time{}, &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: interval}}})
+			src.registerTimer("team-a", "clock", time.Time{}, &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: v1.Duration(interval)}}})
 			start := src.timers[eventKey{ns: "team-a", source: "clock", event: "tick"}].lastFire
 
 			// The Run loop's ticks: not aligned with the registration, with sub-millisecond ticker jitter.
@@ -62,7 +62,7 @@ func newFailPurgeSource(t *testing.T, st store.Store) *Source {
 
 func TestReconcileDeletedSourceReturnsPurgeError(t *testing.T) {
 	src := newFailPurgeSource(t, store.New(memory.New()))
-	src.registerTimer("team-a", "clock", time.Time{}, &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: time.Minute}}})
+	src.registerTimer("team-a", "clock", time.Time{}, &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: v1.Duration(time.Minute)}}})
 
 	_, err := src.Reconcile(context.Background(), controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "team-a", Name: "clock"})
 	require.Error(t, err, "a Purge error is returned for a retry")
@@ -77,7 +77,7 @@ func TestReconcileTimerPurgeErrorKeepsTimer(t *testing.T) {
 	require.True(t, ok)
 	es := obj.(*v1.EventSource)
 	es.Name, es.Namespace, es.ResourceGroup = "clock", "team-a", "rg1"
-	es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: time.Minute}}}
+	es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: v1.Duration(time.Minute)}}}
 	_, err := st.Create(ctx, es)
 	require.NoError(t, err)
 	src := newFailPurgeSource(t, st)

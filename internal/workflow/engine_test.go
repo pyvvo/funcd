@@ -423,7 +423,7 @@ func TestIssue180_RetryBackoffIsExponential(t *testing.T) {
 	d := &attemptClock{}
 	e := newTestEngine(t, d, Config{})
 	st := retryStep("a", 5)
-	st.Function.Retry.Backoff = backoff
+	st.Function.Retry.Backoff = v1.Duration(backoff)
 	if _, err := e.Execute(context.Background(), "default", "run-bo", "wf", spec(st), json.RawMessage(`{}`), StartOptions{}); err == nil {
 		t.Fatal("run should have failed after its retries")
 	}
@@ -450,7 +450,7 @@ func TestDefaultRetryBackoffPacesAStepWithNoBackoff(t *testing.T) {
 		d := &attemptClock{}
 		e := newTestEngine(t, d, Config{DefaultRetryBackoff: 300 * time.Millisecond})
 		st := retryStep("a", 3)
-		st.Function.Retry.Backoff = stepBackoff
+		st.Function.Retry.Backoff = v1.Duration(stepBackoff)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := e.Execute(ctx, "default", "run-default-bo", "wf", spec(st), json.RawMessage(`{}`), StartOptions{}); err == nil {
@@ -767,7 +767,7 @@ func TestIssue177_PausedTimeExcludedFromRunTimeout(t *testing.T) {
 	ctx := context.Background()
 	clk := &manualClock{t: time.Now()}
 	sp := spec(step("a", ""), step("b", "", "a"))
-	sp.Timeout = 10 * time.Second
+	sp.Timeout = v1.Duration(10 * time.Second)
 	_ = runs.Put(ctx, &runstate.Record{
 		Namespace: "default", Name: "p-1", Phase: runRunning, Spec: sp, StartedAt: clk.Now().UnixNano(),
 		Steps: []runstate.StepState{{Name: "a", Phase: v1.StepSucceeded, Output: json.RawMessage(`{}`)}, {Name: "b", Phase: v1.StepPending}},

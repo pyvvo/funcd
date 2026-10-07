@@ -76,7 +76,7 @@ func TestScenarioLinkKeepsOwnLimit(t *testing.T) {
 	h := newShimRig(t, "")
 	h.deploy(t, "lcallee", nodeFn(after32s).pooled("w151l"))
 	caller := nodeFn("export async function handle(ctx) { return await ctx.invoke('callee', {}); }\n")
-	caller.links = []v1.FunctionLink{{Alias: "callee", Target: "lcallee", Timeout: 40 * time.Second}}
+	caller.links = []v1.FunctionLink{{Alias: "callee", Target: "lcallee", Timeout: v1.Duration(40 * time.Second)}}
 	h.deploy(t, "lcaller", caller)
 	waitReady(t, h.c, "lcallee", "lcaller")
 
@@ -99,8 +99,8 @@ func TestScenarioStepKeepsOwnLimit(t *testing.T) {
 		Spec: v1.WorkflowSpec{
 			Pooling: v1.WorkflowPooling{Mode: v1.PoolingShared, MinReplicas: 1},
 			Steps: []v1.WorkflowStep{
-				{Name: "brief", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "brief"), Timeout: 5 * time.Second}},
-				{Name: "long", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "long"), Timeout: 40 * time.Second}},
+				{Name: "brief", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "brief"), Timeout: v1.Duration(5 * time.Second)}},
+				{Name: "long", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "long"), Timeout: v1.Duration(40 * time.Second)}},
 			},
 		},
 	}

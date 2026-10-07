@@ -325,7 +325,7 @@ func TestIssue48_WarmDispatchCountsAsActivity(t *testing.T) {
 	}
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "busy", "default", "rg1"
-	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: time.Minute}
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Minute)}
 	if _, err := st.Create(ctx, fn); err != nil {
 		t.Fatal(err)
 	}

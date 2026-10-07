@@ -320,7 +320,7 @@ func TestIssue349_StoppedChildRunsItsOnFailureHandler(t *testing.T) {
 	kid.OnFailure = "c_notify"
 	timedOut := spec(subwfStep("sub", "kid"), step("p_notify", ""))
 	timedOut.OnFailure = "p_notify"
-	timedOut.Timeout = 50 * time.Millisecond
+	timedOut.Timeout = v1.Duration(50 * time.Millisecond)
 	failFast := spec(step("r", ""), subwfStep("sub", "kid", "r"), step("x", "", "r"))
 	for _, tc := range []struct {
 		name         string
@@ -403,9 +403,9 @@ func (d *backoffStopDispatcher) Dispatch(ctx context.Context, req DispatchReques
 // parent's fail-fast stopped did not time out.
 func TestIssue445_StepStoppedInBackoffKeepsItsDispatchCause(t *testing.T) {
 	s := retryStep("s", 3)
-	s.Function.Retry.Backoff = 30 * time.Second
+	s.Function.Retry.Backoff = v1.Duration(30 * time.Second)
 	timed := spec(s)
-	timed.Timeout = 100 * time.Millisecond
+	timed.Timeout = v1.Duration(100 * time.Millisecond)
 	for _, tc := range []struct {
 		name     string
 		parent   v1.WorkflowSpec

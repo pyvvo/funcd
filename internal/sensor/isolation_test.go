@@ -303,7 +303,7 @@ func TestScenarioStuckTargetSparesTimer(t *testing.T) {
 	require.NoError(t, err)
 	for _, name := range []string{"slowclock", "fastclock"} {
 		eventSource(t, g.st, name, func(es *v1.EventSource) {
-			es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: 500 * time.Millisecond}}}
+			es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "tick", Interval: v1.Duration(500 * time.Millisecond)}}}
 		})
 		reconcileSource(t, src, name)
 	}

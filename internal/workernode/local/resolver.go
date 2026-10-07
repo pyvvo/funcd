@@ -36,7 +36,7 @@ func (r storeResolver) Resolve(ctx context.Context, caller Ref, alias string) (R
 	}
 	for _, l := range fn.Spec.Links {
 		if l.Alias == alias {
-			timeout := l.Timeout
+			timeout := time.Duration(l.Timeout)
 			if timeout <= 0 {
 				timeout = defaultTimeout
 			}

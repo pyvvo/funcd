@@ -2,7 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
-	"time"
+	"fmt"
 
 	huma "github.com/danielgtaylor/huma/v2"
 	"github.com/pyvvo/funcd/api/fault"
@@ -33,7 +33,7 @@ type WorkflowSpec struct {
 	// default (the total-defaults rule).
 	Contract *WorkflowContract `json:"contract,omitempty"`
 	// Timeout is the wall-clock bound on a whole run (paused time excluded); 0 ⇒ none.
-	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"604800000000000"`
+	Timeout Duration `json:"timeout,omitempty" doc:"The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound."`
 	// OnFailure names a handler function step (defined in Steps, excluded from the DAG)
 	// invoked once when the run ends Failed. Empty ⇒ no handler.
 	OnFailure ObjectName `json:"onFailure,omitempty"`
@@ -110,7 +110,7 @@ type FunctionStep struct {
 	// Retry is the per-step retry policy; nil ⇒ the engine default.
 	Retry *StepRetry `json:"retry,omitempty"`
 	// Timeout is the per-step invocation bound; 0 ⇒ the engine default.
-	Timeout time.Duration `json:"timeout,omitempty" minimum:"0" maximum:"86400000000000"`
+	Timeout Duration `json:"timeout,omitempty" doc:"The per-step invocation bound: 0s to 24h; 0s or unset means workflow.defaultStepTimeout."`
 	// Pooling overrides the workflow-level pooling for this step's materialized Function
 	// (nil ⇒ inherit spec.pooling); image steps only.
 	Pooling *WorkflowPooling `json:"pooling,omitempty"`
@@ -163,8 +163,8 @@ type StepWhen struct {
 
 // StepRetry is a per-step retry policy: attempts and exponential backoff.
 type StepRetry struct {
-	MaxAttempts int           `json:"maxAttempts,omitempty" minimum:"1" maximum:"100"`
-	Backoff     time.Duration `json:"backoff,omitempty" minimum:"0" maximum:"3600000000000"`
+	MaxAttempts int      `json:"maxAttempts,omitempty" minimum:"1" maximum:"100"`
+	Backoff     Duration `json:"backoff,omitempty" doc:"The base of the exponential retry backoff: 0s to 1h; 0s or unset means workflow.defaultRetryBackoff."`
 }
 
 // WorkflowKVStore declares a workflow-owned KVStore whose table owners name a step.
@@ -239,11 +239,14 @@ func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
 // step kind-union, unique step names, each image step's <workflow>-<step> Function
 // name fitting a DNS label, dependsOn edge validity + acyclicity, the reserved
 // workflow: kind, the onFailure handler constraints, workflow-owned store owners
-// naming a step, and the declared-contract total-defaults rule. Field-format
-// constraints (durations, retry bounds, enums) are schema-enforced at the edge.
+// naming a step, the declared-contract total-defaults rule and the duration bounds
+// (ADR-0194). Field-format constraints (retry attempts, enums) are schema-enforced at the edge.
 func (w *Workflow) Validate() error {
 	const op = "Workflow.Validate"
 	if err := validateMeta(w.TypeMeta, &w.ObjectMeta, KindWorkflow); err != nil {
+		return err
+	}
+	if err := CheckDuration(op, "spec.timeout", w.Spec.Timeout, 0, MaxWorkflowTimeout); err != nil {
 		return err
 	}
 	if len(w.Spec.Steps) == 0 {
@@ -260,6 +263,9 @@ func (w *Workflow) Validate() error {
 		}
 		names[s.Name] = true
 		if err := s.validateKind(op); err != nil {
+			return err
+		}
+		if err := s.validateDurations(op, i); err != nil {
 			return err
 		}
 		if s.Join != "" && s.Join != JoinAll && s.Join != JoinAny {
@@ -349,6 +355,21 @@ func (s *WorkflowStep) validateKind(op string) error {
 	}
 	if set != 1 {
 		return fault.Invalidf(op, "step %q must set exactly one of function, builtin, or workflow", s.Name)
+	}
+	return nil
+}
+
+// validateDurations bounds a function step's timeout and retry backoff (ADR-0194).
+func (s *WorkflowStep) validateDurations(op string, i int) error {
+	if f := s.Function; f != nil {
+		if err := CheckDuration(op, fmt.Sprintf("spec.steps[%d].function.timeout", i), f.Timeout, 0, MaxStepTimeout); err != nil {
+			return err
+		}
+		if f.Retry != nil {
+			if err := CheckDuration(op, fmt.Sprintf("spec.steps[%d].function.retry.backoff", i), f.Retry.Backoff, 0, MaxRetryBackoff); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

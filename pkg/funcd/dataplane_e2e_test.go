@@ -106,7 +106,7 @@ func TestScenarioDataPlaneInvokesWarmFunction(t *testing.T) {
 // woken by a data-plane request (the B1 proof: reachable while Idle, no programmed route).
 func TestScenarioDataPlaneWakesColdFunction(t *testing.T) {
 	c, dpURL, _ := shimPlatform(t)
-	applyFn(t, c, "cold", v1.Scaling{MinReplicas: 0, IdleTimeout: time.Hour}, 0, writeArtifact(t))
+	applyFn(t, c, "cold", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Hour)}, 0, writeArtifact(t))
 
 	// settles scaled to zero (Idle, no running worker).
 	require.Eventually(t, func() bool {

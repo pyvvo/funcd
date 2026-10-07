@@ -135,7 +135,7 @@ func (r *asleepRig) reader(t *testing.T, bind func(*v1.Function)) {
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "reader", "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file://"+r.art
-	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: asleepIdle}
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(asleepIdle)}
 	bind(fn)
 	r.apply(t, fn)
 }

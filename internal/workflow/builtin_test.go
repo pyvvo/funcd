@@ -92,7 +92,7 @@ func TestWaitCountsTowardRunTimeout(t *testing.T) {
 	f := newFake()
 	e := newTestEngine(t, f, Config{})
 	sp := spec(waitStep("w", "5s"))
-	sp.Timeout = 60 * time.Millisecond
+	sp.Timeout = v1.Duration(60 * time.Millisecond)
 	start := time.Now()
 	rec, err := e.Execute(context.Background(), "default", "run-t", "wf", sp, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
