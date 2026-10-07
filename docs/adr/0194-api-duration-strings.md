@@ -1,6 +1,6 @@
 # ADR-0194: API durations are duration strings — one `Duration` type, one grammar (h, m, s, ms)
 
-- **Status**: Reviewing (2026-10-07)
+- **Status**: Implemented (2026-10-08)
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: api, types, openapi, validation, funcdctl, config, workflow, breaking-change
