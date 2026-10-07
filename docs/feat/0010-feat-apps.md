@@ -402,7 +402,8 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **App backups**: a backup section and an App backup scope come with the disaster-recovery work on workload
   backups, once its schedule kind exists.
 - **Cron schedules for timers**: their own decision, outside this epoch.
-- **Durations in milliseconds instead of nanoseconds** across the API: issue #816, under tracker #817.
+- **Duration strings across the API**, such as `10m` and `500ms`, with the millisecond as the smallest unit: decided
+  on issue #816 (tracker #817), whose ADR decides how existing manifests migrate. The App examples already use them.
 
 ## Open questions
 

@@ -707,6 +707,9 @@ today's roles.
 
 ## Example: the to-do app
 
+Durations are duration strings such as `10m` and `1h`, as decided on issue #816. The API still takes
+nanosecond integers until the ADR for #816 lands.
+
 **Project tree** (git)
 
 ```
@@ -755,7 +758,7 @@ images:
   stats: registry.example/todo-stats:1.0.0
   web: registry.example/todo-web:1.0.0
 minReplicas: 1
-planEveryMinutes: 60
+planEvery: 1h
 analytics:
   enabled: true
 data:
@@ -797,11 +800,9 @@ valuesSchema:
       type: integer
       minimum: 0
       default: 0
-    planEveryMinutes:
-      type: integer
-      minimum: 1
-      maximum: 1440
-      default: 60
+    planEvery:
+      type: string
+      default: 1h
     analytics:
       type: object
       properties:
@@ -889,7 +890,7 @@ eventSources:
     timer:
       events:
         - name: tick
-          interval: ${{ values.planEveryMinutes * 60000000000 }}
+          interval: ${{ values.planEvery }}
 sensors:
   - name: ${{ app.name + "-plan-schedule" }}
     "on":
@@ -976,7 +977,7 @@ spec:
       runtime: nodejs22
       handler: handle
       image: registry.example/todo-migrate:1.2.0
-      timeout: 600000000000          # the hook's limit
+      timeout: 10m                   # the hook's limit
       kv:
         - alias: todos
           store: todo-store
@@ -995,7 +996,7 @@ spec:
       timer:
         events:
           - name: tick
-            interval: 3600000000000
+            interval: 1h
   sensors:
     - name: todo-plan-schedule
       "on":
