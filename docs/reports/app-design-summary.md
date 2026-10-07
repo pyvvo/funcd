@@ -20,39 +20,18 @@ template gives values and reuse across installs, and it can be pushed to an OCI 
 ## 2. What an App contains, and what stays outside
 
 ```mermaid
-flowchart LR
-    subgraph outside["Outside the App, used by name"]
-        SEC["Secret values, set by an operator or an Identity"]
-        CMX["ConfigMaps the App does not define"]
-        REFX["existing objects named with ref"]
-        REG["OCI registry: function bundles, site bundles, App templates"]
-    end
-    subgraph app["App todo"]
-        SPEC["spec sections: kv, buckets, functions, workflows,<br/>eventSources, sensors, routes, sites, catalogs, configMaps,<br/>secrets (declarations: names and keys)"]
-        HOOKS["hooks: preApply, postApply"]
-        TESTS["tests (opt-in)"]
-    end
-    subgraph owned["Parts the App creates and owns"]
-        FN["Functions"]
-        WF["Workflows"]
-        EVS["EventSources and Sensors"]
-        RT["Routes and Sites"]
-        CAT["CatalogServices"]
-        STO["KV stores and Buckets (marker; controller ref only with deletion: delete)"]
-        CM["ConfigMaps, stored as name-hash"]
-    end
-    subgraph grand["Children that the parts create themselves"]
-        REV["Function Revisions"]
-        STEP["Workflow step Functions and KV stores"]
-        SR["the Route of a Site"]
-        ENG["the catalog engine"]
-    end
-    AR["AppRevision todo-n: frozen spec and rollout record"]
-    app -->|"stamps on every change"| AR
-    app -->|"creates, updates, restores, prunes"| owned
-    owned --> grand
-    owned -.->|"read by name"| outside
-    app -.->|"declares, checks keys"| SEC
+%%{init: {"fontFamily": "Arial, Helvetica, sans-serif", "flowchart": {"wrappingWidth": 400}}}%%
+flowchart TB
+    APP["App todo: the spec<br/>parts: kv · buckets · functions<br/>workflows · eventSources · sensors<br/>routes · sites · catalogs · configMaps<br/>secrets: names and keys only<br/>hooks: preApply · postApply<br/>tests: opt-in"]
+    AR["AppRevision todo-n<br/>frozen spec and rollout record"]
+    OWN["Created and owned by the App<br/>Functions · Workflows<br/>EventSources · Sensors<br/>Routes · Sites · CatalogServices<br/>ConfigMaps, stored as name-hash<br/>KV stores and Buckets,<br/>kept unless deletion: delete"]
+    GR["Created by the parts themselves<br/>Function Revisions<br/>Workflow step Functions and KV stores<br/>the Site's Route · the catalog engine"]
+    OUT["Outside the App<br/>Secret values, set by an operator<br/>or as an Identity's credential<br/>existing objects named with ref<br/>other ConfigMaps<br/>OCI registry: bundles, templates"]
+    APP -->|"stamps on every change"| AR
+    APP -->|"creates, restores, prunes"| OWN
+    OWN -->|"each part makes its own"| GR
+    OWN -.->|"reads by name"| OUT
+    APP -.->|"declares Secrets, checks their keys"| OUT
 ```
 
 ## 3. Example: the files of the to-do app
