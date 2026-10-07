@@ -1,6 +1,7 @@
 # ADR-0048: DTO validation reference — the per-field validation table for every v1alpha1 entity
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — for durations only: the `nonNegInt` (67) and literal-ns duration-cap (69) rows, the schema-enforced bounds (80, 124, 196) and the int64-ns wire form (274): a duration is a string bounded by `CheckDuration` in `Validate`.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** · **Implemented 2026-06-16** — judge: no Blockers/Majors (decision sound, tables verified against the
   real types, the duration-tag mechanism confirmed implementable, the huma-in-api cost honestly disclosed = 5 SDK packages).
   Folded 4 Minors: huma is **MIT** (not Apache-2.0); the **duration bound is the literal-ns tag as sole source** (a tag can't

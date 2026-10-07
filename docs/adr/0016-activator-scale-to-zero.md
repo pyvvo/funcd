@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — §5 and scaler `* -> Idle` reclaim edge; idle-reclaim of every minReplicas:0 Function.
 - **Superseded in part by**: [ADR-0185](0185-idle-reclaim-skips-pending.md) (2026-10-05) — C2 reclaim edge (lines 138-139): becomes Ready/Degraded/— → Idle.
+- **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — Scope Out's deferred duration codec (126–127), plan step 1's int-ns marshalling (352–353) and the `time.Duration` Contracts lines (233, 333): API durations are duration strings.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** — review **pass** (zero findings), see
   docs/reviews/adr-0016-implementation-claude-opus-4-8.md; 7 scenarios pass under `-race`, DoD 8/8, no new
   deps. **Reviewing 2026-06-14** — implemented via `adr-impl`: `internal/activator`

@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0191](0191-response-write-stall-timeout.md) (2026-10-05) — Decision 2 ("After headers nothing is cut.") and Scope *Out* (bounds after the response starts): a response write that the client does not accept for 60 s ends the connection.
+- **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the `spec.timeout` bound in the OpenAPI schema with 422 (89; 43, 132, 234, 249; the settled 1 h schema cap, 262–264) and the config's bare `0` (174): the bound is checked by `CheckDuration` in `Validate` (400), and the config value follows the duration grammar (`0s`).
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, invoke, timeout, activator, errors, rfc9457, shim, pool
