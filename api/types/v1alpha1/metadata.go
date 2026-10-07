@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -142,8 +141,8 @@ type ObjectMeta struct {
 	UID             UID               `json:"uid,omitempty"`
 	Generation      int64             `json:"generation,omitempty"`
 	ResourceVersion string            `json:"resourceVersion,omitempty"`
-	CreationTime    time.Time         `json:"creationTimestamp,omitempty"`
-	DeletionTime    *time.Time        `json:"deletionTimestamp,omitempty"`
+	CreationTime    Timestamp         `json:"creationTimestamp,omitzero"`
+	DeletionTime    *Timestamp        `json:"deletionTimestamp,omitempty"`
 	OwnerReferences []OwnerReference  `json:"ownerReferences,omitempty"`
 	Finalizers      []string          `json:"finalizers,omitempty"`
 }

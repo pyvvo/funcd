@@ -51,7 +51,7 @@ func (h *shimHarness) degradedSinceAnHour(t *testing.T, name string) {
 	fn := h.getFn(t, name)
 	for i := range fn.Status.Conditions {
 		if fn.Status.Conditions[i].Type == "Ready" {
-			fn.Status.Conditions[i].LastTransitionTime = time.Now().Add(-time.Hour)
+			fn.Status.Conditions[i].LastTransitionTime = v1.NewTimestamp(time.Now().Add(-time.Hour))
 		}
 	}
 	_, err := h.st.Update(context.Background(), fn)

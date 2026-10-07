@@ -30,7 +30,7 @@ func TestScenario_ConditionsUpsertByType(t *testing.T) {
 	if len(cs) != 1 {
 		t.Fatalf("Conditions length after same-status upsert = %d, want 1", len(cs))
 	}
-	if !cs[0].LastTransitionTime.Equal(firstTime) {
+	if !time.Time(cs[0].LastTransitionTime).Equal(time.Time(firstTime)) {
 		t.Errorf("LastTransitionTime advanced on same status: %v != %v", cs[0].LastTransitionTime, firstTime)
 	}
 
@@ -43,7 +43,7 @@ func TestScenario_ConditionsUpsertByType(t *testing.T) {
 	if len(cs) != 1 {
 		t.Fatalf("Conditions length after status-change upsert = %d, want 1", len(cs))
 	}
-	if !cs[0].LastTransitionTime.After(firstTime) {
+	if !time.Time(cs[0].LastTransitionTime).After(time.Time(firstTime)) {
 		t.Errorf("LastTransitionTime should have advanced on status change: %v (was %v)", cs[0].LastTransitionTime, firstTime)
 	}
 	c, found := cs.Get("Ready")

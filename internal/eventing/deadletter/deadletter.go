@@ -33,7 +33,7 @@ type DeadLetter struct {
 	Payload   json.RawMessage  `json:"payload"`   // the full CloudEvent JSON (re-injected verbatim on replay)
 	Attempts  int              `json:"attempts"`  // delivery attempts made before dead-lettering (0 if never attempted)
 	Reason    string           `json:"reason"`    // the terminal delivery error, or the park reason (ADR-0156)
-	FailedAt  time.Time        `json:"failedAt"`  //
+	FailedAt  v1.Timestamp     `json:"failedAt"`  //
 }
 
 // Store is the dead-letter queue port (ADR-0002 §1) — bus-driver-independent. Records are engine-owned

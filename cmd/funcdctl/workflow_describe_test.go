@@ -2,15 +2,28 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // scenario: describe-surfaces-troubleshooting — describe renders a readable per-step line
 // (phase · attempts · duration · error), the run trace-id, and the full-logs pointer (ADR-0100); a step duration is
-// rounded to 1 ms and printed in the normalized form (ADR-0194).
+// the difference of two millisecond timestamps (ADR-0196), printed in the normalized form (ADR-0194).
 func TestRenderRunDescribe(t *testing.T) {
 	var buf bytes.Buffer
 	a := &cli{out: &buf}
@@ -19,9 +32,9 @@ func TestRenderRunDescribe(t *testing.T) {
 	run.Status.Phase = v1.RunFailed
 	run.Status.TraceID = "0123456789abcdef0123456789abcdef"
 	run.Status.Steps = []v1.RunStepStatus{
-		{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 1_000_000_000, EndedAt: 1_500_000_000},
-		{Name: "b", Phase: v1.StepFailed, Attempts: 3, StartedAt: 2_000_000_000, EndedAt: 2_250_000_000, Error: "scorer returned 503"},
-		{Name: "c", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 3_000_000_000, EndedAt: 4_500_400_000},
+		{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: unixNano(1_000_000_000), EndedAt: unixNano(1_500_000_000)},
+		{Name: "b", Phase: v1.StepFailed, Attempts: 3, StartedAt: unixNano(2_000_000_000), EndedAt: unixNano(2_250_000_000), Error: "scorer returned 503"},
+		{Name: "c", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: unixNano(3_000_000_000), EndedAt: unixNano(4_500_400_000)},
 	}
 	if err := a.renderRunDescribe(run); err != nil {
 		t.Fatalf("renderRunDescribe: %v", err)
@@ -124,4 +137,56 @@ func TestRenderRunDescribeEscapesFunctionText(t *testing.T) {
 			t.Fatalf("describe output missing %q\n---\n%s", want, out)
 		}
 	}
+}
+
+func unixNano(ns int64) v1.Timestamp { return v1.NewTimestamp(time.Unix(0, ns)) }
+
+// scenario: step-times-are-timestamps — `get workflowrun -o json` prints a step's startedAt and endedAt in the
+// ADR-0196 form, endedAt not before startedAt, a Pending step carries neither key, and `workflow describe` prints the
+// step's duration.
+func TestStepTimesAreTimestamps(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
+		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+	})
+	h, err := controlplane.NewServer(controlplane.Deps{Store: st, Authorizer: rbac.New(), Credentials: creds})
+	require.NoError(t, err)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
+	require.NoError(t, err)
+
+	obj, _ := v1.NewObject(v1.KindWorkflowRun)
+	run := obj.(*v1.WorkflowRun)
+	run.Name, run.Namespace, run.ResourceGroup = "run-1", "team-a", "rg1"
+	run.Spec.Workflow = "wf"
+	run.Status.Phase = v1.RunRunning
+	run.Status.Steps = []v1.RunStepStatus{
+		{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: unixNano(1791403415965999999), EndedAt: unixNano(1791403416465000000)},
+		{Name: "b", Phase: v1.StepPending},
+	}
+	_, err = st.Create(ctx, run)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "get", "workflowrun", "run-1", "-n", "team-a", "-o", "json"))
+	var got struct {
+		Status struct {
+			Steps []map[string]json.RawMessage `json:"steps"`
+		} `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
+	require.Len(t, got.Status.Steps, 2)
+	a, b := got.Status.Steps[0], got.Status.Steps[1]
+	require.JSONEq(t, `"2026-10-07T20:03:35.965Z"`, string(a["startedAt"]))
+	require.JSONEq(t, `"2026-10-07T20:03:36.465Z"`, string(a["endedAt"]))
+	require.Less(t, string(a["startedAt"]), string(a["endedAt"]), "text order is time order")
+	require.NotContains(t, b, "startedAt")
+	require.NotContains(t, b, "endedAt")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "workflow", "describe", "run-1", "-n", "team-a"))
+	require.Contains(t, out.String(), "duration: 500ms")
+	require.Equal(t, 1, strings.Count(out.String(), "duration:"), "a Pending step has no duration")
 }

@@ -664,10 +664,19 @@ func mirror(run *v1.WorkflowRun, rec *runstate.Record) {
 	for _, s := range rec.Steps {
 		steps = append(steps, v1.RunStepStatus{
 			Name: s.Name, Phase: s.Phase, Attempts: s.Attempts, Revision: s.Revision,
-			StartedAt: s.StartedAt, EndedAt: s.EndedAt, Error: s.Error, // ADR-0100 troubleshooting facts
+			StartedAt: stepTime(s.StartedAt), EndedAt: stepTime(s.EndedAt), Error: s.Error, // ADR-0100 troubleshooting facts
 		})
 	}
 	run.Status.Steps = steps
+}
+
+// stepTime converts a runstate int64 nanosecond instant to the API form (ADR-0196): 0, a step not yet started or
+// ended, gives the zero Timestamp so the field is omitted.
+func stepTime(ns int64) v1.Timestamp {
+	if ns == 0 {
+		return v1.Timestamp{}
+	}
+	return v1.NewTimestamp(time.Unix(0, ns))
 }
 
 // linkAttempts bounds the optimistic-concurrency retries of a status.runs update: the counts are

@@ -328,10 +328,10 @@ func TestIssue60_CreateStampsCreationTimestamp(t *testing.T) {
 
 	for _, in := range []struct {
 		name string
-		sent time.Time
+		sent v1.Timestamp
 	}{
 		{name: "unset"},
-		{name: "forged", sent: forged},
+		{name: "forged", sent: v1.NewTimestamp(forged)},
 	} {
 		obj, _ := v1.NewObject(v1.KindConfigMap)
 		cfg, _ := obj.(*v1.ConfigMap)
@@ -340,32 +340,32 @@ func TestIssue60_CreateStampsCreationTimestamp(t *testing.T) {
 		cfg.ResourceGroup = "rg1"
 		cfg.CreationTime = in.sent
 
-		before := time.Now()
+		before := time.Now().Truncate(time.Millisecond)
 		created, err := s.Create(ctx, cfg)
 		after := time.Now()
 		if err != nil {
 			t.Fatalf("%s: Create: %v", in.name, err)
 		}
 		ct := created.GetObjectMeta().CreationTime
-		if ct.Before(before) || ct.After(after) {
+		if time.Time(ct).Before(before) || time.Time(ct).After(after) {
 			t.Fatalf("%s: Create returned creationTimestamp %v, want the server time in [%v, %v]", in.name, ct, before, after)
 		}
 		got, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", cfg.Name)
 		if err != nil {
 			t.Fatalf("%s: Get: %v", in.name, err)
 		}
-		if !got.GetObjectMeta().CreationTime.Equal(ct) {
+		if got.GetObjectMeta().CreationTime != ct {
 			t.Fatalf("%s: stored creationTimestamp %v, want %v", in.name, got.GetObjectMeta().CreationTime, ct)
 		}
 
 		up, _ := got.(*v1.ConfigMap)
-		up.CreationTime = forged
+		up.CreationTime = v1.NewTimestamp(forged)
 		up.Spec.Data = map[string]string{"k": "v2"}
 		updated, err := s.Update(ctx, up)
 		if err != nil {
 			t.Fatalf("%s: Update: %v", in.name, err)
 		}
-		if !updated.GetObjectMeta().CreationTime.Equal(ct) {
+		if updated.GetObjectMeta().CreationTime != ct {
 			t.Fatalf("%s: Update changed creationTimestamp to %v, want %v", in.name, updated.GetObjectMeta().CreationTime, ct)
 		}
 	}

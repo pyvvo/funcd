@@ -67,7 +67,7 @@ func MarkKVStoresOnce(ctx context.Context, s store.Store, log *slog.Logger) erro
 	rec := &v1.ConfigMap{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap},
 		ObjectMeta: v1.ObjectMeta{Name: KVMigrationRecord, Namespace: KVMigrationNamespace, ResourceGroup: "funcd-system"},
-		Spec:       v1.ConfigMapSpec{Data: map[string]string{"COMPLETED_AT": time.Now().UTC().Format(time.RFC3339)}},
+		Spec:       v1.ConfigMapSpec{Data: map[string]string{"COMPLETED_AT": v1.NewTimestamp(time.Now()).String()}},
 	}
 	if _, err := s.Create(ctx, rec); err != nil && fault.KindOf(err) != fault.Conflict {
 		return fault.Wrapf(err, fault.KindOf(err), migrationOp, "record completion")
@@ -109,7 +109,7 @@ func declares(wf *v1.Workflow, name v1.ObjectName) bool {
 // adoptableAtUpgrade is Decision 3 (a)-(c): wf is not younger than cur, every controller ref on cur names
 // wf's kind, name and UID, and every table owner is empty or exactly one of wf's materialized step names.
 func adoptableAtUpgrade(cur *v1.KVStore, wf *v1.Workflow) bool {
-	if wf.CreationTime.After(cur.CreationTime) {
+	if time.Time(wf.CreationTime).After(time.Time(cur.CreationTime)) {
 		return false
 	}
 	for _, r := range cur.OwnerReferences {

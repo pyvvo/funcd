@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -137,8 +138,8 @@ func TestRunTraceIDInStatus(t *testing.T) {
 	rec := &runstate.Record{
 		Namespace: "default", Name: "run-x", Phase: runFailed, TraceID: "0123456789abcdef0123456789abcdef",
 		Steps: []runstate.StepState{
-			{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 100, EndedAt: 200},
-			{Name: "b", Phase: v1.StepFailed, Attempts: 2, StartedAt: 200, EndedAt: 250, Error: "scorer returned 503"},
+			{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 100e6, EndedAt: 200e6},
+			{Name: "b", Phase: v1.StepFailed, Attempts: 2, StartedAt: 200e6, EndedAt: 250e6, Error: "scorer returned 503"},
 		},
 	}
 	run := &v1.WorkflowRun{}
@@ -150,7 +151,7 @@ func TestRunTraceIDInStatus(t *testing.T) {
 		t.Fatalf("want 2 mirrored steps, got %d", len(run.Status.Steps))
 	}
 	b := run.Status.Steps[1]
-	if b.Attempts != 2 || b.StartedAt != 200 || b.EndedAt != 250 || b.Error != "scorer returned 503" {
+	if b.Attempts != 2 || b.StartedAt != v1.NewTimestamp(time.Unix(0, 200e6)) || b.EndedAt != v1.NewTimestamp(time.Unix(0, 250e6)) || b.Error != "scorer returned 503" {
 		t.Fatalf("per-step facts not mirrored: %+v", b)
 	}
 }

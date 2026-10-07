@@ -384,7 +384,7 @@ func TestRetentionEvicts(t *testing.T) {
 	now := time.Now().UTC()
 	// team-a: 3 entries — one past TTL, two within; cap 1 ⇒ the sweep keeps only the newest survivor.
 	put := func(ns v1.NamespaceName, id string, at time.Time) {
-		require.NoError(t, dlq.Put(ctx, deadletter.DeadLetter{ID: id, Namespace: ns, Sensor: "s", Action: "a", FailedAt: at}))
+		require.NoError(t, dlq.Put(ctx, deadletter.DeadLetter{ID: id, Namespace: ns, Sensor: "s", Action: "a", FailedAt: v1.NewTimestamp(at)}))
 	}
 	put("team-a", "01A", now.Add(-48*time.Hour)) // past TTL
 	put("team-a", "01B", now.Add(-2*time.Minute))

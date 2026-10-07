@@ -123,7 +123,7 @@ func TestApplyIgnoresClientStatus(t *testing.T) {
 func TestIssue328_ApplyIgnoresClientOwnerAndDeletionMeta(t *testing.T) {
 	st := store.New(memory.New())
 	srv := newServerOn(t, st)
-	deleted := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	deleted := v1.NewTimestamp(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 	forged := v1.Function{
 		ObjectMeta: v1.ObjectMeta{
 			Name: "echo", Namespace: "team-a", ResourceGroup: "rg1",

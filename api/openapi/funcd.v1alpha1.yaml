@@ -263,6 +263,8 @@ components:
       properties:
         lastTransitionTime:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         message:
           type: string
@@ -319,6 +321,8 @@ components:
           type: string
         failedAt:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         id:
           type: string
@@ -722,6 +726,8 @@ components:
           type: string
         drainingSince:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         observedGeneration:
           format: int64
@@ -951,6 +957,8 @@ components:
             - "null"
         endTime:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         error:
           type: string
@@ -969,6 +977,8 @@ components:
           type: string
         startTime:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
       type: object
     KVServiceSpec:
@@ -1098,6 +1108,8 @@ components:
           type: string
         time:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         traceId:
           type: string
@@ -1181,9 +1193,13 @@ components:
       properties:
         creationTimestamp:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         deletionTimestamp:
           format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         finalizers:
           items:
@@ -1678,8 +1694,10 @@ components:
           format: int64
           type: integer
         endedAt:
-          format: int64
-          type: integer
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
         error:
           type: string
         name:
@@ -1699,8 +1717,10 @@ components:
         revision:
           type: string
         startedAt:
-          format: int64
-          type: integer
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
       required:
         - name
       type: object

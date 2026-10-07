@@ -41,7 +41,7 @@ func newTimerHarness(t *testing.T) *timerHarness {
 	require.NoError(t, err)
 	got, err := st.Get(t.Context(), v1.KindEventSource.GVK(), "team-a", "clock")
 	require.NoError(t, err)
-	t0 := got.(*v1.EventSource).CreationTime
+	t0 := time.Time(got.(*v1.EventSource).CreationTime)
 	require.False(t, t0.IsZero())
 	return &timerHarness{t: t, st: st, t0: t0, fires: map[v1.ObjectName][]time.Duration{}}
 }

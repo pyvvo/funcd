@@ -31,7 +31,7 @@ type CloudEvent struct {
 	ID              string          `json:"id"`
 	Source          string          `json:"source"` // funcd://<ns>/eventsource/<name>
 	Type            string          `json:"type"`   // the event name (ADR-0108)
-	Time            time.Time       `json:"time"`
+	Time            v1.Timestamp    `json:"time"`
 	DataContentType string          `json:"datacontenttype,omitempty"`
 	Data            json.RawMessage `json:"data,omitempty"`
 }
@@ -49,7 +49,7 @@ func NewNamedEvent(ns v1.NamespaceName, source, event v1.ObjectName) (CloudEvent
 		ID:              id,
 		Source:          SourceURI(ns, source),
 		Type:            string(event),
-		Time:            time.Now().UTC(),
+		Time:            v1.NewTimestamp(time.Now()),
 		DataContentType: "application/json",
 		Data:            json.RawMessage("{}"),
 	}, nil
@@ -60,11 +60,11 @@ func NewNamedEvent(ns v1.NamespaceName, source, event v1.ObjectName) (CloudEvent
 // fingerprint of the observed object version — NOT a content ETag (a `data.etag` from blob.Attributes.MD5,
 // ADR-0159, is ADR-0119's follow-up).
 type BlobEventData struct {
-	Bucket  string    `json:"bucket"`
-	Key     string    `json:"key"`
-	Size    int64     `json:"size"`
-	Version string    `json:"version"`
-	Time    time.Time `json:"time"`
+	Bucket  string       `json:"bucket"`
+	Key     string       `json:"key"`
+	Size    int64        `json:"size"`
+	Version string       `json:"version"`
+	Time    v1.Timestamp `json:"time"`
 }
 
 // NewBlobEvent builds a named CloudEvent for a landed object (ADR-0119): the same envelope as
@@ -84,7 +84,7 @@ func NewBlobEvent(ns v1.NamespaceName, source, event v1.ObjectName, d BlobEventD
 		ID:              id,
 		Source:          SourceURI(ns, source),
 		Type:            string(event),
-		Time:            time.Now().UTC(),
+		Time:            v1.NewTimestamp(time.Now()),
 		DataContentType: "application/json",
 		Data:            json.RawMessage(payload),
 	}, nil

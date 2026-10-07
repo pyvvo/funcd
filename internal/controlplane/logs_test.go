@@ -25,7 +25,7 @@ type fakeLogs struct{}
 
 func (fakeLogs) Read(_ context.Context, q logread.Query) ([]logread.Line, error) {
 	return []logread.Line{{
-		Time: time.Unix(0, 1).UTC(), Severity: "INFO", Body: "hello",
+		Time: v1.NewTimestamp(time.Unix(0, 1)), Severity: "INFO", Body: "hello",
 		Namespace: q.Namespace, Function: q.Function,
 	}}, nil
 }

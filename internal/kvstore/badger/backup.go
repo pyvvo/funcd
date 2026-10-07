@@ -15,6 +15,7 @@ import (
 	badger "github.com/dgraph-io/badger/v4"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 )
 
@@ -90,11 +91,28 @@ func NewBackup(db *badger.DB, bucket blob.Bucket, cfg BackupConfig) (Backup, err
 // At is when Rebaseline started a base's export; it is zero on an incremental and in a manifest written
 // before the field existed, which reads as an unknown re-baseline time.
 type segment struct {
-	Prefix string    `json:"prefix"`
-	Since  uint64    `json:"since"`
-	To     uint64    `json:"to"`
-	Parts  int       `json:"parts"`
-	At     time.Time `json:"at,omitzero"`
+	Prefix string       `json:"prefix"`
+	Since  uint64       `json:"since"`
+	To     uint64       `json:"to"`
+	Parts  int          `json:"parts"`
+	At     manifestTime `json:"at,omitzero"`
+}
+
+// manifestTime is a manifest instant (ADR-0196 Decision 10): written in the v1alpha1.Timestamp form, read from any
+// RFC3339 value, so a manifest written before that form (RFC3339Nano) still loads.
+type manifestTime v1.Timestamp
+
+func (t manifestTime) IsZero() bool { return v1.Timestamp(t).IsZero() }
+
+func (t manifestTime) MarshalJSON() ([]byte, error) { return v1.Timestamp(t).MarshalJSON() }
+
+func (t *manifestTime) UnmarshalJSON(b []byte) error {
+	var v time.Time
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*t = manifestTime(v1.NewTimestamp(v))
+	return nil
 }
 
 // manifest is the ordered restore chain: the latest base then the incrementals after it. It is the
@@ -188,7 +206,7 @@ func (b *backup) rebaseline(ctx context.Context) error {
 	if err := w.Close(); err != nil {
 		return err
 	}
-	man := manifest{Format: manifestFormat, Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: started}}
+	man := manifest{Format: manifestFormat, Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: manifestTime(v1.NewTimestamp(started))}}
 	if err := b.saveManifest(ctx, man); err != nil {
 		return err
 	}
@@ -658,5 +676,5 @@ func (b *backup) untilRebaseline(ctx context.Context, period time.Duration) time
 	if err != nil || man.Base == nil || man.Base.At.IsZero() || man.Format < manifestFormat {
 		return 0
 	}
-	return max(time.Until(man.Base.At.Add(period)), 0)
+	return max(time.Until(time.Time(man.Base.At).Add(period)), 0)
 }

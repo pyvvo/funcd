@@ -91,7 +91,7 @@ func TestScenarioFuncdctlLogsPrints(t *testing.T) {
 // A record's text fields come from the function, so the default and wide renderings must escape what a
 // terminal would act on: one record stays one printed line (ADR-0084) and no control byte reaches the tty.
 func TestRenderLogLinesEscapesControlBytes(t *testing.T) {
-	at := time.Date(2026, 10, 2, 10, 40, 54, 0, time.UTC)
+	at := v1.NewTimestamp(time.Date(2026, 10, 2, 10, 40, 54, 0, time.UTC))
 	lines := []logread.Line{
 		{
 			Time: at, Severity: "INFO", Replica: "0\r",
@@ -119,4 +119,12 @@ func TestRenderLogLinesEscapesControlBytes(t *testing.T) {
 			require.Contains(t, got, `k\x1b=a\x1b[31mb\nc n={\n"x":1}`)
 		}
 	}
+}
+
+// The text rendering prints a line's time in the ADR-0196 form (Decision 11), not in whole seconds.
+func TestRenderLogLinesTimeFixedForm(t *testing.T) {
+	at := v1.NewTimestamp(time.Date(2026, 10, 7, 22, 3, 35, 965999999, time.FixedZone("UTC+2", 2*60*60)))
+	var buf bytes.Buffer
+	require.NoError(t, (&cli{out: &buf}).renderLogLines([]logread.Line{{Time: at, Severity: "INFO", Replica: "0", Body: "hi"}}, ""))
+	require.Equal(t, "2026-10-07T20:03:35.965Z [INFO] 0 hi\n", buf.String())
 }

@@ -50,7 +50,7 @@ type AuditRecorder struct {
 // NewAuditRecorder builds an AuditRecorder writing to w (the composition root
 // passes the audit stream; tests pass a buffer).
 func NewAuditRecorder(w io.Writer) *AuditRecorder {
-	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo})
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo, ReplaceAttr: ReplaceAttr})
 	return &AuditRecorder{log: slog.New(handler).With("source", "audit")}
 }
 

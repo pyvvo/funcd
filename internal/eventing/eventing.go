@@ -139,7 +139,7 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
 		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 	}
-	s.registerTimer(req.Namespace, req.Name, es.CreationTime, es.Spec.Timer)
+	s.registerTimer(req.Namespace, req.Name, time.Time(es.CreationTime), es.Spec.Timer)
 	_, blobCond := es.Status.Conditions.Get(condReady) // left by an earlier blob kind; a timer source has none
 	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
 	if es.Status.Phase != v1.PhaseReady || blobCond || seenCond {

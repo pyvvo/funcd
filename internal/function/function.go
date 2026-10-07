@@ -1382,7 +1382,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 // then, so one failed probe of a busy worker does not stop it. It reports whether it stopped the replica.
 func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed runtime.InstanceID) (bool, error) {
 	rc, _ := fn.Status.Conditions.Get(condReady)
-	if failed == "" || fn.Status.Phase != v1.PhaseDegraded || time.Since(rc.LastTransitionTime) < r.bootTimeout {
+	if failed == "" || fn.Status.Phase != v1.PhaseDegraded || time.Since(time.Time(rc.LastTransitionTime)) < r.bootTimeout {
 		return false, nil
 	}
 	if in, err := r.runtime.Status(ctx, failed); err != nil || in.State != runtime.StateRunning {
@@ -1488,7 +1488,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		cCrash = cUl.crashLoop
 	}
 	if readyC == desired && fn.Status.DrainingRevision == "" {
-		now := r.clock.Now()
+		now := v1.NewTimestamp(r.clock.Now())
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: cPass.running, ready: readyC, serving: true, switched: true, desired: desired}, nil
 	}
@@ -1771,7 +1771,7 @@ func (r *Reconciler) drain(ctx context.Context, fn *v1.Function) (time.Duration,
 	s, c, d := fn.Status.ServingRevision, fn.Status.CurrentRevision, fn.Status.DrainingRevision
 	var elapsed time.Duration
 	if fn.Status.DrainingSince != nil {
-		elapsed = r.clock.Now().Sub(*fn.Status.DrainingSince)
+		elapsed = r.clock.Now().Sub(time.Time(*fn.Status.DrainingSince))
 	}
 	draining, kept := 0, 0
 	var held revhold.Holds
