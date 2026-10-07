@@ -749,8 +749,8 @@ const reasonReconcileFailed = "ReconcileFailed"
 
 // failPass writes the status of a pass that failed with err before its own status write, from read, the status the pass
 // started from, and returns err for the engine's backoff (ADR-0161 Decision 1). Ready and status.replicas follow the
-// listening workers; a List error keeps them as read (issue #353). It never writes Failed and never wakes the Function;
-// only finish makes a Degraded Function Ready.
+// listening workers; a List error, or a pool worker that does not answer, keeps them as read (issues #353, #838). It
+// never writes Failed and never wakes the Function; only finish makes a Degraded Function Ready.
 func (r *Reconciler) failPass(ctx context.Context, fn *v1.Function, read v1.FunctionStatus, err error) (controller.Result, error) {
 	reason := reasonReconcileFailed
 	if errors.As(err, new(convergeError)) {
@@ -1243,7 +1243,9 @@ func (r *Reconciler) servingWorkers(ctx context.Context, fn *v1.Function) (runni
 
 // countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of the pool
 // worker the resolver hands out (servingPool, else the newest running one), which runs for fn only while its
-// /health/members lists fn and listens for it only while that entry reads ready (ADR-0158).
+// /health/members lists fn and listens for it only while that entry reads ready (ADR-0158). A pool worker that does not
+// answer is an error, as a List error is, so no pass judges a member it could not read; one that has no port to ask yet
+// runs and does not listen, as a solo replica before its port (ADR-0161 Decision 2, issue #838).
 func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (running, listening int, err error) {
 	name := fn.Name
 	key, pooled := pooling.PoolKey{}, r.pooled(fn)
@@ -1278,8 +1280,13 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 		}
 	}
 	if pooled && running > 0 && r.materializer != nil {
-		_, m, ok := r.memberIn(ctx, key, insts, fn.Name)
-		if !ok {
+		w, m, ok, perr := r.memberIn(ctx, key, insts, fn.Name)
+		switch {
+		case perr != nil:
+			return 0, 0, perr
+		case w.ID == "":
+			return running, 0, nil
+		case !ok:
 			return 0, 0, nil
 		}
 		if m.State != memberReady {

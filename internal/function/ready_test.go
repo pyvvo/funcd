@@ -536,6 +536,71 @@ func TestGateFailedWritesListeningCount(t *testing.T) {
 	})
 }
 
+// A Ready pooled member whose gate fails while its pool host does not answer /health/members stays Ready: the
+// unanswered probe leaves the status as read, as a List error does (ADR-0161 Decision 1), so the next gate-failed pass,
+// which reads its entry ready, keeps it Ready (issue #838).
+func TestIssue838_UnansweredMembersProbeKeepsGatedMemberReady(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.setMembersDown(true)
+	h.apply(t, "member", func(fn *v1.Function) { fn.Spec.Handler = "" })
+	_, _ = h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "member"})
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "an unanswered probe keeps the phase as read")
+	require.Equal(t, 1, fn.Status.Replicas)
+
+	h.rt.setMembersDown(false)
+	res := h.reconcile(t, "member")
+	fn = h.getFn(t, "member")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the pool worker serves member, so it stays Ready")
+	require.Equal(t, 1, fn.Status.Replicas)
+	h.requireCondition(t, "member", "Ready", v1.ConditionTrue, "")
+	h.requireCondition(t, "member", "RevisionReady", v1.ConditionFalse, "ShapeInvalid")
+	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
+// A Ready pooled member whose gate fails while its pool worker runs before writing its port is Degraded, not the gate's
+// phase: a running pool worker that does not listen is ADR-0161 Decision 2's running row, as a solo replica is.
+func TestIssue838_PoolWorkerWithoutPortCountsAsRunning(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.hold(runtime.NewInstanceID("default", poolOf("w1"), "", 0), true)
+	h.apply(t, "member", func(fn *v1.Function) { fn.Spec.Handler = "" })
+	res := h.reconcile(t, "member")
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseDegraded, fn.Status.Phase, "the pool worker runs")
+	require.Zero(t, fn.Status.Replicas)
+	h.requireCondition(t, "member", "Ready", v1.ConditionFalse, "Restarting")
+	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
+// A converging pass whose pool host does not answer /health/members judges a serving member not ready: Degraded, as
+// ADR-0158 Decision 4 maps a failed probe, not a failed pass.
+func TestUnansweredMembersProbeDegradesServingMember(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.setMembersDown(true)
+	h.reconcile(t, "member")
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseDegraded, fn.Status.Phase)
+	require.Zero(t, fn.Status.Replicas)
+	ready, ok := fn.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, ready.Status)
+}
+
 // A pooled member's pool worker that runs but does not listen is never handed out (ADR-0161 Decision 2).
 func TestUnlistenedPoolWorkerIsNotHandedOut(t *testing.T) {
 	t.Parallel()
