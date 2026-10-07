@@ -502,9 +502,17 @@ func WithContainerExecution(imageFor func(runtime string) string) Option {
 	return func(c *config) error { c.imageFor = imageFor; return nil }
 }
 
-// WithLogger injects the root logger. If not set, a stdout text logger is built.
+// WithLogger injects the root logger, used exactly as given unless WithNormalizedLogFields is set. If not set, a
+// stdout text logger is built.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *config) error { c.logger = l; return nil }
+}
+
+// WithNormalizedLogFields makes funcd's own lines through a WithLogger logger write a duration as a <key>_ms number
+// of milliseconds and the time in UTC, truncated to the millisecond (the handler decides how many fractional digits
+// it prints). Off by default. Without WithLogger it changes nothing (ADR-0197).
+func WithNormalizedLogFields() Option {
+	return func(c *config) error { c.normalizeLogFields = true; return nil }
 }
 
 // WithTelemetry injects the OTel telemetry pipeline. If not set, the no-op

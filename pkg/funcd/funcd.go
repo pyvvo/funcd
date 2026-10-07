@@ -154,6 +154,7 @@ type config struct {
 	processRuntime       bool // InMemory: New builds a process runtime over the final logger, a later WithLogger's included
 	gateway              gateway.Gateway
 	logger               *slog.Logger
+	normalizeLogFields   bool
 	telemetry            *observability.Telemetry
 
 	// egress network isolation (ADR-0115, FEAT-0007/F80). nil ⇒ not configured. Apply at Run start
@@ -418,6 +419,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 		return nil, err
 	}
 
+	if cfg.logger != nil && cfg.normalizeLogFields {
+		cfg.logger = slog.New(observability.NewNormalizeHandler(cfg.logger.Handler()))
+	}
 	if cfg.logger == nil {
 		lg, err := observability.NewLogger(observability.Config{Format: observability.FormatText}, os.Stdout)
 		if err != nil {
