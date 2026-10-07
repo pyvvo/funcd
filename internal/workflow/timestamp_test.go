@@ -67,7 +67,7 @@ func TestEveryTimestampUTCMillisecond(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	before := time.Now().Truncate(time.Millisecond)
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 	after := time.Now()
 	obj, err := s.Get(ctx, v1.KindConfigMap.GVK(), KVMigrationNamespace, KVMigrationRecord)
 	require.NoError(t, err)
