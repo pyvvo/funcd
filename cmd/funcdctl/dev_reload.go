@@ -154,7 +154,7 @@ func (h *devHandler) fingerprint(stateDirs []string) (string, error) {
 // watchHandlers polls every function's files, and the workflow file of a workflow run (wf, nil otherwise), for an
 // edit until ctx is done (ADR-0125, hot-reload on change). applied is the set of resources the boot applied, plus
 // the objects of an earlier session it could not delete.
-func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, done chan<- struct{}) {
+func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, wf *devWorkflow, applied []v1.Object, stateDirs []string, logger *slog.Logger, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -163,14 +163,14 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs)
+			err := reloadChanged(ctx, op, c, hs, &applied, stateDirs, logger)
 			if wf != nil {
 				var werr error
-				hs, werr = wf.reapply(ctx, op, c, hs)
+				hs, werr = wf.reapply(ctx, op, c, hs, logger)
 				err = errors.Join(err, werr)
 			}
 			if err != nil && ctx.Err() == nil {
-				slog.Default().Warn("hot-reload failed", "err", err)
+				logger.Warn("hot-reload failed", "err", err)
 			}
 		}
 	}
@@ -182,8 +182,8 @@ func watchHandlers(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 // tables and prefixes no Function binds any more (stageResources) and deletes the resources of *applied that the set
 // no longer holds. A failed reload is reported once and retried on the next edit; an apply that lost a race with a
 // concurrent status write (Conflict) is re-applied in place, then on the next poll once those attempts run out.
-func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string) error {
-	changed, errs := changedHandlers(op, hs, stateDirs)
+func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, applied *[]v1.Object, stateDirs []string, logger *slog.Logger) error {
+	changed, errs := changedHandlers(op, hs, stateDirs, logger)
 	if len(changed) == 0 {
 		return errors.Join(errs...)
 	}
@@ -237,14 +237,14 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 			}
 		}
 	}
-	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs)
+	*applied = pruneRemoved(ctx, c, *applied, resObjs, len(errs) == loadErrs, logger)
 	return errors.Join(errs...)
 }
 
 // changedHandlers returns the handlers whose files changed since the last poll, each with its manifest re-read and
 // its new fingerprint marked seen, and an error for each edited manifest that does not load. A handler whose files
 // cannot be fingerprinted (an editor's save swaps the file) is retried on the next poll.
-func changedHandlers(op string, hs []*devHandler, stateDirs []string) (changed []*devHandler, errs []error) {
+func changedHandlers(op string, hs []*devHandler, stateDirs []string, logger *slog.Logger) (changed []*devHandler, errs []error) {
 	for _, h := range hs {
 		fp, ferr := h.fingerprint(stateDirs)
 		if ferr != nil || fp == h.seen {
@@ -257,7 +257,7 @@ func changedHandlers(op string, hs []*devHandler, stateDirs []string) (changed [
 			continue
 		}
 		if m.Main != h.pf.m.Main || m.Dev.Backends != h.pf.m.Dev.Backends || m.Dev.Node != h.pf.m.Dev.Node || m.Dev.Python != h.pf.m.Dev.Python {
-			slog.Default().Warn("restart funcdctl dev to apply a changed main, dev.backends, dev.node or dev.python", "function", h.pf.name)
+			logger.Warn("restart funcdctl dev to apply a changed main, dev.backends, dev.node or dev.python", "function", h.pf.name)
 		}
 		h.pf.m = m
 		changed = append(changed, h)
@@ -294,7 +294,7 @@ func infoStamp(fi fs.FileInfo) string {
 // not running needs a restart, which it warns about, as for a changed main. A failed reload is reported once and
 // retried on the next edit; an apply that keeps losing a race with a concurrent status write (Conflict) is retried
 // on the next poll.
-func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler) ([]*devHandler, error) {
+func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs []*devHandler, logger *slog.Logger) ([]*devHandler, error) {
 	stamp, serr := fileStamp(w.path)
 	if serr != nil || stamp == w.seen {
 		return hs, nil
@@ -313,7 +313,7 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 	}
 	for _, pf := range pfs {
 		if !slices.ContainsFunc(hs, func(h *devHandler) bool { return h.pf.name == pf.name }) {
-			slog.Default().Warn("restart funcdctl dev to run a new workflow step function", "function", pf.name)
+			logger.Warn("restart funcdctl dev to run a new workflow step function", "function", pf.name)
 		}
 	}
 	if aerr := applyDesired(ctx, c, wf); aerr != nil {
@@ -329,7 +329,7 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 	for _, h := range hs {
 		next = append(next, synthesizeFunction(h.pf, h.bundle))
 	}
-	w.applied = pruneRemoved(ctx, c, w.applied, append(next, wf), true)
+	w.applied = pruneRemoved(ctx, c, w.applied, append(next, wf), true, logger)
 	return hs, nil
 }
 
@@ -338,7 +338,7 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 // did not delete. del is false when the reload failed to apply, as a Function may still bind a removed resource. A
 // KVStore or Bucket that still holds data refuses the delete (ADR-0073), so a reload never drops data: it stays with
 // a warning, and the next reload retries it.
-func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool) []v1.Object {
+func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool, logger *slog.Logger) []v1.Object {
 	key := func(o v1.Object) string { return string(o.GroupVersionKind().Kind) + "/" + string(o.GetName()) }
 	want := make(map[string]bool, len(next))
 	for _, o := range next {
@@ -355,7 +355,7 @@ func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, de
 			if err == nil || fault.KindOf(err) == fault.NotFound {
 				continue
 			}
-			slog.Default().Warn("a resource removed from the manifests stays until it can be deleted",
+			logger.Warn("a resource removed from the manifests stays until it can be deleted",
 				"kind", o.GroupVersionKind().Kind, "name", o.GetName(), "err", err)
 		}
 		kept = append(kept, o)

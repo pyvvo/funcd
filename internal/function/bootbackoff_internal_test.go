@@ -1,6 +1,7 @@
 package function
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
+	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
@@ -179,4 +181,16 @@ func TestScenarioZeroStartTimeKeepsCreatedAt(t *testing.T) {
 
 	in.StartedAt = created.Add(2*time.Minute + 30*time.Second)
 	require.Equal(t, in.StartedAt, lastStart(in))
+}
+
+// scenario: configured-timeout-whole-ms (ADR-0197) — the boot-timeout warning names the 60 s timeout timeout_ms=60000.
+func TestScenarioConfiguredTimeoutWholeMs(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatJSON}, &buf)
+	require.NoError(t, err)
+	b := newBootBackoff(10*time.Second, 5*time.Minute, 60*time.Second, lg.Root())
+	b.timedOut(runtime.Instance{ID: "default/fn/fn-1/r0", Namespace: "default", Name: "fn", CreatedAt: time.Now()})
+	require.Contains(t, buf.String(), `"timeout_ms":60000`)
+	require.NotContains(t, buf.String(), `"timeout":`)
 }

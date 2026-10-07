@@ -1,6 +1,6 @@
 # ADR-0197: Log durations as milliseconds, with the unit in the key
 
-- **Status**: Accepted (2026-10-07)
+- **Status**: Reviewing (2026-10-08)
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: observability, logging, slog, funcdctl

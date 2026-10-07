@@ -11,8 +11,13 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
+	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -97,12 +102,49 @@ func NewLogger(cfg Config, w io.Writer) (*Logger, error) {
 }
 
 // ReplaceAttr is the slog hook every funcd handler sets: it writes a record's own top-level time in the
-// v1alpha1.Timestamp form (ADR-0196). A time-valued attribute, or a time inside a group, is left as it is.
+// v1alpha1.Timestamp form (ADR-0196); a time-valued attribute, or a time inside a group, is left as it is. A duration
+// at any group depth becomes a <key>_ms number of milliseconds (ADR-0197).
 func ReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
 		return slog.String(slog.TimeKey, v1.NewTimestamp(a.Value.Time()).String())
 	}
+	return durationField(a)
+}
+
+// durationField rewrites a time.Duration or v1.Duration attribute by ADR-0197; any other attribute is unchanged.
+func durationField(a slog.Attr) slog.Attr {
+	switch a.Value.Kind() {
+	case slog.KindDuration:
+		return durationAttr(a.Key, a.Value.Duration())
+	case slog.KindAny:
+		if d, ok := a.Value.Any().(v1.Duration); ok {
+			return durationAttr(a.Key, time.Duration(d))
+		}
+	}
 	return a
+}
+
+// durationAttr is the attribute <key>_ms (a key already ending in _ms is kept) valued millis(d).
+func durationAttr(key string, d time.Duration) slog.Attr {
+	if !strings.HasSuffix(key, "_ms") {
+		key += "_ms"
+	}
+	return slog.Any(key, json.Number(millis(d)))
+}
+
+// millis writes d in milliseconds, rounded to the nearest microsecond, with at most three decimals and no trailing
+// zeros; a whole number of milliseconds has no fraction.
+func millis(d time.Duration) string {
+	us := int64(d.Round(time.Microsecond) / time.Microsecond)
+	sign := ""
+	if us < 0 {
+		sign, us = "-", -us
+	}
+	s := sign + strconv.FormatInt(us/1000, 10)
+	if frac := us % 1000; frac != 0 {
+		s += "." + strings.TrimRight(fmt.Sprintf("%03d", frac), "0")
+	}
+	return s
 }
 
 // Root returns the root logger. Prefer Component for per-component children.

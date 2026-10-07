@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -372,7 +373,7 @@ func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
 	require.NoError(t, err)
 
 	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
-	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, &[]v1.Object{}, nil),
+	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, &[]v1.Object{}, nil, slog.New(slog.DiscardHandler)),
 		"a Conflict on a hot-reload apply is re-applied in place, not reported")
 	mu.Lock()
 	defer mu.Unlock()

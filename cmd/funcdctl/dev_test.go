@@ -50,8 +50,14 @@ func devProject(t *testing.T, files map[string]string) string {
 // removed) at test end.
 func tryStartDev(t *testing.T, path string) (*devInstance, error) {
 	t.Helper()
+	return tryStartDevTo(t, path, io.Discard)
+}
+
+// tryStartDevTo is tryStartDev with funcdctl's output, where funcdctl dev logs, written to out.
+func tryStartDevTo(t *testing.T, path string, out io.Writer) (*devInstance, error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, path, "", devConfig{cacheDir: t.TempDir()})
+	inst, err := (&cli{out: out}).startDev(ctx, path, "", devConfig{cacheDir: t.TempDir()})
 	t.Cleanup(func() {
 		cancel()
 		if inst != nil {
