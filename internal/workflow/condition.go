@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -183,7 +182,7 @@ func (e *Engine) runBuiltin(ctx context.Context, rec *runstate.Record, st *v1.Wo
 // ${{ }} goja Select expression evaluating to one; any other result fails the step naming the grammar.
 func (e *Engine) evalWait(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (time.Duration, error) {
 	s := raw
-	if strings.HasPrefix(strings.TrimSpace(raw), "${{") {
+	if v1.IsWaitExpression(raw) {
 		v, err := e.evalSelect(raw, n, rec, input, outputs)
 		if err != nil {
 			return 0, err

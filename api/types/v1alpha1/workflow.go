@@ -374,7 +374,7 @@ func (s *WorkflowStep) validateDurations(op string, i int) error {
 			}
 		}
 	}
-	if b := s.Builtin; b != nil && b.Wait != "" && !isWaitExpression(b.Wait) {
+	if b := s.Builtin; b != nil && b.Wait != "" && !IsWaitExpression(b.Wait) {
 		if _, err := ParseDuration(b.Wait); err != nil {
 			return fault.Wrapf(err, fault.Invalid, op, "step %q: builtin.wait", s.Name)
 		}
@@ -382,8 +382,8 @@ func (s *WorkflowStep) validateDurations(op string, i int) error {
 	return nil
 }
 
-// isWaitExpression reports whether a builtin wait is a ${{ }} expression rather than a literal duration.
-func isWaitExpression(wait string) bool { return strings.HasPrefix(strings.TrimSpace(wait), "${{") }
+// IsWaitExpression reports whether a builtin wait is a ${{ }} expression; apply and the engine both use it.
+func IsWaitExpression(wait string) bool { return strings.HasPrefix(strings.TrimSpace(wait), "${{") }
 
 // EffectiveDependsOn returns each step's parents as the engine schedules them (ADR-0094 Control flow):
 // its dependsOn, else the previous step in list order. The onFailure handler is outside the DAG: it gets
