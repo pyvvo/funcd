@@ -316,11 +316,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 
 	// Workflow engine (ADR-0094): durable run state in its own Badger instance at Workflow.DataDir
 	// (default <dataDir>/workflow; in-memory when the substrate is memory), plus the workflow.* tunables.
-	stepTimeout, err := parseDuration("workflow.defaultStepTimeout", cfg.Workflow.DefaultStepTimeout, 0, true)
+	stepTimeout, err := parseDuration("workflow.defaultStepTimeout", cfg.Workflow.DefaultStepTimeout, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	retention, err := parseDuration("workflow.retention", cfg.Workflow.Retention, 0, true)
+	retention, err := parseDuration("workflow.retention", cfg.Workflow.Retention, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -331,7 +331,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	opts = append(opts, funcd.WithWorkflow(workflowDir, stepTimeout, retention, cfg.Workflow.DefaultRetry, cfg.Workflow.PayloadLimit),
 		funcd.WithWorkflowMaxStepsInFlight(cfg.Workflow.MaxStepsInFlight))
 	// ADR-0151: the response deadline of an external invoke whose Function sets no spec.timeout.
-	invokeTimeout, err := parseDuration("invoke.defaultTimeout", cfg.Invoke.DefaultTimeout, 0, true)
+	invokeTimeout, err := parseDuration("invoke.defaultTimeout", cfg.Invoke.DefaultTimeout, 0, 0, v1.Duration(v1.MaxInvokeTimeout))
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -349,7 +349,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
-	dlRetention, err := parseDuration("eventing.deadletter.retention", cfg.Eventing.Deadletter.Retention, 0, true)
+	dlRetention, err := parseDuration("eventing.deadletter.retention", cfg.Eventing.Deadletter.Retention, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -360,14 +360,14 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries),
 		funcd.WithSensorDelivery(cfg.Eventing.MaxDeliveriesInFlight, cfg.Eventing.MaxInFlightPerTarget, cfg.Eventing.MaxQueuedPerSensor))
 
-	gcSweep, err := parseDuration("controller.gcSweepInterval", cfg.Controller.GCSweepInterval, 0, false)
+	gcSweep, err := parseDuration("controller.gcSweepInterval", cfg.Controller.GCSweepInterval, 0, minPositive, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithGCSweepInterval(gcSweep))
 
 	// Blob EventSource poll cadence (ADR-0119, F83): the List-poll interval for `blob:` sources.
-	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, true)
+	blobPoll, err := parseDuration("eventing.blobPollInterval", cfg.Eventing.BlobPollInterval, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -376,7 +376,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 
 	// Function-log capture (ADR-0081) and its traces signal (ADR-0101); a zero segment size/age keeps the sink default.
-	segmentMaxAge, err := parseDuration("funclog.segmentMaxAge", cfg.Funclog.SegmentMaxAge, 0, true)
+	segmentMaxAge, err := parseDuration("funclog.segmentMaxAge", cfg.Funclog.SegmentMaxAge, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -504,11 +504,11 @@ func kvBackup(ctx context.Context, cfg config.Config) (blob.Bucket, kvbadger.Bac
 	if !cfg.Kvstore.Backup.Enabled {
 		return nil, kvbadger.BackupConfig{}, nil
 	}
-	interval, err := parseDurationOr("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second)
+	interval, err := parseDuration("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second, minPositive, v1.MaxDuration)
 	if err != nil {
 		return nil, kvbadger.BackupConfig{}, err
 	}
-	rebaseline, err := parseDurationOr("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour)
+	rebaseline, err := parseDuration("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour, minPositive, v1.MaxDuration)
 	if err != nil {
 		return nil, kvbadger.BackupConfig{}, err
 	}
@@ -531,7 +531,7 @@ func kvCDC(cfg config.Config, theBus bus.Bus) (bus.Bus, kvbadger.CDCConfig, erro
 	if theBus == nil {
 		return nil, kvbadger.CDCConfig{}, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but no bus is configured")
 	}
-	retention, err := parseDurationOr("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour)
+	retention, err := parseDuration("kvstore.cdc.retention", cfg.Kvstore.Cdc.Retention, 24*time.Hour, minPositive, v1.MaxDuration)
 	if err != nil {
 		return nil, kvbadger.CDCConfig{}, err
 	}
@@ -544,11 +544,11 @@ func kvCDC(cfg config.Config, theBus bus.Bus) (bus.Bus, kvbadger.CDCConfig, erro
 // bootBackoff parses runtime.bootBackoffInitial and runtime.bootBackoffMax (ADR-0160): positive durations, the max
 // defaulting to max(5m, initial) and, when set, at least the initial wait.
 func bootBackoff(cfg config.Config) (initial, limit time.Duration, err error) {
-	initial, err = parseDurationOr("runtime.bootBackoffInitial", cfg.Runtime.BootBackoffInitial, 10*time.Second)
+	initial, err = parseDuration("runtime.bootBackoffInitial", cfg.Runtime.BootBackoffInitial, 10*time.Second, minPositive, v1.MaxDuration)
 	if err != nil {
 		return 0, 0, err
 	}
-	limit, err = parseDurationOr("runtime.bootBackoffMax", cfg.Runtime.BootBackoffMax, max(5*time.Minute, initial))
+	limit, err = parseDuration("runtime.bootBackoffMax", cfg.Runtime.BootBackoffMax, max(5*time.Minute, initial), minPositive, v1.MaxDuration)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -558,40 +558,41 @@ func bootBackoff(cfg config.Config) (initial, limit time.Duration, err error) {
 	return initial, limit, nil
 }
 
-// pacingKey is one ADR-0163 key: its name, raw value, default and where its parsed value goes.
+// pacingKey is one ADR-0163 key: its name, raw value, default, where its parsed value goes and its bounds.
 type pacingKey struct {
 	key, value string
 	def        time.Duration
 	dst        *time.Duration
+	lo, hi     v1.Duration
 }
 
-// pacing parses the ADR-0163 keys with parseDuration (workflow.defaultRetryBackoff may be 0), then checks Decision 5's
+// pacing parses the ADR-0163 keys with parseDuration and their bounds (ADR-0194), then checks Decision 5's
 // orderings, each failure a fault.Invalid naming the first key with the other bound.
 func pacing(cfg config.Config) (funcd.Pacing, error) {
 	var p funcd.Pacing
 	keys := []pacingKey{
-		{"controller.retryBackoffMax", cfg.Controller.RetryBackoffMax, time.Second, &p.RetryBackoffMax},
-		{"controller.referentPollInterval", cfg.Controller.ReferentPollInterval, 2 * time.Second, &p.ReferentPollInterval},
-		{"controller.routeResyncInterval", cfg.Controller.RouteResyncInterval, 10 * time.Second, &p.RouteResyncInterval},
-		{"runtime.supervisionPeriod", cfg.Runtime.SupervisionPeriod, 10 * time.Second, &p.SupervisionPeriod},
-		{"runtime.bootTimeout", cfg.Runtime.BootTimeout, time.Minute, &p.BootTimeout},
-		{"runtime.drainGrace", cfg.Runtime.DrainGrace, 30 * time.Second, &p.DrainGrace},
-		{"runtime.handOutSettle", cfg.Runtime.HandOutSettle, 2 * time.Second, &p.HandOutSettle},
-		{"runtime.drainPollInterval", cfg.Runtime.DrainPollInterval, time.Second, &p.DrainPollInterval},
-		{"catalog.enginePollInterval", cfg.Catalog.EnginePollInterval, 2 * time.Second, &p.EnginePollInterval},
-		{"catalog.engineProbeTimeout", cfg.Catalog.EngineProbeTimeout, 2 * time.Second, &p.EngineProbeTimeout},
-		{"workflow.artifactPollInterval", cfg.Workflow.ArtifactPollInterval, 5 * time.Second, &p.ArtifactPollInterval},
-		{"workflow.defaultRetryBackoff", cfg.Workflow.DefaultRetryBackoff, 0, &p.DefaultRetryBackoff},
-		{"eventing.bucketRecheckInterval", cfg.Eventing.BucketRecheckInterval, 15 * time.Second, &p.BucketRecheckInterval},
-		{"eventing.deliveryBackoffInitial", cfg.Eventing.DeliveryBackoffInitial, 100 * time.Millisecond, &p.DeliveryBackoffInitial},
-		{"eventing.deliveryBackoffMax", cfg.Eventing.DeliveryBackoffMax, 0, &p.DeliveryBackoffMax},
-		{"invoke.activationTimeout", cfg.Invoke.ActivationTimeout, 30 * time.Second, &p.ActivationTimeout},
-		{"invoke.reclaimInterval", cfg.Invoke.ReclaimInterval, 30 * time.Second, &p.ReclaimInterval},
-		{"server.shutdownTimeout", cfg.Server.ShutdownTimeout, 15 * time.Second, &p.ShutdownTimeout},
-		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval},
+		{"controller.retryBackoffMax", cfg.Controller.RetryBackoffMax, time.Second, &p.RetryBackoffMax, minRetryBackoffMax, v1.MaxDuration},
+		{"controller.referentPollInterval", cfg.Controller.ReferentPollInterval, 2 * time.Second, &p.ReferentPollInterval, minPositive, v1.MaxDuration},
+		{"controller.routeResyncInterval", cfg.Controller.RouteResyncInterval, 10 * time.Second, &p.RouteResyncInterval, minPositive, v1.MaxDuration},
+		{"runtime.supervisionPeriod", cfg.Runtime.SupervisionPeriod, 10 * time.Second, &p.SupervisionPeriod, minPositive, v1.MaxDuration},
+		{"runtime.bootTimeout", cfg.Runtime.BootTimeout, time.Minute, &p.BootTimeout, minPositive, v1.MaxDuration},
+		{"runtime.drainGrace", cfg.Runtime.DrainGrace, 30 * time.Second, &p.DrainGrace, minPositive, v1.MaxDuration},
+		{"runtime.handOutSettle", cfg.Runtime.HandOutSettle, 2 * time.Second, &p.HandOutSettle, minPositive, v1.MaxDuration},
+		{"runtime.drainPollInterval", cfg.Runtime.DrainPollInterval, time.Second, &p.DrainPollInterval, minPositive, v1.MaxDuration},
+		{"catalog.enginePollInterval", cfg.Catalog.EnginePollInterval, 2 * time.Second, &p.EnginePollInterval, minPositive, v1.MaxDuration},
+		{"catalog.engineProbeTimeout", cfg.Catalog.EngineProbeTimeout, 2 * time.Second, &p.EngineProbeTimeout, minPositive, v1.MaxDuration},
+		{"workflow.artifactPollInterval", cfg.Workflow.ArtifactPollInterval, 5 * time.Second, &p.ArtifactPollInterval, minPositive, v1.MaxDuration},
+		{"workflow.defaultRetryBackoff", cfg.Workflow.DefaultRetryBackoff, 0, &p.DefaultRetryBackoff, 0, v1.MaxRetryBackoff},
+		{"eventing.bucketRecheckInterval", cfg.Eventing.BucketRecheckInterval, 15 * time.Second, &p.BucketRecheckInterval, minPositive, v1.MaxDuration},
+		{"eventing.deliveryBackoffInitial", cfg.Eventing.DeliveryBackoffInitial, 100 * time.Millisecond, &p.DeliveryBackoffInitial, minPositive, v1.MaxDuration},
+		{"eventing.deliveryBackoffMax", cfg.Eventing.DeliveryBackoffMax, 0, &p.DeliveryBackoffMax, minPositive, v1.MaxDuration},
+		{"invoke.activationTimeout", cfg.Invoke.ActivationTimeout, 30 * time.Second, &p.ActivationTimeout, minPositive, v1.MaxDuration},
+		{"invoke.reclaimInterval", cfg.Invoke.ReclaimInterval, 30 * time.Second, &p.ReclaimInterval, minPositive, v1.MaxDuration},
+		{"server.shutdownTimeout", cfg.Server.ShutdownTimeout, 15 * time.Second, &p.ShutdownTimeout, minPositive, v1.MaxDuration},
+		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval, minPositive, v1.MaxDuration},
 	}
 	for _, k := range keys {
-		d, err := parseDuration(k.key, k.value, k.def, k.key == "workflow.defaultRetryBackoff")
+		d, err := parseDuration(k.key, k.value, k.def, k.lo, k.hi)
 		if err != nil {
 			return funcd.Pacing{}, err
 		}
@@ -605,56 +606,46 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		return fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s)", key, d.String(), want)
 	}
 	switch {
-	case p.RetryBackoffMax < 5*time.Millisecond:
-		return funcd.Pacing{}, refuse("controller.retryBackoffMax", p.RetryBackoffMax, "at least 5ms")
 	case p.BootTimeout <= p.ActivationTimeout:
 		return funcd.Pacing{}, refuse("runtime.bootTimeout", p.BootTimeout, "more than invoke.activationTimeout, "+p.ActivationTimeout.String())
 	case p.HandOutSettle > p.DrainGrace:
 		return funcd.Pacing{}, refuse("runtime.handOutSettle", p.HandOutSettle, "at most runtime.drainGrace, "+p.DrainGrace.String())
-	case p.DefaultRetryBackoff > time.Hour:
-		return funcd.Pacing{}, refuse("workflow.defaultRetryBackoff", p.DefaultRetryBackoff, "at most 1h")
 	case maxSet && p.DeliveryBackoffMax < p.DeliveryBackoffInitial:
 		return funcd.Pacing{}, refuse("eventing.deliveryBackoffMax", p.DeliveryBackoffMax, "at least eventing.deliveryBackoffInitial, "+p.DeliveryBackoffInitial.String())
 	}
 	return p, nil
 }
 
-// maxStopGrace bounds runtime.process.stopGrace by the containerd driver's stop grace (ADR-0167).
-const maxStopGrace = 10 * time.Second
+// The config duration bounds (ADR-0194): minPositive for a key that must be positive, maxStopGrace for
+// runtime.process.stopGrace (the containerd driver's stop grace, ADR-0167) and minRetryBackoffMax for
+// controller.retryBackoffMax (ADR-0163, as funcd.WithPacing checks it).
+const (
+	minPositive        = v1.Duration(time.Millisecond)
+	maxStopGrace       = v1.Duration(10 * time.Second)
+	minRetryBackoffMax = v1.Duration(5 * time.Millisecond)
+)
 
-// processStopGrace parses runtime.process.stopGrace (ADR-0167): a Go duration with 0 < d <= 10s, default 3s.
+// processStopGrace parses runtime.process.stopGrace (ADR-0167): 1ms to 10s, default 3s.
 func processStopGrace(cfg config.Config) (time.Duration, error) {
-	grace, err := parseDurationOr("runtime.process.stopGrace", cfg.Runtime.Process.StopGrace, 3*time.Second)
-	if err != nil {
-		return 0, err
-	}
-	if grace > maxStopGrace {
-		return 0, fault.Invalidf("buildOptions", "config key %q has value %s, above %s", "runtime.process.stopGrace", grace, maxStopGrace)
-	}
-	return grace, nil
+	return parseDuration("runtime.process.stopGrace", cfg.Runtime.Process.StopGrace, 3*time.Second, minPositive, maxStopGrace)
 }
 
-// parseDurationOr parses the optional Go duration at config key: empty ⇒ def; a malformed or non-positive
-// value ⇒ fault.Invalid naming the key (ADR-0061), never a silent fall back to def.
-func parseDurationOr(key, s string, def time.Duration) (time.Duration, error) {
-	return parseDuration(key, s, def, false)
-}
-
-// parseDuration is parseDurationOr that, with zeroOK, also accepts 0 for a key where 0 keeps its documented
-// meaning (none, never or the default). A negative value is always fault.Invalid.
-func parseDuration(key, s string, def time.Duration, zeroOK bool) (time.Duration, error) {
+// parseDuration parses the optional duration at config key with the API grammar and bounds it to [lo, hi]
+// (ADR-0194): empty ⇒ def; a malformed or out-of-bounds value ⇒ fault.Invalid naming the key (ADR-0061), never a
+// silent fall back to def.
+func parseDuration(key, s string, def time.Duration, lo, hi v1.Duration) (time.Duration, error) {
+	const op = "buildOptions"
 	if s == "" {
 		return def, nil
 	}
-	d, err := time.ParseDuration(s)
-	if err == nil && (d > 0 || d == 0 && zeroOK) {
-		return d, nil
+	d, err := v1.ParseDuration(s)
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.Invalid, op, "config key %q", key)
 	}
-	want := "a positive"
-	if zeroOK {
-		want = "a non-negative"
+	if err := v1.CheckDuration(op, fmt.Sprintf("config key %q", key), d, lo, hi); err != nil {
+		return 0, err
 	}
-	return 0, fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s Go duration, e.g. 30s)", key, s, want)
+	return time.Duration(d), nil
 }
 
 // limitsConfig maps server.limits to the data-plane limiter's Config (ADR-0112, ADR-0164).

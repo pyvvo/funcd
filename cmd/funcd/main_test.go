@@ -910,7 +910,7 @@ func TestInvokeDefaultTimeoutNegativeRejected(t *testing.T) {
 	}
 }
 
-// controller.gcSweepInterval accepts a positive Go duration only: 0, a negative or a malformed value fails startup
+// controller.gcSweepInterval accepts a positive duration only: 0, a negative or a malformed value fails startup
 // with fault.Invalid naming the key (ADR-0170 Decision 9).
 func TestGCSweepIntervalMustBePositive(t *testing.T) {
 	root := slog.New(slog.NewTextHandler(io.Discard, nil))

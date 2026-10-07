@@ -133,7 +133,7 @@ func TestScenarioInvalidValueRefusedNamingKey(t *testing.T) {
 		{pacingYAML("runtime.handOutSettle", "1m"), "runtime.handOutSettle", "at most runtime.drainGrace, 30s"},
 		{pacingYAML("eventing.deliveryBackoffMax", "50ms"), "eventing.deliveryBackoffMax", "at least eventing.deliveryBackoffInitial, 100ms"},
 		{pacingYAML("controller.retryBackoffMax", "1ms"), "controller.retryBackoffMax", "at least 5ms"},
-		{pacingYAML("workflow.defaultRetryBackoff", "2h"), "workflow.defaultRetryBackoff", "at most 1h"},
+		{pacingYAML("workflow.defaultRetryBackoff", "2h"), "workflow.defaultRetryBackoff", "[0s, 1h]"},
 	}
 	for _, o := range orderings {
 		t.Run("ordering/"+o.key, func(t *testing.T) {
