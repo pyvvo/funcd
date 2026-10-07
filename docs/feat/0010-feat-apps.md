@@ -277,7 +277,7 @@ status:
   lastRestore:
     kind: Function
     name: todo-api
-    at: "2026-10-07T12:03:10Z"
+    at: "2026-10-07T12:03:10.000Z"
 ```
 
 A person or an agent follows one path: `funcdctl describe app todo`, then `funcdctl app history todo`, then the
@@ -508,8 +508,10 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **Requirements across namespaces**: an App requires only Apps of its own namespace.
 - **A platform-side registry mapping** (a Nexus mirror for every artifact pull): skipped for now. funcd redirects
   only runtime images today (`runtime.containerd.imagePrefix`).
-- **Duration strings across the API**, such as `10m` and `500ms`, with the millisecond as the smallest unit: decided
-  on issue #816 (tracker #817), whose ADR decides how existing manifests migrate. The App examples already use them.
+- **Duration strings across the API**, such as `10m` and `500ms`, with the millisecond as the smallest unit:
+  [ADR-0194](../adr/0194-api-duration-strings.md) (accepted) makes them the API format with a clean break, so an
+  integer is refused. The App examples use them, and their times follow
+  [ADR-0196](../adr/0196-utc-millisecond-timestamps.md) (RFC3339 UTC with milliseconds).
 
 ## Open questions
 

@@ -669,7 +669,7 @@ type AppRequirementState struct {
 type AppRestore struct {
 	Kind Kind       `json:"kind"`
 	Name ObjectName `json:"name"`
-	At   time.Time  `json:"at"`
+	At   time.Time  `json:"at"` // RFC3339 UTC with milliseconds (ADR-0196)
 }
 type AppChild struct {
 	Kind   Kind          `json:"kind"`
@@ -899,8 +899,8 @@ today's roles.
 
 ## Example: the to-do app
 
-Durations are duration strings such as `10m` and `1h`, as decided on issue #816. The API still takes
-nanosecond integers until the ADR for #816 lands.
+Durations are duration strings such as `10m` and `1h`, as [ADR-0194](../adr/0194-api-duration-strings.md) decides,
+and times are RFC3339 UTC with milliseconds, as [ADR-0196](../adr/0196-utc-millisecond-timestamps.md) decides.
 
 **Project tree** (git)
 
