@@ -122,6 +122,10 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 - `scenario: app-reapply-same-spec` — the same App applied again ⇒ no new AppRevision and no part written.
 - `scenario: app-upgrade` — `functions[0].image` changed ⇒ `todo-2` stamped and current, `todo-1` `Current=False`;
   calls answer from the new image.
+- `scenario: app-one-part-changes` — only `todo-api`'s image changes ⇒ `todo-4` is stamped with the whole spec; the
+  App writes `todo-api` alone, which gets a new generation and Revision that boots beside the serving one and takes
+  the calls once ready (ADR-0143); no other part is written or restarted; a WorkflowRun started before the switch
+  finishes on the old revision (ADR-0190).
 - `scenario: app-prune-after-current` — Route `todo-legacy` removed from the spec ⇒ it stays until `todo-2` is
   current, then is gone within 5 s.
 - `scenario: app-failed-upgrade-keeps-serving` — an image that never starts, `app.upgradeTimeout` 20 s ⇒ after 20 s
@@ -221,6 +225,10 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 4. **Stamp.** When the canonical spec differs from the latest AppRevision's, the platform stamps `<app>-<n+1>` and
    sets `status.latestRevision`. Numbers only grow; an unchanged re-apply stamps nothing; a rollback is a new
    revision.
+   A rollout writes only the parts whose spec changed: the store bumps a generation only when `spec` changes
+   (`specChanged`, `internal/store/store.go:399-404`), so an unchanged part gets no new Revision and no restart, and a
+   changed Function switches alone, as ADR-0143 switches any redeploy. Parts switch one by one, so two parts changed
+   together can run in mixed versions for a short time (Open question 9).
 5. **Apply.** The App reconciler is a materializer one level up, as the Workflow's `Materializer` is for its steps
    (`internal/workflow/reconcile_workflow.go:196-290`): it creates and updates only the objects its sections declare.
    Their own children are provisioned by their own reconcilers: a Workflow in the App materializes its step
@@ -604,6 +612,8 @@ today's roles.
    storage, their config keys and defaults → the health ADR (it also changes the shim contract).
 8. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
    refuses other impossible settings → this design, when it becomes an ADR.
+9. An app-wide switch: boot a complete new copy of the changed parts and move all traffic at once (blue-green at the
+   App level), for changes that must not run in mixed versions → a later ADR, if per-part switches prove too weak.
 
 ## Example: the to-do app
 
