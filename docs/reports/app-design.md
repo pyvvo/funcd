@@ -1,10 +1,11 @@
 # App design note — many resources declared, deployed and versioned as one unit
 
-- **Status**: Design note, not an ADR yet. It becomes an ADR once the design is final.
+- **Status**: Design note, not an ADR yet. Once the design is final, it becomes one or more ADRs per feature row.
 - **Date**: 2026-10-06, refined 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, revisions, admission, gc, templates
-- **Feature row and ADR number**: none yet; assigned when the ADR is drafted, after the DR plan's provisional numbers.
+- **Feature rows**: [FEAT-0010](../feat/0010-feat-apps.md) F113 to F122. ADR numbers are assigned when each ADR is
+  drafted.
 - **Relates to**: [ADR-0094](../adr/0094-workflow-engine-core.md) and
   [ADR-0096](../adr/0096-engine-native-builtin-steps.md) (a Workflow declares its KV stores and step Functions
   inline: the shape the App follows) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (a Site declares
@@ -18,7 +19,7 @@
   [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja engine the template uses)
 - **Extends (additive)**: [ADR-0170](../adr/0170-owner-garbage-collector.md) — `gc.Pairs()` gains the pairs of
   Decision 9.
-- **Follow-up topics**: lifecycle hooks (migrations, backup before upgrade) · App dependencies · finer RBAC
+- **Follow-up topics**: App dependencies (F122) · finer RBAC · a hook before a delete
 
 ## Decisions taken with the decider
 
