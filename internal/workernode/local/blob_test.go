@@ -2,10 +2,13 @@ package local_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -172,4 +175,100 @@ func TestScenarioBlobOverBucketObjectCap(t *testing.T) {
 	requireProblem(t, do(t, h, http.MethodPut, "/blob/b/big.bin", strings.Repeat("x", 17)), http.StatusRequestEntityTooLarge, payloadTooLarge, "maxObjectBytes (16)")
 	require.Empty(t, inner.m, "nothing is stored")
 	require.Equal(t, http.StatusNoContent, do(t, h, http.MethodPut, "/blob/b/ok.bin", strings.Repeat("x", 16)).Code)
+}
+
+const problemInvalid = "urn:funcd:problem:invalid"
+
+// signRecBucket records the SignOptions of every SignedURL call it gets (ADR-0198).
+type signRecBucket struct {
+	*blobMapBucket
+	calls []iblob.SignOptions
+}
+
+func (b *signRecBucket) SignedURL(ctx context.Context, key string, opts iblob.SignOptions) (string, error) {
+	b.calls = append(b.calls, opts)
+	return b.blobMapBucket.SignedURL(ctx, key, opts)
+}
+
+func signHandler(t *testing.T) (http.Handler, *signRecBucket) {
+	t.Helper()
+	bkt := &signRecBucket{blobMapBucket: newBlobMapBucket()}
+	return blobHandler(t, "default", s3TestPDP{readOK: true, writeOK: true}, bkt), bkt
+}
+
+// scenario: valid-expiry-honoured — ?sign=1&method=PUT&expiry=10m (or 1h30m) is 200 and signs a PUT for exactly
+// that lifetime.
+func TestScenarioValidExpiryHonoured(t *testing.T) {
+	for q, want := range map[string]time.Duration{"10m": 10 * time.Minute, "1h30m": 90 * time.Minute} {
+		h, bkt := signHandler(t)
+		rec := do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=PUT&expiry="+q, "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, []iblob.SignOptions{{Method: iblob.SignPut, Expiry: want}}, bkt.calls, q)
+	}
+}
+
+// scenario: bad-expiry-refused — an expiry outside the grammar or the whole-second 1s–168h bounds is 400 invalid
+// naming the value; nothing is signed.
+func TestScenarioBadExpiryRefused(t *testing.T) {
+	for _, e := range []string{"10", "abc", "1e-05s", "1.5s", "500us", "-5m", "", "0s", "500ms", "1s500ms", "168h1s"} {
+		h, bkt := signHandler(t)
+		rec := do(t, h, http.MethodGet, "/blob/b/k?sign=1&expiry="+url.QueryEscape(e), "")
+		requireProblem(t, rec, http.StatusBadRequest, problemInvalid, fmt.Sprintf("workernode.local.blob.sign: expiry %q ", e))
+		require.Empty(t, bkt.calls, "expiry %q signs nothing", e)
+	}
+}
+
+// scenario: unknown-method-refused — a method other than exactly GET, PUT or DELETE is 400 naming it; nothing is
+// signed.
+func TestScenarioUnknownMethodRefused(t *testing.T) {
+	for _, m := range []string{"post", "POST", "put", "HEAD", ""} {
+		h, bkt := signHandler(t)
+		rec := do(t, h, http.MethodGet, "/blob/b/k?sign=1&method="+url.QueryEscape(m), "")
+		requireProblem(t, rec, http.StatusBadRequest, problemInvalid,
+			fmt.Sprintf("workernode.local.blob.sign: method %q is not GET, PUT or DELETE", m))
+		require.Empty(t, bkt.calls, "method %q signs nothing", m)
+	}
+}
+
+// scenario: absent-expiry-defaults — neither expiry nor method signs a GET with a zero Expiry (the driver default).
+func TestScenarioAbsentExpiryDefaults(t *testing.T) {
+	h, bkt := signHandler(t)
+	require.Equal(t, http.StatusOK, do(t, h, http.MethodGet, "/blob/b/k?sign=1", "").Code)
+	require.Equal(t, []iblob.SignOptions{{Method: iblob.SignGet}}, bkt.calls)
+}
+
+// The checks run before the PDP and the driver (ADR-0198 Decision 1): an unbound alias with a good expiry is 403,
+// with a bad one 400; the method is checked before the expiry.
+func TestADR0198_SignCheckOrder(t *testing.T) {
+	h, bkt := signHandler(t)
+	require.Equal(t, http.StatusForbidden, do(t, h, http.MethodGet, "/blob/nope/k?sign=1&expiry=10m", "").Code)
+	requireProblem(t, do(t, h, http.MethodGet, "/blob/nope/k?sign=1&expiry=10", ""), http.StatusBadRequest, problemInvalid, `expiry "10"`)
+	requireProblem(t, do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=post&expiry=10", ""), http.StatusBadRequest, problemInvalid, `method "post"`)
+	require.Empty(t, bkt.calls)
+}
+
+// scenario: typescript-shim-takes-duration-string — the queries funcd-typescript's signedUrl builds: no expiry
+// takes the default, "10m" signs 10 minutes, "1.5s" and "" (sent since expiry != null) are 400.
+func TestScenarioTypescriptShimTakesDurationString(t *testing.T) {
+	h, bkt := signHandler(t)
+	require.Equal(t, http.StatusOK, do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=GET", "").Code)
+	require.Equal(t, http.StatusOK, do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=GET&expiry=10m", "").Code)
+	require.Equal(t, []iblob.SignOptions{{Method: iblob.SignGet}, {Method: iblob.SignGet, Expiry: 10 * time.Minute}}, bkt.calls)
+	for _, e := range []string{"1.5s", ""} {
+		requireProblem(t, do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=GET&expiry="+e, ""), http.StatusBadRequest, problemInvalid, fmt.Sprintf("expiry %q", e))
+	}
+	require.Len(t, bkt.calls, 2)
+}
+
+// scenario: python-shim-takes-duration-string — the queries funcd-python's signed_url builds (its own suite covers
+// the TypeError): "10m" signs, "" is 400, and the old shim's float seconds ("60.0s", "0.5s") are 400.
+func TestScenarioPythonShimTakesDurationString(t *testing.T) {
+	h, bkt := signHandler(t)
+	rec := do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=PUT&expiry=10m", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "method=PUT")
+	for _, e := range []string{"", "60.0s", "0.5s"} {
+		requireProblem(t, do(t, h, http.MethodGet, "/blob/b/k?sign=1&method=GET&expiry="+e, ""), http.StatusBadRequest, problemInvalid, fmt.Sprintf("expiry %q", e))
+	}
+	require.Equal(t, []iblob.SignOptions{{Method: iblob.SignPut, Expiry: 10 * time.Minute}}, bkt.calls)
 }

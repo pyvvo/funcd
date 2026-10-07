@@ -1,6 +1,6 @@
 # ADR-0198: Blob presign takes a strict `expiry` duration and `method`, and refuses a bad value with 400
 
-- **Status**: Accepted (2026-10-07)
+- **Status**: Reviewing (2026-10-08)
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, presign, local-api, shim, python, duration, validation, breaking-change
