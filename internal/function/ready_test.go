@@ -563,6 +563,25 @@ func TestIssue838_UnansweredMembersProbeKeepsGatedMemberReady(t *testing.T) {
 	require.Equal(t, testPeriod, res.RequeueAfter)
 }
 
+// A converging pass whose pool host does not answer /health/members judges a serving member not ready: Degraded, as
+// ADR-0158 Decision 4 maps a failed probe, not a failed pass.
+func TestUnansweredMembersProbeDegradesServingMember(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.setMembersDown(true)
+	h.reconcile(t, "member")
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseDegraded, fn.Status.Phase)
+	require.Zero(t, fn.Status.Replicas)
+	ready, ok := fn.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionFalse, ready.Status)
+}
+
 // A pooled member's pool worker that runs but does not listen is never handed out (ADR-0161 Decision 2).
 func TestUnlistenedPoolWorkerIsNotHandedOut(t *testing.T) {
 	t.Parallel()
