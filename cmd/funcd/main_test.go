@@ -50,7 +50,7 @@ func TestProductionRequiresSubstrate(t *testing.T) {
 	_, err := funcd.New(
 		funcd.Production(),
 		funcd.WithStore(store.New(memory.New())),
-		funcd.WithRuntime(process.New()),
+		funcd.WithRuntime(process.New(nil)),
 		funcd.WithDevAuth("t", "default"),
 	)
 	require.Error(t, err, "Production() requires WithBlob + WithBus injected (ADR-0043)")
@@ -77,7 +77,7 @@ func TestDaemonSubstrate(t *testing.T) {
 			all := append([]funcd.Option{
 				funcd.Production(),
 				funcd.WithStore(store.New(memory.New())),
-				funcd.WithRuntime(process.New()),
+				funcd.WithRuntime(process.New(nil)),
 				funcd.WithDevAuth("t", "default"),
 			}, opts...)
 			p, err := funcd.New(all...)
@@ -113,7 +113,7 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	all := append([]funcd.Option{
 		funcd.Production(),
 		funcd.WithStore(store.New(memory.New())),
-		funcd.WithRuntime(process.New()),
+		funcd.WithRuntime(process.New(nil)),
 		funcd.WithDevAuth("t", "default"),
 	}, opts...)
 	p, err := funcd.New(all...)
@@ -135,7 +135,7 @@ func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
 			all := append([]funcd.Option{
 				funcd.Production(),
 				funcd.WithStore(store.New(memory.New())),
-				funcd.WithRuntime(process.New()),
+				funcd.WithRuntime(process.New(nil)),
 				funcd.WithDevAuth("t", "default"),
 			}, opts...)
 			p, err := funcd.New(all...)
@@ -503,7 +503,7 @@ func TestIssue153_FunclogConfigBlockLoadsAndMaps(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = closeExec() })
 
-			spy := &captureSpy{Runtime: process.New()}
+			spy := &captureSpy{Runtime: process.New(nil)}
 			p, err := funcd.New(append(opts, funcd.WithRuntime(spy))...)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })

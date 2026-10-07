@@ -3,6 +3,9 @@ package process_test
 import (
 	"context"
 	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -20,7 +23,7 @@ import (
 // write pipe as fd 3 (FUNCD_LOG_FD=3) and hands the read end to the hook; a child writing to fd 3 is
 // delivered to the hook. This is the host side of ADR-0081's Path B for the process driver.
 func TestSetLogCaptureDeliversFd3(t *testing.T) {
-	d := process.New()
+	d := process.New(nil)
 	lc, ok := d.(runtime.LogCapturer)
 	require.True(t, ok, "process driver implements runtime.LogCapturer")
 
@@ -58,7 +61,7 @@ func TestSetLogCaptureDeliversFd3(t *testing.T) {
 // scenario: no-capture-when-unset — without a hook, Start passes no fd 3 and writing to fd 3 fails
 // (the child has no inherited fd 3); the function still runs. We assert Start succeeds and no panic.
 func TestNoCaptureWhenHookUnset(t *testing.T) {
-	d := process.New()
+	d := process.New(nil)
 	spec := runtime.WorkerSpec{
 		Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "quiet", Replica: 0,
 		Command: []string{"sh", "-c", "exit 0"},
@@ -72,7 +75,7 @@ func TestNoCaptureWhenHookUnset(t *testing.T) {
 // A Start whose cmd.Start fails has already handed the run's output to the hook: the Pumps reading it must still end,
 // or each failed start leaks two readers (ADR-0168).
 func TestFailedStartLeavesNoPump(t *testing.T) {
-	d := process.New()
+	d := process.New(nil)
 	t.Cleanup(func() { _ = d.Close() })
 	var outs []*workerpipe.Output
 	pumps := make(chan struct{}, 2)
@@ -111,7 +114,7 @@ func TestFailedStartLeavesNoPump(t *testing.T) {
 // The terminal state waits for the run's last output, so Logs read as soon as the state is terminal ends with the line a
 // load error ends with (ADR-0168). A Drain the hook holds back past the worker's exit stands in for a slow one.
 func TestTerminalStateWaitsForTheLastOutput(t *testing.T) {
-	d := process.New()
+	d := process.New(nil)
 	t.Cleanup(func() { _ = d.Close() })
 	held, release := io.Pipe()
 	d.(runtime.OutputCapturer).SetOutputCapture(func(_ runtime.WorkerSpec, out *workerpipe.Output) {
@@ -145,4 +148,45 @@ func TestTerminalStateWaitsForTheLastOutput(t *testing.T) {
 	b, err := io.ReadAll(logs)
 	require.NoError(t, err)
 	require.True(t, strings.HasSuffix(string(b), "load error\n"), "Logs at the terminal state: %q", b)
+}
+
+// fileLogger logs to a file at path, so the driver's goroutines and the test that reads it share no memory.
+func fileLogger(t *testing.T, path string) *slog.Logger {
+	t.Helper()
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	return slog.New(slog.NewTextHandler(f, nil))
+}
+
+// Issue 830: the driver Open returns, the daemon's, warns about a run's dropped output through the logger it is given,
+// not through slog's default, which funcd never configures.
+func TestIssue830_OpenedDriverLogsThroughItsLogger(t *testing.T) {
+	dir := t.TempDir()
+	leaked, logs := filepath.Join(dir, "leaked.log"), filepath.Join(dir, "platform.log")
+	prev := slog.Default()
+	slog.SetDefault(fileLogger(t, leaked))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	d, err := process.Open(context.Background(), filepath.Join(dir, "state"), 0, fileLogger(t, logs))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+
+	// A stdout reader that never reads makes the run drop lines, which its output warns about once it closes.
+	d.(runtime.OutputCapturer).SetOutputCapture(func(_ runtime.WorkerSpec, out *workerpipe.Output) {
+		r := out.Reader(workerpipe.Stdout)
+		t.Cleanup(func() { _ = r.Close() })
+	})
+	ctx := context.Background()
+	inst, err := d.Create(ctx, runtime.WorkerSpec{
+		Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "flood",
+		Command: []string{"sh", "-c", "yes x | head -n 100000"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.Start(ctx, inst.ID))
+
+	const warn = "worker output dropped"
+	read := func(path string) string { b, _ := os.ReadFile(path); return string(b) }
+	require.Eventually(t, func() bool { return strings.Contains(read(logs)+read(leaked), warn) }, 10*time.Second, 10*time.Millisecond)
+	require.Contains(t, read(logs), warn)
+	require.NotContains(t, read(leaked), warn)
 }

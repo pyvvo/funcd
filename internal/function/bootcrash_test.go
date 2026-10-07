@@ -37,7 +37,7 @@ func (f *fakeRuntime) end(id runtime.InstanceID, ex runtime.Exit, age time.Durat
 // processHarness runs the reconciler on the process driver, every worker running shim as its shim.
 func processHarness(t *testing.T, shim string) (*shimHarness, *createCounter) {
 	t.Helper()
-	rt := &createCounter{Runtime: process.New()}
+	rt := &createCounter{Runtime: process.New(nil)}
 	t.Cleanup(func() { _ = rt.Close() })
 	return newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
 		d.Runtime = rt

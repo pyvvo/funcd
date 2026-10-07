@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"slices"
@@ -22,8 +23,9 @@ const (
 
 // MarkKVStoresOnce marks, once, each unmarked KVStore the previous materializer made for a Workflow, then
 // strips every Workflow-controlled Function's binding to a store it left unmarked and records completion.
-// funcd calls it at boot before the controllers, the collector and the control plane start (ADR-0178).
-func MarkKVStoresOnce(ctx context.Context, s store.Store) error {
+// funcd calls it at boot before the controllers, the collector and the control plane start (ADR-0178). It logs
+// through log (nil means slog.Default()).
+func MarkKVStoresOnce(ctx context.Context, s store.Store, log *slog.Logger) error {
 	_, err := s.Get(ctx, v1.KindConfigMap.GVK(), KVMigrationNamespace, KVMigrationRecord)
 	if err == nil {
 		return nil
@@ -31,7 +33,7 @@ func MarkKVStoresOnce(ctx context.Context, s store.Store) error {
 	if fault.KindOf(err) != fault.NotFound {
 		return fault.Wrapf(err, fault.KindOf(err), migrationOp, "read the completion record")
 	}
-	log := slog.Default().With("component", "workflow.kvstore-migration")
+	log = cmp.Or(log, slog.Default()).With("component", "workflow.kvstore-migration")
 	wfs, err := s.List(ctx, v1.KindWorkflow.GVK(), store.ListOptions{})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), migrationOp, "list workflows")

@@ -35,7 +35,7 @@ func Ready(t testing.TB, mat function.Materializer, image, digest string) gatewa
 	}
 
 	st := store.New(memory.New())
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)

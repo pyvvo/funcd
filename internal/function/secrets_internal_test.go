@@ -37,7 +37,7 @@ func newShimReconciler(t *testing.T, secretsResolver SecretResolver) *Reconciler
 	t.Helper()
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	r, err := NewReconciler(Deps{
 		Store: store.New(memory.New()), Runtime: rt, Scheduler: sch,

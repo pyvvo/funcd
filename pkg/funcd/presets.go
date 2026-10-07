@@ -10,7 +10,6 @@ import (
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
 	"github.com/pyvvo/funcd/internal/platform/observability"
-	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -47,7 +46,7 @@ func InMemory() Option {
 		c.store = store.New(memory.New())
 		c.blob = bucket
 		c.bus = messaging
-		c.runtime = process.New()
+		c.runtime, c.processRuntime = nil, true
 		c.gateway = embedded.New()
 		c.logger = logger.Root()
 		c.telemetry = telemetry

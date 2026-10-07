@@ -20,7 +20,7 @@ import (
 func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
 	const workers = 3
 	ctx := context.Background()
-	d := New()
+	d := New(nil)
 	dir := t.TempDir()
 	for i := range workers {
 		ready := filepath.Join(dir, fmt.Sprintf("ready-%d", i))

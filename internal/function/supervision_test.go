@@ -297,7 +297,7 @@ func (c *createCounter) Create(ctx context.Context, spec runtime.WorkerSpec) (ru
 // nothing while it still fails.
 func TestIssue73_StartFailureWritesFailedStatus(t *testing.T) {
 	t.Parallel()
-	rt := &createCounter{Runtime: process.New()}
+	rt := &createCounter{Runtime: process.New(nil)}
 	t.Cleanup(func() { _ = rt.Close() })
 	sf := &startFailer{Runtime: rt}
 	clk := clock.NewManual(time.Now())

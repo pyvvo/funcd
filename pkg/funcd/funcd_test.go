@@ -30,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network/egress"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/testkit/freeport"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -192,7 +193,7 @@ func TestShutdown_KeepsEgressFenceUntilRuntimeClosed(t *testing.T) {
 	probe := &removeProbe{}
 	rt := &fenceAtClose{fence: probe}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithEgressIsolation(probe, network.Policy{}), func(c *config) error {
-		rt.Runtime, c.runtime = c.runtime, rt
+		rt.Runtime, c.runtime = process.New(c.logger), rt
 		return nil
 	})
 	require.NoError(t, err)
@@ -211,7 +212,7 @@ func TestShutdown_KeepsEgressFenceWhenRuntimeCloseFails(t *testing.T) {
 	probe := &removeProbe{}
 	rt := &fenceAtClose{fence: probe, err: errors.New("worker still running")}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithEgressIsolation(probe, network.Policy{}), func(c *config) error {
-		rt.Runtime, c.runtime = c.runtime, rt
+		rt.Runtime, c.runtime = process.New(c.logger), rt
 		return nil
 	})
 	require.NoError(t, err)

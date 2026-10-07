@@ -187,7 +187,7 @@ func TestScenarioMigrationRecordGuarded(t *testing.T) {
 	_, err = st.Get(ctx, v1.KindConfigMap.GVK(), workflow.KVMigrationNamespace, workflow.KVMigrationRecord)
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "no record exists")
 
-	require.NoError(t, workflow.MarkKVStoresOnce(ctx, st))
+	require.NoError(t, workflow.MarkKVStoresOnce(ctx, st, nil))
 	before, err := st.Get(ctx, v1.KindConfigMap.GVK(), workflow.KVMigrationNamespace, workflow.KVMigrationRecord)
 	require.NoError(t, err)
 	item := base + "/" + string(workflow.KVMigrationRecord)
@@ -217,7 +217,7 @@ func TestIssue719_MigrationRecordGuardRunsAfterAuthorization(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	require.NoError(t, workflow.MarkKVStoresOnce(context.Background(), st))
+	require.NoError(t, workflow.MarkKVStoresOnce(context.Background(), st, nil))
 	body, err := json.Marshal(&v1.ConfigMap{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap},
 		ObjectMeta: v1.ObjectMeta{Name: workflow.KVMigrationRecord, Namespace: workflow.KVMigrationNamespace, ResourceGroup: "x"},

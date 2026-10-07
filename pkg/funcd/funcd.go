@@ -67,6 +67,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/route"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/secrets"
@@ -150,6 +151,7 @@ type config struct {
 	logCompactRetention  time.Duration
 	bus                  bus.Bus
 	runtime              runtime.Runtime
+	processRuntime       bool // InMemory: New builds a process runtime over the final logger, a later WithLogger's included
 	gateway              gateway.Gateway
 	logger               *slog.Logger
 	telemetry            *observability.Telemetry
@@ -310,7 +312,7 @@ func (c *config) validate() error {
 		return fault.Invalidf(op, "blob is required")
 	case c.bus == nil:
 		return fault.Invalidf(op, "bus is required")
-	case c.runtime == nil:
+	case c.runtime == nil && !c.processRuntime:
 		return fault.Invalidf(op, "runtime is required")
 	case c.gateway == nil:
 		return fault.Invalidf(op, "gateway is required")
@@ -422,6 +424,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 			return nil, fault.Wrapf(err, fault.Internal, "funcd.New", "build default logger")
 		}
 		cfg.logger = lg.Root()
+	}
+	if cfg.runtime == nil && cfg.processRuntime {
+		cfg.runtime = process.New(cfg.logger)
 	}
 
 	pc, err := providerCatalog()
@@ -1265,7 +1270,7 @@ func (p *Platform) Run(ctx context.Context) error {
 
 	// ADR-0178 Decision 3: mark the KVStores the previous materializer made, before any controller, the
 	// collector or the control plane reads them.
-	if err := workflow.MarkKVStoresOnce(ctx, p.cfg.store); err != nil && ctx.Err() == nil {
+	if err := workflow.MarkKVStoresOnce(ctx, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
 		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores"))
 	}
 

@@ -8,6 +8,7 @@
 package local
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -240,10 +241,11 @@ func listen(ctx context.Context, op, path string, h http.Handler, logger *slog.L
 }
 
 // Serve runs h on a Unix domain socket at path (bind-mounted into the sandbox) until ctx is done.
-// A stale socket file at path is removed first. The server's own errors are logged through slog.Default().
-func Serve(ctx context.Context, path string, h http.Handler) error {
+// A stale socket file at path is removed first. The server's own errors are logged through logger (nil means
+// slog.Default()).
+func Serve(ctx context.Context, path string, h http.Handler, logger *slog.Logger) error {
 	const op = "workernode.local.Serve"
-	ln, srv, err := listen(ctx, op, path, h, slog.Default())
+	ln, srv, err := listen(ctx, op, path, h, cmp.Or(logger, slog.Default()))
 	if err != nil {
 		return err
 	}

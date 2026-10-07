@@ -243,7 +243,7 @@ func TestScenarioStopGraceFromConfig(t *testing.T) {
 	cfg.Runtime.Process.StopGrace = "500ms"
 	grace, err := processStopGrace(cfg)
 	require.NoError(t, err)
-	rt, err := process.Open(ctx, filepath.Join(dir, "process"), grace)
+	rt, err := process.Open(ctx, filepath.Join(dir, "process"), grace, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = rt.Close() })
 	inst, err := rt.Create(ctx, fnruntime.WorkerSpec{

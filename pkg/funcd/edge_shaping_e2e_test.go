@@ -49,7 +49,7 @@ func TestScenarioE2EEdgeCorsPreflight(t *testing.T) {
 
 	p, err := funcd.New(
 		funcd.WithBlob(bucket), funcd.WithBus(messaging),
-		funcd.WithStore(store.New(memory.New())), funcd.WithRuntime(process.New()),
+		funcd.WithStore(store.New(memory.New())), funcd.WithRuntime(process.New(nil)),
 		funcd.WithGateway(embedded.New()), funcd.WithListenAddr("127.0.0.1:0"),
 		funcd.WithDataPlaneAddr("127.0.0.1:0"),
 		funcd.WithDevAuth(funcd.DevToken, "default"),

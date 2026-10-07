@@ -32,7 +32,7 @@ type harness struct {
 func newHarness(t *testing.T, opts ...func(*function.Deps)) *harness {
 	t.Helper()
 	st := store.New(memory.New())
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)

@@ -106,7 +106,7 @@ func heldLogPlatform(t *testing.T, lines int, opts ...Option) (*Platform, *close
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
 	bucket := &closeOrderBucket{Bucket: mem, onClose: ch.release}
-	rt := &captureRuntime{Runtime: process.New()}
+	rt := &captureRuntime{Runtime: process.New(nil)}
 
 	p, err := New(append([]Option{InMemory(), WithRuntime(rt), WithBlob(bucket), WithoutLogCompaction()}, opts...)...)
 	require.NoError(t, err)

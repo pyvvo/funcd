@@ -704,7 +704,7 @@ func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
 // nothing while it still fails.
 func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
 	t.Parallel()
-	rt := &createCounter{Runtime: process.New()}
+	rt := &createCounter{Runtime: process.New(nil)}
 	t.Cleanup(func() { _ = rt.Close() })
 	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
 		d.Runtime = rt

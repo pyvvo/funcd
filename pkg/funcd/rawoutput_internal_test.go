@@ -57,7 +57,7 @@ func TestEngineWorkerRawOutputIsNotStored(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
 	bucket := &logKeysBucket{Bucket: mem}
-	rt := &outputRuntime{captureRuntime: captureRuntime{Runtime: process.New()}}
+	rt := &outputRuntime{captureRuntime: captureRuntime{Runtime: process.New(nil)}}
 	p, err := New(InMemory(), WithRuntime(rt), WithBlob(bucket), WithoutLogCompaction())
 	require.NoError(t, err)
 	require.NotNil(t, rt.outputs, "the platform installs its raw-output hook on an OutputCapturer runtime")
