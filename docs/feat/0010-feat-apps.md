@@ -4,7 +4,7 @@
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Defines**: an **Apps epoch**: funcd's built-in operator for user apps. One `App` resource declares every part
-  of an application, and the platform installs, upgrades, restores, tests and removes those parts as one unit.
+  of an application, and the platform installs, upgrades, self-heals, tests and removes those parts as one unit.
   Positioned alongside the other additive epochs (FEAT-0003 to FEAT-0008); **not** part of v1.1 (FEAT-0001).
 
 ## Initial need
@@ -64,8 +64,8 @@ flowchart LR
 |---|---------|-----------|--------|--------|
 | F113 | **App resource: one unit for a whole app**: one namespaced `App` declares every part of an application in typed sections, the way a Workflow declares its step Functions and KV stores: Functions, Workflows, EventSources, Sensors, Routes, Sites, CatalogServices, KV stores, Buckets and ConfigMaps. Each part keeps its declared name and takes the App's namespace and resource group. An entry can instead name an existing object with `ref`, as a Workflow step names an existing Function; the App uses that object and never writes or deletes it. The platform checks the whole App when it is applied and refuses an inconsistent one before anything is stored: a repeated name, an invalid part, an unknown section, or two parts that would write one object. It then creates and updates the parts with platform rights, as a Workflow writes its steps, and each part's own reconciler still makes that part's children (a Workflow its step Functions, a Site its Route). The App reports one status: its phase and the state of every part. It is Ready when every part is Ready, and an idle, scaled-to-zero Function counts as ready. Deleting the App removes its whole tree, but data survives: a KV store or a Bucket is deleted only when its entry says so, and a kept store is used again through `ref`. An App installs into any namespace and resource group, and a Function of one App may use a store of another when a role allows it. **Why**: today the parts of an app are applied one file at a time, and nothing knows that they belong together or reports whether the app works. A person or an agent should read, check and change the whole app as one object. | [ADR-0094](../adr/0094-workflow-engine-core.md)/[ADR-0096](../adr/0096-engine-native-builtin-steps.md) (a Workflow declares and creates its parts) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (a Site declares its Bucket and Route) · [ADR-0063](../adr/0063-admission-framework.md) (admission) · [ADR-0121](../adr/0121-declarative-referential-integrity-admission.md) (referential integrity) · [ADR-0015](../adr/0015-controller-engine.md) (controller framework) · [ADR-0170](../adr/0170-owner-garbage-collector.md) (owner garbage collector) · [ADR-0178](../adr/0178-a-workflow-adopts-only-its-own-kv-stores.md) (a Workflow adopts only its own KV stores) · [ADR-0174](../adr/0174-never-booted-revision-is-unknown.md) (a never-booted revision is unknown) | — | idea |
 | F114 | **App revisions: safe upgrade, history and rollback**: the platform stamps every change to an App's spec as an immutable, read-only `AppRevision`, as it stamps a Function change as a Revision. The AppRevision also records how its rollout went. An upgrade writes only the parts whose spec changed, so the other parts keep running untouched, and each changed Function switches to its new revision by itself once that revision is ready. The new AppRevision becomes current only when every part is ready, and only then are the parts that the new version dropped removed. An upgrade that does not finish within the platform's timeout stops and is reported as failed; the previous revision stays current and keeps serving, and nothing rolls back by itself. The history lists every revision, and a rollback applies an earlier revision's spec as a new revision. The timeout and the number of revisions kept are platform settings. The App does not judge which component versions work together: the App builder, a person or an agent, pins compatible versions in the template that it publishes. **Why**: the decider requires immutable App revisions, as the platform keeps for Functions. An upgrade that fails halfway must not take the app down, and an operator must see what is deployed and be able to go back. | F113 · [ADR-0020](../adr/0020-function-contract-lifecycle.md)/[ADR-0172](../adr/0172-revision-integrity.md) (Function → Revision, the model) · [ADR-0143](../adr/0143-redeploy-by-revision-switch.md) (redeploy by revision switch) · [ADR-0190](../adr/0190-run-bound-to-its-revision.md) (a run stays bound to its revision) | — | idea |
-| F115 | **Drift correction and pause**: the App behaves as an operator. When someone edits or deletes one of its parts by hand, the App writes the declared spec back at once, writes one log line and records the last restore in its status, as a Site restores its Route. For deliberate manual work, such as a hot fix during an incident, an operator pauses the App. A paused App writes nothing (no apply, no removal and no restore) until it is resumed, and then the declared spec wins again. The App never restores a Secret or an object that it names with `ref`. **Why**: the App must remain the truth about what runs, or an upgrade and a rollback act on a state that nobody declared. A person still needs a safe way to step in. | F113 · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (a Site restores its Route) · [ADR-0094](../adr/0094-workflow-engine-core.md) (a paused WorkflowRun) | — | idea |
-| F116 | **App configuration and secret declarations**: an App defines its own configuration as ConfigMaps, and a change to that configuration rolls out like any other change: the Functions that use it get a new revision and switch, and a rollback brings the old values back. An App declares the Secrets it needs but never holds their values. Each declaration gives the Secret's name, the keys that the code reads and a description, so the App and its template document everything that an installer must provide. The values stay with the platform: an operator sets them, or an Identity's credential provides them. The App never creates, writes or restores a Secret. It refuses a part that uses a Secret it does not declare, and it holds a rollout, naming the missing Secret or key, until an operator provides it. **Why**: a Function reads its configuration only when a worker starts, so a changed ConfigMap reaches no running Function today. Secret values must never sit in an App, a template or git, but an installer, a person or an agent, still needs to know which secrets to provide. | F113 · F114 · [ADR-0057](../adr/0057-secret-injection-last-mile.md) (secret injection) · [ADR-0093](../adr/0093-function-configmap-consumption.md) (ConfigMap consumption) · [ADR-0135](../adr/0135-managed-identity.md) (an Identity's credential Secret) | — | idea |
+| F115 | **Drift correction and pause**: the App behaves as an operator. When someone edits or deletes one of its parts by hand, the App writes the declared spec back at once (self-heal), writes one log line and records the last self-heal in its status, as a Site rewrites its Route. For deliberate manual work, such as a hot fix during an incident, an operator pauses the App. A paused App writes nothing (no apply, no removal and no self-heal) until it is resumed, and then the declared spec wins again. The App never writes back a Secret or an object that it names with `ref`. **Why**: the App must remain the truth about what runs, or an upgrade and a rollback act on a state that nobody declared. A person still needs a safe way to step in. | F113 · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (a Site rewrites its Route) · [ADR-0094](../adr/0094-workflow-engine-core.md) (a paused WorkflowRun) | — | idea |
+| F116 | **App configuration and secret declarations**: an App defines its own configuration as ConfigMaps, and a change to that configuration rolls out like any other change: the Functions that use it get a new revision and switch, and a rollback brings the old values back. An App declares the Secrets it needs but never holds their values. Each declaration gives the Secret's name, the keys that the code reads and a description, so the App and its template document everything that an installer must provide. The values stay with the platform: an operator sets them, or an Identity's credential provides them. The App never creates, writes or rewrites a Secret. It refuses a part that uses a Secret it does not declare, and it holds a rollout, naming the missing Secret or key, until an operator provides it. **Why**: a Function reads its configuration only when a worker starts, so a changed ConfigMap reaches no running Function today. Secret values must never sit in an App, a template or git, but an installer, a person or an agent, still needs to know which secrets to provide. | F113 · F114 · [ADR-0057](../adr/0057-secret-injection-last-mile.md) (secret injection) · [ADR-0093](../adr/0093-function-configmap-consumption.md) (ConfigMap consumption) · [ADR-0135](../adr/0135-managed-identity.md) (an Identity's credential Secret) | — | idea |
 | F117 | **App lifecycle hooks**: an App names Functions of its own to call once before its parts change (pre-apply: a schema migration, a backup before an upgrade) and once after the new version is current (post-apply: a data migration, a cache warm-up), on install, upgrade and rollback. A hook is one ordinary Function call with the usual handler context (KV, blob, invoke and log, scoped by the hook Function's own bindings), recorded as an Invocation. No Workflow or other engine sits in the path, so a failed hook is debugged like any Function call. A failed pre-hook stops the upgrade before any other part changes. A failed post-hook keeps the new version, holds the removal of dropped parts and marks the App degraded. A retry command calls the failed hooks again and resumes the rollout, so a hook must be safe to repeat. **Why**: deploying a service often needs a migration beside it, and the decider wants that work inside the platform, run by the App. A hook must not depend on another component that can itself be degraded. | F114 · [ADR-0109](../adr/0109-sensor-event-action-binder.md) (the Sensor's invoker) · [ADR-0033](../adr/0033-data-plane-serving-and-trigger-wake.md) (wake on call) · [ADR-0090](../adr/0090-mandatory-single-io-schema.md) (the input contract) | — | idea |
 | F118 | **Built-in health for every part**: every part's health comes from the platform, with no code from the user. funcd checks liveness on every Function replica and restarts a replica that hangs. A Function's readiness also proves that its declared dependencies answer (its KV tables, blob prefixes, catalogs and link targets), without waking a scaled-to-zero target. The platform probes the KV engine and the blob storage, and every KV store and Bucket reflects the result. An App combines these states into its own. This changes the contract between funcd and the language shims, so new shim releases ship with it. **Why**: today funcd restarts a crashed worker but not a hung one, and it polls liveness only for pool workers. Ready proves that a handler loaded, not that the handler can reach what it needs. The decider wants health inherited from the shim, not written for each function. Every Function benefits, with or without an App. | [ADR-0142](../adr/0142-supervision-by-periodic-re-convergence.md) (supervision by periodic re-convergence) · [ADR-0174](../adr/0174-never-booted-revision-is-unknown.md) (a never-booted revision is unknown) · [ADR-0141](../adr/0141-repo-split-pyvvo-pinned-language-modules.md) (the shims as pinned language modules) | — | idea |
 | F119 | **Opt-in App tests**: an App can list checks that prove it still behaves as intended: an HTTP request through the edge with its expected status, a Function call with an input, or a WorkflowRun. A command runs them on demand, as `helm test` does. The results are recorded on the current AppRevision, nothing runs the checks by itself, and a failed check changes nothing else. **Why**: the platform proves that each part is accepted and loaded, never that the app does its job, because no reconciler calls a handler with test input. The decider wants that proof to be explicit and opt-in, and separate from health. | F113 · F114 | — | idea |
@@ -78,7 +78,7 @@ flowchart LR
 
 An App is funcd's built-in operator for user apps. It is one namespaced resource that declares every part of an
 application in typed sections, the way a Workflow declares its steps. funcd checks the parts when the App is
-applied, creates them, reports one status, stamps an immutable AppRevision for each change, restores parts that
+applied, creates them, reports one status, stamps an immutable AppRevision for each change, self-heals parts that
 someone edits by hand, runs the App's hooks, removes what a new version dropped, and rolls back by revision. A
 client-side template gives values and reuse across installs, and it can be pushed to an OCI registry like a Helm
 chart.
@@ -96,7 +96,7 @@ flowchart TB
     GR["Created by the parts themselves<br/>Function Revisions<br/>Workflow step Functions and KV stores<br/>the Site's Route · the catalog engine"]
     OUT["Outside the App<br/>Secret values, set by an operator<br/>or as an Identity's credential<br/>existing objects named with ref<br/>other ConfigMaps<br/>OCI registry: bundles, templates"]
     APP -->|"stamps on every change"| AR
-    APP -->|"creates, restores, prunes"| OWN
+    APP -->|"creates, self-heals, prunes"| OWN
     OWN -->|"each part makes its own"| GR
     OWN -.->|"reads by name"| OUT
     APP -.->|"declares Secrets, checks their keys"| OUT
@@ -117,7 +117,7 @@ flowchart TB
 | API server and admission ([ADR-0063](../adr/0063-admission-framework.md)) | decodes the App strictly and runs the App admission | exists; App admission new | F113 |
 | Store, the metastore | holds the App, its AppRevisions and its parts; bumps a generation only when a `spec` changes | exists | F113, F114 |
 | Controller framework ([ADR-0015](../adr/0015-controller-engine.md)) | runs the App reconciler and one watch per part kind | exists | F113, F115 |
-| App reconciler | a materializer one level up: stamp, requirements, hooks, apply, wait, switch, prune, restore, status | new | F113 to F117, F122 |
+| App reconciler | a materializer one level up: stamp, requirements, hooks, apply, wait, switch, prune, self-heal, status | new | F113 to F117, F122 |
 | Child reconcilers | Function (revisions, the [ADR-0143](../adr/0143-redeploy-by-revision-switch.md) switch), Workflow materializer, KV store, Site, Route, CatalogService, EventSource, Sensor: each provisions its own children and reports Ready | exist | F113 |
 | Invoker (activator, [ADR-0033](../adr/0033-data-plane-serving-and-trigger-wake.md)) | calls hook Functions once and wakes them when they are scaled to zero | exists | F117 |
 | Workers and shims | run the Functions; the handler context gives `kv`, `blob`, `invoke` and `log` | exist; health checks extended | F117, F118 |
@@ -274,7 +274,7 @@ status:
     - kind: Function
       name: todo-stats
       state: NotStarted
-  lastRestore:
+  lastSelfHeal:
     kind: Function
     name: todo-api
     at: "2026-10-07T12:03:10.000Z"
@@ -331,15 +331,15 @@ stateDiagram-v2
     Degraded --> Ready : the part recovers
     Degraded --> Prune : funcdctl app retry succeeds
     Failed --> PreHooks : funcdctl app retry
-    Ready --> Restore : a part was edited or deleted by hand
-    Restore --> Ready : declared spec written back
+    Ready --> SelfHeal : a part was edited or deleted by hand
+    SelfHeal --> Ready : declared spec written back
     Ready --> Stamp : spec changed or rollback
     Failed --> Stamp : spec changed
     Ready --> Paused : funcdctl app pause
     Paused --> Ready : funcdctl app resume
 ```
 
-A paused App writes nothing: no apply, no prune and no restore. The diagram shows the pause from `Ready` only, to
+A paused App writes nothing: no apply, no prune and no self-heal. The diagram shows the pause from `Ready` only, to
 keep it readable.
 
 ### App phases (F113, F114)
@@ -421,7 +421,7 @@ sequenceDiagram
     API->>ST: update, the owner reference is kept
     ST-->>AR: watch event, mapped to App todo
     AR->>ST: write the declared spec back
-    AR->>ST: status.lastRestore and one log line
+    AR->>ST: status.lastSelfHeal and one log line
 ```
 
 ## Rules at a glance (illustrative, non-normative)
@@ -464,10 +464,10 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
   (`app-upgrade`, `app-one-part-changes`); dropped parts go only after the switch (`app-prune-after-current`); a
   broken upgrade keeps the old revision serving (`app-failed-upgrade-keeps-serving`); a rollback is a new revision
   (`app-rollback`).
-- **F115**: a hand edit is reverted within seconds and recorded (`app-drift-restored`); a paused App keeps a hot fix
+- **F115**: a hand edit is reverted within seconds and recorded (`app-drift-self-healed`); a paused App keeps a hot fix
   (`app-paused-keeps-hotfix`).
 - **F116**: a declared Secret holds the rollout until it is complete (`app-secret-declared`); an undeclared one is
-  refused (`app-secret-undeclared-refused`); a config change rolls its Functions and a rollback restores it
+  refused (`app-secret-undeclared-refused`); a config change rolls its Functions and a rollback brings it back
   (`app-config-change-rolls`); no secret value appears in an App, an AppRevision, a status or a log.
 - **F117**: a pre-hook migration runs before any other part changes (`app-pre-hook-migrates`); a failed hook stops
   or degrades the rollout and a retry resumes it (`app-pre-hook-fails-then-retry`, `app-post-hook-fails`).
@@ -499,9 +499,10 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **Hooks through Workflows or goja scripts**, and hooks before a delete: a delete hook would need finalizers, which
   funcd does not use ([ADR-0170](../adr/0170-owner-garbage-collector.md)).
 - **Apps across namespaces**: the namespace stays the tenancy boundary.
-- **App backups**: a backup section and an App backup scope come with the disaster-recovery work on workload
-  backups, once its schedule kind exists.
-- **Cron schedules for timers**: their own decision, outside this epoch.
+- **App backups**: the `backupSchedules` section and the App scope are reserved for the DR workload-backup ADR,
+  which writes them once the `BackupSchedule` kind exists.
+- **Cron schedules for timers**: their own decision, outside this epoch. The DR plan's `BackupSchedule` needs cron for
+  its `schedule` field, so that ADR comes before the DR workload-backup ADR.
 - **Images from two registries in one template**: not yet; a board card tracks it.
 - **Template includes and nested Apps**: a building block copied into each App (a Helm subchart) and an App holding
   child Apps were not chosen for F122 (2026-10-07).
@@ -520,6 +521,7 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 | Finer RBAC: do parts get written with the last writer's rights or with a named Identity's? | the IAM work (FEAT-0008), when it adds per-kind roles |
 | Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) | F113, when an app needs them |
 | A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` | the F114 ADR |
-| A platform client in a hook's context (pause a Sensor, trigger a backup) | F117, with the disaster-recovery backup API |
+| A platform client in a hook's context: the DR plan's API lets a Function create a `Backup`, and a hook needs a client to call it | F117, with the DR backup API |
+| A hook point around a backup or a restore, for the DR plan's deferred app-level consistency | F117, with that DR work |
 | A hook before a delete | F117, later, if a case needs it |
 | Health settings: the liveness period, the dependency-check timeout, the probe interval | the F118 ADR, which also changes the shim contract |
