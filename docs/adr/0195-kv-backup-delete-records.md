@@ -1,6 +1,6 @@
 # ADR-0195: KV backup delete records — every delete reaches the backup chain
 
-- **Status**: Accepted (2026-10-07)
+- **Status**: Reviewing (2026-10-07)
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, backup, disaster-recovery, badger

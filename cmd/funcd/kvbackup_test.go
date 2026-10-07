@@ -120,6 +120,7 @@ func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
 	}{
 		{"kvstore.backup.interval", func(c *config.Config, v string) { c.Kvstore.Backup.Interval = v }},
 		{"kvstore.backup.rebaseline", func(c *config.Config, v string) { c.Kvstore.Backup.Rebaseline = v }},
+		{"kvstore.backup.rebaselineRetry", func(c *config.Config, v string) { c.Kvstore.Backup.RebaselineRetry = v }},
 		{"kvstore.cdc.retention", func(c *config.Config, v string) { c.Kvstore.Cdc.Retention = v }},
 	}
 	b := newMemBus(t)
