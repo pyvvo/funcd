@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — Decisions 1 and 5 wait while an open run pins the object; Scope 72-74: deleting a Workflow cancels its open runs.
+- **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the config value as any Go duration (148): it follows the duration grammar.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: controller, lifecycle, owner-references, garbage-collection, workflow, identity, site, function,
