@@ -113,8 +113,9 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 `minReplicas: 1`); `routes` `todo-api` (`/api`); `workflows` `todo-plan` (one step with an owned image, so Function
 `todo-plan-due`).
 
-- `scenario: app-install` — `todo` applied ⇒ within 30 s every part and `todo-plan-due` exist, each part with the
-  App's controller ref; Route `todo-api` answers; App `Ready=True`; AppRevision `todo-1` is current, phase `Ready`.
+- `scenario: app-install` — `todo` applied ⇒ within 30 s every part exists, each with the App's controller ref or
+  marker, and the Workflow `todo-plan` has made `todo-plan-due` itself, with its own controller ref; Route `todo-api`
+  answers; App `Ready=True`; AppRevision `todo-1` is current, phase `Ready`.
 - `scenario: app-admission-refuses` — two `functions` named `todo-api`, a KV table named `Bad_Name`, or a `secrets:`
   section ⇒ `funcdctl apply` fails naming the field (`spec.functions[1]`, `spec.kv[0].tables[0].name`, unknown field
   `secrets`); nothing is stored.
@@ -220,12 +221,18 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 4. **Stamp.** When the canonical spec differs from the latest AppRevision's, the platform stamps `<app>-<n+1>` and
    sets `status.latestRevision`. Numbers only grow; an unchanged re-apply stamps nothing; a rollback is a new
    revision.
-5. **Apply.** First every owned part is checked: one that exists without this App's controller ref (kind, name, UID)
-   stops the pass with `ChildNotOwned` before any write. Then each owned part is created, or its spec replaced when it
-   differs, with the App's controller ref; a write the store refuses is `ChildInvalid`. Part status is never written.
-   A `ref` object is never created, written, owned or deleted, as a Workflow treats a `function.ref` step
-   (`internal/workflow/reconcile_workflow.go:743-760`); until it exists the App waits with reason `RefNotFound`. The
-   App re-queues on any change of a part it controls or references (Decision 17).
+5. **Apply.** The App reconciler is a materializer one level up, as the Workflow's `Materializer` is for its steps
+   (`internal/workflow/reconcile_workflow.go:196-290`): it creates and updates only the objects its sections declare.
+   Their own children are provisioned by their own reconcilers: a Workflow in the App materializes its step
+   Functions and KV stores itself, a Site its Route, a CatalogService its engine. Nothing is provisioned twice, and
+   the GC follows the chain App → Workflow → step Function on delete. First every owned part is checked: a
+   Function, Route or other part that exists without this App's controller ref (kind, name, UID), or a KVStore or
+   Bucket without this App's marker (Decision 9), stops the pass with `ChildNotOwned` before any write, as
+   `checkKVStore` does (`:563-576`). Then each owned part is created, or its spec replaced when it differs, with the
+   App's references; a write the store refuses is `ChildInvalid`. Part status is never written. A `ref` object is
+   never created, written, owned or deleted, as a Workflow treats a `function.ref` step (`:743-760`); until it
+   exists the App waits with reason `RefNotFound`. The App re-queues on any change of a part it controls or
+   references (Decision 17).
 6. **Readiness and current.** A part is *Ready* when its kind has no status, or when its `Ready` condition is True
    (for the current generation where the kind records it). A Function counts by `RevisionReady` instead, because an
    idle Function reports `Ready=False` (`NoReplicas`) while its revision still serves; it is *NotStarted* when
@@ -241,14 +248,19 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    and the App phase is `Failed` with reason `ChildNotReady`, naming the first Pending part and its reason.
    `currentRevision` does not move; Functions keep serving their old revision (ADR-0143); kinds without revisions
    keep the new spec. A spec change starts a new attempt. No automatic rollback.
-9. **Prune and delete.** After `currentRevision` moves, the App deletes the parts it controls that the spec no longer
-   declares. A `kv` or `buckets` entry with `retain` keeps the store and its data on prune and on App delete, with
-   the ref, and a later spec declaring it takes it back; `delete` deletes it with its data, a Bucket's objects purged
-   first, as the GC reclaims a KVStore's keys. A store still bound by a Function the App does not control is not
-   deleted, and the App reports it (ADR-0080's binding rule). `gc.Pairs()` gains `(App, X)` for every section kind
-   plus `(App, AppRevision)`; a KVStore or Bucket is collectable only when marked `delete` (for a KVStore, the
-   ADR-0178 marker a Workflow writes). Nested owners (App → Workflow → step Function) follow by chain. A kept store
-   that outlives its App is used again through `ref`.
+9. **Prune and delete.** The App marks its stores as a Workflow marks its own (`buildKVStore`, `:505-530`): every
+   KVStore and Bucket it makes carries a non-controller marker naming this App's kind, name and UID, and
+   `deletion: delete` adds the App's controller ref. The App re-derives both references from the current
+   `deletion` on every write (`ensureKVStore`, `:578-605`), and writes only a store that carries its marker. After
+   `currentRevision` moves, the App deletes the parts it controls that the spec no longer declares. A `retain`
+   store has no controller, so neither the App nor the GC ever deletes it: it keeps its data and its marker, and a
+   later spec of the same App that declares it again takes it back. A `delete` store is deleted with its data on
+   prune and on App delete; the GC collects a KVStore only when its controller ref and its marker name the same
+   App (`kvStoreCollectable`, `internal/gc/gc.go:317-331`), and the same rule is new for a Bucket, whose objects
+   are purged first, as the GC reclaims a KVStore's keys. A store still bound by a Function the App does not
+   control is not deleted, and the App reports it (ADR-0080's binding rule). `gc.Pairs()` gains `(App, X)` for
+   every section kind plus `(App, AppRevision)`. A retained store that outlives its App belongs to no live App: a
+   new App uses it through `ref`, and an ownership transfer stays the explicit handover of ADR-0178.
 10. **History.** The App keeps the current revision plus the newest `app.revisionHistory` others and deletes older
     ones. `funcdctl app history <app>` lists number, version, phase and stamp time; `funcdctl app rollback <app> <n>`
     applies revision `n`'s spec.
@@ -553,7 +565,9 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] Every part carries the App's namespace, resource group and controller ref, and its declared name.
 - [ ] An unchanged re-apply stamps no AppRevision; AppRevision is read-only at the API and named `<app>-<n>`.
 - [ ] `currentRevision` moves only when no part is Pending; prune runs only after it moves.
-- [ ] A KVStore or Bucket is deleted only when its entry says `deletion: delete`.
+- [ ] A KVStore or Bucket is deleted only when its entry says `deletion: delete`; every store the App makes carries
+      its marker, and only a `delete` store carries its controller ref.
+- [ ] The App writes no child of its own parts (a Workflow's step Functions, a Site's Route).
 - [ ] A `ref` object is never created, written or deleted by the App.
 - [ ] An idle Function (phase `Idle`, `RevisionReady=True`) keeps the App Ready.
 - [ ] No health or dependency check wakes a scaled-to-zero Function.
