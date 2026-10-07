@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,13 +69,13 @@ func TestWaitBlocksThenContinues(t *testing.T) {
 }
 
 // scenario: wait-duration-from-expression — a wait duration sourced from a ${{ }} Select expression
-// (a number of seconds) computed against the run input.
+// (a duration string, ADR-0194) computed against the run input.
 func TestWaitDurationFromExpression(t *testing.T) {
 	f := newFake()
 	e := newTestEngine(t, f, Config{})
 	start := time.Now()
 	rec, err := e.Execute(context.Background(), "default", "run-we", "wf",
-		spec(waitStep("w", "${{ input.secs }}")), json.RawMessage(`{"secs":0.05}`), StartOptions{})
+		spec(waitStep("w", "${{ input.wait }}")), json.RawMessage(`{"wait":"50ms"}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -86,13 +87,38 @@ func TestWaitDurationFromExpression(t *testing.T) {
 	}
 }
 
+// scenario: wait-expression-yields-string (ADR-0194) — a wait expression must yield a duration string: "50ms"
+// waits about 50 ms and succeeds; a number of seconds, as ADR-0096 had it, fails the step naming the grammar.
+func TestWaitExpressionYieldsString(t *testing.T) {
+	e := newTestEngine(t, newFake(), Config{})
+	start := time.Now()
+	rec, err := e.Execute(context.Background(), "default", "run-ws", "wf",
+		spec(waitStep("w", "${{ input.wait }}")), json.RawMessage(`{"wait":"50ms"}`), StartOptions{})
+	if err != nil || rec.Phase != runSucceeded || phaseOf(rec, "w") != v1.StepSucceeded {
+		t.Fatalf("string wait: err=%v run=%s step=%s, want Succeeded", err, rec.Phase, phaseOf(rec, "w"))
+	}
+	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
+		t.Fatalf("the wait must block ~50ms, finished in %s", elapsed)
+	}
+	for _, in := range []string{`{"wait":0.05}`, `{"wait":true}`, `{"wait":"1.5s"}`} {
+		rec, err = e.Execute(context.Background(), "default", "run-wn", "wf",
+			spec(waitStep("w", "${{ input.wait }}")), json.RawMessage(in), StartOptions{})
+		if err == nil || rec.Phase != runFailed || phaseOf(rec, "w") != v1.StepFailed {
+			t.Fatalf("input %s: err=%v run=%s step=%s, want the step Failed", in, err, rec.Phase, phaseOf(rec, "w"))
+		}
+		if !strings.Contains(err.Error(), "units h, m, s and ms") {
+			t.Fatalf("input %s: error %q does not name the grammar", in, err)
+		}
+	}
+}
+
 // scenario: wait-counts-toward-run-timeout — a wait blocks on the run context, so a wait longer than
 // the run's timeout is interrupted at the deadline and the run fails (wait time counts).
 func TestWaitCountsTowardRunTimeout(t *testing.T) {
 	f := newFake()
 	e := newTestEngine(t, f, Config{})
 	sp := spec(waitStep("w", "5s"))
-	sp.Timeout = 60 * time.Millisecond
+	sp.Timeout = v1.Duration(60 * time.Millisecond)
 	start := time.Now()
 	rec, err := e.Execute(context.Background(), "default", "run-t", "wf", sp, json.RawMessage(`{}`), StartOptions{})
 	if err == nil {
@@ -228,7 +254,7 @@ func TestIssue495_BuiltinBindsSchemaDefault(t *testing.T) {
 	rec, err := e.Execute(context.Background(), "default", "run-495", "wf", spec(
 		step("a", ""),
 		passStep("p", "${{ {y: step.a.output.y} }}", "a"),
-		waitStep("w", `${{ step.a.output.y === "d" ? 0 : 60 }}`, "a"),
+		waitStep("w", `${{ step.a.output.y === "d" ? "0s" : "60s" }}`, "a"),
 	), json.RawMessage(`{}`), opts)
 	if err != nil || rec.Phase != runSucceeded {
 		t.Fatalf("run: err=%v phase=%s, want Succeeded", err, rec.Phase)

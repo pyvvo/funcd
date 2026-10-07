@@ -317,7 +317,7 @@ func TestScenarioFunctionDeleteCollectsRevisions(t *testing.T) {
 	}
 	e.apply(t, fn)
 	e.waitExists(t, v1.KindRevision, "fn-1")
-	fn.Spec.Scaling.IdleTimeout = time.Minute
+	fn.Spec.Scaling.IdleTimeout = v1.Duration(time.Minute)
 	e.apply(t, fn)
 	e.waitExists(t, v1.KindRevision, "fn-2")
 	e.del(t, v1.KindFunction, "fn")
@@ -431,7 +431,7 @@ func TestScenarioResourcegroupForceWithBackloggedSensor(t *testing.T) {
 	e.apply(t, &v1.EventSource{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindEventSource.GVK().APIVersion(), Kind: v1.KindEventSource},
 		ObjectMeta: v1.ObjectMeta{Name: "clock", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.EventSourceSpec{Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "beat", Interval: 100 * time.Millisecond}}}},
+		Spec:       v1.EventSourceSpec{Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "beat", Interval: v1.Duration(100 * time.Millisecond)}}}},
 	})
 	e.apply(t, &v1.Sensor{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSensor.GVK().APIVersion(), Kind: v1.KindSensor},

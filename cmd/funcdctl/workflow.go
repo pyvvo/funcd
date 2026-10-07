@@ -336,7 +336,7 @@ func (a *cli) renderRunDescribe(run *v1.WorkflowRun) error {
 			line += "   attempts: " + strconv.Itoa(s.Attempts)
 		}
 		if s.StartedAt > 0 && s.EndedAt >= s.StartedAt {
-			line += "   duration: " + time.Duration(s.EndedAt-s.StartedAt).String()
+			line += "   duration: " + v1.Duration(time.Duration(s.EndedAt-s.StartedAt).Round(time.Millisecond)).String()
 		}
 		if s.Error != "" {
 			line += "   error: " + termSafe(s.Error)

@@ -110,7 +110,7 @@ func TestIssue48_WarmInvokeCountsAsActivity(t *testing.T) {
 	require.True(t, ok)
 	fn := obj.(*v1.Function)
 	fn.Name, fn.Namespace, fn.ResourceGroup = "busy", "default", "rg1"
-	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: time.Minute}
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Minute)}
 	_, err := st.Create(ctx, fn)
 	require.NoError(t, err)
 	ep := readyEndpoints{upstream: srv.URL}

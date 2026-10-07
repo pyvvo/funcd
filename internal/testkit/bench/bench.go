@@ -234,7 +234,7 @@ func deploy(ctx context.Context, c *sdk.Client, ns, name, ref string, minReplica
 	fn.Spec.Runtime, fn.Spec.Handler = "nodejs22", "handle"
 	fn.Spec.Image = ref
 	fn.Spec.Replicas = replicas
-	fn.Spec.Scaling = v1.Scaling{MinReplicas: minReplicas, IdleTimeout: idle}
+	fn.Spec.Scaling = v1.Scaling{MinReplicas: minReplicas, IdleTimeout: v1.Duration(idle)}
 	_, err := c.Apply(ctx, fn)
 	return err
 }

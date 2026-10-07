@@ -372,7 +372,7 @@ spec:
   timer:
     events:
       - name: tick
-        interval: 5000000000
+        interval: 5s
 `)
 	obj, err := sdk.DecodeManifest(valid)
 	require.NoError(t, err)
@@ -398,7 +398,7 @@ spec:
   timer:
     events:
       - name: tick
-        interval: 5000000000
+        interval: 5s
 `,
 		},
 		"nested unknown timer key": {
@@ -413,7 +413,7 @@ spec:
   timer:
     events:
       - name: tick
-        interval: 5000000000
+        interval: 5s
         cron: "*/5 * * * *"
 `,
 		},

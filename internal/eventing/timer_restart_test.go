@@ -36,7 +36,7 @@ func newTimerHarness(t *testing.T) *timerHarness {
 	require.True(t, ok)
 	es := obj.(*v1.EventSource)
 	es.Name, es.Namespace, es.ResourceGroup = "clock", "team-a", "rg1"
-	es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "daily", Interval: 24 * time.Hour}}}
+	es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "daily", Interval: v1.Duration(24 * time.Hour)}}}
 	_, err := st.Create(t.Context(), es)
 	require.NoError(t, err)
 	got, err := st.Get(t.Context(), v1.KindEventSource.GVK(), "team-a", "clock")
@@ -112,7 +112,7 @@ func TestScenarioMissedFireSkipped(t *testing.T) {
 func TestScenarioAddedEventOnCreationGrid(t *testing.T) {
 	h := newTimerHarness(t)
 	h.live(0, 73*time.Hour, specEdit{at: 30 * time.Hour, apply: func(ts *v1.TimerSource) {
-		ts.Events = append(ts.Events, v1.TimerEvent{Name: "other", Interval: 24 * time.Hour})
+		ts.Events = append(ts.Events, v1.TimerEvent{Name: "other", Interval: v1.Duration(24 * time.Hour)})
 	}})
 	h.requireFires("other", 48*time.Hour, 72*time.Hour)
 	h.requireFires("daily", 24*time.Hour, 48*time.Hour, 72*time.Hour)
@@ -121,7 +121,7 @@ func TestScenarioAddedEventOnCreationGrid(t *testing.T) {
 func TestScenarioIntervalChangeOnCreationGrid(t *testing.T) {
 	h := newTimerHarness(t)
 	h.live(0, 49*time.Hour, specEdit{at: 25 * time.Hour, apply: func(ts *v1.TimerSource) {
-		ts.Events[0].Interval = 6 * time.Hour
+		ts.Events[0].Interval = v1.Duration(6 * time.Hour)
 	}})
 	h.requireFires("daily", 24*time.Hour, 30*time.Hour, 36*time.Hour, 42*time.Hour, 48*time.Hour)
 }

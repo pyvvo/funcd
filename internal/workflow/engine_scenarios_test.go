@@ -29,7 +29,7 @@ func (blockingDispatcher) Dispatch(ctx context.Context, _ DispatchRequest) (json
 func TestRunTimeoutFails(t *testing.T) {
 	e := newTestEngine(t, blockingDispatcher{}, Config{})
 	spc := spec(step("slow", ""))
-	spc.Timeout = 20 * time.Millisecond
+	spc.Timeout = v1.Duration(20 * time.Millisecond)
 	rec, err := e.Execute(context.Background(), "default", "run-to", "wf", spc, json.RawMessage(`{}`), StartOptions{})
 	if err == nil || !strings.Contains(err.Error(), "RunTimedOut") {
 		t.Fatalf("want a RunTimedOut error, got %v", err)
@@ -151,7 +151,7 @@ func TestIssue118_OnFailureFiresOnRunTimeoutAndInputMismatch(t *testing.T) {
 	e := newTestEngine(t, liveCtxDispatcher{fakeDispatcher: f, block: "slow"}, Config{})
 	spc := spec(step("slow", ""), step("notify", ""))
 	spc.OnFailure = "notify"
-	spc.Timeout = 20 * time.Millisecond
+	spc.Timeout = v1.Duration(20 * time.Millisecond)
 	rec, err := e.Execute(context.Background(), "default", "run-to", "wf", spc, json.RawMessage(`{}`), StartOptions{})
 	if err == nil || !strings.Contains(err.Error(), "RunTimedOut") || rec.Phase != runFailed {
 		t.Fatalf("want a RunTimedOut Failed run, got %v (err %v)", rec, err)
@@ -214,13 +214,13 @@ func TestIssue28_OnFailureHandlerHonorsStepTimeout(t *testing.T) {
 	d := &handlerDeadline{}
 	e := newTestEngine(t, d, Config{})
 	notify := step("notify", "")
-	notify.Function.Timeout = 2 * time.Second
+	notify.Function.Timeout = v1.Duration(2 * time.Second)
 	spc := spec(step("boom", ""), notify)
 	spc.OnFailure = "notify"
 	if _, err := e.Execute(context.Background(), "default", "run-ht", "wf", spc, json.RawMessage(`{}`), StartOptions{}); err == nil {
 		t.Fatal("run should have failed")
 	}
-	if d.left <= 0 || d.left > notify.Function.Timeout {
+	if d.left <= 0 || d.left > time.Duration(notify.Function.Timeout) {
 		t.Fatalf("handler dispatch deadline in %v, want within its 2s step timeout", d.left)
 	}
 }

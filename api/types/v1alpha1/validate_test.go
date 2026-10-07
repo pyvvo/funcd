@@ -84,7 +84,7 @@ func TestServiceValidateMatrix(t *testing.T) {
 // schema edge, additionalProperties:false → 422 — not Validate's concern.)
 func TestEventSourceValidateMatrix(t *testing.T) {
 	tev := func(name string, iv time.Duration) TimerEvent {
-		return TimerEvent{Name: ObjectName(name), Interval: iv}
+		return TimerEvent{Name: ObjectName(name), Interval: Duration(iv)}
 	}
 	timer := func(events ...TimerEvent) EventSourceSpec {
 		return EventSourceSpec{Timer: &TimerSource{Events: events}}
@@ -130,7 +130,7 @@ func TestScenarioEventSourceValidate(t *testing.T) {
 	}{
 		{"one blob event", blob("raw", ev("arrived", "drop/", BlobCreated)), true},
 		{"blob event empty on (defaulted later, not rejected)", blob("raw", ev("arrived", "drop/")), true},
-		{"blob and timer both set", EventSourceSpec{Timer: &TimerSource{Events: []TimerEvent{{Name: "t", Interval: time.Minute}}}, Blob: &BlobSource{Bucket: "raw", Events: []BlobEvent{ev("a", "")}}}, false},
+		{"blob and timer both set", EventSourceSpec{Timer: &TimerSource{Events: []TimerEvent{{Name: "t", Interval: Duration(time.Minute)}}}, Blob: &BlobSource{Bucket: "raw", Events: []BlobEvent{ev("a", "")}}}, false},
 		{"blob empty bucket", blob("", ev("arrived", "drop/")), false},
 		{"blob non-DNS-1123 bucket", blob("Raw_Bucket", ev("arrived", "drop/")), false},
 		{"blob no events", blob("raw"), false},

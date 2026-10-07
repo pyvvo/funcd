@@ -9,7 +9,8 @@ import (
 )
 
 // scenario: describe-surfaces-troubleshooting — describe renders a readable per-step line
-// (phase · attempts · duration · error), the run trace-id, and the full-logs pointer (ADR-0100).
+// (phase · attempts · duration · error), the run trace-id, and the full-logs pointer (ADR-0100); a step duration is
+// rounded to 1 ms and printed in the normalized form (ADR-0194).
 func TestRenderRunDescribe(t *testing.T) {
 	var buf bytes.Buffer
 	a := &cli{out: &buf}
@@ -20,6 +21,7 @@ func TestRenderRunDescribe(t *testing.T) {
 	run.Status.Steps = []v1.RunStepStatus{
 		{Name: "a", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 1_000_000_000, EndedAt: 1_500_000_000},
 		{Name: "b", Phase: v1.StepFailed, Attempts: 3, StartedAt: 2_000_000_000, EndedAt: 2_250_000_000, Error: "scorer returned 503"},
+		{Name: "c", Phase: v1.StepSucceeded, Attempts: 1, StartedAt: 3_000_000_000, EndedAt: 4_500_400_000},
 	}
 	if err := a.renderRunDescribe(run); err != nil {
 		t.Fatalf("renderRunDescribe: %v", err)
@@ -29,6 +31,7 @@ func TestRenderRunDescribe(t *testing.T) {
 		"RUN run-1", "phase: Failed",
 		"a", "phase: Succeeded", "attempts: 1", "duration: 500ms",
 		"b", "phase: Failed", "attempts: 3", "duration: 250ms", "error: scorer returned 503",
+		"duration: 1s500ms",
 		"trace: 0123456789abcdef0123456789abcdef",
 		"full logs: funcdctl workflow logs run-1",
 	} {

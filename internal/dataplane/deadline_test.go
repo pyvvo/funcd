@@ -55,7 +55,7 @@ func seedTimed(t *testing.T, st store.Store, name string, timeout time.Duration)
 	fn.TypeMeta = v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}
 	fn.Name, fn.Namespace, fn.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file:///tmp/x"
-	fn.Spec.Timeout = timeout
+	fn.Spec.Timeout = v1.Duration(timeout)
 	_, err := st.Create(context.Background(), fn)
 	require.NoError(t, err)
 }

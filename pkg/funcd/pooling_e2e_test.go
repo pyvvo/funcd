@@ -180,8 +180,8 @@ func TestScenarioPoolSameWorkerCoLocates(t *testing.T) {
 // worker), and the first data-plane request wakes the whole pool and is served.
 func TestScenarioPoolScalesToZero(t *testing.T) {
 	h := newPoolHarness(t)
-	h.applyPooled(t, "cold1", "batch", v1.Scaling{MinReplicas: 0, IdleTimeout: time.Hour}, 0)
-	h.applyPooled(t, "cold2", "batch", v1.Scaling{MinReplicas: 0, IdleTimeout: time.Hour}, 0)
+	h.applyPooled(t, "cold1", "batch", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Hour)}, 0)
+	h.applyPooled(t, "cold2", "batch", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Hour)}, 0)
 
 	require.Eventually(t, func() bool {
 		p1, p2 := h.phase(t, "cold1"), h.phase(t, "cold2")
@@ -202,7 +202,7 @@ func TestScenarioPoolScalesToZero(t *testing.T) {
 func TestScenarioPoolWakeKeepsSiblings(t *testing.T) {
 	h := newPoolHarness(t)
 	h.applyPooled(t, "warm", "mix", v1.Scaling{MinReplicas: 1}, 1)
-	h.applyPooled(t, "sleepy", "mix", v1.Scaling{MinReplicas: 0, IdleTimeout: time.Hour}, 0)
+	h.applyPooled(t, "sleepy", "mix", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(time.Hour)}, 0)
 
 	require.Eventually(t, func() bool { return h.phase(t, "warm") == v1.PhaseReady },
 		20*time.Second, 100*time.Millisecond, "the warm member keeps the pool up")

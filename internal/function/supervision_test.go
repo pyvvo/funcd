@@ -587,7 +587,7 @@ func TestScenarioFixedSpecRecoversScaleToZeroFunction(t *testing.T) {
 	h := newShimHarness(t, http.StatusOK, true, withPeriod)
 	h.create(t, "fixme", func(fn *v1.Function) {
 		fn.Spec.Replicas = 0
-		fn.Spec.Scaling.IdleTimeout = idle
+		fn.Spec.Scaling.IdleTimeout = v1.Duration(idle)
 	})
 	h.reconcile(t, "fixme")
 	h.setPhase(t, "fixme", v1.PhaseDeploying)
@@ -620,7 +620,7 @@ func TestScenarioIdleReclaimSkipsFailed(t *testing.T) {
 	t.Parallel()
 	const idle = time.Minute
 	h := newShimHarness(t, http.StatusOK, true, withPeriod)
-	h.create(t, "broken", func(fn *v1.Function) { fn.Spec.Scaling.IdleTimeout = idle })
+	h.create(t, "broken", func(fn *v1.Function) { fn.Spec.Scaling.IdleTimeout = v1.Duration(idle) })
 	h.reconcile(t, "broken")
 	require.Equal(t, v1.PhaseFailed, h.getFn(t, "broken").Status.Phase)
 
@@ -649,7 +649,7 @@ func TestScenarioStartFailureRetriedWithGrowingWait(t *testing.T) {
 	})
 	h.create(t, "stuck", func(fn *v1.Function) {
 		fn.Spec.Replicas = 0
-		fn.Spec.Scaling.IdleTimeout = idle
+		fn.Spec.Scaling.IdleTimeout = v1.Duration(idle)
 	})
 	h.reconcile(t, "stuck")
 	h.setPhase(t, "stuck", v1.PhaseDeploying)
@@ -728,7 +728,7 @@ func (h *shimHarness) createGated(t *testing.T, name string, replicas int) {
 	t.Helper()
 	h.create(t, name, func(fn *v1.Function) {
 		fn.Spec.Replicas = replicas
-		fn.Spec.Scaling.IdleTimeout = gatedIdle
+		fn.Spec.Scaling.IdleTimeout = v1.Duration(gatedIdle)
 		bindMissing(fn)
 	})
 	h.reconcile(t, name)
@@ -850,7 +850,7 @@ func TestScenarioSleepingFunctionGateFires(t *testing.T) {
 	h := newShimHarness(t, http.StatusOK, false, withPeriod)
 	h.create(t, "sleepy", func(fn *v1.Function) {
 		fn.Spec.Replicas = 0
-		fn.Spec.Scaling.IdleTimeout = gatedIdle
+		fn.Spec.Scaling.IdleTimeout = v1.Duration(gatedIdle)
 	})
 	h.reconcile(t, "sleepy")
 	require.Equal(t, v1.PhaseIdle, h.getFn(t, "sleepy").Status.Phase)

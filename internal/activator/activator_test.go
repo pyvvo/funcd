@@ -453,7 +453,7 @@ func TestScenarioIdleReclaim(t *testing.T) {
 	t.Run("stale-is-reclaimed", func(t *testing.T) {
 		t.Parallel()
 		st := store.New(memory.New())
-		createFunction(t, st, "stale", v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		createFunction(t, st, "stale", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)})
 		clk := &stepClock{t: base}
 		sc := &fakeScaler{}
 		a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{}, Scaler: sc, Clock: clk})
@@ -472,7 +472,7 @@ func TestScenarioIdleReclaim(t *testing.T) {
 		backend := echoUpstream("ok")
 		defer backend.Close()
 		st := store.New(memory.New())
-		createFunction(t, st, "active", v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		createFunction(t, st, "active", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)})
 		clk := &stepClock{t: base}
 		sc := &fakeScaler{}
 		ep := &fakeEndpoints{upstream: backend.URL, ready: true}
@@ -488,7 +488,7 @@ func TestScenarioIdleReclaim(t *testing.T) {
 	t.Run("min-replicas-pinned-is-kept", func(t *testing.T) {
 		t.Parallel()
 		st := store.New(memory.New())
-		createFunction(t, st, "pinned", v1.Scaling{MinReplicas: 1, IdleTimeout: time.Millisecond})
+		createFunction(t, st, "pinned", v1.Scaling{MinReplicas: 1, IdleTimeout: v1.Duration(time.Millisecond)})
 		clk := &stepClock{t: base}
 		sc := &fakeScaler{}
 		a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{}, Scaler: sc, Clock: clk})
@@ -507,7 +507,7 @@ func TestIssue49_ReclaimSkipsWakeInProgress(t *testing.T) {
 	ctx := context.Background()
 	const idle = time.Hour
 	st := store.New(memory.New())
-	createFunction(t, st, "slowboot", v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+	createFunction(t, st, "slowboot", v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)})
 	clk := &stepClock{t: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)}
 	ep := &fakeEndpoints{}
 	woke := make(chan struct{})
@@ -579,7 +579,7 @@ func TestReclaimIdleSkipsUnreclaimablePhases(t *testing.T) {
 		"failed": v1.PhaseFailed, "deploying": v1.PhaseDeploying, "terminating": v1.PhaseTerminating,
 		"idle": v1.PhaseIdle, "ready": v1.PhaseReady,
 	} {
-		createFunction(t, st, name, v1.Scaling{IdleTimeout: idle})
+		createFunction(t, st, name, v1.Scaling{IdleTimeout: v1.Duration(idle)})
 		obj, err := st.Get(ctx, v1.KindFunction.GVK(), "default", v1.ObjectName(name))
 		require.NoError(t, err)
 		fn := obj.(*v1.Function)
@@ -660,7 +660,7 @@ func TestIssue47_ReclaimSparesInFlightCall(t *testing.T) {
 		t.Cleanup(backend.Close)
 		t.Cleanup(release)
 		st := store.New(memory.New())
-		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)})
 		clk := &stepClock{t: base}
 		sc := &fakeScaler{}
 		calls := activator.NewCallTracker(clk)
@@ -697,7 +697,7 @@ func TestIssue47_ReclaimSparesInFlightCall(t *testing.T) {
 		woken := echoUpstream("woken")
 		t.Cleanup(woken.Close)
 		st := store.New(memory.New())
-		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: idle})
+		createFunction(t, st, string(fn.Name), v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)})
 		clk := &stepClock{t: base}
 		ep := &fakeEndpoints{upstream: reclaimed.URL, ready: true}
 		got := make(chan *httptest.ResponseRecorder, 1)
@@ -739,7 +739,7 @@ func TestIssue146_LastActivityFollowsFunctionIdentity(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	const idle = 10 * time.Minute
-	scaling := v1.Scaling{MinReplicas: 0, IdleTimeout: idle}
+	scaling := v1.Scaling{MinReplicas: 0, IdleTimeout: v1.Duration(idle)}
 
 	for _, observed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("recreated-gets-full-grace-window/observed=%t", observed), func(t *testing.T) {

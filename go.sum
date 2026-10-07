@@ -727,8 +727,8 @@ github.com/prometheus/procfs v0.19.2 h1:zUMhqEW66Ex7OXIiDkll3tl9a1ZdilUOd/F6ZXw4
 github.com/prometheus/procfs v0.19.2/go.mod h1:M0aotyiemPhBCM0z5w87kL22CxfcH05ZpYlu+b4J7mw=
 github.com/pyvvo/funcd-python v0.5.1 h1:hNws+VJd2yskuEsI/Ub8OKtGCIFJfb3W1Ig8zj4nl1M=
 github.com/pyvvo/funcd-python v0.5.1/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
-github.com/pyvvo/funcd-typescript v0.8.1 h1:bdRe+4oWv8PI2wo2lW/PvQZgTgYF2qOlDI7+Qzk/ClM=
-github.com/pyvvo/funcd-typescript v0.8.1/go.mod h1:DGPLN+6I5a0GD2isOoo/c5EIxkajwtqV6lJlT7+1WX8=
+github.com/pyvvo/funcd-typescript v0.8.2 h1:oVs+iNoBuFa2NEURSp+fcHB0gYVG/3KJas1RYWspmIs=
+github.com/pyvvo/funcd-typescript v0.8.2/go.mod h1:DGPLN+6I5a0GD2isOoo/c5EIxkajwtqV6lJlT7+1WX8=
 github.com/quasilyte/go-ruleguard v0.4.5 h1:AGY0tiOT5hJX9BTdx/xBdoCubQUAE2grkqY2lSwvZcA=
 github.com/quasilyte/go-ruleguard v0.4.5/go.mod h1:Vl05zJ538vcEEwu16V/Hdu7IYZWyKSwIy4c88Ro1kRE=
 github.com/quasilyte/go-ruleguard/dsl v0.3.23 h1:lxjt5B6ZCiBeeNO8/oQsegE6fLeCzuMRoVWSkXC4uvY=

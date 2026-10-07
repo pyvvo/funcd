@@ -40,7 +40,7 @@ func (c *capturePublisher) count() int { c.mu.Lock(); defer c.mu.Unlock(); retur
 func newStore() store.Store { return store.New(memory.New()) }
 
 func timerEvent(name string, interval time.Duration) v1.TimerEvent {
-	return v1.TimerEvent{Name: v1.ObjectName(name), Interval: interval}
+	return v1.TimerEvent{Name: v1.ObjectName(name), Interval: v1.Duration(interval)}
 }
 
 func createTimerSource(t *testing.T, st store.Store, name string, events ...v1.TimerEvent) {

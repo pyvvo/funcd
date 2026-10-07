@@ -28,7 +28,7 @@ export const handle = async () => {
   return {};
 };`, first, first, e.gate))
 	return []v1.WorkflowStep{
-		{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "aonce"), Timeout: time.Minute}},
+		{Name: "a", Function: &v1.FunctionStep{Image: pushStepImage(t, e.layout, e.src, "aonce"), Timeout: v1.Duration(time.Minute)}},
 		{Name: "b", Function: &v1.FunctionStep{Image: bImg}, DependsOn: []v1.ObjectName{"a"}},
 	}
 }

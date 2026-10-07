@@ -233,7 +233,7 @@ func (h *shimRig) deploy(t *testing.T, name string, f shimFn) {
 	fn.Spec.Image, fn.Spec.ImageDigest = ref, digest
 	fn.Spec.Replicas, fn.Spec.Scaling.MinReplicas = 1, 1
 	fn.Spec.Pooling.Worker = f.worker
-	fn.Spec.Timeout = f.timeout
+	fn.Spec.Timeout = v1.Duration(f.timeout)
 	fn.Spec.Links = f.links
 	if f.change != nil {
 		f.change(fn)

@@ -477,7 +477,7 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			// validation and serves without the author restating it on every step.
 			Handler:  materializedHandler,
 			Image:    st.Function.Image,
-			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: stepIdleTimeout},
+			Scaling:  v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: v1.Duration(stepIdleTimeout)},
 			Blob:     st.Function.Blob,
 			Secrets:  st.Function.Secrets,
 			Config:   st.Function.Config,

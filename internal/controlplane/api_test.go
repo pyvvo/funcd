@@ -314,11 +314,14 @@ func TestScenarioControlPlaneBodyOverCap(t *testing.T) {
 	}
 }
 
-// scenario: spec-timeout-bounds — spec.timeout 2 h or −1 s ⇒ 422 at apply with nothing stored; 1 h accepted (ADR-0151).
-func TestScenarioSpecTimeoutBounds(t *testing.T) {
+// The huma edge answers a malformed duration with 422 before any handler runs (ADR-0194, replacing ADR-0151's
+// schema bound): a JSON number, a string outside the grammar or a negative value is refused at body.spec.timeout with
+// nothing stored; a duration string is stored and reads back in the normalized form. The bounds are Validate's
+// (TestScenarioBoundsEnforcedAtCreate in cmd/funcdctl).
+func TestDurationEdgeRefusesMalformed(t *testing.T) {
 	ta := humatest.Wrap(t, controlplane.NewAPI(chi.NewRouter(), controlplane.NewStubHandlers()))
 	const path = "/apis/funcd.io/v1alpha1/namespaces/my-ns/functions"
-	fn := func(name string, timeout int64) map[string]interface{} {
+	fn := func(name string, timeout interface{}) map[string]interface{} {
 		return map[string]interface{}{
 			"apiVersion": "funcd.io/v1alpha1",
 			"kind":       "Function",
@@ -326,20 +329,21 @@ func TestScenarioSpecTimeoutBounds(t *testing.T) {
 			"spec":       map[string]interface{}{"runtime": "nodejs22", "timeout": timeout},
 		}
 	}
-	for name, timeout := range map[string]int64{"two-hours": int64(2 * time.Hour), "negative": -int64(time.Second)} {
-		if resp := ta.Post(path, "Content-Type: application/json", fn(name, timeout)); resp.Code != http.StatusUnprocessableEntity || !strings.Contains(resp.Body.String(), "timeout") {
-			t.Fatalf("spec.timeout %d: want a 422 naming timeout, got %d: %s", timeout, resp.Code, resp.Body.String())
+	for name, timeout := range map[string]interface{}{"number": 30, "unitless": "30", "negative": "-1s", "fraction": "1.5s", "micro": "500us"} {
+		resp := ta.Post(path, "Content-Type: application/json", fn(name, timeout))
+		if resp.Code != http.StatusUnprocessableEntity || !strings.Contains(resp.Body.String(), "body.spec.timeout") {
+			t.Fatalf("spec.timeout %v: want a 422 at body.spec.timeout, got %d: %s", timeout, resp.Code, resp.Body.String())
 		}
 		if resp := ta.Get(path+"/"+name, "Accept: application/json"); resp.Code != http.StatusNotFound {
-			t.Fatalf("spec.timeout %d: nothing stored, got %d", timeout, resp.Code)
+			t.Fatalf("spec.timeout %v: nothing stored, got %d", timeout, resp.Code)
 		}
 	}
-	if resp := ta.Post(path, "Content-Type: application/json", fn("one-hour", int64(v1.MaxInvokeTimeout))); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
-		t.Fatalf("spec.timeout 1h: want stored, got %d: %s", resp.Code, resp.Body.String())
+	if resp := ta.Post(path, "Content-Type: application/json", fn("one-hour", "3600s")); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
+		t.Fatalf("spec.timeout 3600s: want stored, got %d: %s", resp.Code, resp.Body.String())
 	}
 	resp := ta.Get(path+"/one-hour", "Accept: application/json")
 	var got v1.Function
-	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil || got.Spec.Timeout != time.Hour {
-		t.Fatalf("stored spec.timeout = %s (%v)", got.Spec.Timeout, err)
+	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil || got.Spec.Timeout != v1.Duration(time.Hour) || !strings.Contains(resp.Body.String(), `"timeout":"1h"`) {
+		t.Fatalf("stored spec.timeout = %s (%v): %s", got.Spec.Timeout, err, resp.Body.String())
 	}
 }

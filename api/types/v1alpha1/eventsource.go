@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	"time"
+	"fmt"
 
 	"github.com/pyvvo/funcd/api/fault"
 )
@@ -36,10 +36,9 @@ type TimerSource struct {
 // publishes a named CloudEvent (source=<eventsource> URI, type=<name>).
 type TimerEvent struct {
 	Name ObjectName `json:"name"`
-	// Interval is the tick period in int64 nanoseconds, bounded 100ms ≤ ≤ 24h (ADR-0023): the floor bars a
-	// μs/ns fire-storm, the ceiling bars an unbounded one. The tag literals are the sole schema source; the
-	// bounds are re-checked in Validate (which also runs at store.Create, bypassing the huma edge).
-	Interval time.Duration `json:"interval" minimum:"100000000" maximum:"86400000000000"` // 100ms–24h
+	// Interval is the tick period (ADR-0023): the floor bars a fire-storm, the ceiling an unbounded one. Validate
+	// checks the bounds, also at store.Create (ADR-0194).
+	Interval Duration `json:"interval" doc:"The tick period: 100ms to 24h."`
 }
 
 // BlobSource hosts the blob kind's named events over one Bucket (ADR-0119, F83): a poll watcher lists the
@@ -122,8 +121,8 @@ func (es *EventSource) Validate() error {
 				return fault.Invalidf(op, "duplicate event name %q under spec.timer", ev.Name)
 			}
 			seen[ev.Name] = true
-			if ev.Interval < 100*time.Millisecond || ev.Interval > 24*time.Hour {
-				return fault.Invalidf(op, "spec.timer.events[%d].interval %s is out of bounds (100ms–24h)", i, ev.Interval)
+			if err := CheckDuration(op, fmt.Sprintf("spec.timer.events[%d].interval", i), ev.Interval, MinTimerInterval, MaxTimerInterval); err != nil {
+				return err
 			}
 		}
 	}

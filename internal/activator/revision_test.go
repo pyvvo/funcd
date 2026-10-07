@@ -93,7 +93,7 @@ func TestWakeSingleFlightPerRevision(t *testing.T) {
 // Function's replica floor, which keeps the Function itself up.
 func TestReclaimIdleReclaimsHeldRevision(t *testing.T) {
 	t.Parallel()
-	for _, sc := range []v1.Scaling{{MinReplicas: 1, IdleTimeout: time.Hour}, {}} {
+	for _, sc := range []v1.Scaling{{MinReplicas: 1, IdleTimeout: v1.Duration(time.Hour)}, {}} {
 		ctx := context.Background()
 		st := store.New(memory.New())
 		held := storeHeld(t, st, sc, v1.PhaseReady, "")
@@ -126,7 +126,7 @@ func TestPinnedCallCountsForItsRevision(t *testing.T) {
 	}{{"f-1", true}, {"f-2", false}} {
 		ctx := context.Background()
 		st := store.New(memory.New())
-		held := storeHeld(t, st, v1.Scaling{IdleTimeout: idle}, v1.PhaseReady, "")
+		held := storeHeld(t, st, v1.Scaling{IdleTimeout: v1.Duration(idle)}, v1.PhaseReady, "")
 		clk := &stepClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
 		rs := &refScaler{}
 		a := newActivator(t, activator.Deps{Store: st, Endpoints: &fakeEndpoints{upstream: "http://10.0.0.9:8080", ready: true}, Scaler: rs, Clock: clk})

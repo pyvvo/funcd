@@ -103,10 +103,10 @@ type Config struct {
 			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
 			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
 			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:","`
-			// WorkerSyncInterval is the egress WorkerIndex sync cadence (ADR-0163), a positive Go duration.
+			// WorkerSyncInterval is the egress WorkerIndex sync cadence (ADR-0163), a positive duration.
 			WorkerSyncInterval string `json:"workerSyncInterval,omitempty" env:"FUNCD_NETWORK_WORKER_SYNC_INTERVAL"`
 		} `json:"network,omitempty"`
-		// ShutdownTimeout bounds the HTTP, Sensor and workflow-run drain at shutdown (ADR-0163), a positive Go duration.
+		// ShutdownTimeout bounds the HTTP, Sensor and workflow-run drain at shutdown (ADR-0163), a positive duration.
 		ShutdownTimeout string `json:"shutdownTimeout,omitempty" env:"FUNCD_SHUTDOWN_TIMEOUT"`
 	} `json:"server,omitempty"`
 	Storage struct {
@@ -129,7 +129,7 @@ type Config struct {
 		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
 		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
 		// Enabled without a Target, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when
-		// Storage.Mode is memory. Interval/Rebaseline are Go durations ("30s").
+		// Storage.Mode is memory. Interval/Rebaseline are durations ("30s").
 		Backup struct {
 			Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
 			Target     string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
@@ -139,7 +139,7 @@ type Config struct {
 		} `json:"backup,omitempty"`
 		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
 		// without a Sink, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when Storage.Mode
-		// is memory. Retention is a Go duration ("24h").
+		// is memory. Retention is a duration ("24h").
 		Cdc struct {
 			Enabled   bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_CDC_ENABLED"`
 			Sink      string `json:"sink,omitempty" env:"FUNCD_KVSTORE_CDC_SINK"`
@@ -159,10 +159,10 @@ type Config struct {
 	Runtime struct {
 		Mode string `json:"mode,omitempty" env:"FUNCD_RUNTIME" validate:"oneof=process containerd"`
 		// BootBackoffInitial and BootBackoffMax bound the wait before a worker that crashed while booting is created
-		// again (ADR-0160): positive Go durations, the max at least the initial wait.
+		// again (ADR-0160): positive durations, the max at least the initial wait.
 		BootBackoffInitial string `json:"bootBackoffInitial,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_INITIAL"`
 		BootBackoffMax     string `json:"bootBackoffMax,omitempty" env:"FUNCD_RUNTIME_BOOT_BACKOFF_MAX"`
-		// The supervision, boot and drain times (ADR-0163): positive Go durations, bootTimeout above
+		// The supervision, boot and drain times (ADR-0163): positive durations, bootTimeout above
 		// invoke.activationTimeout and handOutSettle at most drainGrace.
 		SupervisionPeriod string `json:"supervisionPeriod,omitempty" env:"FUNCD_RUNTIME_SUPERVISION_PERIOD"`
 		BootTimeout       string `json:"bootTimeout,omitempty" env:"FUNCD_RUNTIME_BOOT_TIMEOUT"`
@@ -170,7 +170,7 @@ type Config struct {
 		HandOutSettle     string `json:"handOutSettle,omitempty" env:"FUNCD_RUNTIME_HAND_OUT_SETTLE"`
 		DrainPollInterval string `json:"drainPollInterval,omitempty" env:"FUNCD_RUNTIME_DRAIN_POLL_INTERVAL"`
 		// Process tunes the process driver (ADR-0167): StopGrace is the wait after SIGTERM before SIGKILL for a stop,
-		// the shutdown close and the boot reap, a Go duration with 0 < d <= 10s.
+		// the shutdown close and the boot reap, a duration with 0 < d <= 10s.
 		Process struct {
 			StopGrace string `json:"stopGrace,omitempty" env:"FUNCD_PROCESS_STOP_GRACE"`
 		} `json:"process,omitempty"`
@@ -187,10 +187,10 @@ type Config struct {
 		} `json:"containerd,omitempty"`
 	} `json:"runtime,omitempty"`
 	// Controller tunes the platform controllers; GCSweepInterval is the owner garbage collector's sweep period
-	// (ADR-0170), a positive Go duration.
+	// (ADR-0170), a positive duration.
 	Controller struct {
 		GCSweepInterval string `json:"gcSweepInterval,omitempty" env:"FUNCD_CONTROLLER_GC_SWEEP_INTERVAL"`
-		// The retry and requeue times (ADR-0163): positive Go durations, retryBackoffMax at least 5ms.
+		// The retry and requeue times (ADR-0163): positive durations, retryBackoffMax at least 5ms.
 		RetryBackoffMax      string `json:"retryBackoffMax,omitempty" env:"FUNCD_CONTROLLER_RETRY_BACKOFF_MAX"`
 		ReferentPollInterval string `json:"referentPollInterval,omitempty" env:"FUNCD_CONTROLLER_REFERENT_POLL_INTERVAL"`
 		RouteResyncInterval  string `json:"routeResyncInterval,omitempty" env:"FUNCD_CONTROLLER_ROUTE_RESYNC_INTERVAL"`
@@ -204,7 +204,7 @@ type Config struct {
 		Insecure bool   `json:"insecure,omitempty" env:"FUNCD_TELEMETRY_INSECURE"`
 	} `json:"telemetry,omitempty"`
 	// Funclog tunes structured function-log capture (ADR-0081) and its traces signal (ADR-0101); both on by
-	// default. A zero SegmentMaxBytes / empty SegmentMaxAge (a Go duration, "10s") keeps the sink default
+	// default. A zero SegmentMaxBytes / empty SegmentMaxAge (a duration, "10s") keeps the sink default
 	// (8 MiB / 10s). The sink writes to the blob substrate, so funcd-system is the only Bucket accepted.
 	Funclog struct {
 		Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_FUNCLOG_ENABLED"`
@@ -286,7 +286,7 @@ type Config struct {
 			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_DEADLETTER_DATA_DIR"`
 		} `json:"deadletter,omitempty"`
 		// BlobPollInterval is the cadence a `blob:` EventSource's prefixes are List-polled for new objects
-		// (ADR-0119, F83). A Go duration ("15s"); one cadence for all blob sources in V1.
+		// (ADR-0119, F83). A duration ("15s"); one cadence for all blob sources in V1.
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
 		// BucketRecheckInterval re-checks every blob EventSource's Bucket; DeliveryBackoffInitial/Max pace the Sensor
 		// delivery retry, an empty max following max(10s, initial) (ADR-0163).
@@ -298,7 +298,7 @@ type Config struct {
 	// Invoke tunes function invocation. MaxNestedInFlight caps the nested (fn-to-fn) calls in flight to one
 	// Function (ADR-0147); 0 ⇒ the default (10). It cannot be disabled. DefaultTimeout bounds external invokes
 	// only (ADR-0151): how long one waits for its response to start when the Function sets no spec.timeout; a
-	// link keeps links[].timeout (30 s default). A Go duration; empty or 0 ⇒ 60s, at most 1h.
+	// link keeps links[].timeout (30 s default). A duration (ADR-0194); empty or 0s ⇒ 60s, at most 1h.
 	Invoke struct {
 		MaxNestedInFlight int    `json:"maxNestedInFlight,omitempty" env:"FUNCD_INVOKE_MAX_NESTED_IN_FLIGHT" validate:"min=0"`
 		DefaultTimeout    string `json:"defaultTimeout,omitempty" env:"FUNCD_INVOKE_DEFAULT_TIMEOUT"`

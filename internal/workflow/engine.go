@@ -1272,7 +1272,7 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 		if fn.Retry.MaxAttempts > 0 {
 			maxAttempts = fn.Retry.MaxAttempts
 		}
-		backoff = fn.Retry.Backoff
+		backoff = time.Duration(fn.Retry.Backoff)
 	}
 	if backoff == 0 {
 		backoff = e.cfg.DefaultRetryBackoff
@@ -1372,7 +1372,7 @@ func (e *Engine) dispatchStep(rctx, ctx context.Context, run *activeRun, n *step
 }
 
 // maxRetryBackoff caps one retry gap at the largest backoff StepRetry admits, so the doubling never overflows.
-const maxRetryBackoff = time.Hour
+const maxRetryBackoff = time.Duration(v1.MaxRetryBackoff)
 
 // retryBackoff is the gap after a step's attempt-th failed dispatch: backoff·2^(attempt-1), capped at
 // maxRetryBackoff (ADR-0094: exponential backoff). A recovered step continues the schedule from its
@@ -1389,7 +1389,7 @@ func retryBackoff(backoff time.Duration, attempt int) time.Duration {
 // (0 ⇒ none).
 func (e *Engine) stepTimeout(fn *v1.FunctionStep) time.Duration {
 	if fn != nil && fn.Timeout > 0 {
-		return fn.Timeout
+		return time.Duration(fn.Timeout)
 	}
 	return e.cfg.DefaultStepTimeout
 }

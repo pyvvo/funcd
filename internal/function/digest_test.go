@@ -298,7 +298,7 @@ func revisionHashed(name string, keep int, gen string) string {
 func (h *shimHarness) bumpTimeout(t *testing.T, name string, n int) {
 	t.Helper()
 	for range n {
-		h.apply(t, name, func(fn *v1.Function) { fn.Spec.Timeout += time.Second })
+		h.apply(t, name, func(fn *v1.Function) { fn.Spec.Timeout += v1.Duration(time.Second) })
 	}
 }
 
