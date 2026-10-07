@@ -259,8 +259,9 @@ type memberHealth struct {
 }
 
 // memberIn reads member's entry from the newest running pool worker among insts, key's pool workers; ok is false when
-// there is none, it does not answer or it has no entry for member, and err is set only when it does not answer. An
-// answer counts as that pool worker's liveness.
+// there is none, it does not answer or it has no entry for member, and err is set only when it does not answer. The
+// returned Instance is zero exactly when no running pool worker has a port to ask. An answer counts as that pool
+// worker's liveness.
 func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (runtime.Instance, memberHealth, bool, error) {
 	if in, ok := newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning && in.Port > 0 }); ok {
 		members, ok := r.probeMembers(ctx, in.IP, in.Port)
