@@ -60,6 +60,7 @@
 | 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | Config | an App defines its ConfigMaps in `configMaps`, or names existing ones |
 | 2026-10-07 | Secrets | consumed by name only, as a Workflow step and a Function do; the App never creates, owns or restores a Secret, and rotation belongs to the secrets work (ADR-0057) |
+| 2026-10-07 | Which component versions work together | not the App's concern: the App builder (a person or an agent) pins compatible versions in the template it publishes; parts switch one by one |
 | 2026-10-07 | A changed ConfigMap the App defines | a content-hash name, so its Functions get a new Revision and switch (ADR-0143) |
 | 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
 | 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
@@ -202,6 +203,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | `adopt: true` to take a kept store back | the Workflow's `ref` already says "use an existing object"; an ownership transfer stays explicit (ADR-0178's handover) |
 | Automatic adoption by the same App name | the silent same-name takeover ADR-0178 refused for Workflows |
 | Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
+| An app-wide switch (blue-green of the whole App) | the App does not judge compatibility; the builder pins compatible versions in the published template (decider) |
 | Owned Secrets with generated values | a Secret is consumed by name, as a Workflow step does; self-heal would undo every rotation of an owned one, and rotation belongs to the secrets work (ADR-0057) |
 | kapp-controller, Timoni | Kubernetes-only |
 
@@ -224,11 +226,11 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    are checked here only: the parts are written in-process, as a Workflow's are.
 4. **Stamp.** When the canonical spec differs from the latest AppRevision's, the platform stamps `<app>-<n+1>` and
    sets `status.latestRevision`. Numbers only grow; an unchanged re-apply stamps nothing; a rollback is a new
-   revision.
-   A rollout writes only the parts whose spec changed: the store bumps a generation only when `spec` changes
-   (`specChanged`, `internal/store/store.go:399-404`), so an unchanged part gets no new Revision and no restart, and a
-   changed Function switches alone, as ADR-0143 switches any redeploy. Parts switch one by one, so two parts changed
-   together can run in mixed versions for a short time (Open question 9).
+   revision. A rollout writes only the parts whose spec changed: the store bumps a generation only when `spec`
+   changes (`specChanged`, `internal/store/store.go:399-404`), so an unchanged part gets no new Revision and no
+   restart, and a changed Function switches alone, as ADR-0143 switches any redeploy. Parts switch one by one. The
+   App does not judge which component versions work together: the App builder, a person or an agent, pins compatible
+   versions in the template version it publishes (decider, 2026-10-07).
 5. **Apply.** The App reconciler is a materializer one level up, as the Workflow's `Materializer` is for its steps
    (`internal/workflow/reconcile_workflow.go:196-290`): it creates and updates only the objects its sections declare.
    Their own children are provisioned by their own reconcilers: a Workflow in the App materializes its step
@@ -388,6 +390,8 @@ invocations (ADR-0101) and runs (ADR-0102).
   `funcdctl apply -f` applies it. `funcdctl push --template <dir> <ref>` pushes the template as
   `application/vnd.funcd.app-template.artifact.v1` (one tar+gzip layer), as `push --site` does. Values files stay in
   git; the server never pulls a template.
+- **Compatibility**: a template version is the unit of compatibility. Its builder, a person or an agent, pins the
+  component versions that work together and publishes them as one version; the platform never checks it.
 
 | Helm | funcd |
 |---|---|
@@ -612,8 +616,6 @@ today's roles.
    storage, their config keys and defaults → the health ADR (it also changes the shim contract).
 8. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
    refuses other impossible settings → this design, when it becomes an ADR.
-9. An app-wide switch: boot a complete new copy of the changed parts and move all traffic at once (blue-green at the
-   App level), for changes that must not run in mixed versions → a later ADR, if per-part switches prove too weak.
 
 ## Example: the to-do app
 
