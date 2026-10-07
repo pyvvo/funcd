@@ -145,7 +145,11 @@ func TestScenarioEdgeAccessLogKeepsFraction(t *testing.T) {
 	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatJSON}, &buf)
 	require.NoError(t, err)
 	mw := observ.Chain(observ.Config{AccessLog: true}, nil, lg.Root())
-	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { time.Sleep(100 * time.Microsecond) })
+	// A spin, not time.Sleep: Linux timers round a 100µs sleep up to about a millisecond.
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		for start := time.Now(); time.Since(start) < 100*time.Microsecond; {
+		}
+	})
 	field := regexp.MustCompile(`"duration_ms":([0-9]+(?:\.[0-9]{1,3})?)[,}]`)
 	for try := 1; ; try++ {
 		buf.Reset()
