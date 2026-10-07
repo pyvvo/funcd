@@ -52,6 +52,9 @@
 | 2026-10-07 | Existing objects (a kept store, a hand-made Function) | `ref: <name>`, as a Workflow step references an existing Function; no adoption |
 | 2026-10-07 | A Function of one App using a store of another | allowed by role: a binding grants read, a writer role grants write |
 | 2026-10-07 | Where an App installs | any namespace and any resource group: an App is a unit of work |
+| 2026-10-07 | The upgrade timeout | platform config only (`app.upgradeTimeout`), with no App field |
+| 2026-10-07 | Health | built in and inherited, with no user code: liveness for every replica, a dependency check in the shim, one probe of the KV engine and of the blob storage |
+| 2026-10-07 | Proof that the App behaves | an opt-in `spec.tests` (HTTP checks, Function calls, WorkflowRuns), run on demand only, like `helm test` |
 | 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
 | 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
 | 2026-10-07 | Cron | one implementation for timers and BackupSchedule, in its own ADR |
@@ -88,8 +91,14 @@ Each reconciler writes its own `Ready` condition; the App reads them and adds no
 
 The platform proves that a part is accepted and loaded, never that it behaves as intended: no reconciler calls a
 handler with test input. Behaviour shows at run time, in Invocation records, WorkflowRun results, the eventing DLQ,
-logs and traces, and before release in scenario tests and Venom lanes. A functional check of an App would be a test
-hook (Open question 7).
+logs and traces, and before release in scenario tests and Venom lanes.
+
+Health checks today are thin. The shim answers `GET /health/readiness` with `200 ready` once the handler module has
+loaded, and `GET /health/liveness` with `200 ok` while the process is up (`shim.ts:52-53`, `shim.py:131-134`).
+funcd polls liveness only for pool workers (`internal/function/pool.go:290`). For other workers, the reconciler
+checks every `runtime.supervisionPeriod` (10 s) that the processes still run, and restarts a crashed one
+(ADR-0142); a worker that hangs without crashing is not detected. The CatalogService engine has its own readiness
+probe (`internal/provider/probe.go`). Decisions 15 and 16 add built-in health and an opt-in App test.
 
 ## Scenarios
 
@@ -122,6 +131,13 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   `RefNotFound`; once `mailer` is applied and serves ⇒ `Ready=True`; deleting the App leaves `mailer` unchanged.
 - `scenario: app-idle-function-stays-current` — `todo-api` served, then scaled to zero (phase `Idle`, `Ready=False`
   `NoReplicas`) ⇒ the App stays `Ready=True`.
+- `scenario: app-hung-worker-restarted` — a replica of `todo-api` stops answering `/health/liveness` while its process
+  runs ⇒ funcd restarts it; the App turns `Degraded` and then `Ready` again.
+- `scenario: app-dependency-check` — a new revision of `todo-api` binds a KV table that it may not read ⇒ its
+  readiness fails the dependency check, the App keeps `todo-2` current and turns `Failed` after the timeout; a
+  scaled-to-zero link target of `todo-api` is not woken by the check.
+- `scenario: app-test-on-demand` — `funcdctl app test todo` while `/api/todos` answers 500 ⇒ the AppRevision shows
+  `Tested=False` naming `api-lists-todos`; the App phase is unchanged; nothing runs the tests by itself.
 - `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files` while `buckets` declares `todo-files` ⇒
   apply fails (422) naming both fields.
 - `scenario: app-scale-to-zero-not-started` — `todo-api` with `minReplicas: 0`, never called ⇒ `todo-1` current,
@@ -229,6 +245,17 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 14. **Ownership boundaries.** An App installs into any namespace and any resource group: it is a unit of work. A
     Function of App A may bind a store of App B by name: the binding grants read (ADR-0076) and a writer role grants
     write (ADR-0136). The App adds no rule of its own.
+15. **Health (built in).** Every part's health comes from the platform, with no user code. funcd polls
+    `/health/liveness` on every replica and restarts one that stops answering. The shim's `/health/readiness` also
+    checks the Function's declared bindings (KV table, blob prefix, catalog, link targets) and never wakes a
+    scaled-to-zero target; this changes the funcd ↔ shim contract, so it takes its own ADR and shim releases. The
+    platform probes the KV engine and the blob storage once per interval, and every KVStore and Bucket reflects the
+    result. A Workflow is healthy when it is Ready and every step Function, owned or `ref`, is healthy. A
+    CatalogService keeps its engine probe. The App combines all of them (Decision 6).
+16. **App test (opt-in).** `spec.tests` lists checks: an HTTP request through the edge (method, path, expected
+    status), a Function call with an input, or a WorkflowRun with an input. `funcdctl app test <app>` asks the
+    platform to run them, on demand only, as `helm test` does; nothing runs them by itself. The results are recorded
+    on the current AppRevision (condition `Tested`, one result per check); a failure changes nothing else.
 
 ## Lifecycle
 
@@ -245,6 +272,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | Failure | the timeout passes before the switch; `currentRevision` stays | `Failed` |
 | Degraded | a part of the current revision stops being Ready, and the App recovers with it | `Degraded` |
 | Rollback | revision `n`'s spec is applied again, as a new revision | `Deploying` |
+| Test (opt-in) | `funcdctl app test` runs `spec.tests`; the results go on the current AppRevision | unchanged |
 | Delete | the GC deletes owned parts and AppRevisions; stores follow `deletion`; `ref` objects stay | gone |
 
 ## Status and observability
@@ -327,6 +355,7 @@ type AppSpec struct {
 	Sites        []AppSite        `json:"sites,omitempty"`
 	Catalogs     []AppCatalog     `json:"catalogs,omitempty"`
 	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
+	Tests        []AppTest        `json:"tests,omitempty"` // opt-in, run only by funcdctl app test
 }
 type AppKVStore struct {
 	Name        ObjectName     `json:"name,omitempty"`
@@ -366,7 +395,29 @@ type AppRevisionSpec struct {
 	Number int64     `json:"number" minimum:"1"`
 	Spec   AppSpec   `json:"spec"` // the frozen copy
 }
-type AppRevisionStatus struct{ Status `json:",inline"` } // phase Deploying|Ready|Failed; Applied, ChildrenReady, Current
+type AppTest struct {
+	Name     ObjectName      `json:"name"`
+	HTTP     *AppTestHTTP    `json:"http,omitempty"` // exactly one of http, function and workflow
+	Function ObjectName      `json:"function,omitempty"`
+	Workflow ObjectName      `json:"workflow,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"` // for function and workflow
+}
+type AppTestHTTP struct {
+	Method string `json:"method,omitempty"` // default GET
+	Host   string `json:"host,omitempty"`
+	Path   string `json:"path"`
+	Status int    `json:"status"` // the expected status code
+}
+type AppRevisionStatus struct {
+	Status `json:",inline"`             // phase Deploying|Ready|Failed; Applied, ChildrenReady, Current, Tested
+	Tests  []AppTestResult `json:"tests,omitempty"` // the last funcdctl app test
+}
+type AppTestResult struct {
+	Name    ObjectName `json:"name"`
+	Passed  bool       `json:"passed"`
+	Message string     `json:"message,omitempty"`
+	At      time.Time  `json:"at"`
+}
 ```
 
 ```go
@@ -449,6 +500,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] A KVStore or Bucket is deleted only when its entry says `deletion: delete`.
 - [ ] A `ref` object is never created, written or deleted by the App.
 - [ ] An idle Function (phase `Idle`, `RevisionReady=True`) keeps the App Ready.
+- [ ] No health or dependency check wakes a scaled-to-zero Function.
+- [ ] Nothing runs `spec.tests` except `funcdctl app test`.
 - [ ] `render` leaves expressions without `values`/`app` byte for byte.
 - [ ] The config keys exist with the defaults above.
 
@@ -472,8 +525,10 @@ today's roles.
    shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained).
 5. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
 6. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
-7. A functional check: a `test` hook that calls the App after an upgrade and records the result, as `helm test`
-   does? → the hooks topic.
+7. Health: the liveness period, the dependency-check timeout, the probe interval of the KV engine and the blob
+   storage, their config keys and defaults → the health ADR (it also changes the shim contract).
+8. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
+   refuses other impossible settings → this design, when it becomes an ADR.
 
 ## Example: the to-do app
 
@@ -794,6 +849,16 @@ spec:
       catalog:
         bucket: todo-files
         prefix: lake
+  tests:
+    - name: api-lists-todos
+      http:
+        host: todo.example.com
+        path: /api/todos
+        status: 200
+    - name: api-answers
+      function: todo-api
+      input:
+        op: list
 status:
   phase: Ready
   currentRevision: todo-3
