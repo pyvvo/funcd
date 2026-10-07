@@ -218,7 +218,7 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		if w, ok := r.servingPool(pass.all); ok && servesCurrent {
 			judge = []runtime.Instance{w}
 		}
-		in, m, ok := r.memberIn(ctx, a.Key, judge, fn.Name)
+		in, m, ok, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
 		switch {
 		case !ok:
 		case m.State == memberReady:
@@ -259,22 +259,23 @@ type memberHealth struct {
 }
 
 // memberIn reads member's entry from the newest running pool worker among insts, key's pool workers; ok is false when
-// none answers or it has no entry for member. An answer counts as that pool worker's liveness.
-func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (runtime.Instance, memberHealth, bool) {
+// there is none, it does not answer or it has no entry for member, and err is set only when it does not answer. An
+// answer counts as that pool worker's liveness.
+func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (runtime.Instance, memberHealth, bool, error) {
 	if in, ok := newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning && in.Port > 0 }); ok {
 		members, ok := r.probeMembers(ctx, in.IP, in.Port)
 		if !ok {
-			return in, memberHealth{}, false
+			return in, memberHealth{}, false, fault.Unavailablef("function.memberIn", "pool worker %s did not answer %s", in.ID, membersPath)
 		}
 		r.markPoolLive(key, in.ID, r.clock.Now())
 		for _, m := range members {
 			if m.Name == string(member) {
-				return in, m, true
+				return in, m, true, nil
 			}
 		}
-		return in, memberHealth{}, false
+		return in, memberHealth{}, false, nil
 	}
-	return runtime.Instance{}, memberHealth{}, false
+	return runtime.Instance{}, memberHealth{}, false, nil
 }
 
 // poolSilent reports whether the running pool worker in insts has not answered /health/liveness for bootTimeout since

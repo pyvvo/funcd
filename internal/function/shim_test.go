@@ -69,6 +69,7 @@ type fakeRuntime struct {
 	clk       clock.Clock // ages instances, as Deps.Clock does the reconciler's reads (ADR-0161)
 	// memberStates overrides a pool member's /health/members entry (state, error); every other member reads ready.
 	memberStates map[string][2]string
+	membersDown  bool // GET /health/members answers 503, as a pool host too slow for the probe's timeout
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -100,10 +101,22 @@ func (f *fakeRuntime) setMember(name, state, errText string) {
 	f.memberStates[name] = [2]string{state, errText}
 }
 
+// setMembersDown makes GET /health/members fail while down is set.
+func (f *fakeRuntime) setMembersDown(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.membersDown = down
+}
+
 // serveMembers answers a pool host's GET /health/members: every member of the pool manifests the fake runs, ready
 // unless setMember says otherwise.
 func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
 	f.mu.Lock()
+	if f.membersDown {
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
 	var paths []string
 	for _, s := range f.specs {
 		if p := s.Env["FUNCD_POOL_MANIFEST"]; p != "" {

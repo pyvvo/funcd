@@ -536,6 +536,33 @@ func TestGateFailedWritesListeningCount(t *testing.T) {
 	})
 }
 
+// A Ready pooled member whose gate fails while its pool host does not answer /health/members stays Ready: the
+// unanswered probe leaves the status as read, as a List error does (ADR-0161 Decision 1), so the next gate-failed pass,
+// which reads its entry ready, keeps it Ready (issue #838).
+func TestIssue838_UnansweredMembersProbeKeepsGatedMemberReady(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.setMembersDown(true)
+	h.apply(t, "member", func(fn *v1.Function) { fn.Spec.Handler = "" })
+	_, _ = h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "member"})
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "an unanswered probe keeps the phase as read")
+	require.Equal(t, 1, fn.Status.Replicas)
+
+	h.rt.setMembersDown(false)
+	res := h.reconcile(t, "member")
+	fn = h.getFn(t, "member")
+	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the pool worker serves member, so it stays Ready")
+	require.Equal(t, 1, fn.Status.Replicas)
+	h.requireCondition(t, "member", "Ready", v1.ConditionTrue, "")
+	h.requireCondition(t, "member", "RevisionReady", v1.ConditionFalse, "ShapeInvalid")
+	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
 // A pooled member's pool worker that runs but does not listen is never handed out (ADR-0161 Decision 2).
 func TestUnlistenedPoolWorkerIsNotHandedOut(t *testing.T) {
 	t.Parallel()
