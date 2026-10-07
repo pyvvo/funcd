@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Contracts row runtime.bootTimeout (line 155): counted from the last successful Start.
+- **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the config value as any Go duration (124): it follows the duration grammar.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: config, operability, controller, supervision, runtime, eventing, workflow
