@@ -97,7 +97,7 @@ func TestE2EUserJourney(t *testing.T) {
 	require.Contains(t, body, "echoed", "the user's handler ran and returned its body")
 
 	// 5. scale-to-zero: a min-replicas-0 function settles Idle, and a cold HTTP request wakes it.
-	applyFunction(t, runCLI, "cold", layout, "", `"scaling":{"minReplicas":0,"idleTimeout":3600000000000},"replicas":0`)
+	applyFunction(t, runCLI, "cold", layout, "", `"scaling":{"minReplicas":0,"idleTimeout":"1h"},"replicas":0`)
 	require.Eventually(t, func() bool {
 		ph := cliPhase(t, runCLI, "cold")
 		return ph == "Idle" || ph == "Pending"

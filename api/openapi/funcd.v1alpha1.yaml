@@ -626,10 +626,10 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         timeout:
-          format: int64
-          maximum: 300000000000
-          minimum: 0
-          type: integer
+          description: "Bounds the synchronous call, a cold-start wake included: 0s to 5m; 0s or unset means the 30s link default."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
       required:
         - alias
         - target
@@ -702,10 +702,10 @@ components:
             - array
             - "null"
         timeout:
-          format: int64
-          maximum: 3600000000000
-          minimum: 0
-          type: integer
+          description: "Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
       type: object
     FunctionStatus:
       additionalProperties: false
@@ -795,10 +795,10 @@ components:
             - array
             - "null"
         timeout:
-          format: int64
-          maximum: 86400000000000
-          minimum: 0
-          type: integer
+          description: "The per-step invocation bound: 0s to 24h; 0s or unset means workflow.defaultStepTimeout."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
       type: object
     Gateway:
       additionalProperties: false
@@ -1757,10 +1757,10 @@ components:
       additionalProperties: false
       properties:
         idleTimeout:
-          format: int64
-          maximum: 86400000000000
-          minimum: 0
-          type: integer
+          description: "The idle time before a worker is reclaimed: 0s to 24h; 0s or unset disables reclaim."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
         maxReplicas:
           format: int64
           maximum: 15
@@ -2088,10 +2088,10 @@ components:
       additionalProperties: false
       properties:
         backoff:
-          format: int64
-          maximum: 3600000000000
-          minimum: 0
-          type: integer
+          description: "The base of the exponential retry backoff: 0s to 1h; 0s or unset means workflow.defaultRetryBackoff."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
         maxAttempts:
           format: int64
           maximum: 100
@@ -2110,10 +2110,10 @@ components:
       additionalProperties: false
       properties:
         interval:
-          format: int64
-          maximum: 86400000000000
-          minimum: 100000000
-          type: integer
+          description: "The tick period: 100ms to 24h."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
         name:
           maxLength: 63
           minLength: 1
@@ -2372,10 +2372,10 @@ components:
             - array
             - "null"
         timeout:
-          format: int64
-          maximum: 604800000000000
-          minimum: 0
-          type: integer
+          description: "The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound."
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
       required:
         - steps
       type: object
