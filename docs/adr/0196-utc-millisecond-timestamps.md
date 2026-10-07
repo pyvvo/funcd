@@ -1,6 +1,7 @@
 # ADR-0196: One timestamp form — RFC3339 UTC with milliseconds
 
 - **Status**: Accepted (2026-10-07)
+- **Superseded in part by**: [ADR-0197](0197-log-durations-in-ms.md) (2026-10-07) — the logger hook's name: `replaceAttr` is exported as `observability.ReplaceAttr` (still unexported outside the module), shared by both ADRs' branches.
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: api, types, openapi, observability, logging, eventing, funcdctl, breaking-change
