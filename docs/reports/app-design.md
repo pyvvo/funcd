@@ -55,6 +55,9 @@
 | 2026-10-07 | The upgrade timeout | platform config only (`app.upgradeTimeout`), with no App field |
 | 2026-10-07 | Health | built in and inherited, with no user code: liveness for every replica, a dependency check in the shim, one probe of the KV engine and of the blob storage |
 | 2026-10-07 | Proof that the App behaves | an opt-in `spec.tests` (HTTP checks, Function calls, WorkflowRuns), run on demand only, like `helm test` |
+| 2026-10-07 | A part edited or deleted by hand | self-heal at once, as a Site restores its Route: the App reconciler watches its parts |
+| 2026-10-07 | Visibility of a revert | one log line, and the last restore in the App status |
+| 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
 | 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
 | 2026-10-07 | Cron | one implementation for timers and BackupSchedule, in its own ADR |
@@ -136,6 +139,11 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 - `scenario: app-dependency-check` — a new revision of `todo-api` binds a KV table that it may not read ⇒ its
   readiness fails the dependency check, the App keeps `todo-2` current and turns `Failed` after the timeout; a
   scaled-to-zero link target of `todo-api` is not woken by the check.
+- `scenario: app-drift-restored` — `funcdctl apply` changes `todo-api`'s image by hand ⇒ within 5 s the App writes
+  its declared image back, logs it, and shows `status.lastRestore` naming `Function/todo-api`; a deleted `todo-api`
+  is re-created the same way.
+- `scenario: app-paused-keeps-hotfix` — `funcdctl app pause todo`, then a manual edit of `todo-api` ⇒ the edit stays
+  and the App shows `Paused=True`; after `funcdctl app resume todo` the declared spec is back within 5 s.
 - `scenario: app-test-on-demand` — `funcdctl app test todo` while `/api/todos` answers 500 ⇒ the AppRevision shows
   `Tested=False` naming `api-lists-todos`; the App phase is unchanged; nothing runs the tests by itself.
 - `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files` while `buckets` declares `todo-files` ⇒
@@ -205,7 +213,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    differs, with the App's controller ref; a write the store refuses is `ChildInvalid`. Part status is never written.
    A `ref` object is never created, written, owned or deleted, as a Workflow treats a `function.ref` step
    (`internal/workflow/reconcile_workflow.go:743-760`); until it exists the App waits with reason `RefNotFound`. The
-   App re-queues on any change of a part it controls or references.
+   App re-queues on any change of a part it controls or references (Decision 17).
 6. **Readiness and current.** A part is *Ready* when its kind has no status, or when its `Ready` condition is True
    (for the current generation where the kind records it). A Function counts by `RevisionReady` instead, because an
    idle Function reports `Ready=False` (`NoReplicas`) while its revision still serves; it is *NotStarted* when
@@ -256,6 +264,16 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     status), a Function call with an input, or a WorkflowRun with an input. `funcdctl app test <app>` asks the
     platform to run them, on demand only, as `helm test` does; nothing runs them by itself. The results are recorded
     on the current AppRevision (condition `Tested`, one result per check); a failure changes nothing else.
+17. **Drift and pause.** The App is funcd's operator pattern: one reconciler registered for `App` in the controller
+    framework (`ctrl.Register`), and one `ctrl.Watches(<part kind>, app.MapPart)` per section kind, which maps a
+    changed part to the App named by its controller ref, as `site.MapRoute` maps a Route to its Site
+    (`pkg/funcd/funcd.go:867`). When a part's spec differs from the declared one, or the part is gone, the App writes
+    the declared spec back at once (self-heal), as a Site rewrites its Route (`ensureRoute`). Only the spec is
+    restored, never the status. Each restore writes one Info log line and sets `status.lastRestore` (kind, name,
+    time). `spec.paused: true`, set with `funcdctl app pause <app>` and cleared with `funcdctl app resume <app>` as
+    for a WorkflowRun (`cmd/funcdctl/workflow.go`), stops every write of the App: no apply, no prune, no self-heal;
+    the App reports the condition `Paused=True`, whatever its phase. On resume, the declared spec wins again; a
+    manual fix survives only when it is copied into the App.
 
 ## Lifecycle
 
@@ -274,6 +292,8 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | Rollback | revision `n`'s spec is applied again, as a new revision | `Deploying` |
 | Test (opt-in) | `funcdctl app test` runs `spec.tests`; the results go on the current AppRevision | unchanged |
 | Delete | the GC deletes owned parts and AppRevisions; stores follow `deletion`; `ref` objects stay | gone |
+| Drift | a part was edited or deleted by hand; the App writes the declared spec back at once | unchanged |
+| Paused | `funcdctl app pause`: the App writes nothing until `resume` | unchanged, `Paused=True` |
 
 ## Status and observability
 
@@ -345,6 +365,7 @@ section entry embeds the kind's shipped spec type, as `WorkflowKVStore` reuses `
 ```go
 type AppSpec struct {
 	Version      string           `json:"version,omitempty"` // a free label
+	Paused       bool             `json:"paused,omitempty"`  // stops every write of the App (Decision 17)
 	KV           []AppKVStore     `json:"kv,omitempty"`
 	Buckets      []AppBucket      `json:"buckets,omitempty"`
 	Functions    []AppFunction    `json:"functions,omitempty"`
@@ -381,8 +402,14 @@ type AppStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
 	LatestRevision  ObjectName `json:"latestRevision,omitempty"`
-	Version         string     `json:"version,omitempty"` // spec.version of the current revision
-	Children        []AppChild `json:"children,omitempty"`
+	Version         string      `json:"version,omitempty"` // spec.version of the current revision
+	Children        []AppChild  `json:"children,omitempty"`
+	LastRestore     *AppRestore `json:"lastRestore,omitempty"` // the last self-heal write
+}
+type AppRestore struct {
+	Kind Kind       `json:"kind"`
+	Name ObjectName `json:"name"`
+	At   time.Time  `json:"at"`
 }
 type AppChild struct {
 	Kind   Kind          `json:"kind"`
@@ -480,10 +507,12 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - **API**: `internal/controlplane` Handlers, CRUD block, the `stampTypeMeta` switch, routes, `stubs.go`; `just
   generate`. AppRevision writes are refused at the API, as for Revision.
 - **Server**: `internal/app/{children,admission,reconcile}.go`; the admission registered in the pipeline; wiring in
-  `pkg/funcd`; keys in `internal/platform/config/config.go`; pairs in `internal/gc/gc.go`.
+  `pkg/funcd` (`ctrl.Register` for App, `ctrl.Watches` per section kind with `app.MapPart`); keys in
+  `internal/platform/config/config.go`; pairs in `internal/gc/gc.go`.
 - **Template and CLI**: `internal/app/template`; `internal/artifact/template.go`; `schemaResolver` moves to
-  `internal/expr/schema.go` (workflow uses it), plus `Idents`; `cmd/funcdctl` `push --template`, `app render`,
-  `app history`, `app rollback`; `go.mod` makes `santhosh-tekuri/jsonschema/v6` direct.
+  `internal/expr/schema.go` (workflow uses it), plus `Idents`; `cmd/funcdctl` `push --template`, `app render`, `app
+  history`, `app rollback`, `app pause`, `app resume`, `app test`; `go.mod` makes `santhosh-tekuri/jsonschema/v6`
+  direct.
 - **Tests**: unit tests for `Children`, the admission (each refusal of Decision 3) and `Render` (typed substitution,
   defaults, `when`, pass-through and mixed expressions); a push/resolve/pull round trip; one `TestScenarioApp…` per
   Scenario in `pkg/funcd` (e2e tag); a CLI `apply` test of an App through `controlplane.NewServer`.
@@ -502,6 +531,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] An idle Function (phase `Idle`, `RevisionReady=True`) keeps the App Ready.
 - [ ] No health or dependency check wakes a scaled-to-zero Function.
 - [ ] Nothing runs `spec.tests` except `funcdctl app test`.
+- [ ] A part edited or deleted by hand gets its declared spec back at once, with a log line and `status.lastRestore`,
+      unless the App is paused; a paused App writes nothing.
 - [ ] `render` leaves expressions without `values`/`app` byte for byte.
 - [ ] The config keys exist with the defaults above.
 
