@@ -49,7 +49,9 @@
 | 2026-10-07 | Values required only in some cases | full JSON Schema in `valuesSchema`, `if`/`then` included |
 | 2026-10-07 | Sections for IAM kinds | added later, when an app needs them |
 | 2026-10-07 | Whose rights under a finer RBAC | decided with the IAM work |
-| 2026-10-07 | A re-created App and its kept stores | declarative: `adopt: true` on the `kv` or `buckets` entry |
+| 2026-10-07 | Existing objects (a kept store, a hand-made Function) | `ref: <name>`, as a Workflow step references an existing Function; no adoption |
+| 2026-10-07 | A Function of one App using a store of another | allowed by role: a binding grants read, a writer role grants write |
+| 2026-10-07 | Where an App installs | any namespace and any resource group: an App is a unit of work |
 | 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
 | 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
 | 2026-10-07 | Cron | one implementation for timers and BackupSchedule, in its own ADR |
@@ -66,6 +68,28 @@ sections, as a Workflow declares its KV stores and step Functions. funcd checks 
 reports one status, stamps an immutable `AppRevision` per change, prunes what a new spec dropped and rolls back by
 revision. A person or an AI agent reads and edits the whole app in one object. A client-side template gives values
 and reuse across installs. Hooks and App dependencies build on the App later.
+
+## What the platform proves today
+
+Each reconciler writes its own `Ready` condition; the App reads them and adds no probe of its own.
+
+| Kind | `Ready` means | Code |
+|---|---|---|
+| Function | `RevisionReady=True`: a replica of the current generation loaded its handler and answered `/health/readiness`; it stays True after a scale to zero, while `Ready` turns False (`NoReplicas`, phase `Idle`). Gates refuse a missing runtime, handler or image, and an unknown platform or runtime first (`ShapeInvalid`, `NoMatchingPlatform`, `RuntimeUnavailable`). | `internal/function/function.go` |
+| Workflow | its owned step Functions exist and every edge type-checks (`EdgesTypeChecked`); step Functions need not run, because a run waits for them (ADR-0190) | `internal/workflow/reconcile_workflow.go` |
+| KVStore | declared and reconciled: tables counted, removed tables reclaimed; the KV engine is not probed | `internal/services/kv/reconcile.go` |
+| CatalogService | the engine converged and its proxy endpoint exists (`status.endpoint`); `IngressReady` covers edge exposure | `internal/services/catalog/reconcile.go` |
+| Site | the bundle is unpacked under its digest and its Route is programmed (`Materialized`) | `internal/site/reconcile.go` |
+| Route | programmed into the edge without a conflict (`Programmed`) | `internal/route/reconcile.go` |
+| EventSource | its timer or blob watcher is registered (`Watching`) | `internal/eventing/eventing.go` |
+| Sensor | its `${{ }}` inputs pass the static check and its subscriptions are registered (`Bound`) | `internal/sensor/sensor.go` |
+| Identity | its credential Secret is issued | `internal/services/identity/reconcile.go` |
+| Bucket, ConfigMap, Policy, Role, RolesAssignment | no status: admission checks them | — |
+
+The platform proves that a part is accepted and loaded, never that it behaves as intended: no reconciler calls a
+handler with test input. Behaviour shows at run time, in Invocation records, WorkflowRun results, the eventing DLQ,
+logs and traces, and before release in scenario tests and Venom lanes. A functional check of an App would be a test
+hook (Open question 7).
 
 ## Scenarios
 
@@ -91,11 +115,13 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   `funcdctl app history todo` lists 1 to 4 with version, phase and time.
 - `scenario: app-child-not-owned` — Function `todo-api` made by hand first ⇒ `Ready=False` `ChildNotOwned` naming
   it; nothing written; that Function unchanged.
-- `scenario: app-adopt-kept-store` — App `todo` deleted (`todo-store` kept, with a key) and applied again: without
-  `adopt` ⇒ `ChildNotOwned` naming `KVStore/todo-store`; with `adopt: true` ⇒ the store is under the new App and
-  the key is intact.
-- `scenario: app-adopt-live-owner-refused` — `adopt: true` on a store a live Workflow holds ⇒ `ChildNotOwned`; the
-  store and its ref unchanged.
+- `scenario: app-ref-kept-store` — App `todo` deleted (`todo-store` kept, with a key) and applied again with `kv:
+  - ref: todo-store` ⇒ `Ready=True`; `todo-api` reads the key; the store keeps its old owner ref, and the App never
+  writes it.
+- `scenario: app-ref-waits` — `functions: - ref: mailer` while `mailer` does not exist ⇒ `Ready=False`, reason
+  `RefNotFound`; once `mailer` is applied and serves ⇒ `Ready=True`; deleting the App leaves `mailer` unchanged.
+- `scenario: app-idle-function-stays-current` — `todo-api` served, then scaled to zero (phase `Idle`, `Ready=False`
+  `NoReplicas`) ⇒ the App stays `Ready=True`.
 - `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files` while `buckets` declares `todo-files` ⇒
   apply fails (422) naming both fields.
 - `scenario: app-scale-to-zero-not-started` — `todo-api` with `minReplicas: 0`, never called ⇒ `todo-1` current,
@@ -133,7 +159,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | A run kind per rollout, like WorkflowRun | the AppRevision status already records the rollout; hooks will run as WorkflowRuns |
 | Automatic rollback on failure | hides the failed state and can fail itself; ADR-0143 already keeps old Function revisions serving |
 | Names `<app>-<name>`, like step Functions | every reference field would need rewriting; a template adds the prefix when two installs share a namespace |
-| An imperative `handover` command for Apps | the decider wants adoption declared in the App, as an operator does |
+| `adopt: true` to take a kept store back | the Workflow's `ref` already says "use an existing object"; an ownership transfer stays explicit (ADR-0178's handover) |
 | Automatic adoption by the same App name | the silent same-name takeover ADR-0178 refused for Workflows |
 | Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
 | kapp-controller, Timoni | Kubernetes-only |
@@ -145,29 +171,33 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    the record of that version's rollout. App names are at most 52 characters, so `<app>-<n>` stays a DNS label.
 2. **Sections**: `kv`, `buckets`, `functions`, `workflows`, `eventSources`, `sensors`, `routes`, `sites`, `catalogs`,
    `configMaps`. An entry is `name` plus the kind's own spec fields; `kv` and `buckets` entries add `deletion: retain
-   | delete` (default `retain`) and `adopt` (Decision 5). Each part takes the App's namespace and resource group and
-   keeps its declared name. A kind gets a section when an App needs it (the planned `BackupSchedule` adds
-   `backupSchedules`). An unknown section is refused: `funcdctl` decodes strictly (`pkg/sdk/sdk.go:430`) and the API
-   schema allows no extra field.
+   | delete` (default `retain`). Instead of a definition, any entry may be `ref: <name>`, which names an existing
+   object of that kind in the namespace (Decision 5), as a Workflow step's `function.ref` does. Each part takes the
+   App's namespace and resource group and keeps its declared name. A kind gets a section when an App needs it (the
+   planned `BackupSchedule` adds `backupSchedules`). An unknown section is refused: `funcdctl` decodes strictly
+   (`pkg/sdk/sdk.go:430`) and the API schema allows no extra field.
 3. **Admission** (ADR-0063, Validating) refuses an App before it is stored when a name repeats within a section, an
-   entry fails its kind's validation or the admissions a direct apply of it would pass, or two parts would write one
-   object: a Site's `bucket.name` naming a bucket of the App, a Workflow's step Function `<workflow>-<step>` or `kv`
-   store named like another part. An entry with `adopt: true` also needs its author to hold update and delete rights
-   on that store, the rights `funcdctl kvstore handover` needs (ADR-0178). The error names the field path. Quotas are
-   checked here only: the parts are written in-process, as a Workflow's are.
+   entry sets both `ref` and a definition, an entry fails its kind's validation or the admissions a direct apply of
+   it would pass, or two parts would write one object: a Site's `bucket.name` naming a bucket of the App, a Workflow's
+   step Function `<workflow>-<step>` or `kv` store named like another part. The error names the field path. Quotas
+   are checked here only: the parts are written in-process, as a Workflow's are.
 4. **Stamp.** When the canonical spec differs from the latest AppRevision's, the platform stamps `<app>-<n+1>` and
    sets `status.latestRevision`. Numbers only grow; an unchanged re-apply stamps nothing; a rollback is a new
    revision.
-5. **Apply.** First every part is checked: one that exists without this App's controller ref (kind, name, UID) stops
-   the pass with `ChildNotOwned` before any write, except a `kv` or `buckets` entry with `adopt: true` whose store no
-   live owner holds (no controller ref, or one naming an object that no longer exists): the App takes it with its
-   data. A store a live owner holds is never taken. Then each part is created, or its spec replaced when it differs,
-   with the App's controller ref; a write the store refuses is `ChildInvalid`. Part status is never written. The App
-   re-queues on any change of a part it controls.
-6. **Readiness and current.** A part is *Ready* when its kind has no status (ConfigMap, Bucket) or its `Ready`
-   condition is True for its current generation; *NotStarted* when it is a Function whose `RevisionReady` is Unknown
-   with reason `NotStarted` (ADR-0174); else *Pending*. When no part is Pending, `currentRevision` =
-   `latestRevision`; App `Ready` is True, or Unknown with reason `NotStarted` while a Function has never started.
+5. **Apply.** First every owned part is checked: one that exists without this App's controller ref (kind, name, UID)
+   stops the pass with `ChildNotOwned` before any write. Then each owned part is created, or its spec replaced when it
+   differs, with the App's controller ref; a write the store refuses is `ChildInvalid`. Part status is never written.
+   A `ref` object is never created, written, owned or deleted, as a Workflow treats a `function.ref` step
+   (`internal/workflow/reconcile_workflow.go:743-760`); until it exists the App waits with reason `RefNotFound`. The
+   App re-queues on any change of a part it controls or references.
+6. **Readiness and current.** A part is *Ready* when its kind has no status, or when its `Ready` condition is True
+   (for the current generation where the kind records it). A Function counts by `RevisionReady` instead, because an
+   idle Function reports `Ready=False` (`NoReplicas`) while its revision still serves; it is *NotStarted* when
+   `RevisionReady` is Unknown with reason `NotStarted` (ADR-0174). A `ref` object follows the same rule once it
+   exists. Every other state is *Pending*. When no part is Pending, `currentRevision` = `latestRevision`; App `Ready`
+   is True, or Unknown with reason `NotStarted` while a Function has never started. When a part of the current
+   revision later stops being Ready, the App phase turns `Degraded` and returns to `Ready` when the part recovers,
+   as in the blueprint's state machine.
 7. **The rollout record** is the AppRevision status: phase `Deploying` → `Ready` or `Failed` (the existing `Phase`
    values), with conditions `Applied`, `ChildrenReady` and `Current`; a replaced revision keeps its phase and turns
    `Current=False`. There is no run kind; hooks will run as WorkflowRuns linked from it.
@@ -177,11 +207,12 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    keep the new spec. A spec change starts a new attempt. No automatic rollback.
 9. **Prune and delete.** After `currentRevision` moves, the App deletes the parts it controls that the spec no longer
    declares. A `kv` or `buckets` entry with `retain` keeps the store and its data on prune and on App delete, with
-   the ref, and a later spec declaring it takes it back; `delete` deletes it with its data, a Bucket's objects
-   purged first, as the GC reclaims a KVStore's keys. A store still bound by a Function the App does not control is
-   not deleted, and the App reports it (ADR-0080's binding rule). `gc.Pairs()` gains `(App, X)` for every section
-   kind plus `(App, AppRevision)`; a KVStore or Bucket is collectable only when marked `delete` (for a KVStore, the
-   ADR-0178 marker a Workflow writes). Nested owners (App → Workflow → step Function) follow by chain.
+   the ref, and a later spec declaring it takes it back; `delete` deletes it with its data, a Bucket's objects purged
+   first, as the GC reclaims a KVStore's keys. A store still bound by a Function the App does not control is not
+   deleted, and the App reports it (ADR-0080's binding rule). `gc.Pairs()` gains `(App, X)` for every section kind
+   plus `(App, AppRevision)`; a KVStore or Bucket is collectable only when marked `delete` (for a KVStore, the
+   ADR-0178 marker a Workflow writes). Nested owners (App → Workflow → step Function) follow by chain. A kept store
+   that outlives its App is used again through `ref`.
 10. **History.** The App keeps the current revision plus the newest `app.revisionHistory` others and deletes older
     ones. `funcdctl app history <app>` lists number, version, phase and stamp time; `funcdctl app rollback <app> <n>`
     applies revision `n`'s spec.
@@ -195,6 +226,59 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 13. **Hooks (direction).** An upgrade runs pre-hooks → apply → wait for Ready → switch → post-hooks → prune. A failing
     pre-hook stops before any write, and a post-hook can still read what the old version used. Hooks run as
     WorkflowRuns linked from the AppRevision; the hooks topic writes the details.
+14. **Ownership boundaries.** An App installs into any namespace and any resource group: it is a unit of work. A
+    Function of App A may bind a store of App B by name: the binding grants read (ADR-0076) and a writer role grants
+    write (ADR-0136). The App adds no rule of its own.
+
+## Lifecycle
+
+| Step | What happens | App phase |
+|---|---|---|
+| Admission | the spec is checked: sections, names, refs, shared writers, quotas; a refusal stores nothing | unchanged |
+| Stamp | a changed spec gets AppRevision `<app>-<n>` | `Deploying` |
+| Pre-hooks (later) | WorkflowRuns that must succeed before any write | `Deploying` |
+| Apply | owned parts are created or updated; `ref` objects are only read | `Deploying` |
+| Wait | every part becomes Ready or NotStarted, and every `ref` exists | `Deploying` |
+| Switch | `currentRevision` moves; the previous revision turns `Current=False` | `Ready` |
+| Post-hooks (later) | WorkflowRuns after the switch, such as data migrations | `Ready` |
+| Prune | owned parts the spec dropped are deleted; stores follow `deletion` | `Ready` |
+| Failure | the timeout passes before the switch; `currentRevision` stays | `Failed` |
+| Degraded | a part of the current revision stops being Ready, and the App recovers with it | `Degraded` |
+| Rollback | revision `n`'s spec is applied again, as a new revision | `Deploying` |
+| Delete | the GC deletes owned parts and AppRevisions; stores follow `deletion`; `ref` objects stay | gone |
+
+## Status and observability
+
+An App reports one status, and each line of it points to a part that has its own status, logs and traces:
+
+```yaml
+status:
+  phase: Degraded
+  currentRevision: todo-3
+  latestRevision: todo-3
+  version: 1.2.0
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: ChildNotReady
+      message: "Function/todo-api: Restarting: a replica exited and is being replaced"
+  children:
+    - kind: Function
+      name: todo-api
+      state: Pending
+      reason: Restarting
+    - kind: KVStore
+      name: todo-store
+      state: Ready
+    - kind: Function
+      name: todo-stats
+      state: NotStarted
+```
+
+A person or an agent follows one path: `funcdctl describe app todo` (exists for every kind, the object as JSON),
+then `funcdctl app history todo` (new), then the first part that is not Ready: `funcdctl describe function todo-api`,
+`funcdctl logs todo-api` (ADR-0084), `funcdctl workflow describe <run>` (ADR-0100), and the traces of its
+invocations (ADR-0101) and runs (ADR-0102).
 
 ## The template and where files live
 
@@ -245,23 +329,24 @@ type AppSpec struct {
 	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
 }
 type AppKVStore struct {
-	Name        ObjectName     `json:"name"`
+	Name        ObjectName     `json:"name,omitempty"`
+	Ref         ObjectName     `json:"ref,omitempty"`      // an existing store; exclusive with name and the spec
 	Deletion    DeletionPolicy `json:"deletion,omitempty"` // retain (default) | delete
-	Adopt       bool           `json:"adopt,omitempty"`    // take a kept store no live owner holds
 	KVStoreSpec `json:",inline"`
 }
 type AppBucket struct {
-	Name       ObjectName     `json:"name"`
+	Name       ObjectName     `json:"name,omitempty"`
+	Ref        ObjectName     `json:"ref,omitempty"`
 	Deletion   DeletionPolicy `json:"deletion,omitempty"`
-	Adopt      bool           `json:"adopt,omitempty"`
 	BucketSpec `json:",inline"`
 }
 type AppFunction struct {
-	Name         ObjectName `json:"name"`
+	Name         ObjectName `json:"name,omitempty"`
+	Ref          ObjectName `json:"ref,omitempty"`
 	FunctionSpec `json:",inline"`
 }
 // AppWorkflow, AppEventSource, AppSensor, AppRoute, AppSite, AppCatalog and AppConfigMap follow AppFunction:
-// Name plus WorkflowSpec, EventSourceSpec, SensorSpec, RouteSpec, SiteSpec, CatalogServiceSpec, ConfigMapSpec.
+// Name, Ref plus WorkflowSpec, EventSourceSpec, SensorSpec, RouteSpec, SiteSpec, CatalogServiceSpec, ConfigMapSpec.
 
 type AppStatus struct {
 	Status          `json:",inline"`
@@ -327,9 +412,10 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 |---|---|---|
 | `ChildNotOwned` | App `Ready=False` | a part exists without this App's controller ref |
 | `ChildInvalid` | App `Ready=False` | the store refused a part write |
+| `RefNotFound` | App `Ready=False` | a `ref` names an object that does not exist yet |
 | `Progressing` | App `Ready=False` | a part is Pending, before the timeout |
 | `NotStarted` | App `Ready=Unknown` | current, and a Function has never started |
-| `ChildNotReady` | App phase `Failed`, AppRevision phase `Failed` | timeout |
+| `ChildNotReady` | App `Ready=False`, phase `Failed` or `Degraded` | the timeout passed (the AppRevision is `Failed` too), or a part of the current revision stopped being Ready |
 
 | Consumes | Exposes |
 |---|---|
@@ -361,8 +447,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 - [ ] An unchanged re-apply stamps no AppRevision; AppRevision is read-only at the API and named `<app>-<n>`.
 - [ ] `currentRevision` moves only when no part is Pending; prune runs only after it moves.
 - [ ] A KVStore or Bucket is deleted only when its entry says `deletion: delete`.
-- [ ] A store is adopted only with `adopt: true`, only when no live owner holds it, and only when its author may
-      update and delete it.
+- [ ] A `ref` object is never created, written or deleted by the App.
+- [ ] An idle Function (phase `Idle`, `RevisionReady=True`) keeps the App Ready.
 - [ ] `render` leaves expressions without `values`/`app` byte for byte.
 - [ ] The config keys exist with the defaults above.
 
@@ -374,8 +460,8 @@ revision model; the definition rides the metastore backup; the Workflow pattern,
 and the goja engine are reused. **Negative**: a kind needs a new App section before an App can hold it; an App
 carries its full spec (a few KB per app, at most 1 MiB, the API body cap) and each AppRevision a copy; kinds without
 revisions change at once, so a failed upgrade can leave them on the new spec; stores kept by `deletion: retain` need
-a manual delete or an `adopt: true`. **Risks accepted**: the RBAC equivalence of Decision 11 holds only for today's
-roles.
+a manual delete, or a `ref` to use them again. **Risks accepted**: the RBAC equivalence of Decision 11 holds only for
+today's roles.
 
 ## Open questions
 
@@ -386,6 +472,8 @@ roles.
    shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained).
 5. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
 6. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
+7. A functional check: a `test` hook that calls the App after an upgrade and records the result, as `helm test`
+   does? → the hooks topic.
 
 ## Example: the to-do app
 
