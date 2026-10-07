@@ -216,7 +216,7 @@ func (d *driver) update(batch []*writeReq) (applied int, err error) {
 func (d *driver) apply(txn *badger.Txn, r *writeReq) error {
 	op, err := OpPut, error(nil)
 	if r.del {
-		op, err = OpDelete, txn.Delete([]byte(r.key))
+		op, err = OpDelete, d.stageDelete(txn, r.key)
 	} else {
 		err = txn.Set([]byte(r.key), r.val)
 	}
@@ -224,6 +224,26 @@ func (d *driver) apply(txn *badger.Txn, r *writeReq) error {
 		return err
 	}
 	return d.cdc.OnWrite(txn, r.key, op)
+}
+
+// stageDelete stages the delete of key and, while the backup seam is wired and key exists (a value staged
+// earlier in txn counts), its delete record at the same commit version (ADR-0195 Decision 1), so a backup
+// chain keeps the delete after compaction drops the delete marker.
+func (d *driver) stageDelete(txn *badger.Txn, key string) error {
+	if d.backup == nil {
+		return txn.Delete([]byte(key))
+	}
+	_, err := txn.Get([]byte(key))
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return txn.Delete([]byte(key))
+	}
+	if err != nil {
+		return err
+	}
+	if err := txn.Delete([]byte(key)); err != nil {
+		return err
+	}
+	return txn.Set(delRecordKey(key), nil)
 }
 
 func (d *driver) gcLoop(interval time.Duration) {
@@ -322,8 +342,8 @@ func (d *driver) List(ctx context.Context, prefix string) ([]string, error) {
 }
 
 // Reserved is the NUL-prefixed namespace for the driver's internal keys (the CDC outbox + its cursors,
-// ADR-0068). NUL cannot occur in a facade tenant key (<namespace>/<binding>/<key>), so List excludes it
-// without ever hiding a real key. The CDC seam writes under this prefix.
+// ADR-0068; the backup cursor and delete records, ADR-0067/0195). NUL cannot occur in a facade tenant key
+// (<namespace>/<binding>/<key>), so List excludes it without ever hiding a real key.
 const Reserved = "\x00"
 
 // dropConcurrency bounds the concurrent gateway Deletes of a seam-wired DropPrefix, so the gateway

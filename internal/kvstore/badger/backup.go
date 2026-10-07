@@ -27,7 +27,9 @@ type backup struct {
 	chunkBytes int           // max bytes buffered per blob object (bounds re-baseline RSS)
 	interval   time.Duration // incremental cadence
 	fullEvery  time.Duration // full re-baseline cadence
-	loop       sync.Mutex    // serializes Ship/Rebaseline — one exporter at a time, never overlapping
+	retry      time.Duration // the delay after a failed re-baseline (ADR-0195 Decision 6)
+	logger     *slog.Logger
+	loop       sync.Mutex // serializes Ship/Rebaseline — one exporter at a time, never overlapping
 }
 
 const (
@@ -37,14 +39,28 @@ const (
 	// exportNumGo caps the export's producers: each holds its own batch buffers, so Badger's default of 8
 	// multiplies the export's peak heap (ADR-0067 Decision 2: a low Stream.NumGo caps the export RSS).
 	exportNumGo = 1
+
+	delRecordPrefix = Reserved + "backup/del/" // a record per key deleted through the gateway with backup on
+	manifestFormat  = 1                        // the chain carries a record for every gateway delete
+	delChunkBytes   = 1 << 20                  // the budget of one restore or prune transaction
+	delEntryBytes   = 128                      // added to the length of each key a transaction deletes
+	pruneRetries    = 3                        // retries of one prune chunk after badger.ErrConflict
+
+	defaultRebaselineRetry = time.Hour
 )
 
-// BackupConfig configures the opt-in DR backup (ADR-0067). Zero ChunkBytes ⇒ 64 MiB.
+// BackupConfig configures the opt-in DR backup (ADR-0067, ADR-0195). Zero ChunkBytes ⇒ 64 MiB; zero
+// RebaselineRetry ⇒ 1h; a nil Logger ⇒ slog.Default().
 type BackupConfig struct {
-	Interval   time.Duration
-	Rebaseline time.Duration
-	ChunkBytes int
+	Interval        time.Duration
+	Rebaseline      time.Duration
+	RebaselineRetry time.Duration
+	ChunkBytes      int
+	Logger          *slog.Logger
 }
+
+// delRecordKey is the key of the delete record of key (ADR-0195 Decision 1).
+func delRecordKey(key string) []byte { return []byte(delRecordPrefix + key) }
 
 // NewBackup builds the DR backup over an opened KV Badger instance. A nil bucket means DR was enabled
 // without a target — fault.Invalid (never a silent half-configured backup).
@@ -56,7 +72,18 @@ func NewBackup(db *badger.DB, bucket blob.Bucket, cfg BackupConfig) (Backup, err
 	if cb <= 0 {
 		cb = defaultChunkBytes
 	}
-	return &backup{db: db, bucket: bucket, chunkBytes: cb, interval: cfg.Interval, fullEvery: cfg.Rebaseline}, nil
+	retry := cfg.RebaselineRetry
+	if retry <= 0 {
+		retry = defaultRebaselineRetry
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &backup{
+		db: db, bucket: bucket, chunkBytes: cb, interval: cfg.Interval, fullEvery: cfg.Rebaseline,
+		retry: retry, logger: logger,
+	}, nil
 }
 
 // segment is one exported range of blob parts (a base or an incremental). Parts are part-00000…part-NNNNN.
@@ -72,9 +99,12 @@ type segment struct {
 
 // manifest is the ordered restore chain: the latest base then the incrementals after it. It is the
 // authoritative segment list (blob has no rename), written only after every part is durably uploaded.
+// Format is manifestFormat once a re-baseline has run with delete records (ADR-0195 Decision 5); an older
+// binary drops it, which reads as 0 and makes the next start re-baseline.
 type manifest struct {
-	Base *segment  `json:"base,omitempty"`
-	Incs []segment `json:"incs,omitempty"`
+	Format int       `json:"format,omitempty"`
+	Base   *segment  `json:"base,omitempty"`
+	Incs   []segment `json:"incs,omitempty"`
 }
 
 // Ship runs one incremental tick: export every change since the persisted cursor to a fresh blob segment,
@@ -103,7 +133,7 @@ func (b *backup) Ship(ctx context.Context) (uint64, error) {
 	}
 	prefix := fmt.Sprintf("inc/%020d", since)
 	w := b.newChunkWriter(ctx, prefix)
-	to, berr := b.export(w, since)
+	to, _, berr := b.export(w, since, false)
 	if berr != nil {
 		return since, fault.Internalf(op, "badger backup since %d: %v", since, berr)
 	}
@@ -114,6 +144,7 @@ func (b *backup) Ship(ctx context.Context) (uint64, error) {
 	if err := w.Close(); err != nil { // an upload failure here keeps the cursor where it was
 		return since, err
 	}
+	man.Format = min(man.Format, manifestFormat) // never claim a format this chain's base was not built with
 	man.Incs = append(man.Incs, segment{Prefix: prefix, Since: since, To: to, Parts: w.parts})
 	if err := b.saveManifest(ctx, man); err != nil {
 		return since, err
@@ -126,7 +157,8 @@ func (b *backup) Ship(ctx context.Context) (uint64, error) {
 
 // Rebaseline writes a fresh full base (db.Backup since 0) through the chunking writer with a low export
 // concurrency, repoints the manifest at it (resetting the incremental chain), and prunes the superseded
-// segments — bounding the restore chain and the on-disk backup set.
+// segments — bounding the restore chain and the on-disk backup set — then the delete records the base
+// reflects (ADR-0195 Decision 2). A failed record prune is logged, not returned: the next re-baseline prunes them.
 func (b *backup) Rebaseline(ctx context.Context) error {
 	b.loop.Lock()
 	defer b.loop.Unlock()
@@ -149,14 +181,14 @@ func (b *backup) rebaseline(ctx context.Context) error {
 	// without backup, #808), and a reused name would overwrite the live base's parts before the manifest moves
 	prefix := fmt.Sprintf("base/%020d-%d", at, started.UnixNano())
 	w := b.newChunkWriter(ctx, prefix)
-	to, berr := b.export(w, 0)
+	to, readTs, berr := b.export(w, 0, true)
 	if berr != nil {
 		return fault.Internalf(op, "badger full backup: %v", berr)
 	}
 	if err := w.Close(); err != nil {
 		return err
 	}
-	man := manifest{Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: started}}
+	man := manifest{Format: manifestFormat, Base: &segment{Prefix: prefix, Since: 0, To: to, Parts: w.parts, At: started}}
 	if err := b.saveManifest(ctx, man); err != nil {
 		return err
 	}
@@ -164,12 +196,16 @@ func (b *backup) rebaseline(ctx context.Context) error {
 		return err
 	}
 	b.prune(ctx, old, prefix) // best-effort: drop the old base (unless reused) + old incrementals
+	if err := b.pruneDelRecords(ctx, readTs); err != nil && ctx.Err() == nil {
+		b.logger.Warn("kv backup delete-record prune failed; the next re-baseline prunes the rest", "err", err)
+	}
 	return nil
 }
 
-// Restore reconstructs the instance from the latest base then each incremental, in version order, and sets
-// the cursor to the chain's head so a ship from the restored instance continues the chain. Idempotent
-// (Badger Load is last-writer-wins per key-version). Run into a fresh instance.
+// Restore reconstructs the instance from the latest base then each incremental, in version order, deletes
+// every key its delete records say was deleted later (ADR-0195 Decision 3), and only then sets the cursor to
+// the chain's head so a ship from the restored instance continues the chain. Run into a fresh instance,
+// before it takes writes.
 func (b *backup) Restore(ctx context.Context) error {
 	const op = "kvbadger.backup.Restore"
 	man, err := b.loadManifest(ctx)
@@ -194,27 +230,174 @@ func (b *backup) Restore(ctx context.Context) error {
 		}
 		head = s.To
 	}
+	if err := b.applyDelRecords(ctx); err != nil {
+		return err
+	}
 	return b.setCursor(ctx, head)
 }
 
-// export streams every version > since to w and returns the version the cursor may advance to. It leaves out
-// the backup's own cursor: each cursor write is a new version, so exporting it made every idle tick ship a
-// segment (#790). Each Stream producer reads its own, later snapshot, so a version above the read timestamp
-// taken here can be exported while a write below it was missed (#806): the result is capped at that read
-// timestamp, which every producer sees in full, and the next export ships the versions above it again.
-func (b *backup) export(w io.Writer, since uint64) (uint64, error) {
+// export streams every version > since to w and returns the version the cursor may advance to, and the read
+// timestamp taken before the stream. It leaves out the backup's own cursor: each cursor write is a new
+// version, so exporting it made every idle tick ship a segment (#790). Each Stream producer reads its own,
+// later snapshot, so a version above the read timestamp can be exported while a write below it was missed
+// (#806): the result is capped at that read timestamp, which every producer sees in full, and the next export
+// ships the versions above it again. A base also leaves out every delete record whose newest version is at or
+// below the read timestamp: the base reflects that delete (ADR-0195 Decision 2).
+func (b *backup) export(w io.Writer, since uint64, base bool) (to, readTs uint64, err error) {
 	snap := b.db.NewTransaction(false)
 	defer snap.Discard()
+	readTs = snap.ReadTs()
+	recPrefix := []byte(delRecordPrefix)
 	s := b.db.NewStream()
 	s.LogPrefix = "kvbadger.backup"
 	s.SinceTs = since
 	s.NumGo = exportNumGo
-	s.ChooseKey = func(item *badger.Item) bool { return string(item.Key()) != backupCursorKey }
-	to, err := s.Backup(w, since)
-	if err != nil {
-		return 0, err
+	s.ChooseKey = func(item *badger.Item) bool {
+		k := item.Key()
+		if string(k) == backupCursorKey {
+			return false
+		}
+		return !base || !bytes.HasPrefix(k, recPrefix) || item.Version() > readTs
 	}
-	return min(to, snap.ReadTs()), nil
+	to, err = s.Backup(w, since)
+	if err != nil {
+		return 0, 0, err
+	}
+	return min(to, readTs), readTs, nil
+}
+
+// applyDelRecords deletes every key whose newest version is strictly older than its delete record, one
+// transaction per chunk. A key set again in the delete's transaction shares its version and stays. The records
+// stay: these deletes write none, so dropping the records would let a later restore bring the keys back once
+// compaction drops this instance's delete markers (ADR-0195 Decision 3).
+func (b *backup) applyDelRecords(ctx context.Context) error {
+	const op = "kvbadger.backup.Restore"
+	stale := func(txn *badger.Txn, rec *badger.Item) ([]byte, error) {
+		key := rec.Key()[len(delRecordPrefix):]
+		item, err := txn.Get(key)
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil, nil
+		}
+		if err != nil || item.Version() >= rec.Version() {
+			return nil, err
+		}
+		return bytes.Clone(key), nil
+	}
+	err := b.forDelRecordChunks(ctx, stale, func(keys [][]byte) error {
+		return b.db.Update(func(txn *badger.Txn) error {
+			for _, k := range keys {
+				if err := txn.Delete(k); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil && ctx.Err() == nil {
+		return fault.Internalf(op, "apply delete records: %v", err)
+	}
+	return err
+}
+
+// pruneDelRecords deletes the delete records at or below readTs, the deletes a new base reflects, one
+// transaction per chunk. Each transaction re-reads its records and keeps one a later delete rewrote, and a
+// chunk that conflicts with such a delete is retried up to pruneRetries times (ADR-0195 Decision 4).
+func (b *backup) pruneDelRecords(ctx context.Context, readTs uint64) error {
+	const op = "kvbadger.backup.pruneDelRecords"
+	covered := func(_ *badger.Txn, rec *badger.Item) ([]byte, error) {
+		if rec.Version() > readTs {
+			return nil, nil
+		}
+		return rec.KeyCopy(nil), nil
+	}
+	err := b.forDelRecordChunks(ctx, covered, func(recs [][]byte) error {
+		err := b.pruneChunk(recs, readTs)
+		for try := 0; try < pruneRetries && errors.Is(err, badger.ErrConflict); try++ {
+			err = b.pruneChunk(recs, readTs)
+		}
+		return err
+	})
+	if err != nil && ctx.Err() == nil {
+		return fault.Internalf(op, "%v", err)
+	}
+	return err
+}
+
+// pruneChunk deletes, in one transaction, each of the records recs that is still at or below readTs.
+func (b *backup) pruneChunk(recs [][]byte, readTs uint64) error {
+	return b.db.Update(func(txn *badger.Txn) error {
+		for _, k := range recs {
+			item, err := txn.Get(k)
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if item.Version() > readTs {
+				continue
+			}
+			if err := txn.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// forDelRecordChunks scans the delete records in key order and hands each chunk of the keys pick returns to
+// apply, so a pass holds one chunk at most. A chunk is full before the sum of len(key) + delEntryBytes over its
+// keys would pass delChunkBytes. The context is checked between chunks.
+func (b *backup) forDelRecordChunks(
+	ctx context.Context,
+	pick func(txn *badger.Txn, rec *badger.Item) ([]byte, error),
+	apply func(keys [][]byte) error,
+) error {
+	prefix := []byte(delRecordPrefix)
+	from := prefix
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var chunk [][]byte
+		size, done := 0, true
+		err := b.db.View(func(txn *badger.Txn) error {
+			opts := badger.DefaultIteratorOptions
+			opts.PrefetchValues = false
+			opts.Prefix = prefix
+			it := txn.NewIterator(opts)
+			defer it.Close()
+			for it.Seek(from); it.ValidForPrefix(prefix); it.Next() {
+				rec := it.Item()
+				k, err := pick(txn, rec)
+				if err != nil {
+					return err
+				}
+				if k != nil {
+					cost := len(k) + delEntryBytes
+					if size+cost > delChunkBytes {
+						done = false
+						return nil
+					}
+					size += cost
+					chunk = append(chunk, k)
+				}
+				from = append(rec.KeyCopy(nil), 0) // the least key after rec: where the next scan resumes
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if len(chunk) > 0 {
+			if err := apply(chunk); err != nil {
+				return err
+			}
+		}
+		if done {
+			return nil
+		}
+	}
 }
 
 func (b *backup) loadSegment(ctx context.Context, s segment) error {
@@ -454,7 +637,7 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 				logger.Error("kv backup ship failed", "err", err)
 			}
 		case <-reb.C:
-			next := rebaseline // a failed re-baseline retries one period later, never in a loop of full exports
+			next := bk.retry // a failed re-baseline retries after rebaselineRetry, never in a loop of full exports
 			if err := bk.Rebaseline(ctx); err != nil {
 				if ctx.Err() == nil {
 					logger.Error("kv backup re-baseline failed", "err", err)
@@ -468,11 +651,11 @@ func RunBackup(ctx context.Context, b Backup, logger *slog.Logger) {
 }
 
 // untilRebaseline returns how long until the next re-baseline is due: one period after the time the manifest's
-// base records, which survives a restart (#807). A manifest without a base or a recorded time, or one that
-// cannot be read, is due now.
+// base records, which survives a restart (#807). A manifest without a base or a recorded time, one of an older
+// format (a chain without delete records, ADR-0195 Decision 5), or one that cannot be read, is due now.
 func (b *backup) untilRebaseline(ctx context.Context, period time.Duration) time.Duration {
 	man, err := b.loadManifest(ctx)
-	if err != nil || man.Base == nil || man.Base.At.IsZero() {
+	if err != nil || man.Base == nil || man.Base.At.IsZero() || man.Format < manifestFormat {
 		return 0
 	}
 	return max(time.Until(man.Base.At.Add(period)), 0)
