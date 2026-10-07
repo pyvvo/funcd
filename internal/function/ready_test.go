@@ -563,6 +563,25 @@ func TestIssue838_UnansweredMembersProbeKeepsGatedMemberReady(t *testing.T) {
 	require.Equal(t, testPeriod, res.RequeueAfter)
 }
 
+// A Ready pooled member whose gate fails while its pool worker runs before writing its port is Degraded, not the gate's
+// phase: a running pool worker that does not listen is ADR-0161 Decision 2's running row, as a solo replica is.
+func TestIssue838_PoolWorkerWithoutPortCountsAsRunning(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.create(t, "member", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w1" })
+	h.reconcile(t, "member")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "member").Status.Phase)
+
+	h.rt.hold(runtime.NewInstanceID("default", poolOf("w1"), "", 0), true)
+	h.apply(t, "member", func(fn *v1.Function) { fn.Spec.Handler = "" })
+	res := h.reconcile(t, "member")
+	fn := h.getFn(t, "member")
+	require.Equal(t, v1.PhaseDegraded, fn.Status.Phase, "the pool worker runs")
+	require.Zero(t, fn.Status.Replicas)
+	h.requireCondition(t, "member", "Ready", v1.ConditionFalse, "Restarting")
+	require.Equal(t, testPeriod, res.RequeueAfter)
+}
+
 // A converging pass whose pool host does not answer /health/members judges a serving member not ready: Degraded, as
 // ADR-0158 Decision 4 maps a failed probe, not a failed pass.
 func TestUnansweredMembersProbeDegradesServingMember(t *testing.T) {
