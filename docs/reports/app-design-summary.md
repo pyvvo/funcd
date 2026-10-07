@@ -22,13 +22,13 @@ template gives values and reuse across installs, and it can be pushed to an OCI 
 ```mermaid
 flowchart LR
     subgraph outside["Outside the App, used by name"]
-        SEC["Secrets"]
+        SEC["Secret values, set by an operator or an Identity"]
         CMX["ConfigMaps the App does not define"]
         REFX["existing objects named with ref"]
         REG["OCI registry: function bundles, site bundles, App templates"]
     end
     subgraph app["App todo"]
-        SPEC["spec sections: kv, buckets, functions, workflows,<br/>eventSources, sensors, routes, sites, catalogs, configMaps"]
+        SPEC["spec sections: kv, buckets, functions, workflows,<br/>eventSources, sensors, routes, sites, catalogs, configMaps,<br/>secrets (declarations: names and keys)"]
         HOOKS["hooks: preApply, postApply"]
         TESTS["tests (opt-in)"]
     end
@@ -52,6 +52,7 @@ flowchart LR
     app -->|"creates, updates, restores, prunes"| owned
     owned --> grand
     owned -.->|"read by name"| outside
+    app -.->|"declares, checks keys"| SEC
 ```
 
 ## 3. Example: the files of the to-do app
@@ -75,6 +76,7 @@ todo/
 │       ├── lake.yaml             catalogs: todo-lake, when analytics is on
 │       ├── web.yaml              sites: todo-web
 │       ├── settings.yaml         configMaps: todo-settings
+│       ├── secrets.yaml          secrets: todo-stripe-key, declared with its keys, no values
 │       ├── hooks.yaml            hooks: preApply calls todo-migrate
 │       └── tests.yaml            tests: an HTTP check and a Function call, run on demand
 ├── functions/                    code, pushed with funcdctl push
@@ -85,8 +87,9 @@ todo/
 └── web/dist/                     the front end, pushed with funcdctl push --site
 ```
 
-Secrets such as `todo-stripe-key` are made outside the App, by hand or as an Identity's credential, and a Function
-names them in its own `secrets` field.
+Secrets are declared in `resources/secrets.yaml` with their names and keys, so the template documents what the app
+needs. Their values are set outside the App, by an operator or as an Identity's credential, and a Function names a
+Secret in its own `secrets` field.
 
 ## 4. The components involved
 
@@ -231,7 +234,7 @@ sequenceDiagram
 | Failure and rollback | `app-failed-upgrade-keeps-serving`, `app-rollback` |
 | Admission and ownership | `app-admission-refuses`, `app-shared-writer-refused`, `app-child-not-owned`, `app-ref-kept-store`, `app-ref-waits` |
 | Readiness and health | `app-idle-function-stays-current`, `app-scale-to-zero-not-started`, `app-hung-worker-restarted`, `app-dependency-check` |
-| Config and secrets | `app-secret-by-name`, `app-config-change-rolls` |
+| Config and secrets | `app-secret-declared`, `app-secret-undeclared-refused`, `app-config-change-rolls` |
 | Drift and pause | `app-drift-restored`, `app-paused-keeps-hotfix` |
 | Hooks | `app-pre-hook-migrates`, `app-pre-hook-fails-then-retry`, `app-post-hook-fails` |
 | Tests | `app-test-on-demand` |
@@ -251,7 +254,7 @@ sequenceDiagram
 | Failure | after `app.upgradeTimeout` the revision is `Failed` and the old one stays current; no automatic rollback |
 | Prune | runs only after the switch, and is skipped when a post-hook fails |
 | Data | stores are kept unless `deletion: delete`; a kept store is used again through `ref` |
-| Secrets | consumed by name only; the App never creates, owns or restores a Secret |
+| Secrets | declared in the App (name, keys, description); values are managed by the platform; a missing Secret or key holds the rollout; the App never writes a Secret |
 | Config | a ConfigMap the App defines is stored as `<name>-<hash>`, so a change rolls the Functions that use it |
 | Drift | a part edited or deleted by hand gets its declared spec back at once; `spec.paused` stops every write |
 | Health | built in: liveness on every replica, a dependency check in the shim, one probe of the KV engine and blob storage |
@@ -289,7 +292,7 @@ first part that is not Ready, with `funcdctl describe` and `funcdctl logs`. A fa
 ## 10. What the App does not do
 
 - It does not pull a bundle or a template on the server.
-- It does not own, generate or rotate Secrets.
+- It does not hold or write Secret values: it declares the Secrets it needs, and the platform manages their values.
 - It does not judge which component versions work together.
 - It does not switch the whole App at once (no app-wide blue-green).
 - It does not roll back by itself.

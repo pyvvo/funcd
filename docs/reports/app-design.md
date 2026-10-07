@@ -59,7 +59,7 @@
 | 2026-10-07 | Visibility of a revert | one log line, and the last restore in the App status |
 | 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | Config | an App defines its ConfigMaps in `configMaps`, or names existing ones |
-| 2026-10-07 | Secrets | consumed by name only, as a Workflow step and a Function do; the App never creates, owns or restores a Secret, and rotation belongs to the secrets work (ADR-0057) |
+| 2026-10-07 | Secrets | declared in the App and its template (name, keys, description) to document what the app needs; the values are managed by the platform, and the App never creates, writes or restores a Secret |
 | 2026-10-07 | Hook points | `hooks.preApply` and `hooks.postApply`, on every rollout (install, upgrade, rollback); the call's input names the event |
 | 2026-10-07 | What a hook runs | one call to a Function of the App, recorded as an Invocation; not a Workflow, which would add a second component to debug |
 | 2026-10-07 | What a hook can do | what any Function can: its handler gets the usual context (`kv`, `blob`, `invoke`, `log`, catalog env), scoped by its own bindings |
@@ -154,10 +154,13 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 - `scenario: app-dependency-check` — a new revision of `todo-api` binds a KV table that it may not read ⇒ its
   readiness fails the dependency check, the App keeps `todo-2` current and turns `Failed` after the timeout; a
   scaled-to-zero link target of `todo-api` is not woken by the check.
-- `scenario: app-secret-by-name` — `todo-api` lists `todo-stripe-key` in `secrets`, and the Secret is made outside
-  the App ⇒ `todo-api` gets it in its environment. While the Secret is missing, `todo-api` reports
-  `SecretResolveFailed` and the App waits. Updating the Secret outside the App ⇒ the App writes nothing and restores
-  nothing; a worker started after the update gets the new value.
+- `scenario: app-secret-declared` — `secrets` declares `todo-stripe-key` with key `STRIPE_API_KEY`, and `todo-api`
+  names it in its own `secrets` ⇒ while the Secret is missing, the App waits with `SecretNotFound` naming it; when
+  the Secret exists without that key, `SecretKeyMissing` names the key; once an operator creates it complete,
+  `todo-api` gets `STRIPE_API_KEY` in its environment. Updating the Secret outside the App ⇒ the App writes nothing
+  and restores nothing; a worker started after the update gets the new value.
+- `scenario: app-secret-undeclared-refused` — `todo-api` names a Secret that `secrets` does not declare ⇒ apply
+  fails (422) naming the Function and the Secret; an entry carrying `data` ⇒ apply fails (unknown field).
 - `scenario: app-config-change-rolls` — `configMaps[0].data.TZ` changed ⇒ a new ConfigMap `todo-settings-<hash>`;
   `todo-api` gets a new Revision and serves the new `TZ` after its switch; the old ConfigMap goes at prune; a rollback
   to the previous AppRevision brings the old ConfigMap and value back.
@@ -194,7 +197,7 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
 failure); the GC pairs; the template (`funcdctl app render`, `funcdctl push --template`); `funcdctl app
 history|rollback|retry`; hooks (`preApply`, `postApply`); two config keys. **Out**: hooks before a delete; App
 dependencies and nested Apps; automatic rollback; the DR `BackupSchedule` (its section and App scope come with the
-kind); sections for IAM kinds; cron; Secrets owned by an App (an App consumes Secrets by name); secret rotation (the
+kind); sections for IAM kinds; cron; Secret values in an App (the App only declares its Secrets); secret rotation (the
 secrets work, ADR-0057); apps across namespaces; a template pulled by the server.
 
 ## Constraints & Decision drivers
@@ -220,7 +223,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | Automatic adoption by the same App name | the silent same-name takeover ADR-0178 refused for Workflows |
 | Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
 | An app-wide switch (blue-green of the whole App) | the App does not judge compatibility; the builder pins compatible versions in the published template (decider) |
-| Owned Secrets with generated values | a Secret is consumed by name, as a Workflow step does; self-heal would undo every rotation of an owned one, and rotation belongs to the secrets work (ADR-0057) |
+| Owned Secrets, or Secret values in the App | self-heal would undo every value an operator sets or rotates; the values belong to the platform, so the App only declares its Secrets |
 | Hooks as WorkflowRuns | they add the Workflow engine, its run store and pins as a second component a hook depends on, hard to debug when it is degraded (decider) |
 | Hooks as inline goja scripts | user code inside the control plane, where goja has no memory cap; no libraries and no egress control; could come later for tiny tasks |
 | Hooks as one-shot jobs (Kubernetes Job style) | a new job runner and a run-once mode in both shims, on a path nothing exercises yet |
@@ -232,9 +235,9 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
    (namespaced, read-only like `Revision`, stamped by the platform) is `<app>-<n>`: a frozen copy of an App spec and
    the record of that version's rollout. App names are at most 52 characters, so `<app>-<n>` stays a DNS label.
 2. **Sections**: `kv`, `buckets`, `functions`, `workflows`, `eventSources`, `sensors`, `routes`, `sites`, `catalogs`,
-   `configMaps` (Decision 18). An entry is `name` plus the kind's own spec fields; `kv` and `buckets`
-   entries add `deletion: retain | delete` (default `retain`). Instead of a definition, any entry may be `ref:
-   <name>`, which names an existing object of that kind in the namespace (Decision 5), as a Workflow step's
+   `configMaps`, `secrets` (declarations only, Decision 18). An entry is `name` plus the kind's own spec fields; `kv`
+   and `buckets` entries add `deletion: retain | delete` (default `retain`). Instead of a definition, any entry may
+   be `ref: <name>`, which names an existing object of that kind in the namespace (Decision 5), as a Workflow step's
    `function.ref` does. Each part takes the App's namespace and resource group and keeps its declared name. A kind
    gets a section when an App needs it (the planned `BackupSchedule` adds `backupSchedules`). An unknown section is
    refused: `funcdctl` decodes strictly (`pkg/sdk/sdk.go:430`) and the API schema allows no extra field.
@@ -348,19 +351,25 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     manual fix survives only when it is copied into the App. Self-heal covers only the parts the App defines: it
     never writes a Secret or a `ref` object, so a change made to those outside the App is never undone.
 18. **Config and secrets.** The App defines ConfigMaps in `configMaps` (data inline), or its parts name existing
-    ones. It consumes Secrets by name only, as a Workflow step does: a Function, a step or a CatalogService lists
-    them in its own `secrets` field, and `buildFunction` copies a step's names to its Function
-    (`reconcile_workflow.go:482`). The App never creates, owns, generates, renames or restores a Secret. A Secret is
-    made with or without the App (by hand, or as an Identity's credential), and rotating it is an update of that
-    Secret, outside the App. The Function reconciler resolves its Secrets on every pass and fails closed when one is
-    missing or denied (`SecretResolveFailed`, `function.go:664-684`); a worker gets the values when it starts, and
-    live rotation is planned with the secrets work (ADR-0057, V2). A ConfigMap the App defines is stored as
-    `<name>-<hash>`, the hash of its data, and the App points the parts that name it (a Function's or a
-    CatalogService's `config`) at that name. A changed hash is a new object, so the Function gets a new generation,
-    a new Revision and an ADR-0143 switch with the new environment; the old ConfigMap goes at prune, which keeps a
-    rollback complete. This is needed because the environment is set when a worker starts (ADR-0093: no hot reload)
-    and no ConfigMap event reconciles a Function (`function.go:678`). A ConfigMap the App does not define is not
-    renamed and rolls nothing, as today.
+    ones. Secrets are declared, never defined: a `secrets` entry has a `name`, the `keys` the app needs and an
+    optional `description`, and no field for values, so the template documents every Secret the app needs, as it
+    does its ConfigMaps. The values are managed by the platform: an operator sets them, by hand or as an
+    Identity's credential, and the store keeps them encrypted (`cmd/funcd/main.go:683`). The App never creates,
+    writes, owns or restores a Secret, so self-heal never undoes a value an operator set, and rotating a Secret is
+    an update outside the App (live rotation is planned with the secrets work, ADR-0057, V2). Parts consume
+    Secrets by name, as a Workflow step does: a Function, a step or a CatalogService lists them in its own `secrets`
+    field (`buildFunction` copies a step's names, `reconcile_workflow.go:482`). Admission refuses a part that names a
+    Secret the App does not declare, so the declarations stay complete, and checks each declared key with the env-key
+    rule of a Secret (`validateEnvKeys`). On every pass the App checks that each declared Secret exists and holds
+    every declared key, reading key names only and never logging a value: a missing Secret holds the rollout with
+    `SecretNotFound`, a missing key with `SecretKeyMissing`, and the timeout applies as to any part. The Function
+    reconciler keeps its own fail-closed check (`SecretResolveFailed`, `function.go:664-684`). A ConfigMap the App
+    defines is stored as `<name>-<hash>`, the hash of its data, and the App points the parts that name it (a
+    Function's or a CatalogService's `config`) at that name. A changed hash is a new object, so the Function gets a
+    new generation, a new Revision and an ADR-0143 switch with the new environment; the old ConfigMap goes at
+    prune, which keeps a rollback complete. This is needed because the environment is set when a worker starts
+    (ADR-0093: no hot reload) and no ConfigMap event reconciles a Function (`function.go:678`). A ConfigMap the App
+    does not define is not renamed and rolls nothing, as today.
 
 ## Lifecycle
 
@@ -466,6 +475,7 @@ type AppSpec struct {
 	Sites        []AppSite        `json:"sites,omitempty"`
 	Catalogs     []AppCatalog     `json:"catalogs,omitempty"`
 	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
+	Secrets      []AppSecret      `json:"secrets,omitempty"` // declarations only (Decision 18)
 	Tests        []AppTest        `json:"tests,omitempty"` // opt-in, run only by funcdctl app test
 	Hooks        *AppHooks        `json:"hooks,omitempty"`
 }
@@ -512,6 +522,11 @@ type AppRevisionSpec struct {
 	App    ObjectRef `json:"app"`
 	Number int64     `json:"number" minimum:"1"`
 	Spec   AppSpec   `json:"spec"` // the frozen copy
+}
+type AppSecret struct { // a declaration: what the app needs, never a value
+	Name        ObjectName `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Keys        []string   `json:"keys"` // env-var names, checked with the Secret's key rule
 }
 type AppTest struct {
 	Name     ObjectName      `json:"name"`
@@ -604,6 +619,8 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
 | `ChildNotOwned` | App `Ready=False` | a part exists without this App's controller ref |
 | `ChildInvalid` | App `Ready=False` | the store refused a part write |
 | `RefNotFound` | App `Ready=False` | a `ref` names an object that does not exist yet |
+| `SecretNotFound` | App `Ready=False` | a declared Secret does not exist; the message names it |
+| `SecretKeyMissing` | App `Ready=False` | a declared Secret lacks a declared key; the message names both |
 | `Progressing` | App `Ready=False` | a part is Pending, before the timeout |
 | `NotStarted` | App `Ready=Unknown` | current, and a Function has never started |
 | `HookFailed` | App `Ready=False`; AppRevision `Failed` (pre-hook) or App `Degraded` (post-hook) | a hook run failed or timed out; the message names the run |
@@ -651,7 +668,9 @@ func (e *Expr) Idents() []string // leading identifiers, read before Check to ro
       Invocation owned by its AppRevision; no Workflow is involved in a hook.
 - [ ] No secret value appears in an App, an AppRevision, an App status or a log.
 - [ ] A change to a ConfigMap the App defines gives every Function that uses it a new Revision.
-- [ ] The App never creates, writes or deletes a Secret.
+- [ ] The App never creates, writes or deletes a Secret; a `secrets` entry has no field for values.
+- [ ] A part that names an undeclared Secret is refused at apply; a missing Secret or key holds the rollout with
+      `SecretNotFound` or `SecretKeyMissing`, and no Secret value reaches a log or a status.
 - [ ] A part edited or deleted by hand gets its declared spec back at once, with a log line and `status.lastRestore`,
       unless the App is paused; a paused App writes nothing.
 - [ ] `render` leaves expressions without `values`/`app` byte for byte.
@@ -705,6 +724,7 @@ todo/
 │       ├── stats.yaml          functions + routes   when analytics
 │       ├── lake.yaml           catalogs             when analytics
 │       ├── web.yaml            sites
+│       ├── secrets.yaml        secrets: declarations only (names, keys), no values
 │       └── backup.yaml         backupSchedules      planned (DR)
 ├── functions/
 │   ├── api/                    code + funcdctl.yaml
@@ -927,7 +947,7 @@ spec:
       config:
         - todo-settings
       secrets:
-        - todo-session-key       # a Secret made outside the App, used by name
+        - todo-stripe-key        # declared below, values set by an operator
     - name: todo-planner
       runtime: nodejs22
       handler: handle
@@ -1023,6 +1043,11 @@ spec:
     - name: todo-settings          # stored as todo-settings-<hash>
       data:
         TZ: Europe/Paris
+  secrets:                         # declarations only; values managed by the platform
+    - name: todo-stripe-key
+      description: Stripe secret key for payments
+      keys:
+        - STRIPE_API_KEY
   tests:
     - name: api-lists-todos
       http:
