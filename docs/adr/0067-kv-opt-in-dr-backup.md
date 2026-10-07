@@ -1,6 +1,7 @@
 # ADR-0067: KV opt-in DR backup — version-watermarked incremental export to object storage
 
 - **Status**: Implemented (2026-06-22)
+- **Superseded in part by**: [ADR-0195](0195-kv-backup-delete-records.md) (2026-10-07) — Decisions 1 to 3 (the incremental loop, the re-baseline and Restore), Decision 5's config block and the Contracts: a delete with backup on also writes a delete record that incrementals ship, Restore applies and a re-baseline prunes; the manifest gains `format`; a failed re-baseline retries after `kvstore.backup.rebaselineRetry`.
 - **Date**: 2026-06-22 (judged 2026-06-22 — folded the fix that `blob.Bucket.Put` is whole-object `[]byte`, so
   segments are **chunked** to `chunkBytes` (default 64 MiB) — neither an incremental nor a re-baseline buffers
   a whole segment in memory on the RAM-bound box. No Blockers.)
