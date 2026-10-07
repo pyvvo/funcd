@@ -92,6 +92,9 @@
 | 2026-10-07 | A required App upgraded out of a dependent's range | refused at admission, naming the dependent |
 | 2026-10-07 | Deleting a required App | refused while another App requires it |
 | 2026-10-07 | A requirement not met | the dependent waits before its rollout: no part written, no hook called; the upgrade timeout starts once the requirements are met |
+| 2026-10-07 | A requirement cycle | refused at admission |
+| 2026-10-07 | A requirement without a version range | accepts any version of the required App, even an App with no version; delete protection and the cycle check still apply |
+| 2026-10-07 | Which dependents an upgrade refusal protects | only those that satisfy the range today; a dependent that is still waiting does not block an upgrade |
 | 2026-10-07 | Where the pins live | a committed `app/app.lock`, written by `funcdctl app lock`: the requested ref, the version and the digest of each image, as Chart.lock and package-lock.json; render, deploy and push use it, and push packs it instead of rewriting `app.yaml` |
 
 ## Context & Need
@@ -241,6 +244,9 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   run and `billing-1` becomes current.
 - `scenario: app-requires-version` — `lakehouse` at 1.9.0 ⇒ `billing` waits with the message `App/lakehouse is 1.9.0;
   billing needs ^2.0.0`; after `lakehouse` 2.1.0 becomes current, `billing` rolls out.
+- `scenario: app-requires-any-version` — `billing` requires `lakehouse` with no range, and `lakehouse` was written by
+  hand with no `spec.version` ⇒ `billing` rolls out once `lakehouse` is Ready; a deploy of `lakehouse` at any version
+  is allowed; `funcdctl app delete lakehouse` is refused, naming `billing`.
 - `scenario: app-requires-upgrade-refused` — with `billing` current on `lakehouse` 2.1.0, a deploy of `lakehouse`
   3.0.0 is refused (422) naming `billing` and `^2.0.0`; `funcdctl app rollback lakehouse 1` to 1.9.0 is refused the
   same way, and the dry run shows both refusals.
@@ -446,20 +452,20 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     funcd has no dry run today; the engine serves every kind, with `funcdctl apply --dry-run` beside
     `funcdctl app deploy --dry-run`.
 20. **Requirements (F122).** `spec.requires` names the shared Apps this App needs, in its namespace, each with an
-    npm-style version range (`app: lakehouse`, `version: ^2.0.0`; no range accepts any version), matched against the
-    required App's `spec.version` with `Masterminds/semver/v3`; a range never matches an App without a semver
-    version. Before its pre-hooks, a new AppRevision waits until every required App is Ready at a matching version:
-    no part is written and no hook is called, and the AppRevision stays `Deploying` with reason `RequirementNotMet`,
-    naming the App and what is missing. `app.upgradeTimeout` starts only once the requirements are met, so Apps still
-    apply in any order (ADR-0121). The App admission refuses, naming the dependents: an update or a rollback that
-    takes a required App out of a range that a dependent satisfies today; the delete of an App that another App
-    requires, as link-deletion-protection refuses deleting a link target (`internal/controlplane/admission/links.go:116`);
-    and a requirement cycle, found by a search over the namespace's Apps as link-validity finds link cycles
-    (ADR-0064). The App reconciler watches the Apps of its namespace and maps a change to the Apps that require it.
-    An App's status lists its requirements and their state, and a required App lists the Apps that require it.
-    Requirements do not say which objects are used: a part still names a shared object with `ref` and waits for it
-    (Decision 5). Template includes (a building block copied into each App, as a Helm subchart) and nested Apps were
-    not chosen (decider, 2026-10-07).
+    npm-style version range (`app: lakehouse`, `version: ^2.0.0`; no range accepts any version, even none), matched
+    against the required App's `spec.version` with `Masterminds/semver/v3`; a range never matches an App without a
+    semver version. Before its pre-hooks, a new AppRevision waits until every required App is Ready at a matching
+    version: no part is written and no hook is called, and the AppRevision stays `Deploying` with reason
+    `RequirementNotMet`, naming the App and what is missing. `app.upgradeTimeout` starts only once the requirements
+    are met, so Apps still apply in any order (ADR-0121). The App admission refuses, naming the dependents: an update
+    or a rollback that takes a required App out of a range that a dependent satisfies today; the delete of an App that
+    another App requires, as link-deletion-protection refuses deleting a link target
+    (`internal/controlplane/admission/links.go:116`); and a requirement cycle, found by a search over the namespace's
+    Apps as link-validity finds link cycles (ADR-0064). The App reconciler watches the Apps of its namespace and maps
+    a change to the Apps that require it. An App's status lists its requirements and their state, and a required App
+    lists the Apps that require it. Requirements do not say which objects are used: a part still names a shared object
+    with `ref` and waits for it (Decision 5). Template includes (a building block copied into each App, as a Helm
+    subchart) and nested Apps were not chosen (decider, 2026-10-07).
 
 ## Lifecycle
 
@@ -653,7 +659,7 @@ type AppStatus struct {
 }
 type AppRequirement struct {
 	App     ObjectName `json:"app"`
-	Version string     `json:"version,omitempty"` // an npm-style range; empty accepts any version
+	Version string     `json:"version,omitempty"` // an npm-style range; empty accepts any version, even none
 }
 type AppRequirementState struct {
 	App     ObjectName `json:"app"`
