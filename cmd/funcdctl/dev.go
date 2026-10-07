@@ -688,7 +688,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 	if sderr != nil {
 		return nil, sderr
 	}
-	rt, rerr := process.Open(ctx, stateDir, 0, slog.Default())
+	rt, rerr := process.Open(ctx, stateDir, 0, inst.logger)
 	if rerr != nil {
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "open the process runtime in %s", stateDir)
 	}
