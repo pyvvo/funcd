@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	huma "github.com/danielgtaylor/huma/v2"
 	"github.com/pyvvo/funcd/api/fault"
@@ -125,8 +126,8 @@ type FunctionStep struct {
 // BuiltinStep is an engine-native step (ADR-0096) — a nested kind-union of exactly one of Wait /
 // Pass, evaluated in-process (no container, no dispatch). Room to grow (Gate, F66).
 type BuiltinStep struct {
-	// Wait is a timer: a Go duration string ("30s") or a ${{ }} goja Select expression evaluating
-	// to a number of seconds. The step blocks in-engine for the duration (on the run context, so the
+	// Wait is a timer: a duration string ("30s", ADR-0194) or a ${{ }} goja Select expression evaluating
+	// to one. The step blocks in-engine for the duration (on the run context, so the
 	// run-timeout interrupts it), then passes its flowing input through as output. A normal step —
 	// Running then Succeeded; no special state.
 	Wait string `json:"wait,omitempty"`
@@ -239,8 +240,9 @@ func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
 // step kind-union, unique step names, each image step's <workflow>-<step> Function
 // name fitting a DNS label, dependsOn edge validity + acyclicity, the reserved
 // workflow: kind, the onFailure handler constraints, workflow-owned store owners
-// naming a step, the declared-contract total-defaults rule and the duration bounds
-// (ADR-0194). Field-format constraints (retry attempts, enums) are schema-enforced at the edge.
+// naming a step, the declared-contract total-defaults rule, the duration bounds and a
+// literal wait's grammar (ADR-0194). Field-format constraints (retry attempts, enums) are
+// schema-enforced at the edge.
 func (w *Workflow) Validate() error {
 	const op = "Workflow.Validate"
 	if err := validateMeta(w.TypeMeta, &w.ObjectMeta, KindWorkflow); err != nil {
@@ -359,7 +361,8 @@ func (s *WorkflowStep) validateKind(op string) error {
 	return nil
 }
 
-// validateDurations bounds a function step's timeout and retry backoff (ADR-0194).
+// validateDurations bounds a function step's timeout and retry backoff and parses a literal wait (ADR-0194); a
+// ${{ }} wait expression is checked when it is evaluated.
 func (s *WorkflowStep) validateDurations(op string, i int) error {
 	if f := s.Function; f != nil {
 		if err := CheckDuration(op, fmt.Sprintf("spec.steps[%d].function.timeout", i), f.Timeout, 0, MaxStepTimeout); err != nil {
@@ -371,8 +374,16 @@ func (s *WorkflowStep) validateDurations(op string, i int) error {
 			}
 		}
 	}
+	if b := s.Builtin; b != nil && b.Wait != "" && !isWaitExpression(b.Wait) {
+		if _, err := ParseDuration(b.Wait); err != nil {
+			return fault.Wrapf(err, fault.Invalid, op, "step %q: builtin.wait", s.Name)
+		}
+	}
 	return nil
 }
+
+// isWaitExpression reports whether a builtin wait is a ${{ }} expression rather than a literal duration.
+func isWaitExpression(wait string) bool { return strings.HasPrefix(strings.TrimSpace(wait), "${{") }
 
 // EffectiveDependsOn returns each step's parents as the engine schedules them (ADR-0094 Control flow):
 // its dependsOn, else the previous step in list order. The onFailure handler is outside the DAG: it gets

@@ -312,7 +312,7 @@ func TestIssue308_GuardOnAbsentFieldIsFalse(t *testing.T) {
 		step("a", ""),
 		whenStep("b", "${{ "+guard+" }}", "a"),
 		passStep("p", "${{ {big: "+guard+"} }}", "a"),
-		waitStep("w", "${{ "+guard+" ? 1 : 0 }}", "a"),
+		waitStep("w", "${{ "+guard+" ? \"1s\" : \"0s\" }}", "a"),
 	), json.RawMessage(`{}`), StartOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

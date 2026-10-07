@@ -91,3 +91,20 @@ func TestDurationFieldDocNamesBounds(t *testing.T) {
 		}
 	}
 }
+
+// scenario: wait-literal-checked-at-apply — a literal builtin.wait follows the duration grammar, checked by Validate
+// (funcdctl apply's offline pre-flight and every store write); an expression is checked when it runs.
+func TestScenarioWaitLiteralCheckedAtApply(t *testing.T) {
+	wait := func(w string) *Workflow {
+		return wfWith(WorkflowStep{Name: "pause", Builtin: &BuiltinStep{Wait: w}}, 0)
+	}
+	for _, bad := range []string{"1.5s", "30", "500us", "-1s"} {
+		err := wait(bad).Validate()
+		require.Equal(t, fault.Invalid, fault.KindOf(err), bad)
+		require.ErrorContains(t, err, `step "pause"`, bad)
+		require.ErrorContains(t, err, "units h, m, s and ms", bad)
+	}
+	for _, ok := range []string{"1s500ms", "0s", "${{ input.wait }}", "  ${{ input.wait }}"} {
+		require.NoError(t, wait(ok).Validate(), ok)
+	}
+}

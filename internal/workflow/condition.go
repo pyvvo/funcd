@@ -179,31 +179,25 @@ func (e *Engine) runBuiltin(ctx context.Context, rec *runstate.Record, st *v1.Wo
 	return e.evalPass(n, rec, st.Builtin.Pass, input, outputs)
 }
 
-// evalWait resolves a builtin wait step's duration (ADR-0096): a Go duration string ("30s") or a
-// ${{ }} goja Select expression evaluating to a number of seconds (float; sub-second allowed).
+// evalWait resolves a builtin wait step's duration (ADR-0096, ADR-0194): a duration string ("30s") or a
+// ${{ }} goja Select expression evaluating to one; any other result fails the step naming the grammar.
 func (e *Engine) evalWait(n *stepNode, rec *runstate.Record, raw string, input json.RawMessage, outputs map[v1.ObjectName]json.RawMessage) (time.Duration, error) {
-	if !strings.HasPrefix(strings.TrimSpace(raw), "${{") {
-		d, err := time.ParseDuration(raw)
+	s := raw
+	if strings.HasPrefix(strings.TrimSpace(raw), "${{") {
+		v, err := e.evalSelect(raw, n, rec, input, outputs)
 		if err != nil {
-			return 0, fault.Invalidf(engineOp, "wait %q for step %q is not a duration: %v", raw, n.name, err)
+			return 0, err
 		}
-		if d < 0 {
-			return 0, fault.Invalidf(engineOp, "wait for step %q must be non-negative", n.name)
+		// a non-string result is parsed as its JSON text, which the grammar always refuses (it needs a unit)
+		if json.Unmarshal(v, &s) != nil || string(v) == "null" {
+			s = string(v)
 		}
-		return d, nil
 	}
-	v, err := e.evalSelect(raw, n, rec, input, outputs)
+	d, err := v1.ParseDuration(s)
 	if err != nil {
-		return 0, err
+		return 0, fault.Wrapf(err, fault.Invalid, engineOp, "wait for step %q", n.name)
 	}
-	var secs float64
-	if uerr := json.Unmarshal(v, &secs); uerr != nil {
-		return 0, fault.Invalidf(engineOp, "wait expression for step %q must evaluate to a number of seconds", n.name)
-	}
-	if secs < 0 {
-		return 0, fault.Invalidf(engineOp, "wait for step %q must be non-negative", n.name)
-	}
-	return time.Duration(secs * float64(time.Second)), nil
+	return time.Duration(d), nil
 }
 
 // evalPass evaluates a builtin pass step's Select expression → its output (ADR-0096; no dispatch).
