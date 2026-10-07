@@ -9958,5 +9958,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-808-fix-claude-opus-5-5-w11.md",
     "notes": "pass; minor(model): a re-baseline after an off period always names its base base/0 (no cursor), so a second off->on cycle rewrites the live base's parts in place and a crash mid-upload leaves a mixed part set; revert overlay fails both #808 subtests for the issue's reason; 3/3 mutants killed (M2 only by the chain-continuation test, since inc/0 prefix reuse masks it in the regression test); field rename rebaseline->fullEvery touches one RunBackup line #807 also changes (mechanical merge)"
+  },
+  {
+    "date": "2026-10-07",
+    "issue": "830",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-830-fix-claude-opus-5-5-w12.md",
+    "notes": "Minor(issue): funcdctl dev still builds its process runtime and devengine over slog.Default() (outside the daemon and funcd.New scope; behavior unchanged); Minor(model): the 8-line fileLogger test helper is written twice, in process and workernode/local tests. The revert overlay made all five TestIssue830 tests fail for the issue's reason; 3/3 mutants were killed; the touched packages pass race, vet (e2e tags included) and lint."
   }
 ]
