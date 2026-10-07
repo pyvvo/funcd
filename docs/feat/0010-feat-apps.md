@@ -70,7 +70,7 @@ flowchart LR
 | F118 | **Built-in health for every part**: every part's health comes from the platform, with no code from the user. funcd checks liveness on every Function replica and restarts a replica that hangs. A Function's readiness also proves that its declared dependencies answer (its KV tables, blob prefixes, catalogs and link targets), without waking a scaled-to-zero target. The platform probes the KV engine and the blob storage, and every KV store and Bucket reflects the result. An App combines these states into its own. This changes the contract between funcd and the language shims, so new shim releases ship with it. **Why**: today funcd restarts a crashed worker but not a hung one, and it polls liveness only for pool workers. Ready proves that a handler loaded, not that the handler can reach what it needs. The decider wants health inherited from the shim, not written for each function. Every Function benefits, with or without an App. | [ADR-0142](../adr/0142-supervision-by-periodic-re-convergence.md) (supervision by periodic re-convergence) · [ADR-0174](../adr/0174-never-booted-revision-is-unknown.md) (a never-booted revision is unknown) · [ADR-0141](../adr/0141-repo-split-pyvvo-pinned-language-modules.md) (the shims as pinned language modules) | — | idea |
 | F119 | **Opt-in App tests**: an App can list checks that prove it still behaves as intended: an HTTP request through the edge with its expected status, a Function call with an input, or a WorkflowRun. A command runs them on demand, as `helm test` does. The results are recorded on the current AppRevision, nothing runs the checks by itself, and a failed check changes nothing else. **Why**: the platform proves that each part is accepted and loaded, never that the app does its job, because no reconciler calls a handler with test input. The decider wants that proof to be explicit and opt-in, and separate from health. | F113 · F114 | — | idea |
 | F120 | **App templates: values and rendering**: an App template is a directory of App fragments plus a values schema, so one definition installs many times with different settings. funcdctl renders it on the client into one App. The install values come from files kept in git; a JSON Schema types and checks them, with defaults and conditional requirements, and a value it does not declare is refused. Expressions use the platform's existing `${{ }}` engine, and a file can be included only when a condition holds. One command deploys, upgrades and downgrades an App from a template version and waits until the new revision is current or has failed; its dry run (F123) shows what a deploy would change and which hooks it would call, without writing anything. Another command deletes the App and reports which data stores stayed. The server never sees a template: the App that it receives is the source. **Why**: the same app is installed in several places (dev, prod, a second team, an end-to-end lane) with different settings, as with a Helm chart, and this must not add a template engine or a server-side render to the platform. A person or an agent should deploy, upgrade, downgrade and delete an app with one command each. | F113 · [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja `${{ }}` engine) · [ADR-0122](../adr/0122-funcdctl-yaml-manifest-native-contract-codegen.md) (`funcdctl.yaml`, a client file of the same kind) | — | idea |
-| F121 | **App templates in an OCI registry, with pinned images**: the builder sets the version of every image the app runs, in one table of the template, as a package.json sets its dependencies: an exact version or an npm-style range such as `^1.0.0`. An install can change only the registry the images come from, through a value with a default. Pushing a template resolves each range to the highest matching version and records every image's exact version and digest, as npm writes its lockfile, so a tag moved later never changes what a template version installs. The template's version is its registry tag. A template is pushed to an OCI registry and deployed from it, as a Helm chart is, beside the function bundles and site files it references. The server still never pulls a template. The transfer speed of every artifact kind, templates included, is tracked under #820. **Why**: a template version is the unit of compatibility, so its builder, a person or an agent, must be able to publish image versions that were tested together. The registry must change from day one, because the end-to-end lanes run every image from a local OCI layout and a site may use its own registry. Ranges let a builder accept compatible patch releases without editing the template. | F120 · [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0035](../adr/0035-artifact-digest-resolution-at-revision.md) (an explicit digest is used as written) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (`funcdctl push --site`, the precedent) | — | idea |
+| F121 | **App templates in an OCI registry, with pinned images**: the builder sets the version of every image the app runs, in one table of the template, as a package.json sets its dependencies: an exact version or an npm-style range such as `^1.0.0`. An install can change only the registry the images come from, through a value with a default. A lock command resolves each range to the highest matching version and records every image's exact version and digest in a lock file committed with the template, as npm's package-lock.json and Helm's Chart.lock do. Render, deploy and push use it, and push packs the template exactly as it is in git, so a tag moved later never changes what a template version or a commit installs. The template's version is its registry tag. A template is pushed to an OCI registry and deployed from it, as a Helm chart is, beside the function bundles and site files it references. The server still never pulls a template. The transfer speed of every artifact kind, templates included, is tracked under #820. **Why**: a template version is the unit of compatibility, so its builder, a person or an agent, must be able to publish image versions that were tested together. The registry must change from day one, because the end-to-end lanes run every image from a local OCI layout and a site may use its own registry. Ranges let a builder accept compatible patch releases without editing the template. | F120 · [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0035](../adr/0035-artifact-digest-resolution-at-revision.md) (an explicit digest is used as written) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (`funcdctl push --site`, the precedent) | — | idea |
 | F122 | **App dependencies**: one App depends on another, so that a stack of apps installs and upgrades in the right order. Whether this means nesting (an App inside an App) or ordering between Apps is still open. **Why**: a larger system is made of several apps that must come up in order. | F113 · F114 | — | idea |
 | F123 | **Dry-run engine**: the platform can answer what a write would do without doing it. A create or an update sent as a dry run goes through the same decoding, validation and admission as a real one, and comes back with the object as it would be stored, or with the refusal; nothing is stored. For an App, the answer also carries the plan: the AppRevision that would be stamped, the parts that would be created, updated or pruned, and the hooks that would be called. `funcdctl apply --dry-run` and `funcdctl app deploy --dry-run` use it. **Why**: today a refusal shows only at the real write. `funcdctl apply` validates each document offline, but the checks that need the store run only on the server, such as a Bucket beyond its namespace's quota or a link to a Function that does not exist. A person or an agent should see a refusal, and what a deploy would change, before making the change. Every kind benefits, with or without an App. | F113 · F114 · [ADR-0063](../adr/0063-admission-framework.md) (the admission pipeline every write passes) · [ADR-0064](../adr/0064-fn-to-fn-rpc-links.md) and [ADR-0080](../adr/0080-s3-protocol-frontend-blob-substrate.md) (server-only refusals: link validity, the bucket quota) | — | idea |
 
@@ -110,7 +110,8 @@ flowchart TB
 | `funcdctl app render` | prints the App a template renders, for a review | new | F120 |
 | `funcdctl app delete` | deletes an App, waits until its tree is gone, and reports the stores it kept | new | F120 |
 | goja (`internal/expr`, [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md)) | evaluates the template's `${{ }}` expressions on the client; hooks do not use it | exists | F120 |
-| `funcdctl push --template` | resolves every image's version or npm-style range, writes the exact version and digest into the template, then pushes it as an OCI artifact tagged with its version | new | F121 |
+| `funcdctl app lock` | resolves every image's version or npm-style range and writes the exact version and digest of each into `app.lock` | new | F121 |
+| `funcdctl push --template` | packs the template directory as it is, `app.lock` included, and pushes it as an OCI artifact tagged with its version; refuses a missing or stale lock | new | F121 |
 | `Masterminds/semver/v3` | parses and matches npm-style version ranges; MIT, already in `go.mod` as an indirect dependency | exists, becomes direct | F121 |
 | OCI registry | holds templates, function bundles and site bundles | exists, outside funcd | F121 |
 | API server and admission ([ADR-0063](../adr/0063-admission-framework.md)) | decodes the App strictly and runs the App admission | exists; App admission new | F113 |
@@ -132,6 +133,7 @@ The design note gives the full to-do App. Its project holds the template, the co
 todo/
 ├── app/                          the App template, pushed with funcdctl push --template
 │   ├── app.yaml                  name, version, registry, images, valuesSchema, when per file
+│   ├── app.lock                  written by funcdctl app lock: version and digest of each image
 │   └── resources/                fragments of the App spec, merged at render
 │       ├── store.yaml            kv: todo-store (retain), todo-cache (delete)
 │       ├── files.yaml            buckets: todo-files
@@ -190,9 +192,23 @@ registry: oci-layout:///mnt/funcd-deps/apps
 host: todo.e2e.test
 ```
 
-Rendered from the pushed template with `values/e2e.yaml`, the API Function's image is
-`oci-layout:///mnt/funcd-deps/apps/todo-api:1.0.0@sha256:4f1c…`: the push wrote the digest. It also resolved
-`todo-stats:^1.0.0` to the highest matching version, such as `1.0.3`, and wrote that version with its digest.
+`funcdctl app lock ./app` resolves every image and writes `app/app.lock`, which is committed with `app.yaml`:
+
+```yaml
+images:
+  api:
+    requested: todo-api:1.0.0
+    version: 1.0.0
+    digest: sha256:4f1c…
+  stats:
+    requested: todo-stats:^1.0.0
+    version: 1.0.3
+    digest: sha256:7d2a…
+```
+
+Rendered with this lock and `values/e2e.yaml`, the API Function's image is
+`oci-layout:///mnt/funcd-deps/apps/todo-api:1.0.0@sha256:4f1c…`, from the directory and from the pushed template
+alike.
 
 Secrets are declared in `resources/secrets.yaml` with their names and keys, so the template documents what the app
 needs (F116). A ConfigMap carries its data, because it is not sensitive. A Function names both by their declared
@@ -407,7 +423,7 @@ sequenceDiagram
 | Tests | `spec.tests` runs only with `funcdctl app test` | F119 |
 | Dry run | goes through decoding, validation and admission like a real write, stores nothing, and returns an App's plan | F123 |
 | Templates | rendered on the client; values only from `-f` files, refused when undeclared; the server never pulls a template | F120 |
-| Images | set by the builder in the template's `images` table, as an exact version or an npm-style range; only the registry is a value; push writes the resolved version and digest; the push tag is the template version | F121 |
+| Images | set by the builder in the template's `images` table, as an exact version or an npm-style range; only the registry is a value; `app.lock` holds the resolved version and digest, and render, deploy and push use it; the push tag is the template version | F121 |
 
 ## Exit criterion
 
@@ -437,9 +453,9 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **F120**: the to-do template renders to the App of the design note (`app-render-matches`); an undeclared value or
   an image outside the `images` table is refused (`app-render-refuses`); a deploy waits and reports, and a delete
   reports the stores it kept (`app-deploy-waits`, `app-delete-reports`).
-- **F121**: a pushed template pins every image, and a moved tag changes nothing (`app-template-pinned`); a range
-  resolves to the highest matching version (`app-template-range`); the registry value points the App at a local OCI
-  layout (`app-registry-value`).
+- **F121**: the lock pins every image, push packs it unchanged, and a moved tag changes nothing
+  (`app-template-pinned`); a range resolves to the highest matching version, and a stale lock is refused
+  (`app-template-range`); the registry value points the App at a local OCI layout (`app-registry-value`).
 - **F123**: a dry run returns the same refusal as the real write and stores nothing (`apply-dry-run-refused`); an
   App's dry run lists the AppRevision, the parts and the hooks, and writes nothing (`app-deploy-dry-run`).
 

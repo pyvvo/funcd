@@ -73,21 +73,22 @@
 | 2026-10-07 | BackupSchedule and Apps | a `backupSchedules` section and an App scope, once the kind exists |
 | 2026-10-07 | Upgrade order once hooks exist | pre-hooks → apply → wait → switch → post-hooks → prune |
 | 2026-10-07 | Cron | one implementation for timers and BackupSchedule, in its own ADR |
-| 2026-10-07 | What a pushed template holds | `app.yaml` and `resources/` only; install values live beside it in the project; defaults stay in the schema |
+| 2026-10-07 | What a pushed template holds | `app.yaml`, `app.lock` and `resources/` only; install values live beside it in the project; defaults stay in the schema |
 | 2026-10-07 | Who sets component versions | the builder, in an `images` table in `app.yaml`: fixed versions for now, ranges later, like npm peer dependencies |
 | 2026-10-07 | The registry | a value with a default from day one, so an install can point the App at another registry; the Venom lanes use a local OCI layout |
-| 2026-10-07 | Digests | `push --template` resolves each image and writes `tag@digest` into the pushed `app.yaml`; git keeps the tags |
+| 2026-10-07 | Digests | first: push writes `tag@digest` into the pushed `app.yaml`; replaced the same day by the lock file below |
 | 2026-10-07 | Template version and tag | `version` is required and semver; the push tag is the version |
 | 2026-10-07 | Values input | `-f` files only, kept in git; a later file wins |
 | 2026-10-07 | A value the schema does not declare | refused at render |
 | 2026-10-07 | Conditions | per file, in `app.yaml`'s `when` |
 | 2026-10-07 | Deploy, upgrade and downgrade | one `funcdctl app deploy`, which waits and reports (`--no-wait` returns at once); `funcdctl app render` stays for a review |
 | 2026-10-07 | Delete | its own `funcdctl app delete`, which waits and reports what stayed |
-| 2026-10-07 | Version ranges in `images` | npm-style ranges (`^1.0.0`, `~1.2.0`, `>=1.0.0 <2.0.0`), an exact version being one case; push resolves a range to the highest matching tag and writes that version and its digest, as npm writes package-lock.json |
+| 2026-10-07 | Version ranges in `images` | npm-style ranges (`^1.0.0`, `~1.2.0`, `>=1.0.0 <2.0.0`), an exact version being one case; `funcdctl app lock` resolves a range to the highest matching tag |
 | 2026-10-07 | A dry run | `funcdctl app deploy --dry-run` lists what a deploy would change and the hooks it would call, and writes nothing |
 | 2026-10-07 | Where the dry run runs | on the server: a dry-run engine for every write (F123), so the admissions that need the store run too; for an App it returns the plan |
 | 2026-10-07 | Images from two registries in one template | not yet; a board card tracks it |
 | 2026-10-07 | A platform mapping of registries for artifact pulls (a Nexus mirror) | skipped for now |
+| 2026-10-07 | Where the pins live | a committed `app/app.lock`, written by `funcdctl app lock`: the requested ref, the version and the digest of each image, as Chart.lock and package-lock.json; render, deploy and push use it, and push packs it instead of rewriting `app.yaml` |
 
 ## Context & Need
 
@@ -209,15 +210,17 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   App of the example below.
 - `scenario: app-render-refuses` — a value the schema does not declare (`minReplica: 2`), a value of the wrong type,
   or an `image` that is not `${{ images.<name> }}` ⇒ render fails naming the key or the field; nothing is printed.
-- `scenario: app-template-pinned` — `funcdctl push --template ./app registry.example/todo-app:1.2.0` while
-  `todo-api:1.0.0` resolves to `sha256:4f1c…` ⇒ the pushed `app.yaml` lists `todo-api:1.0.0@sha256:4f1c…`; after the
-  tag moves to another digest, a deploy of `todo-app:1.2.0` still renders `@sha256:4f1c…`; a push of version `1.2.0`
-  to the tag `1.3.0` is refused.
+- `scenario: app-template-pinned` — `funcdctl app lock ./app` while `todo-api:1.0.0` resolves to `sha256:4f1c…` ⇒
+  `app.lock` records version `1.0.0` and that digest, and `funcdctl push --template ./app
+  registry.example/todo-app:1.2.0` packs it unchanged; after the tag moves to another digest, a deploy of
+  `todo-app:1.2.0` or of `./app` still renders `@sha256:4f1c…`, and the directory deploy warns; a push of version
+  `1.2.0` to the tag `1.3.0` is refused, and so is a push without `app.lock`.
 - `scenario: app-registry-value` — `-f values/e2e.yaml` sets `registry: oci-layout:///mnt/funcd-deps/apps` ⇒ every
   image renders as `oci-layout:///mnt/funcd-deps/apps/<image>@<digest>`, and the App deploys from that layout.
 - `scenario: app-template-range` — `images.stats: todo-stats:^1.0.0` while the registry holds the tags `1.0.0`,
-  `1.0.3` and `2.0.0` ⇒ push writes `todo-stats:1.0.3@sha256:…`; with `^3.0.0` the push fails naming the image and
-  the range.
+  `1.0.3` and `2.0.0` ⇒ `funcdctl app lock` records `1.0.3` and its digest; with `^3.0.0` it fails naming the image
+  and the range; after `images.stats` becomes `^2.0.0`, render refuses the stale lock until `funcdctl app lock` runs
+  again.
 - `scenario: apply-dry-run-refused` — `funcdctl apply --dry-run -f bucket.yaml` for a Bucket beyond its namespace's
   bucket quota ⇒ the same refusal as a real apply, naming the `bucket-count` admission; nothing is stored.
 - `scenario: app-deploy-dry-run` — `funcdctl app deploy … --dry-run` with a new image version for `todo-api` and
@@ -264,6 +267,8 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 | Template provenance in tags or a field | the App spec is the source; nothing reads the template's name |
 | Image refs in the install values | an installer could mix versions that were never tested together; the builder fixes them, and only the registry is a value (decider) |
 | The registry inside each image expression | versions spread across files, and pinning would have to rewrite the tag inside each expression |
+| Pins written into a rewritten `app.yaml` at push | the pushed artifact would differ from git, and a deploy from a directory would stay unpinned |
+| Ranges resolved at every render | two deploys of the same commit could run different code |
 | `--set` on the command line | a value set there is not in git, so what runs differs from what the repository says |
 | An app-wide switch (blue-green of the whole App) | the App does not judge compatibility; the builder pins compatible versions in the published template (decider) |
 | Owned Secrets, or Secret values in the App | self-heal would undo every value an operator sets or rotates; the values belong to the platform, so the App only declares its Secrets |
@@ -479,10 +484,10 @@ invocations (ADR-0101) and runs (ADR-0102).
 
 ## The template and where files live
 
-- **A template** is a directory that holds `app.yaml` and `resources/*.yaml`, and nothing else: `push --template`
-  packs every file under it (`packDir`, `internal/artifact/bundle.go:91`), so install values live beside it in the
-  project (`todo/values/prod.yaml`). Each resource file is a fragment of an App spec (sections with entries); render
-  concatenates the sections of every file whose `when` holds, in lexical order.
+- **A template** is a directory that holds `app.yaml`, `app.lock` and `resources/*.yaml`, and nothing else:
+  `push --template` packs every file under it (`packDir`, `internal/artifact/bundle.go:91`), so install values live
+  beside it in the project (`todo/values/prod.yaml`). Each resource file is a fragment of an App spec (sections with
+  entries); render concatenates the sections of every file whose `when` holds, in lexical order.
 - **`app.yaml`** is a plain client file, like `funcdctl.yaml` (`pkg/sdk/manifest.go:22`): it has no `apiVersion` or
   `kind`, and an unknown key is refused. Its keys are `name`; `version`, required and semver; `registry`, where the
   images come from, usually `${{ values.registry }}`; `images`, every image the app runs with its version or version
@@ -493,15 +498,18 @@ invocations (ADR-0101) and runs (ADR-0102).
   dependency ranges). An install changes only the registry, through a value with a default: a
   Venom lane points the App at a local OCI layout, and a site at its own registry. A fragment names an image only as
   `${{ images.<name> }}`, which renders to `<registry>/<image>`; render refuses any other `image` value.
-- **Pinning**: `funcdctl push --template` resolves each image at the default registry. A range becomes the highest tag
-  that satisfies it, read from the registry's or the layout's tag list (oras-go v2.6.1:
-  `registry/remote/repository.go:399`, `content/oci/oci.go:350`), and a range that no tag satisfies refuses the push.
-  Push writes the exact version and its digest into the pushed `app.yaml` (`todo-api:1.0.3@sha256:…`), as npm writes
-  package-lock.json; the copy in git keeps the readable versions and ranges. Rendered from a directory, which holds
-  no pins, a range resolves at render to the highest matching tag at the install's registry, and an exact version
-  stays as written. A
-  Revision uses an explicit digest as written (ADR-0035), so a moved tag never changes what a template version
-  installs, and a copy of an image in another registry keeps its digest.
+- **Pinning**: `funcdctl app lock <dir> [-f values.yaml]…` resolves each image at the registry, the default one or the
+  one the values give. A range becomes the highest tag that satisfies it, read from the registry's or the layout's tag
+  list (oras-go v2.6.1: `registry/remote/repository.go:399`, `content/oci/oci.go:350`); a range that no tag satisfies
+  is an error. It writes `app.lock`, committed with `app.yaml` as package-lock.json is with package.json, and as Helm
+  writes `Chart.lock`: for each image, the requested ref, the version and the digest. Render and deploy use the lock,
+  from a directory or from the registry, so every deploy of one commit runs the same code; a lock that no longer
+  matches `app.yaml` is refused, naming the image. Without a lock, render resolves the ranges itself and prints what
+  it picked. When a tag moved after locking, the locked digest still applies, and render warns that `funcdctl app
+  lock` would take the new one. A Revision uses an explicit digest as written (ADR-0035), and a copy of an image in
+  another registry keeps its digest. funcd packs bundles reproducibly (`packDir` zeroes file times,
+  `internal/artifact/bundle.go:91`; `reproducible` zeroes the created date, `internal/artifact/artifact.go:114`), so
+  a lane that pushes the same source into a local layout gets the same digests.
 - **Values** come only from `-f` files, kept in git; a later file wins, maps merge key by key and lists are replaced.
   `santhosh-tekuri/jsonschema` validates them against `valuesSchema` and only validates: v6 never fills a default.
   Render refuses a value the schema does not declare, as if every object of the schema said
@@ -526,8 +534,10 @@ invocations (ADR-0101) and runs (ADR-0102).
   - `funcdctl app render <dir|ref> …` prints the App without applying it, for a review or a GitOps repository.
   - `funcdctl app delete <app> -n <namespace>` deletes the App, waits until the GC has removed its tree, and prints
     what went and which stores stayed (`deletion: retain`); `--no-wait` returns at once.
-  - `funcdctl push --template <dir> <ref>` pins the images and pushes the template as
-    `application/vnd.funcd.app-template.artifact.v1` (one tar+gzip layer), as `push --site` does. The tag is the
+  - `funcdctl app lock <dir> [-f values.yaml]…` resolves the images and writes `app.lock`.
+  - `funcdctl push --template <dir> <ref>` packs the directory as it is, `app.lock` included, and pushes it as
+    `application/vnd.funcd.app-template.artifact.v1` (one tar+gzip layer), as `push --site` does. It refuses a
+    missing or stale lock and never rewrites a file, so what is pushed is exactly what is in git. The tag is the
     template's `version`, and push refuses another tag.
 
   The server never pulls a template.
@@ -540,7 +550,7 @@ invocations (ADR-0101) and runs (ADR-0102).
 |---|---|
 | Chart (templates, `values.yaml`, `Chart.yaml`) in git, `helm push` to an OCI registry | App template in git, pushable to the same registry |
 | `helm template` / `helm upgrade --install` render on the client | `funcdctl app render` / `funcdctl app deploy` render on the client with goja |
-| Image repository and tag in `values.yaml` | `images` in `app.yaml` with fixed versions, digests written at push; only `registry` is a value |
+| Image repository and tag in `values.yaml`; `Chart.lock` for chart dependencies | `images` in `app.yaml` (versions or ranges) and `app.lock` (version and digest per image); only `registry` is a value |
 | `helm uninstall` | `funcdctl app delete` |
 | Release: rendered manifests + values in the cluster, `helm history`, `helm rollback` | App + AppRevision in the metastore, `app history`, `app rollback` |
 | Container images in a registry | function bundles and site files in the registry |
@@ -683,7 +693,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 type Template struct {
 	Name, Version string            // Version: semver, the push tag
 	Registry      string            // a literal or a ${{ }} over values
-	Images        map[string]string // name → repo:version or repo:range; repo:version@digest once pushed
+	Images        map[string]string      // name → repo:version or repo:range
+	Lock          map[string]LockedImage // app.lock; nil when the directory has none
 	ValuesSchema  json.RawMessage
 	When          map[string]string // resources/<file> → ${{ }} Condition
 	Files         map[string][]byte // resources/*.yaml by path
@@ -700,11 +711,16 @@ type ImageResolver interface {
 	Tags(ctx context.Context, repo string) ([]string, error) // a registry's or a layout's tags
 	Digest(ctx context.Context, ref string) (string, error)
 }
-func Pin(ctx context.Context, t *Template, r ImageResolver) error // at push: range → highest matching version → digest
+type LockedImage struct {
+	Requested string // the app.yaml entry it was resolved from; a mismatch makes the lock stale
+	Version   string
+	Digest    string
+}
+func Lock(ctx context.Context, t *Template, registry string, r ImageResolver) (map[string]LockedImage, error) // funcdctl app lock
 
 // internal/artifact
 const AppTemplateArtifactType = "application/vnd.funcd.app-template.artifact.v1"
-func PushTemplate(ctx context.Context, ref, dir string) (digest string, err error) // dir holds the pinned app.yaml
+func PushTemplate(ctx context.Context, ref, dir string) (digest string, err error) // dir as it is; the caller checks app.lock first
 func ResolveTemplate(ctx context.Context, ref string) (digest string, err error)
 func PullTemplate(ctx context.Context, ref, digest, dir string) error
 
@@ -754,9 +770,9 @@ type AppPlan struct {
   `pkg/funcd` (`ctrl.Register` for App, `ctrl.Watches` per section kind with `app.MapPart`); keys in
   `internal/platform/config/config.go`; pairs in `internal/gc/gc.go`.
 - **Template and CLI**: `internal/app/template`; `internal/artifact/template.go`; `schemaResolver` moves to
-  `internal/expr/schema.go` (workflow uses it), plus `Idents`; `cmd/funcdctl` `push --template`, `app render`, `app
-  deploy`, `app delete`, `app history`, `app rollback`, `app pause`, `app resume`, `app test`, `app retry`;
-  `go.mod` makes `santhosh-tekuri/jsonschema/v6` and `Masterminds/semver/v3` direct.
+  `internal/expr/schema.go` (workflow uses it), plus `Idents`; `cmd/funcdctl` `push --template`, `app lock`, `app
+  render`, `app deploy`, `app delete`, `app history`, `app rollback`, `app pause`, `app resume`, `app test`, `app
+  retry`; `go.mod` makes `santhosh-tekuri/jsonschema/v6` and `Masterminds/semver/v3` direct.
 - **Tests**: unit tests for `Children`, the admission (each refusal of Decision 3) and `Render` (typed substitution,
   defaults, `when`, pass-through and mixed expressions, refused values and images); a push/resolve/pull round trip
   that pins every image; one `TestScenarioApp…` per
@@ -788,10 +804,11 @@ type AppPlan struct {
 - [ ] A part edited or deleted by hand gets its declared spec back at once, with a log line and `status.lastRestore`,
       unless the App is paused; a paused App writes nothing.
 - [ ] `render` leaves expressions without `values`/`app`/`images` byte for byte.
-- [ ] A pushed template holds only `app.yaml` and `resources/`, and every image in its `app.yaml` carries a digest.
+- [ ] A pushed template holds only `app.yaml`, `app.lock` and `resources/`, and its lock covers every image.
 - [ ] Render refuses an undeclared value and an `image` that is not `${{ images.<name> }}`.
 - [ ] `funcdctl app deploy` exits non-zero when the new revision fails or times out.
-- [ ] A range resolves to the highest matching version at push, and a range that no tag satisfies refuses the push.
+- [ ] `funcdctl app lock` resolves a range to the highest matching version and fails when no tag satisfies it;
+      render refuses a stale lock.
 - [ ] A dry run stores nothing, stamps nothing and calls no hook, and returns the refusal the real write would get.
 - [ ] The config keys exist with the defaults above.
 
@@ -833,6 +850,7 @@ nanosecond integers until the ADR for #816 lands.
 todo/
 ├── app/                        the App template, pushed with funcdctl push --template
 │   ├── app.yaml                name, version, registry, images, values schema, when
+│   ├── app.lock                written by funcdctl app lock: version and digest of each image
 │   └── resources/              fragments of the App spec
 │       ├── store.yaml          kv
 │       ├── files.yaml          buckets
@@ -860,7 +878,7 @@ todo/
 
 | Artifact | Ref | Artifact type | Pushed with |
 |---|---|---|---|
-| App template | `todo-app:1.2.0` (the template's version) | `application/vnd.funcd.app-template.artifact.v1` (new) | `funcdctl push --template ./app <ref>`, which pins every image by digest |
+| App template | `todo-app:1.2.0` (the template's version) | `application/vnd.funcd.app-template.artifact.v1` (new) | `funcdctl app lock ./app`, then `funcdctl push --template ./app <ref>` |
 | api, planner, stats | `todo-api:1.0.0`, … | `application/vnd.funcd.function.artifact.v1` | `funcdctl push functions/<name> <ref>` |
 | front end | `todo-web:1.0.0` | `application/vnd.funcd.site.artifact.v1` | `funcdctl push --site web/dist <ref>` |
 
@@ -960,9 +978,19 @@ when:
   resources/backup.yaml: ${{ values.backup.enabled === true }}
 ```
 
-In the pushed template, push has written each image's exact version and digest into `images`
-(`api: todo-api:1.0.0@sha256:4f1c…`, `stats: todo-stats:1.0.3@sha256:…`). Rendered from the directory, as below,
-`^1.0.0` resolves to `1.0.3`, the highest matching tag, and no image carries a digest.
+**Lock** (`app/app.lock`, written by `funcdctl app lock ./app` and committed; excerpt)
+
+```yaml
+images:
+  api:
+    requested: todo-api:1.0.0
+    version: 1.0.0
+    digest: sha256:4f1c…
+  stats:
+    requested: todo-stats:^1.0.0
+    version: 1.0.3
+    digest: sha256:7d2a…
+```
 
 **Template fragments** (`app/resources/store.yaml`, `api.yaml`, `schedule.yaml`)
 
@@ -1017,8 +1045,7 @@ sensors:
         workflow: ${{ app.name + "-plan" }}
 ```
 
-**The App** (`funcdctl app render ./app --name todo -n team-a -f values/prod.yaml`; rendered from the registry
-instead, every image carries its digest)
+**The App** (`funcdctl app render ./app --name todo -n team-a -f values/prod.yaml`, with the lock above)
 
 ```yaml
 apiVersion: funcd.io/v1alpha1
@@ -1051,7 +1078,7 @@ spec:
     - name: todo-api
       runtime: nodejs22
       handler: handle
-      image: registry.example/todo-api:1.0.0
+      image: registry.example/todo-api:1.0.0@sha256:4f1c…
       scaling:
         minReplicas: 1
       kv:
@@ -1069,7 +1096,7 @@ spec:
     - name: todo-planner
       runtime: nodejs22
       handler: handle
-      image: registry.example/todo-planner:1.0.0
+      image: registry.example/todo-planner:1.0.0@sha256:b81e…
       kv:
         - alias: todos
           store: todo-store
@@ -1084,14 +1111,14 @@ spec:
     - name: todo-stats
       runtime: nodejs22
       handler: handle
-      image: registry.example/todo-stats:1.0.3
+      image: registry.example/todo-stats:1.0.3@sha256:7d2a…
       catalogs:
         - alias: lake
           catalog: todo-lake
     - name: todo-migrate             # a hook (spec.hooks), called once per rollout
       runtime: nodejs22
       handler: handle
-      image: registry.example/todo-migrate:1.2.0
+      image: registry.example/todo-migrate:1.2.0@sha256:c09f…
       timeout: 10m                   # the hook's limit
       kv:
         - alias: todos
@@ -1137,7 +1164,7 @@ spec:
             function: todo-stats
   sites:
     - name: todo-web
-      image: registry.example/todo-web:1.0.0
+      image: registry.example/todo-web:1.0.0@sha256:e5d3…
       bucket:
         name: todo-web
       prefix: web
