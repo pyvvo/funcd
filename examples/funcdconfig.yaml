@@ -78,6 +78,7 @@ storage:
 #     target: ""                  # bucket URL; required when enabled. default: ""
 #     interval: 30s               # incremental export cadence. default: 30s
 #     rebaseline: 24h             # full re-baseline cadence. default: 24h
+#     rebaselineRetry: 1h         # delay before retrying a failed re-baseline. default: 1h
 #     chunkBytes: 67108864        # max bytes per exported object. default: 67108864 (64 MiB)
 #   cdc:                          # change feed to the bus (ADR-0068); engine: badger only
 #     enabled: false              # default: false

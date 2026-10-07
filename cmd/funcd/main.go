@@ -442,7 +442,7 @@ func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger
 		kv, err := kvbadger.Open(dir)
 		return kv, noop, err
 	}
-	bucket, bcfg, err := kvBackup(ctx, cfg)
+	bucket, bcfg, err := kvBackup(ctx, cfg, logger)
 	if err != nil {
 		return nil, noop, err
 	}
@@ -499,8 +499,8 @@ func checkKVStoreConfig(cfg config.Config, logger *slog.Logger) (memory bool, er
 	return false, nil
 }
 
-// kvBackup opens the kvstore.backup target and resolves its intervals (ADR-0067); disabled ⇒ no bucket.
-func kvBackup(ctx context.Context, cfg config.Config) (blob.Bucket, kvbadger.BackupConfig, error) {
+// kvBackup opens the kvstore.backup target and resolves its intervals (ADR-0067, ADR-0195); disabled ⇒ no bucket.
+func kvBackup(ctx context.Context, cfg config.Config, logger *slog.Logger) (blob.Bucket, kvbadger.BackupConfig, error) {
 	if !cfg.Kvstore.Backup.Enabled {
 		return nil, kvbadger.BackupConfig{}, nil
 	}
@@ -512,14 +512,20 @@ func kvBackup(ctx context.Context, cfg config.Config) (blob.Bucket, kvbadger.Bac
 	if err != nil {
 		return nil, kvbadger.BackupConfig{}, err
 	}
+	retry, err := parseDuration("kvstore.backup.rebaselineRetry", cfg.Kvstore.Backup.RebaselineRetry, time.Hour, minPositive, v1.MaxDuration)
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, err
+	}
 	b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
 	if err != nil {
 		return nil, kvbadger.BackupConfig{}, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
 	}
 	return b, kvbadger.BackupConfig{
-		Interval:   interval,
-		Rebaseline: rebaseline,
-		ChunkBytes: cfg.Kvstore.Backup.ChunkBytes,
+		Interval:        interval,
+		Rebaseline:      rebaseline,
+		RebaselineRetry: retry,
+		ChunkBytes:      cfg.Kvstore.Backup.ChunkBytes,
+		Logger:          logger,
 	}, nil
 }
 

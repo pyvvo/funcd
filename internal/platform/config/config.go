@@ -129,13 +129,15 @@ type Config struct {
 		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
 		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
 		// Enabled without a Target, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when
-		// Storage.Mode is memory. Interval/Rebaseline are durations ("30s").
+		// Storage.Mode is memory. Interval/Rebaseline/RebaselineRetry are durations ("30s"); RebaselineRetry is the
+		// delay after a failed re-baseline (ADR-0195).
 		Backup struct {
-			Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
-			Target     string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
-			Interval   string `json:"interval,omitempty" env:"FUNCD_KVSTORE_BACKUP_INTERVAL"`
-			Rebaseline string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
-			ChunkBytes int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES" validate:"min=0"`
+			Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
+			Target          string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
+			Interval        string `json:"interval,omitempty" env:"FUNCD_KVSTORE_BACKUP_INTERVAL"`
+			Rebaseline      string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
+			RebaselineRetry string `json:"rebaselineRetry,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE_RETRY"`
+			ChunkBytes      int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES" validate:"min=0"`
 		} `json:"backup,omitempty"`
 		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
 		// without a Sink, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when Storage.Mode
