@@ -1,6 +1,7 @@
 # ADR-0100: Per-step troubleshooting lineage in the run status (F67)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — Decision 3's `StartedAt`, `EndedAt int64` (113–114) and its Contracts comment (150): the step times are API timestamps (RFC3339 UTC with exactly 3 fractional digits); `runstate.StepState` keeps its int64 fields.
 - **Date**: 2026-07-07
 - **Implemented**: 2026-07-07
 - **Deciders**: green-0-rabbit

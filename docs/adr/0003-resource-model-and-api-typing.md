@@ -9,6 +9,7 @@
 - **Superseded in part by**: [ADR-0045](0045-rename-sandbox-to-worker.md) (2026-06-16) — **naming only**: the `Worker`
   resource kind (a compute node) → `WorkerNode` (+ `KindWorker`→`KindWorkerNode`). The resource model is unchanged; read
   this ADR for the model, ADR-0045 for the name; "Worker" in this frozen text ≡ "WorkerNode".
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field types (331–332, 430): every API timestamp is a `v1alpha1.Timestamp`, RFC3339 UTC with exactly 3 fractional digits.
 - **Deciders**: green-0-rabbit
 - **Tags**: resource-model, api-types, crd, typing, v1alpha1
 - **Realizes**: [FEAT-0000/F03](../feat/0000-feat-v1.md), [FEAT-0000/F22](../feat/0000-feat-v1.md)

@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0157](0157-blob-event-seen-list.md) (2026-10-05) — Decision §3 cursor/new-object rule, Watermark/Cursor contracts, §5 never-drops, sizing.
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (255): the blob-event `time` is RFC3339 UTC with exactly 3 fractional digits.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Reviewing**: 2026-07-10

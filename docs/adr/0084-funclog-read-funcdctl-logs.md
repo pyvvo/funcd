@@ -1,6 +1,7 @@
 # ADR-0084: Thin pure-Go function-log reader + `funcdctl logs`
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (154): the log-read `time` is RFC3339 UTC with exactly 3 fractional digits.
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after one judge pass — no Blockers; security model verified airtight
   [RBAC-derived namespace, never client-asserted; DNS-label path params block traversal] and kept verbatim. Folded
   the Major [made `compact.DecodeJSONL` provably wrap ADR-0083's *existing* per-line decode loop — an additive

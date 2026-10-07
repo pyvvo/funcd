@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0156](0156-sensor-delivery-isolation.md) (2026-10-05) — Decision 2 inline attempt 1 + retry workers; Decision 6 shutdown drain; DeadLetter scope; workaround.
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (229): `failedAt` is RFC3339 UTC with exactly 3 fractional digits.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Implemented**: 2026-07-10
