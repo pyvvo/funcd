@@ -392,11 +392,23 @@ Services provide additional capabilities to the functions, such as KV storage, b
 
 Events are the triggers that cause functions to be executed. Events can come from various sources, such as HTTP requests, timers, or messages from an eventing system. Each event will have its own configuration and will be able to trigger one or more functions within the same namespace. Events will be managed by the controller, and will be able to scale independently of the functions.
 
+#### App
+
+An app made of several resources is declared as one namespaced **`App`** ([ADR-0199](docs/adr/0199-app-resource.md),
+FEAT-0010): typed sections (`kv`, `buckets`, `functions`, `workflows`, `eventSources`, `sensors`, `routes`, `sites`,
+`catalogs`) define each part with its kind's own spec, or name an existing object with `ref`, which the App never
+writes. Admission refuses an inconsistent App before anything is stored, with quotas counted over all its parts. The
+App controller writes the parts with platform rights, as a Workflow writes its steps, writes back a part edited by
+hand, reports one status in which an idle Function counts as ready, and prunes a dropped part once no part is pending
+and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
+only when its entry says `deletion: delete`. Revisions, hooks, templates and dependencies between Apps are FEAT-0010's
+later rows.
+
 #### Controller
 
 The controller is responsible for managing the lifecycle of the functions and services, including deployment, scaling, and monitoring. The controller will reconcile the desired state of the functions and services with the actual state, and will take corrective actions as needed. The controller will also be responsible for managing events and triggers, and for ensuring that functions are executed in response to events.
 
-Owned objects follow their owner: a platform **garbage collector** (ADR-0170) runs beside the control loops and deletes every object whose controller owner reference names an owner that no longer exists at that UID (a Workflow's step Functions and the `delete` KVStores it made, an Identity's credential Secret, a Site's Route, a Function's Revisions). It acts on the owner's delete event and on a periodic sweep, one at start included, so a crash loses no collection; a live owner's child is never collected. A step Function or Revision that an open workflow run pins is collected only after that run ends, and deleting a Workflow cancels its started runs (ADR-0190).
+Owned objects follow their owner: a platform **garbage collector** (ADR-0170) runs beside the control loops and deletes every object whose controller owner reference names an owner that no longer exists at that UID (a Workflow's step Functions and the `delete` KVStores it made, an App's parts and the `delete` stores it made, a Bucket purged first (ADR-0199), an Identity's credential Secret, a Site's Route, a Function's Revisions). It acts on the owner's delete event and on a periodic sweep, one at start included, so a crash loses no collection; a live owner's child is never collected. A step Function or Revision that an open workflow run pins is collected only after that run ends, and deleting a Workflow cancels its started runs (ADR-0190).
 
 Each resource kind gets its own control loop, following the Kubernetes controller pattern:
 

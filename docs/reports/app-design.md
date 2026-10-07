@@ -1,6 +1,9 @@
 # App design note — many resources declared, deployed and versioned as one unit
 
 - **Status**: Design note, not an ADR yet. Once the design is final, it becomes one or more ADRs per feature row.
+- **Decided by ADRs**: F113 by [ADR-0199](../adr/0199-app-resource.md) (Accepted 2026-10-08). Where an ADR and this
+  note differ, the ADR wins: ADR-0199 refines the Function readiness rule, moves the `configMaps` and `secrets`
+  sections to F116, lets prune skip an object still in use and decides the Bucket teardown.
 - **Date**: 2026-10-06, refined 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, revisions, admission, gc, templates
