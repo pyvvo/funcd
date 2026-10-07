@@ -56,11 +56,11 @@
 | 2026-10-07 | The upgrade timeout | platform config only (`app.upgradeTimeout`), with no App field |
 | 2026-10-07 | Health | built in and inherited, with no user code: liveness for every replica, a dependency check in the shim, one probe of the KV engine and of the blob storage |
 | 2026-10-07 | Proof that the App behaves | an opt-in `spec.tests` (HTTP checks, Function calls, WorkflowRuns), run on demand only, like `helm test` |
-| 2026-10-07 | A part edited or deleted by hand | self-heal at once, as a Site restores its Route: the App reconciler watches its parts |
-| 2026-10-07 | Visibility of a revert | one log line, and the last restore in the App status |
+| 2026-10-07 | A part edited or deleted by hand | self-heal at once, as a Site rewrites its Route: the App reconciler watches its parts |
+| 2026-10-07 | Visibility of a self-heal | one log line, and the last self-heal in the App status |
 | 2026-10-07 | Deliberate manual work | `spec.paused`, as on a WorkflowRun, with `funcdctl app pause` and `resume` |
 | 2026-10-07 | Config | an App defines its ConfigMaps in `configMaps`, or names existing ones |
-| 2026-10-07 | Secrets | declared in the App and its template (name, keys, description) to document what the app needs; the values are managed by the platform, and the App never creates, writes or restores a Secret |
+| 2026-10-07 | Secrets | declared in the App and its template (name, keys, description) to document what the app needs; the values are managed by the platform, and the App never creates, writes or rewrites a Secret |
 | 2026-10-07 | Secret keys | required: a Secret can hold several keys, each injected as an env var, so the declaration lists every key the code reads |
 | 2026-10-07 | Hook points | `hooks.preApply` and `hooks.postApply`, on every rollout (install, upgrade, rollback); the call's input names the event |
 | 2026-10-07 | What a hook runs | one call to a Function of the App, recorded as an Invocation; not a Workflow, which would add a second component to debug |
@@ -93,6 +93,7 @@
 | 2026-10-07 | Deleting a required App | refused while another App requires it |
 | 2026-10-07 | A requirement not met | the dependent waits before its rollout: no part written, no hook called; the upgrade timeout starts once the requirements are met |
 | 2026-10-07 | A requirement cycle | refused at admission |
+| 2026-10-07 | The word for writing back a hand-edited part | self-heal (`status.lastSelfHeal`), never restore, which the DR plan uses for restoring data from a backup (asked by the DR plan) |
 | 2026-10-07 | A requirement without a version range | accepts any version of the required App, even an App with no version; delete protection and the cycle check still apply |
 | 2026-10-07 | Which dependents an upgrade refusal protects | only those that satisfy the range today; a dependent that is still waiting does not block an upgrade |
 | 2026-10-07 | Where the pins live | a committed `app/app.lock`, written by `funcdctl app lock`: the requested ref, the version and the digest of each image, as Chart.lock and package-lock.json; render, deploy and push use it, and push packs it instead of rewriting `app.yaml` |
@@ -183,14 +184,14 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   names it in its own `secrets` ⇒ while the Secret is missing, the App waits with `SecretNotFound` naming it; when
   the Secret exists without that key, `SecretKeyMissing` names the key; once an operator creates it complete,
   `todo-api` gets `STRIPE_API_KEY` in its environment. Updating the Secret outside the App ⇒ the App writes nothing
-  and restores nothing; a worker started after the update gets the new value.
+  and writes nothing back; a worker started after the update gets the new value.
 - `scenario: app-secret-undeclared-refused` — `todo-api` names a Secret that `secrets` does not declare ⇒ apply
   fails (422) naming the Function and the Secret; an entry carrying `data` ⇒ apply fails (unknown field).
 - `scenario: app-config-change-rolls` — `configMaps[0].data.TZ` changed ⇒ a new ConfigMap `todo-settings-<hash>`;
   `todo-api` gets a new Revision and serves the new `TZ` after its switch; the old ConfigMap goes at prune; a rollback
   to the previous AppRevision brings the old ConfigMap and value back.
-- `scenario: app-drift-restored` — `funcdctl apply` changes `todo-api`'s image by hand ⇒ within 5 s the App writes
-  its declared image back, logs it, and shows `status.lastRestore` naming `Function/todo-api`; a deleted `todo-api`
+- `scenario: app-drift-self-healed` — `funcdctl apply` changes `todo-api`'s image by hand ⇒ within 5 s the App
+  writes its declared image back, logs it, and shows `status.lastSelfHeal` naming `Function/todo-api`; a deleted `todo-api`
   is re-created the same way.
 - `scenario: app-paused-keeps-hotfix` — `funcdctl app pause todo`, then a manual edit of `todo-api` ⇒ the edit stays
   and the App shows `Paused=True`; after `funcdctl app resume todo` the declared spec is back within 5 s.
@@ -416,8 +417,8 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     changed part to the App named by its controller ref, as `site.MapRoute` maps a Route to its Site
     (`pkg/funcd/funcd.go:867`). When a part's spec differs from the declared one, or the part is gone, the App writes
     the declared spec back at once (self-heal), as a Site rewrites its Route (`ensureRoute`). Only the spec is
-    restored, never the status. Each restore writes one Info log line and sets `status.lastRestore` (kind, name,
-    time). `spec.paused: true`, set with `funcdctl app pause <app>` and cleared with `funcdctl app resume <app>` as
+    written back, never the status. Each self-heal writes one Info log line and sets `status.lastSelfHeal` (kind,
+    name, time). `spec.paused: true`, set with `funcdctl app pause <app>` and cleared with `funcdctl app resume <app>` as
     for a WorkflowRun (`cmd/funcdctl/workflow.go`), stops every write of the App: no apply, no prune, no self-heal;
     the App reports the condition `Paused=True`, whatever its phase. On resume, the declared spec wins again; a
     manual fix survives only when it is copied into the App. Self-heal covers only the parts the App defines: it
@@ -427,7 +428,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     optional `description`, and no field for values, so the template documents every Secret the app needs, as it
     does its ConfigMaps. The values are managed by the platform: an operator sets them, by hand or as an
     Identity's credential, and the store keeps them encrypted (`cmd/funcd/main.go:683`). The App never creates,
-    writes, owns or restores a Secret, so self-heal never undoes a value an operator set, and rotating a Secret is
+    writes, owns or rewrites a Secret, so self-heal never undoes a value an operator set, and rotating a Secret is
     an update outside the App (live rotation is planned with the secrets work, ADR-0057, V2). Parts consume
     Secrets by name, as a Workflow step does: a Function, a step or a CatalogService lists them in its own `secrets`
     field (`buildFunction` copies a step's names, `reconcile_workflow.go:482`). Admission refuses a part that names a
@@ -626,6 +627,7 @@ type AppSpec struct {
 	Secrets      []AppSecret      `json:"secrets,omitempty"` // declarations only (Decision 18)
 	Tests        []AppTest        `json:"tests,omitempty"` // opt-in, run only by funcdctl app test
 	Hooks        *AppHooks        `json:"hooks,omitempty"`
+	// backupSchedules and the App scope: reserved for the DR workload-backup ADR (Decision 12)
 }
 type AppKVStore struct {
 	Name        ObjectName     `json:"name,omitempty"`
@@ -653,7 +655,7 @@ type AppStatus struct {
 	LatestRevision  ObjectName `json:"latestRevision,omitempty"`
 	Version         string      `json:"version,omitempty"` // spec.version of the current revision
 	Children        []AppChild  `json:"children,omitempty"`
-	LastRestore     *AppRestore `json:"lastRestore,omitempty"` // the last self-heal write
+	LastSelfHeal    *AppSelfHeal `json:"lastSelfHeal,omitempty"` // the last self-heal write
 	Requires        []AppRequirementState `json:"requires,omitempty"`   // each requirement and whether it is met
 	RequiredBy      []ObjectName          `json:"requiredBy,omitempty"` // the Apps that require this one
 }
@@ -666,7 +668,7 @@ type AppRequirementState struct {
 	Version string     `json:"version,omitempty"` // the required App's current version
 	Met     bool       `json:"met"`
 }
-type AppRestore struct {
+type AppSelfHeal struct {
 	Kind Kind       `json:"kind"`
 	Name ObjectName `json:"name"`
 	At   time.Time  `json:"at"` // RFC3339 UTC with milliseconds (ADR-0196)
@@ -856,7 +858,7 @@ type AppPlan struct {
 - [ ] The App never creates, writes or deletes a Secret; a `secrets` entry has no field for values.
 - [ ] A part that names an undeclared Secret is refused at apply; a missing Secret or key holds the rollout with
       `SecretNotFound` or `SecretKeyMissing`, and no Secret value reaches a log or a status.
-- [ ] A part edited or deleted by hand gets its declared spec back at once, with a log line and `status.lastRestore`,
+- [ ] A part edited or deleted by hand gets its declared spec back at once, with a log line and `status.lastSelfHeal`,
       unless the App is paused; a paused App writes nothing.
 - [ ] `render` leaves expressions without `values`/`app`/`images` byte for byte.
 - [ ] A pushed template holds only `app.yaml`, `app.lock` and `resources/`, and its lock covers every image.
@@ -887,15 +889,19 @@ today's roles.
 1. Finer RBAC: last writer or a named Identity → the IAM work that adds per-kind roles.
 2. A hook before a delete (a last backup) needs finalizers, unused today (ADR-0170) → later, if a case needs it.
 3. Cron for EventSource timers and BackupSchedule, with a time zone (UTC by default) → its own ADR (it changes a
-   shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained).
+   shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained). The DR
+   plan's `BackupSchedule` needs it for its `schedule` field, so it is decided before the DR workload-backup ADR.
 4. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
 5. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
 6. Health: the liveness period, the dependency-check timeout, the probe interval of the KV engine and the blob
    storage, their config keys and defaults → the health ADR (it also changes the shim contract).
 7. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
    refuses other impossible settings → this design, when it becomes an ADR.
-8. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
-   has `kv`, `blob`, `invoke` and `log` only → its own decision, with the DR backup API.
+8. A platform client in a hook's context: the DR plan will offer an API that a Function calls to create a `Backup`,
+   and a hook needs a client in its context to call it; today's context has `kv`, `blob`, `invoke` and `log` only
+   → its own decision, with the DR backup API.
+9. A hook point around a backup or a restore: none exists yet; the DR plan's deferred app-level consistency may need
+   one → with that DR work.
 
 ## Example: the to-do app
 
