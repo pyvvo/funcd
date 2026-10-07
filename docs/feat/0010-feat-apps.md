@@ -66,8 +66,8 @@ flowchart LR
 | F117 | **App lifecycle hooks**: an App names Functions of its own to call once before its parts change (pre-apply: a schema migration, a backup before an upgrade) and once after the new version is current (post-apply: a data migration, a cache warm-up), on install, upgrade and rollback. A hook is one ordinary Function call with the usual handler context (KV, blob, invoke and log, scoped by the hook Function's own bindings), recorded as an Invocation. No Workflow or other engine sits in the path, so a failed hook is debugged like any Function call. A failed pre-hook stops the upgrade before any other part changes. A failed post-hook keeps the new version, holds the removal of dropped parts and marks the App degraded. A retry command calls the failed hooks again and resumes the rollout, so a hook must be safe to repeat. **Why**: deploying a service often needs a migration beside it, and the decider wants that work inside the platform, run by the App. A hook must not depend on another component that can itself be degraded. | F114 · [ADR-0109](../adr/0109-sensor-event-action-binder.md) (the Sensor's invoker) · [ADR-0033](../adr/0033-data-plane-serving-and-trigger-wake.md) (wake on call) · [ADR-0090](../adr/0090-mandatory-single-io-schema.md) (the input contract) | — | idea |
 | F118 | **Built-in health for every part**: every part's health comes from the platform, with no code from the user. funcd checks liveness on every Function replica and restarts a replica that hangs. A Function's readiness also proves that its declared dependencies answer (its KV tables, blob prefixes, catalogs and link targets), without waking a scaled-to-zero target. The platform probes the KV engine and the blob storage, and every KV store and Bucket reflects the result. An App combines these states into its own. This changes the contract between funcd and the language shims, so new shim releases ship with it. **Why**: today funcd restarts a crashed worker but not a hung one, and it polls liveness only for pool workers. Ready proves that a handler loaded, not that the handler can reach what it needs. The decider wants health inherited from the shim, not written for each function. Every Function benefits, with or without an App. | [ADR-0142](../adr/0142-supervision-by-periodic-re-convergence.md) (supervision by periodic re-convergence) · [ADR-0174](../adr/0174-never-booted-revision-is-unknown.md) (a never-booted revision is unknown) · [ADR-0141](../adr/0141-repo-split-pyvvo-pinned-language-modules.md) (the shims as pinned language modules) | — | idea |
 | F119 | **Opt-in App tests**: an App can list checks that prove it still behaves as intended: an HTTP request through the edge with its expected status, a Function call with an input, or a WorkflowRun. A command runs them on demand, as `helm test` does. The results are recorded on the current AppRevision, nothing runs the checks by itself, and a failed check changes nothing else. **Why**: the platform proves that each part is accepted and loaded, never that the app does its job, because no reconciler calls a handler with test input. The decider wants that proof to be explicit and opt-in, and separate from health. | F113 · F114 | — | idea |
-| F120 | **App templates: values and rendering**: an App template is a directory of App fragments plus a values schema, so one definition installs many times with different settings. `funcdctl` renders the template on the client into one App, which is then applied as usual. A JSON Schema types and checks the values, with defaults and conditional requirements. Expressions use the platform's existing `${{ }}` engine, and a file can be included only when a condition holds. The server never sees a template: the App that it receives is the source. **Why**: the same app is installed in several places (dev, prod, a second team) with different settings, as with a Helm chart, and this must not add a template engine or a server-side render to the platform. | F113 · [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja `${{ }}` engine) | — | idea |
-| F121 | **App templates in an OCI registry**: a template can be pushed to an OCI registry and rendered from it, as a Helm chart can, beside the function bundles and site files that the App's parts already reference. A template version is the unit of compatibility: its builder pins component versions that work together. The server still never pulls a template. The transfer speed of every artifact kind, templates included, is tracked under #820. **Why**: a team shares and versions an app definition through the registry that it already uses for code, instead of copying directories. | F120 · [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (`funcdctl push --site`, the precedent) | — | idea |
+| F120 | **App templates: values and rendering**: an App template is a directory of App fragments plus a values schema, so one definition installs many times with different settings. funcdctl renders it on the client into one App. The install values come from files kept in git; a JSON Schema types and checks them, with defaults and conditional requirements, and a value it does not declare is refused. Expressions use the platform's existing `${{ }}` engine, and a file can be included only when a condition holds. One command deploys, upgrades and downgrades an App from a template version and waits until the new revision is current or has failed; another deletes the App and reports which data stores stayed. The server never sees a template: the App that it receives is the source. **Why**: the same app is installed in several places (dev, prod, a second team, an end-to-end lane) with different settings, as with a Helm chart, and this must not add a template engine or a server-side render to the platform. A person or an agent should deploy, upgrade, downgrade and delete an app with one command each. | F113 · [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja `${{ }}` engine) · [ADR-0122](../adr/0122-funcdctl-yaml-manifest-native-contract-codegen.md) (`funcdctl.yaml`, a client file of the same kind) | — | idea |
+| F121 | **App templates in an OCI registry, with pinned images**: the builder fixes the version of every image the app runs, in one table of the template, as a package.json fixes its dependencies; an install can change only the registry the images come from, through a value with a default. Pushing a template records the digest of every image, as a lockfile does, so a tag moved later never changes what a template version installs. The template's version is its registry tag. A template is pushed to an OCI registry and deployed from it, as a Helm chart is, beside the function bundles and site files it references. The server still never pulls a template. The transfer speed of every artifact kind, templates included, is tracked under #820. **Why**: a template version is the unit of compatibility, so its builder, a person or an agent, must be able to publish image versions that were tested together. The registry must change from day one, because the end-to-end lanes run every image from a local OCI layout and a site may use its own registry. Version ranges, like npm peer dependencies, can come later in the same table. | F120 · [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0035](../adr/0035-artifact-digest-resolution-at-revision.md) (an explicit digest is used as written) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (`funcdctl push --site`, the precedent) | — | idea |
 | F122 | **App dependencies**: one App depends on another, so that a stack of apps installs and upgrades in the right order. Whether this means nesting (an App inside an App) or ordering between Apps is still open. **Why**: a larger system is made of several apps that must come up in order. | F113 · F114 | — | idea |
 
 ## How it lands on funcd (high level)
@@ -102,9 +102,11 @@ flowchart TB
 
 | Component | Role for the App | Status | Feature |
 |---|---|---|---|
-| `funcdctl app render` | expands a template with typed values into one App | new | F120 |
+| `funcdctl app deploy` | renders a template version and applies it, then waits until the new revision is current or failed; deploys, upgrades and downgrades | new | F120 |
+| `funcdctl app render` | prints the App a template renders, for a review | new | F120 |
+| `funcdctl app delete` | deletes an App, waits until its tree is gone, and reports the stores it kept | new | F120 |
 | goja (`internal/expr`, [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md)) | evaluates the template's `${{ }}` expressions on the client; hooks do not use it | exists | F120 |
-| `funcdctl push --template` | pushes a template as an OCI artifact | new | F121 |
+| `funcdctl push --template` | writes the digest of every image into the template, then pushes it as an OCI artifact tagged with its version | new | F121 |
 | OCI registry | holds templates, function bundles and site bundles | exists, outside funcd | F121 |
 | API server and admission ([ADR-0063](../adr/0063-admission-framework.md)) | decodes the App strictly and runs the App admission | exists; App admission new | F113 |
 | Store, the metastore | holds the App, its AppRevisions and its parts; bumps a generation only when a `spec` changes | exists | F113, F114 |
@@ -122,12 +124,9 @@ The design note gives the full to-do App. Its project holds the template, the co
 
 ```
 todo/
-├── app/                          the App template, pushable with funcdctl push --template
-│   ├── app.yaml                  name, version, valuesSchema (JSON Schema), when per file
-│   ├── values/
-│   │   ├── dev.yaml              install values for dev, kept in git
-│   │   └── prod.yaml             install values for prod, kept in git
-│   └── resources/                fragments of the App spec, merged by funcdctl app render
+├── app/                          the App template, pushed with funcdctl push --template
+│   ├── app.yaml                  name, version, registry, images, valuesSchema, when per file
+│   └── resources/                fragments of the App spec, merged at render
 │       ├── store.yaml            kv: todo-store (retain), todo-cache (delete)
 │       ├── files.yaml            buckets: todo-files
 │       ├── api.yaml              functions and routes: todo-api on /api
@@ -142,6 +141,10 @@ todo/
 │       ├── secrets.yaml          secrets: todo-stripe-key, keys only, no value
 │       ├── hooks.yaml            hooks: preApply calls todo-migrate
 │       └── tests.yaml            tests: an HTTP check and a Function call, run on demand
+├── values/                       install values, kept in git, never pushed
+│   ├── dev.yaml
+│   ├── e2e.yaml                  registry: a local OCI layout for the Venom lanes
+│   └── prod.yaml
 ├── functions/                    code, pushed with funcdctl push
 │   ├── api/
 │   ├── planner/
@@ -149,6 +152,40 @@ todo/
 │   └── stats/
 └── web/dist/                     the front end, pushed with funcdctl push --site
 ```
+
+The builder fixes every image version in `app.yaml`, and an install changes only the registry (F121):
+
+```yaml
+# app/app.yaml (excerpt)
+name: todo
+version: 1.2.0
+registry: ${{ values.registry }}
+images:
+  api: todo-api:1.0.0
+  planner: todo-planner:1.0.0
+  migrate: todo-migrate:1.2.0
+  stats: todo-stats:1.0.0
+  web: todo-web:1.0.0
+valuesSchema:
+  type: object
+  required:
+    - host
+  properties:
+    registry:
+      type: string
+      default: registry.example
+    host:
+      type: string
+when:
+  resources/stats.yaml: ${{ values.analytics.enabled === true }}
+---
+# values/e2e.yaml: a Venom lane pulls every image from a local OCI layout
+registry: oci-layout:///mnt/funcd-deps/apps
+host: todo.e2e.test
+```
+
+Rendered from the pushed template with `values/e2e.yaml`, the API Function's image is
+`oci-layout:///mnt/funcd-deps/apps/todo-api:1.0.0@sha256:4f1c…`: the push wrote the digest.
 
 Secrets are declared in `resources/secrets.yaml` with their names and keys, so the template documents what the app
 needs (F116). A ConfigMap carries its data, because it is not sensitive. A Function names both by their declared
@@ -172,6 +209,7 @@ configMaps:
 # resources/api.yaml (excerpt)
 functions:
   - name: ${{ app.name + "-api" }}
+    image: ${{ images.api }}
     secrets:
       - ${{ app.name + "-stripe-key" }}
     config:
@@ -298,8 +336,8 @@ sequenceDiagram
     participant CR as Child reconcilers
     participant INV as Invoker
     participant WK as Workers
-    B->>CLI: app render ./app -f prod.yaml
-    CLI->>API: apply App todo
+    B->>CLI: app deploy ./app -f values/prod.yaml
+    CLI->>API: apply the rendered App todo
     API->>API: strict decode and App admission
     API->>ST: store App todo
     ST-->>AR: watch event
@@ -320,6 +358,9 @@ sequenceDiagram
     AR->>INV: post-hooks, if any
     AR->>ST: prune the parts the spec dropped
     AR->>ST: status Ready, with the children's states
+    CLI->>API: wait for todo-4 to be current
+    API-->>CLI: App todo Ready
+    CLI-->>B: each part's state, exit 0
 ```
 
 ### A part edited by hand (F115)
@@ -357,7 +398,8 @@ sequenceDiagram
 | Hooks | `preApply` and `postApply` call Functions of the App once per rollout; `funcdctl app retry` calls failed ones again | F117 |
 | Health | built in: liveness on every replica, a dependency check in the shim, one probe of the KV engine and blob storage | F118 |
 | Tests | `spec.tests` runs only with `funcdctl app test` | F119 |
-| Templates | rendered on the client; the server never pulls a template | F120, F121 |
+| Templates | rendered on the client; values only from `-f` files, refused when undeclared; the server never pulls a template | F120 |
+| Images | fixed by the builder in the template's `images` table; only the registry is a value; digests written at push; the push tag is the template version | F121 |
 
 ## Exit criterion
 
@@ -384,8 +426,11 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **F118**: a hung replica is restarted (`app-hung-worker-restarted`); a revision that cannot reach its declared
   dependencies never becomes current, and no check wakes a scaled-to-zero target (`app-dependency-check`).
 - **F119**: tests run only on demand and change nothing else (`app-test-on-demand`).
-- **F120** and **F121**: the to-do template renders to the App of the design note (`app-render-matches`), from a
-  directory and from a registry.
+- **F120**: the to-do template renders to the App of the design note (`app-render-matches`); an undeclared value or
+  an image outside the `images` table is refused (`app-render-refuses`); a deploy waits and reports, and a delete
+  reports the stores it kept (`app-deploy-waits`, `app-delete-reports`).
+- **F121**: a pushed template pins every image, and a moved tag changes nothing (`app-template-pinned`); the
+  registry value points the App at a local OCI layout (`app-registry-value`).
 
 ## Out of scope (tracked elsewhere)
 
@@ -415,5 +460,8 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 | A platform client in a hook's context (pause a Sensor, trigger a backup) | F117, with the disaster-recovery backup API |
 | A hook before a delete | F117, later, if a case needs it |
 | Health settings: the liveness period, the dependency-check timeout, the probe interval | the F118 ADR, which also changes the shim contract |
-| The template format in detail: folder layout, push and versioning | F120 and F121, the next refinement topic |
+| Version ranges in the `images` table, like npm peer dependencies | F121, later |
+| A platform setting that maps a registry to a mirror for every artifact pull, as a Nexus setup needs | its own decision, outside this epoch |
+| A dry run of `funcdctl app deploy`, listing the parts it would write | F120, later, if needed |
+| Images from two registries in one template | F121, later, if a template needs it |
 | App dependencies: nesting or ordering | F122 |
