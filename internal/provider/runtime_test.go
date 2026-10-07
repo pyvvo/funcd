@@ -423,7 +423,7 @@ func TestIssue373_RemovesStoppedEngine(t *testing.T) {
 	spec := specFor(host, port, nil)
 	newEngine := func(t *testing.T) (*processEngine, provider.Runtime) {
 		t.Helper()
-		rt := &processEngine{Runtime: process.New()}
+		rt := &processEngine{Runtime: process.New(nil)}
 		t.Cleanup(func() { _ = rt.Close() })
 		pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
 		require.NoError(t, err)

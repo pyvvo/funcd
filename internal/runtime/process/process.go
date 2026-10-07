@@ -5,6 +5,7 @@
 package process
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"log/slog"
@@ -61,17 +62,19 @@ type driver struct {
 	grace     time.Duration
 	reg       *procreg.Registry             // the saved worker registry (ADR-0167); nil = in-memory only
 	startTime func(pid int) (uint64, error) // procreg.StartTime; a test delays it to widen the exit-before-save window
+	log       *slog.Logger                  // the platform logger a run's output warns through
 }
 
-// New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI) that saves nothing.
-func New() runtime.Runtime {
-	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: defaultStopGrace}
+// New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI) that saves nothing and logs through logger
+// (nil means slog.Default()).
+func New(logger *slog.Logger) runtime.Runtime {
+	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: defaultStopGrace, log: cmp.Or(logger, slog.Default())}
 }
 
 // Open returns a process driver that saves its workers in <stateDir>/workers.json (ADR-0167). Before it returns it
 // reaps the workers a crashed run left there; the reconciler then re-creates the replicas. A stopGrace <= 0 is the
-// 3 s default.
-func Open(ctx context.Context, stateDir string, stopGrace time.Duration) (runtime.Runtime, error) {
+// 3 s default. It logs through logger (nil means slog.Default()).
+func Open(ctx context.Context, stateDir string, stopGrace time.Duration, logger *slog.Logger) (runtime.Runtime, error) {
 	const op = "runtime.process.Open"
 	if stopGrace <= 0 {
 		stopGrace = defaultStopGrace
@@ -84,7 +87,8 @@ func Open(ctx context.Context, stateDir string, stopGrace time.Duration) (runtim
 		_ = reg.Close()
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "reap workers of a previous run")
 	}
-	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: stopGrace, reg: reg, startTime: procreg.StartTime}, nil
+	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: stopGrace, reg: reg, startTime: procreg.StartTime,
+		log: cmp.Or(logger, slog.Default())}, nil
 }
 
 // SetLogCapture installs the per-instance structured-log hook (runtime.LogCapturer, ADR-0081). When
@@ -165,7 +169,7 @@ func (d *driver) Start(_ context.Context, id runtime.InstanceID) error {
 		return fault.Wrapf(err, fault.Internal, op, "reset port file")
 	}
 	// Raw stdout and stderr (ADR-0168): two pipes funcd reads; the parent's write ends close once the child has them.
-	out := workerpipe.New(workerpipe.Options{Logger: slog.Default().With(
+	out := workerpipe.New(workerpipe.Options{Logger: d.log.With(
 		"namespace", inst.spec.Namespace, "name", inst.spec.Name, "revision", inst.spec.Revision, "replica", inst.spec.Replica)})
 	var pipes []*os.File // every pipe end made so far: an error return closes them
 	fail := func(err error, msg string) error {

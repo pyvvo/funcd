@@ -39,7 +39,7 @@ func newHarness(t *testing.T) *harness {
 		t.Skip("node not on PATH — the chaos lane needs a real worker")
 	}
 	shim := langmod.NodeShim(t)
-	rt := process.New()
+	rt := process.New(nil)
 	p, err := funcd.New(funcd.InMemory(), funcd.WithRuntime(rt), funcd.WithRuntimeShim(node, shim))
 	require.NoError(t, err)
 

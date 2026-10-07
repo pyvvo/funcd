@@ -44,7 +44,7 @@ func newRedeployHarness(t *testing.T) *redeployHarness {
 	if err != nil {
 		t.Skip("node not on PATH; skipping the redeploy lane")
 	}
-	rt := process.New()
+	rt := process.New(nil)
 	p, err := funcd.New(funcd.InMemory(), funcd.WithRuntime(rt), funcd.WithRuntimeShim(node, shim), funcd.WithArtifactStore(t.TempDir()))
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"io"
 	"log/slog"
@@ -47,9 +48,9 @@ type catalogProxy struct {
 }
 
 // NewCatalogProxy builds the catalog PEP proxy handler fronting one CatalogService engine (ADR-0137).
-// It logs through slog.Default; the Manager builds its proxies over its own logger (ADR-0002 §6).
-func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget) http.Handler {
-	return newCatalogProxy(keys, pdp, engine, httpx.NodeTransport(), slog.Default().With("component", "catalog.gateway"))
+// It logs through log (nil means slog.Default()), as the Manager's proxies log through its logger (ADR-0002 §6).
+func NewCatalogProxy(keys CatalogKeys, pdp auth.Authorizer, engine EngineTarget, log *slog.Logger) http.Handler {
+	return newCatalogProxy(keys, pdp, engine, httpx.NodeTransport(), cmp.Or(log, slog.Default()).With("component", "catalog.gateway"))
 }
 
 // newCatalogProxy builds the proxy over transport and log. A failed engine call is a 502 logged through log, not

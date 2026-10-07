@@ -72,7 +72,7 @@ func TestCatalogProxy_AllowDeny(t *testing.T) {
 	newProxy := func(stub *engineStub) *httptest.Server {
 		up := httptest.NewServer(stub.handler())
 		t.Cleanup(up.Close)
-		h := NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken})
+		h := NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}, nil)
 		front := httptest.NewServer(h)
 		t.Cleanup(front.Close)
 		return front
@@ -164,7 +164,7 @@ func TestIssue39_ProxyStreamsTheBody(t *testing.T) {
 	proxyTo := func(engine http.Handler) http.Handler {
 		up := httptest.NewServer(engine)
 		t.Cleanup(up.Close)
-		return NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken})
+		return NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}, nil)
 	}
 
 	t.Run("a denied handshake is rejected before its body is read", func(t *testing.T) {
@@ -330,7 +330,7 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewCatalogProxy(keys, tc.pdp, EngineTarget{Catalog: target, Upstream: tc.upstream, EngineToken: engineToken})
+			h := NewCatalogProxy(keys, tc.pdp, EngineTarget{Catalog: target, Upstream: tc.upstream, EngineToken: engineToken}, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", tc.body()))
 			require.Equal(t, tc.status, rec.Code)
@@ -340,6 +340,30 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 	}
 	require.Empty(t, stdlog.String(), "nothing is logged through the stdlib log package")
 	require.Equal(t, 2, strings.Count(logs.String(), "level=WARN"), "each engine failure is logged once through slog")
+}
+
+// Issue 830: NewCatalogProxy logs a failed engine call through the logger it is given, not through slog's default.
+func TestIssue830_CatalogProxyLogsThroughItsLogger(t *testing.T) {
+	var leaked, logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&leaked, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	st := store.New(memory.New())
+	seedCatalogWorld(t, st)
+	master := []byte("proxy-test-node-master")
+	granted, err := DeriveCatalogToken(master, "data", "analytics")
+	require.NoError(t, err)
+	stopped := httptest.NewServer(http.NotFoundHandler())
+	stopped.Close()
+
+	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
+	h := NewCatalogProxy(NewCatalogKeys(master, st), buildPDP(t, st), EngineTarget{Catalog: target, Upstream: stopped.URL, EngineToken: engineToken},
+		slog.New(slog.NewTextHandler(&logs, nil)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", bytes.NewReader(makeHandshake(granted))))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, logs.String(), "catalog engine call failed")
+	require.NotContains(t, leaked.String(), "catalog engine call failed")
 }
 
 // TestCatalogProxy_DeniesCrossNamespaceCaller pins the PEP to the endpoint's own CatalogService: a
@@ -376,7 +400,7 @@ func TestCatalogProxy_DeniesCrossNamespaceCaller(t *testing.T) {
 		stub := &engineStub{}
 		up := httptest.NewServer(stub.handler())
 		defer up.Close()
-		front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}))
+		front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}, nil))
 		defer front.Close()
 		resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
 		require.NoError(t, err)

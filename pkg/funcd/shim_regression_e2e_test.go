@@ -90,7 +90,7 @@ func shimRigBase(t *testing.T, python string) (*shimRig, []funcd.Option) {
 		unreadable: unreadable,
 		next:       slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}),
 	})
-	rt := process.New()
+	rt := process.New(nil)
 	opts := []funcd.Option{
 		funcd.WithBlob(bucket),
 		funcd.WithBus(messaging),

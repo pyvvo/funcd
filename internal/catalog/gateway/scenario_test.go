@@ -327,7 +327,7 @@ func proxyStatus(t *testing.T, keys CatalogKeys, pdp auth.Authorizer, token stri
 	up := httptest.NewServer(stub.handler())
 	defer up.Close()
 	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
-	front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}))
+	front := httptest.NewServer(NewCatalogProxy(keys, pdp, EngineTarget{Catalog: target, Upstream: up.URL, EngineToken: engineToken}, nil))
 	defer front.Close()
 	resp, err := http.Post(front.URL, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
 	require.NoError(t, err)

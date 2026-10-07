@@ -25,7 +25,7 @@ func newS3Reconciler(t *testing.T, enabled bool) *Reconciler {
 	t.Helper()
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	inj := S3GatewayInjection{}
 	if enabled {
@@ -75,7 +75,7 @@ func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 	t.Parallel()
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	r, err := NewReconciler(Deps{
 		Store: store.New(memory.New()), Runtime: rt, Scheduler: sch,

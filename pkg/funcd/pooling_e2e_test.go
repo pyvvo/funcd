@@ -53,7 +53,7 @@ func newPoolHarness(t *testing.T) *poolHarness {
 	require.NoError(t, err)
 	messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
 	require.NoError(t, err)
-	rt := process.New()
+	rt := process.New(nil)
 
 	// Wire the in-memory drivers explicitly (not InMemory(), which builds its own runtime) so
 	// the test holds the runtime and can List pool worker instances; plus the pool shim + a

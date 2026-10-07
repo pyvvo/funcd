@@ -25,7 +25,7 @@ func TestProcessDriverContract(t *testing.T) {
 	t.Parallel()
 	runtimecontract.RunContract(t, func(t *testing.T) runtime.Runtime {
 		t.Helper()
-		return process.New()
+		return process.New(nil)
 	})
 }
 
@@ -34,7 +34,7 @@ func TestProcessDriverContract(t *testing.T) {
 func TestCreateRejectsLiveInstance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}}
 
@@ -73,7 +73,7 @@ func TestIssue45_WorkerEndReclaimsSubprocesses(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
 			pidFile := filepath.Join(dir, "child.pid")
-			rt := process.New()
+			rt := process.New(nil)
 			t.Cleanup(func() { _ = rt.Close() })
 			inst, err := rt.Create(ctx, runtime.WorkerSpec{
 				Namespace: "default",
@@ -113,7 +113,7 @@ func TestIssue46_ReplaceRemovesDriverFiles(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	ctx := context.Background()
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "crasher", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}}
 	files := func() []string {
@@ -144,7 +144,7 @@ func TestIssue365_RejectedCreateLeaksNoLog(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	ctx := context.Background()
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	spec := runtime.WorkerSpec{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sleep", "30"}}
 	logs := func() []string {
@@ -175,7 +175,7 @@ func TestIssue366_CloseRemovesDriverFiles(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	ctx := context.Background()
-	rt := process.New()
+	rt := process.New(nil)
 	specs := []runtime.WorkerSpec{
 		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "live", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exec sleep 60`}},
 		{Namespace: "default", OwnerKind: v1alpha1.KindFunction, Name: "exited", Command: []string{"sh", "-c", `echo 1 > "$FUNCD_PORTFILE"; exit 1`}},
@@ -208,7 +208,7 @@ func TestWorkerEnvExcludesDaemonEnvironment(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	out := filepath.Join(dir, "env.out")
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	inst, err := rt.Create(ctx, runtime.WorkerSpec{
 		Namespace: "default",

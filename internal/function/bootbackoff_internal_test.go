@@ -133,7 +133,7 @@ func reconcilerWithBackoff(t *testing.T, initial, limit time.Duration) (*Reconci
 	t.Helper()
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
-	rt := process.New()
+	rt := process.New(nil)
 	t.Cleanup(func() { _ = rt.Close() })
 	return NewReconciler(Deps{
 		Store: store.New(memory.New()), Runtime: rt, Scheduler: sch, Gateway: embedded.New(), Validator: NewBasicValidator(),

@@ -19,7 +19,7 @@ import (
 func openSaving(t *testing.T) (*driver, string) {
 	t.Helper()
 	state := filepath.Join(t.TempDir(), "process")
-	rt, err := Open(context.Background(), state, time.Second)
+	rt, err := Open(context.Background(), state, time.Second, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = rt.Close() })
 	return rt.(*driver), state

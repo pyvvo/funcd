@@ -815,7 +815,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver, which
 	// reaps the workers a crashed run left in <dataDir>/process before the controllers start (ADR-0167).
 	logger.WarnContext(ctx, "funcd: runtime.mode process — functions run as the daemon's OS user with no isolation (dev/test only, ADR-0011); set runtime.mode: containerd for untrusted functions")
-	rt, err := process.Open(ctx, filepath.Join(cfg.Storage.DataDir, "process"), grace)
+	rt, err := process.Open(ctx, filepath.Join(cfg.Storage.DataDir, "process"), grace, logger)
 	if err != nil {
 		return nil, noopClose, fmt.Errorf("process runtime: %w", err)
 	}

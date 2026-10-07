@@ -300,7 +300,7 @@ func TestIssue357_ServeServesTheLocalAPIUntilCancelled(t *testing.T) {
 	go func() {
 		served <- local.Serve(ctx, path, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("ok"))
-		}))
+		}), nil)
 	}()
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", path)
@@ -325,6 +325,49 @@ func TestIssue357_ServeServesTheLocalAPIUntilCancelled(t *testing.T) {
 		t.Fatal("Serve did not return after its context was done")
 	}
 
-	err = local.Serve(context.Background(), filepath.Join(dir, "missing", "api.sock"), http.NotFoundHandler())
+	err = local.Serve(context.Background(), filepath.Join(dir, "missing", "api.sock"), http.NotFoundHandler(), nil)
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
+}
+
+// fileLogger logs to a file at path, so the server's goroutines and the test that reads it share no memory.
+func fileLogger(t *testing.T, path string) *slog.Logger {
+	t.Helper()
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	return slog.New(slog.NewTextHandler(f, nil))
+}
+
+// Issue 830: Serve logs its server's own errors, here a recovered handler panic, through the logger it is given, not
+// through slog's default.
+func TestIssue830_ServeLogsThroughItsLogger(t *testing.T) {
+	dir, err := os.MkdirTemp("", "i830") // not t.TempDir(): a unix socket path is capped near 104 bytes
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	leaked, logs, path := filepath.Join(dir, "leaked.log"), filepath.Join(dir, "platform.log"), filepath.Join(dir, "api.sock")
+	prev := slog.Default()
+	slog.SetDefault(fileLogger(t, leaked))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- local.Serve(ctx, path, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }), fileLogger(t, logs))
+	}()
+	t.Cleanup(func() { cancel(); <-served })
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", path)
+	}}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	const line = "http: panic serving"
+	read := func(path string) string { b, _ := os.ReadFile(path); return string(b) }
+	require.Eventually(t, func() bool {
+		if resp, err := client.Get("http://local/"); err == nil {
+			_ = resp.Body.Close()
+		}
+		return strings.Contains(read(logs)+read(leaked), line)
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Contains(t, read(logs), line)
+	require.NotContains(t, read(leaked), line)
 }

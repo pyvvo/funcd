@@ -74,7 +74,7 @@ func TestOpenWorkersServeWithTheInstanceToken(t *testing.T) {
 			ctx := context.Background()
 			command, env, path := setup(t)
 			state := filepath.Join(t.TempDir(), "process")
-			rt, err := process.Open(ctx, state, 0)
+			rt, err := process.Open(ctx, state, 0, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = rt.Close() })
 			inst, err := rt.Create(ctx, runtime.WorkerSpec{

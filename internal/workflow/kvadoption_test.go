@@ -167,7 +167,7 @@ func TestScenarioUpgradeMigrationMarksOwnStore(t *testing.T) {
 		w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 		prev := previousStore(t, s, "w-kv", w, controller)
 
-		require.NoError(t, MarkKVStoresOnce(ctx, s))
+		require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 		got := getObj(t, s, v1.KindKVStore, "w-kv").(*v1.KVStore)
 		require.Equal(t, append(prev.OwnerReferences, kvMarker(w)), got.OwnerReferences, "only the marker is added")
 		require.Equal(t, prev.Spec, got.Spec)
@@ -189,7 +189,7 @@ func TestScenarioPostUpgradeApiStoreRefused(t *testing.T) {
 	ctx := context.Background()
 	w := storedWorkflow(t, s, "w", []string{"s"})
 	require.NoError(t, m.Materialize(ctx, w))
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 
 	user := apiKVStore(t, s, "shared")
 	w.Spec.KV = []v1.WorkflowKVStore{storeKV("shared", v1.DeletionRetain)}
@@ -328,7 +328,7 @@ func TestMigrationStripsBindingsToStoresLeftUnmarked(t *testing.T) {
 	apiKVStore(t, s, "shared")
 	setFunctionKV(t, s, "w-s", "w-kv", "shared")
 
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 	require.True(t, marked(getObj(t, s, v1.KindKVStore, "w-kv").GetObjectMeta().OwnerReferences, w))
 	require.Empty(t, getObj(t, s, v1.KindKVStore, "shared").GetObjectMeta().OwnerReferences)
 	require.Equal(t, []v1.ObjectName{"w-kv"}, boundStores(t, s, "w-s"))
@@ -338,7 +338,7 @@ func TestMigrationStripsBindingsToStoresLeftUnmarked(t *testing.T) {
 func TestScenarioMigrationRecordStopsRerun(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 	_, err := s.Get(ctx, v1.KindConfigMap.GVK(), KVMigrationNamespace, KVMigrationRecord)
 	require.NoError(t, err, "the record is written")
 
@@ -346,10 +346,28 @@ func TestScenarioMigrationRecordStopsRerun(t *testing.T) {
 	kv.Tables[0].Owner = "s"
 	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
 	prev := previousStore(t, s, "w-kv", w, false)
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 	got := getObj(t, s, v1.KindKVStore, "w-kv")
 	require.Equal(t, prev.ResourceVersion, got.GetObjectMeta().ResourceVersion, "the store stays unmarked")
 	require.Empty(t, got.GetObjectMeta().OwnerReferences)
+}
+
+// Issue 830: the KVStore migration logs through the logger funcd gives it, not through slog's default.
+func TestIssue830_KVMigrationLogsThroughItsLogger(t *testing.T) {
+	var leaked, logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&leaked, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	s := newStore(t)
+	kv := storeKV("w-kv", v1.DeletionRetain)
+	kv.Tables[0].Owner = "s"
+	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
+	previousStore(t, s, "w-kv", w, false)
+
+	require.NoError(t, MarkKVStoresOnce(context.Background(), s, slog.New(slog.NewTextHandler(&logs, nil))))
+	require.Contains(t, logs.String(), "kvstore marked for its workflow")
+	require.Contains(t, logs.String(), "component=workflow.kvstore-migration")
+	require.NotContains(t, leaked.String(), "kvstore marked for its workflow")
 }
 
 // scenario: migration-audit-is-one-line
@@ -369,7 +387,7 @@ func TestScenarioMigrationAuditIsOneLine(t *testing.T) {
 		want[string(name)+"-kv"] = w
 	}
 
-	require.NoError(t, MarkKVStoresOnce(ctx, s))
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	require.Len(t, lines, 2, buf.String())
 	for _, line := range lines {

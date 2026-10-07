@@ -251,7 +251,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 
 		return funcd.New(
 			funcd.WithBlob(bucket), funcd.WithBus(messaging),
-			funcd.WithStore(st), funcd.WithRuntime(process.New()),
+			funcd.WithStore(st), funcd.WithRuntime(process.New(nil)),
 			funcd.WithGateway(embedded.New()), funcd.WithListenAddr("127.0.0.1:0"),
 			funcd.WithDataPlaneAddr("127.0.0.1:0"),
 			funcd.WithS3Gateway(s3Addr, "", 0, master, shortDataDir(t)),
@@ -357,7 +357,7 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 
 	p, err := funcd.New(
 		funcd.WithBlob(bucket), funcd.WithBus(messaging),
-		funcd.WithStore(st), funcd.WithRuntime(process.New()),
+		funcd.WithStore(st), funcd.WithRuntime(process.New(nil)),
 		funcd.WithGateway(embedded.New()), funcd.WithListenAddr("127.0.0.1:0"),
 		funcd.WithDataPlaneAddr("127.0.0.1:0"),
 		funcd.WithDevAuth(funcd.DevToken, ns),
