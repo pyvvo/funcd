@@ -19,7 +19,7 @@
   [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja engine the template uses)
 - **Extends (additive)**: [ADR-0170](../adr/0170-owner-garbage-collector.md) — `gc.Pairs()` gains the pairs of
   Decision 9.
-- **Follow-up topics**: App dependencies (F122) · finer RBAC · a hook before a delete
+- **Follow-up topics**: finer RBAC · a hook before a delete
 
 ## Decisions taken with the decider
 
@@ -88,6 +88,10 @@
 | 2026-10-07 | Where the dry run runs | on the server: a dry-run engine for every write (F123), so the admissions that need the store run too; for an App it returns the plan |
 | 2026-10-07 | Images from two registries in one template | not yet; a board card tracks it |
 | 2026-10-07 | A platform mapping of registries for artifact pulls (a Nexus mirror) | skipped for now |
+| 2026-10-07 | App dependencies | shared Apps through `requires`: an App name and an npm-style version range, in the same namespace; template includes and nested Apps were not chosen |
+| 2026-10-07 | A required App upgraded out of a dependent's range | refused at admission, naming the dependent |
+| 2026-10-07 | Deleting a required App | refused while another App requires it |
+| 2026-10-07 | A requirement not met | the dependent waits before its rollout: no part written, no hook called; the upgrade timeout starts once the requirements are met |
 | 2026-10-07 | Where the pins live | a committed `app/app.lock`, written by `funcdctl app lock`: the requested ref, the version and the digest of each image, as Chart.lock and package-lock.json; render, deploy and push use it, and push packs it instead of rewriting `app.yaml` |
 
 ## Context & Need
@@ -231,13 +235,27 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   naming the part.
 - `scenario: app-delete-reports` — `funcdctl app delete todo -n team-a` returns once the tree is gone and lists
   `todo-store` and `todo-files` as kept.
+- `scenario: app-requires-waits` — App `billing` (requires `lakehouse` `^2.0.0`, `catalogs: - ref: lake`) applied
+  before App `lakehouse` exists ⇒ `billing-1` stays `Deploying` with `RequirementNotMet` naming `App/lakehouse`, writes
+  no part and calls no hook, also after `app.upgradeTimeout`; once `lakehouse` 2.1.0 is Ready, `billing`'s pre-hooks
+  run and `billing-1` becomes current.
+- `scenario: app-requires-version` — `lakehouse` at 1.9.0 ⇒ `billing` waits with the message `App/lakehouse is 1.9.0;
+  billing needs ^2.0.0`; after `lakehouse` 2.1.0 becomes current, `billing` rolls out.
+- `scenario: app-requires-upgrade-refused` — with `billing` current on `lakehouse` 2.1.0, a deploy of `lakehouse`
+  3.0.0 is refused (422) naming `billing` and `^2.0.0`; `funcdctl app rollback lakehouse 1` to 1.9.0 is refused the
+  same way, and the dry run shows both refusals.
+- `scenario: app-requires-delete-refused` — `funcdctl app delete lakehouse` while `billing` requires it ⇒ refused,
+  naming `billing`; after `billing` is deleted, the delete succeeds.
+- `scenario: app-requires-cycle-refused` — `lakehouse` updated to require `billing`, which requires `lakehouse` ⇒
+  refused, naming the cycle `lakehouse → billing → lakehouse`.
 
 ## Scope
 
 **In**: kinds `App` and `AppRevision`; the App admission; the reconciler (stamp, apply, readiness, prune, history,
 failure); the GC pairs; the template (`funcdctl app render|deploy`, `funcdctl push --template`); `funcdctl app
-history|rollback|retry|delete`; the dry-run engine (Decision 19); hooks (`preApply`, `postApply`); two config keys.
-**Out**: hooks before a delete; App dependencies and nested Apps; automatic rollback; the DR `BackupSchedule` (its
+history|rollback|retry|delete`; the dry-run engine (Decision 19); requirements between Apps (Decision 20); hooks
+(`preApply`, `postApply`); two config keys. **Out**: hooks before a delete; nested Apps; template includes
+(Helm-subchart building blocks); requirements across namespaces; automatic rollback; the DR `BackupSchedule` (its
 section and App scope come with the kind); sections for IAM kinds; cron; Secret values in an App (the App only
 declares its Secrets); secret rotation (the secrets work, ADR-0057); apps across namespaces; a template pulled by the
 server; images from two registries in one template (a board card); a platform mapping of registries for artifact pulls
@@ -427,6 +445,21 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
     would be created, updated or pruned, and the hooks that would be called. Nothing is stamped, written or called.
     funcd has no dry run today; the engine serves every kind, with `funcdctl apply --dry-run` beside
     `funcdctl app deploy --dry-run`.
+20. **Requirements (F122).** `spec.requires` names the shared Apps this App needs, in its namespace, each with an
+    npm-style version range (`app: lakehouse`, `version: ^2.0.0`; no range accepts any version), matched against the
+    required App's `spec.version` with `Masterminds/semver/v3`; a range never matches an App without a semver
+    version. Before its pre-hooks, a new AppRevision waits until every required App is Ready at a matching version:
+    no part is written and no hook is called, and the AppRevision stays `Deploying` with reason `RequirementNotMet`,
+    naming the App and what is missing. `app.upgradeTimeout` starts only once the requirements are met, so Apps still
+    apply in any order (ADR-0121). The App admission refuses, naming the dependents: an update or a rollback that
+    takes a required App out of a range that a dependent satisfies today; the delete of an App that another App
+    requires, as link-deletion-protection refuses deleting a link target (`internal/controlplane/admission/links.go:116`);
+    and a requirement cycle, found by a search over the namespace's Apps as link-validity finds link cycles
+    (ADR-0064). The App reconciler watches the Apps of its namespace and maps a change to the Apps that require it.
+    An App's status lists its requirements and their state, and a required App lists the Apps that require it.
+    Requirements do not say which objects are used: a part still names a shared object with `ref` and waits for it
+    (Decision 5). Template includes (a building block copied into each App, as a Helm subchart) and nested Apps were
+    not chosen (decider, 2026-10-07).
 
 ## Lifecycle
 
@@ -434,6 +467,7 @@ Bucket only when its entry says `deletion: delete`. The namespace stays the tena
 |---|---|---|
 | Admission | the spec is checked: sections, names, refs, shared writers, quotas; a refusal stores nothing | unchanged |
 | Stamp | a changed spec gets AppRevision `<app>-<n>` | `Deploying` |
+| Requirements | the rollout waits until every required App is Ready at a matching version; nothing is written yet, and the timeout starts once they are met | `Deploying` |
 | Pre-hooks | the hook Functions of the new spec are written and serve, then each call must succeed before any other write | `Deploying` |
 | Apply | owned parts are created or updated; `ref` objects are only read | `Deploying` |
 | Wait | every part becomes Ready or NotStarted, and every `ref` exists | `Deploying` |
@@ -572,6 +606,7 @@ section entry embeds the kind's shipped spec type, as `WorkflowKVStore` reuses `
 type AppSpec struct {
 	Version      string           `json:"version,omitempty"` // a free label
 	Paused       bool             `json:"paused,omitempty"`  // stops every write of the App (Decision 17)
+	Requires     []AppRequirement `json:"requires,omitempty"` // shared Apps this App needs (Decision 20)
 	KV           []AppKVStore     `json:"kv,omitempty"`
 	Buckets      []AppBucket      `json:"buckets,omitempty"`
 	Functions    []AppFunction    `json:"functions,omitempty"`
@@ -613,6 +648,17 @@ type AppStatus struct {
 	Version         string      `json:"version,omitempty"` // spec.version of the current revision
 	Children        []AppChild  `json:"children,omitempty"`
 	LastRestore     *AppRestore `json:"lastRestore,omitempty"` // the last self-heal write
+	Requires        []AppRequirementState `json:"requires,omitempty"`   // each requirement and whether it is met
+	RequiredBy      []ObjectName          `json:"requiredBy,omitempty"` // the Apps that require this one
+}
+type AppRequirement struct {
+	App     ObjectName `json:"app"`
+	Version string     `json:"version,omitempty"` // an npm-style range; empty accepts any version
+}
+type AppRequirementState struct {
+	App     ObjectName `json:"app"`
+	Version string     `json:"version,omitempty"` // the required App's current version
+	Met     bool       `json:"met"`
 }
 type AppRestore struct {
 	Kind Kind       `json:"kind"`
@@ -753,6 +799,7 @@ type AppPlan struct {
 | `NotStarted` | App `Ready=Unknown` | current, and a Function has never started |
 | `HookFailed` | App `Ready=False`; AppRevision `Failed` (pre-hook) or App `Degraded` (post-hook) | a hook run failed or timed out; the message names the run |
 | `ChildNotReady` | App `Ready=False`, phase `Failed` or `Degraded` | the timeout passed (the AppRevision is `Failed` too), or a part of the current revision stopped being Ready |
+| `RequirementNotMet` | App `Ready=False`, phase `Deploying`; AppRevision `Deploying` | a required App is missing, not Ready, or outside the range; the message names it, and the rollout has not started |
 
 | Consumes | Exposes |
 |---|---|
@@ -766,7 +813,9 @@ type AppPlan struct {
 - **API**: `internal/controlplane` Handlers, CRUD block, the `stampTypeMeta` switch, routes, `stubs.go`; `just
   generate`. AppRevision writes are refused at the API, as for Revision. The dry run: a `dryRun` parameter on create
   and replace that admits and does not store; `sdk.DryRun()`; `funcdctl apply --dry-run`.
-- **Server**: `internal/app/{children,admission,reconcile}.go`; the admission registered in the pipeline; wiring in
+- **Server**: `internal/app/{children,admission,reconcile}.go`; the admission registered in the pipeline, with the
+  requirement checks (range on update and rollback, delete protection, cycle search) and a watch of Apps that maps a
+  change to the Apps that require it; wiring in
   `pkg/funcd` (`ctrl.Register` for App, `ctrl.Watches` per section kind with `app.MapPart`); keys in
   `internal/platform/config/config.go`; pairs in `internal/gc/gc.go`.
 - **Template and CLI**: `internal/app/template`; `internal/artifact/template.go`; `schemaResolver` moves to
@@ -810,6 +859,10 @@ type AppPlan struct {
 - [ ] `funcdctl app lock` resolves a range to the highest matching version and fails when no tag satisfies it;
       render refuses a stale lock.
 - [ ] A dry run stores nothing, stamps nothing and calls no hook, and returns the refusal the real write would get.
+- [ ] A rollout writes nothing and calls no hook while a requirement is not met, and its timeout starts once the
+      requirements are met.
+- [ ] Admission refuses an update or a rollback that takes a required App out of a range a dependent satisfies, the
+      delete of a required App, and a requirement cycle; each refusal names the dependents.
 - [ ] The config keys exist with the defaults above.
 
 ## Consequences
@@ -827,16 +880,15 @@ today's roles.
 
 1. Finer RBAC: last writer or a named Identity → the IAM work that adds per-kind roles.
 2. A hook before a delete (a last backup) needs finalizers, unused today (ADR-0170) → later, if a case needs it.
-3. App dependencies: nesting or ordering → its own topic.
-4. Cron for EventSource timers and BackupSchedule, with a time zone (UTC by default) → its own ADR (it changes a
+3. Cron for EventSource timers and BackupSchedule, with a time zone (UTC by default) → its own ADR (it changes a
    shipped kind); candidate library `adhocore/gronx` (MIT, maintained; `robfig/cron` looks unmaintained).
-5. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
-6. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
-7. Health: the liveness period, the dependency-check timeout, the probe interval of the KV engine and the blob
+4. The `backupSchedules` section and the App scope → the DR workload-backup ADR.
+5. Sections for IAM kinds (Identity, Role, RolesAssignment, Policy, EgressPolicy) → when an app needs them.
+6. Health: the liveness period, the dependency-check timeout, the probe interval of the KV engine and the blob
    storage, their config keys and defaults → the health ADR (it also changes the shim contract).
-8. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
+7. A start-time check that `app.upgradeTimeout` is longer than `runtime.bootTimeout` (default `1m`), as the daemon
    refuses other impossible settings → this design, when it becomes an ADR.
-9. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
+8. A platform client in a hook's context (pause a Sensor during a migration, trigger a Backup): today's context
    has `kv`, `blob`, `invoke` and `log` only → its own decision, with the DR backup API.
 
 ## Example: the to-do app

@@ -42,7 +42,7 @@ an Accepted ADR disagrees with them, the ADR wins and this document is updated t
 
 Build order follows the dependencies. F113 lands first, and F114 builds on it. F115 needs only F113; F116, F117 and
 F119 need both. F118 needs no App and can land at any time; the App reads its results once both exist. F120 and then
-F121 can start once F113 has fixed the App's shape. F122 is an open topic. F123 needs F113 and F114 for an App's plan,
+F121 can start once F113 has fixed the App's shape. F122 needs F113 and F114. F123 needs F113 and F114 for an App's plan,
 and F120's dry run uses it.
 
 ```mermaid
@@ -71,7 +71,7 @@ flowchart LR
 | F119 | **Opt-in App tests**: an App can list checks that prove it still behaves as intended: an HTTP request through the edge with its expected status, a Function call with an input, or a WorkflowRun. A command runs them on demand, as `helm test` does. The results are recorded on the current AppRevision, nothing runs the checks by itself, and a failed check changes nothing else. **Why**: the platform proves that each part is accepted and loaded, never that the app does its job, because no reconciler calls a handler with test input. The decider wants that proof to be explicit and opt-in, and separate from health. | F113 · F114 | — | idea |
 | F120 | **App templates: values and rendering**: an App template is a directory of App fragments plus a values schema, so one definition installs many times with different settings. funcdctl renders it on the client into one App. The install values come from files kept in git; a JSON Schema types and checks them, with defaults and conditional requirements, and a value it does not declare is refused. Expressions use the platform's existing `${{ }}` engine, and a file can be included only when a condition holds. One command deploys, upgrades and downgrades an App from a template version and waits until the new revision is current or has failed; its dry run (F123) shows what a deploy would change and which hooks it would call, without writing anything. Another command deletes the App and reports which data stores stayed. The server never sees a template: the App that it receives is the source. **Why**: the same app is installed in several places (dev, prod, a second team, an end-to-end lane) with different settings, as with a Helm chart, and this must not add a template engine or a server-side render to the platform. A person or an agent should deploy, upgrade, downgrade and delete an app with one command each. | F113 · [ADR-0095](../adr/0095-reference-engine-typed-paths-predicates.md) (the goja `${{ }}` engine) · [ADR-0122](../adr/0122-funcdctl-yaml-manifest-native-contract-codegen.md) (`funcdctl.yaml`, a client file of the same kind) | — | idea |
 | F121 | **App templates in an OCI registry, with pinned images**: the builder sets the version of every image the app runs, in one table of the template, as a package.json sets its dependencies: an exact version or an npm-style range such as `^1.0.0`. An install can change only the registry the images come from, through a value with a default. A lock command resolves each range to the highest matching version and records every image's exact version and digest in a lock file committed with the template, as npm's package-lock.json and Helm's Chart.lock do. Render, deploy and push use it, and push packs the template exactly as it is in git, so a tag moved later never changes what a template version or a commit installs. The template's version is its registry tag. A template is pushed to an OCI registry and deployed from it, as a Helm chart is, beside the function bundles and site files it references. The server still never pulls a template. The transfer speed of every artifact kind, templates included, is tracked under #820. **Why**: a template version is the unit of compatibility, so its builder, a person or an agent, must be able to publish image versions that were tested together. The registry must change from day one, because the end-to-end lanes run every image from a local OCI layout and a site may use its own registry. Ranges let a builder accept compatible patch releases without editing the template. | F120 · [ADR-0031](../adr/0031-oci-artifact-distribution-oras.md) (OCI artifacts) · [ADR-0035](../adr/0035-artifact-digest-resolution-at-revision.md) (an explicit digest is used as written) · [ADR-0139](../adr/0139-site-declarative-static-web-app.md) (`funcdctl push --site`, the precedent) | — | idea |
-| F122 | **App dependencies**: one App depends on another, so that a stack of apps installs and upgrades in the right order. Whether this means nesting (an App inside an App) or ordering between Apps is still open. **Why**: a larger system is made of several apps that must come up in order. | F113 · F114 | — | idea |
+| F122 | **App dependencies (`requires`)**: an App declares the shared Apps it needs, in its namespace, each with an npm-style version range, such as a `billing` App that needs a `lakehouse` App at `^2.0.0`. Its rollout waits until every required App is Ready at a matching version: no part is written and no hook is called before that, and the upgrade timeout starts only then, so Apps still apply in any order. Admission refuses an upgrade or a rollback that takes a required App out of a range a dependent satisfies, the delete of an App that another App requires, and a requirement cycle; each refusal names the dependents. Both Apps show the link in their status. **Why**: a shared app, such as a lakehouse used by several services, is managed on its own. `ref` already lets an App use its objects and wait for them (ADR-0121), but nothing checks the shared app's version, and nothing stops an upgrade or a delete that breaks the apps using it. Template includes (Helm-subchart building blocks) and nested Apps were not chosen. | F113 · F114 · [ADR-0121](../adr/0121-declarative-referential-integrity-admission.md) (references wait; apply in any order) · [ADR-0064](../adr/0064-fn-to-fn-rpc-links.md) (link validity and deletion protection, the precedent) | — | idea |
 | F123 | **Dry-run engine**: the platform can answer what a write would do without doing it. A create or an update sent as a dry run goes through the same decoding, validation and admission as a real one, and comes back with the object as it would be stored, or with the refusal; nothing is stored. For an App, the answer also carries the plan: the AppRevision that would be stamped, the parts that would be created, updated or pruned, and the hooks that would be called. `funcdctl apply --dry-run` and `funcdctl app deploy --dry-run` use it. **Why**: today a refusal shows only at the real write. `funcdctl apply` validates each document offline, but the checks that need the store run only on the server, such as a Bucket beyond its namespace's quota or a link to a Function that does not exist. A person or an agent should see a refusal, and what a deploy would change, before making the change. Every kind benefits, with or without an App. | F113 · F114 · [ADR-0063](../adr/0063-admission-framework.md) (the admission pipeline every write passes) · [ADR-0064](../adr/0064-fn-to-fn-rpc-links.md) and [ADR-0080](../adr/0080-s3-protocol-frontend-blob-substrate.md) (server-only refusals: link validity, the bucket quota) | — | idea |
 
 ## How it lands on funcd (high level)
@@ -117,7 +117,7 @@ flowchart TB
 | API server and admission ([ADR-0063](../adr/0063-admission-framework.md)) | decodes the App strictly and runs the App admission | exists; App admission new | F113 |
 | Store, the metastore | holds the App, its AppRevisions and its parts; bumps a generation only when a `spec` changes | exists | F113, F114 |
 | Controller framework ([ADR-0015](../adr/0015-controller-engine.md)) | runs the App reconciler and one watch per part kind | exists | F113, F115 |
-| App reconciler | a materializer one level up: stamp, hooks, apply, wait, switch, prune, restore, status | new | F113 to F117 |
+| App reconciler | a materializer one level up: stamp, requirements, hooks, apply, wait, switch, prune, restore, status | new | F113 to F117, F122 |
 | Child reconcilers | Function (revisions, the [ADR-0143](../adr/0143-redeploy-by-revision-switch.md) switch), Workflow materializer, KV store, Site, Route, CatalogService, EventSource, Sensor: each provisions its own children and reports Ready | exist | F113 |
 | Invoker (activator, [ADR-0033](../adr/0033-data-plane-serving-and-trigger-wake.md)) | calls hook Functions once and wakes them when they are scaled to zero | exists | F117 |
 | Workers and shims | run the Functions; the handler context gives `kv`, `blob`, `invoke` and `log` | exist; health checks extended | F117, F118 |
@@ -283,9 +283,31 @@ status:
 A person or an agent follows one path: `funcdctl describe app todo`, then `funcdctl app history todo`, then the
 first part that is not Ready, with `funcdctl describe` and `funcdctl logs`. A failed hook names its Invocation.
 
+A shared App (F122): `billing` uses the catalog of the `lakehouse` App and needs version 2 of it.
+
+```yaml
+# App billing (excerpt)
+spec:
+  version: 1.3.0
+  requires:
+    - app: lakehouse
+      version: ^2.0.0
+  catalogs:
+    - ref: lake
+---
+# while lakehouse is at 1.9.0
+status:
+  phase: Deploying
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: RequirementNotMet
+      message: "App/lakehouse is 1.9.0; billing needs ^2.0.0"
+```
+
 ## The lifecycle (illustrative, non-normative)
 
-### One rollout, as the App reconciler runs it (F114, F115, F117)
+### One rollout, as the App reconciler runs it (F114, F115, F117, F122)
 
 ```mermaid
 stateDiagram-v2
@@ -294,7 +316,8 @@ stateDiagram-v2
     Refused --> [*]
     Admission --> Stamp : App stored
     Stamp --> Ready : spec unchanged, no new revision
-    Stamp --> PreHooks : new AppRevision, phase Deploying
+    Stamp --> Requirements : new AppRevision, phase Deploying
+    Requirements --> PreHooks : required Apps Ready at matching versions
     PreHooks --> Apply : every hook call succeeded
     PreHooks --> Failed : HookFailed
     Apply --> Wait : changed parts written
@@ -422,6 +445,7 @@ sequenceDiagram
 | Health | built in: liveness on every replica, a dependency check in the shim, one probe of the KV engine and blob storage | F118 |
 | Tests | `spec.tests` runs only with `funcdctl app test` | F119 |
 | Dry run | goes through decoding, validation and admission like a real write, stores nothing, and returns an App's plan | F123 |
+| Requirements | `requires` names shared Apps with npm-style ranges; the rollout waits until they are Ready at a matching version; an upgrade out of a dependent's range, the delete of a required App and a cycle are refused | F122 |
 | Templates | rendered on the client; values only from `-f` files, refused when undeclared; the server never pulls a template | F120 |
 | Images | set by the builder in the template's `images` table, as an exact version or an npm-style range; only the registry is a value; `app.lock` holds the resolved version and digest, and render, deploy and push use it; the push tag is the template version | F121 |
 
@@ -456,6 +480,9 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 - **F121**: the lock pins every image, push packs it unchanged, and a moved tag changes nothing
   (`app-template-pinned`); a range resolves to the highest matching version, and a stale lock is refused
   (`app-template-range`); the registry value points the App at a local OCI layout (`app-registry-value`).
+- **F122**: a dependent waits for its required App and writes nothing until then (`app-requires-waits`,
+  `app-requires-version`); an upgrade out of a dependent's range, the delete of a required App and a cycle are
+  refused (`app-requires-upgrade-refused`, `app-requires-delete-refused`, `app-requires-cycle-refused`).
 - **F123**: a dry run returns the same refusal as the real write and stores nothing (`apply-dry-run-refused`); an
   App's dry run lists the AppRevision, the parts and the hooks, and writes nothing (`app-deploy-dry-run`).
 
@@ -475,6 +502,9 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
   backups, once its schedule kind exists.
 - **Cron schedules for timers**: their own decision, outside this epoch.
 - **Images from two registries in one template**: not yet; a board card tracks it.
+- **Template includes and nested Apps**: a building block copied into each App (a Helm subchart) and an App holding
+  child Apps were not chosen for F122 (2026-10-07).
+- **Requirements across namespaces**: an App requires only Apps of its own namespace.
 - **A platform-side registry mapping** (a Nexus mirror for every artifact pull): skipped for now. funcd redirects
   only runtime images today (`runtime.containerd.imagePrefix`).
 - **Duration strings across the API**, such as `10m` and `500ms`, with the millisecond as the smallest unit: decided
@@ -490,4 +520,3 @@ object, by hand or by an agent, and each feature passes its scenarios (named in 
 | A platform client in a hook's context (pause a Sensor, trigger a backup) | F117, with the disaster-recovery backup API |
 | A hook before a delete | F117, later, if a case needs it |
 | Health settings: the liveness period, the dependency-check timeout, the probe interval | the F118 ADR, which also changes the shim contract |
-| App dependencies: nesting or ordering | F122 |
