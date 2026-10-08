@@ -20,6 +20,8 @@ func TestIssue852_WatchPRsReportsEveryBranchPrefix(t *testing.T) {
  "mergeStateStatus":"BLOCKED","isInMergeQueue":false,
  "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[{"name":"ci","conclusion":"FAILURE","status":"COMPLETED"}]}}}}]}},
 {"number":900,"title":"fix pr","headRefName":"fix/900-thing","headRefOid":"cccccccccccccccc",
+ "mergeStateStatus":"DIRTY","isInMergeQueue":false,"commits":{"nodes":[]}},
+{"number":901,"title":"other pr","headRefName":"spike-no-prefix","headRefOid":"dddddddddddddddd",
  "mergeStateStatus":"DIRTY","isInMergeQueue":false,"commits":{"nodes":[]}}
 ]}}}}`
 	bin := t.TempDir()
@@ -34,4 +36,5 @@ func TestIssue852_WatchPRsReportsEveryBranchPrefix(t *testing.T) {
 	require.Contains(t, out, "GREEN    #842 [feat/adr-0197-log-durations-in-ms]")
 	require.Contains(t, out, "RED      #851 [impl/adr-0199-app]")
 	require.Contains(t, out, "CONFLICT #900 [fix/900-thing]")
+	require.Contains(t, out, "CONFLICT #901 [spike-no-prefix]")
 }
