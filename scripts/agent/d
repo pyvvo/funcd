@@ -29,7 +29,8 @@ if [ "${FUNCD_DEVSHELL_KEY:-}" != "$key" ]; then
   fi
   orig_path=$PATH
   tmp_base=${TMPDIR:-/tmp}
-  saved_tmp=$(declare -p TMPDIR TMP TEMP TEMPDIR 2>/dev/null) || true
+  saved_tmp=$(declare -p NIX_BUILD_TOP TMPDIR TMP TEMP TEMPDIR 2>/dev/null) || true
+  unset NIX_BUILD_TOP
   set +eu # the generated environment script is not written for errexit/nounset
   # shellcheck disable=SC1090
   source "$env_file" >/dev/null 2>&1

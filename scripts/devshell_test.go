@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -128,10 +130,14 @@ export DEVSHELL_WHOLE=yes
 	require.NoError(t, os.Symlink(bash, filepath.Join(devbin, "bash")))
 	d := filepath.Join(root, "scripts", "agent", "d")
 	run := func(sh string) (string, error) {
-		cmd := exec.Command(sh, d, "sh", "-c", `printf %s "$DEVSHELL_WHOLE"`)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, sh, d, "sh", "-c", `printf %s "$DEVSHELL_WHOLE"`)
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), "FUNCD_DEVSHELL_KEY=")
+		cmd.WaitDelay = time.Second
 		out, err := cmd.CombinedOutput()
+		require.NoError(t, ctx.Err(), "d under %s must not re-run itself forever", sh)
 		return string(out), err
 	}
 
@@ -183,4 +189,14 @@ export TEMPDIR="$NIX_BUILD_TOP"
 	require.NoError(t, err)
 	require.Empty(t, left, "d must remove the directory the environment script creates")
 	require.Equal(t, slices.Repeat([]string{tmp + "|unset|unset"}, 3), seen, "d must keep TMPDIR")
+
+	callers := filepath.Join(tmp, "nix-shell.callers")
+	require.NoError(t, os.Mkdir(callers, 0o755))
+	cmd := exec.Command(bash, filepath.Join(devshellCheckout(t, "true\n"), "scripts", "agent", "d"),
+		"sh", "-c", `printf %s "$NIX_BUILD_TOP"`)
+	cmd.Env = append(env, "NIX_BUILD_TOP="+callers)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.DirExists(t, callers, "d must remove only the directory the environment script creates")
+	require.Equal(t, callers, string(out), "d must keep the caller's NIX_BUILD_TOP")
 }
