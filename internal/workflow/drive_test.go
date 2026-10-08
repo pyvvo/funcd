@@ -594,15 +594,17 @@ func TestScenarioDeletedRunStops(t *testing.T) {
 
 // holdRuns is a run store that holds one Put of a run's goroutine until release, closing held when it does:
 // with first, the first Put before its write (the run has no record yet); else the first terminal Put after
-// its write (a terminal record while the goroutine is live). A Get made while gate reports true waits for held.
+// its write (a terminal record while the goroutine is live). A Get made while gate reports true waits for held;
+// afterGet, when set, runs after each Get has read the record.
 type holdRuns struct {
 	runstate.Store
-	first   bool
-	gate    func() bool
-	once    sync.Once
-	held    chan struct{}
-	unheld  chan struct{}
-	release func()
+	first    bool
+	gate     func() bool
+	afterGet func()
+	once     sync.Once
+	held     chan struct{}
+	unheld   chan struct{}
+	release  func()
 }
 
 func newHoldRuns(t *testing.T, first bool) *holdRuns {
@@ -639,7 +641,11 @@ func (h *holdRuns) Get(ctx context.Context, ns v1.NamespaceName, name v1.ObjectN
 		case <-time.After(10 * time.Second):
 		}
 	}
-	return h.Store.Get(ctx, ns, name)
+	rec, err := h.Store.Get(ctx, ns, name)
+	if h.afterGet != nil {
+		h.afterGet()
+	}
+	return rec, err
 }
 
 func (h *holdRuns) waitHeld(t *testing.T) {
@@ -706,6 +712,44 @@ func TestCancelBeforeFirstRecordWaitsForGoroutine(t *testing.T) {
 		t.Fatalf("status.phase = %s before the run's goroutine wrote a record, want a non-terminal phase", p)
 	}
 	runs.release()
+	if _, err := settleRun(ctx, rr, req); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	run := getRunObj(t, s, "run-c")
+	if run.Status.Phase != runCancelled || len(run.Status.Steps) != 1 || run.Status.Steps[0].Phase != v1.StepCancelled {
+		t.Fatalf("status = %s with steps %+v, want Cancelled with step a Cancelled", run.Status.Phase, run.Status.Steps)
+	}
+}
+
+// Issue #846: a pass that reads no record for a cancelled run, and then finds its goroutine gone because the
+// goroutine recorded the run and exited in between, must not write the fallback Cancelled without the steps the
+// goroutine recorded (a terminal run is never reconciled again).
+func TestIssue846_CancelMirrorsStepsWhenGoroutineExitsMidPass(t *testing.T) {
+	ctx := context.Background()
+	s, runs := newStore(t), newHoldRuns(t, true)
+	seedWorkflow(t, s, "wf", step("a", ""))
+	seedRun(t, s, "run-c", "wf", `{}`)
+	eng, err := New(Deps{Runs: runs, Dispatch: newFake()})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	rr, req := NewRunReconciler(s, eng, nil, nil, 0), runReq("run-c")
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("start pass: %v", err)
+	}
+	runs.waitHeld(t)
+	updateRun(t, s, "run-c", func(r *v1.WorkflowRun) { r.Spec.Cancel = true })
+	var exitErr error
+	runs.afterGet = sync.OnceFunc(func() {
+		runs.release()
+		_, exitErr = awaitExit(eng, "default", "run-c")
+	})
+	if _, err := rr.Reconcile(ctx, req); err != nil {
+		t.Fatalf("cancel pass: %v", err)
+	}
+	if exitErr != nil {
+		t.Fatalf("goroutine exit: %v", exitErr)
+	}
 	if _, err := settleRun(ctx, rr, req); err != nil {
 		t.Fatalf("settle: %v", err)
 	}

@@ -496,8 +496,10 @@ func notReadyCause(wf *v1.Workflow) string {
 
 // syncStatus mirrors the run record into WorkflowRun.status (ADR-0146 Decision 4: the only status writer).
 // With no record of its own, a cancel or pause sets fallback. A terminal phase, from the record or the
-// fallback, is written only once the run's goroutine exited: its exit enqueues the run again.
+// fallback, is written only once the run's goroutine exited: its exit enqueues the run again. Liveness is read
+// before the record, so a goroutine seen gone wrote its last record before the read (#846).
 func (r *RunReconciler) syncStatus(ctx context.Context, run *v1.WorkflowRun, before []byte, fallback v1.RunPhase) (controller.Result, error) {
+	_, live := r.engine.live(run.Namespace, run.Name)
 	rec, err := r.engine.runs.Get(ctx, run.Namespace, run.Name)
 	switch {
 	case fault.KindOf(err) == fault.NotFound || err == nil && ForeignRecord(rec, run.UID):
@@ -509,10 +511,8 @@ func (r *RunReconciler) syncStatus(ctx context.Context, run *v1.WorkflowRun, bef
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), runOp, "get run record %q", run.Name)
 	}
 	mirror(run, rec)
-	if isRunTerminal(run.Status.Phase) {
-		if _, live := r.engine.live(run.Namespace, run.Name); live {
-			return controller.Result{}, nil
-		}
+	if live && isRunTerminal(run.Status.Phase) {
+		return controller.Result{}, nil
 	}
 	return r.writeStatus(ctx, run, before, rec)
 }
