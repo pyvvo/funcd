@@ -233,6 +233,16 @@ func TestNewReconcilerRequiresStoreAndPurger(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	_, err = app.NewReconciler(app.Deps{Store: store.New(memory.New()), Purger: &purges{}, RevisionHistory: -1})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	_, err = app.NewReconciler(app.Deps{Store: store.New(memory.New()), Purger: &purges{}, SupervisionPeriod: -time.Second})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}
+
+// A blocked prune retries after the configured runtime.supervisionPeriod, not the package default.
+func TestAppBlockedPruneRequeuesAfterConfiguredPeriod(t *testing.T) {
+	h := newHarness(t, nil, func(d *app.Deps) { d.SupervisionPeriod = 3 * time.Second })
+	h.install(todoApp(nil))
+	h.edit(func(a *v1.App) { a.Spec.KV = a.Spec.KV[:1] })
+	require.Equal(t, 3*time.Second, h.reconcile().RequeueAfter)
 }
 
 // scenario: app-install (the reconciler half) — every part is written in the App's namespace and resource group with

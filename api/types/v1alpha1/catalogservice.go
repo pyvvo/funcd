@@ -94,7 +94,8 @@ type ResourceSpec struct {
 // /status route.
 type CatalogServiceStatus struct {
 	Status `json:",inline"`
-	// Function is the materialized backing duckdb Function (computed by the reconciler).
+	// Function is the engine identity, "<name>-duckdb" (computed by the reconciler). No Function object has this
+	// name: the engine runs as the provider worker named for the CatalogService (ADR-0086, repointed at the engine).
 	Function ObjectName `json:"function,omitempty"`
 	// Endpoint is the published Quack URL — the backing function's ingress path (computed).
 	Endpoint string `json:"endpoint,omitempty"`

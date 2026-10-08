@@ -36,17 +36,21 @@ type Deps struct {
 	UpgradeTimeout time.Duration
 	// RevisionHistory is app.revisionHistory, the AppRevisions kept besides the current one; 0 ⇒ 10.
 	RevisionHistory int
+	// SupervisionPeriod is runtime.supervisionPeriod, the retry of a stopped pass or a blocked prune (ADR-0199
+	// Decision 6, as the Workflow materializer); 0 ⇒ controller.SupervisionPeriod.
+	SupervisionPeriod time.Duration
 }
 
 // Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
 // rollout deadline is read from the AppRevision's status.startedAt.
 type Reconciler struct {
-	store           store.Store
-	purger          gc.BucketPurger
-	log             *slog.Logger
-	clock           clock.Clock
-	upgradeTimeout  time.Duration
-	revisionHistory int
+	store             store.Store
+	purger            gc.BucketPurger
+	log               *slog.Logger
+	clock             clock.Clock
+	upgradeTimeout    time.Duration
+	revisionHistory   int
+	supervisionPeriod time.Duration
 }
 
 // NewReconciler builds the App reconciler.
@@ -61,6 +65,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "upgrade timeout %s is negative", d.UpgradeTimeout)
 	case d.RevisionHistory < 0:
 		return nil, fault.Invalidf(op, "revision history %d is negative", d.RevisionHistory)
+	case d.SupervisionPeriod < 0:
+		return nil, fault.Invalidf(op, "supervision period %s is negative", d.SupervisionPeriod)
 	}
 	log := d.Logger
 	if log == nil {
@@ -71,12 +77,13 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		clk = clock.System()
 	}
 	return &Reconciler{
-		store:           d.Store,
-		purger:          d.Purger,
-		log:             log.With("component", "app"),
-		clock:           clk,
-		upgradeTimeout:  cmp.Or(d.UpgradeTimeout, defaultUpgradeTimeout),
-		revisionHistory: cmp.Or(d.RevisionHistory, defaultRevisionHistory),
+		store:             d.Store,
+		purger:            d.Purger,
+		log:               log.With("component", "app"),
+		clock:             clk,
+		upgradeTimeout:    cmp.Or(d.UpgradeTimeout, defaultUpgradeTimeout),
+		revisionHistory:   cmp.Or(d.RevisionHistory, defaultRevisionHistory),
+		supervisionPeriod: cmp.Or(d.SupervisionPeriod, controller.SupervisionPeriod),
 	}, nil
 }
 

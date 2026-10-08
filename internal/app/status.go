@@ -202,7 +202,7 @@ func (r *Reconciler) publish(ctx context.Context, a *v1.App, revs []*v1.AppRevis
 	a.Status.Children = append(a.Status.Children, pruning...)
 	var res controller.Result
 	if halt != nil || len(pruning) > 0 {
-		res.RequeueAfter = controller.SupervisionPeriod
+		res.RequeueAfter = r.supervisionPeriod
 	}
 	if left > 0 && (res.RequeueAfter == 0 || left < res.RequeueAfter) {
 		res.RequeueAfter = left

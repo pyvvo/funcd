@@ -1025,6 +1025,7 @@ func (p *Platform) buildControlPlane() error {
 	appReconciler, err := app.NewReconciler(app.Deps{
 		Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger, Clock: clock.System(),
 		UpgradeTimeout: c.pacing.appUpgradeTimeout(), RevisionHistory: c.appRevisionHistory,
+		SupervisionPeriod: c.pacing.SupervisionPeriod,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
