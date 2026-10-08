@@ -262,7 +262,6 @@ func TestPoolResolverAfterRestart(t *testing.T) {
 
 	release()
 	require.Equal(t, "old pool", answer())
-	settle()
 	restarted.reconcile(t, "a")
 	require.True(t, h.rt.wasRemoved(old))
 	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 1)
