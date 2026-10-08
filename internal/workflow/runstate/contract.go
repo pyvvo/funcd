@@ -10,8 +10,9 @@ import (
 )
 
 // Contract exercises the runstate.Store port against a driver. Every driver's test
-// runs it (ADR-0002 shared contract suite), so memory and badger are held to one
-// behavior: roundtrip, not-found, overwrite, delete, no-aliasing, and List filters.
+// runs it (ADR-0002 shared contract suite); badger runs it on disk and in memory,
+// so both modes are held to one behavior: roundtrip, not-found, overwrite, delete,
+// no-aliasing, and List filters.
 func Contract(t *testing.T, newStore func(t *testing.T) Store) {
 	t.Helper()
 	ctx := context.Background()
