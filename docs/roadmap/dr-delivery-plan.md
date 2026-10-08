@@ -26,8 +26,6 @@ one wave ahead of the build track.
 
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
-| ADR-0195 | KV backup delete records (Accepted 2026-10-07; implementation in progress) | FEAT-0001/F36 | ADR-0067 |
-| ADR-0196 | UTC millisecond timestamps (Accepted 2026-10-07, not built; ADR-0203 needs `v1.Timestamp`) | FEAT-0000/F02 | — |
 | X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it) | — | — |
 | ADR-0202 | Store layer for backup: one-transaction snapshot, cut order, version timeline | F109 | ADR-0006, ADR-0065 |
 | ADR-0201 | Event store: the dead-letter store extended with the blob seen lists | F110 | ADR-0118, ADR-0119, ADR-0157, ADR-0202 |
@@ -84,8 +82,8 @@ flowchart TB
     ADR_0118["ADR-0118 ✓"]
     ADR_0119["ADR-0119 ✓"]
     ADR_0157["ADR-0157 ✓"]
-    ADR_0195["ADR-0195 · F36<br/>KV backup delete records (Accepted, implementation in progress)"]
-    ADR_0196["ADR-0196 · —<br/>UTC millisecond timestamps (Accepted, not built: api/types/v1alpha1 has no Timestamp yet)"]
+    ADR_0195["ADR-0195 ✓"]
+    ADR_0196["ADR-0196 ✓"]
     X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
     ADR_0202["ADR-0202 · F109<br/>store layer for backup"]
     ADR_0201["ADR-0201 · F110<br/>event store"]
@@ -100,7 +98,6 @@ flowchart TB
     ADR_0210["ADR-0210 · F109<br/>API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844"]
     DR_L1["DR-L1 · F112<br/>funcdctl backup plan"]
 
-    ADR_0067 --> ADR_0195
     ADR_0006 --> ADR_0202
     ADR_0065 --> ADR_0202
     ADR_0118 --> ADR_0201
@@ -146,8 +143,8 @@ flowchart TB
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157 |
-| 1 | ADR-0195, ADR-0196, ADR-0202, X-CRON |
+| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196 |
+| 1 | ADR-0202, X-CRON |
 | 2 | ADR-0201, ADR-0203, ADR-0210 |
 | 3 | ADR-0204 |
 | 4 | ADR-0205, ADR-0206 |
