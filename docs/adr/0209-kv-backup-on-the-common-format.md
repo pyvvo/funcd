@@ -6,16 +6,16 @@
 - **Tags**: kvstore, backup, disaster-recovery, badger, encryption, retention
 - **Realizes**: [FEAT-0009/F111](../feat/0009-feat-disaster-recovery.md) (workload data protection; DR plan item DR-9)
 - **Supersedes in part** (each keeps its status; back-links at acceptance), these clauses only:
-  - [ADR-0067](0067-kv-opt-in-dr-backup.md) (Implemented), by line: Scope In "segment retention/pruning" (47-48);
-    "named `<range>/part-NNN`" (77); "partial parts are overwritten" (82); "`base-<v>/part-NNN`), then older segments may
-    be pruned" (84-85); Decision 3 (87-88); `target` "REQUIRED iff enabled" (96); `chunkBytes` 64 MiB (99); scenario
-    `backup-enabled-requires-target` (32-33); "segment pruning bounds the restore chain" (151); "encrypted segments" (166).
-  - [ADR-0195](0195-kv-backup-delete-records.md) (Reviewing): Decision 2 "prunes the old segments" (104); Decision 5, the
-    `format` marker in `manifest.json` (118-123); scenario `first-start-after-upgrade-rebaselines` (53-55); Contracts
-    `manifestFormat`, `manifest`, its JSON, the `manifest.json` row (145, 157-161, 170-177, 182). Its Decisions 1-4 and 6
-    (record, exclusion, record pass, record prune, retry) stand; Decision 3 here keeps Decision 5's purpose.
-- **Relates to**: ADR-0066 (`Backup` seam, unchanged) · ADR-0202 · ADR-0203 · ADR-0204 · ADR-0205 · ADR-0206 · ADR-0208
-  (failure-domain guard) · ADR-0072/0073 (store prefix) · ADR-0184 · ADR-0194 · ADR-0196 · DR-10 (workload resources)
+  - [ADR-0067](0067-kv-opt-in-dr-backup.md) (Implemented), by line: segment pruning (47-48, 84-85, 151); part names (77,
+    84); "partial parts are overwritten" (82); Decision 3 (87-88); `chunkBytes` 64 MiB (77, 99); Restore "from the
+    latest base + incrementals" (111); "encrypted segments" (166); each enabled-without-target clause, as the target may
+    come from `backup:` (32-33, 96, 114, 123, 135, 141, 147).
+  - [ADR-0195](0195-kv-backup-delete-records.md) (Implemented): Decision 2 "the manifest (`format: 1`)" and "prunes the
+    old segments" (104); Decision 4 "After the segment prune" (113); Decision 5 (118-123); Decision 6 "a period after
+    the base's `at`" (126); scenario `first-start-after-upgrade-rebaselines` (53-55); the Contracts' manifest (145,
+    157-161, 170-177, 182); checklist "and the segment prune" (220) and 224-225 up to "a lower format". The rest stands:
+    the record (1), exclusion (2), record pass (3), record prune (4) and retry (6); Decision 3 here keeps 5's purpose.
+- **Relates to**: ADR-0066 (`Backup` seam, unchanged) · ADR-0072/0073, 0184, 0194, 0196 · ADR-0202–0206, 0208 · DR-10
 
 ## Context & Need
 

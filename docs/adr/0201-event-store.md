@@ -5,17 +5,17 @@
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, dead-letter, eventsource, blob, badger, disaster-recovery
 - **Realizes**: [FEAT-0009/F110](../feat/0009-feat-disaster-recovery.md) (durable eventing state)
-- **Supersedes in part** (the placement only; both keep `Implemented` and get a back-link at acceptance):
+- **Supersedes in part** (placement, layout, migration; both keep `Implemented` and get a back-link at acceptance):
   - [ADR-0119](0119-object-store-eventsource.md): the V1 driver over `internal/kvstore.KV` in Scope In (:86-88),
     Decision §3 (:189-190), Dependencies & I/O (:314) and the checklist (:358); the constraint "Reuse the in-tree KV
     substrate for persistence" (:131-135).
   - [ADR-0157](0157-blob-event-seen-list.md): "JSON in kvstore.KV" (:164); the path `_eventing/blobwatch/<ns>/<source>/`
-    in Decision 4 (:123-124), in the `KVWatermark` prose (:200-201) and in the Then of `source-delete-deletes-record`
-    (:59-60), now reading "no seen list of the source remains in the event store"; Decision 7 (:145-146): no migration
-    is replaced by the move (Decision 6), which skips and deletes a `Cursor` record the first `Save` used to replace;
-    Consequences: the export by the ADR-0067 backup (:244-245), the value cap at `internal/kvstore/badger/badger.go:116`
-    (:246; its 64 MiB stays as `maxRecord`) and "one KV prefix `List`" per non-blob `Purge` (:250).
-  - The rest of both stands: the record format, fire and prune rule, `Purge` and start sweep.
+    in Decision 4 (:123-124), the `KVWatermark` prose (:200-201) and the Then of `source-delete-deletes-record` (:59-60),
+    now "no seen list of the source remains in the event store"; Decision 7's no migration (:145-146), replaced by
+    this ADR's move (Decision 6); the rejected "Split a record over several KV values" (:98), adopted as parts under
+    a head written last, keeping one-record atomicity (over 64 MiB a `Save` still fails, its Decision 9); Consequences
+    :244-246, :250: the ADR-0067 export, the KV value cap (64 MiB stays as `maxRecord`), a KV `List` per non-blob
+    `Purge`. The rest of both stands: the `SeenList` JSON, fire and prune rule, `Purge`, start sweep.
 - **Relates to**: ADR-0118 (its port, record, `dl/` keys, retention and driver stay; the driver gains two constructors)
   · ADR-0156 (shutdown parks queued deliveries) · ADR-0043 (`storage.mode`) · ADR-0066, ADR-0195 (the KV driver of the
   move) · ADR-0182 · ADR-0202 (`eventstore.Store` implements its `snapshot.Source`/`Loader`; built on it)
@@ -67,7 +67,7 @@ other state (Decision 3); a crash-durable delivery queue and a remote engine (Op
 
 ## Constraints & Decision drivers
 
-- One Badger instance per service, by restore class and ownership (`config.go:464-466`).
+- One Badger instance per service, by restore class and ownership (`config.Load`; `config.go:476-478` at main c35bdf5e).
 - ADR-0157 bounds a record at 64 MiB, the KV's value-log file (`internal/kvstore/badger/badger.go:112`). The in-memory
   DLQ keeps Badger v4.9.2's defaults in RAM (`options.go:128-140`): 5 memtables, up to 15 level-0 tables, 64 MiB each.
 - A value of 1 MiB or more lives in the value log (`options.go:170`, `:201`), which GC reclaims only from compaction
@@ -234,7 +234,7 @@ what they lose today; on the memory KV engine the upgrade back-fills once more.
 - **The move**: the one-time copy (Decision 6). Alternatives: no migration (each watched prefix back-fills once on
   `kvstore.engine: badger`), or a move whose error only warns, then back-fills.
 - **Config keys**: keep all three. Alternative: `eventing.store.dataDir`, with `eventing.deadletter.dataDir` kept as an
-  alias, since strict decoding rejects an unknown key (`config.go:433`).
+  alias, since `config.Load` rejects an unknown key (`yaml.UnmarshalStrict`, `config.go:445` at main c35bdf5e).
 - **In-flight deliveries**: in memory (Decision 8); exit: a crash-durable queue ADR or ADR-0108's V2 durable Fanout.
 - **A remote engine's backup**: none exists; the ADR that adds one names the backup that covers it.
 - **Durable KV, memory event store** (library only): the move skips and the KV keeps the keys (Decision 6).

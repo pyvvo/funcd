@@ -37,16 +37,16 @@ off its failure domain, whole-store restore. Callers: the daemon (start, timer),
   uploads only the new object, its index lists exactly the live objects, and its manifest was created last.
 - **scenario: mirror-frozen-image** — Given a finished freeze, When an object is overwritten and another deleted before
   their copy, Then the generation holds both as at the freeze.
-- **scenario: catalog-checkpoint-first** — Given a checkpoint listing f1, When during the freeze the engine writes f2 and
-  a checkpoint listing both, or a checkpoint dropping f1 and then a cleanup deleting f1, Then every file a checkpoint in
-  the generation lists is in it.
+- **scenario: catalog-checkpoint-first** — Given a checkpoint listing f1, When mid-freeze the engine writes f2 and a
+  checkpoint listing both, or a checkpoint without f1 and deletes f1, Then each checkpoint's files are in the generation.
 - **scenario: mirror-epoch-rolls** — Given an epoch older than `blob.backup.rebaseline`, When the next run starts, Then
   it writes epoch e+1 with every object uploaded again and changes nothing under epoch e.
 - **scenario: mirror-restore** — Given generation n, When the operator restores it into an empty destination, Then
   every object returns with its bytes, content type and metadata; a non-empty one is refused with `fault.Conflict`, a
   missing object fails the restore before its first write, an altered one with `fault.Invalid` and an empty destination.
-- **scenario: remote-restore-at** — Given a versioned store where after T key a was overwritten, b created and c
-  deleted, When the operator restores to T, Then a holds its bytes of T, b is absent, c is back, no version is lost.
+- **scenario: remote-restore-at** — Given a versioned store where after T key a was overwritten, b created, c deleted and
+  d overwritten with its version of T expired, When the operator restores to T, Then a holds its bytes of T, c is back, b
+  and d are absent and in `NoVersion`, no version is lost; a T older than `blob.versionRetention` ⇒ `fault.Invalid`.
 
 ## Scope
 
@@ -76,11 +76,11 @@ flags and the hold (ADR-0206); per-app `BackupSchedule` scopes and their catalog
 ## Decision
 
 **1. Backend and keys** (names proposed; decider confirms at acceptance). `blob.target` set ⇒ `gocloud.OpenWith(ctx,
-target, OpenOptions{CredentialsFile})`; else `blob.dir` (absolute, `config.Load`) through `gocloud.FileURL`.
-`config.CheckBlob` (NEW; rows proposed; decider confirms at acceptance) holds ADR-0205 Decision 3's `blob.*` rules
-(`Validate`, F112): `fault.Invalid` naming the key: a non-`s3://` `target`, `target` with `dir` set, `credentialsFile`
-without `target`, `dir` at or above `storage.dataDir`, a duration off ADR-0194, `backup.retention` or `.rebaseline` below
-`.interval`; a warning for `blob.` keys, ignored under `storage.mode: memory`. Decisions 2, 3 (I/O) run in `cmd/funcd`.
+target, OpenOptions{CredentialsFile})` behind `blob.NoSign` (no presign; Open questions); else `blob.dir` (absolute,
+`config.Load`) through `gocloud.FileURL`. `config.CheckBlob` (NEW; rows proposed; decider confirms at acceptance) holds
+ADR-0205 Decision 3's `blob.*` rules (`Validate`, F112): `fault.Invalid` naming the key: a non-`s3://` `target`, `target`
+with `dir` set, `credentialsFile` without `target`, `dir` at or above `storage.dataDir`, a duration off ADR-0194,
+`backup.retention` or `.rebaseline` below `.interval`; a warning for `blob.` keys, ignored under `storage.mode: memory`.
 
 | Key (`blob.`) | Meaning | Default |
 |---|---|---|
@@ -88,6 +88,7 @@ without `target`, `dir` at or above `storage.dataDir`, a duration off ADR-0194, 
 | `credentialsFile` | AWS shared credentials, `[default]` only (as `backup.credentialsFile`) | empty ⇒ the SDK chain |
 | `dir` | the local store | `<storage.dataDir>/blob` |
 | `allowUnversioned` | the operator accepts a store funcd cannot protect | `false` |
+| `versionRetention` | how long the operator's rule keeps a noncurrent version on the store (Decision 6's `--at` window) | none ⇒ `--at` refused |
 | `backup.interval` | the mirror is due when the newest complete manifest is this old (survives restarts) | `1h` |
 | `backup.rebaseline` | age of the current epoch that starts a new one | `720h` |
 | `backup.retention` | the least time each generation stays restorable | `720h` |
@@ -129,29 +130,28 @@ a failure. id = hex SHA-256 of `key ‖ 0x00 ‖ size ‖ ModTime ns ‖ MD5 ‖
 `recipients`, `,`-joined). The operator expires `blob/` after ⌈(`rebaseline` + `retention`) / 24h⌉ days (`LifecycleRule`,
 logged at start): no object is older than its epoch, so a generation stays restorable for `retention` less one run.
 
-**5. Frozen image** (proposed; decider confirms at acceptance). `<blob.dir>-frozen` (NEW), emptied first. The walk lists
-`blob.dir` and `link(2)`s each data file (never `.attrs`), then reads its live `Attributes`. `fileblob` writes `.attrs`
-before its `Rename`, truncating it in place (`fileblob.go:840-854`, `attrs.go:42-53`), so the linked bytes' MD5 must
-match the recorded one (none without `.attrs`): at once for a checkpoint (`<p>/_ducklake/catalog.db`, ADR-0086), else at
-copy time; a mismatch or an undecodable `.attrs` re-freezes the key. Under `<p>/` the checkpoint is linked first, then
-`<p>/` is listed again and only that listing linked; a live checkpoint MD5 changed by the end of that listing, or a
-listed key gone at its link, re-freezes `<p>/`; elsewhere a gone key is left out. A fourth re-freeze of a key or prefix
-fails the run (`fault.Conflict` naming it). `EXDEV` (`blob.dir` a mount point) ⇒ a live read under the same checks,
-warned. Parquet precedes its checkpoint (ADR-0086), so a linked checkpoint's files exist when `<p>/` is listed; a
-DuckLake cleanup removes one only after a newer checkpoint (else the Risk), which these checks see.
+**5. Frozen image** (proposed; decider confirms at acceptance). `<blob.dir>-frozen` (NEW), emptied first.
+`gocloud.WalkFileKeys` walks `blob.dir` as the store decodes its paths (no `.attrs` or `.funcd-tmp`; an unreadable
+directory fails the run) and `link(2)`s each data file into the image, then reads its live `Attributes`. `fileblob`
+writes `.attrs` before its `Rename`, truncating it in place (`fileblob.go:840-854`, `attrs.go:42-53`), so the linked
+bytes' MD5 must match the recorded one (none without `.attrs`): at once for a checkpoint (`<p>/_ducklake/catalog.db`,
+ADR-0086), else at copy time; a mismatch or an undecodable `.attrs` re-freezes the key. Under `<p>/` the checkpoint is
+linked first, then only a new walk of `<p>/` is linked; a live checkpoint MD5 changed by the end of that walk, or a
+walked key gone at its link, re-freezes `<p>/`; elsewhere a gone key is left out. A fourth re-freeze of a key or prefix
+fails the run (`fault.Conflict` naming it). `EXDEV` (`blob.dir` a mount point) ⇒ a live read, same checks, warned.
 
 **6. Whole-store restore**, offline: `funcd restore blob [<generation>]` (default: the newest complete) or `--at <RFC
 3339>` (`RestoreAt`), on ADR-0206's surface (flags, `envelope.Opener(ids)`, `hold.Begin`, `hold.Own(storage.dataDir,
-blob.dir)` for a local destination, `hold.End`). It writes the configured store with `--store-credentials-file`
-(ADR-0206; proposed default `blob.credentialsFile`; `--at` also needs `s3:ListBucketVersions`, `GetObjectVersion`).
+blob.dir)` for a local destination, `hold.End`), into the configured store (`--store-credentials-file`: Open questions).
 - **Mirror**: `Restore` reads manifest n, calls `open` once with its `recipients` (one `backup.Unseal` for the index and
   every object), lists `blob/<e>/objects/`; a missing part or `sha256-` key ⇒ `fault.NotFound` before any write; a
   non-empty destination (`ListAfter` limit 1) ⇒ `fault.Conflict`; per object a SHA-256 mismatch over its parts ⇒
   `fault.Invalid`, else a `Put` with its type and metadata. An error after a write deletes what it wrote (ADR-0206 §5).
-- **Versions**: `RestoreAt` lists `ListObjectVersions` under the URL's `prefix`; per key the newest version or delete
-  marker at or before `at` wins: a differing version is copied over the key (`CopyObject` from its `versionId`), none or
-  a marker deletes the live key (a new marker). No version is removed, so a restore can be undone; an error empties
-  nothing (a rerun completes it). A version over 5 GiB (`CopyObject`'s limit) ⇒ `fault.Invalid` before the first write.
+- **Versions** (window proposed; Open questions): `RestoreAt` refuses an `at` older than `versionRetention` with
+  `fault.Invalid`, lists `ListObjectVersions` under the URL's `prefix`; per key the newest version or delete marker at or
+  before `at` wins: a differing version is copied over the key (`CopyObject` from its `versionId`); a marker or none
+  (then in `NoVersion`) deletes the live key (a new marker). No version is removed, so a restore can be undone; an error
+  empties nothing (a rerun completes it). A version over 5 GiB (`CopyObject`'s limit) ⇒ `fault.Invalid` before any write.
 
 ## Temporary workarounds
 
@@ -163,12 +163,12 @@ None.
 package blob // internal/blob, NEW optional capability (as RangeReader); gocloud: s3:// buckets only
 type Versioned interface { // found by type assertion; a store without it ⇒ the caller answers fault.Invalid
 	Versioning(ctx context.Context) (Versioning, error)
-	RestoreAt(ctx context.Context, at time.Time) (RestoreReport, error)
-}
-type Versioning struct{ Enabled, ObjectLock bool }; type RestoreReport struct{ Copied, Deleted, Unchanged int }
-type Overlap int // in internal/blob/gocloud, NEW: OverlapProvider warns, OverlapStore refuses (Decision 3)
-const (OverlapNone Overlap = iota; OverlapProvider; OverlapStore)
+	RestoreAt(ctx context.Context, at time.Time, keep time.Duration) (RestoreReport, error) // keep: versionRetention; 0 refuses
+}; func NoSign(inner Bucket) Bucket // NEW: SignedURL ⇒ fault.Unavailable; forwards RangeReader as Capped does
+type Versioning struct{ Enabled, ObjectLock bool }; type RestoreReport struct{ Copied, Deleted, Unchanged int; NoVersion []string }
+type Overlap int; const (OverlapNone Overlap = iota; OverlapProvider; OverlapStore) // internal/blob/gocloud, NEW
 func CompareDomains(store, target string) (Overlap, error) // URLs, endpoints normalized; malformed ⇒ fault.Invalid
+func WalkFileKeys(ctx context.Context, dir, prefix string, fn func(key, path string) error) error // NEW, Decision 5
 func (c Config) CheckBlob() []Finding // NEW, internal/platform/config: Decision 1's rows, errors first (Finding: ADR-0205)
 package blobmirror // internal/backup/blobmirror (NEW)
 const Format = 1 // Object.Gen: the n of objects/<id>/<n>/; Object.SHA256: its stored bytes, all Parts in order
@@ -193,36 +193,36 @@ func LifecycleRule(rebaseline, retention time.Duration) (prefix string, days int
 
 | consumes | exposes |
 |---|---|
-| Go CDK v0.46.0 `s3blob` (`As`), `fileblob`; aws-sdk-go-v2 `service/s3` v1.104.1 (`GetBucketVersioning`, `GetObjectLockConfiguration`, `ListObjectVersions`, `CopyObject`, `DeleteObject`); `link(2)`; ADR-0203 `OpenWith`, `Target.Ready`, `Target.Conditional`, `Seal`, `StoreFile`, `backup.Unseal`, `Opener`, the 8 MiB part rule; ADR-0204 `Sealer.Keys`, `envelope.Opener`; ADR-0205 `Runner.Recorder`, `config.Finding`; ADR-0206 `hold.Begin`, `End`, `Own` (a local `blob.dir` destination, before `End`), the restore flags (with `--store-credentials-file`, NEW); `v1alpha1.Timestamp` (ADR-0196); no new module | `blob.Versioned`; `gocloud.CompareDomains`; `config.CheckBlob`; `internal/backup/blobmirror`; keys `blob.target`, `.credentialsFile`, `.dir`, `.allowUnversioned`, `.backup.interval`, `.backup.rebaseline`, `.backup.retention` (env `FUNCD_BLOB_TARGET`, `…_CREDENTIALS_FILE`, `…_DIR`, `…_ALLOW_UNVERSIONED`, `FUNCD_BLOB_BACKUP_INTERVAL`, `…_REBASELINE`, `…_RETENTION`) |
+| Go CDK v0.46.0 `s3blob` (`As`), `fileblob`; aws-sdk-go-v2 `service/s3` v1.104.1 (`GetBucketVersioning`, `GetObjectLockConfiguration`, `ListObjectVersions`, `CopyObject`, `DeleteObject`); `link(2)`; `internal/blob/gocloud`'s unexported `fileWalker`, `fileUnescapeKey` (under `WalkFileKeys`); `blob.Capped` (the forwarding precedent); ADR-0203 `OpenWith`, `Target.Ready`, `Target.Conditional`, `Seal`, `StoreFile`, `backup.Unseal`, `Opener`, the 8 MiB part rule, the walk's `.funcd-tmp` skip; ADR-0204 `Sealer.Keys`, `envelope.Opener`; ADR-0205 `Runner.Recorder` (the runner its Decision 2 builds first), `config.Finding`; ADR-0206 `hold.Begin`, `End`, `Own` (a local `blob.dir` destination, before `End`), the restore flags (with `--store-credentials-file`, NEW); `v1alpha1.Timestamp` (ADR-0196); no new module | `blob.Versioned`, `NoSign`; `gocloud.CompareDomains`, `WalkFileKeys`; `config.CheckBlob`; `internal/backup/blobmirror`; keys `blob.target`, `.credentialsFile`, `.dir`, `.allowUnversioned`, `.versionRetention`, `.backup.interval`, `.backup.rebaseline`, `.backup.retention` (env `FUNCD_BLOB_TARGET`, `…_CREDENTIALS_FILE`, `…_DIR`, `…_ALLOW_UNVERSIONED`, `…_VERSION_RETENTION`, `FUNCD_BLOB_BACKUP_INTERVAL`, `…_REBASELINE`, `…_RETENTION`) |
 
 ## Implementation plan
 
 **Files**: `internal/platform/config/config.go` (`Blob`, `dir` derived in `Load`, `CheckBlob` in `Validate`);
-`cmd/funcd/main.go` (`substrateOptions` opens `target` or `dir`, runs Decisions 2 and 3, starts `Mirror.Loop` with the
-daemon's hold and `Recorder("blob")`); `cmd/funcd/restore.go` (`restore blob`, the blob rows of `restore list`);
-`internal/blob/blob.go`; `internal/blob/gocloud/gocloud.go` (`Versioning`, `RestoreAt`, `CompareDomains`; `OpenWith`
-keeps the URL's bucket and `prefix`); NEW `internal/backup/blobmirror/{mirror,freeze,restore}.go`;
-`examples/funcdconfig.yaml`; ADR-0203's `examples/backup-lifecycle.md` (the `blob/` rule, store and box policies).
-**Order**: DR-8 after DR-3 to DR-5. **go.mod**: none. **Blueprint** (at acceptance): lines 81 (the store list), 212.
-
-**Test plan**: one `TestScenario<Name>` per scenario on ADR-0203's `httptest` S3 stub plus versioning and lock answers
-(on, off, 403, 501), `ListObjectVersions`, `CopyObject` from a `versionId` and delete markers; the freeze takes hooks
-after each listing and link, the epoch test a clock. Units: `TestCheckBlobRows`, `TestObjectIDStable` (with recipients),
-`TestLargeObjectPartedBoundedMemory` (20 MiB: three parts, no request over 8 MiB; redone after a crash past part 0),
-`TestLifecycleRule`, `TestCompareDomains` (Decision 3's cases), `TestFreezeEXDEVReadsLive`, `TestAttrsMismatchRefrozen`
-(a torn `.attrs`; for a checkpoint, re-linked before `<p>/` is listed; the fourth fails),
+`cmd/funcd/main.go` (`substrateOptions` opens `target` behind `NoSign` or `dir`, runs Decisions 2 and 3, starts
+`Mirror.Loop` with the daemon's hold and `Recorder("blob")`); ADR-0206's `cmd/funcd/restore.go` (`restore blob`, the blob
+rows of `restore list`); `internal/blob/{blob,nosign}.go`; NEW `internal/backup/blobmirror/{mirror,freeze,restore}.go`;
+`internal/blob/gocloud/gocloud.go` (`Versioning`, `RestoreAt`, `CompareDomains`, `WalkFileKeys`; `OpenWith` keeps the
+URL's bucket and `prefix`); `examples/funcdconfig.yaml`; ADR-0203's `examples/backup-lifecycle.md` (the `blob/` and
+noncurrent rules, store and box policies). **Order**: DR-8 after DR-3 to DR-5. **go.mod**: none. **Blueprint** (at
+acceptance): lines 81 (the store list), 212, at main c35bdf5e. **Test plan**: one `TestScenario<Name>` per scenario on
+ADR-0203's `httptest` S3 stub plus versioning and lock answers (on, off, 403, 501), `ListObjectVersions`, `CopyObject`
+from a `versionId` and delete markers; the freeze takes hooks after each walk and link, the epoch test a clock. Units:
+`TestCheckBlobRows`, `TestObjectIDStable` (with recipients), `TestLargeObjectPartedBoundedMemory` (20 MiB: three parts,
+no request over 8 MiB; redone after a crash past part 0), `TestLifecycleRule`, `TestCompareDomains` (Decision 3's cases),
+`TestWalkFileKeys` (escapes, `.attrs`, `.funcd-tmp`, an unreadable dir), `TestNoSign`, `TestFreezeEXDEVReadsLive`,
+`TestAttrsMismatchRefrozen` (a torn `.attrs`; for a checkpoint, re-linked before `<p>/` is walked; the fourth fails),
 `TestCheckpointChangedAfterListingRelistsPrefix`, `TestMissingCatalogKeyRefreezesPrefix` (a Parquet gone before its link;
-a checkpoint and cleanup during the prefix listing), `TestRestoreAtRefusesLargeVersion`, `TestRestoreAtErrorKeepsDone`,
+a checkpoint and cleanup during the prefix walk), `TestRestoreAtRefusesLargeVersion`, `TestRestoreAtErrorKeepsDone`,
 `TestRestoreOpensOnce`, `TestLoopSkipsWhileHeld` (in ADR-0206's `TestEveryRunnerConsultsHold`). **Definition of done**:
 `scripts/agent/d go test -race -count=1`, `just ci` green; no new module; no identity or path leak.
 
 ## Review checklist
 
-- [ ] Keys, defaults, `CheckBlob` (no I/O), protection check and guard match Decisions 1 to 3; each scenario has a test.
+- [ ] Keys, defaults, `CheckBlob` (no I/O), `NoSign`, protection check, guard match Decisions 1 to 3; scenarios tested.
 - [ ] The mirror waits for `Ready`, writes new keys under its n (`IfNotExist` but in ADR-0203's refused case), parts
       before their `sha256-` key, the manifest last, never `Get`, `Attributes`, `Delete`; the image is always removed.
 - [ ] `Restore` checks every part before its first write and each SHA-256, refuses a non-empty destination, empties it
-      after an error; `RestoreAt` removes no version and empties nothing; the lifecycle rule matches Decision 4.
+      after an error; `RestoreAt` checks its window, removes no version, empties nothing; lifecycle as Decision 4.
 
 ## Consequences
 
@@ -237,10 +237,10 @@ a run; a lock-less store relies on IAM alone; escrow keeps each identity a retai
 
 | Item | Recommended default (proposed; decider confirms at acceptance) | Why |
 |---|---|---|
-| Missing protection | versioning off ⇒ refuse unless `blob.allowUnversioned`; no Object Lock ⇒ warn; unreachable ⇒ no start | fail closed without barring lock-less stores |
-| Frozen image; catalog verify | hard links under `<blob.dir>-frozen`; across devices a live read and a warning; a checkpoint linked before its prefix is listed again, a changed checkpoint or a missing key re-freezing the prefix; a fourth re-freeze fails the run. The mirror never runs report §4.D's verify step; DR-10's `catalogs` scope does | portable, unprivileged, a seconds-long walk; never mixes versions. Verifying reads `ducklake_data_file` (relative paths), which needs a SQLite reader: a new module (none in `go.mod`) |
-| Store side of `restore blob` | `--store-credentials-file` (NEW, on ADR-0206's flags), default `blob.credentialsFile`; `--at` needs the operator's credential with the version reads | Q8: the restore credential is the operator's, the daemon's stays least-privilege; alternative: widen `blob.credentialsFile` with `s3:ListBucketVersions`, `GetObjectVersion` |
-| Keys under `blob:`; turning the mirror off | Decision 1's seven keys and defaults; `CheckBlob` refuses `backup.retention` or `.rebaseline` below `.interval` (the alternative for `rebaseline`: a warning); no key turns the mirror off while the backup is on | the report's `target`, `credentialsFile`, `dir`, plus what the mirror needs; a generation written expired is unrestorable, a full copy each run is no mirror; Q1, secure by default, a key can follow if a site needs it |
+| Missing protection; presign | versioning off ⇒ refuse unless `blob.allowUnversioned`; no Object Lock ⇒ warn; unreachable ⇒ no start. `blob.NoSign`: `SignedURL` stays `fault.Unavailable`, as on every store funcd opens today (ADR-0007; `blobcontract` `testSignedURLUnsupported`), until a presign ADR; the driver itself still signs | fail closed without barring lock-less stores. `Facade.SignedURL` (`internal/services/blob`) would hand out a URL signed with the store credential (it holds `s3:DeleteObject`), naming the store's endpoint, often private, and the `s3/<ns>/<bucket>/` layout. Alternative: serve it (ADR-0021, ADR-0198); versioning then turns a presigned DELETE into a marker |
+| Frozen image; catalog verify | hard links under `<blob.dir>-frozen`; across devices a live read and a warning; a checkpoint linked before its prefix is listed again, a changed checkpoint or a missing key re-freezing the prefix; a fourth re-freeze fails the run. The mirror never runs report §4.D's verify step; DR-10's `catalogs` scope does | portable, unprivileged, a seconds-long walk; never mixes versions: Parquet precedes its checkpoint and a cleanup follows a newer one (ADR-0086; else the Risk), which the checks see. Verifying reads `ducklake_data_file` (relative paths), which needs a SQLite reader: a new module (none in `go.mod`) |
+| Store side of `restore blob`; `--at` window | `--store-credentials-file` (NEW, on ADR-0206's flags), default `blob.credentialsFile`; `--at` needs the operator's credential with the version reads, and `blob.versionRetention` set to the store rule's noncurrent days (unset ⇒ refused); keys deleted for want of a version are listed in `NoVersion` | Q8: the restore credential is the operator's, the daemon's stays least-privilege; alternative: widen `blob.credentialsFile` with `s3:ListBucketVersions`, `GetObjectVersion`. A version current at `at` turns noncurrent after it, so within the window the rule still keeps it; past it, a key whose version expired is deleted. Window alternatives: a restore flag (ADR-0206's surface); reading `GetBucketLifecycleConfiguration` (rule filters make it brittle; one more permission) |
+| Keys under `blob:`; turning the mirror off | Decision 1's eight keys and defaults; `CheckBlob` refuses `backup.retention` or `.rebaseline` below `.interval` (the alternative for `rebaseline`: a warning); no key turns the mirror off while the backup is on | the report's `target`, `credentialsFile`, `dir`, plus what the mirror and `--at` need; a generation written expired is unrestorable, a full copy each run is no mirror; Q1, secure by default, a key can follow if a site needs it |
 
 ## References
 

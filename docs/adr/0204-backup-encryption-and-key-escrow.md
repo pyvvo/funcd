@@ -15,7 +15,7 @@ ADR-0203 writes each store file, and ADR-0208 each blob mirror object, through a
 metastore stores a Secret whole, AES-256-GCM encrypted under the secrets key when `secrets.encryptionKeyFile` is set,
 plain JSON otherwise; ConfigMaps stay plain (`cmd/funcd/main.go` `buildStore`, `secretEncryptor`); startup refuses
 Secrets that do not decrypt with that key (`checkSecretsDecode`), so one key covers all. The node master secret
-(`s3gateway.LoadOrCreateMaster`, `pkg/funcd/funcd.go:637`) loads at every start, derives S3 keypairs (`DeriveKeypair`)
+(`s3gateway.LoadOrCreateMaster`, `buildControlPlane`) loads at every start, derives S3 keypairs (`DeriveKeypair`)
 and catalog tokens (`gateway.DeriveCatalogToken`, HMAC key `hs256Key` = SHA-256(master)); with the gateway off it
 ignores `s3gateway.masterSecretFile` and sits under the working directory. TLS state is in `<storage.dataDir>/tls` or
 provided files; the config holds `auth.token`, `auth.credentials`; no key is in a store or a snapshot (ADR-0202).
@@ -147,7 +147,7 @@ mirror generation `blob/<e>/gen/<n>` (kept `blob.backup.rebaseline` + `retention
 
 **7. Master location.** `s3gateway.masterSecretFile` when set, else `<storage.dataDir>/s3gateway/master.key`, gateway
 on or off. Migration (proposed; decider confirms at acceptance) on a gateway-off node, the only one that reads the
-working directory's `s3gateway/master.key` today (`cmd/funcd/main.go:305`): that file present and the new path absent
+working directory's `s3gateway/master.key` today (References, #850): that file present and the new path absent
 ⇒ funcd copies it there 0600 and warns naming both, leaving the old file to the operator; both present and different
 ⇒ `fault.Invalid` naming both paths and `s3gateway.masterSecretFile`. A gateway-on node keeps its key and warns naming
 an ignored working-directory file. Paths compare after `filepath.Abs` and `EvalSymlinks`: one file is one key.
@@ -184,16 +184,17 @@ const SecretsDir, MasterDir = "secrets", "master"
 // Find returns the file under dir/sub whose envelope.Fingerprint is fp; none ⇒ fault.NotFound naming fp and the found.
 func Find(dir, sub, fp string) (string, error)
 func CheckSecretsKey(m backup.Manifest, configured []byte, dir string) error // nil configured ⇒ no key
-// MasterPlan: Install non-nil ⇒ write to Path 0600 before start; Changed: acceptNew took another master or m names none
-type MasterPlan struct{ Install []byte; Path string; Changed []Derived }
+// PlanMaster, before any part is read, writes nothing: Decision 5's match on masterFile, else Find in MasterDir, else
+// fault.Invalid unless acceptNew. The restore writes a non-nil Install to Path (Decision 7) 0600 after the load.
+func PlanMaster(m backup.Manifest, masterFile, dataDir, dir string, acceptNew bool) (MasterPlan, error)
+type MasterPlan struct{ Install []byte; Path string; List bool } // List: acceptNew took another master, or m names none
 type Derived struct{ Kind v1.Kind; Namespace, Name, Credential string } // Credential: "s3-keypair" | "catalog-token"
-func CheckMaster(ctx context.Context, m backup.Manifest, masterFile, dataDir, dir string, acceptNew bool,
-	st store.Store) (MasterPlan, error)
+func ListChanged(ctx context.Context, plan MasterPlan, st store.Store) ([]Derived, error) // after the load; nil unless List
 ```
 
 | consumes | exposes |
 |---|---|
-| `filippo.io/age` v1.3.2 `Encrypt`, `Decrypt`, `ParseRecipients`, `ParseIdentities`; ADR-0203 `backup.Seal`, `backup.Unseal`, `Opener`, `Keys`, `Manifest`, `WriteOptions`; `secrets.encryptionKeyFile`, `s3gateway.masterSecretFile`, `storage.dataDir`; the loaded `store.Store` | keys `backup.encryption.recipients`, `.none` (env `FUNCD_BACKUP_ENCRYPTION_RECIPIENTS`, comma-separated; `FUNCD_BACKUP_ENCRYPTION_NONE`); values of manifest fields `secretsKey`, `masterSecret`, `recipients`; `envelope.Opener`, `envelope.Config.NoSecrets`; the escrow layout; restore flag `--new-master-secret` |
+| `filippo.io/age` v1.3.2 `Encrypt`, `Decrypt`, `ParseRecipients`, `ParseIdentities`; ADR-0203 `backup.Seal`, `backup.Unseal`, `Opener`, `Keys`, `Manifest`, `WriteOptions`; `secrets.encryptionKeyFile`, `s3gateway.masterSecretFile`, `storage.dataDir`; the loaded `store.Store` | keys `backup.encryption.recipients`, `.none` (env `FUNCD_BACKUP_ENCRYPTION_RECIPIENTS`, comma-separated; `FUNCD_BACKUP_ENCRYPTION_NONE`); values of manifest fields `secretsKey`, `masterSecret`, `recipients`; `envelope.Opener`, `envelope.Config.NoSecrets`; `escrow.Find`, `CheckSecretsKey`, `PlanMaster`, `ListChanged`; the escrow layout; restore flag `--new-master-secret` |
 
 ## Implementation plan
 
@@ -202,12 +203,12 @@ func CheckMaster(ctx context.Context, m backup.Manifest, masterFile, dataDir, di
 `examples/funcdconfig.yaml`; Decision 7: `pkg/funcd/funcd.go`, `cmd/funcd/main.go`, `internal/blob/s3gateway/s3gateway.go`.
 **go.mod**: `filippo.io/age` v1.3.2 (adds `filippo.io/edwards25519` v1.2.0, `filippo.io/hpke` v0.4.0,
 `filippo.io/nistec` v0.0.4, `golang.org/x/term` v0.45.0; raises `golang.org/x/crypto` to v0.55.0, `golang.org/x/sys`
-to v0.47.0). **Blueprint** (at acceptance): line 699 gains "generations sealed to age recipients; keys in an
-operator-held escrow set outside every backup".
+to v0.47.0). **Blueprint** (at acceptance): the "Backup & disaster recovery" bullet gains "generations sealed to age
+recipients; keys in an operator-held escrow set outside every backup".
 
 **Test plan**: one `TestScenario<Name>` per scenario; the first opens the concatenated parts with `age.Decrypt` and any
 `age` binary on `PATH`. Units: `TestFingerprintIsLabelled`, `TestNewRules` (a row per rule), `TestFindByContent`,
-`TestOpenerUnsealed`, `TestIdentityMatchesRecipientFingerprint`, `TestCheckMasterAbsent`, `TestKeysWhenNone` (`none`
+`TestOpenerUnsealed`, `TestIdentityMatchesRecipientFingerprint`, `TestPlanMasterAbsent`, `TestKeysWhenNone` (`none`
 records both fingerprints; `CheckSecretsKey` passes with that key). **Definition of done**: `scripts/agent/d go test
 -race -count=1` and `scripts/agent/d just ci` green; the new modules' licences recorded; no identity or path leak.
 
@@ -216,9 +217,8 @@ records both fingerprints; `CheckSecretsKey` passes with that key). **Definition
 - [ ] One `Seal` stream per store file unless `none`; manifests and probes unsealed; no SSH or plugin recipient parses.
 - [ ] Each Decision 2 rule is a start-time `fault.Invalid` naming its key; the plaintext-Secrets combination never starts.
 - [ ] `Fingerprint` is labelled, over a recipient's `String()`; no key bytes or SHA-256(key) reach a log or an object.
-- [ ] `CheckSecretsKey`, the master check and the `Opener` match refuse before any part is read; `CheckMaster` installs
-      and lists on the loaded store (ADR-0206 step 2.4) from Decision 5's three sources; the master path and its
-      migration follow Decision 7; each scenario has its named test.
+- [ ] `CheckSecretsKey`, `PlanMaster` (no write) and the `Opener` match refuse before any part is read; `ListChanged`
+      reads Decision 5's three sources on the loaded store; master path and migration per Decision 7; each scenario tested.
 
 ## Consequences
 
@@ -244,7 +244,7 @@ set and identities are the operator's to guard and keep complete, unchecked by f
 
 - `docs/reports/platform-disaster-recovery-design.md` §1, §3, §4.A (Encryption, Credential, Master secret, ConfigMaps
   and Secrets, Key rotation), §4.I row 3, §5 (Q1, Q7, Q8, Q13, Q14); FEAT-0009; `docs/roadmap/dr-plan.json` (DR-3).
-- Gateway-off master path (`funcd.go:637`, `options.go:140`, `s3gateway.go:303`): a bug Decision 7 fixes (#850).
+- Gateway-off master: no `WithS3Gateway`, so `LoadOrCreateMaster` joins an empty `dataDir`; a bug Decision 7 fixes (#850).
 - [age](https://github.com/FiloSottile/age), [pkg.go.dev](https://pkg.go.dev/filippo.io/age): v1.3.2 of 2026-08-29;
   v1.3.0 (2025-12-27) added hybrid recipients; `ParseRecipients` takes no SSH or plugin recipient; only concrete
   identities have `Recipient()`. Licences checked 2026-10-08: age, hpke, nistec, edwards25519, `golang.org/x/*` BSD-3.

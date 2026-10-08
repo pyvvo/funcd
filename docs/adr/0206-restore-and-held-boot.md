@@ -85,15 +85,16 @@ beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is
 1. `config.Load`; `storage.mode: memory` ⇒ `fault.Invalid`; the metastore, run-state, event-store directories absent or
    empty, else `fault.Conflict` naming one. Resolve the point, `backup.ReadManifest`; Decision 4; a `format` above
    `backup.Format` ⇒ `fault.Invalid`. ADR-0204 Decision 5: `ReadIdentities`; `envelope.Opener(ids)(m.Recipients)`, the
-   recipient match, once (else `fault.Invalid`); `CheckSecretsKey`; the master (a set `s3gateway.masterSecretFile`
-   matching `masterSecret`, else `escrow.Find` (`MasterDir`); or `--new-master-secret`). Then `hold.Begin`, `hold.Write`.
+   recipient match, once (else `fault.Invalid`); `CheckSecretsKey`; `escrow.PlanMaster` (the master; refuses unless
+   `--new-master-secret`, writes nothing). Then `hold.Begin`, `hold.Write`.
 2. Per store in cut order: every part present with the manifest's `sha256`, else `fault.Invalid` naming generation and
    store; step 1's `Unseal`, `backup.Records` into ADR-0202's `snapshot.Loader` (`Load`; on the metastore
    `store.Engine`, which skips the timeline record; ADR-0201 for events).
 3. `store.New` on the loaded engine mints a new timeline (ADR-0202 Decision 3).
    Canary: `checkSecretsDecode` (`cmd/funcd/main.go`) on the restored Secrets with the configured key; no Secret warns.
-4. Each non-terminal WorkflowRun not already paused gets `spec.paused: true` (`store.Update`, Decision 7; the report
-   lists both sets); `escrow.CheckMaster` on the loaded store installs the master or prints what the flag changes.
+4. Each non-terminal WorkflowRun not already paused gets `spec.paused: true` (`store.Update`, Decision 7). Step 1's
+   `MasterPlan`: a non-nil `Install` is written 0600 to `Path`; with `List`, `escrow.ListChanged` on the loaded store
+   prints what changes (as "may change" when the manifest has no `masterSecret`).
 5. `restore.json` (0600, `fsync`ed); the stores closed, `hold.Own` gives all the restore created `<storage.dataDir>`'s
    owner (ADR-0026 §4); `hold.End`. A kill before it leaves `restore.inprogress`; `hold.Open` then refuses the start
    (`fault.Conflict`: empty, rerun), as `store.New` would mint a timeline over a partial `Load`.
@@ -109,10 +110,10 @@ beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is
 `list` prints a row per generation (timeline, n, class, `at`, `funcd`, state `complete`, `incomplete`, `abandoned` or
 `newer`), each timeline indented under its `parent`. ADR-0205 takes a generation's `parent` from `restore.Parent`.
 
-**4. Version rule** (Q10). The manifest's `funcd` and `version.Version` compare by major.minor (`golang.org/x/mod/semver`):
-the same or older is restored, newer is `fault.Invalid` naming both; a `dev` build restores any, warning. An older
-generation runs the steps every start runs, as at an upgrade (`workflow.MarkKVStoresOnce`, ADR-0201's move, ADR-0202's
-legacy versions). Restorable until a migration framework exists: generations of the minor shipping ADR-0205 or later.
+**4. Version rule** (Q10). The manifest's `funcd` and `version.Version` compare by `semver.MajorMinor`: the same or older
+restores, newer is `fault.Invalid` naming both; either not semver (`dev`, a bare hash: `scripts/build.sh` without tags)
+restores any, warning. An older generation runs the start steps as at an upgrade (`workflow.MarkKVStoresOnce`, ADR-0201's
+move, ADR-0202's legacy versions); until a migration framework exists, generations from ADR-0205's minor on restore.
 
 **5. Single object, KV, blob, registry.** `inspect` reads into memory engines (ADR-0202), never the data directory;
 `--object` prints one object without `uid`, `resourceVersion`, creation time and status, so `funcdctl apply -f`
@@ -136,9 +137,9 @@ only the release deletes it (a failed restore, its own). `cmd/funcd` opens it an
 | dead letters, `(*Reconciler).Replay` | `fault.Unavailable` | operator-run as today; nothing redelivers by itself (ADR-0118) |
 | runs, `(*RunReconciler).Reconcile` | no start, resume or replay; `RequeueAfter: waitRequeue`; status untouched | a run created while held starts |
 | `runWorkflowRetention`, `runDeadLetterRetention` | skipped: they delete evidence | sweep |
-| data reclaims: `(*kv.Reconciler).ReclaimDeleted` at boot (#708, `pkg/funcd/funcd.go:1294`), ADR-0199 Decision 7's boot Bucket-prefix purge beside it (unbuilt), the KV reconciler's `reclaimOrphanTables` | skipped: KV or blob data newer than the restored metastore, or left intact, may have no KVStore, table or Bucket yet; `hold status` lists it: `Orphans`, and `bucketOrphans` (beside `s3BucketFor`): each `<ns>/<bucket>` with objects under `s3/<ns>/<bucket>/` and no Bucket, the set the boot purge drops by iterating it | as today, the boot ones at the next start (proposed; decider confirms at acceptance); the operator applies, while held, the objects whose data stays |
+| data reclaims: the boot calls in `(*Platform).Run` of `(*kv.Reconciler).ReclaimDeleted` (#708) and, right after it, `reclaimDeletedBuckets` (ADR-0199 Decision 7; `pkg/funcd/funcd.go:1325`, `:1329` at main c35bdf5e); the KV reconciler's `reclaimOrphanTables` | skipped: KV or blob data newer than the restored metastore, or left intact, may have no KVStore, table or Bucket yet; `hold status` lists it: `Orphans`, and `bucketOrphans`, the walk split out of `reclaimDeletedBuckets`: each `<ns>/<bucket>` with objects under `bucketPrefix` (`s3/<ns>/<bucket>/`) and no Bucket, on each of which the boot purge calls `bucketPurger.Purge` | as today, the boot ones at the next start (proposed; decider confirms at acceptance); the operator applies, while held, the objects whose data stays |
 | backups: ADR-0205 `(*Runner).Run`, ADR-0208 `Mirror.Loop`, ADR-0209 `RunBackup`, each through its config's `Hold` (`interface{ Held() bool }`, nil ⇒ never held), set from the daemon's `*hold.Hold` | skipped (proposed; decider confirms at acceptance): a held drill writes no generation that turns the source's later ones `Abandoned` (ADR-0203) | the next due run; the platform runner's `parent` from `restore.Parent` |
-| App reconciler (ADR-0199), hooks, rollouts (ADR-0200) | every pass returns a `RequeueAfter`, as runs: no apply (self-heal included), prune, hook, stamp, switch, history deletion or `Failed`, so the rollout deadline (`startedAt`, set at the stamp, + `app.upgradeTimeout`, ADR-0200 Decision 6) cannot run out while held | the deadline is max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout`, read again after a restart (proposed; decider confirms at acceptance): a `Deploying` AppRevision gets a full timeout after the release, and the App reconciler stays its only writer (ADR-0200 Decision 1); one `Failed` before the hold stays `Failed` |
+| App reconciler and its rollouts (ADR-0199, ADR-0200; F117's hooks, unbuilt, run in it per FEAT-0010), through `app.Deps.Hold` | `(*Reconciler).Reconcile` first returns `RequeueAfter: SupervisionPeriod`, status untouched, as runs: no apply (self-heal included), prune, stamp, switch, history deletion or `Failed`, so the rollout deadline (`startedAt`, set at the stamp, + `app.upgradeTimeout`, ADR-0200 Decision 6) cannot run out while held | `(*Reconciler).deadline` is max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout`, read again after a restart (proposed; decider confirms at acceptance): a `Deploying` AppRevision gets a full timeout after the release, and the App reconciler stays its only writer (ADR-0200 Decision 1); one `Failed` before the hold stays `Failed` |
 
 **7. Evidence** (Q3). A restored non-terminal run is paused (step 2.4); the operator runs `funcdctl workflow resume`
 (from its record, or step 1 without one: no step had dispatched, ADR-0202 Decision 2), `cancel`, or `cancel` then
@@ -167,9 +168,8 @@ const MarkerFile, BusyFile, ReleasedFile = ".hold", "restore.inprogress", ".hold
 type Marker struct{ Reason string `json:"reason"`; Since v1.Timestamp `json:"since"` } // "restore" | "safe-mode"
 type Gate interface{ Held() bool; ReleasedAt() time.Time }; var Never Gate = never{} // never: not held, zero time
 type Hold struct{ dir string; mu sync.RWMutex; m *Marker; released time.Time } // a Gate; Open reads both files
-func Write(dataDir string, m Marker) error // 0600; fsync of the file and the directory
+func Write(dataDir string, m Marker) error; func End(dataDir string) error // 0600, fsync of file and directory; End removes BusyFile
 func Begin(dataDir, command string) error  // BusyFile naming the command (run, kv, blob), as Write; another's ⇒ fault.Conflict
-func End(dataDir string) error             // removes BusyFile; fsync of the directory
 func Open(dataDir string) (*Hold, error)   // BusyFile ⇒ fault.Conflict; no marker ⇒ not held; unreadable ⇒ fault.Internal
 func Own(ref string, roots ...string) error // os.Lchown each root, if it exists, and all below to ref's uid, gid where they differ
 func (h *Hold) Marker() (Marker, bool); func (h *Hold) Release(now time.Time) error // Decision 8: ReleasedFile, no marker
@@ -193,32 +193,32 @@ func Parent(dataDir, timeline string) (*backup.GenRef, error)    // the report's
 func (w *BlobWatcher) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error
 func (w *BlobWatcher) Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error)
 func (r *Reconciler) Orphans(ctx context.Context) ([]string, error) // NEW, internal/services/kv: what the reclaims would drop
-func bucketOrphans(ctx context.Context, shared blob.Bucket, st store.Store) ([]string, error) // NEW, pkg/funcd (Decision 6)
+func bucketOrphans(ctx context.Context, shared blob.Bucket, st store.Store) ([]v1.ObjectRef, error) // NEW, pkg/funcd
+Hold interface{ Held() bool; ReleasedAt() time.Time } // NEW in app.Deps, nil ⇒ never held; deadline: max(startedAt, ReleasedAt)+timeout
 ```
 
 | consumes | exposes |
 |---|---|
-| ADR-0201 `eventstore.Store` (`Load`); ADR-0202 `snapshot.Loader`, `store.Version`; ADR-0203 `List`, `ReadManifest`, `Records`, `Manifest`, `GenRef`, `Class`, `Abandoned`, `Format`; ADR-0204 `envelope.Opener`, `ReadIdentities`, `escrow.Find`, `CheckSecretsKey`, `CheckMaster`; ADR-0199 App reconciler, ADR-0200 AppRevision `status.startedAt`; `internal/platform/clock`; ADR-0196 `v1.Timestamp`; the `s3/<ns>/<bucket>/` prefix of `s3BucketFor` (`pkg/funcd/funcd.go:1930`); ADR-0026 §4 unit (`User=funcd`); `golang.org/x/mod/semver` (indirect → direct) | the Decision 1 commands and flags; the two routes; `<dataDir>/.hold`, `.hold-released`, `restore.inprogress`, `restore.json`; `hold.Gate` (`ReleasedAt` for the App reconciler), `funcd.WithHold`; `hold.Begin`/`End` and the restore flags (`--store-credentials-file` for `restore blob`) for ADR-0208 `restore blob` and ADR-0209 `restore kv`; `hold.Own` (`ref`: the data directory; ADR-0207 also passes a `file://` target directory) for ADR-0207 (upgrade, safe-mode reset), ADR-0208 `restore blob`, ADR-0209 `restore kv`; `Orphans`, `bucketOrphans` |
+| ADR-0201 `eventstore.Store` (`Load`); ADR-0202 `snapshot.Loader`, `store.Version`; ADR-0203 `List`, `ReadManifest`, `Records`, `Manifest`, `GenRef`, `Class`, `Abandoned`, `Format`; ADR-0204 `envelope.Opener`, `ReadIdentities`, `CheckSecretsKey`, `PlanMaster`, `ListChanged`; ADR-0199, ADR-0200 `app.Deps`, `(*Reconciler).deadline` (`internal/app/revision.go`), AppRevision `status.startedAt`; `internal/platform/clock`; ADR-0196 `v1.Timestamp`; `reclaimDeletedBuckets`, `bucketPurger`, `bucketPrefix` (`pkg/funcd/funcd.go`); ADR-0026 §4 unit (`User=funcd`); `golang.org/x/mod/semver` (indirect → direct) | the Decision 1 commands and flags; the two routes; `<dataDir>/.hold`, `.hold-released`, `restore.inprogress`, `restore.json`; `hold.Gate` (as `app.Deps.Hold`, `ReleasedAt` for the deadline), `funcd.WithHold`; `hold.Begin`/`End` and the restore flags (`--store-credentials-file` for `restore blob`) for ADR-0208 `restore blob` and ADR-0209 `restore kv`; `hold.Own` (`ref`: the data directory; ADR-0207 also passes a `file://` target directory) for ADR-0207 (upgrade, safe-mode reset), ADR-0208 `restore blob`, ADR-0209 `restore kv`; `Orphans`, `bucketOrphans` |
 
 ## Implementation plan
 
 **Files**: NEW `internal/platform/hold/hold.go`, `cmd/funcd/restore.go`, `cmd/funcdctl/hold.go`, `pkg/sdk/hold.go`,
 `internal/restore/{point,list,run,inspect,version}.go`, `internal/controlplane/hold.go`, `examples/restore-runbook.md`
-(recovery order, drill); `cmd/funcd/main.go`; `pkg/funcd/{options.go,funcd.go}`; `internal/workflow/reconcile_run.go`;
-`internal/eventing/{eventing.go,blobwatch.go}`; `internal/sensor/sensor.go`; `internal/services/kv/reconcile.go`.
-**Order**: ADR-0207 to ADR-0209 follow this ADR; ADR-0208 and ADR-0209 wire their loop's `Hold`, restore subcommand
-and `TestEveryRunnerConsultsHold` case. ADR-0205 and `internal/app` (ADR-0199, ADR-0200) are parallel: the later of
-each pair wires the runner, or the App gate and deadline rule, the Bucket purge's skip and `bucketOrphans`, with its case.
+(recovery order, drill); `cmd/funcd/main.go`; `pkg/funcd/{options.go,funcd.go}`; `internal/app/{reconcile,revision}.go`;
+`internal/workflow/reconcile_run.go`; `internal/eventing/{eventing.go,blobwatch.go}`; `internal/sensor/sensor.go`;
+`internal/services/kv/reconcile.go`. **Order**: ADR-0207 to ADR-0209 follow; ADR-0208 and ADR-0209 wire their loop's
+`Hold`, restore subcommand and `TestEveryRunnerConsultsHold` case; ADR-0205, if later, its runner and case.
 **go.mod**: `golang.org/x/mod` direct. **Blueprint** (at acceptance): the DR bullet gains "offline restore, held boot".
 
 **Test plan**: one `TestScenario<Name>` per scenario, platform ones on `shortDataDir`, `TestScenarioFirstDrill` in
 `tests/e2e`, the owner one as root on Linux (a second uid owns the data), else skipped. Units: `TestParsePoint`,
 `TestResolve`, `TestCheckVersion`, `TestExportRedacts`, `TestInspectDiff`, `TestHoldMarkerRoundTrip`, `TestOwn`,
-`TestOrphans`, `TestBucketOrphans`, `TestReleaseRefuses` (developer `Forbidden`, unknown `--advance` `Invalid`, not
-held `Conflict`, nothing changed; a failed `Advance` keeps the marker). Conformance:
-`TestPausedRunWithoutRecordStaysStill` (10 passes, no record, no dispatch; Q4's precondition) and
-`TestEveryRunnerConsultsHold` (each Decision 6 runner built by then, held; fails when one acts). **Definition of done**:
-`scripts/agent/d go test -race -count=1`, `scripts/agent/d just ci`, the e2e lane green; no identity leak.
+`TestOrphans`, `TestBucketOrphans`, `TestReleaseRefuses` (developer `Forbidden`, unknown `--advance` `Invalid`, not held
+`Conflict`, nothing changed; a failed `Advance` keeps the marker). Conformance: `TestPausedRunWithoutRecordStaysStill`
+(10 passes, no record, no dispatch; Q4's precondition) and `TestEveryRunnerConsultsHold` (each Decision 6 runner built
+by then, the App's included, held; fails when one acts). **Definition of done**: `scripts/agent/d`
+`go test -race -count=1` and `just ci`, the e2e lane green; no identity leak.
 
 ## Review checklist
 
@@ -239,7 +239,7 @@ while held; `replay --from` of a held run needs a `cancel` first. **Risk**: a la
 |---|---|---|
 | Command names, flags; lineage display; blob `inspect` | Decision 1; a tree indented by `parent`, `abandoned` marked (Decision 3); blob generations listed, not inspected | the daemon owns offline work, funcdctl the API verbs; a restore leaves later generations on a dead branch; ADR-0208 has no manifest reader (else it adds a `ReadManifest`) |
 | Where the hold lives; runner checks; what release verifies | the marker in `storage.dataDir`; `hold.Gate` per runner (Decision 6); held, valid `--advance`, and `hold status`, with pending blob keys, is the operator's check | travels with the data; one switch; funcd cannot judge the real world |
-| Backup runners, data reclaims while held | skipped until the release; `hold status` lists the data with no object; the boot reclaims run at the next start after it | a drill or unverified restore must not branch the source's lineage, nor drop data the restored metastore does not name yet; running backups would protect changes made while held; for reclaims, alternative (ADR-0209): none after a restore until the operator runs them over the listed set, which keeps #708 open on a restored node and needs a reclaim command, offline or racing a live create (`internal/services/kv/reconcile.go:103`) |
+| Backup runners, data reclaims while held | skipped until the release; `hold status` lists the data with no object; the boot reclaims run at the next start after it | a drill or unverified restore must not branch the source's lineage, nor drop data the restored metastore does not name yet; running backups would protect changes made while held; for reclaims, alternative (ADR-0209): none after a restore until the operator runs them over the listed set, which keeps #708 open on a restored node and needs a reclaim command, offline or racing a live create (`ReclaimDeleted`'s comment, `internal/services/kv/reconcile.go`) |
 | Split | one ADR | restore without the hold is unsafe; the hold alone has no caller but ADR-0207 |
 | Registry digest list (Q9, not decided) | none in v1; Functions show not Ready | no registry logic |
 | Held App rollout deadline (ADR-0200 Decision 6; downtime counts) | restart it at the release, with the App reconciler the only AppRevision writer (ADR-0200 Decision 1): `Release` persists its time (`.hold-released`), the reconciler takes the deadline as max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout` (Decision 6); alternatives: the release sets each `Deploying` `startedAt` to now (the move F122 makes, ADR-0200 Open question 2), which also supersedes ADR-0200 Decision 1 (a second writer); pause it (subtract held time, a sum ADR-0200 does not store); let it expire, the operator runs F117's `retry` | the release is the operator's decision to continue (Q3, report §4.L row 6); a hold is no failed rollout; the persisted time survives a restart before the first un-held pass, keeps one writer, and the hold edits no object |

@@ -41,6 +41,8 @@ and `funcdctl backup plan` (F112); one status for every backup stream, metrics, 
   runs, Then it fails naming the store and part, and writes nothing under `gen/verified/`.
 - **scenario: status-shows-restore-points** — Given generations 3 to 9 complete and 7 verified, When an admin runs
   `funcdctl backup status`, Then it prints the times of 9, 7 and 3 and `rpoRisk`; a developer gets 403.
+- **scenario: kv-stream-without-platform-backup** — Given no `backup.target`, the KV export on and its target refusing
+  puts, When a KV run fails, Then `funcdctl backup status` shows `enabled: false` and `streams.kv.lastFailure`.
 
 ## Scope
 
@@ -78,7 +80,8 @@ use ADR-0194's grammar within [1ms, `v1.MaxDuration`]; a change applies at the n
 | `objectives.rpo` (NEW) | age of the newest verified generation that sets `rpoRisk` | `2h` (proposed; decider confirms at acceptance) |
 | `retryInterval` (NEW) | wait after a failed run before the next attempt | `5m` (proposed; decider confirms at acceptance) |
 
-**2. Runner.** One goroutine started by `Platform.Run` beside the other loops; `cmd/funcd` opens its inputs first.
+**2. Runner.** `cmd/funcd` builds it when the platform backup or the KV export is on, before the blob and KV wiring that
+take its `Recorder` (backup off: no `Target`, streams only); `funcd.New` binds its stores, `Platform.Run` runs it.
 
 ```
 start: CheckBackup → envelope.New → backup.Open (an error: no start) → list → due = newest ladder At + interval
@@ -89,7 +92,7 @@ loop:  wait for due → held: due = now + retryInterval, no run → else Target.
 - **Due time**: complete `hourly`, `daily`, `weekly` entries only (none ⇒ now), pins never (ADR-0203 Decision 6). A
   listing anchors on ModTime, which trails the run start by the run's length (seconds at metastore size), so the first
   run after a restart is that late (accepted). A failed first listing (target down at start) is a failed run.
-- **Writes**: `Target.Write` with `WriteOptions{Seal: s.Seal(), Keys: s.Keys(), Parent: cfg.Parent}` (ADR-0203, 0206).
+- **Writes**: `Target.Write` with `WriteOptions{Seal: s.Seal(), Keys: s.Keys(), Parent: in.Parent}` (ADR-0203, 0206).
 - **Held** (ADR-0206 Decision 6; the recheck proposed; decider confirms at acceptance): a due time while `Hold.Held()`
   writes nothing, counts as neither a run nor a failure, sets `held: true` and rechecks after `retryInterval`.
 - **Overrun** (proposed; decider confirms at acceptance): no overlap, no queue: a late run's successor starts when it
@@ -109,7 +112,7 @@ reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) 
 | `encryption.recipients`, `.none`, `secrets.encryptionKeyFile` | no recipients and not `none`; `none` with recipients; `none` without a secrets key | error | `CheckBackup` (ADR-0204 §2 rules) |
 | `encryption.recipients` files | unreadable, under 2 distinct, X25519 mixed with hybrid | error | `envelope.New` (ADR-0204) |
 | `kvstore.backup.*`; `blob.*` | enabled without target or engine not `badger`, malformed duration; ADR-0208 Decision 1, a target inside the store | error | `checkKVStoreConfig`, `kvBackup` until ADR-0209; `config.CheckBlob` (ADR-0208 Decision 1); a target inside the store: `gocloud.CompareDomains` in `cmd/funcd` (ADR-0208 Decision 3, needs I/O) |
-| `interval`, `objectives.rpo`, `retention.verified` (ADR-0203) | interval above half the rpo: one failed run breaks it (Q1); `retention.verified` × 24 h below `rpo − interval`: copies expire between the scheduled verifies (Decision 6) | warning | `CheckBackup` |
+| `interval`, `objectives.rpo`, `retention.verified` (ADR-0203) | interval above half the rpo: one failed run breaks it (Q1); `retention.verified` × 24 h below `rpo − interval`: a copy can expire before its original is `rpo` old (Decision 6) | warning | `CheckBackup` |
 | `backup.*` without `target`; `storage.mode: memory` with `target`; `encryption.none: true`; recipients without a secrets key | a key off its default is ignored, no platform backup runs; ADR-0204 Decision 2 | warning | `CheckBackup` |
 | target on the data dir's device; failed probe with `singleWriter: true`; `kvstore.backup` in memory mode; `OverlapProvider` | ADR-0203 Decision 4; today; ADR-0208 Decision 3 | warning | `Target.Ready`; as above |
 
@@ -126,11 +129,10 @@ reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) 
 | `lastFailure` | `time`, `error` of the last failed run since start; a success clears it |
 
 It relists after each run, at `lastVerifiedTime + rpo` (a fresh listing turns `rpoRisk` on) and per status read.
-**Streams** (proposed; decider confirms at acceptance): ADR-0208's mirror and ADR-0209's KV export report each run, a
-`Ready` refusal included, to `Runner.Recorder`, kept as `streams.blob`, `streams.kv` (`lastSuccessTime`, `lastFailure`)
-since start, without `rpoRisk` (never verified). `GET /apis/funcd.io/v1alpha1/platformbackup` (NEW; 503 on a failed
-listing) authorizes `get` on `WorkerNode` (cluster-scoped, admin-only under the built-in RBAC, `internal/auth/rbac`),
-the kind of every DR operator route (ADR-0206's hold routes too); `funcdctl backup status` (NEW) prints it as YAML.
+**Streams** (proposed; decider confirms at acceptance): ADR-0208's mirror and ADR-0209's KV export report each run (a
+`Ready` refusal too) to `Runner.Recorder`, kept as `streams.blob`, `streams.kv` (`lastSuccessTime`, `lastFailure`) since
+start, no `rpoRisk` (never verified). `GET /apis/funcd.io/v1alpha1/platformbackup` (NEW; 503 on a failed listing)
+authorizes `get` on `WorkerNode` (cluster-scoped, so admin-only); `funcdctl backup status` (NEW) prints it as YAML.
 
 **5. Metrics and alert** (names proposed; decider confirms at acceptance). Meter `funcd.backup` from
 `observability.Telemetry.MeterProvider()`, named like `funcd.edge.*` (ADR-0114): `funcd.backup.runs` (Int64Counter,
@@ -138,17 +140,17 @@ the kind of every DR operator route (ADR-0206's hold routes too); `funcdctl back
 `result`), `funcd.backup.rpo_risk` (Int64ObservableGauge, 0/1). The alert is `rpoRisk`: Warn `backup rpo at risk`
 (`rpo_ms`, `age_ms` when verified exists) on turning on and once per `objectives.rpo` while on, Info on clearing.
 
-**6. Verified** (checks proposed; decider confirms at acceptance). `funcdctl backup verify` (NEW; off the
-box, with ADR-0203's verify credential and an ADR-0204 identity; flags `--target`, `--credentials-file`, `--identity`,
-`--escrow`, `--generation`, default the newest complete ladder generation, none ⇒ `fault.NotFound`) reads the manifest
-and each store's parts in order, matching `parts`, `bytes`, `sha256`; decrypts each store file to its end with the
-`Unseal` that `envelope.Opener(ids)` returns for the manifest's `recipients` (age authenticates every chunk, detects
-truncation); parses the framing (`backup.Records`) to its end, keys strictly ascending (ADR-0202 Decision 1); with
-`--escrow`, finds the `secretsKey` and `masterSecret` fingerprints (`escrow.Find`); decrypts no Secret (the drill does).
-All passed, it copies the parts, the manifest last, to `gen/verified/<n>/` with `IfNotExist` (a part there is read back
-and compared); a rerun writes nothing (`Pinned` false, exit 0). The operator runs it at least every `objectives.rpo −
-interval`. No backup credential deletes (ADR-0203 Decision 5): copies expire by ADR-0203's `gen/verified/` lifecycle
-rule after its `retention.verified` days; the newest stays while verify runs (Decision 3 warns when it cannot).
+**6. Verified** (checks proposed; decider confirms at acceptance). `funcdctl backup verify` (NEW; off the box, with
+ADR-0203's verify credential and an ADR-0204 identity; flags `--target`, `--credentials-file`, `--identity`, `--escrow`,
+`--generation`, default the newest complete ladder generation) reads the manifest and each store's parts in order,
+matching `parts`, `bytes`, `sha256`; decrypts each store file to its end with the `Unseal` that `envelope.Opener(ids)`
+returns for the manifest's `recipients` (age authenticates every chunk, detects truncation); parses the framing
+(`backup.Records`) to its end, keys strictly ascending (ADR-0202 Decision 1); with `--escrow`, finds the `secretsKey`
+and `masterSecret` fingerprints (`escrow.Find`); decrypts no Secret (the drill does). All passed, it copies the parts,
+the manifest last, to `gen/verified/<n>/` with `IfNotExist` (a part there is read back and compared); a rerun writes
+nothing (`Pinned` false, exit 0). The operator runs it every `(objectives.rpo − interval)/2` (30 min at defaults), as
+`rpo − interval` lets an original verified at age `interval` pass `rpo` while the next verify runs. No backup credential
+deletes (ADR-0203 Decision 5): copies expire by ADR-0203's `gen/verified/` rule after `retention.verified` days.
 
 ## Temporary workarounds
 
@@ -166,20 +168,20 @@ func (c Config) CheckBackup() []Finding                // Decision 3 rows readin
 ```
 
 ```go
-package runner // internal/backup/runner (NEW). Events, Meta, Runs: *eventstore.Store (ADR-0201), store.Store,
-// runstate.Store (ADR-0202); Parent, Hold: restore.Parent and the daemon's *hold.Hold (ADR-0206), nil Hold ⇒ never
-// held; Target nil ⇒ streams only; Clock nil ⇒ system; After nil ⇒ time.After.
-type Config struct{ Target backup.Target; Events, Meta, Runs snapshot.Source; Sealer *envelope.Sealer
-	Parent *backup.GenRef; Hold interface{ Held() bool }; Times config.BackupTimes; Meter metric.Meter
-	Logger *slog.Logger; Clock clock.Clock; After func(time.Duration) <-chan time.Time }
+package runner // internal/backup/runner (NEW). Target nil ⇒ streams only; Hold: *hold.Hold, nil ⇒ never held; Clock
+// nil ⇒ system; After nil ⇒ time.After; Inputs: *eventstore.Store, store.Store, runstate.Store, restore.Parent.
+type Config struct{ Target backup.Target; Sealer *envelope.Sealer; Hold interface{ Held() bool }; Times config.BackupTimes
+	Meter metric.Meter; Logger *slog.Logger; Clock clock.Clock; After func(time.Duration) <-chan time.Time }
+type Inputs struct{ Events, Meta, Runs snapshot.Source; Parent *backup.GenRef }
 type Status struct{ Enabled, Held, RPORisk bool; Interval, RPO v1alpha1.Duration; LastFailure *Failure
 	LastSuccessTime, LastVerifiedTime, EarliestRestorePoint, NextRunTime *v1alpha1.Timestamp // ADR-0196; nil omitted
 	Streams map[string]Stream } // "blob", "kv": those that reported since start; JSON keys: Decision 4
 type Stream struct{ LastSuccessTime *v1alpha1.Timestamp; LastFailure *Failure }
 type Failure struct{ Time v1alpha1.Timestamp; Error string }; type Runner struct{ /* unexported */ }
-func New(cfg Config) (*Runner, error) // registers the instruments; with a Target, a nil Source or Sealer ⇒ fault.Invalid
+func New(cfg Config) (*Runner, error) // cmd/funcd; registers the instruments; a Target without a Sealer ⇒ fault.Invalid
+func (r *Runner) Bind(in Inputs) error // funcd.New, before Run; a Target with a nil Source ⇒ fault.Invalid
 func (r *Runner) Run(ctx context.Context) // until ctx ends (at once without a Target); failures: status, log, metrics
-func (r *Runner) Status(ctx context.Context) (Status, error) // relists; list error ⇒ last status, fault.Unavailable
+func (r *Runner) Status(ctx context.Context) (Status, error) // lists the Target; its error ⇒ last status, fault.Unavailable
 func (r *Runner) Recorder(stream string) func(start time.Time, err error) // "blob", "kv"; nil err: success, at the call
 ```
 
@@ -190,8 +192,8 @@ type Options struct{ Bucket blob.Bucket; Identities []age.Identity; EscrowDir st
 type Result struct{ Generation uint64; Records int64; KeysChecked, Pinned bool } // Pinned false: copy existed
 func Verify(ctx context.Context, o Options) (Result, error) // damage ⇒ fault.Invalid (store, part); none ⇒ NotFound
 type BackupStatuser interface{ Status(ctx context.Context) (runner.Status, error) } // internal/controlplane (NEW)
-func RegisterPlatformBackup(api huma.API, s BackupStatuser, authz auth.Authorizer) // nil s: Status{Enabled: false}
-func WithPlatformBackup(cfg runner.Config) Option // pkg/funcd (NEW): New fills the Sources, Hold and Parent (ADR-0206)
+func RegisterPlatformBackup(api huma.API, s BackupStatuser, authz auth.Authorizer) // nil s (no stream on): Enabled false
+func WithPlatformBackup(r *runner.Runner) Option // pkg/funcd (NEW): New calls r.Bind, Run runs r, the route reads r
 ```
 
 | consumes | exposes |
@@ -200,13 +202,14 @@ func WithPlatformBackup(cfg runner.Config) Option // pkg/funcd (NEW): New fills 
 
 ## Implementation plan
 
-**Files**: `internal/platform/config/config.go` (fields, defaults beside `c.Eventing`, `BackupTimes`, `CheckBackup` in
-`Validate`); NEW `internal/backup/runner/`, `internal/backup/verify/`, `internal/controlplane/backup.go` (route and stub,
-mounted in `server.go` as `RegisterDeadLetters`), `cmd/funcdctl/backup.go`; `pkg/funcd/funcd.go`; `cmd/funcd/main.go`
-(warnings, runner); `examples/funcdconfig.yaml`; ADR-0203's `examples/backup-lifecycle.md` (off-box verify every `rpo −
-interval` at most); the OpenAPI. **Order**: no build edge on ADR-0206 (`Hold` is structural, `Parent` a `backup.GenRef`);
-the later of the two wires `Hold` and `Parent` in `pkg/funcd` and adds the runner to `TestEveryRunnerConsultsHold`.
-**go.mod**: none. **Blueprint** (at acceptance): line 699 gains "scheduled, checked and alerted platform backups".
+**Files**: `internal/platform/config/config.go` (fields, defaults beside `c.Eventing`, `CheckBackup` in `Validate`); NEW
+`internal/backup/{runner,verify}/`, `internal/controlplane/backup.go` (route, stub; mounted in `server.go` as
+`RegisterDeadLetters`), `cmd/funcdctl/backup.go`; `pkg/funcd/{options,funcd}.go`; `cmd/funcd/main.go` (warnings; the
+Telemetry block, now after `buildKVStore`, then `runner.New` with its `funcd.backup` meter, no-op only without
+`telemetry.endpoint` as `invokeMeter`, both before `substrateOptions`); `examples/funcdconfig.yaml`; ADR-0203's
+`examples/backup-lifecycle.md` (verify every `(rpo − interval)/2`); the OpenAPI. **Order**: no build edge on ADR-0206
+(`Hold` structural, `Parent` a `backup.GenRef`); the later wires both, adds the runner to `TestEveryRunnerConsultsHold`.
+**go.mod**: none. **Blueprint** (at acceptance): the DR bullet gains "scheduled, checked and alerted platform backups".
 
 **Test plan**: a `TestScenario<Name>` per scenario on `file://` targets (`os.Chtimes` for ModTimes), injected `Clock`,
 `After`, `sdkmetric.ManualReader`. Units: `TestCheckBackupRules`, `TestBackupTimesDefaults`, `TestDueTime` (a newer pin
@@ -219,29 +222,26 @@ a `verified` copy not), `TestRecorderStreams`, `TestRPOWarnOncePerRPO`, `TestVer
 - [ ] `CheckBackup` holds the config-only Decision 3 rows but `kvstore.backup.*`, `blob.*`; `Validate` fails on errors.
 - [ ] One run at a time, no deadline; due times per Decision 2 from ladder entries; a cancelled or held run is no
       failure; a `CheckBackup`, `envelope.New` or `backup.Open` error stops the start, a failed first listing does not.
-- [ ] Status times from the listing, none stored; `rpoRisk` on the verified original's `At`; `streams` via `Recorder`.
+- [ ] Status times from the listing, none stored; `rpoRisk` on the verified `At`; `streams` by `Recorder`, backup off too.
 - [ ] The route authorizes `get` on `WorkerNode`; instruments, log keys and the Warn cadence match Decision 5 (`_ms`).
 - [ ] Verify pins only after every check passes, the manifest last; the daemon holds no read credential or identity.
 
 ## Consequences
 
 **Positive**: one rule set for daemon and helper; a stopped, unreadable or hung backup surfaces as `rpoRisk`, a failing
-mirror or KV export in `streams`; nothing stored. **Negative (accepted)**: no verifier every `rpo − interval` keeps
-`rpoRisk` on (a fresh install too; one Warn per rpo), none for `retention.verified` days (ADR-0203) leaves no `verified`
-copy; each verify stores a full generation in `gen/verified/`, up to 24 a day at defaults (interval 1h, rpo 2h), each
-kept `retention.verified` days (48 copies at the defaults); a restart loses `lastFailure`, `streams` and one run's length
-of cadence; each status read lists the target. **Risk**: the verify host's credential and identity read every generation.
+mirror or KV export in `streams`; nothing stored. **Negative (accepted)**: rarer verifies (Decision 6) keep `rpoRisk` on
+(a fresh install too; one Warn per rpo), none for `retention.verified` days (ADR-0203) leaves no `verified` copy; at
+defaults verify reads 48 generations a day, copies 24 (48 kept); a restart loses `lastFailure`, `streams` and one run's
+length of cadence; each status read lists the target. **Risk**: the verify host can read every generation.
 
 ## Open questions
 
 | Item | Recommended default (proposed; decider confirms at acceptance) | Why |
 |---|---|---|
 | Where status lives; its scope | runner memory, times from the listing; route `platformbackup`, `get` on `WorkerNode`; a `streams` section the mirror and KV export feed through `Recorder`, no `rpoRisk` (the alternative: platform only, the others logging) | no second truth; a restore cannot bring back a stale status; the KV export's failures stop being silent |
-| Metric names | `funcd.backup.runs`, `.duration_ms` (both with `stream`), `.rpo_risk` | the `funcd.<area>.<name>` pattern; one gauge carries the alert |
-| What verification does; cost | checksums, full decrypt, framing; keys only with `--escrow`; no Secret decrypt; one read and write per generation | catches damage and wrong recipients without a restore |
-| Overrun; error and warning table | Decision 2 (no overlap, no queue, next run at once, one warning); Decision 3 | one run at a time (ADR-0203); Q1's two examples, generalized |
+| What verification does; cost; cadence | checksums, full decrypt, framing; keys only with `--escrow`; no Secret decrypt; a read per verify, a write per generation; every `(rpo − interval)/2` (the alternative: `rpoRisk` tolerates one verify's length) | catches damage and wrong recipients without a restore; the slack absorbs a verify's own length and the alert stays exact |
 | `objectives.rpo`, `retryInterval`; switch; memory mode | `2h`, `5m`; `backup.target` set; memory mode warns, runs nothing; `gen/verified/` expiry: ADR-0203's Open questions | `1h` warns at defaults under Q1's rule; Q7's wording; the `kvstore.backup` precedent; ADR-0203 owns `retention.*` and `LifecycleRules`, so one ADR holds the choice |
-| Runs while held; answered elsewhere | skipped (ADR-0206 Decision 6), no run and no failure, rechecked every `retryInterval`, `held: true`; an age gauge, a `backup status` exit code are F112's | a held drill writes no generation that turns the source's later ones `Abandoned` (ADR-0203); a quick first run after the release |
+| Overrun; runs while held; error and warning table; metric names; answered elsewhere | Decision 2: no overlap, no queue, next run at once, one warning; held: skipped (ADR-0206 Decision 6), no run and no failure, rechecked every `retryInterval`, `held: true`; Decision 3; `funcd.backup.runs`, `.duration_ms` (both with `stream`), `.rpo_risk`; an age gauge, a `backup status` exit code are F112's | one run at a time (ADR-0203); a held drill writes no generation that turns the source's later ones `Abandoned` (ADR-0203), a quick first run after the release; Q1's two examples, generalized; the `funcd.<area>.<name>` pattern, one gauge carries the alert |
 
 ## References
 

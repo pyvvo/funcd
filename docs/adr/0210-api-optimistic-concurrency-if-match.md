@@ -6,7 +6,7 @@
 - **Tags**: api, control-plane, resource-version, optimistic-concurrency, sdk, funcdctl, openapi, disaster-recovery
 - **Realizes**: [FEAT-0009/F109](../feat/0009-feat-disaster-recovery.md) (exit clause: a client that holds a version
   from before a restore gets a conflict instead of overwriting)
-- **Supersedes in part** (these clauses only; each keeps `Implemented`, back-linked at acceptance; lines at b48c6b9d):
+- **Supersedes in part** (these clauses only; each keeps `Implemented`, back-linked at acceptance; lines at c35bdf5e):
   1. [ADR-0018](0018-api-server-authn-rbac-admission.md): the Temporary workarounds row "`Replace` is
      read-RV-then-Update" (line 233), its exit criterion met here, and the Decision 4 sentence "`Replace` reads the
      current `resourceVersion` and applies it so a client `PUT` is a normal optimistic update" (lines 213–214): a
@@ -23,12 +23,11 @@
 
 ## Context & Need
 
-The store already rejects a stale write: `Update` and `Delete` return `fault.Conflict` when the precondition differs
-from the stored version (`internal/store/store.go` `(*store).Update`, `(*store).Delete`). The REST API never passes
-the client's version: `replaceObjIf` (`internal/controlplane/handlers.go`) overwrites it with the stored one before
-`store.Update`, and `deleteObj` calls `deleteObjIf` with `""` (no precondition). A client holding an old object
-therefore overwrites or deletes newer data silently. ADR-0202's restore timeline makes every pre-restore version
-differ from a current one, but that protects API clients only if the API forwards their version.
+The store already rejects a stale write: `(*store).Update` and `Delete` (`internal/store/store.go`) return
+`fault.Conflict` when the precondition differs from the stored version. The REST API never passes the client's
+version: `replaceObjIf` (`internal/controlplane/handlers.go`) overwrites it with the stored one, and `deleteObj` passes
+`""`, so a client holding an old object silently overwrites or deletes newer data. ADR-0202's timeline makes every
+pre-restore version differ from a current one, which protects API clients only if the API forwards their version.
 
 Purpose: a PUT or DELETE that names the version it was based on succeeds only on that version; otherwise 409 and the
 object is unchanged. Callers: `pkg/sdk` (`Apply`, `Delete`), `cmd/funcdctl`, any HTTP client.
@@ -50,22 +49,24 @@ object is unchanged. Callers: `pkg/sdk` (`Apply`, `Delete`), `cmd/funcdctl`, any
   PUT carries a stale version, Then 409 whose detail says to re-read, not that the Workflow manages the store.
 - **scenario: forced-group-delete-honors-version** — Given ResourceGroup `g` with members, When `DELETE ?force=true`
   carries a stale `If-Match`, Then 409 and every member still exists.
-- **scenario: pre-restore-version-conflicts** — Given platform A, a backup at revision 100, then a write leaving `f` at
-  `T1-130`, and B restored from that backup (ADR-0202 `Load`, new timeline), When a client PUTs or DELETEs `f` on B
+- **scenario: pre-restore-version-conflicts** — Given platform A, a backup at revision 100, then a write leaving `f`
+  at `T1-130`, and B restored from that backup (ADR-0202 `Load`, new timeline), When a client PUTs or DELETEs `f` on B
   with `T1-130`, Then 409 and `f` keeps B's content.
 - **scenario: sdk-held-version-conflicts** — Given an object read with `sdk.Get` and then changed by another writer,
   When the caller `Apply`s its copy, or `Delete`s with `sdk.IfVersion` of it, Then `fault.Conflict`, no POST follows.
 - **scenario: workflow-pause-retries-on-conflict** — Given a WorkflowRun whose status changes between the command's
   read and write, When `funcdctl workflow pause` runs, Then it re-reads, the run ends paused, and no 409 is shown.
+- **scenario: app-rollback-retries-on-conflict** — Given App `a` whose status changes between the command's read and
+  write, When `funcdctl app rollback a 1` runs, Then it re-reads, `a` holds revision 1's spec, and no 409 is shown.
 
 ## Scope
 
-**In**: the 25 PUT and 25 DELETE object operations (`internal/controlplane/routes.go`, `routes_rest.go`),
-`replaceObjIf`, `deleteObjIf`, the forced ResourceGroup delete, `pkg/sdk` `Delete`, the `funcdctl workflow` commands
-that read, change and apply, the generated OpenAPI spec. **Out**: the timeline and string comparison (ADR-0202);
-restore and the hold (ADR-0206); admission and authorization (unchanged); create (POST ignores a version, ADR-0048);
-writes that never call `replaceObjIf` or `deleteObjIf`: controllers, the garbage collector and every status write use
-`store.Update` with the version they read; `HandoverKVStore` (`kvhandover.go`, a POST action) keeps read-then-update.
+**In**: every PUT and DELETE object operation (`internal/controlplane/routes.go`, `routes_rest.go`), `replaceObjIf`,
+`deleteObjIf`, the forced ResourceGroup delete, `pkg/sdk` `Delete`, the `funcdctl` commands that read, change and
+apply (`workflow pause`, `resume`, `cancel`, `app rollback`), the generated OpenAPI spec. **Out**: the timeline and
+string comparison (ADR-0202); restore and the hold (ADR-0206); admission and authorization; create (POST ignores a
+version, ADR-0048); writes that never call `replaceObjIf` or `deleteObjIf` (controllers, the garbage collector, status
+writes and `HandoverKVStore` in `kvhandover.go`, a POST action, write through the store with the version they read).
 
 ## Constraints & Decision drivers
 
@@ -100,25 +101,23 @@ different is 400. The route passes one string on.
 guard and admission; a mismatch is `fault.Conflict` (409, `urn:funcd:problem:conflict`, the existing mapping in
 `api/fault/problem.go`) whose detail names the kind and object and says to re-read. On a match the write carries that
 version, so a write landing between the Get and `store.Update` still loses with the store's `fault.Conflict`.
-`deleteObjIf` makes the same comparison on the Get it does when a Delete admission is registered; otherwise
-`store.Delete` compares. Comparison is string equality: a version of another timeline, or a plain number from a lost
-history, never equals the stored one (ADR-0202), so every pre-restore version conflicts. Order: 401; 400 for the
-precondition's syntax (the resolver, like huma's body validation) and agreement (the route); 403; 400 path and body;
-409; guard and admission; store.
+`deleteObjIf` compares on the Get it does when a Delete admission is registered, else `store.Delete` compares. String
+equality: a version of another timeline or of a lost history never equals the stored one (ADR-0202). Order: 401; 400
+for the precondition's syntax (the resolver) and agreement (the route); 403; 400 path and body; 409; guard and
+admission; store.
 
 | Caller | Today | After |
 |---|---|---|
-| `Replace<Kind>` of 24 kinds through `replaceObj` | stored version | the client's version, else the stored one |
+| `Replace<Kind>` of every kind but KVStore, through `replaceObj` | stored version | the client's version, else the stored one |
 | `ReplaceKVStore` through `replaceObjIf` with `refuseLiveMarked` | stored version | as above; compared before the guard |
-| `Delete<Kind>` of 25 kinds through `deleteObj` (a ResourceGroup without force) | `""` | the client's `If-Match`, else `""` |
+| `Delete<Kind>` of every kind through `deleteObj` (a ResourceGroup without force) | `""` | the client's `If-Match`, else `""` |
 | `forceDeleteResourceGroup`: the group's Get, then its final `deleteObj` | no check, `""` | the client's version compared at the Get (409 before any member delete) and passed to the final delete |
 | `deleteMember` → `deleteObjIf` with each listed version | listed version | unchanged (internal, already conditional) |
 | `HandoverKVStore`, controllers, collector, status writes | own read version | unchanged (they never call these helpers) |
 
 **3. No version** (proposed; decider confirms at acceptance). A write without a version stays unconditional, with no
-end date: a PUT is read-then-update, a DELETE has no precondition. A manifest describes desired state and has no
-version, and ADR-0206 Decision 5 prints a restored object without one so that `funcdctl apply -f` replaces the current
-object. This is the API's contract, not a workaround.
+end date: a PUT is read-then-update, a DELETE has no precondition. A manifest has no version, and ADR-0206 Decision 5
+prints a restored object without one so that `funcdctl apply -f` replaces the current object.
 
 **4. Clients** (proposed; decider confirms at acceptance). The server ships first; no client breaks.
 
@@ -128,12 +127,13 @@ object. This is the API's contract, not a workaround.
 | `pkg/sdk` `Delete` | NEW option `IfVersion(rv)` sends `If-Match: "<rv>"` |
 | `funcdctl apply -f` | none: a document with `metadata.resourceVersion` (e.g. saved from `get -o json`) is conditional; the 409 names the document |
 | `funcdctl workflow pause`, `resume`, `cancel` (`cmd/funcdctl/workflow.go`) | read, change, apply now conflicts when the run controller writes status meanwhile: re-read and retry on `fault.Conflict`, at most 5 attempts (the `devApplyAttempts` bound, `cmd/funcdctl/dev.go`) |
+| `funcdctl app rollback` (`cmd/funcdctl/app.go`) | the same race with the App reconciler's status writes (`internal/app/status.go`, `revision.go`): re-read the App and retry when the PUT answers `fault.Conflict`, at most 5 attempts, re-checking the revision's controller and `sameAppSpec` on each |
 | `funcdctl dev` `applyDesired`, `funcdctl delete` | none: they send no version; `applyDesired` keeps its retry for the Get-to-Update race |
 | TypeScript and Python | no control-plane client exists (verified 2026-10-08, see References); one added later sends the version it holds (body on PUT, `If-Match` on DELETE) and treats 409 as re-read |
 
 **5. OpenAPI** (proposed; decider confirms at acceptance). The spec stays generated (`just generate`,
-`internal/controlplane/cmd/specgen`); each of the 50 operations gains an optional `If-Match` header parameter from the
-embedded input field. No `ETag` response header (Open questions).
+`internal/controlplane/cmd/specgen`); every PUT and DELETE operation gains an optional `If-Match` header parameter
+from the embedded input field. No `ETag` response header (Open questions).
 
 ## Temporary workarounds
 
@@ -159,7 +159,7 @@ func (p *IfMatchParams) Resolve(ctx huma.Context) []error
 func replaceVersion(header, body string) (string, error)
 
 type Handlers interface {
-	// … every other method unchanged. Each of the 25 Delete<Kind> gains rv ("" ⇒ no precondition), for example:
+	// … every other method unchanged. Every Delete<Kind> (26 at c35bdf5e) gains rv ("" ⇒ no precondition), e.g.:
 	DeleteNamespace(ctx context.Context, name v1.ObjectName, rv string) error
 	DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, force bool, rv string) error
 	DeleteFunction(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
@@ -171,24 +171,24 @@ type Handlers interface {
 ```go
 package sdk // pkg/sdk
 
-// IfVersion makes Delete conditional on rv: the server answers fault.Conflict when the object's current
-// resourceVersion differs (NEW).
+// IfVersion (NEW) makes Delete conditional on rv: fault.Conflict when the object's resourceVersion differs.
 func IfVersion(rv string) DeleteOption
 ```
 
 | consumes | exposes |
 |---|---|
-| `If-Match` (RFC 9110 §13.1.1); body `metadata.resourceVersion`; `store.Store` `Get`, `Update`, `Delete` preconditions (ADR-0006, unchanged); `fault.Conflict` → 409 (`api/fault/problem.go`) | optional `If-Match` on 25 PUT and 25 DELETE operations in `api/openapi/funcd.v1alpha1.yaml`; 409 on a stale version; 400 on a bad precondition; `sdk.IfVersion` |
+| `If-Match` (RFC 9110 §13.1.1); body `metadata.resourceVersion`; `store.Store` `Get`, `Update`, `Delete` preconditions (ADR-0006, unchanged); `fault.Conflict` → 409 (`api/fault/problem.go`) | optional `If-Match` on every PUT and DELETE operation in `api/openapi/funcd.v1alpha1.yaml`; 409 on a stale version; 400 on a bad precondition; `sdk.IfVersion` |
 
 ## Implementation plan
 
 **Files**: NEW `internal/controlplane/precondition.go` (`IfMatchParams`, `Resolve`, `replaceVersion`); `routes.go`,
-`routes_rest.go` (embed `IfMatchParams` in every PUT input, `namespacedDelete`, `clusterScopedDelete` and
-`deleteResourceGroupInput`; pass the version); `controlplane.go` (the `Delete<Kind>` signatures); `handlers.go`
+`routes_rest.go` (embed `IfMatchParams` in every PUT input, the inline structs and `registerNamespacedCRUD`'s
+`namespacedNameBodyInput[T]`, and in `namespacedDelete`, `clusterScopedDelete` and `deleteResourceGroupInput`; pass
+the version; `crudRoutes.remove` gains `rv`); `controlplane.go` (the `Delete<Kind>` signatures); `handlers.go`
 (`replaceObjIf` compares before the guard; `deleteObjIf` compares on its Get; the `Delete<Kind>` methods pass `rv`;
 `forceDeleteResourceGroup` compares at its Get and passes `rv` to the final delete); `stubs.go` (signatures);
-`pkg/sdk/sdk.go` (`IfVersion`, the header on `Delete`); `cmd/funcdctl/workflow.go` (one read-change-apply helper with
-the bounded retry for pause, resume and cancel); `api/openapi/funcd.v1alpha1.yaml` regenerated with
+`pkg/sdk/sdk.go` (`IfVersion`, the header on `Delete`); `cmd/funcdctl/workflow.go`, `app.go` (one NEW read-change-apply
+helper with the bounded retry for pause, resume, cancel and rollback); `api/openapi/funcd.v1alpha1.yaml` regenerated by
 `scripts/agent/d just generate`. **go.mod**: none. **Blueprint**: none (it states no PUT or version semantics). At
 acceptance, ADR-0018, ADR-0024 and ADR-0048 gain `Superseded in part by: ADR-0210`. **Roadmap and feat** (with the
 sibling DR ADRs): a NEW F109 item for ADR-0210 in `docs/roadmap/dr-plan.json` after ADR-0202's item `DR-1`, mirrored
@@ -202,9 +202,9 @@ in the slate table and recomputed with `plan_waves.py`; the F109 row links ADR-0
 `TestScenarioUnversionedWritesStayUnconditional`, `TestScenarioBadPreconditionRejected`,
 `TestScenarioStaleDeleteConflicts`, `TestScenarioStaleKVStoreReplaceConflicts`,
 `TestScenarioForcedGroupDeleteHonorsVersion`, `TestScenarioPreRestoreVersionConflicts`. `pkg/sdk/sdk_test.go`:
-`TestScenarioSDKHeldVersionConflicts`. `cmd/funcdctl/workflow_test.go`: `TestScenarioWorkflowPauseRetriesOnConflict`.
-An existing test that replaces with a stale held version and expects success is changed to re-read first; the PR
-lists each one. The spec drift test (`internal/controlplane/api_test.go`) passes on the regenerated spec.
+`TestScenarioSDKHeldVersionConflicts`. `cmd/funcdctl/workflow_test.go`: `TestScenarioWorkflowPauseRetriesOnConflict`;
+`cmd/funcdctl/app_test.go`: `TestScenarioAppRollbackRetriesOnConflict`. An existing test that replaces with a stale
+version and expects success re-reads first (the PR lists each); the spec drift test (`api_test.go`) passes.
 
 **Definition of done**: every test above passes under `scripts/agent/d go test -race -count=1` for the touched
 packages; `scripts/agent/d just ci` is green; no code outside `internal/store` parses a version; no new dependency; no
@@ -212,13 +212,13 @@ identity or path leak.
 
 ## Review checklist
 
-- [ ] All 50 PUT and DELETE operations embed `IfMatchParams`; the regenerated spec lists 50 `If-Match` parameters.
+- [ ] Every PUT and DELETE operation in the regenerated spec has an optional `If-Match` (from `IfMatchParams`).
 - [ ] `replaceObjIf` compares before the guard and admission and sends the compared version to `store.Update`;
       `deleteObjIf` compares on its Get or forwards `rv` to `store.Delete`; equality is plain string comparison.
-- [ ] A stale version answers 409 `urn:funcd:problem:conflict`; disagreeing or malformed preconditions answer 400; no
-      write happens on either.
+- [ ] A stale version answers 409 `urn:funcd:problem:conflict`, a bad or disagreeing precondition 400; neither writes.
 - [ ] The forced group delete answers 409 before any member delete; `deleteMember` and `HandoverKVStore` are unchanged.
-- [ ] `sdk.IfVersion` sets `If-Match`; `Apply` is unchanged; the workflow commands retry at most 5 times.
+- [ ] `sdk.IfVersion` sets `If-Match`; `Apply` is unchanged; the workflow commands and `app rollback` retry at most 5
+      times, and rollback re-checks the controller and `sameAppSpec` on each attempt.
 - [ ] Each scenario has its named passing test.
 
 ## Consequences
@@ -226,8 +226,8 @@ identity or path leak.
 **Positive**: the F109 exit clause holds for every API client that sends the version it holds; the Go SDK's
 read-change-`Apply` gains lost-update protection without a client change; one 409 contract for body, header and store.
 **Negative (accepted)**: a client or manifest that carries a stale version now gets 409 where it overwrote silently;
-the workflow commands may take extra round trips; 25 `Handlers` `Delete<Kind>` signatures change; `If-Match` answers
-409, not RFC 9110's 412. **Risk**: a client that holds a version but sends none stays last-writer-wins (Decision 3, by design).
+four funcdctl commands may take extra round trips; the `Delete<Kind>` signatures change; `If-Match` answers 409, not
+RFC 9110's 412. **Risk**: a client that holds a version but sends none stays last-writer-wins (Decision 3, by design).
 
 ## Open questions
 
@@ -235,9 +235,9 @@ the workflow commands may take extra round trips; 25 `Handlers` `Delete<Kind>` s
 |---|---|---|
 | Header or body, and precedence | PUT: body or `If-Match`, equal or 400; DELETE: `If-Match` | the body is where a client holds its version today; DELETE has no body; ambiguity fails closed |
 | A write without a version | unconditional, no end date | manifests and ADR-0206's `--object` output carry none; requiring one adds a GET and the same race |
-| SDK and funcdctl rollout | server first; `sdk.IfVersion`; workflow commands retry 5 times; the rest unchanged | old clients keep working; the only new conflicts are read-change-apply races |
+| SDK and funcdctl rollout | server first; `sdk.IfVersion`; `workflow pause`, `resume`, `cancel` and `app rollback` retry 5 times; the rest unchanged | old clients keep working; the only new conflicts are those four commands' read-change-apply races (every `Get` then `Apply` in `cmd/funcdctl` at c35bdf5e; `stageResources` applies the unversioned desired object) |
 | Exempt writes | none to exempt: no API route writes status (`withStatus` copies the stored status) and controllers write through the store | the helpers serve only client requests; `HandoverKVStore` stays server-side |
-| OpenAPI | optional `If-Match` on the 50 operations; no `ETag` header | clients read the version from `metadata`; an `ETag` on every response is an extra contract |
+| OpenAPI | optional `If-Match` on every PUT and DELETE; no `ETag` header | clients read the version from `metadata`; an `ETag` on every response is an extra contract |
 | `Apply` with a version on a missing object | keep the POST fallback | a create overwrites nothing |
 
 ## References
@@ -246,5 +246,5 @@ the workflow commands may take extra round trips; 25 `Handlers` `Delete<Kind>` s
 - RFC 9110 §8.8.3, §13.1.1; RFC 6585 §3; RFC 9457; Kubernetes API conventions, "Concurrency Control and Consistency".
 - huma v2.38.0 (module cache, 2026-10-08): `conditional.Params` embeds `header:"If-Match"` with a `Resolve` that
   sets unexported state; `getParamValue` uses `ctx.Header` (`huma.go:1669`), `Context.EachHeader` (`api.go:101`).
-- Language clients checked 2026-10-08: no `apis/funcd.io` or `resourceVersion` in `pyvvo/funcd-typescript` v0.8.2 or
-  `pyvvo/funcd-python` v0.5.1 (the versions `go.mod` pins), and GitHub code search of both default branches finds none.
+- Language clients checked 2026-10-08: no `apis/funcd.io` or `resourceVersion` in `pyvvo/funcd-typescript` v0.9.0 or
+  `pyvvo/funcd-python` v0.6.0 (`go.mod` pins at c35bdf5e), and GitHub code search of both default branches finds none.

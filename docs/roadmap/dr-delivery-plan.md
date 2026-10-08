@@ -40,9 +40,9 @@ one wave ahead of the build track.
 | ADR-0210 | API optimistic concurrency: replace and delete honor the client's resourceVersion (If-Match), issue #844 | F109 | ADR-0018, ADR-0202 |
 | DR-L1 | `funcdctl backup plan` helper | F112 | ADR-0205, DR-10 |
 
-The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and the three items
-outside it that it needs: ADR-0195 (KV delete records), ADR-0196 (UTC timestamps) and X-CRON. P1 of the report became
-ADR-0195. ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) belong to the rqlite service
+The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
+ADR-0195 (KV delete records) and ADR-0196 (UTC timestamps) are Implemented and appear only as built dependencies in tier 0.
+ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) belong to the rqlite service
 ADRs, and the step idempotency keys (L2) to the workflow epoch; neither realizes FEAT-0009. Three merges are
 deliberate: ADR-0202 joins the snapshot capability and the version timeline (both change the store), ADR-0206 joins restore
 and the held boot (a restore without the hold repeats side effects), and DR-10 joins the workload resources and the
@@ -52,16 +52,16 @@ Each dependency is grounded in one line:
 
 - ADR-0202 extends the store port and its Badger engine (ADR-0006, ADR-0065).
 - ADR-0201 builds on the event stores (ADR-0118, ADR-0119, ADR-0157) and on the snapshot port of ADR-0202.
-- ADR-0203 stores what ADR-0202 reads, writes it through the blob port (ADR-0007) and needs `v1.Timestamp` from ADR-0196.
+- ADR-0203 stores what ADR-0202 reads, writes it through the blob port (ADR-0007) and uses `v1.Timestamp` from ADR-0196.
 - ADR-0204 puts the encryption envelope into the format of ADR-0203.
 - ADR-0205 checks the keys that ADR-0203 and ADR-0204 define; each ADR defines the keys of its own behavior.
 - ADR-0206 loads ADR-0202's snapshots from ADR-0203's format with ADR-0204's keys, holds the tenants of ADR-0201's store and reads
-  the run records of ADR-0094. It applies the KV delete records of ADR-0195 through ADR-0209 (see the sequencing notes).
+  the run records of ADR-0094.
 - ADR-0207 takes its snapshots in ADR-0203's format, reports through ADR-0205 and boots through ADR-0206.
-- ADR-0208 writes its backups with ADR-0203's rules through the blob port, and relies on the operation of ADR-0205 and the
+- ADR-0208 writes its backups with ADR-0203's rules through the blob port, and joins the operation of ADR-0205 and the
   restore of ADR-0206.
-- ADR-0209 builds on the delete records of ADR-0195, on ADR-0203 and ADR-0204, and on the operation (ADR-0205) and restore
-  (ADR-0206) that it joins.
+- ADR-0209 builds on the delete records of ADR-0195, on ADR-0203 and ADR-0204, and joins the operation (ADR-0205) and restore
+  (ADR-0206).
 - ADR-0210 changes the API's replace and delete (ADR-0018) to honor the client's version, which ADR-0202 defines.
 - DR-10 stores its backups with ADR-0203 and ADR-0204, copies catalog data through ADR-0208's blob target, exports KV through ADR-0209
   and takes its `schedule` syntax from X-CRON.
@@ -154,13 +154,12 @@ flowchart TB
 
 Why each tier:
 
-- **Tier 1** needs only built ADRs or none: ADR-0202 extends the store, ADR-0196 and ADR-0195 are Accepted and wait for their
-  implementation, and X-CRON belongs to the Apps epoch.
-- **Tier 2**: ADR-0203 is the keystone, since every later item stores or reads the format it fixes; it needs ADR-0202 and
-  ADR-0196 from tier 1. ADR-0201 needs the snapshot port of ADR-0202. ADR-0210 needs the version of ADR-0202.
+- **Tier 1** needs only built ADRs or none: ADR-0202 extends the store, and X-CRON belongs to the Apps epoch.
+- **Tier 2**: ADR-0203 is the keystone, since every later item stores or reads the format it fixes; it needs ADR-0202. ADR-0201
+  needs the snapshot port of ADR-0202. ADR-0210 needs the version of ADR-0202.
 - **Tier 3**: ADR-0204 wraps the format in encryption.
 - **Tier 4**: ADR-0205 checks the keys of ADR-0203 and ADR-0204. ADR-0206 restores and holds; it waits for ADR-0201 and ADR-0204.
-- **Tier 5**: ADR-0207 needs the restore. ADR-0208 and ADR-0209 need the operation (ADR-0205) and the restore (ADR-0206).
+- **Tier 5**: ADR-0207 needs the operation and the restore. ADR-0208 and ADR-0209 need both too (ADR-0205 and ADR-0206).
   ADR-0208's backend half (an S3-compatible or local blob store) depends on nothing but ADR-0007 and could ship earlier, but
   nothing waits for it.
 - **Tier 6**: DR-10 needs the blob target, the KV format and the Cron decision.
@@ -173,15 +172,14 @@ Why each tier:
   another one to define the keys it reads.
 - **The test harness.** ADR-0206 carries the conformance test with deletes and the first drill. A test that assembles a
   platform needs a short data directory (see the known pitfalls in `.claude/CLAUDE.md`).
-- **The hold is cross-cutting.** ADR-0206 must list every runner that has side effects. When the Apps epoch lands, the App
-  reconciler and the App hooks join that list.
-- **Deletes and snapshots.** ADR-0202's one-transaction rule is the same rule the KV export follows since #809; ADR-0195
-  must be implemented before ADR-0209 restores a KV instance.
-- **Timestamps.** ADR-0196 must be built before ADR-0203, which needs `v1.Timestamp`.
+- **The hold is cross-cutting.** ADR-0206 must list every runner that has side effects, including the App reconciler and the
+  App hooks of the Apps epoch (ADR-0199, ADR-0200, both Implemented).
+- **Deletes and snapshots.** ADR-0202's one-transaction rule is the same rule the KV export follows since #809, and the KV
+  delete records of ADR-0195 are built, so ADR-0209 can restore a KV instance.
 
 ## Design track — what to create + accept ahead
 
-- **Design wave 1** (while ADR-0195 and ADR-0196 are implemented): draft ADR-0202.
+- **Design wave 1**: draft ADR-0202.
 - **Design wave 2** (while ADR-0202 is built): draft ADR-0203, ADR-0201 and ADR-0210, then ADR-0204 as soon as ADR-0203 is Accepted.
 - **Design wave 3**: draft ADR-0205 and ADR-0206.
 - **Design wave 4**: draft ADR-0207, ADR-0208 and ADR-0209, then DR-10 once the Cron ADR of the Apps epoch is Accepted.
@@ -198,9 +196,9 @@ Critical path (8 items, the longest build chain):
 | Exit-criterion clause (FEAT-0009) | Needs (items) |
 |---|---|
 | F110: the dead letters and the list of fired blob objects live in one store; a restart on a file-based store keeps them | ADR-0201 |
-| F109: a backup runs on schedule and is encrypted | ADR-0202, ADR-0203, ADR-0204 (with ADR-0196) |
+| F109: a backup runs on schedule and is encrypted | ADR-0202, ADR-0203, ADR-0204 |
 | F109: a failed start-up check or a missing key stops the backup and says why | ADR-0203, ADR-0204, ADR-0205 |
-| F109: a restore into an empty data directory boots held, with every resource, run record and dead letter of the last backup | ADR-0206 (with ADR-0202, ADR-0203, ADR-0204, ADR-0201, ADR-0209 for KV) |
+| F109: a restore into an empty data directory boots held, with every resource, run record and dead letter of the last backup | ADR-0206 (with ADR-0202, ADR-0203, ADR-0204, ADR-0201; ADR-0209 for KV) |
 | F109: a client that holds a version from before the restore gets a conflict | ADR-0202, ADR-0210, ADR-0206 |
 | F109: the release turns the held parts on | ADR-0206 |
 | F109: an upgrade first snapshots the platform, and a platform that keeps crashing starts on the last good copy, held | ADR-0207 |
@@ -217,12 +215,11 @@ as the helper that the feature table marks as later.
 ## Parallelization & sequencing notes
 
 - **Leaf:** ADR-0207 (nothing depends on it and it is off the critical path) can be deferred.
-- **Parallel inside tiers:** ADR-0195, ADR-0196 and ADR-0202 in tier 1; ADR-0201, ADR-0203 and ADR-0210 in tier 2; ADR-0205 and
+- **Parallel inside tiers:** ADR-0202 and X-CRON in tier 1; ADR-0201, ADR-0203 and ADR-0210 in tier 2; ADR-0205 and
   ADR-0206 in tier 4; ADR-0207, ADR-0208 and ADR-0209 in tier 5.
 - **Riskiest ADRs:** ADR-0203 (fencing and the blob port), ADR-0206 (the hold and the merge) and ADR-0202 (the version timeline).
 - **Off the spine, can trail:** DR-L1, ADR-0207 and ADR-0210.
-- **Outside owners:** X-CRON belongs to the Apps epoch. ADR-0195 is implemented by the fix pipeline; its board card
-  tracks it. ADR-0196 belongs to the platform-wide types.
+- **Outside owner:** X-CRON belongs to the Apps epoch.
 
 ## Reproducing & maintaining this plan
 
@@ -237,7 +234,7 @@ drafted, note its number against its plan id in the caveats below.
 ## Caveats (living doc)
 
 - ADR-0201 to ADR-0210 replaced their `DR-n` placeholders on 2026-10-08; `DR-10` and `DR-L1` keep theirs until they are drafted.
-  ADR-0196 and ADR-0210 entered the plan after the first slate.
+  ADR-0210 entered the plan after the first slate; ADR-0195 and ADR-0196 left it when they became Implemented.
 - Waves are dependency tiers, not a schedule. Within a wave, sequence by review bandwidth.
 - If a drafted ADR reveals a missed dependency, update `dr-plan.json` and re-run the tool; re-validate the graph. The
   accepted ADR still wins for architecture; this plan only tracks ordering.
