@@ -18,6 +18,16 @@ if [ "${FUNCD_DEVSHELL_KEY:-}" != "$key" ]; then
     mkdir -p "$root/.cache"
     (cd "$root" && nix print-dev-env >"$env_file.tmp") && mv "$env_file.tmp" "$env_file"
   fi
+  # The environment script needs bash 4 (`;&`): an older bash stops sourcing it silently there (#857), so run d under
+  # the dev shell's bash, which the part an old bash does source puts on PATH.
+  if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    dev_bash=$(set +eu; source "$env_file" >/dev/null 2>&1; command -v bash) || true
+    if [ -n "$dev_bash" ] && "$dev_bash" -c '((BASH_VERSINFO[0] >= 4))' 2>/dev/null; then
+      exec "$dev_bash" "$0" "$@"
+    fi
+    echo "d: the dev-shell environment needs bash 4 or later, not $BASH_VERSION" >&2
+    exit 1
+  fi
   orig_path=$PATH
   set +eu # the generated environment script is not written for errexit/nounset
   # shellcheck disable=SC1090
