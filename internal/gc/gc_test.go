@@ -87,6 +87,8 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 	case *v1.CatalogService:
 		o.Spec.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "lake"}}
 		o.Spec.Catalog = v1.CatalogRef{Bucket: "lake", Prefix: "lake"}
+	case *v1.AppRevision:
+		o.Spec.App, o.Spec.Number = v1.ObjectRef{Kind: v1.KindApp, Namespace: ns, Name: "app"}, 1
 	}
 	return obj
 }
@@ -143,7 +145,11 @@ func fleet(t testing.TB, st store.Store) map[gc.Pair][2]v1.Object {
 	}
 	for _, p := range gc.Pairs() {
 		if p.Owner == v1.KindApp {
-			f[p] = [2]v1.Object{app, create(t, st, p.Child, v1.ObjectName("app-"+strings.ToLower(string(p.Child))), app)}
+			name := v1.ObjectName("app-" + strings.ToLower(string(p.Child)))
+			if p.Child == v1.KindAppRevision {
+				name = v1.AppRevisionName("app", 1)
+			}
+			f[p] = [2]v1.Object{app, create(t, st, p.Child, name, app)}
 		}
 	}
 	return f
@@ -360,10 +366,11 @@ func writers() map[string][]gc.Pair {
 		"internal/site/reconcile.go":              {{Owner: v1.KindSite, Child: v1.KindRoute}},
 		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}},
 		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
+		"internal/app/revision.go":                {{Owner: v1.KindApp, Child: v1.KindAppRevision}},
 	}
 }
 
-// appPairs is the pairs the App reconciler stamps (ADR-0199 Decision 7).
+// appPairs is the pairs the App reconciler stamps on its parts (ADR-0199 Decision 7).
 func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
@@ -424,6 +431,19 @@ func TestPairsCoverEveryControllerRef(t *testing.T) {
 	}
 	require.ElementsMatch(t, want, gc.Pairs())
 	require.Equal(t, v1.KindRevision, gc.Pairs()[len(gc.Pairs())-1].Child, "Revision is collected last")
+}
+
+// ADR-0200 Contracts: (App, AppRevision) follows ADR-0199's App pairs and precedes (Function, Revision).
+func TestPairsOrderAppRevisionAfterTheAppSections(t *testing.T) {
+	pairs := gc.Pairs()
+	at := slices.Index(pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindAppRevision})
+	require.GreaterOrEqual(t, at, 0, "(App, AppRevision) is a pair")
+	for i, p := range pairs {
+		if p.Owner == v1.KindApp && p.Child != v1.KindAppRevision {
+			require.Less(t, i, at, "the App section pair %v precedes (App, AppRevision)", p)
+		}
+	}
+	require.Less(t, at, slices.Index(pairs, gc.Pair{Owner: v1.KindFunction, Child: v1.KindRevision}))
 }
 
 // aead is an AES-GCM Encryptor so the benchmark pays Secret decryption like a durable store.

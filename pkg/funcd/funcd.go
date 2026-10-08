@@ -295,6 +295,9 @@ type config struct {
 	// Site reconciler (ADR-0139, F103): the index document served for "/" when a Site's spec.index is
 	// empty. "" ⇒ "index.html".
 	siteDefaultIndex string
+	// appRevisionHistory is app.revisionHistory (ADR-0200, WithAppRevisionHistory); 0 ⇒ the App reconciler's 10. The
+	// upgrade timeout is pacing.appUpgradeTimeout().
+	appRevisionHistory int
 
 	// invokeDefaultTimeout is invoke.defaultTimeout (ADR-0151): an external invoke's response deadline when its
 	// Function sets no spec.timeout.
@@ -1019,13 +1022,16 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	// ADR-0199: the App reconciler writes an App's parts; a change to a part it controls or marks, or to an
 	// object a ref entry names, requeues the App.
-	appReconciler, err := app.NewReconciler(app.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger})
+	appReconciler, err := app.NewReconciler(app.Deps{
+		Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger, Clock: clock.System(),
+		UpgradeTimeout: c.pacing.appUpgradeTimeout(), RevisionHistory: c.appRevisionHistory,
+	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
 	}
 	ctrl.Register(v1.KindApp.GVK(), appReconciler)
 	for _, pair := range gc.Pairs() {
-		if pair.Owner == v1.KindApp {
+		if pair.Owner == v1.KindApp && pair.Child != v1.KindAppRevision { // a record, not a part (ADR-0200)
 			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)
 		}
 	}

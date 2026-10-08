@@ -55,6 +55,9 @@ const (
 	// KindApp (ADR-0199, F113) declares a whole app in typed sections: its parts are applied, reported, pruned and
 	// deleted as one.
 	KindApp Kind = "App"
+	// KindAppRevision (ADR-0200, F114) is an App's history and rollout record: one per changed spec, written only by
+	// the App reconciler and served read-only.
+	KindAppRevision Kind = "AppRevision"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -78,7 +81,7 @@ func (k Kind) Validate() error {
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
-		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp:
+		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -397,6 +400,10 @@ func NewObject(k Kind) (Object, bool) {
 		app := &App{}
 		app.TypeMeta = typeMetaFor(k)
 		return app, true
+	case KindAppRevision:
+		ar := &AppRevision{}
+		ar.TypeMeta = typeMetaFor(k)
+		return ar, true
 	default:
 		return nil, false
 	}
@@ -432,6 +439,7 @@ func AllKinds() []Kind {
 		KindRolesAssignment,
 		KindSite,
 		KindApp,
+		KindAppRevision,
 	}
 }
 

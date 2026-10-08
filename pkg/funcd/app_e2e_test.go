@@ -5,7 +5,6 @@ package funcd_test
 import (
 	"context"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -191,13 +190,7 @@ func TestScenarioAppSpecChangeApplies(t *testing.T) {
 	e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
 	parts := todoParts()
 	others := parts[:len(parts)-1]
-	var before map[todoPart]string
-	require.Eventually(t, func() bool {
-		cur := e.versions(t, others)
-		settled := maps.Equal(cur, before)
-		before = cur
-		return settled
-	}, appWithin, time.Second, "the parts settle")
+	before := e.settled(t, others)
 	require.Equal(t, http.StatusNotFound, e.routed(t, todoHost, "/v2"))
 
 	a.Spec.Routes[0].Rules[0].Path = "/v2"

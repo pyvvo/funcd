@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,61 +27,13 @@ type appWrite struct {
 	ready v1.Condition
 }
 
-// appWatch records every write of the App todo from the store's own watch, so a scenario sees each status the App
-// publishes rather than a sample of them.
-type appWatch struct {
-	mu      sync.Mutex
-	got     []appWrite
-	dropped bool
-	stop    func()
-}
-
-func watchApp(t *testing.T, st store.Store) *appWatch {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	w, err := st.Watch(ctx, v1.KindApp.GVK(), store.WatchOptions{Namespace: "default"})
-	require.NoError(t, err)
-	r := &appWatch{}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for ev := range w.ResultChan() {
-			if a, ok := ev.Object.(*v1.App); ok && a.Name == "todo" {
-				r.mu.Lock()
-				r.got = append(r.got, appWrite{phase: a.Status.Phase, ready: readyCondition(a)})
-				r.mu.Unlock()
-			}
-		}
-		r.mu.Lock()
-		r.dropped = ctx.Err() == nil
-		r.mu.Unlock()
-	}()
-	var once sync.Once
-	r.stop = func() {
-		once.Do(func() {
-			cancel()
-			w.Stop()
-			<-done
-		})
+// appWrites is the phase and Ready condition of each write of the App todo among evs.
+func appWrites(evs []store.Event) []appWrite {
+	var out []appWrite
+	for _, a := range todoWrites(evs) {
+		out = append(out, appWrite{phase: a.Status.Phase, ready: readyCondition(a)})
 	}
-	t.Cleanup(r.stop)
-	return r
-}
-
-func (r *appWatch) saw(match func(appWrite) bool) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.ContainsFunc(r.got, match)
-}
-
-// writes stops the watch and returns what it recorded; a watch the store dropped as slow fails the test.
-func (r *appWatch) writes(t *testing.T) []appWrite {
-	t.Helper()
-	r.stop()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	require.False(t, r.dropped, "the store dropped the App watch")
-	return r.got
+	return out
 }
 
 // idleTodo is the fixture with todo-api scaled to zero (minReplicas 0); idle 0 never reclaims it once woken.
@@ -115,7 +66,7 @@ func TestScenarioAppIdleFunctionStaysCurrent(t *testing.T) {
 	require.Equal(t, http.StatusOK, e.routed(t, todoHost, "/api"))
 	before := readyCondition(e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin))
 
-	w := watchApp(t, st)
+	w := watchKind(t, st, v1.KindApp)
 	e.waitPhase(t, "todo-api", v1.PhaseIdle)
 	require.Never(t, func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond,
 		"the App stays Ready while todo-api is scaled to zero")
@@ -124,7 +75,7 @@ func TestScenarioAppIdleFunctionStaysCurrent(t *testing.T) {
 	require.Never(t, func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond,
 		"the App stays Ready once todo-api serves again")
 
-	for i, wr := range w.writes(t) {
+	for i, wr := range appWrites(w.events(t)) {
 		require.Equal(t, v1.ConditionTrue, wr.ready.Status, "write %d of App/todo: %s %s", i, wr.ready.Reason, wr.ready.Message)
 		require.Equal(t, v1.PhaseReady, wr.phase, "write %d of App/todo", i)
 	}
@@ -180,12 +131,12 @@ func TestScenarioAppDegradedRecovers(t *testing.T) {
 	e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
 	dead := todoWorker(t, rt)
 
-	w := watchApp(t, st)
+	w := watchKind(t, st, v1.KindApp)
 	proc, err := os.FindProcess(dead.PID)
 	require.NoError(t, err)
 	require.NoError(t, proc.Kill())
 	require.Eventually(t, func() bool {
-		return w.saw(func(wr appWrite) bool {
+		return slices.ContainsFunc(appWrites(w.seen()), func(wr appWrite) bool {
 			return wr.phase == v1.PhaseDegraded && wr.ready.Status == v1.ConditionFalse && wr.ready.Reason == "ChildNotReady" &&
 				strings.HasPrefix(wr.ready.Message, "Function/todo-api: Restarting")
 		})

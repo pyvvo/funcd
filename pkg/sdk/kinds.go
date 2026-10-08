@@ -12,13 +12,25 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// ReadOnlyKind reports whether the API serves only get and list for k: the Function reconciler writes every
-// Revision (ADR-0172).
-func ReadOnlyKind(k v1.Kind) bool { return k == v1.KindRevision }
+// ReadOnlyKind reports whether the API serves only get and list for k, a kind a reconciler alone writes (ADR-0172,
+// ADR-0200).
+func ReadOnlyKind(k v1.Kind) bool { return ReadOnlyWriter(k) != "" }
+
+// ReadOnlyWriter names the writer of a read-only kind, for the refusal of a write to it; "" if k is writable.
+func ReadOnlyWriter(k v1.Kind) string {
+	switch k {
+	case v1.KindRevision:
+		return "the Function reconciler"
+	case v1.KindAppRevision:
+		return "the App reconciler"
+	default:
+		return ""
+	}
+}
 
 // errReadOnly is the refusal of a write to a read-only kind, made before any request (ADR-0172).
 func errReadOnly(op string, k v1.Kind) error {
-	return fault.Invalidf(op, "%s is read-only: the Function reconciler writes it", k)
+	return fault.Invalidf(op, "%s is read-only: %s writes it", k, ReadOnlyWriter(k))
 }
 
 // kindDescriptor is the client's knowledge of one kind's REST path shape.
@@ -60,6 +72,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindRolesAssignment: {"rolesassignments", true}, // ADR-0136, F101
 	v1.KindSite:            {"sites", true},            // ADR-0139, F103
 	v1.KindApp:             {"apps", true},             // ADR-0199, F113
+	v1.KindAppRevision:     {"apprevisions", true},     // ADR-0200, F114
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

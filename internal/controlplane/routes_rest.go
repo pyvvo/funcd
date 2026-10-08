@@ -1468,8 +1468,18 @@ func registerApp(api huma.API, h Handlers) {
 	})
 }
 
+// ===== AppRevision (namespaced, read-only) — ADR-0200, FEAT-0010/F114 =====
+
+func registerAppRevision(api huma.API, h Handlers) {
+	registerNamespacedRead(api, crudRoutes[v1.AppRevision]{
+		kind: "AppRevision", kinds: "AppRevisions", path: "apprevisions",
+		list: h.ListAppRevisions, get: h.GetAppRevision,
+	})
+}
+
 // crudRoutes is the REST surface of one namespaced kind under
-// /apis/funcd.io/v1alpha1/namespaces/{namespace}/<path>, registered by registerNamespacedCRUD.
+// /apis/funcd.io/v1alpha1/namespaces/{namespace}/<path>, registered by registerNamespacedCRUD, or by
+// registerNamespacedRead for a read-only kind, which leaves create, replace and remove nil.
 type crudRoutes[T crudKind] struct {
 	kind, kinds, path string
 	list              func(context.Context, v1.NamespaceName) ([]T, error)
@@ -1502,27 +1512,13 @@ func respond[T crudKind](v T, err error) (*bodyOutput[T], error) {
 }
 
 func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) {
-	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
-	tags := []string{r.kind}
-	huma.Register(api, huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base, Tags: tags},
-		func(ctx context.Context, in *namespacedList) (*listOutput[T], error) {
-			items, err := r.list(ctx, in.Namespace)
-			if err != nil {
-				return nil, wrapFaultError(err)
-			}
-			return &listOutput[T]{Body: items}, nil
-		})
+	base, item, tags := registerNamespacedRead(api, r)
 	huma.Register(api, huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base, Tags: tags},
 		func(ctx context.Context, in *namespacedBodyInput[T]) (*bodyOutput[T], error) {
 			if err := matchPathNamespace(in.Namespace, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
 			return respond(r.create(ctx, in.Body))
-		})
-	item := base + "/{name}"
-	huma.Register(api, huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item, Tags: tags},
-		func(ctx context.Context, in *namespacedGet) (*bodyOutput[T], error) {
-			return respond(r.get(ctx, in.Namespace, in.Name))
 		})
 	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
 		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
@@ -1532,4 +1528,26 @@ func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRou
 		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
 			return nil, wrapFaultError(r.remove(ctx, in.Namespace, in.Name))
 		})
+}
+
+// registerNamespacedRead registers r's list and get only, and returns the collection path, the item path and the
+// tags. A read-only kind (ADR-0172 Decision 2, ADR-0200 Decision 2) stops here: its POST, PUT and DELETE answer 405
+// with Allow: GET.
+func registerNamespacedRead[T crudKind](api huma.API, r crudRoutes[T]) (base, item string, tags []string) {
+	base = "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
+	item = base + "/{name}"
+	tags = []string{r.kind}
+	huma.Register(api, huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base, Tags: tags},
+		func(ctx context.Context, in *namespacedList) (*listOutput[T], error) {
+			items, err := r.list(ctx, in.Namespace)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &listOutput[T]{Body: items}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item, Tags: tags},
+		func(ctx context.Context, in *namespacedGet) (*bodyOutput[T], error) {
+			return respond(r.get(ctx, in.Namespace, in.Name))
+		})
+	return base, item, tags
 }

@@ -199,10 +199,14 @@ func (e AppCatalog) MarshalJSON() ([]byte, error) {
 	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec)
 }
 
-// AppStatus is the observed state (Decision 5): phase Deploying, Ready or Degraded, the Ready condition, and the
-// state of each child.
+// AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
+// Decision 6), the Ready condition, the current and latest AppRevision, and the state of each child.
 type AppStatus struct {
-	Status   `json:",inline"`
+	Status          `json:",inline"`
+	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
+	LatestRevision  ObjectName `json:"latestRevision,omitempty"`
+	// Version is the spec.version of the current revision.
+	Version  string     `json:"version,omitempty"`
 	Children []AppChild `json:"children,omitempty"`
 }
 

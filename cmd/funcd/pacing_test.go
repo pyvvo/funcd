@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,7 @@ func TestScenarioDefaultsEqualTodaysValues(t *testing.T) {
 		ReclaimInterval:        30 * time.Second,
 		ShutdownTimeout:        15 * time.Second,
 		WorkerSyncInterval:     2 * time.Second,
+		AppUpgradeTimeout:      5 * time.Minute,
 	}, p)
 }
 
@@ -214,5 +216,67 @@ func TestPacingMapsEveryKey(t *testing.T) {
 		ReclaimInterval:        ms(115),
 		ShutdownTimeout:        ms(116),
 		WorkerSyncInterval:     ms(117),
+		AppUpgradeTimeout:      5 * time.Minute,
 	}, p)
+}
+
+// ADR-0200 Decision 10: an unset app.upgradeTimeout is max(5m, twice runtime.bootTimeout); a set one, from the file or
+// FUNCD_APP_UPGRADE_TIMEOUT, is a positive duration (ADR-0194) more than runtime.bootTimeout.
+func TestAppUpgradeTimeoutConfig(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want time.Duration
+	}{
+		{"", 5 * time.Minute},
+		{pacingYAML("runtime.bootTimeout", "2m"), 5 * time.Minute},
+		{pacingYAML("runtime.bootTimeout", "3m"), 6 * time.Minute},
+		{pacingYAML("runtime.bootTimeout", "2000000h"), math.MaxInt64},
+		{pacingYAML("app.upgradeTimeout", "61s"), 61 * time.Second},
+		{pacingYAML("runtime.bootTimeout", "10s") + pacingYAML("invoke.activationTimeout", "5s") + pacingYAML("app.upgradeTimeout", "20s"), 20 * time.Second},
+	} {
+		t.Run(strings.ReplaceAll(tc.body, "\n", " "), func(t *testing.T) {
+			p, err := pacing(loadPacing(t, tc.body))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, p.AppUpgradeTimeout)
+			require.Greater(t, p.AppUpgradeTimeout, p.BootTimeout)
+		})
+	}
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_APP_UPGRADE_TIMEOUT", "90s")
+		p, err := pacing(loadPacing(t, ""))
+		require.NoError(t, err)
+		require.Equal(t, 90*time.Second, p.AppUpgradeTimeout)
+	})
+
+	refused := func(t *testing.T, cfg config.Config, want string) {
+		t.Helper()
+		_, err := pacing(cfg)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, want)
+	}
+	// scenario: app-upgrade-timeout-config
+	t.Run("at the default bootTimeout", func(t *testing.T) {
+		refused(t, loadPacing(t, pacingYAML("app.upgradeTimeout", "1m")),
+			`config key "app.upgradeTimeout" has invalid value "1m0s" (want more than runtime.bootTimeout, 1m0s)`)
+	})
+	t.Run("below a set bootTimeout", func(t *testing.T) {
+		refused(t, loadPacing(t, pacingYAML("runtime.bootTimeout", "10m")+pacingYAML("app.upgradeTimeout", "6m")),
+			`(want more than runtime.bootTimeout, 10m0s)`)
+	})
+	for _, v := range []string{"0s", "-1s", "soon"} {
+		t.Run(v+"/file", func(t *testing.T) {
+			refused(t, loadPacing(t, pacingYAML("app.upgradeTimeout", v)), `"app.upgradeTimeout"`)
+		})
+		t.Run(v+"/env", func(t *testing.T) {
+			t.Setenv("FUNCD_APP_UPGRADE_TIMEOUT", v)
+			refused(t, loadPacing(t, ""), `"app.upgradeTimeout"`)
+		})
+	}
+	t.Run("exits before serving", func(t *testing.T) {
+		dir := shortDataDir(t)
+		cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+pacingYAML("app.upgradeTimeout", "1m"))
+		_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, `"app.upgradeTimeout"`)
+	})
 }

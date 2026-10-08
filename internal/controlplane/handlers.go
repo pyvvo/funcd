@@ -184,6 +184,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.App:
 		o.TypeMeta = tm
+	case *v1.AppRevision:
+		o.TypeMeta = tm
 	}
 }
 
@@ -690,10 +692,20 @@ func (h *storeHandlers) DeleteApp(ctx context.Context, ns v1.NamespaceName, name
 	return h.deleteObj(ctx, v1.KindApp, ns, name)
 }
 
+// --- AppRevision (namespaced, read-only) — ADR-0200, FEAT-0010/F114 ---
+
+func (h *storeHandlers) GetAppRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.AppRevision, error) {
+	return typedObj[v1.AppRevision](h.getObj(ctx, v1.KindAppRevision, ns, name))
+}
+
+func (h *storeHandlers) ListAppRevisions(ctx context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error) {
+	return typedObjs[v1.AppRevision](h.listObj(ctx, v1.KindAppRevision, ns))
+}
+
 // crudKind lists the namespaced kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, the
 // stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
-	v1.App
+	v1.App | v1.AppRevision
 }
 
 type objectPtr[T crudKind] interface {

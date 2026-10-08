@@ -1,6 +1,7 @@
 // Package app is the App kind's server side (ADR-0199, F113): the app-parts admission, which admits each declared
 // part as a direct write of it would be admitted, and the App reconciler, which writes the parts, reports one status
-// and prunes what a new spec drops. The owner GC removes the tree on App delete (internal/gc).
+// and prunes what a new spec drops. The reconciler also stamps an AppRevision per changed spec and records its
+// rollout, its deadline and the history (ADR-0200, F114). The owner GC removes the tree on App delete (internal/gc).
 package app
 
 import (
@@ -11,11 +12,13 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -27,29 +30,54 @@ type Deps struct {
 	Store  store.Store
 	Purger gc.BucketPurger
 	Logger *slog.Logger
+	// Clock reads every time of the rollout record (ADR-0200); nil ⇒ clock.System().
+	Clock clock.Clock
+	// UpgradeTimeout is app.upgradeTimeout, the time from a stamp to its switch; 0 ⇒ 5m.
+	UpgradeTimeout time.Duration
+	// RevisionHistory is app.revisionHistory, the AppRevisions kept besides the current one; 0 ⇒ 10.
+	RevisionHistory int
 }
 
-// Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes.
+// Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
+// rollout deadline is read from the AppRevision's status.startedAt.
 type Reconciler struct {
-	store  store.Store
-	purger gc.BucketPurger
-	log    *slog.Logger
+	store           store.Store
+	purger          gc.BucketPurger
+	log             *slog.Logger
+	clock           clock.Clock
+	upgradeTimeout  time.Duration
+	revisionHistory int
 }
 
 // NewReconciler builds the App reconciler.
 func NewReconciler(d Deps) (*Reconciler, error) {
 	const op = "app.NewReconciler"
-	if d.Store == nil {
+	switch {
+	case d.Store == nil:
 		return nil, fault.Invalidf(op, "store is required")
-	}
-	if d.Purger == nil {
+	case d.Purger == nil:
 		return nil, fault.Invalidf(op, "bucket purger is required")
+	case d.UpgradeTimeout < 0:
+		return nil, fault.Invalidf(op, "upgrade timeout %s is negative", d.UpgradeTimeout)
+	case d.RevisionHistory < 0:
+		return nil, fault.Invalidf(op, "revision history %d is negative", d.RevisionHistory)
 	}
 	log := d.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{store: d.Store, purger: d.Purger, log: log.With("component", "app")}, nil
+	clk := d.Clock
+	if clk == nil {
+		clk = clock.System()
+	}
+	return &Reconciler{
+		store:           d.Store,
+		purger:          d.Purger,
+		log:             log.With("component", "app"),
+		clock:           clk,
+		upgradeTimeout:  cmp.Or(d.UpgradeTimeout, defaultUpgradeTimeout),
+		revisionHistory: cmp.Or(d.RevisionHistory, defaultRevisionHistory),
+	}, nil
 }
 
 // entry is one section entry: its field path, its kind, the object it names (its name or its ref), and its deletion.
@@ -102,11 +130,12 @@ func entries(a *v1.App) []entry {
 	return out
 }
 
-// sectionKinds is the kind of every App section: the children of gc.Pairs' App pairs (Decision 7).
+// sectionKinds is the kind of every App section: the children of gc.Pairs' App pairs (Decision 7) but AppRevision,
+// a record, so prune never deletes one (ADR-0200 Decision 7).
 func sectionKinds() []v1.Kind {
 	var out []v1.Kind
 	for _, p := range gc.Pairs() {
-		if p.Owner == v1.KindApp {
+		if p.Owner == v1.KindApp && p.Child != v1.KindAppRevision {
 			out = append(out, p.Child)
 		}
 	}
@@ -118,15 +147,19 @@ func keyOf(o v1.Object) v1.ObjectRef {
 	return v1.ObjectRef{Kind: o.GroupVersionKind().Kind, Namespace: m.Namespace, Name: m.Name}
 }
 
-// stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4).
+// stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4), naming the object.
 type stop struct {
 	reason string
 	part   v1.ObjectRef
-	msg    string
+	detail string
 }
 
-// Reconcile checks that the App owns every part that exists, writes the parts that are absent or differ, reads each
-// part's readiness, prunes the dropped objects it controls once no part is Pending, and writes the App's status.
+func (s *stop) msg() string { return fmt.Sprintf("%s: %s", partName(s.part), s.detail) }
+
+// Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
+// parts that are absent or differ, reads each part's readiness, derives the rollout record, prunes the dropped objects
+// it controls once the latest revision is current, writes the App's status, then each changed AppRevision status,
+// and trims the history.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	obj, err := r.store.Get(ctx, v1.KindApp.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
@@ -136,9 +169,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get app %s/%s", req.Namespace, req.Name)
 	}
 	a := obj.(*v1.App)
+	revs, err := r.revisions(ctx, a)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	revs, halt, err := r.stamp(ctx, a, revs)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	stored := statuses(revs)
 	ents := entries(a)
 	objs := make(map[v1.ObjectRef]v1.Object, len(ents))
-	halt, err := r.apply(ctx, a, ents, objs)
+	halt, wrote, err := r.apply(ctx, a, ents, objs, halt)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -150,28 +192,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 	}
 	children := readiness(a, ents, objs, halt)
+	left := r.settle(ctx, a, revs, children, halt, wrote)
 	dropped, err := r.dropped(ctx, a, ents)
 	if err != nil {
 		return controller.Result{}, err
 	}
+	current := len(revs) > 0 && revs[len(revs)-1].Name == a.Status.CurrentRevision
 	var pruning []v1.AppChild
-	if halt == nil && !anyPending(children) {
+	if current && halt == nil && wrote == nil && !anyPending(children) {
 		pruning, err = r.prune(ctx, a, dropped)
 		if err != nil {
 			return controller.Result{}, err
 		}
 	} else {
+		reason := ""
+		if !current {
+			reason = reasonNotCurrent
+		}
 		for _, o := range dropped {
-			pruning = append(pruning, pruningChild(o, ""))
+			pruning = append(pruning, pruningChild(o, reason))
 		}
 	}
-	return r.publish(ctx, a, children, pruning, halt)
+	res, written, err := r.publish(ctx, a, revs, children, pruning, halt, left)
+	if err != nil || !written {
+		return res, err
+	}
+	return res, r.record(ctx, a, revs, stored)
 }
 
 // apply reads every declared part, stops with ChildNotOwned before any write when one is not this App's, then writes
 // each part, in section order, that is absent or whose spec, owner references or resource group differ. A write the
-// store refuses stops the pass with ChildInvalid. objs gains each part's stored object, nil when absent.
-func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object) (*stop, error) {
+// store refuses stops the pass with ChildInvalid. A pass the stamp stopped (halt) reads the parts and writes none.
+// objs gains each part's stored object, nil when absent; wrote is the first part written, nil when none was.
+func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop) (*stop, *v1.ObjectRef, error) {
 	parts := make(map[v1.ObjectRef]v1.Object)
 	for _, p := range a.Parts() {
 		parts[keyOf(p)] = p
@@ -183,16 +236,20 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		k := e.key(a.Namespace)
 		cur, err := r.get(ctx, e.kind, a.Namespace, e.name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		objs[k] = cur
+	}
+	if halt != nil {
+		return halt, nil, nil
 	}
 	for _, e := range ents {
 		k := e.key(a.Namespace)
 		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
-			return &stop{reason: reasonChildNotOwned, part: k, msg: fmt.Sprintf("%s: exists and is not owned by App/%s", partName(k), a.Name)}, nil
+			return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil, nil
 		}
 	}
+	var wrote *v1.ObjectRef
 	for _, e := range ents {
 		if e.ref {
 			continue
@@ -200,36 +257,41 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		k := e.key(a.Namespace)
 		desired := parts[k]
 		desired.GetObjectMeta().OwnerReferences = ownerRefs(a, e.kind, e.deletion)
-		written, err := r.write(ctx, desired, objs[k])
+		written, changed, err := r.write(ctx, desired, objs[k])
 		switch fault.KindOf(err) {
 		case "":
 			objs[k] = written
+			if changed && wrote == nil {
+				wrote = &k
+			}
 		case fault.Invalid, fault.PayloadTooLarge:
-			return &stop{reason: reasonChildInvalid, part: k, msg: fmt.Sprintf("%s: %v", partName(k), err)}, nil
+			return &stop{reason: reasonChildInvalid, part: k, detail: err.Error()}, wrote, nil
 		default:
-			return nil, fault.Wrapf(err, fault.KindOf(err), op, "write %s of app %s/%s", partName(k), a.Namespace, a.Name)
+			return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "write %s of app %s/%s", partName(k), a.Namespace, a.Name)
 		}
 	}
-	return nil, nil
+	return nil, wrote, nil
 }
 
 // write creates desired, or updates cur with desired's spec, owner references and resource group when one of them
-// differs. It never writes a part's status: an update carries cur's.
-func (r *Reconciler) write(ctx context.Context, desired, cur v1.Object) (v1.Object, error) {
+// differs, and reports whether it wrote. It never writes a part's status: an update carries cur's.
+func (r *Reconciler) write(ctx context.Context, desired, cur v1.Object) (v1.Object, bool, error) {
 	if cur == nil {
-		return r.store.Create(ctx, desired)
+		obj, err := r.store.Create(ctx, desired)
+		return obj, err == nil, err
 	}
 	same, err := sameSpec(desired, cur)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	dm, cm := desired.GetObjectMeta(), cur.GetObjectMeta()
 	if same && slices.Equal(dm.OwnerReferences, cm.OwnerReferences) && dm.ResourceGroup == cm.ResourceGroup {
-		return cur, nil
+		return cur, false, nil
 	}
 	spec(cur).Set(spec(desired))
 	cm.OwnerReferences, cm.ResourceGroup = dm.OwnerReferences, dm.ResourceGroup
-	return r.store.Update(ctx, cur)
+	obj, err := r.store.Update(ctx, cur)
+	return obj, err == nil, err
 }
 
 // spec is the Spec field of a part: every section kind has one.

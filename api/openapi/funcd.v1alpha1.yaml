@@ -74,6 +74,70 @@ components:
         - name
         - state
       type: object
+    AppRevision:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/AppRevisionSpec"
+        status:
+          $ref: "#/components/schemas/AppRevisionStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    AppRevisionSpec:
+      additionalProperties: false
+      properties:
+        app:
+          $ref: "#/components/schemas/ObjectRef"
+        number:
+          format: int64
+          maximum: 9999999999
+          minimum: 1
+          type: integer
+        spec:
+          $ref: "#/components/schemas/AppSpec"
+      required:
+        - app
+        - number
+        - spec
+      type: object
+    AppRevisionStatus:
+      additionalProperties: false
+      properties:
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+        startedAt:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+      type: object
     AppSpec:
       additionalProperties: false
       properties:
@@ -477,6 +541,16 @@ components:
           type:
             - array
             - "null"
+        currentRevision:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        latestRevision:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         observedGeneration:
           format: int64
           type: integer
@@ -489,6 +563,8 @@ components:
             - Degraded
             - Failed
             - Terminating
+          type: string
+        version:
           type: string
       type: object
     AssignmentEntry:
@@ -3118,6 +3194,72 @@ paths:
           description: Error
       tags:
         - Namespace
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions:
+    get:
+      operationId: listAppRevisions
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AppRevision"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - AppRevision
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions/{name}:
+    get:
+      operationId: getAppRevision
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppRevision"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - AppRevision
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/apps:
     get:
       operationId: listApps

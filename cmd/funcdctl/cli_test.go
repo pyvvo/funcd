@@ -45,11 +45,19 @@ func newClient(t *testing.T) *sdk.Client {
 // newClientURL is newClient that also returns the server URL, for a raw HTTP request beside the CLI.
 func newClientURL(t *testing.T) (*sdk.Client, string) {
 	t.Helper()
+	c, url, _ := newTestServer(t)
+	return c, url
+}
+
+// newTestServer is newClientURL that also returns the server's store, to seed what only a reconciler writes.
+func newTestServer(t *testing.T) (*sdk.Client, string, store.Store) {
+	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
+	st := store.New(memory.New())
 	h, err := controlplane.NewServer(controlplane.Deps{
-		Store:       store.New(memory.New()),
+		Store:       st,
 		Authorizer:  rbac.New(),
 		Credentials: creds,
 	})
@@ -58,7 +66,7 @@ func newClientURL(t *testing.T) (*sdk.Client, string) {
 	t.Cleanup(srv.Close)
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
 	require.NoError(t, err)
-	return c, srv.URL
+	return c, srv.URL, st
 }
 
 func mkfn(ctx context.Context, t *testing.T, c *sdk.Client) {
@@ -575,6 +583,32 @@ func TestCLIRevisionIsReadOnly(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(gerr), "the ConfigMap before the Revision is not applied")
 
 	err = execCLI(&out, c, "delete", "revision", "x", "-n", "team-a")
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+}
+
+// scenario: app-revision-read-only (ADR-0200 Decision 2) — apply -f of a file holding an AppRevision, or delete
+// apprevision, fails naming the App reconciler before any request; the documents before it are not applied.
+func TestCLIAppRevisionIsReadOnly(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+	const readOnly = "AppRevision is read-only: the App reconciler writes it"
+	manifest := `{"apiVersion":"funcd.io/v1alpha1","kind":"ConfigMap",` +
+		`"metadata":{"name":"cm1","namespace":"team-a","resourceGroup":"rg1"}}` + "\n---\n" +
+		`{"apiVersion":"funcd.io/v1alpha1","kind":"AppRevision",` +
+		`"metadata":{"name":"todo-1","namespace":"team-a","resourceGroup":"rg1"},` +
+		`"spec":{"app":{"kind":"App","name":"todo"},"number":1,"spec":{"version":"1.0.0"}}}`
+
+	var out bytes.Buffer
+	err := execCLI(&out, c, "apply", "-f", writeManifest(t, manifest))
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+	_, gerr := c.Get(context.Background(), v1.KindConfigMap, "team-a", "cm1")
+	require.Equal(t, fault.NotFound, fault.KindOf(gerr), "the ConfigMap before the AppRevision is not applied")
+
+	err = execCLI(&out, c, "delete", "apprevision", "todo-1", "-n", "team-a")
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), readOnly)

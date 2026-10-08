@@ -198,3 +198,8 @@ log:
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
 #   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html
+
+# --- app: App revisions, upgrade timeout and history (ADR-0200) ---------------------------------
+# app:
+#   upgradeTimeout: 5m            # an upgrade not Ready this long fails its AppRevision; more than runtime.bootTimeout. default: 5m, or twice runtime.bootTimeout when larger
+#   revisionHistory: 10           # AppRevisions kept besides the current one; 1..100. default: 10

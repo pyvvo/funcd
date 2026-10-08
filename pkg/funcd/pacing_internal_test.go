@@ -2,6 +2,7 @@ package funcd
 
 import (
 	"context"
+	"math"
 	"net/netip"
 	"reflect"
 	"sync"
@@ -82,6 +83,9 @@ func TestWithPacingRefusesInvalidFields(t *testing.T) {
 		{"default retry backoff above 1h", Pacing{DefaultRetryBackoff: 2 * time.Hour}, "Pacing.DefaultRetryBackoff"},
 		{"delivery max below the default initial", Pacing{DeliveryBackoffMax: 50 * time.Millisecond}, "Pacing.DeliveryBackoffMax"},
 		{"delivery max below a set initial", Pacing{DeliveryBackoffInitial: time.Second, DeliveryBackoffMax: 500 * time.Millisecond}, "Pacing.DeliveryBackoffMax"},
+		{"negative upgrade timeout", Pacing{AppUpgradeTimeout: -time.Second}, "Pacing.AppUpgradeTimeout"},
+		{"upgrade timeout at the default boot timeout", Pacing{AppUpgradeTimeout: time.Minute}, "Pacing.AppUpgradeTimeout 1m0s must be more than BootTimeout 1m0s"},
+		{"upgrade timeout below a set boot timeout", Pacing{BootTimeout: 10 * time.Minute, AppUpgradeTimeout: 6 * time.Minute}, "Pacing.AppUpgradeTimeout 6m0s must be more than BootTimeout 10m0s"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +97,42 @@ func TestWithPacingRefusesInvalidFields(t *testing.T) {
 	c := &config{}
 	require.NoError(t, WithPacing(Pacing{DeliveryBackoffInitial: 20 * time.Second})(c))
 	require.Equal(t, 20*time.Second, c.pacing.deliveryBackoffMax(), "an unset max follows a larger initial wait")
+}
+
+// ADR-0200 Decision 10: a zero Pacing.AppUpgradeTimeout is max(5m, twice the effective BootTimeout); a set one is kept.
+func TestAppUpgradeTimeoutDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    Pacing
+		want time.Duration
+	}{
+		{"zero", Pacing{}, 5 * time.Minute},
+		{"short boot timeout", Pacing{BootTimeout: 2 * time.Second, ActivationTimeout: time.Second}, 5 * time.Minute},
+		{"long boot timeout", Pacing{BootTimeout: 4 * time.Minute}, 8 * time.Minute},
+		{"boot timeout above half the range", Pacing{BootTimeout: math.MaxInt64 - 1}, math.MaxInt64},
+		{"set", Pacing{AppUpgradeTimeout: 61 * time.Second}, 61 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &config{}
+			require.NoError(t, WithPacing(tc.p)(c))
+			require.Equal(t, tc.want, c.pacing.appUpgradeTimeout())
+		})
+	}
+}
+
+// ADR-0200 Decision 10: app.revisionHistory is 1 to 100.
+func TestWithAppRevisionHistory(t *testing.T) {
+	for _, n := range []int{-1, 0, 101} {
+		err := WithAppRevisionHistory(n)(&config{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%d: %v", n, err)
+	}
+	for _, n := range []int{1, 100} {
+		c := &config{}
+		require.NoError(t, WithAppRevisionHistory(n)(c))
+		require.Equal(t, n, c.appRevisionHistory)
+	}
+	_, err := New(InMemory(), WithAppRevisionHistory(0))
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "New refuses it: %v", err)
 }
 
 // scenario: controller-keys-pace-the-control-plane.

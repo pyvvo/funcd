@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/app"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -77,22 +78,36 @@ func (p *purges) Purge(_ context.Context, ns v1.NamespaceName, bucket v1.ObjectN
 }
 
 type harness struct {
-	t   *testing.T
-	ctx context.Context
-	st  store.Store
-	r   *app.Reconciler
-	p   *purges
+	t    *testing.T
+	ctx  context.Context
+	st   store.Store
+	r    *app.Reconciler
+	p    *purges
+	clk  *clock.Manual
+	deps app.Deps
 }
 
-func newHarness(t *testing.T, st store.Store) *harness {
+// newHarness builds the reconciler on st (a fresh memory store when nil) and a manual clock; opts adjust its Deps.
+func newHarness(t *testing.T, st store.Store, opts ...func(*app.Deps)) *harness {
 	t.Helper()
 	if st == nil {
 		st = store.New(memory.New())
 	}
-	p := &purges{}
-	r, err := app.NewReconciler(app.Deps{Store: st, Purger: p})
-	require.NoError(t, err)
-	return &harness{t: t, ctx: context.Background(), st: st, r: r, p: p}
+	h := &harness{t: t, ctx: context.Background(), st: st, p: &purges{}, clk: clock.NewManual(time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC))}
+	h.deps = app.Deps{Store: st, Purger: h.p, Clock: h.clk}
+	for _, o := range opts {
+		o(&h.deps)
+	}
+	h.restart()
+	return h
+}
+
+// restart replaces the reconciler with a new one on the same Deps, as a funcd restart does.
+func (h *harness) restart() {
+	h.t.Helper()
+	r, err := app.NewReconciler(h.deps)
+	require.NoError(h.t, err)
+	h.r = r
 }
 
 func (h *harness) create(obj v1.Object) v1.Object {
@@ -131,9 +146,13 @@ func (h *harness) edit(mutate func(*v1.App)) {
 
 func (h *harness) reconcile() controller.Result {
 	h.t.Helper()
-	res, err := h.r.Reconcile(h.ctx, controller.Request{GVK: v1.KindApp.GVK(), Namespace: ns, Name: "todo"})
+	res, err := h.reconcileErr()
 	require.NoError(h.t, err)
 	return res
+}
+
+func (h *harness) reconcileErr() (controller.Result, error) {
+	return h.r.Reconcile(h.ctx, controller.Request{GVK: v1.KindApp.GVK(), Namespace: ns, Name: "todo"})
 }
 
 func (h *harness) ready() v1.Condition {
@@ -209,6 +228,10 @@ func TestNewReconcilerRequiresStoreAndPurger(t *testing.T) {
 	_, err := app.NewReconciler(app.Deps{Purger: &purges{}})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	_, err = app.NewReconciler(app.Deps{Store: store.New(memory.New())})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	_, err = app.NewReconciler(app.Deps{Store: store.New(memory.New()), Purger: &purges{}, UpgradeTimeout: -time.Second})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	_, err = app.NewReconciler(app.Deps{Store: store.New(memory.New()), Purger: &purges{}, RevisionHistory: -1})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
@@ -422,7 +445,8 @@ func TestAppChildInvalid(t *testing.T) {
 }
 
 // Decision 5's readiness of each kind: a Function by its own rule (idle and waking included), a Bucket once it
-// exists, any other part by its Ready condition at its generation.
+// exists, any other part by its Ready condition at its generation. The App is Deploying until its first switch, so a
+// part that is not ready gives Progressing: ChildNotReady is for Failed and Degraded only (ADR-0200 Decision 6).
 func TestAppReadiness(t *testing.T) {
 	fn := func(a *v1.App) { a.Spec.Functions = []v1.AppFunction{{Name: "todo-api", FunctionSpec: apiSpec()}} }
 	kv := func(a *v1.App) { a.Spec.KV = []v1.AppKVStore{{Name: "todo-store"}} }
@@ -467,13 +491,13 @@ func TestAppReadiness(t *testing.T) {
 		}, v1.AppChildNotStarted, "NotStarted", unk, "NotStarted"},
 		{"a Function whose replica is replaced", fn, v1.KindFunction, "todo-api", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseDegraded, []v1.Condition{cond("Ready", no, "Restarting", 0), cond("ShapeValid", yes, "", g), cond("RevisionReady", yes, "", g)}
-		}, v1.AppChildPending, "Restarting", no, "ChildNotReady"},
+		}, v1.AppChildPending, "Restarting", no, "Progressing"},
 		{"a Function whose new generation has not served", fn, v1.KindFunction, "todo-api", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseDeploying, []v1.Condition{cond("Ready", yes, "", 0), cond("ShapeValid", yes, "", g-1), cond("RevisionReady", no, "Progressing", g)}
 		}, v1.AppChildPending, "Progressing", no, "Progressing"},
 		{"a Function that failed to start", fn, v1.KindFunction, "todo-api", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseFailed, []v1.Condition{cond("Ready", no, "StartFailed", 0), cond("ShapeValid", unk, "NotStarted", g), cond("RevisionReady", no, "StartFailed", g)}
-		}, v1.AppChildPending, "StartFailed", no, "ChildNotReady"},
+		}, v1.AppChildPending, "StartFailed", no, "Progressing"},
 		{"a Function with a status of an earlier generation", fn, v1.KindFunction, "todo-api", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", 0), cond("ShapeValid", yes, "", g-1), cond("RevisionReady", yes, "", g-1)}
 		}, v1.AppChildPending, "Progressing", no, "Progressing"},
@@ -485,7 +509,7 @@ func TestAppReadiness(t *testing.T) {
 		}, v1.AppChildPending, "Progressing", no, "Progressing"},
 		{"a KVStore not ready at its generation", kv, v1.KindKVStore, "todo-store", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhasePending, []v1.Condition{cond("Ready", no, "QuotaExceeded", g)}
-		}, v1.AppChildPending, "QuotaExceeded", no, "ChildNotReady"},
+		}, v1.AppChildPending, "QuotaExceeded", no, "Progressing"},
 		{"a timer EventSource at a new generation", timer, v1.KindEventSource, "todo-tick", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", g-1)}
 		}, v1.AppChildPending, "Progressing", no, "Progressing"},
@@ -568,8 +592,8 @@ func TestScenarioAppRefWaits(t *testing.T) {
 	require.Empty(t, refsOf(got), "a ref object is never owned")
 }
 
-// scenario: app-prune-dropped-part (the reconciler half) — a dropped part goes once no part is Pending; a retained
-// store has no controller reference and stays with its marker.
+// scenario: app-prune-dropped-part (the reconciler half) — a dropped part goes once no part is Pending and the new
+// revision is current (ADR-0200 Decision 7); a retained store has no controller reference and stays with its marker.
 func TestScenarioAppPruneDroppedPart(t *testing.T) {
 	h := newHarness(t, nil)
 	h.install(todoApp(nil))
@@ -580,7 +604,7 @@ func TestScenarioAppPruneDroppedPart(t *testing.T) {
 	})
 	require.Equal(t, controller.SupervisionPeriod, h.reconcile().RequeueAfter, "the edited Function is Pending: prune waits")
 	require.NotNil(t, h.get(v1.KindRoute, "todo-api"))
-	require.Equal(t, v1.AppChild{Kind: v1.KindRoute, Name: "todo-api", State: v1.AppChildPruning}, h.child(v1.KindRoute, "todo-api"))
+	require.Equal(t, v1.AppChild{Kind: v1.KindRoute, Name: "todo-api", State: v1.AppChildPruning, Reason: "NotCurrent"}, h.child(v1.KindRoute, "todo-api"))
 	require.Equal(t, v1.ConditionFalse, h.ready().Status, "the Pending Function decides Ready, not the Pruning Route")
 
 	h.markReady(v1.KindFunction, "todo-api")

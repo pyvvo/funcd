@@ -29,7 +29,7 @@ const rewatchBackoff = time.Second
 type Pair struct{ Owner, Child v1.Kind }
 
 // Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
-// The App pairs are one per App section kind (ADR-0199 Decision 7).
+// The App pairs are one per App section kind (ADR-0199 Decision 7), then (App, AppRevision) (ADR-0200 Decision 8).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
@@ -38,7 +38,7 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindEventSource}, {Owner: v1.KindApp, Child: v1.KindSensor},
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
 		{Owner: v1.KindApp, Child: v1.KindCatalogService}, {Owner: v1.KindApp, Child: v1.KindKVStore},
-		{Owner: v1.KindApp, Child: v1.KindBucket},
+		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindAppRevision},
 		{Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }

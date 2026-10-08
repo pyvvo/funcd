@@ -48,6 +48,8 @@ func TestScenarioZeroConfigDefaults(t *testing.T) {
 	require.True(t, c.Funclog.Enabled, "ADR-0081 capture on by default")
 	require.True(t, c.Funclog.Traces, "ADR-0101 traces on by default")
 	require.Equal(t, "funcd-system", c.Funclog.Bucket)
+	require.Equal(t, 10, c.App.RevisionHistory, "ADR-0200 revision history")
+	require.Empty(t, c.App.UpgradeTimeout, "ADR-0200: unset, so cmd/funcd derives it from runtime.bootTimeout")
 }
 
 // scenario: site-default-index-config (ADR-0139) — site.defaultIndex is a config-level knob with the web
@@ -145,6 +147,8 @@ func TestEnvVarsMapToFields(t *testing.T) {
 		"FUNCD_TELEMETRY_ENDPOINT":          {"otel:4317", func(c config.Config) string { return c.Telemetry.Endpoint }},
 		"FUNCD_FUNCLOG_SEGMENT_MAX_AGE":     {"2s", func(c config.Config) string { return c.Funclog.SegmentMaxAge }},
 		"FUNCD_FUNCLOG_ENABLED":             {"false", func(c config.Config) string { return strconv.FormatBool(c.Funclog.Enabled) }},
+		"FUNCD_APP_UPGRADE_TIMEOUT":         {"10m", func(c config.Config) string { return c.App.UpgradeTimeout }},
+		"FUNCD_APP_REVISION_HISTORY":        {"3", func(c config.Config) string { return strconv.Itoa(c.App.RevisionHistory) }},
 	}
 	for envName, tc := range cases {
 		t.Run(envName, func(t *testing.T) {
@@ -383,6 +387,7 @@ func TestIssue326_OutOfRangeNumbersRejected(t *testing.T) {
 		{"eventing.deliveryAttempts", []string{"-1"}, []string{"0"}},
 		{"eventing.deadletter.maxEntries", []string{"-1"}, []string{"0"}},
 		{"kvstore.maxStoresPerNamespace", nil, []string{"-1", "0"}},
+		{"app.revisionHistory", []string{"-1", "0", "101"}, []string{"1", "100"}},
 	} {
 		for _, v := range tc.bad {
 			t.Run(tc.key+"="+v, func(t *testing.T) {
@@ -402,6 +407,12 @@ func TestIssue326_OutOfRangeNumbersRejected(t *testing.T) {
 		t.Setenv("FUNCD_NETWORK_DNS_FORWARDER_PORT", "65536")
 		_, err := config.Load("", config.Flags{})
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "an out-of-range port from env is rejected")
+	})
+	t.Run("env app.revisionHistory", func(t *testing.T) {
+		t.Setenv("FUNCD_APP_REVISION_HISTORY", "0")
+		_, err := config.Load("", config.Flags{})
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.ErrorContains(t, err, `config key "app.revisionHistory" has invalid value "0" (want min=1)`)
 	})
 }
 

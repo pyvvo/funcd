@@ -182,6 +182,10 @@ type Handlers interface {
 	ReplaceApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, app v1.App) (v1.App, error)
 	DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// AppRevision (namespaced, read-only) — ADR-0200, FEAT-0010/F114
+	GetAppRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.AppRevision, error)
+	ListAppRevisions(ctx context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error)
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

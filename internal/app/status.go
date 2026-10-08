@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -16,7 +18,7 @@ const (
 	condRevisionReady = v1.ConditionType("RevisionReady")
 )
 
-// The App's Ready reasons (Decisions 4 and 5) and the Pruning reasons (Decision 6).
+// The App's Ready reasons (ADR-0199 Decisions 4 and 5) and the Pruning reasons (ADR-0199 Decision 6).
 const (
 	reasonProgressing   = "Progressing"
 	reasonChildNotReady = "ChildNotReady"
@@ -129,7 +131,7 @@ func anyPending(vs []verdict) bool {
 func readyCondition(vs []verdict, halt *stop) v1.Condition {
 	c := v1.Condition{Type: condReady, Status: v1.ConditionTrue}
 	if halt != nil {
-		c.Status, c.Reason, c.Message = v1.ConditionFalse, halt.reason, halt.msg
+		c.Status, c.Reason, c.Message = v1.ConditionFalse, halt.reason, halt.msg()
 		return c
 	}
 	for _, state := range []v1.AppChildState{v1.AppChildPending, v1.AppChildNotStarted} {
@@ -152,14 +154,25 @@ func readyCondition(vs []verdict, halt *stop) v1.Condition {
 	return c
 }
 
-// publish writes the App's status. The phase is Ready once no part is Pending, which records the generation in
-// status.observedGeneration; before that a generation is Deploying, and a later Pending part or stopped pass makes it
-// Degraded until the cause clears. A stopped pass, or one that leaves a Pruning object, requeues after the supervision
-// period, since what blocks it does not requeue the App.
-func (r *Reconciler) publish(ctx context.Context, a *v1.App, vs []verdict, pruning []v1.AppChild, halt *stop) (controller.Result, error) {
+// appPhase sets the App's phase and returns its Ready condition (ADR-0200 Decision 6): Deploying while the latest
+// revision is Deploying or none exists; Failed while it is Failed, with Ready=False ChildNotReady and its message
+// unless the pass stopped; once it is current, ADR-0199 Decision 5: Ready once no part is Pending, which records the
+// generation in status.observedGeneration, then Degraded while a part is Pending or a pass stops. ChildNotReady is for
+// Failed and Degraded only, so a Deploying App reports Progressing instead.
+func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop) v1.Condition {
 	ready := readyCondition(vs, halt)
-	ready.ObservedGeneration = a.Generation
 	switch {
+	case latest != nil && latest.Status.Phase == v1.PhaseFailed:
+		a.Status.Phase = v1.PhaseFailed
+		if halt == nil {
+			c, _ := latest.Status.Conditions.Get(condChildrenReady)
+			ready = v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonChildNotReady, Message: c.Message}
+		}
+	case latest == nil || latest.Name != a.Status.CurrentRevision:
+		a.Status.Phase = v1.PhaseDeploying
+		if ready.Reason == reasonChildNotReady {
+			ready.Reason = reasonProgressing
+		}
 	case ready.Status != v1.ConditionFalse:
 		a.Status.Phase, a.Status.ObservedGeneration = v1.PhaseReady, a.Generation
 	case a.Status.ObservedGeneration == a.Generation:
@@ -167,18 +180,49 @@ func (r *Reconciler) publish(ctx context.Context, a *v1.App, vs []verdict, pruni
 	default:
 		a.Status.Phase = v1.PhaseDeploying
 	}
-	a.Status.Conditions.Set(ready)
+	return ready
+}
+
+// publish writes the App's status, before any AppRevision status (ADR-0200 Decision 6), and reports whether it did:
+// a Conflict means the App changed, and its watch brings the next pass. A stopped pass, or one that leaves a Pruning
+// object, requeues after the supervision period, since what blocks it does not requeue the App; a rollout short of
+// its deadline requeues at the deadline if that is earlier (left).
+func (r *Reconciler) publish(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, pruning []v1.AppChild, halt *stop, left time.Duration) (controller.Result, bool, error) {
+	var latest *v1.AppRevision
+	if len(revs) > 0 {
+		latest = revs[len(revs)-1]
+	}
+	ready := appPhase(a, latest, vs, halt)
+	ready.ObservedGeneration = a.Generation
+	r.setCondition(&a.Status.Conditions, ready)
 	a.Status.Children = make([]v1.AppChild, 0, len(vs)+len(pruning))
 	for _, v := range vs {
 		a.Status.Children = append(a.Status.Children, v.child)
 	}
 	a.Status.Children = append(a.Status.Children, pruning...)
-	if _, err := r.store.Update(ctx, a); err != nil && fault.KindOf(err) != fault.Conflict {
-		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "update app status %s/%s", a.Namespace, a.Name)
-	}
 	var res controller.Result
 	if halt != nil || len(pruning) > 0 {
 		res.RequeueAfter = controller.SupervisionPeriod
 	}
-	return res, nil
+	if left > 0 && (res.RequeueAfter == 0 || left < res.RequeueAfter) {
+		res.RequeueAfter = left
+	}
+	if _, err := r.store.Update(ctx, a); err != nil {
+		if fault.KindOf(err) == fault.Conflict {
+			return res, false, nil
+		}
+		return controller.Result{}, false, fault.Wrapf(err, fault.KindOf(err), op, "update app status %s/%s", a.Namespace, a.Name)
+	}
+	return res, true, nil
+}
+
+// setCondition is Conditions.Set with the transition time read from the injected clock, as every time this package
+// reads (ADR-0200).
+func (r *Reconciler) setCondition(cs *v1.Conditions, c v1.Condition) {
+	old, ok := cs.Get(c.Type)
+	cs.Set(c)
+	if !ok || old.Status != c.Status {
+		i := slices.IndexFunc(*cs, func(x v1.Condition) bool { return x.Type == c.Type })
+		(*cs)[i].LastTransitionTime = v1.NewTimestamp(r.clock.Now())
+	}
 }

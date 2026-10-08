@@ -48,7 +48,7 @@ func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.token, "token", os.Getenv("FUNCD_TOKEN"),
 		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
-		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.kvstoreCmd(), a.eventingCmd(), // control-plane verbs (need the SDK client)
+		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), // control-plane verbs (need the SDK client)
 		a.pushCmd(), a.indexCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + funcdctl.yaml type codegen (ADR-0122)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
 		a.devCmd(),   // ADR-0125: run a function locally from source (real under -tags dev; a rebuild-hint stub otherwise)
@@ -153,8 +153,8 @@ func (a *cli) applyCmd() *cobra.Command {
 			for _, doc := range docs {
 				obj := doc.Object
 				if k := obj.GroupVersionKind().Kind; sdk.ReadOnlyKind(k) {
-					return fault.Invalidf("funcdctl apply", "document %d (%s %q): %s is read-only: the Function reconciler writes it",
-						doc.Number, k, obj.GetName(), k)
+					return fault.Invalidf("funcdctl apply", "document %d (%s %q): %s is read-only: %s writes it",
+						doc.Number, k, obj.GetName(), k, sdk.ReadOnlyWriter(k))
 				}
 				if verr := obj.Validate(); verr != nil {
 					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",

@@ -36,6 +36,7 @@ type StubHandlers struct {
 	rolesAssignments map[string]v1.RolesAssignment
 	sites            map[string]v1.Site
 	apps             map[string]v1.App
+	appRevisions     map[string]v1.AppRevision
 	policies         map[string]v1.Policy
 	workflows        map[string]v1.Workflow
 	workflowRuns     map[string]v1.WorkflowRun
@@ -68,6 +69,7 @@ func NewStubHandlers() *StubHandlers {
 		rolesAssignments: make(map[string]v1.RolesAssignment),
 		sites:            make(map[string]v1.Site),
 		apps:             make(map[string]v1.App),
+		appRevisions:     make(map[string]v1.AppRevision),
 		policies:         make(map[string]v1.Policy),
 		workflows:        make(map[string]v1.Workflow),
 		workflowRuns:     make(map[string]v1.WorkflowRun),
@@ -742,6 +744,16 @@ func (s *StubHandlers) ReplaceApp(_ context.Context, ns v1.NamespaceName, name v
 
 func (s *StubHandlers) DeleteApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return stubDelete(s, s.apps, "App", ns, name)
+}
+
+// ---- AppRevision (ADR-0200, read-only) ----
+
+func (s *StubHandlers) GetAppRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.AppRevision, error) {
+	return stubGet(s, s.appRevisions, "AppRevision", ns, name)
+}
+
+func (s *StubHandlers) ListAppRevisions(_ context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error) {
+	return stubList(s, s.appRevisions, ns)
 }
 
 // stubGet, stubPut, stubList and stubDelete keep one crudKind in a stub map.

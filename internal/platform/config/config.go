@@ -315,6 +315,14 @@ type Config struct {
 	Site struct {
 		DefaultIndex string `json:"defaultIndex,omitempty" env:"FUNCD_SITE_DEFAULT_INDEX" validate:"omitempty,startsnotwith=/"`
 	} `json:"site,omitempty"`
+
+	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than
+	// runtime.bootTimeout; empty ⇒ max(5m, twice runtime.bootTimeout), derived in cmd/funcd. RevisionHistory is the
+	// number of AppRevisions an App keeps besides its current one.
+	App struct {
+		UpgradeTimeout  string `json:"upgradeTimeout,omitempty" env:"FUNCD_APP_UPGRADE_TIMEOUT"`
+		RevisionHistory int    `json:"revisionHistory,omitempty" env:"FUNCD_APP_REVISION_HISTORY" validate:"min=1,max=100"`
+	} `json:"app,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -391,6 +399,8 @@ func defaults() Config {
 	c.Eventing.DeliveryBackoffInitial = "100ms"
 	// Site default index document (ADR-0139): the web convention.
 	c.Site.DefaultIndex = "index.html"
+	// App revisions (ADR-0200): app.upgradeTimeout stays empty, so cmd/funcd derives it from runtime.bootTimeout.
+	c.App.RevisionHistory = 10
 	return c
 }
 
