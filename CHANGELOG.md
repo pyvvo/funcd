@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.8.0](https://github.com/pyvvo/funcd/compare/v0.7.3...v0.8.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** the log keys `timeout` (boot backoff) and `bound` (sensor retry drain) become `timeout_ms` and `bound_ms`. Each is now a number of milliseconds; before, it was nanoseconds in JSON and a Go duration string in text. `funcdctl dev` warnings go to funcdctl's output instead of stderr.
+* **api:** WorkflowRun `status.steps[].startedAt` and `endedAt` are timestamp strings instead of unix nanoseconds. Every timestamp in a request body, a manifest, a stored object, a DLQ record or a CloudEvent payload must have the form `YYYY-MM-DDTHH:MM:SS.sssZ`. Any other precision, or an offset, is refused with 422 (or `fault.Invalid` outside the API). A data dir that an earlier version wrote holds instants in another form, so it no longer loads. The KV backup manifest is the one exception.
+* **blob:** a presign request now answers 400 instead of signing a URL when any of these holds:
+    - its `expiry` is outside the ADR-0194 grammar or the whole-second
+    `1s`–`168h` range (for example `1.5s`, `500ms`, `0s`, `10`, or the
+    `60.0s` that the old Python shim sent);
+    - its `expiry` is empty;
+    - its `method` is anything other than exactly `GET`, `PUT` or `DELETE`
+    (for example `put` or `POST`).
+* **api:** integer durations are refused everywhere: in manifests, request bodies and the platform config (a bare `0`, `1.5s` and `500us` are refused; write `0s`, `1s500ms`). A data dir written by an earlier version that holds a duration no longer loads.
+
+### Features
+
+* **api:** API durations are duration strings (ADR-0194) ([#832](https://github.com/pyvvo/funcd/issues/832)) ([77ab7f9](https://github.com/pyvvo/funcd/commit/77ab7f9cfe70017f4bfb2a96dbd76cd3a68df7ce))
+* **api:** write every instant as an RFC3339 UTC timestamp with milliseconds (ADR-0196) ([#840](https://github.com/pyvvo/funcd/issues/840)) ([b5aa622](https://github.com/pyvvo/funcd/commit/b5aa622a90d243b088df43e5cc86f40426f182d7))
+* **blob:** refuse a bad presign expiry or method with 400 (ADR-0198) ([#839](https://github.com/pyvvo/funcd/issues/839)) ([fae4100](https://github.com/pyvvo/funcd/commit/fae4100969a062a02d2be325a204fdf3f4085631))
+* **observability:** log every duration as a &lt;key&gt;_ms number of milliseconds (ADR-0197) ([#842](https://github.com/pyvvo/funcd/issues/842)) ([022e6f3](https://github.com/pyvvo/funcd/commit/022e6f3fda3ecf74c2e72b224f3c831d5b710498))
+
+
+### Bug Fixes
+
+* **function:** keep a gated pooled member Ready when its pool host misses one health probe ([#845](https://github.com/pyvvo/funcd/issues/845)) ([628eebb](https://github.com/pyvvo/funcd/commit/628eebbe76a1a353b56505b1560597ed844ff583))
+* **kvstore:** keep every gateway delete in the KV backup chain (ADR-0195) ([#837](https://github.com/pyvvo/funcd/issues/837)) ([be53220](https://github.com/pyvvo/funcd/commit/be532206aab0c0ce4c9c530b664544698af2cd71))
+* **observability:** route runtime, local API, proxy and KV migration logs to the platform logger ([#817](https://github.com/pyvvo/funcd/issues/817)) ([#833](https://github.com/pyvvo/funcd/issues/833)) ([f52f341](https://github.com/pyvvo/funcd/commit/f52f34125651d727035f5306d827cff18b76ee9e))
+* **workflow:** a cancelled run keeps its recorded steps when its goroutine exits mid-pass ([#847](https://github.com/pyvvo/funcd/issues/847)) ([297f8ba](https://github.com/pyvvo/funcd/commit/297f8baf7eee788b458748df0be90b7bc580bd7f))
+
 ## [0.7.3](https://github.com/pyvvo/funcd/compare/v0.7.2...v0.7.3) (2026-10-06)
 
 
