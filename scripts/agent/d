@@ -11,7 +11,8 @@ root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 key=$(cat "$root/flake.nix" "$root/flake.lock" | shasum | cut -c1-16)
 env_file="$root/.cache/devshell-env-$key.sh"
 # The environment script points TMPDIR at a new nix-shell.XXXXXX directory under the current one, so a call nested in
-# another (gate.sh under `d timeout`) keeps the environment it inherits rather than lengthen TMPDIR (#853).
+# another (gate.sh under `d timeout`) keeps the environment it inherits rather than lengthen TMPDIR (#853). It trusts
+# that environment: a process in between that resets PATH must also unset FUNCD_DEVSHELL_KEY.
 if [ "${FUNCD_DEVSHELL_KEY:-}" != "$key" ]; then
   if [ ! -s "$env_file" ]; then
     mkdir -p "$root/.cache"
