@@ -1,6 +1,6 @@
 # ADR-0199: App — one resource declares, installs and removes a whole app
 
-- **Status**: Accepted (2026-10-08)
+- **Status**: Implemented (2026-10-08)
 - **Date**: 2026-10-08 (judged in three rounds: five lenses, then three, then one, each finding checked by a skeptic)
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, admission, gc, ownership

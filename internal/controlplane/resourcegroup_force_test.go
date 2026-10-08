@@ -47,7 +47,7 @@ func newGroupServer(t *testing.T, withCollector bool) (http.Handler, store.Store
 		},
 	}
 	if withCollector {
-		col, err := gc.New(gc.Deps{Store: st})
+		col, err := gc.New(gc.Deps{Store: st, Purger: noPurge{}})
 		require.NoError(t, err)
 		d.Collector = col
 	}

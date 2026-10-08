@@ -401,8 +401,11 @@ writes. Admission refuses an inconsistent App before anything is stored, with qu
 App controller writes the parts with platform rights, as a Workflow writes its steps, writes back a part edited by
 hand, reports one status in which an idle Function counts as ready, and prunes a dropped part once no part is pending
 and nothing else uses it. Deleting the App removes its tree through the garbage collector; a KV store or a Bucket goes
-only when its entry says `deletion: delete`. Revisions, hooks, templates and dependencies between Apps are FEAT-0010's
-later rows.
+only when its entry says `deletion: delete`. Every spec change is stamped as a read-only `AppRevision`
+([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current, and lets dropped parts go, only once every part
+is Ready within `app.upgradeTimeout`; a timed-out upgrade is `Failed` and the previous revision stays current, with no
+automatic rollback; `funcdctl app history` lists the revisions and `funcdctl app rollback` re-applies one as a new
+revision. Hooks, templates and dependencies between Apps are FEAT-0010's later rows.
 
 #### Controller
 

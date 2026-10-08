@@ -35,6 +35,8 @@ type StubHandlers struct {
 	roles            map[string]v1.Role
 	rolesAssignments map[string]v1.RolesAssignment
 	sites            map[string]v1.Site
+	apps             map[string]v1.App
+	appRevisions     map[string]v1.AppRevision
 	policies         map[string]v1.Policy
 	workflows        map[string]v1.Workflow
 	workflowRuns     map[string]v1.WorkflowRun
@@ -66,6 +68,8 @@ func NewStubHandlers() *StubHandlers {
 		roles:            make(map[string]v1.Role),
 		rolesAssignments: make(map[string]v1.RolesAssignment),
 		sites:            make(map[string]v1.Site),
+		apps:             make(map[string]v1.App),
+		appRevisions:     make(map[string]v1.AppRevision),
 		policies:         make(map[string]v1.Policy),
 		workflows:        make(map[string]v1.Workflow),
 		workflowRuns:     make(map[string]v1.WorkflowRun),
@@ -717,6 +721,87 @@ func (s *StubHandlers) DeleteSite(_ context.Context, ns v1.NamespaceName, name v
 		return fault.NotFoundf("StubHandlers.DeleteSite", "Site %s not found", key)
 	}
 	delete(s.sites, key)
+	return nil
+}
+
+// ---- App (ADR-0199) ----
+
+func (s *StubHandlers) GetApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.App, error) {
+	return stubGet(s, s.apps, "App", ns, name)
+}
+
+func (s *StubHandlers) CreateApp(_ context.Context, app v1.App) (v1.App, error) {
+	return stubPut(s, s.apps, "App", nsKey(app.Namespace, app.Name), app, false)
+}
+
+func (s *StubHandlers) ListApps(_ context.Context, ns v1.NamespaceName) ([]v1.App, error) {
+	return stubList(s, s.apps, ns)
+}
+
+func (s *StubHandlers) ReplaceApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, app v1.App) (v1.App, error) {
+	return stubPut(s, s.apps, "App", nsKey(ns, name), app, true)
+}
+
+func (s *StubHandlers) DeleteApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return stubDelete(s, s.apps, "App", ns, name)
+}
+
+// ---- AppRevision (ADR-0200, read-only) ----
+
+func (s *StubHandlers) GetAppRevision(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.AppRevision, error) {
+	return stubGet(s, s.appRevisions, "AppRevision", ns, name)
+}
+
+func (s *StubHandlers) ListAppRevisions(_ context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error) {
+	return stubList(s, s.appRevisions, ns)
+}
+
+// stubGet, stubPut, stubList and stubDelete keep one crudKind in a stub map.
+func stubGet[T crudKind](s *StubHandlers, m map[string]T, kind string, ns v1.NamespaceName, name v1.ObjectName) (T, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := m[nsKey(ns, name)]
+	if !ok {
+		return v, fault.NotFoundf("StubHandlers.Get"+kind, "%s %s/%s not found", kind, ns, name)
+	}
+	return v, nil
+}
+
+// stubPut creates (replace false: the key must be new) or replaces (replace true: the key must exist).
+func stubPut[T crudKind](s *StubHandlers, m map[string]T, kind, key string, v T, replace bool) (T, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var zero T
+	switch _, exists := m[key]; {
+	case exists && !replace:
+		return zero, fault.Conflictf("StubHandlers.Create"+kind, "%s %s already exists", kind, key)
+	case !exists && replace:
+		return zero, fault.NotFoundf("StubHandlers.Replace"+kind, "%s %s not found", kind, key)
+	}
+	m[key] = v
+	return v, nil
+}
+
+func stubList[T crudKind, PT objectPtr[T]](s *StubHandlers, m map[string]T, ns v1.NamespaceName) ([]T, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]T, 0)
+	for _, v := range m {
+		if PT(&v).GetNamespace() == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func stubDelete[T crudKind](s *StubHandlers, m map[string]T, kind string, ns v1.NamespaceName, name v1.ObjectName) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := m[key]; !exists {
+		return fault.NotFoundf("StubHandlers.Delete"+kind, "%s %s not found", kind, key)
+	}
+	delete(m, key)
 	return nil
 }
 

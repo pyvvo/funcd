@@ -95,6 +95,54 @@ func TestKindFromToken(t *testing.T) {
 	}
 }
 
+// ADR-0200 Decision 2: ReadOnlyWriter names the writer of each read-only kind, and only of those.
+func TestReadOnlyWriter(t *testing.T) {
+	t.Parallel()
+	for _, k := range v1.AllKinds() {
+		want := map[v1.Kind]string{
+			v1.KindRevision:    "the Function reconciler",
+			v1.KindAppRevision: "the App reconciler",
+		}[k]
+		if got := ReadOnlyWriter(k); got != want || ReadOnlyKind(k) != (want != "") {
+			t.Errorf("ReadOnlyWriter(%s) = %q, ReadOnlyKind = %v; want %q", k, got, ReadOnlyKind(k), want)
+		}
+	}
+}
+
+// ADR-0200 Decision 2: Apply, Create and Delete refuse an AppRevision with fault.Invalid before any request, naming
+// the App reconciler.
+func TestSDKAppRevisionWritesRefusedBeforeRequest(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	obj, _ := v1.NewObject(v1.KindAppRevision)
+	rev := obj.(*v1.AppRevision)
+	rev.Name, rev.Namespace = "todo-1", "team-a"
+	_, applyErr := c.Apply(ctx, rev)
+	_, createErr := c.Create(ctx, rev)
+	for op, err := range map[string]error{
+		"Apply":  applyErr,
+		"Create": createErr,
+		"Delete": c.Delete(ctx, v1.KindAppRevision, "team-a", "todo-1"),
+	} {
+		if fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), "AppRevision is read-only: the App reconciler writes it") {
+			t.Errorf("%s: err = %v, want fault.Invalid with the read-only message", op, err)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("the refused writes sent %d requests, want 0", n)
+	}
+}
+
 // ADR-0172 Decision 2: Apply, Create and Delete refuse a Revision with fault.Invalid before any request.
 func TestSDKRevisionWritesRefusedBeforeRequest(t *testing.T) {
 	t.Parallel()

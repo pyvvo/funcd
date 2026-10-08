@@ -45,11 +45,19 @@ func newClient(t *testing.T) *sdk.Client {
 // newClientURL is newClient that also returns the server URL, for a raw HTTP request beside the CLI.
 func newClientURL(t *testing.T) (*sdk.Client, string) {
 	t.Helper()
+	c, url, _ := newTestServer(t)
+	return c, url
+}
+
+// newTestServer is newClientURL that also returns the server's store, to seed what only a reconciler writes.
+func newTestServer(t *testing.T) (*sdk.Client, string, store.Store) {
+	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
+	st := store.New(memory.New())
 	h, err := controlplane.NewServer(controlplane.Deps{
-		Store:       store.New(memory.New()),
+		Store:       st,
 		Authorizer:  rbac.New(),
 		Credentials: creds,
 	})
@@ -58,7 +66,7 @@ func newClientURL(t *testing.T) (*sdk.Client, string) {
 	t.Cleanup(srv.Close)
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
 	require.NoError(t, err)
-	return c, srv.URL
+	return c, srv.URL, st
 }
 
 func mkfn(ctx context.Context, t *testing.T, c *sdk.Client) {
@@ -364,6 +372,98 @@ func TestScenarioCLIApplySite(t *testing.T) {
 	require.Contains(t, err.Error(), "spec.prefix is immutable")
 }
 
+// appManifest is the ADR-0199 Scenarios fixture App todo.
+const appManifest = `apiVersion: funcd.io/v1alpha1
+kind: App
+metadata:
+  name: todo
+  namespace: team-a
+  resourceGroup: rg1
+spec:
+  version: 1.0.0
+  kv:
+    - name: todo-store
+      tables:
+        - name: todos
+          owner: todo-api
+    - name: todo-cache
+      deletion: delete
+      tables:
+        - name: entries
+          owner: todo-api
+  buckets:
+    - name: todo-files
+      prefixes:
+        - name: attachments
+          owner: todo-api
+    - name: todo-tmp
+      deletion: delete
+  functions:
+    - name: todo-api
+      runtime: nodejs22
+      handler: index.handler
+      image: oci-layout://todo-api:1
+      scaling:
+        minReplicas: 1
+      kv:
+        - alias: store
+          store: todo-store
+          table: todos
+        - alias: cache
+          store: todo-cache
+          table: entries
+      blob:
+        - alias: files
+          bucket: todo-files
+          prefix: attachments
+    - ref: mailer
+  workflows:
+    - name: todo-plan
+      steps:
+        - name: due
+          function:
+            image: oci-layout://todo-due:1
+  routes:
+    - name: todo-api
+      rules:
+        - path: /api
+          backend:
+            function: todo-api
+`
+
+// The CLI apply test of ADR-0199 (Implementation plan step 4): `funcdctl apply -f app.yaml` creates an App through the
+// real control plane (stampTypeMeta, the validate admission and the store) and a re-apply is accepted; a manifest with
+// a bad part or an unknown section is refused before anything is stored.
+func TestScenarioCLIApplyApp(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "apply", "-f", writeManifest(t, appManifest)))
+	require.Contains(t, out.String(), "applied App/todo")
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "get", "app", "todo", "-n", "team-a", "-o", "json"))
+	require.Contains(t, out.String(), `"apiVersion": "funcd.io/v1alpha1"`, "the server stamps TypeMeta for an App")
+	require.Contains(t, out.String(), `"ref": "mailer"`)
+	require.Contains(t, out.String(), `"deletion": "delete"`)
+
+	require.NoError(t, execCLI(&bytes.Buffer{}, c, "apply", "-f", writeManifest(t, appManifest)), "re-applying the same manifest is fine")
+
+	renamed := strings.Replace(appManifest, "  name: todo\n", "  name: todo-bad\n", 1)
+	for field, manifest := range map[string]string{
+		"spec.kv[0].tables[0].name": strings.Replace(renamed, "- name: todos\n", "- name: Bad_Name\n", 1),
+		"spec.functions[2]":         strings.Replace(renamed, "    - ref: mailer\n", "    - ref: mailer\n    - ref: mailer\n", 1),
+		"deployments":               strings.Replace(renamed, "spec:\n", "spec:\n  deployments:\n    - name: web\n", 1),
+	} {
+		err := execCLI(&bytes.Buffer{}, c, "apply", "-f", writeManifest(t, manifest))
+		require.Error(t, err, field)
+		require.Contains(t, err.Error(), field)
+		_, err = c.Get(context.Background(), v1.KindApp, "team-a", "todo-bad")
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "%s: nothing is stored", field)
+	}
+}
+
 // Issue #193: a verb whose only machine format is json must reject any other -o value, not fall
 // back to the table with exit 0 (the logs verbs already do).
 func TestIssue193_UnknownOutputIsRejected(t *testing.T) {
@@ -483,6 +583,32 @@ func TestCLIRevisionIsReadOnly(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(gerr), "the ConfigMap before the Revision is not applied")
 
 	err = execCLI(&out, c, "delete", "revision", "x", "-n", "team-a")
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+}
+
+// scenario: app-revision-read-only (ADR-0200 Decision 2) — apply -f of a file holding an AppRevision, or delete
+// apprevision, fails naming the App reconciler before any request; the documents before it are not applied.
+func TestCLIAppRevisionIsReadOnly(t *testing.T) {
+	t.Parallel()
+	c := newClient(t)
+	const readOnly = "AppRevision is read-only: the App reconciler writes it"
+	manifest := `{"apiVersion":"funcd.io/v1alpha1","kind":"ConfigMap",` +
+		`"metadata":{"name":"cm1","namespace":"team-a","resourceGroup":"rg1"}}` + "\n---\n" +
+		`{"apiVersion":"funcd.io/v1alpha1","kind":"AppRevision",` +
+		`"metadata":{"name":"todo-1","namespace":"team-a","resourceGroup":"rg1"},` +
+		`"spec":{"app":{"kind":"App","name":"todo"},"number":1,"spec":{"version":"1.0.0"}}}`
+
+	var out bytes.Buffer
+	err := execCLI(&out, c, "apply", "-f", writeManifest(t, manifest))
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), readOnly)
+	_, gerr := c.Get(context.Background(), v1.KindConfigMap, "team-a", "cm1")
+	require.Equal(t, fault.NotFound, fault.KindOf(gerr), "the ConfigMap before the AppRevision is not applied")
+
+	err = execCLI(&out, c, "delete", "apprevision", "todo-1", "-n", "team-a")
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, err.Error(), readOnly)

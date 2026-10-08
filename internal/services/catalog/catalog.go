@@ -35,7 +35,8 @@ const DuckDBRuntime = "duckdb"
 const enginePort = 8080
 
 // condReady is the readiness condition the CatalogService reconciler raises (ADR-0086): True once
-// the provider-runtime reports the engine Ready on its Quack HTTP probe.
+// the provider-runtime reports the engine Ready on its Quack HTTP probe. Every write stamps the generation it
+// observed (ADR-0199 Decision 5).
 const condReady = "Ready"
 
 // condIngressReady reports whether the edge programs this catalog's spec.ingress entry (ADR-0176): False names

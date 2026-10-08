@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -345,7 +346,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	opts = append(opts, funcd.WithPacing(pace))
+	opts = append(opts, funcd.WithPacing(pace), funcd.WithAppRevisionHistory(cfg.App.RevisionHistory))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
@@ -572,8 +573,10 @@ type pacingKey struct {
 	lo, hi     v1.Duration
 }
 
-// pacing parses the ADR-0163 keys with parseDuration and their bounds (ADR-0194), then checks Decision 5's
-// orderings, each failure a fault.Invalid naming the first key with the other bound.
+// pacing parses the ADR-0163 keys and app.upgradeTimeout (ADR-0200) with parseDuration and their bounds (ADR-0194),
+// then checks ADR-0163 Decision 5's orderings and that a set app.upgradeTimeout is more than runtime.bootTimeout, each
+// failure a fault.Invalid naming the first key with the other bound. An unset app.upgradeTimeout is max(5m, twice
+// runtime.bootTimeout), so one boot retry fits.
 func pacing(cfg config.Config) (funcd.Pacing, error) {
 	var p funcd.Pacing
 	keys := []pacingKey{
@@ -596,6 +599,7 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		{"invoke.reclaimInterval", cfg.Invoke.ReclaimInterval, 30 * time.Second, &p.ReclaimInterval, minPositive, v1.MaxDuration},
 		{"server.shutdownTimeout", cfg.Server.ShutdownTimeout, 15 * time.Second, &p.ShutdownTimeout, minPositive, v1.MaxDuration},
 		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval, minPositive, v1.MaxDuration},
+		{"app.upgradeTimeout", cfg.App.UpgradeTimeout, 0, &p.AppUpgradeTimeout, minPositive, v1.MaxDuration},
 	}
 	for _, k := range keys {
 		d, err := parseDuration(k.key, k.value, k.def, k.lo, k.hi)
@@ -608,6 +612,13 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 	if !maxSet {
 		p.DeliveryBackoffMax = max(10*time.Second, p.DeliveryBackoffInitial)
 	}
+	upgradeSet := p.AppUpgradeTimeout > 0
+	if !upgradeSet {
+		p.AppUpgradeTimeout = math.MaxInt64 // twice a bootTimeout above half the range saturates
+		if p.BootTimeout <= math.MaxInt64/2 {
+			p.AppUpgradeTimeout = max(5*time.Minute, 2*p.BootTimeout)
+		}
+	}
 	refuse := func(key string, d time.Duration, want string) error {
 		return fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s)", key, d.String(), want)
 	}
@@ -618,6 +629,8 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		return funcd.Pacing{}, refuse("runtime.handOutSettle", p.HandOutSettle, "at most runtime.drainGrace, "+p.DrainGrace.String())
 	case maxSet && p.DeliveryBackoffMax < p.DeliveryBackoffInitial:
 		return funcd.Pacing{}, refuse("eventing.deliveryBackoffMax", p.DeliveryBackoffMax, "at least eventing.deliveryBackoffInitial, "+p.DeliveryBackoffInitial.String())
+	case upgradeSet && p.AppUpgradeTimeout <= p.BootTimeout:
+		return funcd.Pacing{}, refuse("app.upgradeTimeout", p.AppUpgradeTimeout, "more than runtime.bootTimeout, "+p.BootTimeout.String())
 	}
 	return p, nil
 }

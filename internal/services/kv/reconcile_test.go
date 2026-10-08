@@ -85,6 +85,41 @@ func TestScenarioKVStoreCreateProvisions(t *testing.T) {
 	require.Equal(t, v1.ConditionTrue, cond.Status)
 }
 
+// ADR-0199 Decision 5: the Ready condition records the generation the reconciler observed, also after a spec change.
+func TestReadyObservesGeneration(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	_, err := st.Create(ctx, mkKVStore("orders", v1.KVTable{Name: "customers", Owner: "customers-svc"}))
+	require.NoError(t, err)
+	r, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: st})
+	require.NoError(t, err)
+	req := controller.Request{GVK: v1.KindKVStore.GVK(), Namespace: "default", Name: "orders"}
+	get := func() *v1.KVStore {
+		obj, gerr := st.Get(ctx, v1.KindKVStore.GVK(), "default", "orders")
+		require.NoError(t, gerr)
+		return obj.(*v1.KVStore)
+	}
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	cond, ok := get().Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, int64(1), cond.ObservedGeneration)
+
+	ks := get()
+	ks.Spec.Tables = append(ks.Spec.Tables, v1.KVTable{Name: "fulfillment", Owner: "fulfillment-svc"})
+	_, err = st.Update(ctx, ks)
+	require.NoError(t, err)
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	ks = get()
+	require.Equal(t, int64(2), ks.Generation)
+	cond, ok = ks.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, cond.Status)
+	require.Equal(t, ks.Generation, cond.ObservedGeneration)
+}
+
 // scenario: deletion-protected (reclaim half) — a deleted (absent) KVStore reclaims its whole prefix via
 // DropPrefix(<ns>/<name>/).
 func TestScenarioDeleteReclaims(t *testing.T) {

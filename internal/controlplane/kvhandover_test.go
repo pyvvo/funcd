@@ -162,11 +162,16 @@ func TestKVStoreUpdateRefusedWhileItsWorkflowLives(t *testing.T) {
 	require.Equal(t, http.StatusOK, do(t, srv, http.MethodPut, path, "operator-token", body).Code, "a dead-UID marker stays editable")
 }
 
+// noPurge is a gc.BucketPurger that purges nothing: these tests collect no Bucket.
+type noPurge struct{}
+
+func (noPurge) Purge(context.Context, v1.NamespaceName, v1.ObjectName) error { return nil }
+
 // scenario: migration-record-guarded
 func TestScenarioMigrationRecordGuarded(t *testing.T) {
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
-	col, err := gc.New(gc.Deps{Store: st})
+	col, err := gc.New(gc.Deps{Store: st, Purger: noPurge{}})
 	require.NoError(t, err)
 	srv, err := controlplane.NewServer(controlplane.Deps{
 		Store: st, Authorizer: rbac.New(), Collector: col,

@@ -3,6 +3,7 @@ package funcd
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -269,6 +270,21 @@ func WithSiteDefaultIndex(index string) Option {
 			return fault.Invalidf("funcd.WithSiteDefaultIndex", "site default index %q must be a relative path (no leading '/')", index)
 		}
 		c.siteDefaultIndex = index
+		return nil
+	}
+}
+
+// maxAppRevisionHistory is the largest app.revisionHistory (ADR-0200 Decision 10).
+const maxAppRevisionHistory = 100
+
+// WithAppRevisionHistory sets app.revisionHistory (ADR-0200 Decision 8): the AppRevisions an App keeps besides its
+// current one. Outside 1..100 ⇒ fault.Invalid from New. Without it the App reconciler keeps 10.
+func WithAppRevisionHistory(n int) Option {
+	return func(c *config) error {
+		if n < 1 || n > maxAppRevisionHistory {
+			return fault.Invalidf("funcd.WithAppRevisionHistory", "app revision history %d is outside 1..%d", n, maxAppRevisionHistory)
+		}
+		c.appRevisionHistory = n
 		return nil
 	}
 }
@@ -625,6 +641,8 @@ type Pacing struct {
 	DrainGrace, HandOutSettle, DrainPollInterval, EnginePollInterval, EngineProbeTimeout        time.Duration
 	ArtifactPollInterval, DefaultRetryBackoff, BucketRecheckInterval, DeliveryBackoffInitial    time.Duration
 	DeliveryBackoffMax, ActivationTimeout, ReclaimInterval, ShutdownTimeout, WorkerSyncInterval time.Duration
+	// AppUpgradeTimeout bounds an App upgrade (ADR-0200): zero ⇒ max(5m, twice the effective BootTimeout).
+	AppUpgradeTimeout time.Duration
 }
 
 // The defaults WithPacing checks its orderings against: the components' own zero defaults.
@@ -639,6 +657,7 @@ const (
 	defaultDeliveryBackoffMax     = 10 * time.Second
 	defaultWorkerSyncInterval     = 2 * time.Second
 	maxDefaultRetryBackoff        = time.Hour
+	minDefaultAppUpgradeTimeout   = 5 * time.Minute
 )
 
 func orDefault(d, def time.Duration) time.Duration {
@@ -656,9 +675,22 @@ func (p Pacing) deliveryBackoffMax() time.Duration {
 	return max(defaultDeliveryBackoffMax, orDefault(p.DeliveryBackoffInitial, defaultDeliveryBackoffInitial))
 }
 
-// WithPacing sets the pacing times (ADR-0163). A negative field, or the five orderings of Decision 5 broken on the
-// effective values (a zero field read as its default; a zero DeliveryBackoffMax is max(10s, DeliveryBackoffInitial)),
-// ⇒ fault.Invalid naming the field.
+// appUpgradeTimeout is the effective App upgrade timeout (ADR-0200): a zero AppUpgradeTimeout is max(5m, twice the
+// effective BootTimeout), so one boot retry fits; twice a BootTimeout above half the range saturates.
+func (p Pacing) appUpgradeTimeout() time.Duration {
+	if p.AppUpgradeTimeout > 0 {
+		return p.AppUpgradeTimeout
+	}
+	boot := orDefault(p.BootTimeout, defaultBootTimeout)
+	if boot > math.MaxInt64/2 {
+		return math.MaxInt64
+	}
+	return max(minDefaultAppUpgradeTimeout, 2*boot)
+}
+
+// WithPacing sets the pacing times (ADR-0163). A negative field, the five orderings of Decision 5, or a non-zero
+// AppUpgradeTimeout at or below BootTimeout (ADR-0200), broken on the effective values (a zero field read as its
+// default; a zero DeliveryBackoffMax is max(10s, DeliveryBackoffInitial)), ⇒ fault.Invalid naming the field.
 func WithPacing(p Pacing) Option {
 	return func(c *config) error {
 		const op = "funcd.WithPacing"
@@ -683,6 +715,8 @@ func WithPacing(p Pacing) Option {
 			return fault.Invalidf(op, "Pacing.DefaultRetryBackoff %s is above %s", p.DefaultRetryBackoff, maxDefaultRetryBackoff)
 		case p.DeliveryBackoffMax > 0 && p.DeliveryBackoffMax < initial:
 			return fault.Invalidf(op, "Pacing.DeliveryBackoffMax %s is below DeliveryBackoffInitial %s", p.DeliveryBackoffMax, initial)
+		case p.AppUpgradeTimeout > 0 && p.AppUpgradeTimeout <= boot:
+			return fault.Invalidf(op, "Pacing.AppUpgradeTimeout %s must be more than BootTimeout %s", p.AppUpgradeTimeout, boot)
 		}
 		c.pacing = p
 		return nil

@@ -293,7 +293,7 @@ func TestIssue148_StatusMatchesCurrentSpec(t *testing.T) {
 	})
 
 	for _, bucket := range []string{"missing", "raw"} {
-		t.Run("timer source drops the blob condition/bucket "+bucket, func(t *testing.T) {
+		t.Run("timer source replaces the blob condition/bucket "+bucket, func(t *testing.T) {
 			t.Parallel()
 			st := newStore()
 			createBucket(t, st, "raw")
@@ -312,9 +312,46 @@ func TestIssue148_StatusMatchesCurrentSpec(t *testing.T) {
 			es = getSource(t, st, "drops")
 			require.Equal(t, v1.PhaseReady, es.Status.Phase)
 			cond, ok := es.Status.Conditions.Get("Ready")
-			require.False(t, ok, "a timer source keeps no blob Ready condition, got %+v", cond)
+			require.True(t, ok)
+			require.Equal(t, v1.Condition{Type: "Ready", Status: v1.ConditionTrue, ObservedGeneration: es.Generation, LastTransitionTime: cond.LastTransitionTime}, cond,
+				"the timer Ready replaces the blob one, its reason and message included")
 		})
 	}
+}
+
+// ADR-0199 Decision 5: a timer source's Ready records the generation it observed, also after a spec change, and
+// a pass that changes nothing writes nothing.
+func TestTimerSourceReadyObservesGeneration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newStore()
+	createTimerSource(t, st, "nightly", timerEvent("tick", time.Minute))
+	src, err := eventing.NewSource(eventing.Deps{Store: st, Publisher: &capturePublisher{}})
+	require.NoError(t, err)
+	_, err = src.Reconcile(ctx, reqOf("nightly"))
+	require.NoError(t, err)
+	cond, ok := getSource(t, st, "nightly").Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, cond.Status)
+	require.Equal(t, int64(1), cond.ObservedGeneration)
+
+	es := getSource(t, st, "nightly")
+	es.Spec.Timer.Events = append(es.Spec.Timer.Events, timerEvent("hourly", time.Hour))
+	_, err = st.Update(ctx, es)
+	require.NoError(t, err)
+	_, err = src.Reconcile(ctx, reqOf("nightly"))
+	require.NoError(t, err)
+	es = getSource(t, st, "nightly")
+	require.Equal(t, int64(2), es.Generation)
+	require.Equal(t, v1.PhaseReady, es.Status.Phase)
+	cond, ok = es.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, v1.ConditionTrue, cond.Status)
+	require.Equal(t, es.Generation, cond.ObservedGeneration)
+
+	_, err = src.Reconcile(ctx, reqOf("nightly"))
+	require.NoError(t, err)
+	require.Equal(t, es.ResourceVersion, getSource(t, st, "nightly").ResourceVersion, "a converged timer source is not rewritten")
 }
 
 // scriptLister is a BucketLister scripted per Bucket, filtered by prefix.

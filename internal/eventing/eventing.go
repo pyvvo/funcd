@@ -23,7 +23,8 @@ import (
 const runTick = 25 * time.Millisecond
 
 // condReady is the EventSource readiness condition type (ADR-0119): a blob source with a missing Bucket is
-// NotReady with a reason, mirroring the Route BackendNotFound pattern.
+// NotReady with a reason, mirroring the Route BackendNotFound pattern. A timer source is Ready once its events
+// are registered; both kinds stamp the generation they observed (ADR-0199 Decision 5).
 const condReady = v1.ConditionType("Ready")
 
 // condSeenListSaved is False with reason SaveFailed while a blob event's record cannot be saved (ADR-0157).
@@ -140,13 +141,12 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 	}
 	s.registerTimer(req.Namespace, req.Name, time.Time(es.CreationTime), es.Spec.Timer)
-	_, blobCond := es.Status.Conditions.Get(condReady) // left by an earlier blob kind; a timer source has none
+	cur, hasReady := es.Status.Conditions.Get(condReady)
 	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
-	if es.Status.Phase != v1.PhaseReady || blobCond || seenCond {
+	if es.Status.Phase != v1.PhaseReady || !hasReady || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || seenCond {
 		es.Status.Phase = v1.PhaseReady
-		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool {
-			return c.Type == condReady || c.Type == condSeenListSaved
-		})
+		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: es.Generation})
+		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
 		if _, err := s.store.Update(ctx, es); err != nil {
 			return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.Reconcile", "set eventsource ready")
 		}

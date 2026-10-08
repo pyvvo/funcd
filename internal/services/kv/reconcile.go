@@ -12,7 +12,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// condReady is the readiness condition the KVStore reconciler raises (ADR-0072).
+// condReady is the readiness condition the KVStore reconciler raises (ADR-0072), stamped with the generation it
+// observed so a reader tells a Ready of the current spec from an earlier one (ADR-0199 Decision 5).
 const condReady v1.ConditionType = "Ready"
 
 // PrefixManager is the narrow KV-driver view the reconciler needs (ADR-0072/0073): DropPrefix reclaims a
@@ -88,7 +89,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	ks.Status.Tables = len(ks.Spec.Tables)
 	ks.Status.Bindings = bindings
 	ks.Status.Phase = v1.PhaseReady
-	ks.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+	ks.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: ks.Generation})
 	if _, uerr := r.store.Update(ctx, ks); uerr != nil {
 		if fault.KindOf(uerr) == fault.Conflict {
 			return controller.Result{}, nil // re-reconciled on the next watch event

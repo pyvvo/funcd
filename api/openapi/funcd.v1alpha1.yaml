@@ -31,6 +31,542 @@ components:
         - name
         - "on"
       type: object
+    App:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/AppSpec"
+        status:
+          $ref: "#/components/schemas/AppStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    AppChild:
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        reason:
+          type: string
+        state:
+          enum:
+            - Ready
+            - NotStarted
+            - Pending
+            - Pruning
+          type: string
+      required:
+        - kind
+        - name
+        - state
+      type: object
+    AppRevision:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/AppRevisionSpec"
+        status:
+          $ref: "#/components/schemas/AppRevisionStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    AppRevisionSpec:
+      additionalProperties: false
+      properties:
+        app:
+          $ref: "#/components/schemas/ObjectRef"
+        number:
+          format: int64
+          maximum: 9999999999
+          minimum: 1
+          type: integer
+        spec:
+          $ref: "#/components/schemas/AppSpec"
+      required:
+        - app
+        - number
+        - spec
+      type: object
+    AppRevisionStatus:
+      additionalProperties: false
+      properties:
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+        startedAt:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+      type: object
+    AppSpec:
+      additionalProperties: false
+      properties:
+        buckets:
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              maxObjectBytes:
+                format: int64
+                minimum: 0
+                type: integer
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              prefixes:
+                items:
+                  $ref: "#/components/schemas/BucketPrefix"
+                type:
+                  - array
+                  - "null"
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            additionalProperties: false
+            properties:
+              blob:
+                items:
+                  $ref: "#/components/schemas/FunctionBlob"
+                type:
+                  - array
+                  - "null"
+              catalog:
+                $ref: "#/components/schemas/CatalogRef"
+              config:
+                items:
+                  maxLength: 63
+                  minLength: 1
+                  pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                  type: string
+                type:
+                  - array
+                  - "null"
+              ingress:
+                $ref: "#/components/schemas/CatalogIngress"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+              secrets:
+                items:
+                  maxLength: 63
+                  minLength: 1
+                  pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                  type: string
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
+        eventSources:
+          items:
+            additionalProperties: false
+            properties:
+              blob:
+                $ref: "#/components/schemas/BlobSource"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              timer:
+                $ref: "#/components/schemas/TimerSource"
+            type: object
+          type:
+            - array
+            - "null"
+        functions:
+          items:
+            additionalProperties: false
+            properties:
+              blob:
+                items:
+                  $ref: "#/components/schemas/FunctionBlob"
+                type:
+                  - array
+                  - "null"
+              catalogs:
+                items:
+                  $ref: "#/components/schemas/FunctionCatalog"
+                type:
+                  - array
+                  - "null"
+              config:
+                items:
+                  maxLength: 63
+                  minLength: 1
+                  pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                  type: string
+                type:
+                  - array
+                  - "null"
+              handler:
+                pattern: ^[A-Za-z_][A-Za-z0-9_.]*$
+                type: string
+              image:
+                type: string
+              imageDigest:
+                pattern: ^sha256:[a-f0-9]{64}$
+                type: string
+              kv:
+                items:
+                  $ref: "#/components/schemas/FunctionKV"
+                type:
+                  - array
+                  - "null"
+              links:
+                items:
+                  $ref: "#/components/schemas/FunctionLink"
+                type:
+                  - array
+                  - "null"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              pooling:
+                $ref: "#/components/schemas/Pooling"
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              replicas:
+                format: int64
+                maximum: 15
+                minimum: 0
+                type: integer
+              runtime:
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              scaling:
+                $ref: "#/components/schemas/Scaling"
+              secrets:
+                items:
+                  maxLength: 63
+                  minLength: 1
+                  pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                  type: string
+                type:
+                  - array
+                  - "null"
+              timeout:
+                description: "Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout."
+                pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+                patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+        kv:
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              maxKeyBytes:
+                format: int64
+                maximum: 64000
+                minimum: 0
+                type: integer
+              maxValueBytes:
+                format: int64
+                maximum: 1048576
+                minimum: 0
+                type: integer
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              tables:
+                items:
+                  $ref: "#/components/schemas/KVTable"
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
+        routes:
+          items:
+            additionalProperties: false
+            properties:
+              auth:
+                $ref: "#/components/schemas/RouteAuth"
+              host:
+                type: string
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              rules:
+                items:
+                  $ref: "#/components/schemas/RouteRule"
+                type:
+                  - array
+                  - "null"
+            type: object
+          type:
+            - array
+            - "null"
+        sensors:
+          items:
+            additionalProperties: false
+            properties:
+              do:
+                items:
+                  $ref: "#/components/schemas/Action"
+                type:
+                  - array
+                  - "null"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              "on":
+                items:
+                  $ref: "#/components/schemas/Dependency"
+                type:
+                  - array
+                  - "null"
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+        sites:
+          items:
+            additionalProperties: false
+            properties:
+              bucket:
+                $ref: "#/components/schemas/SiteBucket"
+              image:
+                type: string
+              index:
+                type: string
+              ingress:
+                $ref: "#/components/schemas/SiteIngress"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              prefix:
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              spa:
+                type: boolean
+            type: object
+          type:
+            - array
+            - "null"
+        version:
+          type: string
+        workflows:
+          items:
+            additionalProperties: false
+            properties:
+              contract:
+                $ref: "#/components/schemas/WorkflowContract"
+              kv:
+                items:
+                  $ref: "#/components/schemas/WorkflowKVStore"
+                type:
+                  - array
+                  - "null"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              onFailure:
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              pooling:
+                $ref: "#/components/schemas/WorkflowPooling"
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              steps:
+                items:
+                  $ref: "#/components/schemas/WorkflowStep"
+                type:
+                  - array
+                  - "null"
+              timeout:
+                description: "The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound."
+                pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+                patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
+      type: object
+    AppStatus:
+      additionalProperties: false
+      properties:
+        children:
+          items:
+            $ref: "#/components/schemas/AppChild"
+          type:
+            - array
+            - "null"
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        currentRevision:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        latestRevision:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+        version:
+          type: string
+      type: object
     AssignmentEntry:
       additionalProperties: false
       properties:
@@ -2658,6 +3194,240 @@ paths:
           description: Error
       tags:
         - Namespace
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions:
+    get:
+      operationId: listAppRevisions
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/AppRevision"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - AppRevision
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apprevisions/{name}:
+    get:
+      operationId: getAppRevision
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppRevision"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - AppRevision
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apps:
+    get:
+      operationId: listApps
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/App"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
+    post:
+      operationId: createApp
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/App"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/App"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}:
+    delete:
+      operationId: deleteApp
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
+    get:
+      operationId: getApp
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/App"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
+    put:
+      operationId: replaceApp
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/App"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/App"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets:
     get:
       operationId: listBuckets

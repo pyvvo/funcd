@@ -66,7 +66,7 @@ func TestScenarioE2ESite(t *testing.T) {
 		"index.html": "<!doctype html><title>bi-B</title>",
 		"app.js":     "console.log('B')",
 	})
-	p, st, s3Addr := startSitePlatform(t, funcd.FreeLoopbackAddr, refA)
+	p, st, substrate, s3Addr := startSitePlatform(t, funcd.FreeLoopbackAddr, refA)
 
 	getSite := func() *v1.Site {
 		obj, gerr := st.Get(ctx, v1.KindSite.GVK(), siteNS, "bi")
@@ -81,6 +81,7 @@ func TestScenarioE2ESite(t *testing.T) {
 		}, 20*time.Second, 100*time.Millisecond, "site Ready at %s; last status %+v", digest, getSite().Status)
 	}
 	waitReady(digestA)
+	putGold(t, substrate, siteNS)
 
 	// The owned resources: the Bucket (site prefix ownerless + the declared gold prefix, no OwnerReference)
 	// and the Route (owner-stamped, data mount + bundle rule).
@@ -214,21 +215,28 @@ const (
 // fetches, a Function bound to the site prefix (read grant only) and an external Identity with no role assignment.
 // Its S3 gateway listens on an address from reserve, through the #288 retry: a start that loses its port shuts the
 // platform down with its substrate, so each attempt builds and seeds its own (#464).
-func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image string) (*funcd.Platform, store.Store, string) {
+// putGold writes the gold layer straight into the substrate: the per-namespace view the S3 frontend, the static
+// handler and the Site reconciler share. It runs once the Site has created Bucket reports, because at boot funcd
+// purges the prefix of a Bucket that does not exist (ADR-0199 Decision 7).
+func putGold(t *testing.T, substrate blob.Bucket, ns v1.NamespaceName) {
+	t.Helper()
+	require.NoError(t, substrate.Put(context.Background(), "s3/"+string(ns)+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows"), blob.PutOptions{}))
+}
+
+func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image string) (*funcd.Platform, store.Store, blob.Bucket, string) {
 	t.Helper()
 	master := filepath.Join(t.TempDir(), "master.key")
 	require.NoError(t, os.WriteFile(master, []byte(siteMaster), 0o600))
 	var st store.Store
+	var bucket blob.Bucket
 	p, s3Addr := funcd.StartWithS3Gateway(t, reserve, func(s3Addr string, logger funcd.Option) (*funcd.Platform, error) {
 		ctx := context.Background()
-		bucket, err := gocloud.Open(ctx, "mem://")
+		var err error
+		bucket, err = gocloud.Open(ctx, "mem://")
 		require.NoError(t, err)
 		messaging, err := nats.Open(ctx, nats.Options{Storage: nats.MemoryStorage})
 		require.NoError(t, err)
 		st = store.New(memory.New())
-		// Written straight into the substrate: the per-namespace view the S3 frontend, the static handler, and the
-		// Site reconciler share.
-		require.NoError(t, bucket.Put(ctx, "s3/"+siteNS+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows"), blob.PutOptions{}))
 
 		siteObj := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
 		siteObj.Name, siteObj.Namespace, siteObj.ResourceGroup = "bi", siteNS, "rg1"
@@ -260,7 +268,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 			logger,
 		)
 	})
-	return p, st, s3Addr
+	return p, st, bucket, s3Addr
 }
 
 // TestIssue464_SiteS3GatewayStartsWhenItsReservedPortIsTaken: the site scenario reserves its S3 gateway port and
@@ -269,7 +277,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 func TestIssue464_SiteS3GatewayStartsWhenItsReservedPortIsTaken(t *testing.T) {
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": "<!doctype html>"})
 	reserve, taken := funcd.TakenPortReserve()
-	_, _, s3Addr := startSitePlatform(t, reserve, ref)
+	_, _, _, s3Addr := startSitePlatform(t, reserve, ref)
 	require.NotEqual(t, taken().Addr().String(), s3Addr, "the S3 clients target the port another listener holds")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -325,7 +333,6 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 
 	const ns = "openteam"
 	st := store.New(memory.New())
-	require.NoError(t, bucket.Put(ctx, "s3/"+ns+"/reports/gold/part-0.parquet", []byte("PAR1-gold-rows"), blob.PutOptions{}))
 
 	mkSite := func(name, ref string, mutate func(*v1.Site)) {
 		s := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
@@ -376,6 +383,7 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 			return gerr == nil && obj.(*v1.Site).Status.Phase == v1.PhaseReady
 		}, 20*time.Second, 100*time.Millisecond, "site %s Ready", name)
 	}
+	putGold(t, bucket, ns)
 
 	base := "http://" + p.DataPlaneAddr()
 	get := func(path string) (int, string) {

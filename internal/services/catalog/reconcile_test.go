@@ -252,6 +252,52 @@ func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 	require.Equal(t, v1.ConditionTrue, cond.Status)
 }
 
+// ADR-0199 Decision 5: every Ready the reconciler writes (engine Ready, engine not Ready, held for a missing
+// Bucket) records the generation it observed, also after a spec change.
+func TestReadyObservesGeneration(t *testing.T) {
+	for name, tc := range map[string]struct {
+		bucket bool
+		status provider.ProviderStatus
+		want   v1.ConditionStatus
+	}{
+		"engine ready":     {bucket: true, status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}, want: v1.ConditionTrue},
+		"engine not ready": {bucket: true, want: v1.ConditionFalse},
+		"bucket missing":   {status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}, want: v1.ConditionFalse},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			if tc.bucket {
+				seedCatalogBucket(t, st)
+			}
+			r := newReconciler(t, st, &fakeProvider{status: tc.status}, nil)
+			_, err := st.Create(ctx, mkCatalogService("lake"))
+			require.NoError(t, err)
+			get := func() *v1.CatalogService {
+				obj, gerr := st.Get(ctx, v1.KindCatalogService.GVK(), "default", "lake")
+				require.NoError(t, gerr)
+				return obj.(*v1.CatalogService)
+			}
+			reconcileOnce(t, r, "lake")
+			cond, ok := get().Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, int64(1), cond.ObservedGeneration)
+
+			cs := get()
+			cs.Spec.Resources.Memory = "4Gi"
+			_, err = st.Update(ctx, cs)
+			require.NoError(t, err)
+			reconcileOnce(t, r, "lake")
+			cs = get()
+			require.Equal(t, int64(2), cs.Generation)
+			cond, ok = cs.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, tc.want, cond.Status)
+			require.Equal(t, cs.Generation, cond.ObservedGeneration)
+		})
+	}
+}
+
 // scenario (ADR-0137 internal enforcement) — when a Manager is wired and the provider reports Ready,
 // the reconciler Ensures a node-private catalog PEP proxy fronting the engine and publishes the PROXY
 // address (bare 127.0.0.1:<port> — the function wraps it in quack://) as Status.Endpoint — internal

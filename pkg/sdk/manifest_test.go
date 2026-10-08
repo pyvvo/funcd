@@ -547,3 +547,43 @@ dev:
 		require.JSONEq(t, `{"type":"number","maximum":1.1}`, string(m.Contract.Input))
 	})
 }
+
+// scenario: app-admission-refuses (the strict-decode half, ADR-0199 Decision 2): an App's sections decode into their
+// typed entries, a ref entry included, and an unknown section or entry key fails the decode naming it.
+func TestDecodeManifestApp(t *testing.T) {
+	const head = `
+apiVersion: funcd.io/v1alpha1
+kind: App
+metadata:
+  name: todo
+  namespace: default
+  resourceGroup: todo-rg
+spec:
+`
+	obj, err := sdk.DecodeManifest([]byte(head + `
+  kv:
+    - name: todo-store
+      deletion: delete
+      tables:
+        - name: todos
+          owner: todo-api
+  functions:
+    - ref: mailer
+`))
+	require.NoError(t, err)
+	app, ok := obj.(*v1.App)
+	require.True(t, ok)
+	require.Equal(t, v1.DeletionDelete, app.Spec.KV[0].Deletion)
+	require.Equal(t, []v1.KVTable{{Name: "todos", Owner: "todo-api"}}, app.Spec.KV[0].Tables)
+	require.Equal(t, v1.ObjectName("mailer"), app.Spec.Functions[0].Ref)
+	require.NoError(t, app.Validate())
+
+	for key, body := range map[string]string{
+		"deployments": "\n  deployments:\n    - name: web\n",
+		"replicaz":    "\n  functions:\n    - name: web\n      replicaz: 2\n",
+	} {
+		_, err := sdk.DecodeManifest([]byte(head + body))
+		require.Error(t, err, key)
+		require.Contains(t, err.Error(), key)
+	}
+}

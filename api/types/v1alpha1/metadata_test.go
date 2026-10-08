@@ -128,8 +128,8 @@ func TestScenario_GenericObjectAccess(t *testing.T) {
 // scenario: kind-registry-roundtrips-every-kind (ADR-0003)
 func TestScenario_KindRegistryRoundtripsEveryKind(t *testing.T) {
 	all := AllKinds()
-	if len(all) != 26 {
-		t.Fatalf("AllKinds() returned %d kinds, want 26", len(all))
+	if len(all) != 28 {
+		t.Fatalf("AllKinds() returned %d kinds, want 28", len(all))
 	}
 
 	// Every Kind const is returned by AllKinds()
