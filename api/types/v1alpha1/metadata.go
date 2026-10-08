@@ -52,6 +52,9 @@ const (
 	// KindSite (ADR-0139, F103) is a declarative static web app: an immutable bundle materialized into a
 	// digest-scoped Bucket prefix, owning its Bucket + Route inline; Ready only once servable.
 	KindSite Kind = "Site"
+	// KindApp (ADR-0199, F113) declares a whole app in typed sections: its parts are applied, reported, pruned and
+	// deleted as one.
+	KindApp Kind = "App"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -75,7 +78,7 @@ func (k Kind) Validate() error {
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
-		KindIdentity, KindRole, KindRolesAssignment, KindSite:
+		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -390,6 +393,10 @@ func NewObject(k Kind) (Object, bool) {
 		si := &Site{}
 		si.TypeMeta = typeMetaFor(k)
 		return si, true
+	case KindApp:
+		app := &App{}
+		app.TypeMeta = typeMetaFor(k)
+		return app, true
 	default:
 		return nil, false
 	}
@@ -424,6 +431,7 @@ func AllKinds() []Kind {
 		KindRole,
 		KindRolesAssignment,
 		KindSite,
+		KindApp,
 	}
 }
 

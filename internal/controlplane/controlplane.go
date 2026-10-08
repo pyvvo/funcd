@@ -175,6 +175,13 @@ type Handlers interface {
 	ReplaceSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, si v1.Site) (v1.Site, error)
 	DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
 
+	// App (namespaced) — ADR-0199, FEAT-0010/F113
+	GetApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.App, error)
+	CreateApp(ctx context.Context, app v1.App) (v1.App, error)
+	ListApps(ctx context.Context, ns v1.NamespaceName) ([]v1.App, error)
+	ReplaceApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, app v1.App) (v1.App, error)
+	DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

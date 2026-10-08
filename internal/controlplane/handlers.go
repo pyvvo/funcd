@@ -182,6 +182,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Site:
 		o.TypeMeta = tm
+	case *v1.App:
+		o.TypeMeta = tm
 	}
 }
 
@@ -664,6 +666,58 @@ func (h *storeHandlers) ReplaceSite(ctx context.Context, ns v1.NamespaceName, na
 
 func (h *storeHandlers) DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	return h.deleteObj(ctx, v1.KindSite, ns, name)
+}
+
+// --- App (namespaced) — ADR-0199, FEAT-0010/F113 ---
+
+func (h *storeHandlers) GetApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.App, error) {
+	return typedObj[v1.App](h.getObj(ctx, v1.KindApp, ns, name))
+}
+
+func (h *storeHandlers) CreateApp(ctx context.Context, app v1.App) (v1.App, error) {
+	return typedObj[v1.App](h.createObj(ctx, v1.KindApp, &app))
+}
+
+func (h *storeHandlers) ListApps(ctx context.Context, ns v1.NamespaceName) ([]v1.App, error) {
+	return typedObjs[v1.App](h.listObj(ctx, v1.KindApp, ns))
+}
+
+func (h *storeHandlers) ReplaceApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, app v1.App) (v1.App, error) {
+	return typedObj[v1.App](h.replaceObj(ctx, v1.KindApp, ns, name, &app))
+}
+
+func (h *storeHandlers) DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	return h.deleteObj(ctx, v1.KindApp, ns, name)
+}
+
+// crudKind lists the namespaced kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, the
+// stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
+type crudKind interface {
+	v1.App
+}
+
+type objectPtr[T crudKind] interface {
+	*T
+	v1.Object
+}
+
+func typedObj[T crudKind, PT objectPtr[T]](o v1.Object, err error) (T, error) {
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return *o.(PT), nil
+}
+
+func typedObjs[T crudKind, PT objectPtr[T]](objs []v1.Object, err error) ([]T, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]T, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(PT)
+	}
+	return out, nil
 }
 
 // --- Service (namespaced) ---

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,9 +30,28 @@ import (
 
 const ns v1.NamespaceName = "default"
 
+// purges records each Purge as "<ns>/<bucket>".
+type purges struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (p *purges) Purge(_ context.Context, ns v1.NamespaceName, bucket v1.ObjectName) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, string(ns)+"/"+string(bucket))
+	return nil
+}
+
+func (p *purges) got() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.calls)
+}
+
 func newCollector(t testing.TB, st store.Store, interval time.Duration) *gc.Collector {
 	t.Helper()
-	c, err := gc.New(gc.Deps{Store: st, Interval: interval})
+	c, err := gc.New(gc.Deps{Store: st, Purger: &purges{}, Interval: interval})
 	require.NoError(t, err)
 	return c
 }
@@ -59,6 +79,14 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 	case *v1.Route:
 		o.Spec.Host = string(name) + ".example.com"
 		o.Spec.Rules = []v1.RouteRule{{Path: "/", Backend: v1.RouteBackend{Function: "fn"}}}
+	case *v1.EventSource:
+		o.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{{Name: "hourly", Interval: v1.Duration(time.Hour)}}}
+	case *v1.Sensor:
+		o.Spec.On = []v1.Dependency{{Name: "tick", Source: "tick", Event: "hourly"}}
+		o.Spec.Do = []v1.Action{{Name: "plan", On: "tick", Workflow: "wf"}}
+	case *v1.CatalogService:
+		o.Spec.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "lake"}}
+		o.Spec.Catalog = v1.CatalogRef{Bucket: "lake", Prefix: "lake"}
 	}
 	return obj
 }
@@ -73,7 +101,7 @@ func create(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName, owne
 			UID:       om.UID, Controller: true,
 		}
 		obj.GetObjectMeta().OwnerReferences = []v1.OwnerReference{ref}
-		if kind == v1.KindKVStore { // the materializer marks every store it makes (ADR-0178)
+		if kind == v1.KindKVStore || kind == v1.KindBucket { // a store's maker marks it (ADR-0178, ADR-0199)
 			ref.Controller = false
 			obj.GetObjectMeta().OwnerReferences = append(obj.GetObjectMeta().OwnerReferences, ref)
 		}
@@ -98,20 +126,36 @@ func del(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName) {
 	require.NoError(t, st.Delete(context.Background(), kind.GVK(), ns, name, ""))
 }
 
-// fleet creates one owner and child of every pair, and returns them by child kind.
-func fleet(t testing.TB, st store.Store) map[v1.Kind][2]v1.Object {
+// fleet creates one owner and child of every pair, and returns them by pair.
+func fleet(t testing.TB, st store.Store) map[gc.Pair][2]v1.Object {
 	t.Helper()
 	wf := create(t, st, v1.KindWorkflow, "wf", nil)
 	id := create(t, st, v1.KindIdentity, "id", nil)
 	site := create(t, st, v1.KindSite, "web", nil)
 	fn := create(t, st, v1.KindFunction, "fn", nil)
-	return map[v1.Kind][2]v1.Object{
-		v1.KindFunction: {wf, create(t, st, v1.KindFunction, "wf-s1", wf)},
-		v1.KindKVStore:  {wf, create(t, st, v1.KindKVStore, "wf-state", wf)},
-		v1.KindSecret:   {id, create(t, st, v1.KindSecret, "id", id)},
-		v1.KindRoute:    {site, create(t, st, v1.KindRoute, "web", site)},
-		v1.KindRevision: {fn, create(t, st, v1.KindRevision, "fn-1", fn)},
+	app := create(t, st, v1.KindApp, "app", nil)
+	f := map[gc.Pair][2]v1.Object{
+		{Owner: v1.KindWorkflow, Child: v1.KindFunction}: {wf, create(t, st, v1.KindFunction, "wf-s1", wf)},
+		{Owner: v1.KindWorkflow, Child: v1.KindKVStore}:  {wf, create(t, st, v1.KindKVStore, "wf-state", wf)},
+		{Owner: v1.KindIdentity, Child: v1.KindSecret}:   {id, create(t, st, v1.KindSecret, "id", id)},
+		{Owner: v1.KindSite, Child: v1.KindRoute}:        {site, create(t, st, v1.KindRoute, "web", site)},
+		{Owner: v1.KindFunction, Child: v1.KindRevision}: {fn, create(t, st, v1.KindRevision, "fn-1", fn)},
 	}
+	for _, p := range gc.Pairs() {
+		if p.Owner == v1.KindApp {
+			f[p] = [2]v1.Object{app, create(t, st, p.Child, v1.ObjectName("app-"+strings.ToLower(string(p.Child))), app)}
+		}
+	}
+	return f
+}
+
+func deleteOwners(t testing.TB, st store.Store) {
+	t.Helper()
+	del(t, st, v1.KindWorkflow, "wf")
+	del(t, st, v1.KindIdentity, "id")
+	del(t, st, v1.KindSite, "web")
+	del(t, st, v1.KindFunction, "fn")
+	del(t, st, v1.KindApp, "app")
 }
 
 // scenario: live-owner-children-never-collected — sweeps delete nothing while every owner lives.
@@ -122,8 +166,8 @@ func TestScenarioLiveOwnerChildrenNeverCollected(t *testing.T) {
 	for range 3 {
 		require.NoError(t, c.CollectNamespace(context.Background(), ""))
 	}
-	for kind, pair := range f {
-		require.True(t, exists(t, st, kind, pair[1].GetObjectMeta().Name), "%s of a live owner stays", kind)
+	for p, oc := range f {
+		require.True(t, exists(t, st, p.Child, oc[1].GetObjectMeta().Name), "the child of a live owner stays: %v", p)
 	}
 }
 
@@ -136,15 +180,12 @@ func TestCollectNamespaceDeletesChildrenOfDeletedOrReplacedOwners(t *testing.T) 
 	_, err := st.Create(context.Background(), weak)
 	require.NoError(t, err)
 
-	del(t, st, v1.KindWorkflow, "wf")
-	del(t, st, v1.KindIdentity, "id")
+	deleteOwners(t, st)
 	create(t, st, v1.KindIdentity, "id", nil) // a namesake with another UID
-	del(t, st, v1.KindSite, "web")
-	del(t, st, v1.KindFunction, "fn")
 
 	require.NoError(t, newCollector(t, st, 0).CollectNamespace(context.Background(), ns))
-	for kind, pair := range f {
-		require.False(t, exists(t, st, kind, pair[1].GetObjectMeta().Name), "%s of a dead owner is collected", kind)
+	for p, oc := range f {
+		require.False(t, exists(t, st, p.Child, oc[1].GetObjectMeta().Name), "the child of a dead owner is collected: %v", p)
 	}
 	require.True(t, exists(t, st, v1.KindSecret, unowned.GetObjectMeta().Name), "an unowned object stays")
 	require.True(t, exists(t, st, v1.KindSecret, "weak"), "a non-controller ownerRef is ignored")
@@ -216,9 +257,11 @@ func TestConflictRejudgesWithAFreshOwnerRead(t *testing.T) {
 }
 
 func TestNewValidatesDeps(t *testing.T) {
-	_, err := gc.New(gc.Deps{})
+	_, err := gc.New(gc.Deps{Purger: &purges{}})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	_, err = gc.New(gc.Deps{Store: store.New(memory.New()), Interval: -time.Second})
+	_, err = gc.New(gc.Deps{Store: store.New(memory.New())})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a purger is required")
+	_, err = gc.New(gc.Deps{Store: store.New(memory.New()), Purger: &purges{}, Interval: -time.Second})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
@@ -247,16 +290,13 @@ func TestRunCollectsADeletedOwnersChildrenFromItsWatch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the start sweep did not return")
 	}
-	for kind, pair := range f {
-		require.True(t, exists(t, st, kind, pair[1].GetObjectMeta().Name), "the start sweep keeps the %s of a live owner", kind)
+	for p, oc := range f {
+		require.True(t, exists(t, st, p.Child, oc[1].GetObjectMeta().Name), "the start sweep keeps the child of a live owner: %v", p)
 	}
-	del(t, st, v1.KindWorkflow, "wf")
-	del(t, st, v1.KindIdentity, "id")
-	del(t, st, v1.KindSite, "web")
-	del(t, st, v1.KindFunction, "fn")
+	deleteOwners(t, st)
 	require.Eventually(t, func() bool {
-		for kind, pair := range f {
-			if exists(t, st, kind, pair[1].GetObjectMeta().Name) {
+		for p, oc := range f {
+			if exists(t, st, p.Child, oc[1].GetObjectMeta().Name) {
 				return false
 			}
 		}
@@ -323,6 +363,18 @@ func writers() map[string][]gc.Pair {
 	}
 }
 
+// appPairs is the pairs the App reconciler stamps (ADR-0199 Decision 7).
+func appPairs() []gc.Pair {
+	var out []gc.Pair
+	for _, k := range []v1.Kind{
+		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
+		v1.KindCatalogService, v1.KindKVStore, v1.KindBucket,
+	} {
+		out = append(out, gc.Pair{Owner: v1.KindApp, Child: k})
+	}
+	return out
+}
+
 func TestPairsCoverEveryControllerRef(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var found []string
@@ -353,7 +405,7 @@ func TestPairsCoverEveryControllerRef(t *testing.T) {
 		return nil
 	}))
 	var known []string
-	var want []gc.Pair
+	want := appPairs()
 	for f, pairs := range writers() {
 		known = append(known, f)
 		want = append(want, pairs...)
@@ -494,10 +546,11 @@ func holdPins(t *testing.T, st store.Store, fn v1.Object, rev v1.ObjectName) v1.
 func TestHeldChildrenWaitForTheirRun(t *testing.T) {
 	st := store.New(memory.New())
 	f := fleet(t, st)
-	stepFn, fnRev := f[v1.KindFunction][1], f[v1.KindRevision][1]
+	revPair := gc.Pair{Owner: v1.KindFunction, Child: v1.KindRevision}
+	stepFn, fnRev := f[gc.Pair{Owner: v1.KindWorkflow, Child: v1.KindFunction}][1], f[revPair][1]
 	run := holdPins(t, st, stepFn, "wf-s1-1")
 	runPin := run.(*v1.WorkflowRun)
-	runPin.Status.Pins = append(runPin.Status.Pins, v1.RevisionPin{Function: "fn", FunctionUID: f[v1.KindRevision][0].GetObjectMeta().UID, Revision: fnRev.GetObjectMeta().Name})
+	runPin.Status.Pins = append(runPin.Status.Pins, v1.RevisionPin{Function: "fn", FunctionUID: f[revPair][0].GetObjectMeta().UID, Revision: fnRev.GetObjectMeta().Name})
 	run, err := st.Update(context.Background(), runPin)
 	require.NoError(t, err)
 	del(t, st, v1.KindWorkflow, "wf")
@@ -516,4 +569,217 @@ func TestHeldChildrenWaitForTheirRun(t *testing.T) {
 	require.NoError(t, c.CollectNamespace(context.Background(), ns))
 	require.False(t, exists(t, st, v1.KindFunction, "wf-s1"), "the next sweep after the run ends collects it")
 	require.False(t, exists(t, st, v1.KindRevision, "fn-1"))
+}
+
+// ownedBy returns obj with owner's controller reference and, with marker, the non-controller marker too.
+func ownedBy(obj, owner v1.Object, controller, marker bool) v1.Object {
+	om := owner.GetObjectMeta()
+	ref := v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: owner.GroupVersionKind().Kind, Namespace: om.Namespace, Name: om.Name}, UID: om.UID}
+	var refs []v1.OwnerReference
+	if controller {
+		c := ref
+		c.Controller = true
+		refs = append(refs, c)
+	}
+	if marker {
+		refs = append(refs, ref)
+	}
+	obj.GetObjectMeta().OwnerReferences = refs
+	return obj
+}
+
+func put(t testing.TB, st store.Store, obj v1.Object) v1.Object {
+	t.Helper()
+	out, err := st.Create(context.Background(), obj)
+	require.NoError(t, err)
+	return out
+}
+
+// deleteHook runs after once a Delete has returned.
+type deleteHook struct {
+	store.Store
+	after func()
+}
+
+func (s deleteHook) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	err := s.Store.Delete(ctx, gvk, ns, name, rv)
+	s.after()
+	return err
+}
+
+// ADR-0199 Decision 7: purge, delete at the resourceVersion, then purge again unless a namesake exists.
+func TestDeleteBucket(t *testing.T) {
+	ctx := context.Background()
+	t.Run("purges, deletes and purges again", func(t *testing.T) {
+		st := store.New(memory.New())
+		b := put(t, st, object(t, v1.KindBucket, "b")).(*v1.Bucket)
+		p := &purges{}
+		require.NoError(t, gc.DeleteBucket(ctx, st, p, b))
+		require.Equal(t, []string{"default/b", "default/b"}, p.got())
+		require.False(t, exists(t, st, v1.KindBucket, "b"))
+	})
+	t.Run("a Bucket of that name exists again", func(t *testing.T) {
+		base := store.New(memory.New())
+		b := put(t, base, object(t, v1.KindBucket, "b")).(*v1.Bucket)
+		var again v1.Object
+		st := deleteHook{Store: base, after: func() { again = put(t, base, object(t, v1.KindBucket, "b")) }}
+		p := &purges{}
+		require.NoError(t, gc.DeleteBucket(ctx, st, p, b))
+		require.Equal(t, []string{"default/b"}, p.got(), "the namesake's prefix is its own")
+		cur, err := base.Get(ctx, v1.KindBucket.GVK(), ns, "b")
+		require.NoError(t, err)
+		require.Equal(t, again.GetObjectMeta().UID, cur.GetObjectMeta().UID)
+	})
+	t.Run("a changed Bucket is a Conflict", func(t *testing.T) {
+		st := store.New(memory.New())
+		b := put(t, st, object(t, v1.KindBucket, "b")).(*v1.Bucket)
+		changed, err := st.Get(ctx, v1.KindBucket.GVK(), ns, "b")
+		require.NoError(t, err)
+		changed.GetObjectMeta().Tags = v1.Tags{"touched": "yes"}
+		_, err = st.Update(ctx, changed)
+		require.NoError(t, err)
+		p := &purges{}
+		err = gc.DeleteBucket(ctx, st, p, b)
+		require.Equal(t, fault.Conflict, fault.KindOf(err), "got %v", err)
+		require.Equal(t, []string{"default/b"}, p.got(), "no second purge while the Bucket stays")
+		require.True(t, exists(t, st, v1.KindBucket, "b"))
+	})
+	t.Run("a Bucket already gone is purged again", func(t *testing.T) {
+		st := store.New(memory.New())
+		b := put(t, st, object(t, v1.KindBucket, "b")).(*v1.Bucket)
+		del(t, st, v1.KindBucket, "b")
+		p := &purges{}
+		require.NoError(t, gc.DeleteBucket(ctx, st, p, b))
+		require.Equal(t, []string{"default/b", "default/b"}, p.got())
+	})
+}
+
+// ADR-0199 Decision 6: one row per field that keeps an object in use.
+func TestInUse(t *testing.T) {
+	ctx := context.Background()
+	fn := func(name v1.ObjectName, mutate func(*v1.FunctionSpec)) v1.Object {
+		f := object(t, v1.KindFunction, name).(*v1.Function)
+		mutate(&f.Spec)
+		return f
+	}
+	for _, tc := range []struct {
+		name   string
+		target v1.Object
+		user   v1.Object
+	}{
+		{"a Function's spec.links", object(t, v1.KindFunction, "callee"), fn("caller", func(s *v1.FunctionSpec) {
+			s.Links = []v1.FunctionLink{{Alias: "callee", Target: "callee"}}
+		})},
+		{"a Function's spec.kv", object(t, v1.KindKVStore, "cache"), fn("api", func(s *v1.FunctionSpec) {
+			s.KV = []v1.FunctionKV{{Alias: "cache", Store: "cache", Table: "entries"}}
+		})},
+		{"a Function's spec.blob", object(t, v1.KindBucket, "lake"), fn("api", func(s *v1.FunctionSpec) {
+			s.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "raw"}}
+		})},
+		{"a CatalogService's spec.blob", object(t, v1.KindBucket, "lake"), object(t, v1.KindCatalogService, "catalog")},
+		{"an EventSource's spec.blob.bucket", object(t, v1.KindBucket, "lake"), func() v1.Object {
+			es := object(t, v1.KindEventSource, "drops").(*v1.EventSource)
+			es.Spec.Timer = nil
+			es.Spec.Blob = &v1.BlobSource{Bucket: "lake", Events: []v1.BlobEvent{{Name: "dropped"}}}
+			return es
+		}()},
+		{"a Route's spec.rules[].backend.static.bucket", object(t, v1.KindBucket, "lake"), func() v1.Object {
+			r := object(t, v1.KindRoute, "docs").(*v1.Route)
+			r.Spec.Rules = append(r.Spec.Rules, v1.RouteRule{Path: "/docs", Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "lake"}}})
+			return r
+		}()},
+		{"a Site's spec.bucket.name", object(t, v1.KindBucket, "assets"), object(t, v1.KindSite, "web")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := store.New(memory.New())
+			target := put(t, st, tc.target)
+			user := put(t, st, tc.user)
+			um := user.GetObjectMeta()
+			want := v1.ObjectRef{Kind: user.GroupVersionKind().Kind, Namespace: um.Namespace, Name: um.Name}
+
+			got, used, err := gc.InUse(ctx, st, target, nil)
+			require.NoError(t, err)
+			require.True(t, used)
+			require.Equal(t, want, got)
+
+			_, used, err = gc.InUse(ctx, st, target, func(o v1.Object) bool { return o.GetObjectMeta().UID == um.UID })
+			require.NoError(t, err)
+			require.False(t, used, "a skipped user does not count")
+
+			other := put(t, st, func() v1.Object {
+				o := object(t, tc.target.GroupVersionKind().Kind, tc.target.GetObjectMeta().Name)
+				o.GetObjectMeta().Namespace = "other"
+				return o
+			}())
+			_, used, err = gc.InUse(ctx, st, other, nil)
+			require.NoError(t, err)
+			require.False(t, used, "a user in another namespace does not count")
+		})
+	}
+	t.Run("a kind nothing uses", func(t *testing.T) {
+		st := store.New(memory.New())
+		_, used, err := gc.InUse(ctx, st, put(t, st, object(t, v1.KindSecret, "s")), nil)
+		require.NoError(t, err)
+		require.False(t, used)
+	})
+}
+
+// scenario: app-store-in-use-kept (the collector half, ADR-0199 Decision 7) — a store a dead App controls waits
+// while something the sweep does not delete uses it; an unused Bucket goes through DeleteBucket.
+func TestAppStoreInUseWaitsForALaterSweep(t *testing.T) {
+	ctx := context.Background()
+	t.Run("a user outside the App", func(t *testing.T) {
+		st := store.New(memory.New())
+		app := create(t, st, v1.KindApp, "todo", nil)
+		put(t, st, ownedBy(object(t, v1.KindKVStore, "todo-cache"), app, true, true))
+		put(t, st, ownedBy(object(t, v1.KindBucket, "todo-tmp"), app, true, true))
+		put(t, st, ownedBy(object(t, v1.KindBucket, "todo-files"), app, false, true))
+		put(t, st, ownedBy(object(t, v1.KindBucket, "unmarked"), app, true, false))
+		api := object(t, v1.KindFunction, "todo-api").(*v1.Function)
+		api.Spec.KV = []v1.FunctionKV{{Alias: "cache", Store: "todo-cache", Table: "entries"}}
+		api.Spec.Blob = []v1.FunctionBlob{{Alias: "tmp", Bucket: "todo-tmp", Prefix: "tmp"}}
+		put(t, st, ownedBy(api, app, true, false))
+		audit := object(t, v1.KindFunction, "audit").(*v1.Function)
+		audit.Spec.KV = []v1.FunctionKV{{Alias: "cache", Store: "todo-cache", Table: "entries"}}
+		audit = put(t, st, audit).(*v1.Function)
+		del(t, st, v1.KindApp, "todo")
+
+		p := &purges{}
+		c, err := gc.New(gc.Deps{Store: st, Purger: p})
+		require.NoError(t, err)
+		require.NoError(t, c.CollectNamespace(ctx, ns))
+		require.False(t, exists(t, st, v1.KindFunction, "todo-api"))
+		require.False(t, exists(t, st, v1.KindBucket, "todo-tmp"), "a user the App controls does not keep it")
+		require.Equal(t, []string{"default/todo-tmp", "default/todo-tmp"}, p.got(), "a collected Bucket goes through DeleteBucket")
+		require.True(t, exists(t, st, v1.KindKVStore, "todo-cache"), "audit, outside the App, still binds it")
+		require.True(t, exists(t, st, v1.KindBucket, "todo-files"), "a retained Bucket has no controller reference")
+		require.True(t, exists(t, st, v1.KindBucket, "unmarked"), "a Bucket without the marker is never collected")
+
+		audit.Spec.KV = nil
+		_, err = st.Update(ctx, audit)
+		require.NoError(t, err)
+		require.NoError(t, c.CollectNamespace(ctx, ns))
+		require.False(t, exists(t, st, v1.KindKVStore, "todo-cache"), "the next sweep after the binding goes collects it")
+	})
+	t.Run("a held Function of the App", func(t *testing.T) {
+		st := store.New(memory.New())
+		app := create(t, st, v1.KindApp, "todo", nil)
+		put(t, st, ownedBy(object(t, v1.KindKVStore, "todo-cache"), app, true, true))
+		api := object(t, v1.KindFunction, "todo-api").(*v1.Function)
+		api.Spec.KV = []v1.FunctionKV{{Alias: "cache", Store: "todo-cache", Table: "entries"}}
+		run := holdPins(t, st, put(t, st, ownedBy(api, app, true, false)), "todo-api-1").(*v1.WorkflowRun)
+		del(t, st, v1.KindApp, "todo")
+
+		c := newCollector(t, st, 0)
+		require.NoError(t, c.CollectNamespace(ctx, ns))
+		require.True(t, exists(t, st, v1.KindFunction, "todo-api"), "a held Function waits")
+		require.True(t, exists(t, st, v1.KindKVStore, "todo-cache"), "a held Function counts as a user")
+
+		run.Status.Phase = v1.RunCancelled
+		_, err := st.Update(ctx, run)
+		require.NoError(t, err)
+		require.NoError(t, c.CollectNamespace(ctx, ns))
+		require.False(t, exists(t, st, v1.KindFunction, "todo-api"))
+		require.False(t, exists(t, st, v1.KindKVStore, "todo-cache"))
+	})
 }

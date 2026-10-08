@@ -59,6 +59,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindRole:            {"roles", true},            // ADR-0136, F101
 	v1.KindRolesAssignment: {"rolesassignments", true}, // ADR-0136, F101
 	v1.KindSite:            {"sites", true},            // ADR-0139, F103
+	v1.KindApp:             {"apps", true},             // ADR-0199, F113
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

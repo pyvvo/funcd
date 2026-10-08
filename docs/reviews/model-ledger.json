@@ -10138,5 +10138,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-846-fix-claude-opus-5-5.md",
     "notes": "syncStatus read the run record before the goroutine's liveness; a goroutine that recorded and exited in between let the pass write fallback Cancelled with no steps. Fix reads liveness first (ADR-0146 D4). TestIssue846 fails 5/5 pre-fix with the CI message, passes -race x100; 2 mutants + revert caught; no findings"
+  },
+  {
+    "date": "2026-10-08",
+    "adr": "0199",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 16,
+    "dod_total": 16,
+    "report": "docs/reviews/adr-0199-implementation-claude-opus-5-5.md",
+    "notes": "bcd48e94 on acdd8518, 11 commits: just ci EXIT=0 (lint 0 issues x2); 15/15 TestScenarioApp* e2e pass, none skipped; 26 related e2e (substrate seeding, GC, Site, pools) pass after the new boot Bucket reclaim; mutants 6/6 killed (ChildNotOwned stop, prune-while-Pending, waking Deploying, app-parts view, GC used-store wait, DeleteBucket second purge). Contracts, Decisions 3-8 and all 15 Scenarios hold; ADR diff is the status line only; no go.mod change. m1 [model] noPurge inserted between stalledDrop's doc comment and its type (pkg/funcd/kvstore_reclaim_test.go:90-97). just ci-full's full test-e2e lane left to the PR gate."
   }
 ]

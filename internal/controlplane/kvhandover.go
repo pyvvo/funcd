@@ -42,12 +42,12 @@ func (h *storeHandlers) HandoverKVStore(ctx context.Context, ns v1.NamespaceName
 	if !slices.ContainsFunc(wf.Spec.KV, func(kv v1.WorkflowKVStore) bool { return kv.Name == name }) {
 		return v1.KVStore{}, fault.Conflictf(op, "workflow %q does not declare kvstore %q in spec.kv", workflowName, name)
 	}
-	live, err := h.liveMarker(ctx, ns, cur.GetObjectMeta().OwnerReferences)
+	maker, live, err := h.liveMarker(ctx, ns, cur.GetObjectMeta().OwnerReferences)
 	if err != nil {
 		return v1.KVStore{}, err
 	}
 	if live {
-		return v1.KVStore{}, fault.Conflictf(op, "kvstore %q was made by a workflow that still exists; delete that workflow first", name)
+		return v1.KVStore{}, fault.Conflictf(op, "kvstore %q was made by %s/%s, which still exists; delete it first", name, maker.Kind, maker.Name)
 	}
 	next, err := withStatus(cur, cur)
 	if err != nil {
@@ -71,36 +71,37 @@ func (h *storeHandlers) HandoverKVStore(ctx context.Context, ns v1.NamespaceName
 	return *out.(*v1.KVStore), nil
 }
 
-// refuseLiveMarked refuses an API write to a store a live Workflow made, so a user's apply never lands keys
-// under that Workflow's lifecycle; a marker naming a deleted Workflow stays editable (ADR-0178 Decision 6).
+// refuseLiveMarked refuses an API write to a store a live Workflow or App made, so a user's apply never lands keys
+// under its maker's lifecycle; a marker naming a deleted maker stays editable (ADR-0178 Decision 6, ADR-0199
+// Decision 8).
 func (h *storeHandlers) refuseLiveMarked(ctx context.Context, cur v1.Object) error {
 	meta := cur.GetObjectMeta()
-	live, err := h.liveMarker(ctx, meta.Namespace, meta.OwnerReferences)
+	maker, live, err := h.liveMarker(ctx, meta.Namespace, meta.OwnerReferences)
 	if err != nil {
 		return err
 	}
 	if live {
-		return fault.Conflictf("controlplane.ReplaceKVStore", "kvstore %q is managed by the workflow that made it", meta.Name)
+		return fault.Conflictf("controlplane.ReplaceKVStore", "kvstore %q is managed by %s/%s, which made it", meta.Name, maker.Kind, maker.Name)
 	}
 	return nil
 }
 
-// liveMarker reports whether refs hold a Workflow marker whose UID is that of an existing Workflow.
-func (h *storeHandlers) liveMarker(ctx context.Context, ns v1.NamespaceName, refs []v1.OwnerReference) (bool, error) {
+// liveMarker returns the first marker in refs whose UID is that of an existing object of the marker's own kind.
+func (h *storeHandlers) liveMarker(ctx context.Context, ns v1.NamespaceName, refs []v1.OwnerReference) (v1.OwnerReference, bool, error) {
 	for _, r := range refs {
 		if !workflow.IsKVMarker(r) {
 			continue
 		}
-		wf, err := h.store.Get(ctx, v1.KindWorkflow.GVK(), ns, r.Name)
+		maker, err := h.store.Get(ctx, r.Kind.GVK(), ns, r.Name)
 		switch {
 		case fault.KindOf(err) == fault.NotFound:
 		case err != nil:
-			return false, err
-		case wf.GetObjectMeta().UID == r.UID:
-			return true, nil
+			return v1.OwnerReference{}, false, err
+		case maker.GetObjectMeta().UID == r.UID:
+			return r, true, nil
 		}
 	}
-	return false, nil
+	return v1.OwnerReference{}, false, nil
 }
 
 // refuseMigrationRecord keeps the KVStore marker migration's completion record out of the API, so no principal

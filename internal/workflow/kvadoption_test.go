@@ -79,7 +79,7 @@ func rvOf(t *testing.T, s store.Store, kind v1.Kind, name v1.ObjectName) string 
 
 func collectTwice(t *testing.T, s store.Store) {
 	t.Helper()
-	col, err := gc.New(gc.Deps{Store: s})
+	col, err := gc.New(gc.Deps{Store: s, Purger: noPurge{}})
 	require.NoError(t, err)
 	for range 2 {
 		require.NoError(t, col.CollectNamespace(context.Background(), "default"))
@@ -408,4 +408,29 @@ func TestScenarioMigrationAuditIsOneLine(t *testing.T) {
 		delete(want, rec.Store)
 	}
 	require.Empty(t, want, "one line per marked store")
+}
+
+// ADR-0199 Decision 8: a non-controller App ref is a store marker too, so the migration leaves a store an App made
+// to that App even when a Workflow declares it.
+func TestKVMarkerCoversAnApp(t *testing.T) {
+	ref := func(kind v1.Kind, controller bool) v1.OwnerReference {
+		return v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: kind, Namespace: "default", Name: "todo"}, UID: "u1", Controller: controller}
+	}
+	require.True(t, IsKVMarker(ref(v1.KindWorkflow, false)))
+	require.True(t, IsKVMarker(ref(v1.KindApp, false)))
+	require.False(t, IsKVMarker(ref(v1.KindApp, true)))
+	require.False(t, IsKVMarker(ref(v1.KindSite, false)))
+
+	s := newStore(t)
+	ctx := context.Background()
+	kv := storeKV("w-kv", v1.DeletionRetain)
+	kv.Tables[0].Owner = "s"
+	w := storedWorkflow(t, s, "w", []string{"s"}, kv)
+	prev := previousStore(t, s, "w-kv", w, false)
+	prev.OwnerReferences = []v1.OwnerReference{ref(v1.KindApp, false)}
+	_, err := s.Update(ctx, prev)
+	require.NoError(t, err)
+
+	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
+	require.Equal(t, []v1.OwnerReference{ref(v1.KindApp, false)}, getObj(t, s, v1.KindKVStore, "w-kv").GetObjectMeta().OwnerReferences)
 }

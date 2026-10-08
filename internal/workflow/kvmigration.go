@@ -75,7 +75,7 @@ func MarkKVStoresOnce(ctx context.Context, s store.Store, log *slog.Logger) erro
 	return nil
 }
 
-// hasMarker reports whether refs hold a non-controller Workflow ref.
+// hasMarker reports whether refs hold a store marker (IsKVMarker).
 func hasMarker(refs []v1.OwnerReference) bool {
 	return slices.ContainsFunc(refs, IsKVMarker)
 }

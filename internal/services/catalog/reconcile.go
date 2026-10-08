@@ -136,7 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 		cs.Status.Endpoint = endpoint
 		cs.Status.Phase = v1.PhaseReady
-		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: cs.Generation})
 		// ADR-0138: OPT-IN external edge exposure — program an edge entry to the PEP PROXY (proxyURL,
 		// never the raw engine) when spec.ingress is set; clear it otherwise. Requires the proxy (the
 		// entry's upstream); with no proxy wired (in-memory/dev) there is nothing external to expose.
@@ -164,7 +164,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			reason = "EngineNotReady"
 		}
 		cs.Status.Phase = v1.PhasePending
-		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason})
+		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, ObservedGeneration: cs.Generation})
 	}
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
@@ -271,7 +271,7 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.CatalogService, re
 	cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
 	cs.Status.Endpoint = ""
 	cs.Status.Phase = v1.PhasePending
-	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message})
+	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: cs.Generation})
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
 	}

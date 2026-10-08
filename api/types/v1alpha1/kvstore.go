@@ -111,12 +111,12 @@ func (s *KVStore) Validate() error {
 		return fault.Invalidf(op, "spec.maxKeyBytes (%d) exceeds the largest storable key (%d bytes)", s.Spec.MaxKeyBytes, MaxKeyBytesLimit)
 	}
 	seen := make(map[string]bool, len(s.Spec.Tables))
-	for _, tb := range s.Spec.Tables {
+	for i, tb := range s.Spec.Tables {
 		if !dnsLabel.MatchString(tb.Name) {
-			return fault.Invalidf(op, "spec.tables name %q is not a valid DNS-1123 label", tb.Name)
+			return fault.Invalidf(op, "spec.tables[%d].name %q is not a valid DNS-1123 label", i, tb.Name)
 		}
 		if seen[tb.Name] {
-			return fault.Invalidf(op, "spec.tables name %q is duplicated", tb.Name)
+			return fault.Invalidf(op, "spec.tables[%d].name %q is duplicated", i, tb.Name)
 		}
 		seen[tb.Name] = true
 	}

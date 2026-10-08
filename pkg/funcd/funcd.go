@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
@@ -29,6 +30,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/activator/storescaler"
+	"github.com/pyvvo/funcd/internal/app"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/auth"
 	cedarauth "github.com/pyvvo/funcd/internal/auth/cedar"
@@ -786,7 +788,7 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
-	if p.collector, err = gc.New(gc.Deps{Store: c.store, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
+	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
 	}
 	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
@@ -1015,7 +1017,58 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger, c.pacing.ArtifactPollInterval))
 	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger, c.pacing.ReferentPollInterval)
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
+	// ADR-0199: the App reconciler writes an App's parts; a change to a part it controls or marks, or to an
+	// object a ref entry names, requeues the App.
+	appReconciler, err := app.NewReconciler(app.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
+	}
+	ctrl.Register(v1.KindApp.GVK(), appReconciler)
+	for _, pair := range gc.Pairs() {
+		if pair.Owner == v1.KindApp {
+			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)
+		}
+	}
 	p.controller = ctrl
+
+	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over
+	// the store, and app-parts over a view that already holds an App's other parts (ADR-0199 Decision 3).
+	partAdmissions := func(r admission.StoreReader) []admission.Admission {
+		return []admission.Admission{
+			// ADR-0064 fn-to-fn link rules on the write path.
+			admission.NewLinkValidityAdmission(r),
+			admission.NewLinkDeletionProtectionAdmission(r),
+			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
+			// spec.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
+			// Update). Binding/owner EXISTENCE (Function.spec.kv → an existing store/table; KVStore
+			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
+			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
+			// exists — no write-time existence gate.
+			admission.NewKVStoreQuotaAdmission(r, kvMaxStores),
+			admission.NewKVStoreDeletionProtectionAdmission(r, kvProber{c.kvStore}),
+			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
+			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
+			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
+			// the same substrate view the s3gateway writes (s3BucketFor).
+			admission.NewBucketQuotaAdmission(r, bucketMax),
+			admission.NewBucketDeletionProtectionAdmission(r, blobProber{blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}}),
+			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
+			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
+			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
+			admission.NewSitePrefixImmutableAdmission(),
+			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
+			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
+			admission.NewPolicyValidityAdmission(),
+			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
+			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
+			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
+			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
+			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
+			admission.NewWorkflowRunSpecImmutableAdmission(),
+			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
+			admission.NewResourceGroupDeletionProtectionAdmission(r),
+		}
+	}
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
 	// whenever a blob substrate is — nil leaves the route unregistered. ADR-0106: the run-scoped querier
@@ -1038,40 +1091,7 @@ func (p *Platform) buildControlPlane() error {
 		DeadLetters: dlq,              // ADR-0118: the DLQ read + replay/discard surface
 		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
-		Admissions: []admission.Admission{
-			// ADR-0064 fn-to-fn link rules on the write path.
-			admission.NewLinkValidityAdmission(storeReader{c.store}),
-			admission.NewLinkDeletionProtectionAdmission(storeReader{c.store}),
-			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
-			// Update). Binding/owner EXISTENCE (Function.spec.kv → an existing store/table; KVStore
-			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
-			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
-			// exists — no write-time existence gate.
-			admission.NewKVStoreQuotaAdmission(storeReader{c.store}, kvMaxStores),
-			admission.NewKVStoreDeletionProtectionAdmission(storeReader{c.store}, kvProber{c.kvStore}),
-			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
-			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
-			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
-			// the same substrate view the s3gateway writes (s3BucketFor).
-			admission.NewBucketQuotaAdmission(storeReader{c.store}, bucketMax),
-			admission.NewBucketDeletionProtectionAdmission(storeReader{c.store}, blobProber{blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}}),
-			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
-			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
-			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
-			admission.NewSitePrefixImmutableAdmission(),
-			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
-			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
-			admission.NewPolicyValidityAdmission(),
-			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
-			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
-			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
-			admission.NewWorkflowRunContractAdmission(storeReader{c.store}),
-			// ADR-0094: a run's workflow/input/replay are fixed at creation — a second run under a taken name is a Conflict.
-			admission.NewWorkflowRunSpecImmutableAdmission(),
-			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
-			admission.NewResourceGroupDeletionProtectionAdmission(storeReader{c.store}),
-		},
+		Admissions:  append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store})),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")
@@ -1297,6 +1317,10 @@ func (p *Platform) Run(ctx context.Context) error {
 	// ran, before the controller or the control plane can create a store of the same name.
 	if err := p.kvReconciler.ReclaimDeleted(ctx); err != nil && ctx.Err() == nil {
 		p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
+	}
+	// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
+	if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
+		p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every catalog entry until "routes" has Set once, and no
@@ -1944,7 +1968,85 @@ func s3BucketFor(shared blob.Bucket, st store.Store) func(ns v1.NamespaceName, b
 		if b, ok := obj.(*v1.Bucket); ok {
 			maxObjectBytes = b.Spec.MaxObjectBytes
 		}
-		return blob.Capped(blob.Prefixed(shared, "s3/"+string(ns)+"/"+bucket+"/"), maxObjectBytes), true
+		return blob.Capped(blob.Prefixed(shared, bucketPrefix(ns, v1.ObjectName(bucket))), maxObjectBytes), true
+	}
+}
+
+// s3Root is the substrate key prefix under which every Bucket's objects live (ADR-0080).
+const s3Root = "s3/"
+
+// bucketPrefix is one Bucket's substrate key prefix, s3/<ns>/<bucket>/ (ADR-0080).
+func bucketPrefix(ns v1.NamespaceName, bucket v1.ObjectName) string {
+	return s3Root + string(ns) + "/" + string(bucket) + "/"
+}
+
+// purgePage is the most objects one listing of a Purge returns.
+const purgePage = 1000
+
+// bucketPurger is the gc.BucketPurger over a Bucket's raw substrate prefix (ADR-0199 Decision 7). Unlike
+// s3BucketFor it resolves no Bucket resource, so it also purges the prefix of a deleted one.
+type bucketPurger struct{ shared blob.Bucket }
+
+func (p bucketPurger) Purge(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName) error {
+	const op = "funcd.bucketPurger.Purge"
+	view := blob.Prefixed(p.shared, bucketPrefix(ns, bucket))
+	after := ""
+	for {
+		items, more, err := view.ListAfter(ctx, "", after, purgePage)
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "list bucket %s/%s", ns, bucket)
+		}
+		for _, it := range items {
+			if err := view.Delete(ctx, it.Key); err != nil && fault.KindOf(err) != fault.NotFound {
+				return fault.Wrapf(err, fault.KindOf(err), op, "delete %q of bucket %s/%s", it.Key, ns, bucket)
+			}
+		}
+		if !more || len(items) == 0 {
+			return nil
+		}
+		after = items[len(items)-1].Key
+	}
+}
+
+// reclaimDeletedBuckets purges the prefix of every Bucket that no longer exists, which a crash between a Bucket's
+// delete and its second purge leaves behind (ADR-0199 Decision 7). It reads one key per prefix and seeks past the
+// rest, as the S3 frontend rolls up a common prefix.
+func reclaimDeletedBuckets(ctx context.Context, shared blob.Bucket, st store.Store, logger *slog.Logger) error {
+	const op = "funcd.reclaimDeletedBuckets"
+	purger := bucketPurger{shared: shared}
+	var errs []error
+	after := ""
+	for {
+		items, _, err := shared.ListAfter(ctx, s3Root, after, 1)
+		if err != nil {
+			return errors.Join(append(errs, fault.Wrapf(err, fault.KindOf(err), op, "list bucket prefixes"))...)
+		}
+		if len(items) == 0 {
+			return errors.Join(errs...)
+		}
+		key := items[0].Key
+		parts := strings.SplitN(strings.TrimPrefix(key, s3Root), "/", 3)
+		if len(parts) < 3 {
+			after = key
+			continue
+		}
+		ns, name := v1.NamespaceName(parts[0]), v1.ObjectName(parts[1])
+		after = max(bucketPrefix(ns, name)+string(utf8.MaxRune), key)
+		if ns.Validate() != nil || name.Validate() != nil {
+			continue
+		}
+		_, gerr := st.Get(ctx, v1.KindBucket.GVK(), ns, name)
+		if fault.KindOf(gerr) != fault.NotFound {
+			if gerr != nil {
+				errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get bucket %s/%s", ns, name))
+			}
+			continue
+		}
+		if perr := purger.Purge(ctx, ns, name); perr != nil {
+			errs = append(errs, perr)
+			continue
+		}
+		logger.InfoContext(ctx, "reclaimed the objects of a deleted Bucket", "namespace", ns, "bucket", name)
 	}
 }
 

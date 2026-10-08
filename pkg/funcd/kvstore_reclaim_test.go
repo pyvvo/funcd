@@ -39,7 +39,7 @@ func TestIssue708_DeletedKVStoreDataReclaimedOnRestart(t *testing.T) {
 		_, err := st.Create(ctx, ks)
 		require.NoError(t, err)
 		putOld(t, kv)
-		col, err := gc.New(gc.Deps{Store: st})
+		col, err := gc.New(gc.Deps{Store: st, Purger: noPurge{}})
 		require.NoError(t, err)
 		require.NoError(t, col.CollectNamespace(ctx, "default"))
 		_, err = st.Get(ctx, v1.KindKVStore.GVK(), "default", "s")
@@ -89,6 +89,11 @@ func TestIssue708_DeletedKVStoreDataReclaimedOnRestart(t *testing.T) {
 
 // stalledDrop holds the delete's DropPrefix until the platform is stopping, then fails it, as a reconcile
 // that runs with the cancelled context does.
+// noPurge is a gc.BucketPurger that purges nothing: these tests collect no Bucket.
+type noPurge struct{}
+
+func (noPurge) Purge(context.Context, v1.NamespaceName, v1.ObjectName) error { return nil }
+
 type stalledDrop struct {
 	kvstore.KV
 	once    sync.Once

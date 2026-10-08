@@ -1458,3 +1458,78 @@ func registerSite(api huma.API, h Handlers) {
 		return nil, wrapFaultError(h.DeleteSite(ctx, in.Namespace, in.Name))
 	})
 }
+
+// ===== App (namespaced) — ADR-0199, FEAT-0010/F113 =====
+
+func registerApp(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.App]{
+		kind: "App", kinds: "Apps", path: "apps",
+		list: h.ListApps, create: h.CreateApp, get: h.GetApp, replace: h.ReplaceApp, remove: h.DeleteApp,
+	})
+}
+
+// crudRoutes is the REST surface of one namespaced kind under
+// /apis/funcd.io/v1alpha1/namespaces/{namespace}/<path>, registered by registerNamespacedCRUD.
+type crudRoutes[T crudKind] struct {
+	kind, kinds, path string
+	list              func(context.Context, v1.NamespaceName) ([]T, error)
+	create            func(context.Context, T) (T, error)
+	get               func(context.Context, v1.NamespaceName, v1.ObjectName) (T, error)
+	replace           func(context.Context, v1.NamespaceName, v1.ObjectName, T) (T, error)
+	remove            func(context.Context, v1.NamespaceName, v1.ObjectName) error
+}
+
+type namespacedBodyInput[T crudKind] struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      T
+}
+
+type namespacedNameBodyInput[T crudKind] struct {
+	Namespace v1.NamespaceName `path:"namespace"`
+	Name      v1.ObjectName    `path:"name"`
+	Body      T
+}
+
+type bodyOutput[T crudKind] struct{ Body T }
+
+type listOutput[T crudKind] struct{ Body []T }
+
+func respond[T crudKind](v T, err error) (*bodyOutput[T], error) {
+	if err != nil {
+		return nil, wrapFaultError(err)
+	}
+	return &bodyOutput[T]{Body: v}, nil
+}
+
+func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRoutes[T]) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/" + r.path
+	tags := []string{r.kind}
+	huma.Register(api, huma.Operation{OperationID: "list" + r.kinds, Method: http.MethodGet, Path: base, Tags: tags},
+		func(ctx context.Context, in *namespacedList) (*listOutput[T], error) {
+			items, err := r.list(ctx, in.Namespace)
+			if err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return &listOutput[T]{Body: items}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "create" + r.kind, Method: http.MethodPost, Path: base, Tags: tags},
+		func(ctx context.Context, in *namespacedBodyInput[T]) (*bodyOutput[T], error) {
+			if err := matchPathNamespace(in.Namespace, PT(&in.Body).GetObjectMeta()); err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return respond(r.create(ctx, in.Body))
+		})
+	item := base + "/{name}"
+	huma.Register(api, huma.Operation{OperationID: "get" + r.kind, Method: http.MethodGet, Path: item, Tags: tags},
+		func(ctx context.Context, in *namespacedGet) (*bodyOutput[T], error) {
+			return respond(r.get(ctx, in.Namespace, in.Name))
+		})
+	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
+		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
+			return respond(r.replace(ctx, in.Namespace, in.Name, in.Body))
+		})
+	huma.Register(api, huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item, Tags: tags},
+		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+			return nil, wrapFaultError(r.remove(ctx, in.Namespace, in.Name))
+		})
+}

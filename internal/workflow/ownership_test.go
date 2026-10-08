@@ -15,6 +15,11 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+// noPurge is a gc.BucketPurger that purges nothing: these tests collect no Bucket.
+type noPurge struct{}
+
+func (noPurge) Purge(context.Context, v1.NamespaceName, v1.ObjectName) error { return nil }
+
 func storedWorkflow(t *testing.T, s store.Store, name v1.ObjectName, steps []string, kv ...v1.WorkflowKVStore) *v1.Workflow {
 	t.Helper()
 	wf := &v1.Workflow{
@@ -81,7 +86,7 @@ func TestScenarioRecreatedWorkflowTakesNewUid(t *testing.T) {
 		require.Equal(t, wf.UID, controllerUID(getObj(t, s, c.kind, c.name)), "%s carries the new UID", c.name)
 	}
 
-	col, err := gc.New(gc.Deps{Store: s})
+	col, err := gc.New(gc.Deps{Store: s, Purger: noPurge{}})
 	require.NoError(t, err)
 	for range 2 {
 		require.NoError(t, col.CollectNamespace(ctx, "default"))

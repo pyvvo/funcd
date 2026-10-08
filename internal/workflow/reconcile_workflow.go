@@ -446,8 +446,11 @@ func kvMarker(wf *v1.Workflow) v1.OwnerReference {
 // KVMarker is kvMarker for the control plane's handover, so the marker has one definition.
 func KVMarker(wf *v1.Workflow) v1.OwnerReference { return kvMarker(wf) }
 
-// IsKVMarker reports whether r has the shape of a KVStore marker: a non-controller Workflow ref.
-func IsKVMarker(r v1.OwnerReference) bool { return !r.Controller && r.Kind == v1.KindWorkflow }
+// IsKVMarker reports whether r has the shape of a store marker: a non-controller Workflow or App ref (ADR-0199
+// Decision 8 extends ADR-0178's guards to the stores an App makes).
+func IsKVMarker(r v1.OwnerReference) bool {
+	return !r.Controller && (r.Kind == v1.KindWorkflow || r.Kind == v1.KindApp)
+}
 
 // marked reports whether refs hold a non-controller ref with wf's kind, name and UID.
 func marked(refs []v1.OwnerReference, wf *v1.Workflow) bool {
