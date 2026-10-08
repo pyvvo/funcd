@@ -10,9 +10,8 @@ set -euo pipefail
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 key=$(cat "$root/flake.nix" "$root/flake.lock" | shasum | cut -c1-16)
 env_file="$root/.cache/devshell-env-$key.sh"
-# The environment script points TMPDIR at a new nix-shell.XXXXXX directory under the current one, so a call nested in
-# another (gate.sh under `d timeout`) keeps the environment it inherits rather than lengthen TMPDIR (#853). It trusts
-# that environment: a process in between that resets PATH must also unset FUNCD_DEVSHELL_KEY.
+# A call nested in another (gate.sh under `d timeout`) keeps the environment it inherits (#853). It trusts that
+# environment: a process in between that resets PATH must also unset FUNCD_DEVSHELL_KEY.
 if [ "${FUNCD_DEVSHELL_KEY:-}" != "$key" ]; then
   if [ ! -s "$env_file" ]; then
     mkdir -p "$root/.cache"
@@ -29,9 +28,16 @@ if [ "${FUNCD_DEVSHELL_KEY:-}" != "$key" ]; then
     exit 1
   fi
   orig_path=$PATH
+  tmp_base=${TMPDIR:-/tmp}
+  saved_tmp=$(declare -p TMPDIR TMP TEMP TEMPDIR 2>/dev/null) || true
   set +eu # the generated environment script is not written for errexit/nounset
   # shellcheck disable=SC1090
   source "$env_file" >/dev/null 2>&1
+  # The script points TMPDIR and its aliases at a new nix-shell.XXXXXX directory that only an interactive shell removes
+  # on exit; d execs, so it removes that directory while still empty and restores the caller's values (#856).
+  case $NIX_BUILD_TOP in "${tmp_base%/}"/nix-shell.*) rmdir "$NIX_BUILD_TOP" 2>/dev/null ;; esac
+  unset NIX_BUILD_TOP TMPDIR TMP TEMP TEMPDIR
+  eval "$saved_tmp"
   export PATH="$PATH:$orig_path"
   export FUNCD_DEVSHELL_KEY=$key
 fi

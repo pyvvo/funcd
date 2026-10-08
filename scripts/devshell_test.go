@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,4 +148,39 @@ export DEVSHELL_WHOLE=yes
 		require.Error(t, err, "%s", out)
 		require.Contains(t, out, "bash 4 or later")
 	}
+}
+
+// The cached environment script creates a nix-shell.XXXXXX directory and points TMPDIR at it. d ends with exec, so no
+// exit trap removed it and every call left one behind. d removes the empty directory and restores TMPDIR.
+func TestIssue856_CallLeavesNoTempDir(t *testing.T) {
+	bash := devBash(t)
+	root := devshellCheckout(t, `export NIX_BUILD_TOP="$(mktemp -d -t nix-shell.XXXXXX)"
+export TMP="$NIX_BUILD_TOP"
+export TMPDIR="$NIX_BUILD_TOP"
+export TEMP="$NIX_BUILD_TOP"
+export TEMPDIR="$NIX_BUILD_TOP"
+`)
+	d := filepath.Join(root, "scripts", "agent", "d")
+	tmp := t.TempDir()
+	env := []string{"TMPDIR=" + tmp, "FUNCD_DEVSHELL_KEY="}
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains([]string{"TMPDIR", "TMP", "TEMP", "TEMPDIR", "NIX_BUILD_TOP", "FUNCD_DEVSHELL_KEY"}, name) {
+			env = append(env, kv)
+		}
+	}
+
+	var seen []string
+	for range 3 {
+		cmd := exec.Command(bash, d, "sh", "-c", `printf '%s|%s|%s' "$TMPDIR" "${TMP-unset}" "${NIX_BUILD_TOP-unset}"`)
+		cmd.Dir = root
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		seen = append(seen, string(out))
+	}
+	left, err := filepath.Glob(filepath.Join(tmp, "nix-shell.*"))
+	require.NoError(t, err)
+	require.Empty(t, left, "d must remove the directory the environment script creates")
+	require.Equal(t, slices.Repeat([]string{tmp + "|unset|unset"}, 3), seen, "d must keep TMPDIR")
 }
