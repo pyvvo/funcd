@@ -241,7 +241,7 @@ func TestPoolResolverAfterRestart(t *testing.T) {
 	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.Calls = calls })
 	old := pooledPair(t, h)
 	oldURL, release := h.rt.serveWorker(t, old, "old pool")
-	callInFlight(t, calls, oldURL)
+	answer := callInFlight(t, calls, oldURL)
 	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = otherArtifact(t) })
 	h.reconcile(t, "b")
 	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 2)
@@ -261,7 +261,7 @@ func TestPoolResolverAfterRestart(t *testing.T) {
 	require.False(t, h.rt.wasRemoved(old), "the call in flight still holds the old pool worker")
 
 	release()
-	settle()
+	require.Equal(t, "old pool", answer())
 	restarted.reconcile(t, "a")
 	require.True(t, h.rt.wasRemoved(old))
 	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 1)
@@ -280,7 +280,7 @@ func TestPoolRebuildSocketKeepsDepartingMember(t *testing.T) {
 	old := pooledPair(t, h)
 	require.Equal(t, []v1.ObjectName{"a", "b"}, sockets.of(poolOf("w")))
 	oldURL, release := h.rt.serveWorker(t, old, "old pool")
-	callInFlight(t, calls, oldURL)
+	answer := callInFlight(t, calls, oldURL)
 
 	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w2" })
 	h.reconcile(t, "a")
@@ -290,7 +290,7 @@ func TestPoolRebuildSocketKeepsDepartingMember(t *testing.T) {
 	require.ElementsMatch(t, []v1.ObjectName{"a", "b"}, members)
 
 	release()
-	settle()
+	require.Equal(t, "old pool", answer())
 	h.reconcile(t, "a")
 	require.True(t, h.rt.wasRemoved(old))
 	require.Equal(t, []v1.ObjectName{"a"}, sockets.of(poolOf("w")), "the retirement narrows the socket to the current members")
@@ -336,4 +336,46 @@ func TestPoolPinnedCurrentNeedsItsCodeInManifest(t *testing.T) {
 	up, ready = h.upstream(t, "a")
 	require.True(t, ready, "a sibling is still handed the pool worker")
 	require.Equal(t, h.shimURL()+"/function/a", up)
+}
+
+// lateClose carries a call whose response body takes closeLag to close: the call ends, as the tracker counts it, that
+// long after its answer was read.
+type lateClose struct{}
+
+const closeLag = 100 * time.Millisecond
+
+func (lateClose) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = lateBody{resp.Body}
+	return resp, nil
+}
+
+type lateBody struct{ io.ReadCloser }
+
+func (b lateBody) Close() error {
+	time.Sleep(closeLag)
+	return b.ReadCloser.Close()
+}
+
+// A released call holds the old pool worker until it ends, which can be well after its answer arrives; the test's wait
+// for the answer covers its end, so the next pass retires the old pool worker (#858).
+func TestIssue858_ReleasedCallEndsBeforeRetireCheck(t *testing.T) {
+	t.Parallel()
+	calls := activator.NewCallTracker(nil)
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.Calls = calls })
+	old := pooledPair(t, h)
+	oldURL, release := h.rt.serveWorker(t, old, "old pool")
+	answer := callThrough(t, calls, lateClose{}, oldURL)
+
+	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "w2" })
+	h.reconcile(t, "a")
+	require.False(t, h.rt.wasRemoved(old), "the call in flight holds the old pool worker")
+
+	release()
+	require.Equal(t, "old pool", answer())
+	h.reconcile(t, "a")
+	require.True(t, h.rt.wasRemoved(old), "the old pool worker is retired once the released call has ended")
 }

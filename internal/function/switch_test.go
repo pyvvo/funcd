@@ -119,18 +119,24 @@ func (f *fakeRuntime) serveBlockingRevision(t *testing.T, rev v1.ObjectName, ans
 }
 
 // callInFlight starts a call through calls to upstream and waits until the tracker counts it; the returned func waits
-// for its answer.
+// for the call to end, as the tracker counts it, and returns its answer.
 func callInFlight(t *testing.T, calls *activator.CallTracker, upstream string) (answer func() string) {
+	t.Helper()
+	return callThrough(t, calls, nil, upstream)
+}
+
+// callThrough is callInFlight with rt under the tracker.
+func callThrough(t *testing.T, calls *activator.CallTracker, rt http.RoundTripper, upstream string) (answer func() string) {
 	t.Helper()
 	done := make(chan string, 1)
 	go func() {
-		resp, err := (&http.Client{Transport: calls.Wrap(nil)}).Get(upstream + "/invoke")
+		resp, err := (&http.Client{Transport: calls.Wrap(rt)}).Get(upstream + "/invoke")
 		if err != nil {
 			done <- "error: " + err.Error()
 			return
 		}
-		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		done <- string(b)
 	}()
 	require.Eventually(t, func() bool { return !calls.Idle(upstream, 0) }, 2*time.Second, time.Millisecond, "the call is in flight")
