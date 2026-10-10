@@ -26,8 +26,10 @@ const (
 	probePrefix  = "probe/"
 	manifestName = "manifest.yaml"
 	refusedName  = "refused"
-	partBytes    = 8 << 20
 )
+
+// PartBytes is the most bytes one part of a stored file holds (Decision 2); the sibling backups part theirs alike.
+const PartBytes = 8 << 20
 
 // GenDir is a generation's directory, gen/<class>/<n>-<timeline>/, n in 10 decimal digits.
 func GenDir(class Class, n uint64, timeline string) string {
