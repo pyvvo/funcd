@@ -303,6 +303,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		opts = append(opts, funcd.WithEdgeShaping(shCfg))
 	}
 
+	// The node master secret lives at the same place gateway on or off (ADR-0204 Decision 7, #850).
+	opts = append(opts, funcd.WithMasterLocation(cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate.
 	if cfg.S3Gateway.Enabled {
 		opts = append(opts, funcd.WithS3Gateway(
