@@ -295,7 +295,7 @@ type Reconciler struct {
 	poolShimCommand   []string
 	poolShimsByFamily map[string][]string // runtime-family prefix → pool-host command (ADR-0050)
 	poolLimit         int
-	// poolDrains is when the drain of each key's old pool workers started (ADR-0190 Decision 8); poolHolds is the
+	// poolDrains is each key's pool-rebuild switch record (ADR-0190 Decision 8, ADR-0224); poolHolds is the
 	// manifest each key's pool workers were last built to hold; poolSets is each pool worker's member set ("ns/worker" →
 	// names), recorded before it is created. All guarded by poolMu, for concurrent reconciles of sibling members of
 	// the same pool.
@@ -1371,7 +1371,7 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 		return 0, 0, err
 	}
 	if pooled {
-		w, ok := r.servingPool(insts)
+		w, ok := r.servingPool(key, fn.Name, insts)
 		if !ok {
 			w, ok = newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning })
 		}
@@ -2572,7 +2572,7 @@ func (r *Reconciler) upstreamForFn(ctx context.Context, fn *v1.Function) (string
 		if err != nil {
 			return "", err
 		}
-		if w, ok := r.servingPool(insts); ok {
+		if w, ok := r.servingPool(key, fn.Name, insts); ok {
 			return instanceURL(fn.Namespace, w.Name, w), nil
 		}
 		return "", nil
@@ -2599,7 +2599,7 @@ func (r *Reconciler) pinnedPoolUpstream(ctx context.Context, fn *v1.Function, re
 		return "", err
 	}
 	cur, _ := splitPool(insts, hold.sig)
-	if w, ok := r.servingPool(cur); ok {
+	if w, ok := newestPool(cur, r.listening); ok {
 		return instanceURL(fn.Namespace, w.Name, w), nil
 	}
 	return "", nil

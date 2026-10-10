@@ -84,11 +84,17 @@ func (f *fakeRuntime) stateOf(id runtime.InstanceID) runtime.State {
 	return f.state[id]
 }
 
-// poolShim is a pool worker's own endpoint: /health/members as the fake answers it, and /health/liveness with the code
-// a test sets.
-type poolShim struct{ live atomic.Int32 }
+// poolShim is a pool worker's own endpoint at url: /health/members as the fake answers it for that worker, counted, and
+// /health/liveness with the code a test sets.
+type poolShim struct {
+	url           string
+	live, members atomic.Int32
+}
 
 func (s *poolShim) setLive(code int) { s.live.Store(int32(code)) }
+
+// membersCalls is how many GET /health/members the worker has answered.
+func (s *poolShim) membersCalls() int { return int(s.members.Load()) }
 
 // servePoolWorker gives pool worker id, and each one created again under id, its own poolShim.
 func (f *fakeRuntime) servePoolWorker(t *testing.T, id runtime.InstanceID) *poolShim {
@@ -98,7 +104,8 @@ func (f *fakeRuntime) servePoolWorker(t *testing.T, id runtime.InstanceID) *pool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health/members":
-			f.serveMembers(w)
+			s.members.Add(1)
+			f.serveMembersOf(w, id)
 		case "/health/liveness":
 			w.WriteHeader(int(s.live.Load()))
 		default:
@@ -106,6 +113,7 @@ func (f *fakeRuntime) servePoolWorker(t *testing.T, id runtime.InstanceID) *pool
 		}
 	}))
 	t.Cleanup(srv.Close)
+	s.url = srv.URL
 	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	require.NoError(t, err)
 	port, err := strconv.Atoi(portStr)

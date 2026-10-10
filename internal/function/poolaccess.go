@@ -246,8 +246,12 @@ func (r *Reconciler) PoolMembers(ns v1.NamespaceName, worker v1.ObjectName) (mem
 	return members, func(name string) bool { return byName[name] }, true
 }
 
-// poolDrain is the drain of a key's old pool workers: since when worker next of the current manifest listens.
+// poolDrain is a key's pool-rebuild switch record (ADR-0190 Decision 8, ADR-0224 Decisions 2-5). Guarded by poolMu.
 type poolDrain struct {
-	next  runtime.InstanceID
-	since time.Time
+	next        runtime.InstanceID // the worker of the current manifest
+	since       time.Time          // when next was first seen listening; zero before: the load clock
+	nextCreated time.Time          // next's CreatedAt; a newer one (restartPool, same ID) resets since
+	from        runtime.InstanceID // the worker carried members are handed until the switch
+	switched    time.Time          // when the resolver moved to next; zero while it waits: the drain clock
+	carried     []v1.ObjectName    // the members handed from until the switch
 }
