@@ -1,6 +1,6 @@
 # ADR-0224: A rebuilt pool switches to its new worker when every carried-over member is ready
 
-- **Status**: Accepted (2026-10-10; the decider chose option B on #867 and delegated acceptance ("go with the recommended approach … don't wait for me"), so the defaults in Open questions stand as recommended, not confirmed one by one; judged by four lenses with a skeptic per finding, confirmed, then cross-checked with ADR-0225 and ADR-0215)
+- **Status**: Reviewing (2026-10-10; accepted 2026-10-10: the decider chose option B on #867 and delegated acceptance ("go with the recommended approach … don't wait for me"), so the defaults in Open questions stand as recommended, not confirmed one by one; judged by four lenses with a skeptic per finding, confirmed, then cross-checked with ADR-0225 and ADR-0215)
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: function, pooling, redeploy, readiness, resolver, drain
