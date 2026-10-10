@@ -95,16 +95,9 @@ func (e *gcEnv) workflow(t *testing.T, name, group string, steps []string, kv ..
 	require.NoError(t, err)
 }
 
-// apply applies obj as funcdctl dev's applyDesired does: the update is conditional on the version the control plane
-// reads (ADR-0210), so a controller's status write in between answers fault.Conflict, and obj is sent again.
 func (e *gcEnv) apply(t *testing.T, obj v1.Object) {
 	t.Helper()
-	var err error
-	for range 5 {
-		if _, err = e.c.Apply(e.ctx, obj); fault.KindOf(err) != fault.Conflict {
-			break
-		}
-	}
+	_, err := e.c.Apply(e.ctx, obj)
 	require.NoError(t, err)
 }
 
