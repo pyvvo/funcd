@@ -101,6 +101,7 @@ func nextVersion(t *testing.T, s store.Store, name string) store.Version {
 // (memory → Badger → memory): every object keeps its resourceVersion, a loaded store mints
 // <its new timeline>-<revision+1> next, and a non-empty engine refuses the load with fault.Conflict, unchanged.
 func TestScenarioSnapshotLoadsBack(t *testing.T) {
+	t.Parallel()
 	a := atRevision(t, memory.New(), 3)
 	put(t, a, "y", "y")
 	rvA, recsA := records(t, a)
@@ -137,6 +138,7 @@ func TestScenarioSnapshotLoadsBack(t *testing.T) {
 // scenario: first-start-takes-timeline — a store opened on an empty engine versions its first object
 // <16 hex>-1; another empty engine gets another timeline; a reopened Badger store keeps its own.
 func TestScenarioFirstStartTakesTimeline(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	e1, err := bstore.Open(dir, bstore.WithValueLogGCInterval(0))
 	require.NoError(t, err)
@@ -159,6 +161,7 @@ func TestScenarioFirstStartTakesTimeline(t *testing.T) {
 // no timeline) opens with its objects' versions kept; an Update carrying one returns <timeline>-121, and so
 // does List.
 func TestScenarioLegacyStoreTakesTimeline(t *testing.T) {
+	t.Parallel()
 	eng := badgerAt(t, t.TempDir())
 	require.NoError(t, eng.Update(context.Background(), func(tx store.Txn) error {
 		for name, rv := range map[string]string{"x": "119", "y": "120"} {
@@ -196,6 +199,7 @@ func TestScenarioLegacyStoreTakesTimeline(t *testing.T) {
 // and C (Badger), and A's Engine.Snapshot, its timeline record included, loaded and opened as D (Badger) and E
 // (memory): each holds A's objects and versions, has a timeline unlike T1 and the others, and mints <own>-101.
 func TestScenarioRestoreTakesNewTimeline(t *testing.T) {
+	t.Parallel()
 	aEng := memory.New()
 	a := atRevision(t, aEng, 100)
 	rvA, storeRecs := records(t, a)
@@ -222,6 +226,7 @@ func TestScenarioRestoreTakesNewTimeline(t *testing.T) {
 // scenario: stale-update-conflicts — B restored from A; A's later writes leave x at T1-130 and B's at T2-130: an
 // Update or a Delete of x on B carrying T1-130 gets fault.Conflict, and x is unchanged.
 func TestScenarioStaleUpdateConflicts(t *testing.T) {
+	t.Parallel()
 	a := atRevision(t, memory.New(), 100)
 	b := storecontract.Restore(t, a, memory.New())
 	for i := 101; i <= 130; i++ {
@@ -246,6 +251,7 @@ func TestScenarioStaleUpdateConflicts(t *testing.T) {
 // scenario: stale-watch-relists (store) — a Watch on B, restored from A, resuming from a T1 or a plain version
 // gets fault.Unavailable, so the caller re-lists; one from B's own version resumes.
 func TestScenarioStaleWatchRelists(t *testing.T) {
+	t.Parallel()
 	a := atRevision(t, memory.New(), 100)
 	t1 := rvOf(t, a, "x")
 	b := storecontract.Restore(t, a, memory.New())
@@ -262,6 +268,7 @@ func TestScenarioStaleWatchRelists(t *testing.T) {
 // scenario: initial-list-spans-timelines — B holds restored (T1) and new (T2) objects: a Watch opened without a
 // version delivers every object once as Added, then B's next write.
 func TestScenarioInitialListSpansTimelines(t *testing.T) {
+	t.Parallel()
 	a := store.New(memory.New())
 	put(t, a, "r1", "1")
 	put(t, a, "r2", "1")

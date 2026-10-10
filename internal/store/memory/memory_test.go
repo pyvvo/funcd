@@ -20,6 +20,7 @@ func TestScenario_DriverConformanceParity(t *testing.T) {
 // scenario: snapshot-is-one-read (metastore, memory engine) — the snapshot contract: a writer commits a=i, then
 // b=i, while 200 snapshots run, and none holds b above a; the snapshot loads back into an empty engine.
 func TestScenarioSnapshotIsOneRead(t *testing.T) {
+	t.Parallel()
 	snapshotcontract.Run(t, func(t *testing.T) snapshotcontract.Subject {
 		return storecontract.SnapshotSubject(t, memory.New())
 	})

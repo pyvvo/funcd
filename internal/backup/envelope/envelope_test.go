@@ -146,6 +146,7 @@ func readAll(t *testing.T, r io.Reader) []snapshot.Record {
 // scenario: sealed-to-recipients — each store file's parts, concatenated, open with the age CLI and either identity
 // alone, and not with a third.
 func TestScenarioSealedToRecipients(t *testing.T) {
+	t.Parallel()
 	a, b, c := x25519(t), x25519(t), x25519(t)
 	s, _ := newSealer(t, envelope.Config{
 		Recipients: []string{recipientsFile(t, a.Recipient().String()), recipientsFile(t, b.Recipient().String())},
@@ -196,6 +197,7 @@ func TestScenarioSealedToRecipients(t *testing.T) {
 // scenario: recipients-required — no recipient, one, one in two files, or an X25519 and a hybrid one is fault.Invalid
 // naming backup.encryption.recipients.
 func TestScenarioRecipientsRequired(t *testing.T) {
+	t.Parallel()
 	a, h := x25519(t).Recipient().String(), hybrid(t).Recipient().String()
 	for name, files := range map[string][]string{
 		"none":              nil,
@@ -214,6 +216,7 @@ func TestScenarioRecipientsRequired(t *testing.T) {
 // scenario: plaintext-secrets-refused — none without secrets.encryptionKeyFile refuses naming both keys; with it the
 // sealer starts, warns, and the generation holds no plaintext Secret.
 func TestScenarioPlaintextSecretsRefused(t *testing.T) {
+	t.Parallel()
 	_, err := envelope.New(envelope.Config{None: true, Logger: slog.New(slog.DiscardHandler)})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "backup.encryption.none")
@@ -248,6 +251,7 @@ func TestScenarioPlaintextSecretsRefused(t *testing.T) {
 // scenario: manifest-names-keys — the manifest records the fingerprints of K, M and both recipients, and no object
 // (nor the start log) holds K, M or SHA-256(M).
 func TestScenarioManifestNamesKeys(t *testing.T) {
+	t.Parallel()
 	k, mk := randomKey(t), randomKey(t)
 	a, b := x25519(t).Recipient().String(), x25519(t).Recipient().String()
 	s, logs := newSealer(t, envelope.Config{Recipients: []string{recipientsFile(t, a, b)}, SecretsKey: k, Master: mk})
@@ -293,6 +297,7 @@ func TestScenarioManifestNamesKeys(t *testing.T) {
 // scenario: recipients-change — generations 1 and 2 sealed to A and B, 3 to A and C: 3 records A and C, B opens 1 and
 // 2, and opening 3 with B fails naming both sets.
 func TestScenarioRecipientsChange(t *testing.T) {
+	t.Parallel()
 	a, b, c := x25519(t), x25519(t), x25519(t)
 	ab, _ := newSealer(t, envelope.Config{Recipients: []string{recipientsFile(t, a.Recipient().String(), b.Recipient().String())}, SecretsKey: []byte("k")})
 	ac, _ := newSealer(t, envelope.Config{Recipients: []string{recipientsFile(t, a.Recipient().String(), c.Recipient().String())}, SecretsKey: []byte("k")})

@@ -3,6 +3,7 @@ package backup_test
 import (
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -55,12 +56,32 @@ type stubObject struct {
 	mod  time.Time
 }
 
+// TestMain keeps the AWS SDK off the developer's shared config and credentials and the EC2 metadata service, once for
+// the process, so the stub's tests need no t.Setenv and can run in parallel.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "funcd")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "s3 stub TestMain:", err)
+		os.Exit(2)
+	}
+	none := filepath.Join(dir, "none")
+	for k, v := range map[string]string{
+		"AWS_CONFIG_FILE":             none,
+		"AWS_SHARED_CREDENTIALS_FILE": none,
+		"AWS_EC2_METADATA_DISABLED":   "true",
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			fmt.Fprintln(os.Stderr, "s3 stub TestMain:", err)
+			os.Exit(2)
+		}
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func newS3Stub(t *testing.T, c *clock.Manual) *s3stub {
 	t.Helper()
-	none := filepath.Join(t.TempDir(), "none")
-	t.Setenv("AWS_CONFIG_FILE", none)
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", none)
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 	s := &s3stub{clock: c, objects: map[string]stubObject{}}
 	s.srv = httptest.NewServer(s)
 	t.Cleanup(s.srv.Close)
