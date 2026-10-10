@@ -215,6 +215,44 @@ func TestFindByContent(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "an escrow copy must be byte-exact")
 }
 
+// Find follows symlinks: a symlinked key and a symlinked secrets/ are found and listed like regular ones, a dangling
+// symlink is named in the error, and a symlink loop is read once.
+func TestFindThroughSymlinks(t *testing.T) {
+	k, other := randomKey(t), randomKey(t)
+	keys := escrowDir(t, map[string][]byte{"k": k, "other": other})
+
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, escrow.SecretsDir), 0o700))
+	link := filepath.Join(dir, escrow.SecretsDir, "link")
+	require.NoError(t, os.Symlink(filepath.Join(keys, "k"), link))
+	p, err := escrow.Find(dir, escrow.SecretsDir, envelope.Fingerprint(k))
+	require.NoError(t, err)
+	require.Equal(t, link, p, "a symlinked key file")
+
+	dir = t.TempDir()
+	require.NoError(t, os.Symlink(keys, filepath.Join(dir, escrow.SecretsDir)))
+	p, err = escrow.Find(dir, escrow.SecretsDir, envelope.Fingerprint(k))
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, escrow.SecretsDir, "k"), p, "a symlinked secrets/ directory")
+
+	dir = t.TempDir()
+	secrets := filepath.Join(dir, escrow.SecretsDir)
+	require.NoError(t, os.Mkdir(secrets, 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(keys, "other"), filepath.Join(secrets, "other")))
+	dangling := filepath.Join(secrets, "gone")
+	require.NoError(t, os.Symlink(filepath.Join(keys, "absent"), dangling))
+	require.NoError(t, os.Symlink(secrets, filepath.Join(secrets, "loop")))
+	_, err = escrow.Find(dir, escrow.SecretsDir, envelope.Fingerprint(k))
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	require.ErrorContains(t, err, envelope.Fingerprint(other), "a symlinked key is listed")
+	require.ErrorContains(t, err, "unresolved symlink (stat "+dangling, "a dangling symlink is named")
+
+	require.NoError(t, os.Symlink(filepath.Join(keys, "absent"), filepath.Join(dir, escrow.MasterDir)))
+	_, err = escrow.Find(dir, escrow.MasterDir, envelope.Fingerprint(k))
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	require.ErrorContains(t, err, "unresolved symlink (stat "+filepath.Join(dir, escrow.MasterDir), "a dangling master/ is named")
+}
+
 // A generation naming no master: no check, nothing installed, the list printed as credentials that may change.
 func TestPlanMasterAbsent(t *testing.T) {
 	dataDir := t.TempDir()

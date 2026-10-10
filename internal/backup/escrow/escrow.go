@@ -30,42 +30,77 @@ const (
 	catalogToken = "catalog-token"
 )
 
-// Find returns the file under dir/sub whose envelope.Fingerprint is fp; none ⇒ fault.NotFound naming fp and the
-// fingerprints found. The bytes are fingerprinted as they are, so an escrow copy must be byte-exact.
+// Find returns the file under dir/sub whose envelope.Fingerprint is fp; none ⇒ fault.NotFound naming fp, the
+// fingerprints found and every symlink that does not resolve. Symlinked files and directories count as regular ones.
+// The bytes are fingerprinted as they are, so an escrow copy must be byte-exact.
 func Find(dir, sub, fp string) (string, error) {
 	const op = "escrow.Find"
 	if dir == "" {
 		return "", fault.NotFoundf(op, "no escrow directory given to find %s", fp)
 	}
 	root := filepath.Join(dir, sub)
-	var found []string
-	match := ""
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || match != "" || !d.Type().IsRegular() {
-			return err
+	s := search{fp: fp, seen: map[string]bool{}}
+	err := s.visit(root)
+	switch {
+	case s.match != "":
+		return s.match, nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return "", fault.Wrapf(err, fault.Invalid, op, "read escrow directory %s", root)
+	}
+	if len(s.found) == 0 {
+		s.found = []string{"none"}
+	}
+	return "", fault.NotFoundf(op, "no file under %s has fingerprint %s; found: %s", root, fp, strings.Join(s.found, ", "))
+}
+
+// search is one Find: seen holds the resolved directories already read, so a symlink loop ends.
+type search struct {
+	fp, match string
+	found     []string
+	seen      map[string]bool
+}
+
+// visit fingerprints the file at p or reads the directory at p, through symlinks; a symlink that does not resolve is
+// listed in found rather than dropped.
+func (s *search) visit(p string) error {
+	info, err := os.Stat(p)
+	if err != nil {
+		if l, lerr := os.Lstat(p); lerr == nil && l.Mode()&fs.ModeSymlink != 0 {
+			s.found = append(s.found, "unresolved symlink ("+err.Error()+")")
+			return nil
 		}
+		return err
+	}
+	if info.Mode().IsRegular() {
 		b, err := os.ReadFile(p) //nolint:gosec // the operator's escrow directory
 		if err != nil {
 			return err
 		}
-		got := envelope.Fingerprint(b)
-		if got == fp {
-			match = p
-			return fs.SkipAll
+		if got := envelope.Fingerprint(b); got != s.fp {
+			s.found = append(s.found, got+" ("+p+")")
+		} else {
+			s.match = p
 		}
-		found = append(found, got+" ("+p+")")
 		return nil
-	})
-	switch {
-	case match != "":
-		return match, nil
-	case err != nil && !errors.Is(err, fs.ErrNotExist):
-		return "", fault.Wrapf(err, fault.Invalid, op, "read escrow directory %s", root)
 	}
-	if len(found) == 0 {
-		found = []string{"none"}
+	if !info.IsDir() {
+		return nil
 	}
-	return "", fault.NotFoundf(op, "no file under %s has fingerprint %s; found: %s", root, fp, strings.Join(found, ", "))
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil || s.seen[resolved] {
+		return err
+	}
+	s.seen[resolved] = true
+	entries, err := os.ReadDir(p)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := s.visit(filepath.Join(p, e.Name())); err != nil || s.match != "" {
+			return err
+		}
+	}
+	return nil
 }
 
 // CheckSecretsKey requires the restore's secrets key to have the fingerprint m names, or both to be absent; else

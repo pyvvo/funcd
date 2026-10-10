@@ -107,30 +107,71 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 		require.NoError(t, err)
 		return cfg, dataDir
 	}
-
-	cfg, _ := load(t, "")
-	_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.DiscardHandler))
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	require.ErrorContains(t, err, "backup.encryption.recipients")
-
-	cfg, _ = load(t, "  encryption:\n    none: true\n")
-	_, _, _, _, err = buildOptions(context.Background(), cfg, slog.New(slog.DiscardHandler))
-	require.ErrorContains(t, err, "secrets.encryptionKeyFile", "none without a secrets key never starts")
-
+	start := func(t *testing.T, cfg config.Config) (string, error) {
+		t.Helper()
+		logs := &bytes.Buffer{}
+		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)))
+		if err == nil {
+			t.Cleanup(func() { _ = closeExec() })
+		}
+		return logs.String(), err
+	}
+	recipientsFile := func(t *testing.T, ids ...*age.X25519Identity) string {
+		t.Helper()
+		var b bytes.Buffer
+		for _, id := range ids {
+			b.WriteString(id.Recipient().String() + "\n")
+		}
+		p := filepath.Join(t.TempDir(), "recipients.txt")
+		require.NoError(t, os.WriteFile(p, b.Bytes(), 0o600))
+		return p
+	}
 	a, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
 	b, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
-	recipients := filepath.Join(t.TempDir(), "recipients.txt")
-	require.NoError(t, os.WriteFile(recipients, []byte(a.Recipient().String()+"\n"+b.Recipient().String()+"\n"), 0o600))
-	cfg, dataDir := load(t, "  encryption:\n    recipients:\n      - \""+recipients+"\"\n")
-	logs := &bytes.Buffer{}
-	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = closeExec() })
-	master, err := os.ReadFile(filepath.Join(dataDir, "s3gateway", "master.key")) //nolint:gosec // a test temp path
-	require.NoError(t, err)
-	require.Contains(t, logs.String(), "backup keys")
-	require.Contains(t, logs.String(), envelope.Fingerprint(master))
-	require.Contains(t, logs.String(), envelope.Fingerprint([]byte(a.Recipient().String())))
+
+	t.Run("no recipients refuses", func(t *testing.T) {
+		cfg, _ := load(t, "")
+		_, err := start(t, cfg)
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.ErrorContains(t, err, "backup.encryption.recipients")
+	})
+	// scenario: plaintext-secrets-refused — none without a secrets key refuses naming both keys; with one it starts
+	// and warns.
+	t.Run("none without a secrets key refuses", func(t *testing.T) {
+		cfg, _ := load(t, "  encryption:\n    none: true\n")
+		_, err := start(t, cfg)
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.ErrorContains(t, err, "backup.encryption.none")
+		require.ErrorContains(t, err, "secrets.encryptionKeyFile")
+	})
+	t.Run("none with a secrets key starts", func(t *testing.T) {
+		key := filepath.Join(t.TempDir(), "secrets.key")
+		require.NoError(t, os.WriteFile(key, bytes.Repeat([]byte{3}, 32), 0o600))
+		cfg, _ := load(t, "  encryption:\n    none: true\nsecrets:\n  encryptionKeyFile: \""+key+"\"\n")
+		logs, err := start(t, cfg)
+		require.NoError(t, err)
+		require.Contains(t, logs, "level=WARN")
+		require.Contains(t, logs, "backup encryption is off")
+	})
+	t.Run("recipients from the env start", func(t *testing.T) {
+		t.Setenv("FUNCD_BACKUP_ENCRYPTION_RECIPIENTS", recipientsFile(t, a)+","+recipientsFile(t, b))
+		cfg, _ := load(t, "")
+		require.Len(t, cfg.Backup.Encryption.Recipients, 2)
+		logs, err := start(t, cfg)
+		require.NoError(t, err)
+		require.Contains(t, logs, envelope.Fingerprint([]byte(a.Recipient().String())))
+		require.Contains(t, logs, envelope.Fingerprint([]byte(b.Recipient().String())))
+	})
+	t.Run("valid recipients log the fingerprints", func(t *testing.T) {
+		cfg, dataDir := load(t, "  encryption:\n    recipients:\n      - \""+recipientsFile(t, a, b)+"\"\n")
+		logs, err := start(t, cfg)
+		require.NoError(t, err)
+		master, err := os.ReadFile(filepath.Join(dataDir, "s3gateway", "master.key")) //nolint:gosec // a test temp path
+		require.NoError(t, err)
+		require.Contains(t, logs, "backup keys")
+		require.Contains(t, logs, envelope.Fingerprint(master))
+		require.Contains(t, logs, envelope.Fingerprint([]byte(a.Recipient().String())))
+	})
 }

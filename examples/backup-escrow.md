@@ -53,6 +53,8 @@ serves.
 
 A restore finds a key by its fingerprint, the first 16 hex characters of SHA-256 over a fixed label and the file's
 exact bytes. Copy the key files byte for byte (`cp`, never an editor): an added newline changes the fingerprint.
+The lookup follows symlinks, so a key file or the `secrets/` or `master/` directory may be a link; a link that does
+not resolve is named in the refusal.
 The node master secret is `s3gateway.masterSecretFile` when set, else `<storage.dataDir>/s3gateway/master.key`,
 with the S3 gateway on or off. A restore (ADR-0206) without the master a generation names refuses, unless
 `--new-master-secret`, which prints every S3 keypair and catalog token that changes.
