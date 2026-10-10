@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,14 +78,53 @@ func firstRV(t *testing.T, evs []store.Event, what string, match func(store.Even
 	return rvOf(t, evs[i])
 }
 
-// buildCmd compiles this repository's cmd/<name> and returns the binary's path.
+// cmdBuilds keeps the binaries buildCmd builds in one directory, which TestMain removes after the run, and counts
+// the builds of each name.
+//
+//nolint:gochecknoglobals // one build per name, shared by every parallel test of the binary (#916)
+var cmdBuilds = struct {
+	dir    string
+	mu     sync.Mutex
+	byName map[string]func() (string, error)
+	runs   map[string]int
+}{byName: map[string]func() (string, error){}, runs: map[string]int{}}
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "funcd-cmd")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "TestMain:", err)
+		os.Exit(2)
+	}
+	cmdBuilds.dir = dir
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// buildCmd compiles this repository's cmd/<name> once per test binary and returns the binary's path.
+// Parallel tests share the build: concurrent go builds forked from a -race test binary hang (#916).
 func buildCmd(t *testing.T, name string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", bin, "./cmd/"+name)
-	build.Dir = filepath.Join("..", "..")
-	out, err := build.CombinedOutput()
-	require.NoError(t, err, "build cmd/%s: %s", name, out)
+	cmdBuilds.mu.Lock()
+	build, ok := cmdBuilds.byName[name]
+	if !ok {
+		build = sync.OnceValues(func() (string, error) {
+			cmdBuilds.mu.Lock()
+			cmdBuilds.runs[name]++
+			cmdBuilds.mu.Unlock()
+			bin := filepath.Join(cmdBuilds.dir, name)
+			cmd := exec.Command("go", "build", "-o", bin, "./cmd/"+name)
+			cmd.Dir = filepath.Join("..", "..")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("build cmd/%s: %w: %s", name, err, out)
+			}
+			return bin, nil
+		})
+		cmdBuilds.byName[name] = build
+	}
+	cmdBuilds.mu.Unlock()
+	bin, err := build()
+	require.NoError(t, err)
 	return bin
 }
 
