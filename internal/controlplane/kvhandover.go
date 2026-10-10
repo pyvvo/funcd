@@ -30,41 +30,44 @@ func (h *storeHandlers) HandoverKVStore(ctx context.Context, ns v1.NamespaceName
 		return v1.KVStore{}, err
 	}
 	defer unlock()
-	cur, err := h.store.Get(ctx, v1.KindKVStore.GVK(), ns, name)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	obj, err := h.store.Get(ctx, v1.KindWorkflow.GVK(), ns, workflowName)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	wf := obj.(*v1.Workflow)
-	if !slices.ContainsFunc(wf.Spec.KV, func(kv v1.WorkflowKVStore) bool { return kv.Name == name }) {
-		return v1.KVStore{}, fault.Conflictf(op, "workflow %q does not declare kvstore %q in spec.kv", workflowName, name)
-	}
-	maker, live, err := h.liveMarker(ctx, ns, cur.GetObjectMeta().OwnerReferences)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	if live {
-		return v1.KVStore{}, fault.Conflictf(op, "kvstore %q was made by %s/%s, which still exists; delete it first", name, maker.Kind, maker.Name)
-	}
-	next, err := withStatus(cur, cur)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	next.GetObjectMeta().OwnerReferences = []v1.OwnerReference{workflow.KVMarker(wf)}
-	id, _ := middleware.IdentityFrom(ctx)
-	admitted, err := h.admit.Admit(ctx, admission.Request{
-		Operation: admission.Update, GVK: v1.KindKVStore.GVK(), Object: next, Old: cur, Identity: id,
+	out, err := retryOwnRead(func() (v1.Object, bool, error) {
+		cur, err := h.store.Get(ctx, v1.KindKVStore.GVK(), ns, name)
+		if err != nil {
+			return nil, false, err
+		}
+		obj, err := h.store.Get(ctx, v1.KindWorkflow.GVK(), ns, workflowName)
+		if err != nil {
+			return nil, false, err
+		}
+		wf := obj.(*v1.Workflow)
+		if !slices.ContainsFunc(wf.Spec.KV, func(kv v1.WorkflowKVStore) bool { return kv.Name == name }) {
+			return nil, false, fault.Conflictf(op, "workflow %q does not declare kvstore %q in spec.kv", workflowName, name)
+		}
+		maker, live, err := h.liveMarker(ctx, ns, cur.GetObjectMeta().OwnerReferences)
+		if err != nil {
+			return nil, false, err
+		}
+		if live {
+			return nil, false, fault.Conflictf(op, "kvstore %q was made by %s/%s, which still exists; delete it first", name, maker.Kind, maker.Name)
+		}
+		next, err := withStatus(cur, cur)
+		if err != nil {
+			return nil, false, err
+		}
+		next.GetObjectMeta().OwnerReferences = []v1.OwnerReference{workflow.KVMarker(wf)}
+		id, _ := middleware.IdentityFrom(ctx)
+		admitted, err := h.admit.Admit(ctx, admission.Request{
+			Operation: admission.Update, GVK: v1.KindKVStore.GVK(), Object: next, Old: cur, Identity: id,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		m := admitted.GetObjectMeta()
+		m.OwnerReferences = next.GetObjectMeta().OwnerReferences
+		m.ResourceVersion = cur.GetObjectMeta().ResourceVersion
+		out, err := h.store.Update(ctx, admitted)
+		return out, fault.KindOf(err) == fault.Conflict, err
 	})
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	m := admitted.GetObjectMeta()
-	m.OwnerReferences = next.GetObjectMeta().OwnerReferences
-	m.ResourceVersion = cur.GetObjectMeta().ResourceVersion
-	out, err := h.store.Update(ctx, admitted)
 	if err != nil {
 		return v1.KVStore{}, err
 	}

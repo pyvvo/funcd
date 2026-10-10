@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/workflow"
 )
 
 const conflictType = "urn:funcd:problem:conflict"
@@ -30,6 +32,12 @@ const conflictType = "urn:funcd:problem:conflict"
 func newConcurrencyServer(t *testing.T, eng store.Engine) (http.Handler, store.Store) {
 	t.Helper()
 	st := store.New(eng)
+	return concurrencyServerOn(t, st), st
+}
+
+// concurrencyServerOn is newConcurrencyServer over st.
+func concurrencyServerOn(t *testing.T, st store.Store) http.Handler {
+	t.Helper()
 	r := raceReader{st}
 	col, err := gc.New(gc.Deps{Store: st, Purger: noPurge{}})
 	require.NoError(t, err)
@@ -45,7 +53,7 @@ func newConcurrencyServer(t *testing.T, eng store.Engine) (http.Handler, store.S
 		},
 	})
 	require.NoError(t, err)
-	return h, st
+	return h
 }
 
 // send is one request with the dev token and the given If-Match lines.
@@ -386,4 +394,168 @@ func TestScenarioPreRestoreVersionConflicts(t *testing.T) {
 	rv, handler = stored(t, stB, "f")
 	require.Equal(t, atBackup, rv)
 	require.Equal(t, "h2", handler, "f keeps B's content")
+}
+
+// raceStore runs write on the stored copy of the next races objects of kind it reads and updates it, right after
+// each read: a concurrent write (a controller's status write, a replace) landing between a handler's read and its
+// store write. gets counts the reads of kind.
+type raceStore struct {
+	store.Store
+	kind  v1.Kind
+	write func(v1.Object)
+	races atomic.Int32
+	gets  atomic.Int32
+}
+
+func (s *raceStore) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	read, err := s.Store.Get(ctx, gvk, ns, name)
+	if err != nil || gvk.Kind != s.kind {
+		return read, err
+	}
+	s.gets.Add(1)
+	if s.races.Add(-1) < 0 {
+		return read, nil
+	}
+	o, err := s.Store.Get(ctx, gvk, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	s.write(o)
+	if _, err := s.Update(ctx, o); err != nil {
+		return nil, err
+	}
+	return read, nil
+}
+
+// flipPhase is a controller's status write.
+func flipPhase(o v1.Object) {
+	status := o.(v1.StatusObject).GetStatus()
+	if status.Phase == v1.PhaseReady {
+		status.Phase = v1.PhaseDeploying
+	} else {
+		status.Phase = v1.PhaseReady
+	}
+}
+
+// A write without a client version is unconditional (ADR-0210 Decision 3): a controller's status write between the
+// server's read and its write must not turn it into a 409. A PUT that carries a version keeps its 409.
+func TestIssue900_UnversionedWriteSurvivesStatusWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("replace", func(t *testing.T) {
+		t.Parallel()
+		st := &raceStore{Store: store.New(memory.New()), kind: v1.KindFunction, write: flipPhase}
+		srv := concurrencyServerOn(t, st)
+		twoVersions(t, srv, st)
+
+		st.races.Store(1)
+		rec := send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h3", ""))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		o, err := st.Store.Get(ctx, v1.KindFunction.GVK(), groupNS, "f")
+		require.NoError(t, err)
+		require.Equal(t, "h3", o.(*v1.Function).Spec.Handler)
+		require.Equal(t, v1.PhaseReady, o.(*v1.Function).Status.Phase, "the controller's status write is kept")
+
+		cur := o.GetObjectMeta().ResourceVersion
+		st.races.Store(1)
+		requireConflict(t, send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h4", cur)))
+
+		st.races.Store(1000)
+		requireConflict(t, send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h4", "")))
+		o, err = st.Store.Get(ctx, v1.KindFunction.GVK(), groupNS, "f")
+		require.NoError(t, err)
+		require.Equal(t, "h3", o.(*v1.Function).Spec.Handler, "a status that changes on every read still ends in 409")
+	})
+
+	t.Run("kvstore handover", func(t *testing.T) {
+		t.Parallel()
+		st := &raceStore{Store: store.New(memory.New()), kind: v1.KindKVStore, write: flipPhase}
+		srv := kvServerOn(t, st)
+		wf := kvWorkflow(t, st, "w-keep", v1.DeletionRetain)
+		keptStore(t, st, "w-keep", markerOf("w", "u1"))
+
+		st.races.Store(1)
+		require.Equal(t, http.StatusOK, handover(t, srv, "operator-token", "w-keep", "w"))
+		o, err := st.Store.Get(ctx, v1.KindKVStore.GVK(), kvNS, "w-keep")
+		require.NoError(t, err)
+		require.Equal(t, []v1.OwnerReference{workflow.KVMarker(wf)}, o.GetObjectMeta().OwnerReferences)
+		require.Equal(t, v1.PhaseReady, o.(*v1.KVStore).Status.Phase, "the controller's status write is kept")
+	})
+}
+
+// fullPrefixes is a BlobProber whose listed prefixes hold objects.
+type fullPrefixes map[string]bool
+
+func (p fullPrefixes) HasAny(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, prefix string) (bool, error) {
+	return p[prefix], nil
+}
+
+// An unversioned delete is judged by bucket-deletion-protection (ADR-0080). It reads other objects (the namespace's
+// Functions), but ADR-0147 Decision 2 leaves it unmarked, so no namespace lock orders the delete with a replace of
+// the Bucket. A replace that adds a prefix holding objects after the delete's read must still refuse the delete; one
+// that changes nothing protected must not turn it into a 409; a write on every attempt ends in 409 after
+// ownReadAttempts reads. A client version is not retried: its race is one read and a 409.
+func TestDeleteRechecksProtectionWrittenConcurrently(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		write   func(*v1.Bucket)
+		races   int32
+		ifMatch bool
+		code    int
+		gets    int32
+	}{
+		"protection added": {
+			write: func(b *v1.Bucket) { b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: "gold"}) },
+			races: 1, code: http.StatusConflict, gets: 2,
+		},
+		"unprotected change": {
+			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes = 1 << 20 },
+			races: 1, code: http.StatusNoContent, gets: 2,
+		},
+		"write on every attempt": {
+			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes++ },
+			races: 1000, code: http.StatusConflict, gets: controlplane.OwnReadAttempts,
+		},
+		"client version": {
+			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes = 1 << 20 },
+			races: 1, ifMatch: true, code: http.StatusConflict, gets: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := &raceStore{Store: store.New(memory.New()), kind: v1.KindBucket, write: func(o v1.Object) { tc.write(o.(*v1.Bucket)) }}
+			srv, err := controlplane.NewServer(controlplane.Deps{
+				Store: st, Authorizer: rbac.New(),
+				Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{
+					devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{groupNS}},
+				}),
+				Admissions: []admission.Admission{
+					admission.NewBucketDeletionProtectionAdmission(raceReader{st}, fullPrefixes{"gold": true}),
+				},
+			})
+			require.NoError(t, err)
+			obj, _ := v1.NewObject(v1.KindBucket)
+			b := obj.(*v1.Bucket)
+			b.Name, b.Namespace, b.ResourceGroup = "b", groupNS, "team"
+			b.Spec.Prefixes = []v1.BucketPrefix{{Name: "raw"}}
+			created, err := st.Create(ctx, b)
+			require.NoError(t, err)
+			var ifMatch []string
+			if tc.ifMatch {
+				ifMatch = append(ifMatch, `"`+created.GetObjectMeta().ResourceVersion+`"`)
+			}
+
+			st.races.Store(tc.races)
+			rec := send(t, srv, http.MethodDelete, kindPath(groupNS, "buckets")+"/b", nil, ifMatch...)
+			require.Equal(t, tc.code, rec.Code, rec.Body.String())
+			require.Equal(t, tc.gets, st.gets.Load(), "reads of the Bucket")
+			require.Equal(t, tc.code == http.StatusConflict, present(t, st, v1.KindBucket, groupNS, "b"))
+			if name == "protection added" {
+				_, detail := problemOf(t, rec)
+				require.Contains(t, detail, `prefix "gold" still holds objects`)
+			}
+		})
+	}
 }
