@@ -144,6 +144,17 @@ func TestScenarioAppSharedWriterRefused(t *testing.T) {
 			},
 			want: []string{"spec.workflows[0].steps[0].name", "spec.functions[1]"},
 		},
+		"two Workflows declaring one kv store": {
+			edit: func(a *v1.App) {
+				plan := &a.Spec.Workflows[0]
+				plan.KV = []v1.WorkflowKVStore{{Name: "todo-plan-state", Tables: []v1.KVTable{{Name: "runs", Owner: "due"}}}}
+				a.Spec.Workflows = append(a.Spec.Workflows, v1.AppWorkflow{Name: "todo-report", WorkflowSpec: v1.WorkflowSpec{
+					Steps: []v1.WorkflowStep{{Name: "sum", Function: &v1.FunctionStep{Image: plan.Steps[0].Function.Image}}},
+					KV:    []v1.WorkflowKVStore{{Name: "todo-plan-state", Tables: []v1.KVTable{{Name: "runs", Owner: "sum"}}}},
+				}})
+			},
+			want: []string{"spec.workflows[0].kv[0].name", "spec.workflows[1].kv[0].name"},
+		},
 	} {
 		a := todoApp(t, e)
 		tc.edit(a)

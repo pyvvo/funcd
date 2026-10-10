@@ -179,6 +179,52 @@ func TestAppValidateRefusals(t *testing.T) {
 	}
 }
 
+// Issue #924 (Decision 3, amended in place): two parts whose reconcilers would make one object are refused, naming
+// both fields; two Sites may still name one Bucket.
+func TestIssue924_TwoPartsMakeOneObject(t *testing.T) {
+	step := func(name ObjectName) WorkflowStep {
+		return WorkflowStep{Name: name, Function: &FunctionStep{Image: "oci-layout://todo-due:1"}}
+	}
+	store := func(owner ObjectName) []WorkflowKVStore {
+		return []WorkflowKVStore{{Name: "plan-cache", Tables: []KVTable{{Name: "rows", Owner: owner}}}}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*App)
+		want   string
+	}{
+		{"two workflows declare one kv store", func(a *App) {
+			a.Spec.Workflows[0].KV = store("due")
+			a.Spec.Workflows = append(a.Spec.Workflows, AppWorkflow{Name: "todo-report", WorkflowSpec: WorkflowSpec{
+				Steps: []WorkflowStep{step("sum")}, KV: store("sum"),
+			}})
+		}, "spec.workflows[0].kv[0].name and spec.workflows[1].kv[0].name both write KVStore/plan-cache"},
+		{"two workflows make one step function", func(a *App) {
+			a.Spec.Workflows = append(a.Spec.Workflows,
+				AppWorkflow{Name: "a", WorkflowSpec: WorkflowSpec{Steps: []WorkflowStep{step("b-c")}}},
+				AppWorkflow{Name: "a-b", WorkflowSpec: WorkflowSpec{Steps: []WorkflowStep{step("c")}}})
+		}, "spec.workflows[1].steps[0].name and spec.workflows[2].steps[0].name both write Function/a-b-c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := todoApp(tc.mutate).Validate()
+			if fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate: %v, want an Invalid fault containing %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("two sites name one bucket", func(t *testing.T) {
+		site := func(name ObjectName, prefix string) AppSite {
+			return AppSite{Name: name, SiteSpec: SiteSpec{
+				Image: "oci-layout://todo-web:1", Bucket: SiteBucket{Name: "todo-web"}, Prefix: prefix,
+			}}
+		}
+		a := todoApp(func(a *App) { a.Spec.Sites = []AppSite{site("todo-web", "web"), site("todo-docs", "docs")} })
+		if err := a.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+}
+
 func TestAppParts(t *testing.T) {
 	a := fullApp()
 	parts := a.Parts()
