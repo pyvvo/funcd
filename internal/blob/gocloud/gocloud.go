@@ -6,7 +6,10 @@ package gocloud
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime"
@@ -20,11 +23,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
 
+	gcaws "gocloud.dev/aws"
 	gcblob "gocloud.dev/blob"
 	"gocloud.dev/gcerrors"
 
@@ -40,21 +49,45 @@ const (
 	fileAttrsSuffix = ".attrs"
 	// fileEscapePrefix opens fileblob's "__0x<hex>__" rune escape, which it decodes on List.
 	fileEscapePrefix = "__0x"
+	// fileTempSuffix ends the temp file of a file:// create-if-absent Put; keys ending in it are reserved (ADR-0203).
+	fileTempSuffix = ".funcd-tmp"
+	// conflictRetries bounds the retries of an s3:// create-if-absent Put answered 409 ConditionalRequestConflict.
+	conflictRetries = 3
 )
 
 // errNoV2Input reports an s3blob listing without a ListObjectsV2 request (Options.UseLegacyList), which has no
 // StartAfter; s3 ListAfter then falls back to List (ADR-0184 Decision 4).
 var errNoV2Input = errors.New("s3 listing has no ListObjectsV2 input")
 
-// Open adapts a gocloud bucket to blob.Bucket.
+// Open adapts a gocloud bucket to blob.Bucket; it is OpenWith with no options.
 //
 //	Open(ctx, "mem://")                       → in-memory (memblob; the cgo-free in-mem driver)
 //	Open(ctx, "file:///var/lib/funcd/blobs")  → local files (fileblob)
 //	Open(ctx, "s3://bucket?region=us-east-1") → S3 (s3blob)
 func Open(ctx context.Context, url string) (blob.Bucket, error) {
+	return OpenWith(ctx, url, OpenOptions{})
+}
+
+// OpenOptions configures OpenWith (ADR-0203).
+type OpenOptions struct {
+	// CredentialsFile is an AWS shared credentials file whose [default] profile is the only credential source;
+	// s3:// only, another scheme is fault.Invalid.
+	CredentialsFile string
+}
+
+// OpenWith adapts a gocloud bucket to blob.Bucket, opened with opts.
+func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, error) {
+	const op = "gocloud.Open"
+	if opts.CredentialsFile != "" {
+		b, err := openS3With(ctx, url, opts.CredentialsFile)
+		if err != nil {
+			return nil, err
+		}
+		return &bucket{b: b, s3: true}, nil
+	}
 	b, err := gcblob.OpenBucket(ctx, url)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "open bucket %q", url)
+		return nil, fault.Wrapf(err, fault.Internal, op, "open bucket %q", url)
 	}
 	k := &bucket{
 		b:    b,
@@ -62,25 +95,122 @@ func Open(ctx context.Context, url string) (blob.Bucket, error) {
 		s3:   strings.HasPrefix(url, s3blob.Scheme+"://"),
 	}
 	if k.file {
-		if k.dir, err = fileDir(url); err != nil {
+		if k.dir, k.dirMode, err = fileDir(url); err != nil {
 			_ = b.Close()
-			return nil, fault.Wrapf(err, fault.Internal, "gocloud.Open", "resolve the directory of %q", url)
+			return nil, fault.Wrapf(err, fault.Internal, op, "resolve the directory of %q", url)
 		}
 	}
 	return k, nil
 }
 
-// fileDir is the absolute directory fileblob's URL opener serves for url: its path, relative when the host is ".".
-func fileDir(url string) (string, error) {
+// openS3With opens an s3:// URL as s3blob's URL opener does, signing with the [default] profile of credentialsFile
+// alone (ADR-0203 Decision 5).
+func openS3With(ctx context.Context, url, credentialsFile string) (*gcblob.Bucket, error) {
+	const op = "gocloud.OpenWith"
+	u, err := neturl.Parse(url)
+	if err != nil || u.Scheme != s3blob.Scheme {
+		return nil, fault.Invalidf(op, "a credentials file applies to an s3:// URL only, not %q", url)
+	}
+	sc, err := awsconfig.LoadSharedConfigProfile(ctx, "default", func(o *awsconfig.LoadSharedConfigOptions) {
+		o.CredentialsFiles = []string{credentialsFile}
+		o.ConfigFiles = []string{}
+	})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "read the [default] profile of %s", credentialsFile)
+	}
+	if !sc.Credentials.HasKeys() {
+		return nil, fault.Invalidf(op, "the [default] profile of %s has no access key", credentialsFile)
+	}
+	q := u.Query()
+	prefix := q.Get("prefix")
+	q.Del("prefix")
+	s3opts, bopts, err := s3URLOptions(q)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	cfg, err := gcaws.V2ConfigFromURLParams(ctx, q)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	cfg.Credentials = aws.NewCredentialsCache(credentials.StaticCredentialsProvider{Value: sc.Credentials})
+	bopts.RequestChecksumCalculation = cfg.RequestChecksumCalculation
+	b, err := s3blob.OpenBucket(ctx, awss3.NewFromConfig(cfg, s3opts...), u.Host, &bopts)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	if prefix != "" {
+		b = gcblob.PrefixedBucket(b, prefix)
+	}
+	return b, nil
+}
+
+// s3URLOptions takes the parameters s3blob's URL opener reads itself out of q (s3blob.go URLOpener) and refuses
+// the other credential sources, so the rest is gcaws.V2ConfigFromURLParams'.
+func s3URLOptions(q neturl.Values) ([]func(*awss3.Options), s3blob.Options, error) {
+	var opts []func(*awss3.Options)
+	var bopts s3blob.Options
+	flag := func(key string, set func(*awss3.Options, bool)) error {
+		v, err := strconv.ParseBool(q.Get(key))
+		if err != nil {
+			return fmt.Errorf("invalid value for %q: %w", key, err)
+		}
+		opts = append(opts, func(o *awss3.Options) { set(o, v) })
+		return nil
+	}
+	for key := range q {
+		var err error
+		switch key {
+		case "profile", "role", "anonymous":
+			return nil, bopts, fmt.Errorf("%q: the credentials file is the only credential source", key)
+		case "ssetype":
+			i := slices.IndexFunc(s3types.ServerSideEncryptionAes256.Values(), func(e s3types.ServerSideEncryption) bool {
+				return strings.EqualFold(string(e), q.Get(key))
+			})
+			if i < 0 {
+				return nil, bopts, fmt.Errorf("%q is not a valid value for %q", q.Get(key), key)
+			}
+			bopts.EncryptionType = s3types.ServerSideEncryptionAes256.Values()[i]
+		case "kmskeyid":
+			bopts.KMSEncryptionID = q.Get(key)
+		case "accelerate":
+			err = flag(key, func(o *awss3.Options, v bool) { o.UseAccelerate = v })
+		case "use_path_style", "s3ForcePathStyle":
+			err = flag(key, func(o *awss3.Options, v bool) { o.UsePathStyle = v })
+		case "disable_https":
+			err = flag(key, func(o *awss3.Options, v bool) { o.EndpointOptions.DisableHTTPS = v })
+		default:
+			continue
+		}
+		if err != nil {
+			return nil, bopts, err
+		}
+		q.Del(key)
+	}
+	return opts, bopts, nil
+}
+
+// fileDir is the absolute directory fileblob's URL opener serves for url, its path, relative when the host is ".",
+// and the mode it creates directories with: dir_file_mode, decimal as fileblob parses it, default 0777.
+func fileDir(url string) (string, os.FileMode, error) {
 	u, err := neturl.Parse(url)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	p := u.Path
 	if u.Host == "." {
 		p = strings.TrimPrefix(p, "/")
 	}
-	return filepath.Abs(filepath.FromSlash(p))
+	dir, err := filepath.Abs(filepath.FromSlash(p))
+	if err != nil {
+		return "", 0, err
+	}
+	mode := uint64(0o777)
+	if s := u.Query().Get("dir_file_mode"); s != "" {
+		if mode, err = strconv.ParseUint(s, 10, 32); err != nil {
+			return "", 0, err
+		}
+	}
+	return dir, os.FileMode(mode), nil
 }
 
 // FileURL is the file:// bucket URL for the absolute directory dir, path-escaped so URL syntax in a
@@ -94,6 +224,8 @@ type bucket struct {
 	file bool
 	// dir is the file:// bucket's root, which the funcd-owned file walk reads (ADR-0184 Decision 5).
 	dir string
+	// dirMode creates the directories of a file:// create-if-absent Put, as fileblob does for its own.
+	dirMode os.FileMode
 	// s3 leaves MD5 nil: s3blob decodes an SSE-KMS/SSE-C ETag that is not the content's MD5 (ADR-0159).
 	s3 bool
 }
@@ -101,8 +233,9 @@ type bucket struct {
 // checkKey rejects a key the file backend cannot keep as its own object: an empty key
 // names the bucket root, not an object; fileblob reserves the ".attrs" suffix and its
 // "__0x<hex>__" escape (a raw one shares the path of the key it encodes and lists
-// decoded), and its filepath.Join cleans a "." segment, a trailing ".." and a leading
-// "/", which would land the key on another key's file.
+// decoded), funcd the ".funcd-tmp" suffix of its create-if-absent temp files, and
+// fileblob's filepath.Join cleans a "." segment, a trailing ".." and a leading "/",
+// which would land the key on another key's file.
 func (k *bucket) checkKey(op, key string) error {
 	if !k.file {
 		return nil
@@ -110,8 +243,10 @@ func (k *bucket) checkKey(op, key string) error {
 	if key == "" {
 		return fault.Invalidf(op, "an empty key names the bucket root, not an object, on the file backend")
 	}
-	if strings.HasSuffix(key, fileAttrsSuffix) {
-		return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, fileAttrsSuffix)
+	for _, suffix := range []string{fileAttrsSuffix, fileTempSuffix} {
+		if strings.HasSuffix(key, suffix) {
+			return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, suffix)
+		}
 	}
 	if strings.Contains(key, fileEscapePrefix) {
 		return fault.Invalidf(op, "%q: the %q escape is reserved by the file backend", key, fileEscapePrefix)
@@ -137,7 +272,8 @@ func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 // Put stays on WriteAll: memblob's Upload never feeds the MD5 Attributes reports (ADR-0159). gocloud
-// returns a ParseMediaType error unwrapped, so the content type is checked here first.
+// returns a ParseMediaType error unwrapped, so the content type is checked here first. IfNotExist is
+// gocloud's on mem:// and s3://; fileblob's is not atomic, so file:// creates its own (ADR-0203 Decision 1).
 func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	const op = "blob.Put"
 	if err := k.checkKey(op, key); err != nil {
@@ -148,8 +284,73 @@ func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.Put
 			return fault.Wrapf(err, fault.Invalid, op, "content type %q of %q", opts.ContentType, key)
 		}
 	}
-	wo := &gcblob.WriterOptions{ContentType: opts.ContentType, Metadata: opts.Metadata}
-	if err := k.b.WriteAll(ctx, key, data, wo); err != nil {
+	if opts.IfNotExist && k.file {
+		return k.fileCreate(op, key, data, opts)
+	}
+	wo := &gcblob.WriterOptions{ContentType: opts.ContentType, Metadata: opts.Metadata, IfNotExist: opts.IfNotExist}
+	for attempt := 0; ; attempt++ {
+		err := k.b.WriteAll(ctx, key, data, wo)
+		switch {
+		case err == nil:
+			return nil
+		case opts.IfNotExist && gcerrors.Code(err) == gcerrors.FailedPrecondition:
+			return fault.Wrapf(err, fault.Conflict, op, "%q already exists", key)
+		case opts.IfNotExist && k.s3 && conditionalConflict(err):
+			if attempt == conflictRetries {
+				return fault.Wrapf(err, fault.Unavailable, op, "the conditional write of %q conflicted %d times", key, attempt+1)
+			}
+		default:
+			return mapErr(op, key, err)
+		}
+	}
+}
+
+// conditionalConflict reports S3's 409 ConditionalRequestConflict, a concurrent conditional write to the key,
+// which s3blob maps to Unknown (s3blob.go ErrorCode).
+func conditionalConflict(err error) bool {
+	var ae smithy.APIError
+	return errors.As(err, &ae) && ae.ErrorCode() == "ConditionalRequestConflict"
+}
+
+// fileCreate creates a file:// object only when its key is absent: a temp file beside it, fsync, then link(2) onto
+// the key, which fails with EEXIST when the key is taken. The temp file goes on every path; the walk and checkKey
+// hide a crash's.
+func (k *bucket) fileCreate(op, key string, data []byte, opts blob.PutOptions) error {
+	if opts.ContentType != "" || len(opts.Metadata) > 0 {
+		return fault.Invalidf(op, "%q: a create-if-absent put on the file backend stores no content type or metadata", key)
+	}
+	if fileWalkPrefix(key) != key {
+		return fault.Invalidf(op, "%q: the file backend stores this key under another path", key)
+	}
+	path := filepath.Join(k.dir, filepath.FromSlash(key))
+	if !strings.HasPrefix(path+string(os.PathSeparator), k.dir+string(os.PathSeparator)) {
+		return fault.Invalidf(op, "%q escapes the bucket root", key)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), k.dirMode); err != nil {
+		return mapErr(op, key, err)
+	}
+	suffix := make([]byte, 8)
+	_, _ = rand.Read(suffix)
+	tmp := path + "." + hex.EncodeToString(suffix) + fileTempSuffix
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the path is the bucket's own, checked above
+	if err != nil {
+		return mapErr(op, key, err)
+	}
+	defer func() { _ = os.Remove(tmp) }()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return mapErr(op, key, err)
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if info, serr := os.Lstat(path); errors.Is(err, fs.ErrExist) && serr == nil && !info.IsDir() {
+			return fault.Wrapf(err, fault.Conflict, op, "%q already exists", key)
+		}
 		return mapErr(op, key, err)
 	}
 	return nil
@@ -441,7 +642,7 @@ func (w *fileWalker) walk(ctx context.Context, dir, dirKey string) error {
 	}
 	kids := make([]fileChild, 0, len(des))
 	for _, de := range des {
-		if !de.IsDir() && strings.HasSuffix(de.Name(), fileAttrsSuffix) {
+		if !de.IsDir() && (strings.HasSuffix(de.Name(), fileAttrsSuffix) || strings.HasSuffix(de.Name(), fileTempSuffix)) {
 			continue
 		}
 		key := dirKey + fileUnescapeKey(de.Name())

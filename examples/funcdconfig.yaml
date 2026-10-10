@@ -84,6 +84,15 @@ storage:
 #     enabled: false              # default: false
 #     sink: ""                    # bus subject; required when enabled. default: ""
 #     retention: 24h              # how long the feed's stream keeps a change. default: 24h
+# backup:                         # platform backup target (ADR-0203); ADR-0205 runs the backups
+#   target: ""                    # s3://<bucket>?region=…&endpoint=…&prefix=<p>/ or file:///<absolute dir>. default: ""
+#   credentialsFile: ""           # s3:// only: AWS shared credentials file, its [default] profile the only source. default: "" (the SDK chain)
+#   singleWriter: false           # one funcd writes here: a target without If-None-Match then warns, not fails. default: false
+#   retention:                    # expiries of the lifecycle rules funcd logs at start (examples/backup-lifecycle.md)
+#     hourly: 48                  # hours. default: 48
+#     daily: 30                   # days; 0 = no daily class. default: 30
+#     weekly: 12                  # weeks; 0 = no weekly class. default: 12
+#     verified: 2                 # days a gen/verified/ copy is kept. default: 2
 # workflow:                       # workflow engine (ADR-0094)
 #   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
 #   defaultStepTimeout: 300s      # per-step invocation timeout. default: 300s

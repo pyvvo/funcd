@@ -148,6 +148,20 @@ type Config struct {
 			Retention string `json:"retention,omitempty" env:"FUNCD_KVSTORE_CDC_RETENTION"`
 		} `json:"cdc,omitempty"`
 	} `json:"kvstore,omitempty"`
+	// Backup is the platform backup target (ADR-0203), run by ADR-0205. Target is s3:// or file:///<absolute dir>;
+	// CredentialsFile (s3:// only) is an AWS shared credentials file whose [default] profile signs every request.
+	// Retention is in hours (hourly), days (daily, verified) and weeks (weekly).
+	Backup struct {
+		Target          string `json:"target,omitempty" env:"FUNCD_BACKUP_TARGET"`
+		CredentialsFile string `json:"credentialsFile,omitempty" env:"FUNCD_BACKUP_CREDENTIALS_FILE"`
+		SingleWriter    bool   `json:"singleWriter,omitempty" env:"FUNCD_BACKUP_SINGLE_WRITER"`
+		Retention       struct {
+			Hourly   int `json:"hourly,omitempty" env:"FUNCD_BACKUP_RETENTION_HOURLY"`
+			Daily    int `json:"daily,omitempty" env:"FUNCD_BACKUP_RETENTION_DAILY"`
+			Weekly   int `json:"weekly,omitempty" env:"FUNCD_BACKUP_RETENTION_WEEKLY"`
+			Verified int `json:"verified,omitempty" env:"FUNCD_BACKUP_RETENTION_VERIFIED"`
+		} `json:"retention,omitempty"`
+	} `json:"backup,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
 		Namespaces []string `json:"namespaces,omitempty" env:"FUNCD_AUTH_NAMESPACES" envSeparator:","`
@@ -371,6 +385,11 @@ func defaults() Config {
 	c.Funclog.Enabled = true
 	c.Funclog.Bucket = "funcd-system"
 	c.Funclog.Traces = true
+	// Platform backup ladder (ADR-0203): 48 hours, 30 days, 12 weeks; a verified copy 2 days.
+	c.Backup.Retention.Hourly = 48
+	c.Backup.Retention.Daily = 30
+	c.Backup.Retention.Weekly = 12
+	c.Backup.Retention.Verified = 2
 	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
