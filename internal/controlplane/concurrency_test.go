@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/workflow"
 )
 
 const conflictType = "urn:funcd:problem:conflict"
@@ -30,6 +32,12 @@ const conflictType = "urn:funcd:problem:conflict"
 func newConcurrencyServer(t *testing.T, eng store.Engine) (http.Handler, store.Store) {
 	t.Helper()
 	st := store.New(eng)
+	return concurrencyServerOn(t, st), st
+}
+
+// concurrencyServerOn is newConcurrencyServer over st.
+func concurrencyServerOn(t *testing.T, st store.Store) http.Handler {
+	t.Helper()
 	r := raceReader{st}
 	col, err := gc.New(gc.Deps{Store: st, Purger: noPurge{}})
 	require.NoError(t, err)
@@ -45,7 +53,7 @@ func newConcurrencyServer(t *testing.T, eng store.Engine) (http.Handler, store.S
 		},
 	})
 	require.NoError(t, err)
-	return h, st
+	return h
 }
 
 // send is one request with the dev token and the given If-Match lines.
@@ -386,4 +394,80 @@ func TestScenarioPreRestoreVersionConflicts(t *testing.T) {
 	rv, handler = stored(t, stB, "f")
 	require.Equal(t, atBackup, rv)
 	require.Equal(t, "h2", handler, "f keeps B's content")
+}
+
+// statusRaceStore writes the status of the next races objects of kind it reads, right after each read: a
+// controller's in-process status write landing between a handler's read and its store write.
+type statusRaceStore struct {
+	store.Store
+	kind  v1.Kind
+	races atomic.Int32
+}
+
+func (s *statusRaceStore) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	read, err := s.Store.Get(ctx, gvk, ns, name)
+	if err != nil || gvk.Kind != s.kind || s.races.Add(-1) < 0 {
+		return read, err
+	}
+	o, err := s.Store.Get(ctx, gvk, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	status := o.(v1.StatusObject).GetStatus()
+	if status.Phase == v1.PhaseReady {
+		status.Phase = v1.PhaseDeploying
+	} else {
+		status.Phase = v1.PhaseReady
+	}
+	if _, err := s.Update(ctx, o); err != nil {
+		return nil, err
+	}
+	return read, nil
+}
+
+// A write without a client version is unconditional (ADR-0210 Decision 3): a controller's status write between the
+// server's read and its write must not turn it into a 409. A PUT that carries a version keeps its 409.
+func TestIssue900_UnversionedWriteSurvivesStatusWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("replace", func(t *testing.T) {
+		t.Parallel()
+		st := &statusRaceStore{Store: store.New(memory.New()), kind: v1.KindFunction}
+		srv := concurrencyServerOn(t, st)
+		twoVersions(t, srv, st)
+
+		st.races.Store(1)
+		rec := send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h3", ""))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		o, err := st.Store.Get(ctx, v1.KindFunction.GVK(), groupNS, "f")
+		require.NoError(t, err)
+		require.Equal(t, "h3", o.(*v1.Function).Spec.Handler)
+		require.Equal(t, v1.PhaseReady, o.(*v1.Function).Status.Phase, "the controller's status write is kept")
+
+		cur := o.GetObjectMeta().ResourceVersion
+		st.races.Store(1)
+		requireConflict(t, send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h4", cur)))
+
+		st.races.Store(1000)
+		requireConflict(t, send(t, srv, http.MethodPut, fnPath("f"), fnBody(t, "f", "h4", "")))
+		o, err = st.Store.Get(ctx, v1.KindFunction.GVK(), groupNS, "f")
+		require.NoError(t, err)
+		require.Equal(t, "h3", o.(*v1.Function).Spec.Handler, "a status that changes on every read still ends in 409")
+	})
+
+	t.Run("kvstore handover", func(t *testing.T) {
+		t.Parallel()
+		st := &statusRaceStore{Store: store.New(memory.New()), kind: v1.KindKVStore}
+		srv := kvServerOn(t, st)
+		wf := kvWorkflow(t, st, "w-keep", v1.DeletionRetain)
+		keptStore(t, st, "w-keep", markerOf("w", "u1"))
+
+		st.races.Store(1)
+		require.Equal(t, http.StatusOK, handover(t, srv, "operator-token", "w-keep", "w"))
+		o, err := st.Store.Get(ctx, v1.KindKVStore.GVK(), kvNS, "w-keep")
+		require.NoError(t, err)
+		require.Equal(t, []v1.OwnerReference{workflow.KVMarker(wf)}, o.GetObjectMeta().OwnerReferences)
+		require.Equal(t, v1.PhaseReady, o.(*v1.KVStore).Status.Phase, "the controller's status write is kept")
+	})
 }

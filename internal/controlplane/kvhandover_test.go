@@ -44,6 +44,12 @@ func newKVServer(t *testing.T) (http.Handler, store.Store) {
 	t.Helper()
 	st := store.New(memory.New())
 	t.Cleanup(func() { _ = st.Close() })
+	return kvServerOn(t, st), st
+}
+
+// kvServerOn is newKVServer over st.
+func kvServerOn(t *testing.T, st store.Store) http.Handler {
+	t.Helper()
 	tokens := map[string]auth.Identity{}
 	for _, sub := range []string{"operator", "wfwriter", "kvupdater"} {
 		tokens[sub+"-token"] = auth.Identity{Subject: sub, Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{kvNS}}
@@ -61,7 +67,7 @@ func newKVServer(t *testing.T) (http.Handler, store.Store) {
 		Credentials: middleware.NewStaticCredentials(tokens),
 	})
 	require.NoError(t, err)
-	return h, st
+	return h
 }
 
 func kvWorkflow(t *testing.T, st store.Store, store v1.ObjectName, policy v1.DeletionPolicy) *v1.Workflow {

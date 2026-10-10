@@ -195,7 +195,8 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 
 // replaceObjIf is replaceObj with guard run on the stored object before admission. A body resourceVersion is the
 // client's precondition (ADR-0210), compared with the stored one before the guard and admission; the write is
-// conditional on the stored object's resourceVersion, so the guard's verdict holds for the write.
+// conditional on the stored object's resourceVersion, so the guard's verdict holds for the write. Without a client
+// version a write that lost to a concurrent one starts over from the read (retryOwnRead).
 func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object, guard func(context.Context, v1.Object) error) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbUpdate, kind, ns); err != nil {
 		return nil, err
@@ -217,31 +218,51 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		return nil, err
 	}
 	defer unlock()
-	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
-	if err != nil {
-		return nil, err
-	}
-	if err := staleVersion(kind, ns, name, want, cur); err != nil {
-		return nil, err
-	}
-	if guard != nil {
-		if err := guard(ctx, cur); err != nil {
-			return nil, err
+	return retryOwnRead(func() (v1.Object, bool, error) {
+		cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := staleVersion(kind, ns, name, want, cur); err != nil {
+			return nil, false, err
+		}
+		if guard != nil {
+			if err := guard(ctx, cur); err != nil {
+				return nil, false, err
+			}
+		}
+		id, _ := middleware.IdentityFrom(ctx)
+		admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
+			Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		if admitted, err = withStatus(admitted, cur); err != nil {
+			return nil, false, err
+		}
+		withServerMeta(admitted, cur)
+		admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
+		out, err := h.store.Update(ctx, admitted)
+		return out, want == "" && fault.KindOf(err) == fault.Conflict, err
+	})
+}
+
+// ownReadAttempts bounds retryOwnRead, as storescaler's maxAttempts bounds its own read-modify-write.
+const ownReadAttempts = 5
+
+// retryOwnRead runs write, which reads the stored object, judges it (guard, admission) and writes conditional on the
+// version it read, again while write reports that the store refused that version (lost): a controller's status
+// write landed between the read and the write. Only a write without a client version may report lost: it is
+// unconditional (ADR-0210 Decision 3), and each attempt judges the fresh stored object. A client's version keeps its
+// 409, and so does a store whose object changes on every attempt.
+func retryOwnRead(write func() (out v1.Object, lost bool, err error)) (v1.Object, error) {
+	for attempt := 1; ; attempt++ {
+		out, lost, err := write()
+		if !lost || attempt == ownReadAttempts {
+			return out, err
 		}
 	}
-	id, _ := middleware.IdentityFrom(ctx)
-	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
-		Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if admitted, err = withStatus(admitted, cur); err != nil {
-		return nil, err
-	}
-	withServerMeta(admitted, cur)
-	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
-	return h.store.Update(ctx, admitted)
 }
 
 // matchPathNamespace is ADR-0018 §4's path/body namespace consistency check: the body's
