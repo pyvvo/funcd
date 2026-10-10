@@ -116,9 +116,13 @@ func (e *gcEnv) anyPartExists(t *testing.T) bool {
 	return false
 }
 
-// secretPeriod is app-secret-declared's supervision period: a stopped App pass requeues after it and each Function is
-// supervised on it, so each quiet window below spans several periods.
+// secretPeriod is app-secret-declared's supervision period where a quiet window needs it: a stopped App pass requeues
+// after it and each Function is supervised on it, so each quiet window below spans several periods.
 const secretPeriod = 200 * time.Millisecond
+
+// secretWatchPeriod is far longer than secretWithin, so no supervision pass falls inside a Secret step: only the Secret
+// watch can move the App.
+const secretWatchPeriod = time.Minute
 
 // secretPacing scales app-secret-declared's app.upgradeTimeout 20s > runtime.bootTimeout 10s down to 3 s > 1 s, with
 // invoke.activationTimeout 500 ms below both.
@@ -129,13 +133,11 @@ func secretPacing() funcd.Option {
 // scenario: app-secret-declared
 func TestScenarioAppSecretDeclared(t *testing.T) {
 	t.Run("held until the Secret is complete", func(t *testing.T) {
-		e := startGC(t, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: secretPeriod}))
-		a := configTodo(t, e)
-		e.apply(t, a)
+		e := startGC(t, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: secretWatchPeriod}))
+		e.apply(t, configTodo(t, e))
 		got := e.waitApp(t, "todo", v1.ConditionFalse, "SecretNotFound", appWithin)
 		require.Equal(t, v1.PhaseDeploying, got.Status.Phase)
 		require.Contains(t, readyCondition(got).Message, "Secret/todo-stripe-key")
-		require.Never(t, func() bool { return e.anyPartExists(t) }, 3*secretPeriod, 50*time.Millisecond, "no part is written")
 
 		e.stripeKey(t, map[string]string{"OTHER": "x"})
 		got = e.waitApp(t, "todo", v1.ConditionFalse, "SecretKeyMissing", appWithin)
@@ -149,7 +151,17 @@ func TestScenarioAppSecretDeclared(t *testing.T) {
 		e.waitCurrent(t, "todo-1")
 		e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
 		e.waitAPIEnv(t, apiEnv{TZ: "Europe/Paris", Stripe: "sk-test-1"})
+	})
+	t.Run("quiet while held and after a change outside the App", func(t *testing.T) {
+		e := startGC(t, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: secretPeriod}))
+		a := configTodo(t, e)
+		e.apply(t, a)
+		e.waitApp(t, "todo", v1.ConditionFalse, "SecretNotFound", appWithin)
+		require.Never(t, func() bool { return e.anyPartExists(t) }, 3*secretPeriod, 50*time.Millisecond, "no part is written")
 
+		e.stripeKey(t, map[string]string{"STRIPE_API_KEY": "sk-test-1"})
+		e.waitCurrent(t, "todo-1")
+		e.waitAPIEnv(t, apiEnv{TZ: "Europe/Paris", Stripe: "sk-test-1"})
 		parts := append(todoParts(), todoPart{v1.KindConfigMap, settingsName("Europe/Paris")})
 		before := e.settled(t, parts)
 		e.stripeKey(t, map[string]string{"STRIPE_API_KEY": "sk-test-2"})
