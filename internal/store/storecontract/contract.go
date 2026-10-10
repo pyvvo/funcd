@@ -5,14 +5,19 @@
 package storecontract
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
+	"github.com/pyvvo/funcd/internal/snapshot/snapshotcontract"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -27,6 +32,134 @@ func RunContract(t *testing.T, newStore func(t *testing.T) store.Store) {
 	t.Run("list-by-namespace-and-filter", func(t *testing.T) { testListFilter(t, newStore(t)) })
 	t.Run("watch-streams-changes", func(t *testing.T) { testWatchStreams(t, newStore(t)) })
 	t.Run("watch-replays-from-resourceversion", func(t *testing.T) { testWatchReplays(t, newStore(t)) })
+	t.Run("version-names-the-timeline", func(t *testing.T) { testVersionTimeline(t, newStore(t)) })
+	t.Run("snapshot-omits-the-timeline", func(t *testing.T) { testSnapshotOmitsTimeline(t, newStore(t)) })
+}
+
+// testVersionTimeline: every version a store mints is "<its 16-hex timeline>-<n>", the list's included, and a
+// since-version of another timeline, a plain one included, cannot be replayed (ADR-0202).
+func testVersionTimeline(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	a := mustCreate(t, s, mkConfigMap(t, "default", "a", "rg1", nil))
+	b := mustCreate(t, s, mkConfigMap(t, "default", "b", "rg1", nil))
+	va := mustParse(t, a.GetObjectMeta().ResourceVersion)
+	vb := mustParse(t, b.GetObjectMeta().ResourceVersion)
+	if len(va.Timeline) != 16 || vb.Timeline != va.Timeline || vb.N != va.N+1 {
+		t.Fatalf("versions %q then %q, want <16 hex>-n then the same timeline at n+1", va, vb)
+	}
+	l, err := s.List(ctx, v1.KindConfigMap.GVK(), store.ListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if l.ResourceVersion != vb.String() {
+		t.Fatalf("List version %q, want the last write's %q", l.ResourceVersion, vb)
+	}
+	for _, since := range []string{store.Version{N: va.N}.String(), store.Version{Timeline: "0123456789abcdef", N: va.N}.String()} {
+		if _, err := s.Watch(ctx, v1.KindConfigMap.GVK(), store.WatchOptions{SinceResourceVersion: since}); fault.KindOf(err) != fault.Unavailable {
+			t.Fatalf("Watch since %q of another timeline: kind=%v want unavailable", since, fault.KindOf(err))
+		}
+	}
+}
+
+// testSnapshotOmitsTimeline: Store.Snapshot returns the version of its read and leaves the timeline record out.
+func testSnapshotOmitsTimeline(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	mustCreate(t, s, mkConfigMap(t, "default", "a", "rg1", nil))
+	var keys [][]byte
+	rv, err := s.Snapshot(ctx, func(r snapshot.Record) error {
+		keys = append(keys, r.Key)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	l, err := s.List(ctx, v1.KindConfigMap.GVK(), store.ListOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if rv != l.ResourceVersion {
+		t.Fatalf("Snapshot version %q, want the store's %q", rv, l.ResourceVersion)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("Snapshot emitted %d records, want the revision and the object", len(keys))
+	}
+	for _, k := range keys {
+		if i := bytes.LastIndexByte(k, 0); i >= 0 && store.IsTimelineRecord(string(k[:i]), string(k[i+1:])) {
+			t.Fatal("Snapshot emitted the timeline record")
+		}
+	}
+}
+
+// Restore loads src's snapshot into the empty engine dst and opens it: a store restored from src.
+func Restore(t *testing.T, src store.Store, dst store.Engine) store.Store {
+	t.Helper()
+	var recs []snapshot.Record
+	if _, err := src.Snapshot(context.Background(), func(r snapshot.Record) error {
+		recs = append(recs, r)
+		return nil
+	}); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if err := dst.Load(context.Background(), snapshotcontract.Feed(recs)); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return store.New(dst)
+}
+
+// SnapshotSubject is a metastore over the empty engine eng for snapshotcontract.Run: Load goes to the engine,
+// before store.New; Snapshot and Set go through the Store, opened on first use. Set writes a ConfigMap.
+func SnapshotSubject(t *testing.T, eng store.Engine) snapshotcontract.Subject {
+	t.Helper()
+	t.Cleanup(func() { _ = eng.Close() })
+	return &metaSubject{eng: eng}
+}
+
+type metaSubject struct {
+	eng  store.Engine
+	once sync.Once
+	st   store.Store
+}
+
+func (m *metaSubject) store() store.Store {
+	m.once.Do(func() { m.st = store.New(m.eng) })
+	return m.st
+}
+
+func (m *metaSubject) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
+	return m.store().Snapshot(ctx, emit)
+}
+
+func (m *metaSubject) Load(ctx context.Context, next func() (snapshot.Record, error)) error {
+	return m.eng.Load(ctx, next)
+}
+
+func (m *metaSubject) Set(ctx context.Context, name string, n int) error {
+	s := m.store()
+	c := &v1.ConfigMap{TypeMeta: v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap}}
+	c.Name, c.Namespace, c.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	c.Spec.Data = map[string]string{"n": strconv.Itoa(n)}
+	cur, err := s.Get(ctx, v1.KindConfigMap.GVK(), "default", c.Name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		_, err = s.Create(ctx, c)
+	case err == nil:
+		c.ResourceVersion = cur.GetObjectMeta().ResourceVersion
+		_, err = s.Update(ctx, c)
+	}
+	return err
+}
+
+func (m *metaSubject) Value(r snapshot.Record) (string, int, bool) {
+	i := bytes.LastIndexByte(r.Key, 0)
+	if i < 0 || string(r.Key[:i]) != v1.KindConfigMap.GVK().String() {
+		return "", 0, false
+	}
+	var c v1.ConfigMap
+	if err := json.Unmarshal(r.Value, &c); err != nil {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(c.Spec.Data["n"])
+	return string(c.Name), n, err == nil
 }
 
 func mkConfigMap(t *testing.T, ns, name, rg string, data map[string]string) *v1.ConfigMap {
@@ -265,6 +398,15 @@ func testWatchReplays(t *testing.T, s store.Store) {
 }
 
 // --- helpers ---
+
+func mustParse(t *testing.T, rv string) store.Version {
+	t.Helper()
+	v, err := store.ParseVersion(rv)
+	if err != nil {
+		t.Fatalf("ParseVersion(%q): %v", rv, err)
+	}
+	return v
+}
 
 func mustCreate(t *testing.T, s store.Store, obj v1.Object) v1.Object {
 	t.Helper()

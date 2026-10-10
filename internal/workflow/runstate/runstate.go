@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
 // Record is the authoritative durable state of one workflow run: the pinned input,
@@ -133,6 +134,10 @@ type Store interface {
 	List(ctx context.Context, opts ListOptions) ([]*Record, error)
 	// Close releases the driver's resources.
 	Close() error
+	// Snapshot emits every record from one read and returns "" (the run state has no version); Load fills an
+	// empty run store from such a stream (ADR-0202).
+	snapshot.Source
+	snapshot.Loader
 }
 
 // Clone deep-copies a record so drivers never alias caller-owned memory.

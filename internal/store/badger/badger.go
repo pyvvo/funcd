@@ -7,6 +7,7 @@
 package badger
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/dgraph-io/badger/v4/options"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/snapshot"
+	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -111,6 +114,25 @@ func (e *engine) Update(ctx context.Context, fn func(store.Txn) error) error {
 		return fault.Conflictf("badger.Update", "transaction conflict")
 	}
 	return err
+}
+
+// Snapshot emits every record, the timeline included, from one read; a Key is skey's bucket+NUL+key (ADR-0202).
+func (e *engine) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
+	return "", snapbadger.Snapshot(ctx, e.db, emit)
+}
+
+// Load fills an empty engine before store.New and leaves the timeline record out, so New mints a new one.
+func (e *engine) Load(ctx context.Context, next func() (snapshot.Record, error)) error {
+	return snapbadger.Load(ctx, e.db, next, isTimelineKey)
+}
+
+// isTimelineKey splits a record key at its last NUL into bucket and key and reports the timeline record.
+func isTimelineKey(k []byte) (bool, error) {
+	i := bytes.LastIndexByte(k, 0)
+	if i < 0 {
+		return false, fault.Invalidf("badger.Load", "record key %q has no bucket", k)
+	}
+	return store.IsTimelineRecord(string(k[:i]), string(k[i+1:])), nil
 }
 
 func (e *engine) Close() error {

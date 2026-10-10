@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"testing"
 	"time"
 
@@ -62,12 +61,12 @@ func condition(r *v1.AppRevision, ct v1.ConditionType) v1.Condition {
 	return c
 }
 
-// rvOf is the resourceVersion of ev's write, its place in the store's order.
+// rvOf is the counter of ev's resourceVersion, its write's place in the store's one timeline.
 func rvOf(t *testing.T, ev store.Event) uint64 {
 	t.Helper()
-	n, err := strconv.ParseUint(ev.Object.GetObjectMeta().ResourceVersion, 10, 64)
+	v, err := store.ParseVersion(ev.Object.GetObjectMeta().ResourceVersion)
 	require.NoError(t, err)
-	return n
+	return v.N
 }
 
 // firstRV is the resourceVersion of the first event of evs that match accepts.
