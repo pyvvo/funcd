@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0190](0190-run-bound-to-its-revision.md) (2026-10-05) — lines 164-165 (the restart window): a manifest rebuild drains.
+- **Superseded in part by**: [ADR-0225](0225-pool-worker-boot-crash-loop.md) (2026-10-10; lines at 36aae2e8) — Decision 4's "a running one silent on `/health/liveness` for `runtime.bootTimeout` since its last answer (else `CreatedAt`) is restarted" and "an exited one is recreated on ADR-0142's backoff (#603)" (142-143), before the worker listened: a boot crash on the solo count and growing wait.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: pooling, shim, identity, local-api, logs, traces, security
