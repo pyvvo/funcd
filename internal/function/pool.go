@@ -197,12 +197,13 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // revision serves is judged on the pool worker the resolver hands out, and one whose current revision does not serve yet
 // on the worker of the current manifest, which alone holds it (ADR-0190 Decision 8). While the resolver still hands out
 // an old pool worker, which serves a carried member at its serving revision until the key switches to the current
-// manifest's worker (ADR-0224 Decision 6), the phase and Ready follow that worker's entry and the current revision is reported as booting beside it, as a solo
-// switch reports its serving revision (ADR-0143 Decision 5, #863); those cases are judged even while the current worker
-// does not run. The current worker's boot crash is reported in the solo vocabulary (ADR-0225 Decision 3): on Ready when
-// the member is judged on that worker, on RevisionReady when the member's current revision differs from the one it
-// serves; a Start error takes its place. The pool worker is judged on its own liveness (ensurePool), never on a
-// member's state. It also returns how soon an old pool worker's drain needs the pass back.
+// manifest's worker (ADR-0224 Decision 6), the phase and Ready follow that worker's entry and the current revision is
+// reported as booting beside it, as a solo switch reports its serving revision (ADR-0143 Decision 5, #863); those cases
+// are judged even while the current worker does not run. The current worker's boot crash is reported in the solo
+// vocabulary (ADR-0225 Decision 3): on Ready when the member is judged on that worker, on RevisionReady when the
+// member's current revision differs from the one it serves; a Start error takes its place. The pool worker is judged on
+// its own liveness (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs
+// the pass back.
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, secretEnv, catalogEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
 	pass, err := r.ensurePool(ctx, a.Key, fn, secretEnv, catalogEnv, idx)
 	if err != nil {
@@ -370,14 +371,14 @@ type poolPass struct {
 // effective desired. A pool worker carries its manifest's signature in its revision slot, so a rebuild is due when no
 // worker of the key holds the current signature, as the runtime lists it: the rebuild starts a second worker beside the
 // old one, which serves the carried members until the key switches to the new one (beginPoolSwitch, settlePoolSwitch,
-// ADR-0224) and then drains (drainPool). The worker of the current signature
-// follows the boot rule of every Function (ADR-0225): one that has not listened bootTimeout after its last start is
-// stopped, counted as a boot crash and created again once its growing wait has passed, in the same pass when it has; an
-// end before listening and a failed Start go on the same count, and an end after listening is restarted once a period
-// old (#603). One that listened and is silent on /health/liveness for livenessTimeout is restarted at once (#422).
-// Every worker is reclaimed when desired is 0. The pass carries the current worker's running count, its backoff
-// deadline, its Start error and its boot crash, which the pass writes to the member's status, as for a solo worker
-// (issue #73). self is the member being reconciled: its resolved secretEnv and catalogEnv give the pool's shared env.
+// ADR-0224) and then drains (drainPool). The worker of the current signature follows the boot rule of every Function
+// (ADR-0225): one that has not listened bootTimeout after its last start is stopped, counted as a boot crash and
+// created again once its growing wait has passed, in the same pass when it has; an end before listening and a failed
+// Start go on the same count, and an end after listening is restarted once a period old (#603). One that listened and
+// is silent on /health/liveness for livenessTimeout is restarted at once (#422). Every worker is reclaimed when desired
+// is 0. The pass carries the current worker's running count, its backoff deadline, its Start error and its boot crash,
+// which the pass writes to the member's status, as for a solo worker (issue #73). self is the member being reconciled:
+// its resolved secretEnv and catalogEnv give the pool's shared env.
 func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, secretEnv, catalogEnv map[string]string, idx accessIndex) (poolPass, error) {
 	members, err := r.admittedMembers(ctx, key, idx)
 	if err != nil {

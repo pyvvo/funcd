@@ -1,6 +1,8 @@
 package function_test
 
 import (
+	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -469,4 +471,64 @@ func TestServingPoolMakesNoProbe(t *testing.T) {
 	}
 	require.Equal(t, o, sp.os.membersCalls())
 	require.Equal(t, n, sp.ns.membersCalls())
+}
+
+// heldCall carries a call that stays in flight until its gate closes.
+type heldCall struct{ gate chan struct{} }
+
+func (c heldCall) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-c.gate
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// The drain clock of the worker the record handed out starts at the switch, not at the load clock (ADR-0224 Decision
+// 5): with runtime.drainGrace (30 s) below runtime.bootTimeout (1 min), as the defaults are, a switch at the load
+// timeout keeps o while a call to it is in flight, and retires it once the call has ended or drainGrace has passed
+// since the switch.
+func TestPoolSwitchDrainsFromTheSwitch(t *testing.T) {
+	t.Parallel()
+	const drainGrace = 30 * time.Second
+	switchedWithCall := func(t *testing.T) (*shimHarness, *clock.Manual, switchPool, func() string) {
+		t.Helper()
+		var calls *activator.CallTracker
+		h, clk := switchHarness(t, func(d *function.Deps) {
+			d.BootTimeout, d.DrainGrace, calls = time.Minute, drainGrace, d.Calls
+		})
+		sp := rebuild(t, h, clk, "a", "b")
+		call := heldCall{gate: make(chan struct{})}
+		release := sync.OnceFunc(func() { close(call.gate) })
+		t.Cleanup(release)
+		answer := callThrough(t, calls, call, sp.os.url)
+		sp.listen(h, "ready", "a")
+		sp.listen(h, "loading", "b")
+		h.reconcile(t, "a")
+		sp.requireWaits(t, h)
+
+		clk.Advance(time.Minute)
+		h.reconcile(t, "a")
+		requireHandedOut(t, h, sp.ns.url, "a", "b")
+		require.False(t, h.rt.wasRemoved(sp.o), "the call in flight holds o at the switch")
+		return h, clk, sp, func() string {
+			release()
+			return answer()
+		}
+	}
+	t.Run("drainGrace from the switch", func(t *testing.T) {
+		t.Parallel()
+		h, clk, sp, _ := switchedWithCall(t)
+		clk.Advance(drainGrace - time.Millisecond)
+		h.reconcile(t, "a")
+		require.False(t, h.rt.wasRemoved(sp.o), "within drainGrace of the switch")
+		clk.Advance(time.Millisecond)
+		h.reconcile(t, "a")
+		require.True(t, h.rt.wasRemoved(sp.o), "drainGrace after the switch")
+	})
+	t.Run("idle after the call", func(t *testing.T) {
+		t.Parallel()
+		h, clk, sp, end := switchedWithCall(t)
+		require.NotContains(t, end(), "error")
+		clk.Advance(time.Millisecond)
+		h.reconcile(t, "a")
+		require.True(t, h.rt.wasRemoved(sp.o), "o is retired once the call has ended and HandOutSettle has passed")
+	})
 }
