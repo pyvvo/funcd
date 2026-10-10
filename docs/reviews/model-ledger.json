@@ -10633,5 +10633,20 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0214-implementation-claude-opus-5-5.md",
     "notes": "pass; just ci exit 0, 5/5 ADR-0214 e2e Scenarios with -race, every App e2e test green, 19/22 mutants killed (1 equivalent); Minor(model): wrote-no-part and switch-Requeue rules untested; Minor(model): ADR-0221 test in this change; Minor(model): Reconcile complexity and a third randHex; Minor(adr, plausible): restart e2e uses the default upgradeTimeout, no restart exemption in Decision 4"
+  },
+  {
+    "date": "2026-10-10",
+    "adr": "0218",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 4,
+    "model_attributed": 2,
+    "dod_passed": 17,
+    "dod_total": 18,
+    "report": "docs/reviews/adr-0218-implementation-claude-opus-5-5.md",
+    "notes": "pass; m1 model: app lock writes app.lock as 0600 (CreateTemp, no chmod); m2 model: out-of-scope duplicated alias/merge/binary test citing ADR-0218; m3 adr: app lock refuses a malformed app.lock it should regenerate (Load reads it strictly); m4 env: additive verb conflict with main (ADR-0214 retry), union builds and passes"
   }
 ]

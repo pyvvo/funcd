@@ -49,27 +49,49 @@ func PushSite(ctx context.Context, ref, dir string) (digest string, err error) {
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
 	}
+	manifest, perr := pushTarArtifact(ctx, op, target, reference, SiteArtifactType, data)
+	if perr != nil {
+		return "", perr
+	}
+	return manifest.Digest.String(), nil
+}
+
+// pushTarArtifact pushes data as one BundleTarMediaType layer under artifactType with the reproducible manifest
+// (ADR-0089) and tags it reference unless that is "". The same data always yields the same manifest digest.
+func pushTarArtifact(ctx context.Context, op string, target oras.Target, reference, artifactType string, data []byte) (ocispec.Descriptor, error) {
 	layer := content.NewDescriptorFromBytes(BundleTarMediaType, data)
 	if perr := target.Push(ctx, layer, bytes.NewReader(data)); perr != nil && !errors.Is(perr, errdef.ErrAlreadyExists) {
-		return "", fault.Wrapf(perr, fault.Internal, op, "push site layer")
+		return ocispec.Descriptor{}, fault.Wrapf(perr, fault.Internal, op, "push layer")
 	}
-	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, SiteArtifactType,
+	manifest, merr := oras.PackManifest(ctx, target, oras.PackManifestVersion1_1, artifactType,
 		reproducible(oras.PackManifestOptions{Layers: []ocispec.Descriptor{layer}}))
 	if merr != nil {
-		return "", fault.Wrapf(merr, fault.Internal, op, "pack manifest")
+		return ocispec.Descriptor{}, fault.Wrapf(merr, fault.Internal, op, "pack manifest")
 	}
 	if reference != "" {
 		if terr := target.Tag(ctx, manifest, reference); terr != nil {
-			return "", fault.Wrapf(terr, fault.Internal, op, "tag manifest")
+			return ocispec.Descriptor{}, fault.Wrapf(terr, fault.Internal, op, "tag manifest")
 		}
 	}
-	return manifest.Digest.String(), nil
+	return manifest, nil
 }
 
 // ResolveSite resolves ref (a tag or a digest) to its manifest digest, asserting SiteArtifactType.
 // A function artifact ⇒ fault.Invalid; an absent ref ⇒ fault.NotFound.
 func ResolveSite(ctx context.Context, ref string) (digest string, err error) {
-	const op = "artifact.ResolveSite"
+	return resolveTyped(ctx, "artifact.ResolveSite", ref, SiteArtifactType, "site")
+}
+
+// PullSite fetches the digest-pinned site artifact and untars its bundle layer into dir using the
+// existing traversal-safe untar (a "../"/absolute/symlink-escape entry is refused). The manifest is
+// fetched BY DIGEST so a moved tag can never change what materializes.
+func PullSite(ctx context.Context, ref, digest, dir string) error {
+	return pullTyped(ctx, "artifact.PullSite", ref, digest, dir, SiteArtifactType, "site")
+}
+
+// resolveTyped resolves ref (a tag or a digest) to its manifest digest, asserting artifactType, which a what
+// artifact has: another type ⇒ fault.Invalid; an absent ref ⇒ fault.NotFound.
+func resolveTyped(ctx context.Context, op, ref, artifactType, what string) (digest string, err error) {
 	target, reference, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
 		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
@@ -81,19 +103,17 @@ func ResolveSite(ctx context.Context, ref string) (digest string, err error) {
 	if ferr != nil {
 		return "", fault.NotFoundf(op, "resolve %q: %v", ref, ferr)
 	}
-	if aerr := assertSiteManifest(op, manifestDesc, manifestData); aerr != nil {
+	if aerr := assertArtifactType(op, manifestDesc, manifestData, artifactType, what); aerr != nil {
 		return "", aerr
 	}
 	return manifestDesc.Digest.String(), nil
 }
 
-// PullSite fetches the digest-pinned site artifact and untars its bundle layer into dir using the
-// existing traversal-safe untar (a "../"/absolute/symlink-escape entry is refused). The manifest is
-// fetched BY DIGEST so a moved tag can never change what materializes.
-func PullSite(ctx context.Context, ref, digest, dir string) error {
-	const op = "artifact.PullSite"
+// pullTyped fetches the digest-pinned artifact of artifactType, which a what artifact has, and untars its bundle
+// layer into dir traversal-safely. The manifest is fetched BY DIGEST so a moved tag can never change what lands.
+func pullTyped(ctx context.Context, op, ref, digest, dir, artifactType, what string) error {
 	if digest == "" {
-		return fault.Invalidf(op, "site digest is required (the digest is the authority)")
+		return fault.Invalidf(op, "%s digest is required (the digest is the authority)", what)
 	}
 	target, _, terr := resolveReadTarget(ctx, ref)
 	if terr != nil {
@@ -101,13 +121,13 @@ func PullSite(ctx context.Context, ref, digest, dir string) error {
 	}
 	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, digest, oras.DefaultFetchBytesOptions)
 	if ferr != nil {
-		return fault.NotFoundf(op, "fetch site %s@%s: %v", ref, digest, ferr)
+		return fault.NotFoundf(op, "fetch %s %s@%s: %v", what, ref, digest, ferr)
 	}
 	if manifestDesc.Digest.String() != digest {
 		return fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
 	}
 	var manifest ocispec.Manifest
-	if err := assertSiteManifest(op, manifestDesc, manifestData); err != nil {
+	if err := assertArtifactType(op, manifestDesc, manifestData, artifactType, what); err != nil {
 		return err
 	}
 	if jerr := json.Unmarshal(manifestData, &manifest); jerr != nil {
@@ -115,14 +135,14 @@ func PullSite(ctx context.Context, ref, digest, dir string) error {
 	}
 	layer, ok := layerByMediaType(manifest.Layers, BundleTarMediaType)
 	if !ok {
-		return fault.Invalidf(op, "site artifact %s has no bundle layer (media type %s)", digest, BundleTarMediaType)
+		return fault.Invalidf(op, "%s artifact %s has no bundle layer (media type %s)", what, digest, BundleTarMediaType)
 	}
 	if merr := os.MkdirAll(dir, 0o750); merr != nil {
-		return fault.Wrapf(merr, fault.Internal, op, "create site dir")
+		return fault.Wrapf(merr, fault.Internal, op, "create %s dir", what)
 	}
 	rc, ferr := target.Fetch(ctx, layer)
 	if ferr != nil {
-		return fault.Wrapf(ferr, fault.Internal, op, "fetch site layer")
+		return fault.Wrapf(ferr, fault.Internal, op, "fetch %s layer", what)
 	}
 	defer func() { _ = rc.Close() }()
 	vr := content.NewVerifyReader(rc, layer)
@@ -130,23 +150,23 @@ func PullSite(ctx context.Context, ref, digest, dir string) error {
 		return uerr
 	}
 	if _, derr := io.Copy(io.Discard, vr); derr != nil {
-		return fault.Wrapf(derr, fault.Internal, op, "drain site layer")
+		return fault.Wrapf(derr, fault.Internal, op, "drain %s layer", what)
 	}
 	if verr := vr.Verify(); verr != nil {
-		return fault.Wrapf(verr, fault.Internal, op, "site layer digest mismatch")
+		return fault.Wrapf(verr, fault.Internal, op, "%s layer digest mismatch", what)
 	}
 	return nil
 }
 
-// assertSiteManifest rejects a manifest that is not a funcd site artifact: a function artifact (or any
-// other artifactType) is fault.Invalid, so a Site can never materialize a function bundle.
-func assertSiteManifest(op string, desc ocispec.Descriptor, data []byte) error {
+// assertArtifactType rejects a manifest whose artifactType is not want, the type of a what artifact: a function
+// artifact (or any other artifactType) is fault.Invalid, so a Site never materializes a function bundle.
+func assertArtifactType(op string, desc ocispec.Descriptor, data []byte, want, what string) error {
 	var manifest ocispec.Manifest
 	if jerr := json.Unmarshal(data, &manifest); jerr != nil {
 		return fault.Invalidf(op, "decode manifest: %v", jerr)
 	}
-	if manifest.ArtifactType != SiteArtifactType {
-		return fault.Invalidf(op, "artifact %s is %q, not a site artifact (%s)", desc.Digest, manifest.ArtifactType, SiteArtifactType)
+	if manifest.ArtifactType != want {
+		return fault.Invalidf(op, "artifact %s is %q, not a %s artifact (%s)", desc.Digest, manifest.ArtifactType, what, want)
 	}
 	return nil
 }

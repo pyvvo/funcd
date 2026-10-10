@@ -46,7 +46,7 @@ spec:
     config:
     - todo-settings
     handler: handle
-    image: registry.example/todo-api:1.0.0
+    image: registry.example/todo-api:1.0.0@sha256:0dd9c6aadc37466268cdf2d6a80d6791ad6c73ebf9bf45f26069fa6d2d14cde5
     kv:
     - alias: todos
       store: todo-store
@@ -63,7 +63,7 @@ spec:
       bucket: todo-files
       prefix: events
     handler: handle
-    image: registry.example/todo-planner:1.0.0
+    image: registry.example/todo-planner:1.0.0@sha256:784c3ea4bf1545655a2dc0fc2c24a773cb2d2738fd8032b41f5e3c4ccaf90bc7
     kv:
     - alias: todos
       store: todo-store
@@ -79,13 +79,13 @@ spec:
     - alias: lake
       catalog: todo-lake
     handler: handle
-    image: registry.example/todo-stats:1.0.3
+    image: registry.example/todo-stats:1.0.3@sha256:d540eb0bc37f1f6393e5c08593d78bb5e491b2413e0c773daac7795b459f9d81
     name: todo-stats
     pooling: {}
     runtime: nodejs22
     scaling: {}
   - handler: handle
-    image: registry.example/todo-migrate:1.2.0
+    image: registry.example/todo-migrate:1.2.0@sha256:52981c9787e73cfeb83e8b3ccfeebf194f124f6f3c59b3a830f5317d3042f23a
     kv:
     - alias: todos
       store: todo-store
@@ -137,7 +137,7 @@ spec:
   sites:
   - bucket:
       name: todo-web
-    image: registry.example/todo-web:1.0.0
+    image: registry.example/todo-web:1.0.0@sha256:e713cc95caa332f701eafb54a0cdaea94c3cdfcbf86e5303c511a3aae3b124e7
     ingress:
       host: todo.example.com
       public: true
@@ -150,5 +150,5 @@ spec:
     pooling: {}
     steps:
     - function:
-        image: registry.example/todo-planner:1.0.0
+        image: registry.example/todo-planner:1.0.0@sha256:784c3ea4bf1545655a2dc0fc2c24a773cb2d2738fd8032b41f5e3c4ccaf90bc7
       name: due

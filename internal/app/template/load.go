@@ -22,15 +22,17 @@ import (
 
 const loadOp = "app.load"
 
-// Template is a loaded template directory (Decisions 1 and 2).
+// Template is a loaded template directory (ADR-0217 Decisions 1 and 2, ADR-0218 Decisions 1 and 3).
 type Template struct {
 	Name         v1.ObjectName
-	Version      string            // strict semver
-	Registry     string            // a literal or one ${{ }} over values
-	Images       map[string]string // name → "<repo>:<version>"; ADR-0218 adds ranges
-	ValuesSchema json.RawMessage   // empty ⇒ {"type":"object"}
-	When         map[string]string // "resources/<file>.yaml" → ${{ }} condition
-	Files        map[string][]byte // "resources/<file>.yaml" → fragment
+	Version      string                 // strict semver
+	Registry     string                 // a literal or one ${{ }} over values
+	Images       map[string]string      // name → "<repo>:<version or range>", as written
+	Parsed       map[string]Image       // name → ParseImage(Images[name]); Load fills it
+	Lock         map[string]LockedImage // app.lock; nil when the directory has none
+	ValuesSchema json.RawMessage        // empty ⇒ {"type":"object"}
+	When         map[string]string      // "resources/<file>.yaml" → ${{ }} condition
+	Files        map[string][]byte      // "resources/<file>.yaml" → fragment
 }
 
 // appFile is app.yaml: a plain client file, decoded strictly (an unknown key is refused) as YAML 1.2.
@@ -47,17 +49,18 @@ const resourcesDir = "resources"
 
 var imageName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Load reads a template directory: app.yaml and resources/*.yaml, nothing else (Decisions 1 and 2).
+// Load reads a template directory: app.yaml, app.lock and resources/*.yaml, nothing else (ADR-0217 Decisions 1 and
+// 2, ADR-0218 Decision 3).
 func Load(dir string) (*Template, error) {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return nil, fault.Invalidf(loadOp, "%s is not a template directory: deploying from a registry ref is ADR-0218", dir)
+		return nil, fault.Invalidf(loadOp, "%s is not a template directory", dir)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fault.Invalidf(loadOp, "read %s: %v", dir, err)
 	}
 	t := &Template{Files: map[string][]byte{}}
-	var sawApp bool
+	var sawApp, sawLock bool
 	for _, e := range entries {
 		switch {
 		case e.Name() == "app.yaml" && e.Type().IsRegular():
@@ -66,10 +69,10 @@ func Load(dir string) (*Template, error) {
 			if err := t.loadResources(filepath.Join(dir, resourcesDir)); err != nil {
 				return nil, err
 			}
-		case e.Name() == "app.lock":
-			return nil, fault.Invalidf(loadOp, "app.lock: a lock is read from ADR-0218 on, so this template is refused rather than its lock ignored")
+		case e.Name() == lockFile && e.Type().IsRegular():
+			sawLock = true
 		default:
-			return nil, fault.Invalidf(loadOp, "%s: a template holds only app.yaml and resources/*.yaml", e.Name())
+			return nil, fault.Invalidf(loadOp, "%s: a template holds only app.yaml, app.lock and resources/*.yaml", e.Name())
 		}
 	}
 	if !sawApp {
@@ -81,6 +84,11 @@ func Load(dir string) (*Template, error) {
 	}
 	if err := t.parseApp(data); err != nil {
 		return nil, err
+	}
+	if sawLock {
+		if t.Lock, err = ReadLock(dir); err != nil {
+			return nil, err
+		}
 	}
 	return t, nil
 }
@@ -125,10 +133,16 @@ func (t *Template) parseApp(data []byte) error {
 	if len(f.Images) > 0 && f.Registry == "" {
 		return fault.Invalidf(loadOp, "app.yaml: registry is required when images is not empty")
 	}
-	for name, ref := range f.Images {
-		if err := checkImage(name, ref); err != nil {
-			return err
+	t.Parsed = make(map[string]Image, len(f.Images))
+	for name, entry := range f.Images {
+		if !imageName.MatchString(name) {
+			return fault.Invalidf(loadOp, "app.yaml: images.%s: a name is [A-Za-z_][A-Za-z0-9_]*", name)
 		}
+		img, err := ParseImage(entry)
+		if err != nil {
+			return fault.Wrapf(err, fault.Invalid, loadOp, "app.yaml: images.%s", name)
+		}
+		t.Parsed[name] = img
 	}
 	if err := checkForm("registry", f.Registry, expr.Select, valuesRoot); err != nil {
 		return fault.Invalidf(loadOp, "app.yaml: %v", err)
@@ -153,22 +167,6 @@ func (t *Template) parseApp(data []byte) error {
 		schema = raw
 	}
 	t.Name, t.Version, t.Registry, t.Images, t.ValuesSchema, t.When = v1.ObjectName(f.Name), f.Version, f.Registry, f.Images, schema, f.When
-	return nil
-}
-
-// checkImage enforces an images entry until ADR-0218's ParseImage replaces it: <repo>:<version>, split at the first
-// ":", the version strict semver, so a range or a digest is refused.
-func checkImage(name, ref string) error {
-	if !imageName.MatchString(name) {
-		return fault.Invalidf(loadOp, "app.yaml: images.%s: a name is [A-Za-z_][A-Za-z0-9_]*", name)
-	}
-	repo, version, ok := strings.Cut(ref, ":")
-	if !ok || repo == "" || strings.Contains(repo, "@") {
-		return fault.Invalidf(loadOp, "app.yaml: images.%s %q is not <repo>:<version> (a digest is ADR-0218's)", name, ref)
-	}
-	if _, err := semver.StrictNewVersion(version); err != nil {
-		return fault.Invalidf(loadOp, "app.yaml: images.%s %q: %q is not an exact version (a range or a digest is ADR-0218's)", name, ref, version)
-	}
 	return nil
 }
 

@@ -746,19 +746,7 @@ func fillCache(ctx context.Context, op, ref, digest, cacheDir string, node v1.OC
 // reconciler can pin it into the immutable Revision without the user typing it. It is the
 // ArtifactResolver seam the Function reconciler calls at Revision-stamp time.
 func (m *OrasMaterializer) Resolve(ctx context.Context, uri string) (string, error) {
-	const op = "artifact.OrasMaterializer.Resolve"
-	target, ref, terr := resolveReadTarget(ctx, uri)
-	if terr != nil {
-		return "", fault.Wrapf(terr, fault.KindOf(terr), op, "resolve target")
-	}
-	if ref == "" {
-		return "", fault.Invalidf(op, "ref %q has no tag/digest to resolve", uri)
-	}
-	desc, rerr := target.Resolve(ctx, ref)
-	if rerr != nil {
-		return "", fault.NotFoundf(op, "resolve %q: %v", uri, rerr)
-	}
-	return desc.Digest.String(), nil
+	return ResolveDigest(ctx, uri)
 }
 
 var _ function.ArtifactResolver = (*OrasMaterializer)(nil) // implements the ADR-0035 resolver seam

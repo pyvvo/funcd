@@ -88,13 +88,45 @@ func decodeNumbers(raw json.RawMessage, v interface{}) error {
 
 // validateValues validates the merged values against the closed values schema (Decision 3); it fills nothing.
 func validateValues(schema, values json.RawMessage) error {
+	c, err := valuesCompiler(schema)
+	if err != nil {
+		return err
+	}
+	return validateAt(c, "", values, "values do not match valuesSchema")
+}
+
+// validateKeys validates only the given top-level values, each against its subschema (ADR-0218 Decision 4).
+func validateKeys(schema, values json.RawMessage, keys []string) error {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(values, &top); err != nil {
+		return fault.Internalf(renderOp, "decode the merged values: %v", err)
+	}
+	c, err := valuesCompiler(schema)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		raw, ok := top[k]
+		if !ok {
+			continue
+		}
+		ptr := "#/properties/" + strings.NewReplacer("~", "~0", "/", "~1").Replace(k)
+		if err := validateAt(c, ptr, raw, "values do not match valuesSchema at /"+k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// valuesCompiler is the compiler of the closed values schema: draft 2020-12 only, with no non-local $ref.
+func valuesCompiler(schema json.RawMessage) (*jsonschema.Compiler, error) {
 	var doc interface{}
 	if err := decodeNumbers(schema, &doc); err != nil {
-		return fault.Invalidf(renderOp, "valuesSchema is not JSON: %v", err)
+		return nil, fault.Invalidf(renderOp, "valuesSchema is not JSON: %v", err)
 	}
 	if m, ok := doc.(map[string]interface{}); ok {
 		if s, ok := m["$schema"].(string); ok && strings.TrimSuffix(s, "#") != draft2020 {
-			return fault.Invalidf(renderOp, "valuesSchema: $schema %q is not draft 2020-12", s)
+			return nil, fault.Invalidf(renderOp, "valuesSchema: $schema %q is not draft 2020-12", s)
 		}
 	}
 	closeSchema(doc, true)
@@ -102,19 +134,24 @@ func validateValues(schema, values json.RawMessage) error {
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.UseLoader(localOnly{})
 	if err := c.AddResource(schemaURL, doc); err != nil {
-		return fault.Invalidf(renderOp, "valuesSchema: %v", err)
+		return nil, fault.Invalidf(renderOp, "valuesSchema: %v", err)
 	}
-	sch, err := c.Compile(schemaURL)
+	return c, nil
+}
+
+// validateAt validates instance against the schema at fragment ptr of the values schema ("" for the root).
+func validateAt(c *jsonschema.Compiler, ptr string, instance json.RawMessage, refused string) error {
+	sch, err := c.Compile(schemaURL + ptr)
 	if err != nil {
 		return fault.Invalidf(renderOp, "valuesSchema: %v", err)
 	}
-	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(values))
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(instance))
 	if err != nil {
 		return fault.Internalf(renderOp, "decode the merged values: %v", err)
 	}
 	var verr *jsonschema.ValidationError
 	if err := sch.Validate(inst); errors.As(err, &verr) {
-		return fault.Invalidf(renderOp, "values do not match valuesSchema: %s", strings.Join(leaves(verr, nil), "; "))
+		return fault.Invalidf(renderOp, "%s: %s", refused, strings.Join(leaves(verr, nil), "; "))
 	} else if err != nil {
 		return fault.Invalidf(renderOp, "validate values: %v", err)
 	}

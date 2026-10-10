@@ -1,6 +1,8 @@
 package template
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -91,7 +93,27 @@ func render(t *testing.T, app string, files map[string]string, vals ...string) (
 	if err != nil {
 		return nil, err
 	}
+	pin(t, tpl)
 	return Render(tpl, RenderInput{Namespace: "team-a", Values: values(t, vals...)})
+}
+
+// fakeDigest is a sha256 digest of s, a stand-in for the digest a registry would give.
+func fakeDigest(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// pin gives a template without app.lock a lock of its exact entries, each at fakeDigest(entry).
+func pin(t *testing.T, tpl *Template) {
+	t.Helper()
+	if tpl.Lock != nil {
+		return
+	}
+	tpl.Lock = map[string]LockedImage{}
+	for name, entry := range tpl.Images {
+		require.NotEmpty(t, tpl.Parsed[name].Exact, "pin locks exact entries only")
+		tpl.Lock[name] = LockedImage{Requested: entry, Version: tpl.Parsed[name].Exact, Digest: fakeDigest(entry)}
+	}
 }
 
 func mustRender(t *testing.T, app string, files map[string]string, vals ...string) *v1.App {
@@ -113,7 +135,8 @@ func refused(t *testing.T, app string, files map[string]string, vals []string, w
 	}
 }
 
-// ADR-0217 Decisions 1 and 2: Load refuses every other entry, app.lock, an unknown key and a malformed value.
+// ADR-0217 Decisions 1 and 2: Load refuses every other entry, an unknown key and a malformed value; ADR-0218's
+// ParseImage refuses a bad images entry.
 func TestLoadRefuses(t *testing.T) {
 	t.Parallel()
 	api := map[string]string{"resources/api.yaml": apiFragment}
@@ -122,8 +145,7 @@ func TestLoadRefuses(t *testing.T) {
 		files map[string]string
 		want  []string
 	}{
-		"extra file":          {baseApp, map[string]string{"README.md": "x"}, []string{"README.md"}},
-		"lock":                {baseApp, map[string]string{"app.lock": "images: {}"}, []string{"app.lock", "ADR-0218"}},
+		"extra file":          {baseApp, map[string]string{"README.md": "x"}, []string{"README.md", "app.lock"}},
 		"other extension":     {baseApp, map[string]string{"resources/api.yml": apiFragment}, []string{"resources/api.yml"}},
 		"unknown key":         {baseApp + "deploy: true\n", api, []string{"deploy"}},
 		"apiVersion":          {"apiVersion: funcd.io/v1alpha1\n" + baseApp, api, []string{"apiVersion"}},
@@ -134,8 +156,8 @@ func TestLoadRefuses(t *testing.T) {
 		"no registry":         {strings.Replace(baseApp, "registry: ${{ values.registry }}\n", "", 1), api, []string{"registry is required"}},
 		"registry reads app":  {strings.Replace(baseApp, "${{ values.registry }}", "${{ app.name }}", 1), api, []string{"registry reads app"}},
 		"registry interpol":   {strings.Replace(baseApp, "${{ values.registry }}", "r/${{ values.registry }}", 1), api, []string{"registry", "interpolation"}},
-		"range":               {strings.Replace(baseApp, "shop-api:1.0.0", "shop-api:^1.0.0", 1), api, []string{"images.api", "ADR-0218"}},
-		"digest":              {strings.Replace(baseApp, "shop-api:1.0.0", "shop-api@sha256:abc", 1), api, []string{"images.api", "ADR-0218"}},
+		"bad spec":            {strings.Replace(baseApp, "shop-api:1.0.0", "shop-api:latest", 1), api, []string{"images.api", "shop-api:latest"}},
+		"digest":              {strings.Replace(baseApp, "shop-api:1.0.0", "shop-api@sha256:abc", 1), api, []string{"images.api", "shop-api@sha256:abc"}},
 		"host":                {strings.Replace(baseApp, "shop-api:1.0.0", "localhost:5000/shop-api:1.0.0", 1), api, []string{"images.api"}},
 		"bad image name":      {strings.Replace(baseApp, "  api: shop-api", "  a-pi: shop-api", 1), api, []string{"images.a-pi"}},
 		"when unknown file":   {baseApp + "when:\n  resources/x.yaml: ${{ values.debug === true }}\n", api, []string{"when.resources/x.yaml"}},
@@ -158,9 +180,9 @@ func TestLoadRefuses(t *testing.T) {
 	_, err = Load(dir)
 	require.ErrorContains(t, err, "hooks")
 	_, err = Load(filepath.Join(dir, "app.yaml"))
-	require.ErrorContains(t, err, "deploying from a registry ref is ADR-0218")
+	require.ErrorContains(t, err, "is not a template directory")
 	_, err = Load("registry.example/shop-app:1.0.0")
-	require.ErrorContains(t, err, "deploying from a registry ref is ADR-0218")
+	require.ErrorContains(t, err, "is not a template directory")
 	dir = writeTemplate(t, baseApp, nil)
 	require.NoError(t, os.Remove(filepath.Join(dir, "app.yaml")))
 	_, err = Load(dir)
@@ -305,7 +327,7 @@ sensors:
 	require.Len(t, a.Spec.KV, 1, "when true includes the file")
 	fn := a.Spec.Functions[0]
 	require.Equal(t, v1.ObjectName("shop-api"), fn.Name)
-	require.Equal(t, "reg.example/shop-api:1.0.0", fn.Image, "the registry default stands in, no digest")
+	require.Equal(t, "reg.example/shop-api:1.0.0@"+fakeDigest("shop-api:1.0.0"), fn.Image, "the registry default stands in")
 	require.Equal(t, 3, fn.Scaling.MinReplicas, "an integer stays an integer")
 	require.Equal(t, "true", fn.Handler, "the string \"true\" stays a string")
 
@@ -456,7 +478,7 @@ sensors:
 func TestRenderRoutesKeyInAnyCase(t *testing.T) {
 	t.Parallel()
 	a := mustRender(t, baseApp, map[string]string{"resources/a.yaml": strings.Replace(apiFragment, "image:", "Image:", 1)})
-	require.Equal(t, "reg.example/shop-api:1.0.0", a.Spec.Functions[0].Image)
+	require.Equal(t, "reg.example/shop-api:1.0.0@"+fakeDigest("shop-api:1.0.0"), a.Spec.Functions[0].Image)
 }
 
 // ADR-0217 Decision 2: registry reads only values; a when reads values and app.
@@ -467,6 +489,7 @@ func TestLoadRefusesRegistryOverImages(t *testing.T) {
 	tpl, err := Load(writeTemplate(t, baseApp+"when:\n  resources/a.yaml: ${{ app.name === 'shop' && values.debug === false }}\n",
 		map[string]string{"resources/a.yaml": apiFragment}))
 	require.NoError(t, err)
+	pin(t, tpl)
 	a, err := Render(tpl, RenderInput{Name: "other", ResourceGroup: "rg"})
 	require.NoError(t, err)
 	require.Empty(t, a.Spec.Functions, "when reads app.name, which --name sets")

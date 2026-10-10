@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,21 +20,23 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/app/template"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// appCmd groups the App verbs of ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7 and ADR-0217: history
-// reads an App's AppRevisions, rollback re-applies an earlier revision's spec, and pause and resume set spec.paused,
-// each as an ordinary apply, so the App admission runs again with the caller's rights; retry calls a failed hook
-// again; render, deploy and delete work from a template directory on the client.
+// appCmd groups the App verbs of ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7, ADR-0217 and ADR-0218:
+// history reads an App's AppRevisions, rollback re-applies an earlier revision's spec, and pause and resume set
+// spec.paused, each as an ordinary apply, so the App admission runs again with the caller's rights; retry calls a
+// failed hook again; render, deploy and delete work from a template directory or a pushed template on the client, and
+// lock pins a template's images.
 func (a *cli) appCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "app",
-		Short: "Manage Apps (render|deploy|delete|history|rollback|pause|resume|retry)",
+		Short: "Manage Apps (render|deploy|delete|lock|history|rollback|pause|resume|retry)",
 	}
-	cmd.AddCommand(a.appRenderCmd(), a.appDeployCmd(), a.appDeleteCmd(), a.appHistoryCmd(), a.appRollbackCmd(),
-		a.appPauseCmd("pause", true), a.appPauseCmd("resume", false), a.appRetryCmd())
+	cmd.AddCommand(a.appRenderCmd(), a.appDeployCmd(), a.appDeleteCmd(), a.appLockCmd(), a.appHistoryCmd(),
+		a.appRollbackCmd(), a.appPauseCmd("pause", true), a.appPauseCmd("resume", false), a.appRetryCmd())
 	return cmd
 }
 
@@ -230,39 +234,168 @@ func (f *templateFlags) bind(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVarP(&f.values, "values", "f", nil, "a values file; repeat it to merge files in order")
 }
 
-// load reads the template directory and the values files.
-func (f *templateFlags) load(dir string) (*template.Template, template.RenderInput, error) {
-	t, err := template.Load(dir)
+// load loads the template at src and the values files (ADR-0218 Decision 7): src is a directory when one exists at
+// that path, otherwise a registry ref. A directory without app.lock gets a lock resolved now, and one with a lock is
+// checked for moved tags; the notes and warnings go to errOut, never into the App.
+func (f *templateFlags) load(ctx context.Context, a *cli, errOut io.Writer, src string) (*template.Template, template.RenderInput, error) {
+	values, err := readValues(f.values)
 	if err != nil {
 		return nil, template.RenderInput{}, err
 	}
-	in := template.RenderInput{
+	var t *template.Template
+	if fi, serr := os.Stat(src); serr == nil && fi.IsDir() {
+		if t, err = template.Load(src); err == nil {
+			err = a.pinDir(ctx, errOut, src, t, values)
+		}
+	} else {
+		t, err = pullTemplate(ctx, errOut, src)
+	}
+	if err != nil {
+		return nil, template.RenderInput{}, err
+	}
+	return t, template.RenderInput{
 		Name:          cmp.Or(v1.ObjectName(f.name), t.Name),
 		Namespace:     v1.NamespaceName(nsOrDefault(f.namespace)),
 		ResourceGroup: v1.ResourceGroupName(f.group),
-	}
-	for _, path := range f.values {
+		Values:        values,
+	}, nil
+}
+
+func readValues(paths []string) ([]json.RawMessage, error) {
+	values := make([]json.RawMessage, 0, len(paths))
+	for _, path := range paths {
 		raw, err := template.ReadValues(path)
 		if err != nil {
-			return nil, template.RenderInput{}, err
+			return nil, err
 		}
-		in.Values = append(in.Values, raw)
+		values = append(values, raw)
 	}
-	return t, in, nil
+	return values, nil
+}
+
+// pinDir readies the lock of a template directory (ADR-0218 Decisions 4 and 5): with app.lock, a stale lock is
+// refused and each tag that now names another digest is reported; without one, a lock is resolved as funcdctl app
+// lock does, used and reported, and nothing is written.
+func (a *cli) pinDir(ctx context.Context, errOut io.Writer, dir string, t *template.Template, values []json.RawMessage) error {
+	if t.Lock != nil {
+		if err := template.CheckLock(t); err != nil {
+			return err
+		}
+	}
+	registry, err := template.EvalRegistry(t, values, false)
+	if err != nil {
+		return err
+	}
+	if t.Lock != nil {
+		for _, w := range template.Moved(ctx, t, registry, a.images) {
+			if err := fprintf(errOut, "%s\n", termSafe(w)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if t.Lock, err = template.Lock(ctx, t, registry, a.images); err != nil {
+		return err
+	}
+	if err := fprintf(errOut, "note: %s has no app.lock, so its images were resolved now: funcdctl app lock pins them\n", dir); err != nil {
+		return err
+	}
+	return printLock(errOut, "resolved ", t.Lock)
+}
+
+// printLock prints one line per image of lock, in name order: the name, the version and the digest.
+func printLock(w io.Writer, prefix string, lock map[string]template.LockedImage) error {
+	for _, name := range slices.Sorted(maps.Keys(lock)) {
+		if err := fprintf(w, "%s%s %s %s\n", prefix, name, lock[name].Version, lock[name].Digest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pullTemplate resolves a template ref, pulls the template by its digest into a temporary directory and loads it; a
+// pushed template must hold app.lock. The directory is removed on return.
+func pullTemplate(ctx context.Context, errOut io.Writer, ref string) (*template.Template, error) {
+	const op = "funcdctl app"
+	digest, err := artifact.ResolveTemplate(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	pinned := ref
+	if !strings.HasSuffix(ref, "@"+digest) {
+		pinned += "@" + digest
+	}
+	if err := fprintf(errOut, "template %s\n", pinned); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "funcd-template")
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "create a directory for the template")
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if err := artifact.PullTemplate(ctx, ref, digest, dir); err != nil {
+		return nil, err
+	}
+	t, err := template.Load(dir)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "template %s", pinned)
+	}
+	if t.Lock == nil {
+		return nil, fault.Invalidf(op, "template %s holds no app.lock: a pushed template is pinned", pinned)
+	}
+	return t, nil
+}
+
+// appLockCmd pins each image of a template directory to a version and a digest in its app.lock (ADR-0218 Decision 2).
+func (a *cli) appLockCmd() *cobra.Command {
+	var valueFiles []string
+	cmd := &cobra.Command{
+		Use:   "lock <dir>",
+		Short: "Resolve each image of an App template to a version and a digest, and write them to its app.lock",
+		Long: "Resolve each image of an App template to a version and a digest, and write them to its app.lock.\n\n" +
+			"An exact entry resolves its tag; a range takes the highest version tag it accepts. The registry is the " +
+			"template's registry value, from the -f files and the schema defaults. Any failure writes nothing.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := args[0]
+			t, err := template.Load(dir)
+			if err != nil {
+				return err
+			}
+			values, err := readValues(valueFiles)
+			if err != nil {
+				return err
+			}
+			registry, err := template.EvalRegistry(t, values, true)
+			if err != nil {
+				return err
+			}
+			lock, err := template.Lock(cmd.Context(), t, registry, a.images)
+			if err != nil {
+				return err
+			}
+			if err := template.WriteLock(dir, lock); err != nil {
+				return err
+			}
+			return printLock(a.out, "", lock)
+		},
+	}
+	cmd.Flags().StringArrayVarP(&valueFiles, "values", "f", nil, "a values file; repeat it to merge files in order")
+	return cmd
 }
 
 func (a *cli) appRenderCmd() *cobra.Command {
 	var f templateFlags
 	var output string
 	cmd := &cobra.Command{
-		Use:   "render <dir>",
+		Use:   "render <dir|ref>",
 		Short: "Render an App template into the App deploy would apply, and print it (YAML; -o json)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkOutput("funcdctl app render", output, "json"); err != nil {
 				return err
 			}
-			t, in, err := f.load(args[0])
+			t, in, err := f.load(cmd.Context(), a, cmd.ErrOrStderr(), args[0])
 			if err != nil {
 				return err
 			}
@@ -306,7 +439,7 @@ func (a *cli) appDeployCmd() *cobra.Command {
 	var f templateFlags
 	var noWait bool
 	cmd := &cobra.Command{
-		Use:   "deploy <dir>",
+		Use:   "deploy <dir|ref>",
 		Short: "Render an App template, apply the App and wait until its new revision is current or failed",
 		Long: "Render an App template, apply the App and wait until its new revision is current or failed.\n\n" +
 			"One command deploys, upgrades and downgrades. Deploy prints the revision it follows and each part whose " +
@@ -319,7 +452,7 @@ func (a *cli) appDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, in, err := f.load(args[0])
+			t, in, err := f.load(cmd.Context(), a, cmd.ErrOrStderr(), args[0])
 			if err != nil {
 				return err
 			}
