@@ -17,8 +17,8 @@ import (
 // DurationPattern is the duration grammar (ADR-0194): the single source for ParseDuration and the OpenAPI schema.
 const DurationPattern = `^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$`
 
-// durationGrammar describes DurationPattern in words: the OpenAPI patternDescription and every parse error.
-const durationGrammar = "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+// DurationGrammar describes DurationPattern in words: the OpenAPI patternDescription and every parse error.
+const DurationGrammar = "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
 
 // Duration is a span of time: int64 nanoseconds in memory, a duration string on the wire (ADR-0194).
 type Duration time.Duration
@@ -33,11 +33,11 @@ var durationRe = regexp.MustCompile(DurationPattern)
 func ParseDuration(s string) (Duration, error) {
 	const op = "v1alpha1.ParseDuration"
 	if !durationRe.MatchString(s) {
-		return 0, fault.Invalidf(op, "%q is not %s", s, durationGrammar)
+		return 0, fault.Invalidf(op, "%q is not %s", s, DurationGrammar)
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d%time.Millisecond != 0 {
-		return 0, fault.Invalidf(op, "%q is not %s: it exceeds %s", s, durationGrammar, MaxDuration)
+		return 0, fault.Invalidf(op, "%q is not %s: it exceeds %s", s, DurationGrammar, MaxDuration)
 	}
 	return Duration(d), nil
 }
@@ -86,7 +86,7 @@ func (d Duration) String() string {
 // MarshalJSON writes the normalized form as a JSON string; a negative or sub-millisecond value is refused.
 func (d Duration) MarshalJSON() ([]byte, error) {
 	if d < 0 || time.Duration(d)%time.Millisecond != 0 {
-		return nil, fault.Invalidf("v1alpha1.Duration.MarshalJSON", "%s is not %s", time.Duration(d), durationGrammar)
+		return nil, fault.Invalidf("v1alpha1.Duration.MarshalJSON", "%s is not %s", time.Duration(d), DurationGrammar)
 	}
 	return json.Marshal(d.String())
 }
@@ -98,7 +98,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	}
 	var s string
 	if len(b) == 0 || b[0] != '"' || json.Unmarshal(b, &s) != nil {
-		return fault.Invalidf("v1alpha1.Duration.UnmarshalJSON", "%s is not a JSON string: want %s", b, durationGrammar)
+		return fault.Invalidf("v1alpha1.Duration.UnmarshalJSON", "%s is not a JSON string: want %s", b, DurationGrammar)
 	}
 	v, err := ParseDuration(s)
 	if err != nil {
@@ -111,5 +111,5 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 // Schema returns a new schema on each call (huma writes field tags into it): {type: string, pattern:
 // DurationPattern, patternDescription}.
 func (Duration) Schema(huma.Registry) *huma.Schema {
-	return &huma.Schema{Type: huma.TypeString, Pattern: DurationPattern, PatternDescription: durationGrammar}
+	return &huma.Schema{Type: huma.TypeString, Pattern: DurationPattern, PatternDescription: DurationGrammar}
 }

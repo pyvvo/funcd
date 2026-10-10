@@ -34,8 +34,7 @@ const (
 
 // SinceForms names the two forms the logs routes' since parameter takes (#824): a duration in ADR-0194's grammar
 // or a timestamp in ADR-0196's form. The API and funcdctl refuse anything else with it.
-const SinceForms = "a duration in h, m, s and ms, largest unit first (15m, 1h30m, 500ms) " +
-	"or an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z)"
+const SinceForms = v1.DurationGrammar + " or " + v1.TimestampForm
 
 // Line is one log record returned to a caller (the wire + CLI DTO; a friendlier view of compact.Row).
 type Line struct {

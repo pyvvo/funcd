@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -48,7 +49,7 @@ func TestIssue824_LogsSinceConvertsToWireForm(t *testing.T) {
 			err := execCLI(&out, c, append(verb, "--since", bad)...)
 			require.Error(t, err, "%s --since %s", name, bad)
 			require.Contains(t, err.Error(), "1h30m", "%s --since %s", name, bad)
-			require.Contains(t, err.Error(), "2026-10-07T22:00:00.000Z", "%s --since %s", name, bad)
+			require.Contains(t, err.Error(), v1.TimestampForm, "%s --since %s", name, bad)
 			require.Empty(t, sent, "%s --since %s is refused before any request", name, bad)
 		}
 	}

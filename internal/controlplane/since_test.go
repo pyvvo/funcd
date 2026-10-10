@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -48,7 +49,7 @@ func TestIssue824_SinceTakesOnlyDurationAndTimestamp(t *testing.T) {
 			code, body := get(r.srv, r.path, bad)
 			require.Equal(t, http.StatusBadRequest, code, "%s route, since %q: %s", name, bad, body)
 			require.Contains(t, body, "1h30m", "%s route, since %q: the detail names the duration form", name, bad)
-			require.Contains(t, body, "2026-10-07T22:00:00.000Z", "%s route, since %q: the detail names the timestamp form", name, bad)
+			require.Contains(t, body, v1.TimestampForm, "%s route, since %q: the detail names the timestamp form", name, bad)
 		}
 	}
 
