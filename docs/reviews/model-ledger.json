@@ -10693,5 +10693,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0215-implementation-claude-opus-5-5-2.md",
     "notes": "Round 2 pass: resolves round 1's env blocker (shims v0.10.0/v0.7.0 released with green CI, pinned; 3 e2e scenarios pass on the real shims and the 2 new ones fail on the old pins); just ci EXIT 0, ci-full green on this head. Minor (model): funcd-python relays a 503 object without a kind, funcd-typescript does not. Minor (adr): hold tests wait for ADR-0206."
+  },
+  {
+    "date": "2026-10-10",
+    "adr": "0219",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 4,
+    "model_attributed": 2,
+    "dod_passed": 19,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0219-implementation-claude-opus-5-5.md",
+    "notes": "pass; just ci exit 0, just test-e2e exit 0, 6/6 ADR-0219 e2e Scenarios with -race, 9/11 mutants killed (1 equivalent); Minor(model): App watch registration untested (supervision requeue masks it); Minor(model): Reconcile/Admit complexity and a second e2e apply-retry helper; Minor(adr): admission reads 'not started' from App status, which lags startedAt by one pass; Minor(env): pre-existing flaky TestScenarioAppIdleFunctionStaysCurrent (testify Never goroutine)"
   }
 ]

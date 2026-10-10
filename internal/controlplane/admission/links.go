@@ -70,15 +70,15 @@ func (a linkValidity) Admit(ctx context.Context, req Request) (v1.Object, error)
 		adj[string(fn.Name)] = append(adj[string(fn.Name)], string(l.Target))
 	}
 
-	if cyc := findCycle(string(fn.Name), adj); cyc != "" {
+	if cyc := FindCycle(string(fn.Name), adj); cyc != "" {
 		return nil, fault.Invalidf(op, "spec.links would create a dependency cycle (%s)", cyc)
 	}
 	return req.Object, nil
 }
 
-// findCycle runs a coloured DFS from start and returns the cycle path (or "" if none reachable).
-// A self-link (start → start) is detected as a degenerate cycle.
-func findCycle(start string, adj map[string][]string) string {
+// FindCycle runs a coloured DFS from start over adj and returns the cycle path (or "" if none reachable).
+// A self-edge (start → start) is detected as a degenerate cycle. link-validity and app-requires (ADR-0219) use it.
+func FindCycle(start string, adj map[string][]string) string {
 	const (
 		white = 0
 		gray  = 1

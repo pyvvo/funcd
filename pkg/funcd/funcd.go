@@ -1096,6 +1096,7 @@ func (p *Platform) buildControlPlane() error {
 		}
 	}
 	ctrl.Watches(v1.KindSecret.GVK(), appReconciler.MapSecret) // ADR-0213: a declared Secret created, changed or deleted
+	ctrl.Watches(v1.KindApp.GVK(), appReconciler.MapRequires)  // ADR-0219: an App's dependents and the Apps it requires
 	p.controller = ctrl
 
 	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over
@@ -1168,7 +1169,9 @@ func (p *Platform) buildControlPlane() error {
 		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
 		AppRetrier:  appReconciler,    // ADR-0214: retry an App's failed hook
-		Admissions:  append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store})),
+		// ADR-0219: app-requires runs after app-parts.
+		Admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
+			app.NewRequiresAdmission(storeReader{c.store})),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build control-plane server")

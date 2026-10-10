@@ -700,7 +700,10 @@ type listHook struct {
 
 func (s *listHook) List(ctx context.Context, gvk v1.GroupVersionKind, opts store.ListOptions) (store.List, error) {
 	res, err := s.Store.List(ctx, gvk, opts)
-	if f := s.onList.Swap(nil); f != nil && gvk.Kind == v1.KindAppRevision {
+	if gvk.Kind != v1.KindAppRevision {
+		return res, err
+	}
+	if f := s.onList.Swap(nil); f != nil {
 		(*f)()
 	}
 	return res, err

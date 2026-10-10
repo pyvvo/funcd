@@ -53,7 +53,8 @@ func (r *Reconciler) revisions(ctx context.Context, a *v1.App) ([]*v1.AppRevisio
 // specChanged compares (Decision 3). A stored namesake whose controller reference names this App's kind and name with
 // another UID is deleted at its resourceVersion first; any other owner stops the pass with ChildNotOwned naming it,
 // before any part is written. When the spec has a hook, the new revision freezes its hook input (ADR-0214 Decision 2).
-func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevision) ([]*v1.AppRevision, *stop, error) {
+// The new revision gets startedAt only when every requirement is met (met), else it waits (ADR-0219 Decision 3).
+func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevision, met bool) ([]*v1.AppRevision, *stop, error) {
 	declared := a.Spec.WithoutPause()
 	want, err := json.Marshal(declared)
 	if err != nil {
@@ -97,8 +98,11 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 	if rev.Spec.HookInput, err = hookInput(a, name, declared, want, revs); err != nil {
 		return nil, nil, err
 	}
-	started := v1.NewTimestamp(r.clock.Now())
-	rev.Status = v1.AppRevisionStatus{Status: v1.Status{Phase: v1.PhaseDeploying}, StartedAt: &started}
+	rev.Status = v1.AppRevisionStatus{Status: v1.Status{Phase: v1.PhaseDeploying}}
+	if met {
+		started := v1.NewTimestamp(r.clock.Now())
+		rev.Status.StartedAt = &started
+	}
 	created, err := r.store.Create(ctx, rev)
 	if err != nil {
 		return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "stamp %s", partName(k))
@@ -112,8 +116,9 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 // switches in a pass that was not stopped, wrote no part and left none Pending, once its pre-hooks are done; short of
 // a switch it turns Failed once the clock reaches the deadline, unless a pre-hook call runs or started. A failed
 // pre-hook makes it Failed with HookFailed at once, as does a due pre-hook whose Function is not ready at the deadline
-// (ADR-0214 Decision 4). Then every revision's phase and Current follow. It returns the time left to the latest's
-// deadline, zero when none runs, and whether the latest switched.
+// (ADR-0214 Decision 4). A latest without startedAt, which waits for its requirements, neither switches nor fails and
+// has no time left (ADR-0219 Decision 4). Then every revision's phase and Current follow. It returns the time left to
+// the latest's deadline, zero when none runs, and whether the latest switched.
 func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, halt *stop, wrote *v1.ObjectRef,
 	hp hookPass) (time.Duration, bool) {
 	if len(revs) == 0 {
@@ -134,7 +139,7 @@ func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevisi
 		}
 		r.setCondition(&latest.Status.Conditions, applied)
 		ready := childrenReady(vs)
-		if latest.Name != a.Status.CurrentRevision {
+		if latest.Name != a.Status.CurrentRevision && latest.Status.StartedAt != nil {
 			now, deadline := r.clock.Now(), r.deadline(a, latest)
 			switch {
 			case pre != nil && pre.failed:
@@ -188,14 +193,10 @@ func (r *Reconciler) setCurrent(rev, latest *v1.AppRevision, current v1.ObjectNa
 
 // deadline is the latest of the revision's startedAt, resumedAt(a), the hold's ReleasedAt and its last preApply
 // call's endTime, plus UpgradeTimeout (ADR-0212 Decision 6, ADR-0214 Decision 4): paused and held time and the time
-// before a pre-hook's last call do not count. A record without startedAt gets the clock's time, so every term is read
-// from the store and the gate on every pass, a restart included; the other terms are zero when absent and never start
-// a deadline alone.
+// before a pre-hook's last call do not count. rev must have startedAt, so every term is read from the store and the
+// gate on every pass, a restart included; the other terms are zero when absent and never start a deadline alone
+// (ADR-0219 Decision 4).
 func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
-	if rev.Status.StartedAt == nil {
-		t := v1.NewTimestamp(r.clock.Now())
-		rev.Status.StartedAt = &t
-	}
 	start := time.Time(*rev.Status.StartedAt)
 	var released time.Time
 	if r.hold != nil {

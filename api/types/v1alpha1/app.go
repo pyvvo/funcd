@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	huma "github.com/danielgtaylor/huma/v2"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -35,10 +36,12 @@ type App struct {
 // AppSpec is the App's parts, one section per kind: configMaps first, so a ConfigMap is written before the parts that
 // name it (ADR-0213 Decision 4), then the other sections in this order (Decision 2).
 type AppSpec struct {
-	// Version is a free label that funcd does not interpret.
+	// Version is a free label; a requirement's range matches it only when it is a SemVer 2.0.0 version (ADR-0219).
 	Version string `json:"version,omitempty"`
 	// Paused stops every write of the App (ADR-0212); it is not part of an AppRevision.
-	Paused       bool             `json:"paused,omitempty"`
+	Paused bool `json:"paused,omitempty"`
+	// Requires names the shared Apps of this namespace that this App needs before it rolls out (ADR-0219).
+	Requires     []AppRequirement `json:"requires,omitempty"`
 	KV           []AppKVStore     `json:"kv,omitempty"`
 	Buckets      []AppBucket      `json:"buckets,omitempty"`
 	Functions    []AppFunction    `json:"functions,omitempty"`
@@ -76,6 +79,27 @@ type AppHookInput struct {
 	To          ObjectName `json:"to"`
 	FromVersion string     `json:"fromVersion,omitempty"`
 	ToVersion   string     `json:"toVersion,omitempty"`
+}
+
+// AppRequirement is a requires entry (ADR-0219 Decision 1): an App of the same namespace and an npm-style version range.
+type AppRequirement struct {
+	App ObjectName `json:"app"`
+	// Version is an npm-style range such as ^2.0.0; empty accepts any version, even none.
+	Version string `json:"version,omitempty"`
+}
+
+// Matches reports whether version satisfies the range (ADR-0219 Decision 1): always for an empty range; otherwise
+// version must be a SemVer 2.0.0 version that the range accepts, by the library's prerelease rule.
+func (r AppRequirement) Matches(version string) bool {
+	if r.Version == "" {
+		return true
+	}
+	c, err := semver.NewConstraint(r.Version)
+	if err != nil {
+		return false
+	}
+	v, err := semver.StrictNewVersion(version)
+	return err == nil && c.Check(v)
 }
 
 // WithoutPause returns s with Paused cleared: what the stamp compares, an AppRevision freezes and rollback compares
@@ -303,8 +327,8 @@ func (e AppCatalog) MarshalJSON() ([]byte, error) {
 }
 
 // AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
-// Decision 6), the Ready condition, the current and latest AppRevision, the state of each child and the last part the
-// App wrote back (ADR-0212).
+// Decision 6), the Ready condition, the current and latest AppRevision, the state of each child, the last part the
+// App wrote back (ADR-0212) and its requirements in both directions (ADR-0219).
 type AppStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
@@ -313,6 +337,17 @@ type AppStatus struct {
 	Version      string       `json:"version,omitempty"`
 	Children     []AppChild   `json:"children,omitempty"`
 	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty"`
+	// Requires is the state of each spec.requires entry, in its order (ADR-0219 Decision 5).
+	Requires []AppRequirementState `json:"requires,omitempty"`
+	// RequiredBy is every App of the namespace whose spec.requires names this one, sorted by name.
+	RequiredBy []ObjectName `json:"requiredBy,omitempty"`
+}
+
+// AppRequirementState is one requires entry's state: the required App's spec.version and whether it is met.
+type AppRequirementState struct {
+	App     ObjectName `json:"app"`
+	Version string     `json:"version,omitempty"`
+	Met     bool       `json:"met"`
 }
 
 // AppSelfHeal is the last part the App wrote back (ADR-0212 Decision 2).
@@ -379,7 +414,7 @@ func (a *App) Refs() []ObjectRef {
 // characters; each entry either a name or a ref alone; deletion retain or delete; no name repeated within a section;
 // a defined ConfigMap name of at most 52 characters and no two entries with one stored name (ADR-0213 Decision 2);
 // each part valid as its kind; no entry named like an object another part's reconciler writes; the secrets rules
-// (ADR-0213 Decision 6). The rules that need the store (quotas, a ref to an object this App controls) and the
+// (ADR-0213 Decision 6); the requires rules (ADR-0219 Decision 1). The rules that need the store (quotas, a ref to an object this App controls) and the
 // undeclared-Secret rule (ADR-0213 Decision 7) are the app-parts admission's.
 func (a *App) Validate() error {
 	const op = "App.Validate"
@@ -423,7 +458,33 @@ func (a *App) Validate() error {
 	if err := a.validateSecrets(op); err != nil {
 		return err
 	}
+	if err := a.validateRequires(op); err != nil {
+		return err
+	}
 	return a.validateHooks(op)
+}
+
+// validateRequires refuses a requires entry whose app is not a DNS label or repeats another's, or whose range the
+// semver library refuses (ADR-0219 Decision 1). A self-requirement is the app-requires admission's cycle.
+func (a *App) validateRequires(op string) error {
+	seen := make(map[ObjectName]string, len(a.Spec.Requires))
+	for i, r := range a.Spec.Requires {
+		path := fmt.Sprintf("spec.requires[%d]", i)
+		if !dnsLabel.MatchString(string(r.App)) {
+			return fault.Invalidf(op, "%s.app %q is not a valid DNS-1123 label", path, r.App)
+		}
+		if prev, dup := seen[r.App]; dup {
+			return fault.Invalidf(op, "%s repeats the app %q of %s", path, r.App, prev)
+		}
+		seen[r.App] = path
+		if r.Version == "" {
+			continue
+		}
+		if _, err := semver.NewConstraint(r.Version); err != nil {
+			return fault.Invalidf(op, "%s.version %q is not a version range: %v", path, r.Version, err)
+		}
+	}
+	return nil
 }
 
 // validateHooks refuses a hook that names no functions entry of this App or a ref entry, a name twice in one list, and
