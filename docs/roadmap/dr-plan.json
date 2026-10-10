@@ -12,7 +12,9 @@
     "ADR-0157",
     "ADR-0195",
     "ADR-0196",
+    "ADR-0201",
     "ADR-0202",
+    "ADR-0203",
     "ADR-0210"
   ],
   "items": [
@@ -21,31 +23,6 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0201",
-      "title": "event store (Accepted 2026-10-10)",
-      "features": [
-        "F110"
-      ],
-      "depends_on": [
-        "ADR-0118",
-        "ADR-0119",
-        "ADR-0157",
-        "ADR-0202"
-      ]
-    },
-    {
-      "id": "ADR-0203",
-      "title": "backup format, targets and fencing (Accepted 2026-10-10)",
-      "features": [
-        "F109"
-      ],
-      "depends_on": [
-        "ADR-0202",
-        "ADR-0007",
-        "ADR-0196"
-      ]
     },
     {
       "id": "ADR-0204",
@@ -150,26 +127,22 @@
   ],
   "waves": {
     "1": [
-      "ADR-0201",
-      "ADR-0203",
+      "ADR-0204",
       "X-CRON"
     ],
     "2": [
-      "ADR-0204"
-    ],
-    "3": [
       "ADR-0205",
       "ADR-0206"
     ],
-    "4": [
+    "3": [
       "ADR-0207",
       "ADR-0208",
       "ADR-0209"
     ],
-    "5": [
+    "4": [
       "ADR-0222"
     ],
-    "6": [
+    "5": [
       "ADR-0223"
     ]
   }
