@@ -32,7 +32,8 @@ type AppRevisionSpec struct {
 // ChildrenReady and Current.
 type AppRevisionStatus struct {
 	Status `json:",inline"`
-	// StartedAt is the stamp time, from which app.upgradeTimeout runs (Decision 6).
+	// StartedAt is when the requirements were met, the stamp time when none waited; nil while the revision waits; the
+	// rollout deadline (ADR-0212 Decision 6) needs it (ADR-0219 Decision 3).
 	StartedAt *Timestamp `json:"startedAt,omitempty"`
 	// Hooks records every hook call of the revision, retries included, in call order (ADR-0214 Decision 6).
 	Hooks []AppHookCall `json:"hooks,omitempty"`

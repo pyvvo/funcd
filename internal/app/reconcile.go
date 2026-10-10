@@ -5,8 +5,10 @@
 // while spec.paused is set (ADR-0212, F115). It writes the ConfigMaps the App defines under their hashed names and
 // writes no part while a declared Secret or key is missing; app-parts refuses a part that names an undeclared Secret
 // (ADR-0213, F116). It calls the App's hook Functions before its parts change and after a new revision is current,
-// records each call on the AppRevision and resumes a failed one on Retry (ADR-0214, F117). The owner GC removes the
-// tree on App delete (internal/gc).
+// records each call on the AppRevision and resumes a failed one on Retry (ADR-0214, F117). It holds a revision until
+// every App it requires is Ready at a matching version, and app-requires refuses the upgrade, rollback, delete or
+// cycle that would break a started dependent (ADR-0219, F122). The owner GC removes the tree on App delete
+// (internal/gc).
 package app
 
 import (
@@ -196,21 +198,28 @@ func keyOf(o v1.Object) v1.ObjectRef {
 }
 
 // stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4), or SecretNotFound or
-// SecretKeyMissing (ADR-0213 Decision 8), naming the object.
+// SecretKeyMissing (ADR-0213 Decision 8), naming the object, or RequirementNotMet (ADR-0219 Decision 3), naming none.
 type stop struct {
 	reason string
 	part   v1.ObjectRef
 	detail string
 }
 
-func (s *stop) msg() string { return fmt.Sprintf("%s: %s", partName(s.part), s.detail) }
+// msg is "<Kind>/<Name>: <detail>", or the detail alone when the stop names no part.
+func (s *stop) msg() string {
+	if s.part == (v1.ObjectRef{}) {
+		return s.detail
+	}
+	return fmt.Sprintf("%s: %s", partName(s.part), s.detail)
+}
 
 // Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
 // parts that are absent or differ, recording each self-heal, reads each part's readiness, calls the latest revision's
 // due hook, derives the rollout record, prunes the dropped objects it controls once the latest revision is current and
 // its post-hooks are done, writes the App's status, then each changed AppRevision status, and trims the history. While
-// the latest revision's pre-hooks are not done, it writes only what they need (ADR-0214 Decision 4). A held pass writes
-// nothing (ADR-0206 Decision 6); a paused App gets only its Paused condition (ADR-0212).
+// the latest revision's pre-hooks are not done, it writes only what they need (ADR-0214 Decision 4). A revision waits,
+// writing no part, until every App it requires is met (ADR-0219). A held pass writes nothing (ADR-0206 Decision 6); a
+// paused App gets only its Paused condition (ADR-0212).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	if r.held() {
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
@@ -229,13 +238,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	r.resume(a)
 	r.calls.bind(ctx)
 	busy := r.calls.busy(appKey(a.Namespace, a.Name))
+	rq, err := r.requirements(ctx, a)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	a.Status.Requires, a.Status.RequiredBy = rq.states, rq.requiredBy
 	revs, err := r.revisions(ctx, a)
 	if err != nil {
 		return controller.Result{}, err
 	}
-	revs, halt, err := r.stamp(ctx, a, revs)
+	revs, halt, err := r.stamp(ctx, a, revs, rq.unmet == "")
 	if err != nil {
 		return controller.Result{}, err
+	}
+	if halt == nil {
+		var requeue bool
+		if halt, requeue, err = r.wait(ctx, a, revs, rq); err != nil || requeue {
+			return controller.Result{Requeue: requeue}, err
+		}
 	}
 	stored := statuses(revs)
 	var latest *v1.AppRevision

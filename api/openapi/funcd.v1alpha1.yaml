@@ -174,6 +174,35 @@ components:
             - array
             - "null"
       type: object
+    AppRequirement:
+      additionalProperties: false
+      properties:
+        app:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        version:
+          type: string
+      required:
+        - app
+      type: object
+    AppRequirementState:
+      additionalProperties: false
+      properties:
+        app:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        met:
+          type: boolean
+        version:
+          type: string
+      required:
+        - app
+        - met
+      type: object
     AppRevision:
       additionalProperties: false
       properties:
@@ -538,6 +567,12 @@ components:
             - "null"
         paused:
           type: boolean
+        requires:
+          items:
+            $ref: "#/components/schemas/AppRequirement"
+          type:
+            - array
+            - "null"
         routes:
           items:
             additionalProperties: false
@@ -749,6 +784,21 @@ components:
             - Failed
             - Terminating
           type: string
+        requiredBy:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        requires:
+          items:
+            $ref: "#/components/schemas/AppRequirementState"
+          type:
+            - array
+            - "null"
         version:
           type: string
       type: object
