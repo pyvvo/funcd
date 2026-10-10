@@ -337,7 +337,7 @@ So we could use the same approach for the other resources, and define their desi
 
 > Additional steps may occur between 7 and n (e.g., warm-up, canary rollout). A redeploy of a Function switches
 > revisions (ADR-0143): the new revision's workers boot beside the old ones, the calls move once every new replica is
-> ready, and the old workers stop after they drain; a new revision that fails leaves the old one serving. A workflow run stays on the revision it started with: its calls go to that revision, whose workers are spared, and woken solo from zero, until the run ends (ADR-0190).
+> ready, and the old workers stop after they drain; a new revision that fails leaves the old one serving. A pooled member's calls move when its pool switches, once every carried-over member is ready on the new pool worker (ADR-0224). A workflow run stays on the revision it started with: its calls go to that revision, whose workers are spared, and woken solo from zero, until the run ends (ADR-0190).
 
 The same lifecycle as a sequence diagram:
 
