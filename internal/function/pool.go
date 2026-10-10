@@ -194,9 +194,11 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // retried after the supervision period. The pool host holds the member at its current revision only, so its failure is
 // a crash under repair only while that revision is the serving one (ADR-0143 Decision 5). A member whose current
 // revision serves is judged on the pool worker the resolver hands out, and one whose current revision does not serve yet
-// on the worker of the current manifest, which alone holds it (ADR-0190 Decision 8). The pool worker is judged on its
-// own liveness (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs the
-// pass back.
+// on the worker of the current manifest, which alone holds it (ADR-0190 Decision 8). While the resolver still hands out
+// an old pool worker, which serves the member at its serving revision until the current manifest's worker listens, the
+// phase and Ready follow that worker's entry and the current revision is reported as booting beside it, as a solo
+// switch reports its serving revision (ADR-0143 Decision 5, #863). The pool worker is judged on its own liveness
+// (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs the pass back.
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, secretEnv, catalogEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
 	pass, err := r.ensurePool(ctx, a.Key, fn, secretEnv, catalogEnv, idx)
 	if err != nil {
@@ -215,8 +217,17 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	} else {
 		servesCurrent := v.serving && servingRevision(fn) == v1.ObjectName(fn.Status.CurrentRevision)
 		judge := pass.current
-		if w, ok := r.servingPool(pass.all); ok && servesCurrent {
+		w, handedOut := r.servingPool(pass.all)
+		switch {
+		case handedOut && servesCurrent:
 			judge = []runtime.Instance{w}
+		case handedOut && v.serving && !slices.ContainsFunc(pass.current, func(in runtime.Instance) bool { return in.ID == w.ID }):
+			_, m, ok, _ := r.memberIn(ctx, a.Key, []runtime.Instance{w}, fn.Name)
+			if ok && m.State == memberReady {
+				v.ready = 1
+			}
+			v.running, v.switching, v.booting = 1, true, pass.running > 0
+			return v, pass.drainAfter, nil
 		}
 		in, m, ok, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
 		switch {

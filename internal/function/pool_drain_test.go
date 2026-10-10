@@ -21,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
@@ -378,4 +379,95 @@ func TestIssue858_ReleasedCallEndsBeforeRetireCheck(t *testing.T) {
 	require.Equal(t, "old pool", answer())
 	h.reconcile(t, "a")
 	require.True(t, h.rt.wasRemoved(old), "the old pool worker is retired once the released call has ended")
+}
+
+// routeFor reports whether the gateway holds name's route.
+func (h *shimHarness) routeFor(t *testing.T, name string) bool {
+	t.Helper()
+	return slices.ContainsFunc(h.routes(t), func(r gateway.Route) bool { return r.PathPrefix == "/function/"+name })
+}
+
+// A redeployed pooled member stays Ready, routed and handed out while the old pool worker serves it at its serving
+// revision and the new one boots: phase and Ready follow the serving revision (ADR-0143 Decision 5), the old pool worker
+// serves until the new one listens (ADR-0190 Decision 8), and the switch comes once the new pool worker reports the
+// member ready (#863).
+func TestIssue863_PooledRedeployFollowsServingRevision(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	old := pooledPair(t, h)
+	oldURL, release := h.rt.serveWorker(t, old, "old pool")
+	release()
+
+	h.rt.setHoldNew(true)
+	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = otherArtifact(t) })
+	var up string
+	for pass := range 3 {
+		res := h.reconcile(t, "b")
+		b := h.getFn(t, "b")
+		require.Equal(t, "b-1", b.Status.ServingRevision, "pass %d", pass)
+		require.Equal(t, "b-2", b.Status.CurrentRevision, "pass %d", pass)
+		require.Equal(t, v1.PhaseReady, b.Status.Phase, "pass %d: the old pool worker serves b at its serving revision", pass)
+		require.Equal(t, 1, b.Status.Replicas, "pass %d", pass)
+		h.requireCondition(t, "b", "Ready", v1.ConditionTrue, "")
+		h.requireCondition(t, "b", "RevisionReady", v1.ConditionFalse, "Progressing")
+		require.True(t, h.routeFor(t, "b"), "pass %d: b keeps its route", pass)
+		var ready bool
+		up, ready = h.upstream(t, "b")
+		require.True(t, ready, "pass %d: the resolver hands b out", pass)
+		require.Equal(t, oldURL+"/function/b", up, "pass %d", pass)
+		require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "pass %d: the booting pool worker is polled", pass)
+	}
+	resp, err := http.Get(up) //nolint:noctx // the test's own fake pool worker
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, resp.Body.Close())
+	require.NoError(t, err)
+	require.Equal(t, "old pool", string(body), "a call during the rebuild is served by the old pool worker")
+
+	workers := h.rt.poolWorkers("default", poolOf("w"))
+	require.Len(t, workers, 2)
+	h.rt.hold(workers[1], false)
+	h.reconcile(t, "b")
+	b := h.getFn(t, "b")
+	require.Equal(t, v1.PhaseReady, b.Status.Phase)
+	require.Equal(t, "b-2", b.Status.ServingRevision, "the switch once the new pool worker reports b ready")
+	h.requireCondition(t, "b", "RevisionReady", v1.ConditionTrue, "")
+	up, ready := h.upstream(t, "b")
+	require.True(t, ready)
+	require.Equal(t, h.shimURL()+"/function/b", up)
+}
+
+// A new pool worker that never listens leaves the old one serving the redeployed member at its serving revision, past
+// the boot timeout: the member stays Ready with RevisionReady False/Progressing while the silent pool worker is created
+// again (ADR-0158 Decision 4, ADR-0190 Decision 8), and nothing switches (#863).
+func TestIssue863_SilentNewPoolWorkerLeavesOldServing(t *testing.T) {
+	t.Parallel()
+	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) {
+		d.Clock = clk
+		d.BootTimeout = time.Second
+	})
+	old := pooledPair(t, h)
+	oldURL, _ := h.rt.serveWorker(t, old, "old pool")
+
+	h.rt.setHoldNew(true)
+	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = otherArtifact(t) })
+	h.reconcile(t, "b")
+	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 2)
+	creates, _ := h.rt.counts()
+	clk.Advance(time.Second)
+	h.reconcile(t, "b")
+	after, _ := h.rt.counts()
+	require.Equal(t, creates+1, after, "the pool worker silent past the boot timeout is created again")
+	require.False(t, h.rt.wasRemoved(old), "the old pool worker serves while the new one does not listen")
+	b := h.getFn(t, "b")
+	require.Equal(t, v1.PhaseReady, b.Status.Phase)
+	require.Equal(t, "b-1", b.Status.ServingRevision)
+	require.Equal(t, "b-2", b.Status.CurrentRevision)
+	h.requireCondition(t, "b", "Ready", v1.ConditionTrue, "")
+	h.requireCondition(t, "b", "RevisionReady", v1.ConditionFalse, "Progressing")
+	up, ready := h.upstream(t, "b")
+	require.True(t, ready)
+	require.Equal(t, oldURL+"/function/b", up)
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase, "the sibling keeps serving")
 }
