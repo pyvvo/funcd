@@ -109,8 +109,6 @@ const (
 	devPersistDir = ".funcd-dev"
 	// devReloadPoll is how often `funcdctl dev` checks each handler source for an edit (hot-reload).
 	devReloadPoll = 300 * time.Millisecond
-	// devApplyAttempts bounds the re-apply of one resource that loses its update with a Conflict.
-	devApplyAttempts = 5
 )
 
 // envRef matches a ${ENV_VAR} reference in a dev.secrets value (ADR-0125 Decision 4): secret values are

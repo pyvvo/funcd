@@ -142,27 +142,26 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 				return err
 			}
 			rev := revObj.(*v1.AppRevision)
-			appObj, err := c.Get(ctx, v1.KindApp, namespace, appName)
+			applied, err := applyRead(ctx, c, v1.KindApp, namespace, appName, func(obj v1.Object) (bool, error) {
+				app := obj.(*v1.App)
+				if !v1.ControlledBy(rev.OwnerReferences, v1.KindApp, app.UID) {
+					return false, fault.Conflictf(op,
+						"AppRevision %s is not a revision of App %s (uid %s): its controller is another App", name, appName, app.UID)
+				}
+				same, err := sameAppSpec(app.Spec, rev.Spec.Spec)
+				if same || err != nil {
+					return false, err
+				}
+				paused := app.Spec.Paused
+				app.Spec = rev.Spec.Spec
+				app.Spec.Paused = paused
+				return true, nil
+			})
 			if err != nil {
 				return err
 			}
-			app := appObj.(*v1.App)
-			if !v1.ControlledBy(rev.OwnerReferences, v1.KindApp, app.UID) {
-				return fault.Conflictf(op, "AppRevision %s is not a revision of App %s (uid %s): its controller is another App",
-					name, appName, app.UID)
-			}
-			same, err := sameAppSpec(app.Spec, rev.Spec.Spec)
-			if err != nil {
-				return err
-			}
-			if same {
+			if !applied {
 				return a.writef("no change: App %s already has the spec of %s\n", appName, name)
-			}
-			paused := app.Spec.Paused
-			app.Spec = rev.Spec.Spec
-			app.Spec.Paused = paused
-			if _, err := c.Apply(ctx, app); err != nil {
-				return err
 			}
 			return a.writef("applied App %s with the spec of %s\n", appName, name)
 		},

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -52,6 +54,28 @@ func newClientURL(t *testing.T) (*sdk.Client, string) {
 // newTestServer is newClientURL that also returns the server's store, to seed what only a reconciler writes.
 func newTestServer(t *testing.T) (*sdk.Client, string, store.Store) {
 	t.Helper()
+	return newTestServerVia(t, nil)
+}
+
+// newRacingServer is newTestServer whose first races PUTs to path each run bump first: a controller's status write
+// landing between a command's read and its write. It also returns the count of PUTs to path.
+func newRacingServer(t *testing.T, path string, races int32, bump func(store.Store)) (*sdk.Client, store.Store, *atomic.Int32) {
+	t.Helper()
+	var puts atomic.Int32
+	c, _, st := newTestServerVia(t, func(next http.Handler, st store.Store) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPut && r.URL.Path == path && puts.Add(1) <= races {
+				bump(st)
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	return c, st, &puts
+}
+
+// newTestServerVia is newTestServer with the server's handler wrapped by wrap, when set.
+func newTestServerVia(t *testing.T, wrap func(http.Handler, store.Store) http.Handler) (*sdk.Client, string, store.Store) {
+	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
@@ -62,6 +86,9 @@ func newTestServer(t *testing.T) (*sdk.Client, string, store.Store) {
 		Credentials: creds,
 	})
 	require.NoError(t, err)
+	if wrap != nil {
+		h = wrap(h, st)
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))

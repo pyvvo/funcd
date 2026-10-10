@@ -304,3 +304,28 @@ func TestCLIAppRollbackKeepsPaused(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, same)
 }
+
+// scenario: app-rollback-retries-on-conflict (ADR-0210) — the App reconciler's status write between the read and
+// the write makes the PUT conflict; rollback re-reads the App, re-checks it and applies revision 1's spec.
+func TestScenarioAppRollbackRetriesOnConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c, st, puts := newRacingServer(t, "/apis/funcd.io/v1alpha1/namespaces/team-a/apps/todo", 2, func(st store.Store) {
+		bumpStatus(t, st, v1.KindApp, "todo", func(o v1.Object) { o.(*v1.App).Status.ObservedGeneration++ })
+	})
+	created, err := c.Create(ctx, &v1.App{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindApp.GVK().APIVersion(), Kind: v1.KindApp},
+		ObjectMeta: v1.ObjectMeta{Name: "todo", Namespace: "team-a", ResourceGroup: "rg1"},
+		Spec:       todoSpec("2.0.0"),
+	})
+	require.NoError(t, err)
+	seedAppRevision(t, st, "todo", created.GetObjectMeta().UID, 1, todoSpec("1.0.0"), v1.PhaseReady)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "app", "rollback", "todo", "1", "-n", "team-a"))
+	require.Equal(t, "applied App todo with the spec of todo-1\n", out.String(), "no 409 is shown")
+	require.Equal(t, int32(3), puts.Load())
+	obj, err := c.Get(ctx, v1.KindApp, "team-a", "todo")
+	require.NoError(t, err)
+	require.Equal(t, todoSpec("1.0.0"), obj.(*v1.App).Spec)
+}

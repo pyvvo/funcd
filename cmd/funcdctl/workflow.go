@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -234,20 +235,46 @@ func (a *cli) workflowPauseCmd(verb string, paused bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			obj, err := c.Get(cmd.Context(), v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
-			if err != nil {
+			name := v1.ObjectName(args[0])
+			if _, err := applyRead(cmd.Context(), c, v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), name,
+				func(obj v1.Object) (bool, error) {
+					obj.(*v1.WorkflowRun).Spec.Paused = paused
+					return true, nil
+				}); err != nil {
 				return err
 			}
-			run := obj.(*v1.WorkflowRun)
-			run.Spec.Paused = paused
-			if _, err := c.Apply(cmd.Context(), run); err != nil {
-				return err
-			}
-			return a.writef("%sd %s\n", verb, run.GetName())
+			return a.writef("%sd %s\n", verb, name)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
 	return cmd
+}
+
+// devApplyAttempts bounds the re-apply of one resource that loses its update with a Conflict (funcdctl dev and
+// applyRead).
+const devApplyAttempts = 5
+
+// applyRead reads the object, lets change edit it and applies it. The apply is conditional on the version read
+// (ADR-0210), so a controller's status write in between answers fault.Conflict: it reads again, at most
+// devApplyAttempts times. A change that returns false applies nothing; applyRead reports whether it applied.
+func applyRead(ctx context.Context, c *sdk.Client, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName,
+	change func(v1.Object) (bool, error),
+) (bool, error) {
+	var err error
+	for range devApplyAttempts {
+		obj, gerr := c.Get(ctx, kind, ns, name)
+		if gerr != nil {
+			return false, gerr
+		}
+		apply, cerr := change(obj)
+		if cerr != nil || !apply {
+			return false, cerr
+		}
+		if _, err = c.Apply(ctx, obj); fault.KindOf(err) != fault.Conflict {
+			return err == nil, err
+		}
+	}
+	return false, err
 }
 
 // workflowCancelCmd requests cancellation declaratively (patches spec.cancel), the same shape
@@ -264,16 +291,15 @@ func (a *cli) workflowCancelCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			obj, err := c.Get(cmd.Context(), v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]))
-			if err != nil {
+			name := v1.ObjectName(args[0])
+			if _, err := applyRead(cmd.Context(), c, v1.KindWorkflowRun, v1.NamespaceName(nsOrDefault(ns)), name,
+				func(obj v1.Object) (bool, error) {
+					obj.(*v1.WorkflowRun).Spec.Cancel = true
+					return true, nil
+				}); err != nil {
 				return err
 			}
-			run := obj.(*v1.WorkflowRun)
-			run.Spec.Cancel = true
-			if _, err := c.Apply(cmd.Context(), run); err != nil {
-				return err
-			}
-			return a.writef("cancel requested for %s\n", run.GetName())
+			return a.writef("cancel requested for %s\n", name)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")

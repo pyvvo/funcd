@@ -9,11 +9,59 @@ import (
 	"go/token"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
 )
+
+// bumpStatus writes obj's status as a controller does, straight to the store, so its resourceVersion moves.
+func bumpStatus(t *testing.T, st store.Store, kind v1.Kind, name v1.ObjectName, set func(v1.Object)) {
+	t.Helper()
+	ctx := context.Background()
+	obj, err := st.Get(ctx, kind.GVK(), "team-a", name)
+	if !assert.NoError(t, err) {
+		return
+	}
+	set(obj)
+	_, err = st.Update(ctx, obj)
+	assert.NoError(t, err)
+}
+
+// scenario: workflow-pause-retries-on-conflict (ADR-0210) — the run controller's status write between the read
+// and the write makes the PUT conflict; pause re-reads and applies again, at most devApplyAttempts times.
+func TestScenarioWorkflowPauseRetriesOnConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := "/apis/funcd.io/v1alpha1/namespaces/team-a/workflowruns/r1"
+	for _, tc := range []struct {
+		races   int32
+		applied bool
+	}{{races: 2, applied: true}, {races: devApplyAttempts}} {
+		c, st, puts := newRacingServer(t, path, tc.races, func(st store.Store) {
+			bumpStatus(t, st, v1.KindWorkflowRun, "r1", func(o v1.Object) { o.(*v1.WorkflowRun).Status.ObservedGeneration++ })
+		})
+		require.NoError(t, execCLI(&bytes.Buffer{}, c, "workflow", "run", "dur", "r1", "-n", "team-a"))
+
+		var out bytes.Buffer
+		err := execCLI(&out, c, "workflow", "pause", "r1", "-n", "team-a")
+		obj, gerr := st.Get(ctx, v1.KindWorkflowRun.GVK(), "team-a", "r1")
+		require.NoError(t, gerr)
+		paused := obj.(*v1.WorkflowRun).Spec.Paused
+		if !tc.applied {
+			require.Equal(t, fault.Conflict, fault.KindOf(err), "every attempt lost its race")
+			require.Equal(t, int32(devApplyAttempts), puts.Load())
+			require.False(t, paused)
+			continue
+		}
+		require.NoError(t, err)
+		require.Equal(t, "paused r1\n", out.String(), "no 409 is shown")
+		require.Equal(t, tc.races+1, puts.Load())
+		require.True(t, paused)
+	}
+}
 
 // Issue #125: `funcdctl workflow run <wf> <existing-run>` must not replace the existing run's spec. The
 // run verb creates, so a re-used name is rejected (ADR-0094 duplicate-run-name-rejected), with a new input
