@@ -1,6 +1,7 @@
 # ADR-0190: A workflow run is bound to the revision it started with
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0224](0224-pool-switches-when-members-are-ready.md) (2026-10-10; lines at 36aae2e8) — Decision 8's "The resolver hands out the key's newest listening pool worker (by `CreatedAt`), so the old one serves until the new one listens" and "The drain clock starts only when the new one listens" (149-151): a rebuilt pool hands out its old worker until every carried-over member is ready on the new one, and the drain clock starts at that switch.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, engine, revisions, pinning, activator, pooling, gc

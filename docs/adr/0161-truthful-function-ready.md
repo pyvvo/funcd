@@ -7,6 +7,7 @@
 - **Superseded in part by**: [ADR-0193](0193-asleep-gate-rule-for-every-placement.md) (2026-10-05) — Decision 2's gateFailed lead-in and running row and Decision 3's '(a gate failure stops nothing)', now also for an asleep pooled member.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 2 and the steady state: liveness and readiness probes in each pass.
 - **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10; lines at 0cd67ef5) — Decision 1's `failPass` bullets (126-129), Decision 2's `gateFailed` lead-in and rows for a `Degraded` read phase (146-147, 152-153), the rejected alternative "`Degraded → Ready` from a failed pass or gate" (110-111), the constraint at 96, scenario `registry-outage-not-ready` (62) and the header clauses at 18 and 24-28: while a gate or a pass fails, a `Degraded` Function whose serving-revision worker passes its readiness probe becomes `Ready`.
+- **Superseded in part by**: [ADR-0225](0225-pool-worker-boot-crash-loop.md) (2026-10-10; lines at 36aae2e8) — Decision 2's "The pool worker's boot limit is unchanged here" (146) and Decision 3's "as is the pool path (#422)" (169-170): a pool worker that has not listened `bootTimeout` after its last Start is a counted boot crash, re-created after the growing wait, and its waiting members read `CrashLoopBackOff`.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, resolver, activator, crash-recovery
