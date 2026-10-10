@@ -123,6 +123,7 @@ func lastEntry(t *testing.T, tg backup.Target) backup.Entry {
 // scenario: generation-layout — a run puts the stores' parts in cut order, an 8 MiB part at a time, then
 // manifest.yaml with at in ADR-0196's form; creating the manifest again is fault.Conflict.
 func TestScenarioGenerationLayout(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newS3Stub(t, clock.NewManual(monday))
 	tg := stubTarget(t, s, nil)
@@ -190,6 +191,7 @@ func TestScenarioGenerationLayout(t *testing.T) {
 // scenario: failed-run-skips-number — a run failing after the metastore parts leaves n incomplete; the next run
 // writes n+1 and nothing is deleted.
 func TestScenarioFailedRunSkipsNumber(t *testing.T) {
+	t.Parallel()
 	s := newS3Stub(t, clock.NewManual(monday))
 	tg := stubTarget(t, s, nil)
 	s.set(func(s *s3stub) { s.failPut = func(key string) bool { return strings.Contains(key, "/runs/") } })
@@ -219,6 +221,7 @@ func TestScenarioFailedRunSkipsNumber(t *testing.T) {
 // target ignoring or refusing it writes no generation and names backup.singleWriter; singleWriter: true warns
 // and writes.
 func TestScenarioProbeOutcomes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("file", func(t *testing.T) {
 		var logs bytes.Buffer
@@ -334,6 +337,7 @@ func TestHelperHoldsDirectory(t *testing.T) {
 // scenario: directory-second-writer-refused — while process A holds a directory, B writes nothing and reports
 // fault.Conflict, singleWriter or not; after A exits, B's next run writes.
 func TestScenarioDirectorySecondWriterRefused(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperHoldsDirectory$", "-test.count=1") //nolint:gosec // the test binary itself
 	cmd.Env = append(os.Environ(), holdEnv+"="+dir)
@@ -376,6 +380,7 @@ func TestScenarioDirectorySecondWriterRefused(t *testing.T) {
 // run's n, end the run before its manifest with fault.Conflict naming backup.target; a restored copy and its live
 // source refuse each other, the source putting only its refused mark.
 func TestScenarioSecondPlatformRefused(t *testing.T) {
+	t.Parallel()
 	t.Run("another platform's key", func(t *testing.T) {
 		s := newS3Stub(t, clock.NewManual(monday))
 		foreign := "gen/hourly/0000000005-" + tl9 + "/manifest.yaml"
@@ -433,6 +438,7 @@ func TestScenarioSecondPlatformRefused(t *testing.T) {
 // scenario: ladder-class — an ISO week's first run is weekly, a later day's first run daily and that day's second
 // run hourly; with daily 0 the second is hourly. Pins never count.
 func TestScenarioLadderClass(t *testing.T) {
+	t.Parallel()
 	run := func(t *testing.T, c *clock.Manual, tg backup.Target, at time.Time) backup.Class {
 		t.Helper()
 		c.Advance(at.Sub(c.Now()))
@@ -477,6 +483,7 @@ func TestScenarioLadderClass(t *testing.T) {
 // scenario: put-and-list-suffice — against the box policy (no Get, Attributes, Delete, nor puts under
 // gen/verified/) the probe and a weekly, a daily and an hourly run succeed.
 func TestScenarioPutAndListSuffice(t *testing.T) {
+	t.Parallel()
 	c := clock.NewManual(monday)
 	s := newS3Stub(t, c)
 	s.set(func(s *s3stub) { s.box = true })
@@ -498,6 +505,7 @@ func TestScenarioPutAndListSuffice(t *testing.T) {
 // scenario: manifest-records-lineage — timeline T2, restored from T1's generation 40, records its parent in
 // generation 43, and T1's 41 and 42 are abandoned.
 func TestScenarioManifestRecordsLineage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newS3Stub(t, clock.NewManual(monday))
 	for n := uint64(40); n <= 42; n++ {
@@ -534,6 +542,7 @@ func TestScenarioManifestRecordsLineage(t *testing.T) {
 // scenario: target-checked — a mem://, gs:// or azblob:// target, or a credentials file beside a file:// target,
 // is refused with fault.Invalid naming the key.
 func TestScenarioTargetChecked(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cases := []struct {
 		name string

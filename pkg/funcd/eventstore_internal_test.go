@@ -100,6 +100,7 @@ func watchDrops(t *testing.T, p *Platform, want string) []string {
 // scenario: restart-keeps-eventing-state — with file storage and the default KV engine, a restart keeps the seen
 // list (drop/a does not fire again, a new drop/b fires once) and the dead letter, listed with the same id.
 func TestScenarioRestartKeepsEventingState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := eventingDir(t)
 	const id = "01JZ0000000000000000000000"
@@ -136,6 +137,7 @@ func TestScenarioRestartKeepsEventingState(t *testing.T) {
 // scenario: memory-mode-forgets — with storage.mode: memory, a restart leaves the event store with no dead letter
 // and no seen list.
 func TestScenarioMemoryModeForgets(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	p := eventingPlatform(t, WithDeadLetterQueue("", 3, 0, 0))
 	require.NoError(t, p.eventStore.SeenLists().Save(ctx, "default", "drops", "arrived", eventing.SeenList{Bucket: "raw", Seen: map[string]string{"drop/a": "1-1"}}))
@@ -151,6 +153,7 @@ func TestScenarioMemoryModeForgets(t *testing.T) {
 // scenario: memory-store-keeps-kv-keys — a library platform with a durable KV and no event-store directory does not
 // run the move, so the KV keeps the seen-list keys.
 func TestScenarioMemoryStoreKeepsKVKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	kv := legacyKV(t)
 	p := eventingPlatform(t, WithKVStore(kv))

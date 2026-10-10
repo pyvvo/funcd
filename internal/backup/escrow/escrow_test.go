@@ -58,6 +58,7 @@ func manifest(secretsKey, master []byte) backup.Manifest {
 // scenario: restore-names-secrets-key — generation 40 written under K1 and a restore configured with K2 refuses,
 // naming K1's fingerprint and the escrow file matching it, if any.
 func TestScenarioRestoreNamesSecretsKey(t *testing.T) {
+	t.Parallel()
 	k1, k2 := randomKey(t), randomKey(t)
 	m := manifest(k1, nil)
 	dir := escrowDir(t, map[string][]byte{"secrets/2026-10.key": k1, "secrets/old.key": k2})
@@ -84,6 +85,7 @@ func TestScenarioRestoreNamesSecretsKey(t *testing.T) {
 // escrowed it is installed at Decision 7's path and a restored spec.blob Function keeps its S3 keypair. Tested at
 // the escrow API: ADR-0206's restore command writes the plan.
 func TestScenarioMasterSecretRequired(t *testing.T) {
+	t.Parallel()
 	f, other := randomKey(t), randomKey(t)
 	m := manifest(nil, f)
 	dataDir := t.TempDir()
@@ -127,6 +129,7 @@ func TestScenarioMasterSecretRequired(t *testing.T) {
 // and CatalogService c (spec.blob) are listed, not Function d or CatalogService e; the store holds the same either
 // way, so the list does not depend on the gateway.
 func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	eng := memory.New()
 	st := store.New(eng)
