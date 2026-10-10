@@ -42,6 +42,7 @@ func legacyKeys(t *testing.T, kv kvstore.KV) []string {
 // scenario: upgrade-moves-seen-lists — the seen list the previous release kept in a badger KV moves into the event
 // store: drop/a does not fire, no key is left under _eventing/blobwatch/, and a new drop/b fires once.
 func TestScenarioUpgradeMovesSeenLists(t *testing.T) {
+	t.Parallel()
 	kv := previousRelease(t)
 	s := open(t, Config{Dir: t.TempDir()})
 
@@ -56,6 +57,7 @@ func TestScenarioUpgradeMovesSeenLists(t *testing.T) {
 // scenario: interrupted-move-resumes — a move that copied and stopped before its deletes, then a newer list the
 // watcher saved: the next start fires nothing twice, deletes the KV keys and keeps the newer list.
 func TestScenarioInterruptedMoveResumes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	kv := previousRelease(t)
 	s := open(t, Config{Dir: t.TempDir()})
@@ -81,6 +83,7 @@ func TestScenarioInterruptedMoveResumes(t *testing.T) {
 // scenario: move-failure-stops-start — a KV that fails to list _eventing/blobwatch/ fails the move, naming it, and
 // the KV records stay.
 func TestScenarioMoveFailureStopsStart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	kv := previousRelease(t)
 	s := open(t, Config{Dir: t.TempDir()})

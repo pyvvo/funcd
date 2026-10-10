@@ -163,9 +163,11 @@ func TestSeenListParts(t *testing.T) {
 // scenario: tenants-stay-apart — the retention sweep evicts only dead letters, and deleting the source removes its
 // seen lists but no dead letter.
 func TestScenarioTenantsStayApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, cfg := range modes() {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			s := open(t, cfg(t))
 			dlq, seen := s.DeadLetters(), s.SeenLists()
 			now := time.Now()
@@ -210,6 +212,7 @@ func TestScenarioTenantsStayApart(t *testing.T) {
 // scenario: rewrites-do-not-grow-disk — 400 saves of a 2 MiB list, with no restart and no Flatten, keep the event
 // store's files under 384 MiB of disk blocks.
 func TestScenarioRewritesDoNotGrowDisk(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := open(t, Config{Dir: dir})

@@ -48,6 +48,7 @@ func TestScenarioBadgerEnginePassesStoreContract(t *testing.T) {
 // scenario: snapshot-is-one-read (metastore, Badger engine) — the snapshot contract: a writer commits a=i, then
 // b=i, while 200 snapshots run, and none holds b above a; the snapshot loads back into an empty engine.
 func TestScenarioSnapshotIsOneRead(t *testing.T) {
+	t.Parallel()
 	snapshotcontract.Run(t, func(t *testing.T) snapshotcontract.Subject {
 		e, err := bstore.Open(t.TempDir(), bstore.WithSyncWrites(false), bstore.WithValueLogGCInterval(0))
 		require.NoError(t, err)

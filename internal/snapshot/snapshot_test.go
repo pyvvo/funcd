@@ -34,6 +34,7 @@ func (s source) Snapshot(_ context.Context, emit func(snapshot.Record) error) (s
 // scenario: cut-reads-in-order — Cut reads the event store, the metastore, then the run state, emits each
 // record with its source, returns the metastore's version, and reads nothing after a failed read.
 func TestScenarioCutReadsInOrder(t *testing.T) {
+	t.Parallel()
 	var log []string
 	events := source{name: "events", keys: []string{"e1"}, log: &log}
 	meta := source{name: "meta", version: "0123456789abcdef-7", keys: []string{"m1", "m2"}, log: &log}
