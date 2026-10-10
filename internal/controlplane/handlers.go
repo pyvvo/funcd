@@ -335,8 +335,11 @@ func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 }
 
 // deleteObjIf is the whole delete path: authorize → the namespace admission lock when a Delete admission reads
-// the namespace (ADR-0147) → Get Old, compared with rv (ADR-0210) → Admit → store.Delete with rv as the
-// precondition ("" ⇒ none) → unlock.
+// the namespace (ADR-0147) → Get Old, compared with rv (ADR-0210) → Admit → store.Delete conditional on Old's
+// version, so the admission's verdict holds for what is deleted → unlock. Without rv a delete that lost to a
+// concurrent write starts over from the read (retryOwnRead), at most ownReadAttempts times, and then answers 409,
+// as an unversioned replace does; with rv it answers 409 at once. With no Delete admission, store.Delete takes rv
+// as the precondition ("" ⇒ none) and nothing is read.
 func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
@@ -349,24 +352,27 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		return err
 	}
 	defer unlock()
-	// Run the admit step on Delete only when an admission handles it (e.g. ADR-0064 deletion-protection),
-	// so a build with no Delete admission does no extra store fetch.
-	if h.admit.Handles(kind.GVK(), admission.Delete) {
+	if !h.admit.Handles(kind.GVK(), admission.Delete) {
+		return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
+	}
+	_, err = retryOwnRead(func() (v1.Object, bool, error) {
 		old, err := h.store.Get(ctx, kind.GVK(), ns, name)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		if err := staleVersion(kind, ns, name, rv, old); err != nil {
-			return err
+			return nil, false, err
 		}
 		id, _ := middleware.IdentityFrom(ctx)
 		if _, err := h.admit.Admit(ctx, admission.Request{
 			Operation: admission.Delete, GVK: kind.GVK(), Old: old, Identity: id,
 		}); err != nil {
-			return err
+			return nil, false, err
 		}
-	}
-	return h.store.Delete(ctx, kind.GVK(), ns, name, rv)
+		err = h.store.Delete(ctx, kind.GVK(), ns, name, old.GetObjectMeta().ResourceVersion)
+		return nil, rv == "" && fault.KindOf(err) == fault.Conflict, err
+	})
+	return err
 }
 
 // forceDeleteResourceGroup deletes a ResourceGroup's members, then the group (ADR-0170 Decision 8). Each pass
