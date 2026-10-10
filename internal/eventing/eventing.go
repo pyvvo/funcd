@@ -208,7 +208,8 @@ func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason
 // registerTimer (re)registers every named event of a timer source, preserving lastFire when the interval
 // is unchanged (a frequent reconcile can't starve firing), and prunes events removed from the spec. A new or
 // re-intervaled entry is seeded on the creation grid created + k×interval (ADR-0182), so its schedule survives
-// a daemon restart; a grid point passed while the daemon was down is skipped.
+// a daemon restart; a grid point passed while the daemon was down is skipped. An event with no positive interval,
+// such as an ADR-0211 cron event stored by a newer funcd, is skipped with a warning and left idle (#872).
 func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, created time.Time, t *v1.TimerSource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,8 +217,12 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, create
 	for i := range t.Events {
 		ev := &t.Events[i]
 		k := eventKey{ns: ns, source: source, event: ev.Name}
-		want[k] = true
 		interval := time.Duration(ev.Interval)
+		if interval <= 0 {
+			s.logger.Warn("timer event has no positive interval; skipped", "namespace", ns, "eventsource", source, "event", ev.Name, "interval", interval)
+			continue
+		}
+		want[k] = true
 		if e, ok := s.timers[k]; ok && e.interval == interval {
 			continue // unchanged — keep its lastFire
 		}
