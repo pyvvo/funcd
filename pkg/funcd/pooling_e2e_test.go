@@ -39,7 +39,7 @@ type poolHarness struct {
 	artifacts map[string]string // name → file:// URI, stable across re-applies (no-op reconcile)
 }
 
-func newPoolHarness(t *testing.T) *poolHarness {
+func newPoolHarness(t *testing.T, extra ...funcd.Option) *poolHarness {
 	t.Helper()
 	shim := langmod.NodeShim(t)
 	poolShim := langmod.PoolShim(t)
@@ -58,7 +58,7 @@ func newPoolHarness(t *testing.T) *poolHarness {
 	// Wire the in-memory drivers explicitly (not InMemory(), which builds its own runtime) so
 	// the test holds the runtime and can List pool worker instances; plus the pool shim + a
 	// low cap to exercise the cap guard.
-	p, err := funcd.New(
+	p, err := funcd.New(append([]funcd.Option{
 		funcd.WithBlob(bucket),
 		funcd.WithBus(messaging),
 		funcd.WithStore(store.New(memory.New())),
@@ -70,7 +70,7 @@ func newPoolHarness(t *testing.T) *poolHarness {
 		funcd.WithRuntimeShim(node, shim),
 		funcd.WithPoolShim(node, poolShim),
 		funcd.WithPoolLimit(2),
-	)
+	}, extra...)...)
 	require.NoError(t, err)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -258,7 +258,8 @@ func TestScenarioPoolMembershipRebuild(t *testing.T) {
 // NotReady with a PoolFull condition (the over-cap member, by name order), never overloading
 // the process.
 func TestScenarioPoolCapGuard(t *testing.T) {
-	h := newPoolHarness(t) // PoolLimit = 2
+	t.Parallel()
+	h := newPoolHarness(t, funcd.WithPacing(funcd.Pacing{ActivationTimeout: time.Second})) // PoolLimit = 2
 	h.applyPooled(t, "p1", "capped", v1.Scaling{MinReplicas: 1}, 1)
 	h.applyPooled(t, "p2", "capped", v1.Scaling{MinReplicas: 1}, 1)
 	h.applyPooled(t, "p3", "capped", v1.Scaling{MinReplicas: 1}, 1)

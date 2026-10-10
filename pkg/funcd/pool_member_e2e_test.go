@@ -21,7 +21,6 @@ import (
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
-	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/pkg/funcd"
@@ -244,9 +243,13 @@ func TestScenarioPooledMemberLogs(t *testing.T) {
 // its load error, a and c are Ready and answer, and once the pool's manifest holds all three the pool process keeps
 // its PID across two supervision periods.
 func TestScenarioPoolMemberLoadFailure(t *testing.T) {
+	t.Parallel()
+	const supervision = time.Second
 	forPoolLangs(t, func(t *testing.T, l poolLang) {
+		t.Parallel()
 		manifests := shortDataDir(t)
-		h := newShimRig(t, l.python, funcd.WithPoolManifestDir(manifests))
+		h := newShimRig(t, l.python, funcd.WithPoolManifestDir(manifests),
+			funcd.WithPacing(funcd.Pacing{SupervisionPeriod: supervision}))
 		h.deploy(t, "a", l.fn(l.quiet).pooled("mixed"))
 		h.deploy(t, "b", l.fn(l.noHandle).pooled("mixed"))
 		h.deploy(t, "c", l.fn(l.quiet).pooled("mixed"))
@@ -275,7 +278,7 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 		pid := h.poolPID(t, l.runtime, "mixed")
 		require.NotZero(t, pid)
 		require.Never(t, func() bool { return h.poolPID(t, l.runtime, "mixed") != pid },
-			2*controller.SupervisionPeriod+time.Second, 500*time.Millisecond, "a member's load failure never restarts the pool")
+			2*supervision+time.Second, 250*time.Millisecond, "a member's load failure never restarts the pool")
 	})
 }
 
