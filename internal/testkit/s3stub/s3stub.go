@@ -6,9 +6,12 @@ package s3stub
 import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // S3's ETag of a single-part object
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"maps"
 	"net/http"
@@ -341,6 +344,9 @@ func (s *Stub) get(w http.ResponseWriter, r *http.Request, key string) {
 	if from, to, ok := byteRange(r.Header.Get("Range"), int64(len(data))); ok {
 		h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, to-1, len(data)))
 		data, status = data[from:to], http.StatusPartialContent
+	}
+	if status == http.StatusOK {
+		h.Set("x-amz-checksum-crc32", base64.StdEncoding.EncodeToString(binary.BigEndian.AppendUint32(nil, crc32.ChecksumIEEE(data))))
 	}
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(status)
