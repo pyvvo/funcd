@@ -1,6 +1,7 @@
 # ADR-0182: Timer schedules anchored on the EventSource's creation time
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0211](0211-cron-schedules.md) (2026-10-10) — Decisions 1 and 2 now cover interval events only; a cron event seeds with `Next(now)`.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, eventsource, timer, restart

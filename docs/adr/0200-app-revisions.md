@@ -1,6 +1,11 @@
 # ADR-0200: App revisions — safe upgrade, history and rollback
 
 - **Status**: Implemented (2026-10-08)
+- **Superseded in part by**: [ADR-0206](0206-restore-and-held-boot.md) (2026-10-10) — Decisions 3, 6, 7 and 8 for a held rollout.
+- **Superseded in part by**: [ADR-0212](0212-app-self-heal-and-pause.md) (2026-10-10) — Decisions 3, 4, 6, 8 and 9: pause and the deadline.
+- **Superseded in part by**: [ADR-0213](0213-app-config-and-secret-declarations.md) (2026-10-10) — Decision 5: the Secret reasons.
+- **Superseded in part by**: [ADR-0214](0214-app-hooks.md) (2026-10-10) — Decisions 4-7 for an App with hooks.
+- **Superseded in part by**: [ADR-0219](0219-app-requirements.md) (2026-10-10) — Decisions 3-6: startedAt waits for the requirements.
 - **Date**: 2026-10-08 (self-accepted under adr-batch after a five-finder grounding, three judge rounds and two confirm
   judges; the main session made an unset `app.upgradeTimeout` default non-breaking)
 - **Deciders**: green-0-rabbit

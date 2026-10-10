@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 3 rows (lines 131-132, 135) and Decision 5 (lines 146-147): re-create waits count from the last successful Start.
+- **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 4: a replica with a dependency report is never failed past `runtime.bootTimeout`.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, supervision, function, process, containerd, config, crash-recovery

@@ -408,7 +408,17 @@ only when its entry says `deletion: delete`. Every spec change is stamped as a r
 ([ADR-0200](docs/adr/0200-app-revisions.md)), which becomes current, and lets dropped parts go, only once every part
 is Ready within `app.upgradeTimeout`; a timed-out upgrade is `Failed` and the previous revision stays current, with no
 automatic rollback; `funcdctl app history` lists the revisions and `funcdctl app rollback` re-applies one as a new
-revision. Hooks, templates and dependencies between Apps are FEAT-0010's later rows.
+revision. An App can be paused for manual work and records each self-heal ([ADR-0212](docs/adr/0212-app-self-heal-and-pause.md));
+it defines its ConfigMaps under content-hashed names and declares, never holds, the Secrets it needs
+([ADR-0213](docs/adr/0213-app-config-and-secret-declarations.md)); `preApply` and `postApply` hooks call Functions of
+the App around each rollout ([ADR-0214](docs/adr/0214-app-hooks.md)); opt-in tests run on demand
+([ADR-0216](docs/adr/0216-app-tests.md)); an App waits for the shared Apps it `requires` at a matching version
+([ADR-0219](docs/adr/0219-app-requirements.md)). A client-side template renders an App from values and pinned images
+([ADR-0217](docs/adr/0217-app-templates-values-and-rendering.md), [ADR-0218](docs/adr/0218-app-template-images-lock-and-push.md)),
+and every create or replace can run as a dry run that stores nothing ([ADR-0220](docs/adr/0220-dry-run-engine.md)).
+Platform health is built in: liveness on every replica, a dependency check behind each shim's readiness, and a probe of
+the KV engine and the blob storage ([ADR-0215](docs/adr/0215-built-in-health.md)). A timer event can tick on a cron
+expression in a time zone ([ADR-0211](docs/adr/0211-cron-schedules.md)).
 
 #### Controller
 
