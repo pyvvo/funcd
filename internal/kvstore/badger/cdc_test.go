@@ -224,7 +224,7 @@ func TestIssue98_DropPrefixRecordsDeletions(t *testing.T) {
 		kv, seams, err := OpenWithSeamsFor(t.TempDir(), bucket, BackupConfig{ChunkBytes: 1 << 16}, nil, CDCConfig{})
 		require.NoError(t, err)
 		defer func() { _ = kv.(*driver).Close() }()
-		bk := seams.Backup.(*backup)
+		bk := seams.Backup.(*exporter)
 		seed(t, kv)
 		require.NoError(t, bk.Rebaseline(ctx))
 

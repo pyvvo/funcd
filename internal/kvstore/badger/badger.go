@@ -401,7 +401,7 @@ func (d *driver) Close() error {
 		if c, ok := d.cdc.(interface{ release() }); ok { // return the CDC seq lease before closing the db
 			c.release()
 		}
-		if bk, ok := d.backup.(*backup); ok { // Badger panics when an export reads a closed db: let a running Ship or Rebaseline finish
+		if bk, ok := d.backup.(*exporter); ok { // Badger panics when an export reads a closed db: let a running Ship or Rebaseline finish
 			bk.loop.Lock()
 			defer bk.loop.Unlock()
 		}

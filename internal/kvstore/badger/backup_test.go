@@ -27,100 +27,6 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore/kvstorecontract"
 )
 
-// fakeBucket is an in-memory blob.Bucket recording puts (count + bytes) and able to inject upload failures
-// — enough to prove default-off, incremental-delta, cursor-after-durable-upload, and restore parity.
-type fakeBucket struct {
-	// The port is embedded only to satisfy ListAfter, which the backup never calls.
-	blob.Bucket
-	mu       sync.Mutex
-	objs     map[string][]byte
-	puts     int
-	failPut  func(key string) error
-	onDelete func(key string)
-}
-
-func newFakeBucket() *fakeBucket { return &fakeBucket{objs: map[string][]byte{}} }
-
-func (f *fakeBucket) Put(_ context.Context, key string, data []byte, _ blob.PutOptions) error {
-	if f.failPut != nil {
-		if err := f.failPut(key); err != nil {
-			return err
-		}
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.objs[key] = append([]byte(nil), data...)
-	f.puts++
-	return nil
-}
-
-func (f *fakeBucket) Get(_ context.Context, key string) ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	v, ok := f.objs[key]
-	if !ok {
-		return nil, fault.NotFoundf("fakeBucket.Get", "%q not found", key)
-	}
-	return append([]byte(nil), v...), nil
-}
-
-func (f *fakeBucket) Delete(_ context.Context, key string) error {
-	if f.onDelete != nil {
-		f.onDelete(key)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.objs, key)
-	return nil
-}
-
-func (f *fakeBucket) Exists(_ context.Context, key string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	_, ok := f.objs[key]
-	return ok, nil
-}
-
-func (f *fakeBucket) Attributes(_ context.Context, key string) (blob.Attributes, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	v, ok := f.objs[key]
-	if !ok {
-		return blob.Attributes{}, fault.NotFoundf("fakeBucket.Attributes", "%q not found", key)
-	}
-	return blob.Attributes{Key: key, Size: int64(len(v))}, nil
-}
-
-func (f *fakeBucket) List(_ context.Context, prefix string) ([]blob.Attributes, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []blob.Attributes
-	for k, v := range f.objs {
-		if strings.HasPrefix(k, prefix) {
-			out = append(out, blob.Attributes{Key: k, Size: int64(len(v))})
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeBucket) SignedURL(context.Context, string, blob.SignOptions) (string, error) {
-	return "", fault.Invalidf("fakeBucket.SignedURL", "unsupported")
-}
-func (f *fakeBucket) Close() error { return nil }
-
-// bytesUnder sums the size of every uploaded object whose key starts with prefix.
-func (f *fakeBucket) bytesUnder(prefix string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	total := 0
-	for k, v := range f.objs {
-		if strings.HasPrefix(k, prefix) {
-			total += len(v)
-		}
-	}
-	return total
-}
-
 func openRawDB(t *testing.T, dir string) *badger.DB {
 	t.Helper()
 	db, err := openDB(dir, false) // sync off — faster tests; correctness is unaffected
@@ -159,8 +65,25 @@ func countKeys(db *badger.DB, prefix string) int {
 	return n
 }
 
+// newExporter is NewBackup's exporter over db and bucket.
+func newExporter(t *testing.T, db *badger.DB, bucket blob.Bucket, cfg BackupConfig) *exporter {
+	t.Helper()
+	b, err := NewBackup(db, bucket, cfg)
+	require.NoError(t, err)
+	return b.(*exporter)
+}
+
+// restoreDB restores the newest point of bucket into a fresh instance through the seam.
+func restoreDB(t *testing.T, bucket blob.Bucket) *badger.DB {
+	t.Helper()
+	db := openRawDB(t, t.TempDir())
+	require.NoError(t, newExporter(t, db, bucket, BackupConfig{}).Restore(context.Background()))
+	return db
+}
+
 // scenario: backup-default-off — no DR config ⇒ no seam constructed, no object-storage writes.
 func TestScenarioBackupDefaultOff(t *testing.T) {
+	t.Parallel()
 	kv, seams, err := OpenWithSeams(t.TempDir(), nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
@@ -171,40 +94,55 @@ func TestScenarioBackupDefaultOff(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, kv.Put(ctx, "a/b/c", []byte("v")))
 	require.NoError(t, kv.Delete(ctx, "a/b/c"))
-	require.Equal(t, 0, bucket.puts, "the base driver never writes to object storage")
+	require.Empty(t, bucket.puts, "the base driver never writes to object storage")
 }
 
 // scenario: backup-enabled-requires-target — enabled with an empty target ⇒ fault.Invalid.
 func TestScenarioBackupEnabledRequiresTarget(t *testing.T) {
+	t.Parallel()
 	db := openRawDB(t, t.TempDir())
 	_, err := NewBackup(db, nil, BackupConfig{})
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
-// scenario: incremental-ships-only-delta — after a backup, a small delta exports far fewer bytes.
+// NewBackup refuses a seal without recipients or the reverse, and a part above 8 MiB (ADR-0209 Decision 2).
+func TestNewBackupRefusesSealMismatch(t *testing.T) {
+	t.Parallel()
+	db := openRawDB(t, t.TempDir())
+	seal := func(dst io.Writer) (io.WriteCloser, error) { return nopCloser{dst}, nil }
+	for name, cfg := range map[string]BackupConfig{
+		"seal without recipients": {Seal: seal},
+		"recipients without seal": {Recipients: []string{"0123456789abcdef"}},
+		"part above 8 MiB":        {ChunkBytes: 8<<20 + 1},
+	} {
+		_, err := NewBackup(db, newFakeBucket(), cfg)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+	}
+	_, err := NewBackup(db, newFakeBucket(), BackupConfig{ChunkBytes: 8 << 20})
+	require.NoError(t, err)
+}
+
+// scenario: incremental-ships-only-delta — after the first Ship's base, a small delta exports far fewer bytes.
 func TestScenarioIncrementalShipsOnlyDelta(t *testing.T) {
+	t.Parallel()
 	db := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
-	b, err := NewBackup(db, bucket, BackupConfig{ChunkBytes: 1 << 16})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, db, bucket, BackupConfig{ChunkBytes: 1 << 16})
 	ctx := context.Background()
 
 	writeKeys(t, db, "k/", 500, 256)
 	to1, err := bk.Ship(ctx)
 	require.NoError(t, err)
 	require.Greater(t, to1, uint64(0))
-	first := bucket.bytesUnder("inc/")
+	first := bucket.bytesUnder(basePrefix)
 	require.Greater(t, first, 0)
 
 	writeKeys(t, db, "delta/", 3, 256)
-	firstPrefix := fmt.Sprintf("inc/%020d", uint64(0))
 	to2, err := bk.Ship(ctx)
 	require.NoError(t, err)
 	require.Greater(t, to2, to1, "cursor advanced")
-
-	second := bucket.bytesUnder("inc/") - bucket.bytesUnder(firstPrefix)
+	second := bucket.bytesUnder(incPrefix)
 	require.Greater(t, second, 0, "the delta shipped something")
 	require.Less(t, second, first/10, "the incremental ships far fewer bytes than the full first export")
 }
@@ -212,55 +150,56 @@ func TestScenarioIncrementalShipsOnlyDelta(t *testing.T) {
 // scenario: cursor-advances-only-after-durable-upload — an upload failure leaves the cursor unchanged; the
 // next (successful) run re-ships the interval and then advances.
 func TestScenarioCursorAdvancesOnlyAfterDurableUpload(t *testing.T) {
+	t.Parallel()
 	db := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
-	bucket.failPut = func(string) error { return fault.Unavailablef("fakeBucket", "object storage down") }
-	b, err := NewBackup(db, bucket, BackupConfig{ChunkBytes: 1 << 12})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, db, bucket, BackupConfig{ChunkBytes: 1 << 12})
 	ctx := context.Background()
 	writeKeys(t, db, "k/", 200, 256)
+	_, err := bk.Ship(ctx)
+	require.NoError(t, err)
+	writeKeys(t, db, "more/", 200, 256)
 
-	_, err = bk.Ship(ctx)
-	require.Error(t, err, "upload failed")
+	bucket.mu.Lock()
+	bucket.failPut = func(string) error { return fault.Unavailablef("fakeBucket", "object storage down") }
+	bucket.mu.Unlock()
 	cur, err := bk.cursor(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), cur, "cursor NOT advanced on a failed upload")
+	_, err = bk.Ship(ctx)
+	require.Error(t, err, "upload failed")
+	after, err := bk.cursor(ctx)
+	require.NoError(t, err)
+	require.Equal(t, cur, after, "cursor NOT advanced on a failed upload")
 
+	bucket.mu.Lock()
 	bucket.failPut = nil
+	bucket.mu.Unlock()
 	to, err := bk.Ship(ctx)
 	require.NoError(t, err)
-	require.Greater(t, to, uint64(0))
-	cur, err = bk.cursor(ctx)
+	require.Greater(t, to, cur)
+	after, err = bk.cursor(ctx)
 	require.NoError(t, err)
-	require.Equal(t, to, cur, "cursor advances after a durable upload")
+	require.Equal(t, to, after, "cursor advances after a durable upload")
 }
 
 // scenario: restore-reconstructs-store — a base + an incremental restore into a fresh instance with full
 // key/value parity.
 func TestScenarioRestoreReconstructsStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	src := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
-	b, err := NewBackup(src, bucket, BackupConfig{ChunkBytes: 1 << 16})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, src, bucket, BackupConfig{ChunkBytes: 1 << 16})
 
 	writeKeys(t, src, "base/", 100, 128)
 	require.NoError(t, bk.Rebaseline(ctx))
 	writeKeys(t, src, "inc/", 20, 128)
-	_, err = bk.Ship(ctx)
+	_, err := bk.Ship(ctx)
 	require.NoError(t, err)
 
-	dst := openRawDB(t, t.TempDir())
-	rb, err := NewBackup(dst, bucket, BackupConfig{})
-	require.NoError(t, err)
-	require.NoError(t, rb.Restore(ctx))
-
+	dst := restoreDB(t, bucket)
 	require.Equal(t, 100, countKeys(dst, "base/"), "base keys restored")
 	require.Equal(t, 20, countKeys(dst, "inc/"), "incremental keys restored")
-
-	// value parity on a sampled key
 	require.NoError(t, dst.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte("base/000042"))
 		require.NoError(t, err)
@@ -271,54 +210,48 @@ func TestScenarioRestoreReconstructsStore(t *testing.T) {
 	}))
 }
 
-// The backup's own cursor write is not a change: an idle tick uploads nothing, and a restored instance
-// resumes from the chain's head, so a later ship and restore still carry every key.
+// The backup's own cursor write is not a change: an idle tick uploads nothing. A restored instance holds the
+// chain's head as its 8-byte cursor, and its first Ship starts a new chain whose newest point carries every key.
 func TestIssue790_IdleShipUploadsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	src := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
-	b, err := NewBackup(src, bucket, BackupConfig{})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, src, bucket, BackupConfig{})
 
 	writeKeys(t, src, "k/", 10, 16)
 	to, err := bk.Ship(ctx)
 	require.NoError(t, err)
-	puts := bucket.puts
-	for i := 0; i < 20; i++ {
+	puts := len(bucket.puts)
+	for range 20 {
 		_, err = bk.Ship(ctx)
 		require.NoError(t, err)
 	}
-	require.Equal(t, puts, bucket.puts, "an idle tick uploads nothing")
+	require.Len(t, bucket.puts, puts, "an idle tick uploads nothing")
 	cur, err := bk.cursor(ctx)
 	require.NoError(t, err)
 	require.Equal(t, to, cur, "an idle tick leaves the cursor where it was")
 
-	dst := openRawDB(t, t.TempDir())
-	rb, err := NewBackup(dst, bucket, BackupConfig{})
-	require.NoError(t, err)
-	rbk := rb.(*backup)
-	require.NoError(t, rbk.Restore(ctx))
+	dst := restoreDB(t, bucket)
 	require.Equal(t, 10, countKeys(dst, "k/"), "every data key restored")
-	cur, err = rbk.cursor(ctx)
-	require.NoError(t, err)
-	require.Equal(t, to, cur, "the restored instance resumes from the chain's head")
+	st, full := state(t, dst)
+	require.False(t, full, "a restore stores the 8-byte cursor")
+	require.Equal(t, to, st.cursor, "the restored instance holds the chain's head")
 
 	writeKeys(t, dst, "more/", 5, 16)
-	_, err = rbk.Ship(ctx)
+	_, err = newExporter(t, dst, bucket, BackupConfig{}).Ship(ctx)
 	require.NoError(t, err)
-	again := openRawDB(t, t.TempDir())
-	ab, err := NewBackup(again, bucket, BackupConfig{})
-	require.NoError(t, err)
-	require.NoError(t, ab.Restore(ctx))
+	require.Equal(t, []uint64{1, 2}, bucket.chains(t), "the restored instance started a new chain")
+	again := restoreDB(t, bucket)
 	require.Equal(t, 10, countKeys(again, "k/"))
-	require.Equal(t, 5, countKeys(again, "more/"), "a ship after a restore continues the chain")
+	require.Equal(t, 5, countKeys(again, "more/"), "the new chain carries the writes after the restore")
 }
 
 // A write committed while an incremental export runs is in that segment or a later one. Each producer of the
 // export's Stream opens its own snapshot, so the cursor must not pass a version that an earlier snapshot
 // could not see.
 func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	const groups, perGroup = 2, 10000
@@ -331,9 +264,7 @@ func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
 	require.NoError(t, seed.Close())
 	src := openRawDB(t, dir)
 	bucket := newFakeBucket()
-	b, err := NewBackup(src, bucket, BackupConfig{ChunkBytes: 1 << 20})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, src, bucket, BackupConfig{ChunkBytes: 1 << 20})
 	_, err = bk.Ship(ctx)
 	require.NoError(t, err)
 
@@ -359,7 +290,7 @@ func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
 		})
 	}
 	ships := 0
-	for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); ships++ {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); ships++ {
 		_, err := bk.Ship(ctx)
 		require.NoError(t, err)
 	}
@@ -367,10 +298,7 @@ func TestIssue806_WriteDuringShipIsBackedUp(t *testing.T) {
 	_, err = bk.Ship(ctx)
 	require.NoError(t, err)
 
-	dst := openRawDB(t, t.TempDir())
-	rb, err := NewBackup(dst, bucket, BackupConfig{})
-	require.NoError(t, err)
-	require.NoError(t, rb.Restore(ctx))
+	dst := restoreDB(t, bucket)
 	missing, total := 0, 0
 	require.NoError(t, dst.View(func(txn *badger.Txn) error {
 		for _, keys := range written {
@@ -438,7 +366,7 @@ func peakHeap(f func()) uint64 {
 
 // A re-baseline exports with one producer (ADR-0067 Decision 2): its peak heap stays near that of a
 // single-producer Stream export of the same store through the same chunk writer, instead of also holding
-// the batch buffers of Badger's default eight producers.
+// the batch buffers of Badger's default eight producers. Not parallel: it measures the process heap.
 func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
 	const keys, valLen = 50_000, 256
 	dir := t.TempDir()
@@ -463,13 +391,11 @@ func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
 
 	ctx := context.Background()
 	bucket := &partCountingBucket{fakeBucket: newFakeBucket()}
-	b, err := NewBackup(db, bucket, BackupConfig{ChunkBytes: 1 << 20})
-	require.NoError(t, err)
-	bk := b.(*backup)
+	bk := newExporter(t, db, bucket, BackupConfig{ChunkBytes: 1 << 20})
 	rebaseline := peakHeap(func() { require.NoError(t, bk.Rebaseline(ctx)) })
 	require.Greater(t, bucket.partBytes, keys*valLen, "the re-baseline exported the whole store")
 	low := peakHeap(func() {
-		w := bk.newChunkWriter(ctx, "single")
+		w := bk.newChunkWriter(ctx, "single/", true, nil)
 		single(w)
 		require.NoError(t, w.Close())
 	})
@@ -479,77 +405,61 @@ func TestIssue805_RebaselineExportsWithLowConcurrency(t *testing.T) {
 }
 
 // A process that restarts more often than kvstore.backup.rebaseline still re-baselines once a period has passed
-// since the recorded base: three runs of 1.5 s with a 2 s period, a write before each. A later run's base holds
-// that run's write.
+// since the newest base manifest: three runs of 750 ms with a 1 s period, a write before each. The newest base
+// holds the second run's write.
 func TestIssue807_RebaselineRunsAcrossRestarts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	cfg := BackupConfig{Interval: 200 * time.Millisecond, Rebaseline: 2 * time.Second}
+	cfg := BackupConfig{Interval: 100 * time.Millisecond, Rebaseline: time.Second}
 	for run := range 3 {
 		writeKeys(t, db, fmt.Sprintf("run%d/", run), 10, 16)
-		b, err := NewBackup(db, bucket, cfg)
-		require.NoError(t, err)
-		runCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		RunBackup(runCtx, b, logger)
+		runCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		RunBackup(runCtx, newExporter(t, db, bucket, cfg), logger)
 		cancel()
 	}
-
-	man, err := (&backup{bucket: bucket}).loadManifest(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, man.Base, "no full re-baseline in more than two periods of restarting runs (incs=%d)", len(man.Incs))
-	dst := openRawDB(t, t.TempDir())
-	require.NoError(t, (&backup{db: dst, bucket: bucket}).loadSegment(ctx, *man.Base))
-	require.Equal(t, 10, countKeys(dst, "run1/"), "the base predates the second run: no later run re-baselined")
+	chains := bucket.chains(t)
+	require.GreaterOrEqual(t, len(chains), 2, "no re-baseline in more than two periods of restarting runs")
+	base := loadStored(t, bucket, baseDirOf(t, bucket, chains[len(chains)-1]))
+	require.Equal(t, 10, countKeys(base, "run1/"), "the newest base predates the second run")
 }
 
-// At start, RunBackup re-baselines at once when the manifest's base records no time (a manifest written before
-// the field existed), and not when the recorded base is younger than the period.
+// At start, RunBackup re-baselines at once when no complete base is listed, and not when the newest base manifest
+// is younger than the period: the next start ships an incremental instead.
 func TestIssue807_StartRebaselinesOnlyWhenDue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := BackupConfig{Interval: 50 * time.Millisecond, Rebaseline: time.Hour}
-	bk := &backup{db: db, bucket: bucket}
-	require.NoError(t, bk.saveManifest(ctx, manifest{Base: &segment{Prefix: "base/old"}}))
-	current := func() manifest {
-		man, err := bk.loadManifest(ctx)
-		if err != nil {
-			return manifest{}
-		}
-		return man
-	}
-	runUntil := func(done func(manifest) bool, msg string) {
-		b, err := NewBackup(db, bucket, cfg)
-		require.NoError(t, err)
+	runUntil := func(done func() bool, msg string) {
 		runCtx, cancel := context.WithCancel(ctx)
 		stopped := make(chan struct{})
 		go func() {
 			defer close(stopped)
-			RunBackup(runCtx, b, logger)
+			RunBackup(runCtx, newExporter(t, db, bucket, cfg), logger)
 		}()
 		defer func() {
 			cancel()
 			<-stopped
 		}()
-		require.Eventually(t, func() bool { return done(current()) }, 10*time.Second, 20*time.Millisecond, msg)
+		require.Eventually(t, done, 10*time.Second, 10*time.Millisecond, msg)
 	}
 
 	writeKeys(t, db, "a/", 10, 16)
-	runUntil(func(m manifest) bool { return m.Base != nil && m.Base.Prefix != "base/old" },
-		"a base with no recorded time was not re-baselined at start")
-	rebased := current().Base.Prefix
-
+	runUntil(func() bool { return len(bucket.chains(t)) == 1 }, "no base at the first start")
 	writeKeys(t, db, "b/", 10, 16)
-	runUntil(func(m manifest) bool { return len(m.Incs) > 0 }, "the write after a fresh base was not shipped as an incremental")
-	require.Equal(t, rebased, current().Base.Prefix, "a restart re-baselined although the recorded base is younger than the period")
+	runUntil(func() bool { return len(bucket.keys(incPrefix)) > 0 }, "the write after a fresh base was not shipped as an incremental")
+	require.Equal(t, []uint64{1}, bucket.chains(t), "a restart re-baselined although the newest base is younger than the period")
 }
 
-// RunBackup now re-baselines at start, so a stop soon after a boot finds an export running: the driver's Close
+// RunBackup re-baselines at start, so a stop soon after a boot finds an export running: the driver's Close
 // waits for it instead of closing the db under it (Badger panics on a closed db).
 func TestIssue807_CloseWaitsForRunningRebaseline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -564,13 +474,13 @@ func TestIssue807_CloseWaitsForRunningRebaseline(t *testing.T) {
 		return nil
 	}
 	kv, seams, err := OpenWithSeams(t.TempDir(), func(db *badger.DB) (Backup, error) {
-		return NewBackup(db, bucket, BackupConfig{})
+		return NewBackup(db, bucket, BackupConfig{ChunkBytes: 16})
 	}, nil)
 	require.NoError(t, err)
 	require.NoError(t, kv.Put(ctx, "a/b/c", []byte("v")))
 
 	rebased := make(chan error, 1)
-	go func() { rebased <- seams.Backup.(*backup).Rebaseline(ctx) }()
+	go func() { rebased <- seams.Backup.(*exporter).Rebaseline(ctx) }()
 	<-entered
 	closed := make(chan error, 1)
 	go func() { closed <- kv.(io.Closer).Close() }()
@@ -603,6 +513,7 @@ func openBackupKVWith(t *testing.T, dir string, bucket blob.Bucket, cfg BackupCo
 // A key deleted while DR backup is off stays deleted in a restore taken after backup is on again, although
 // the store may hold no version of the deletion (a native DropPrefix, or a delete marker compaction dropped).
 func TestIssue808_DeleteWhileBackupOffStaysDeletedAfterRestore(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(t *testing.T, kv kvstore.KV){
 		"Delete then churn": func(t *testing.T, kv kvstore.KV) {
 			ctx := context.Background()
@@ -618,6 +529,7 @@ func TestIssue808_DeleteWhileBackupOffStaysDeletedAfterRestore(t *testing.T) {
 	}
 	for name, deleteVictim := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			dir := t.TempDir()
 			bucket := newFakeBucket()
@@ -658,11 +570,13 @@ func TestIssue808_DeleteWhileBackupOffStaysDeletedAfterRestore(t *testing.T) {
 	}
 }
 
-// Only an open without the backup seam ends the chain: a restart with backup on ships an incremental that
-// continues it, while a plain Open in between makes the next Ship re-baseline.
+// Only an open without the backup seam ends the chain: a restart with backup on ships segment 1 of the chain,
+// while a plain Open in between makes the next Ship write chain 2's base.
 func TestIssue808_ReopenContinuesChainOnlyWithBackupOn(t *testing.T) {
+	t.Parallel()
 	for name, plainOpen := range map[string]bool{"backup stays on": false, "plain Open in between": true} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			dir := t.TempDir()
 			bucket := newFakeBucket()
@@ -682,39 +596,37 @@ func TestIssue808_ReopenContinuesChainOnlyWithBackupOn(t *testing.T) {
 			require.NoError(t, kv.Put(ctx, "b", []byte("2")))
 			_, err = seams.Backup.Ship(ctx)
 			require.NoError(t, err)
-			man, err := seams.Backup.(*backup).loadManifest(ctx)
-			require.NoError(t, err)
 			if plainOpen {
-				require.NotNil(t, man.Base, "the next Ship re-baselined")
-				require.Empty(t, man.Incs)
+				require.Equal(t, []uint64{1, 2}, bucket.chains(t), "the next Ship re-baselined")
+				require.Empty(t, bucket.keys(incPrefix))
 				return
 			}
-			require.Nil(t, man.Base, "no re-baseline")
-			require.Len(t, man.Incs, 2)
-			require.Equal(t, to, man.Incs[1].Since, "the incremental continues from the cursor")
+			require.Equal(t, []uint64{1}, bucket.chains(t), "no re-baseline")
+			m := readManifest(t, bucket, incDir(1, 1))
+			require.Equal(t, to, m.Since, "segment 1 continues from the cursor")
 		})
 	}
 }
 
-// The first backup ever (no cursor, no chain) ships an incremental since 0, as before.
-func TestIssue808_FirstBackupShipsIncremental(t *testing.T) {
+// The first backup ever (no cursor record) writes chain 1's base (ADR-0209 Decision 3: absent ⇒ base).
+func TestIssue808_FirstBackupWritesBase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	kv, seams := openBackupKV(t, t.TempDir(), newFakeBucket())
+	bucket := newFakeBucket()
+	kv, seams := openBackupKV(t, t.TempDir(), bucket)
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
 	require.NoError(t, kv.Put(ctx, "a", []byte("1")))
 	_, err := seams.Backup.Ship(ctx)
 	require.NoError(t, err)
-	man, err := seams.Backup.(*backup).loadManifest(ctx)
-	require.NoError(t, err)
-	require.Nil(t, man.Base)
-	require.Len(t, man.Incs, 1)
-	require.Zero(t, man.Incs[0].Since)
+	require.Equal(t, []uint64{1}, bucket.chains(t))
+	require.Empty(t, bucket.keys(incPrefix))
+	require.Zero(t, readManifest(t, bucket, baseDirOf(t, bucket, 1)).Since)
 }
 
-// A re-baseline never writes into the live base: after backup was off twice, both re-baselines start with no
-// cursor, and a base named after the cursor alone reused the live base's name, so a failure before the
-// manifest moved left the live base holding parts of the unfinished export (#808).
+// A re-baseline never writes into a live base: it numbers a new chain, so a failure before its manifest leaves
+// every object of the earlier chains as it was (#808).
 func TestIssue808_FailedRebaselineLeavesLiveBaseIntact(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bucket := newFakeBucket()
@@ -731,40 +643,30 @@ func TestIssue808_FailedRebaselineLeavesLiveBaseIntact(t *testing.T) {
 	_, err := seams.Backup.Ship(ctx)
 	require.NoError(t, err)
 	require.NoError(t, kv.(io.Closer).Close())
-
 	kv, seams = offThenOn("b")
 	_, err = seams.Backup.Ship(ctx)
 	require.NoError(t, err)
 	require.NoError(t, kv.(io.Closer).Close())
-	live, err := seams.Backup.(*backup).loadManifest(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, live.Base)
 	before := map[string][]byte{}
-	bucket.mu.Lock()
-	for i := 0; i < live.Base.Parts; i++ {
-		k := fmt.Sprintf("%s/part-%05d", live.Base.Prefix, i)
-		before[k] = append([]byte(nil), bucket.objs[k]...)
+	for _, k := range bucket.keys(KVPrefix) {
+		before[k] = bucket.objs[k].data
 	}
-	bucket.mu.Unlock()
 
 	kv, seams = offThenOn("c")
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	bucket.mu.Lock()
 	bucket.failPut = func(key string) error {
-		if key == manifestKey {
+		if strings.HasSuffix(key, manifestName) {
 			return errors.New("target down")
 		}
 		return nil
 	}
+	bucket.mu.Unlock()
 	_, err = seams.Backup.Ship(ctx)
-	require.Error(t, err, "the re-baseline fails before the manifest moves")
-
-	man, err := seams.Backup.(*backup).loadManifest(ctx)
-	require.NoError(t, err)
-	require.Equal(t, live, man, "the manifest still names the live base")
-	bucket.mu.Lock()
-	defer bucket.mu.Unlock()
+	require.Error(t, err, "the re-baseline fails before its manifest")
+	require.Equal(t, []uint64{1, 2}, bucket.chains(t))
 	for k, b := range before {
-		require.Equal(t, b, bucket.objs[k], "%s was overwritten by the unfinished re-baseline", k)
+		require.Equal(t, b, bucket.objs[k].data, "%s was overwritten by the unfinished re-baseline", k)
 	}
 }
 
@@ -827,7 +729,7 @@ func ship(t *testing.T, seams Seams) {
 	require.NoError(t, err)
 }
 
-// restoreInto restores the chain in bucket into a fresh instance with the backup seam wired.
+// restoreInto restores the newest point of bucket into a fresh instance with the backup seam wired.
 func restoreInto(t *testing.T, bucket blob.Bucket) (kvstore.KV, Seams) {
 	t.Helper()
 	kv, seams := openBackupKV(t, t.TempDir(), bucket)
@@ -890,16 +792,10 @@ func recordVersion(t *testing.T, db *badger.DB, key string) uint64 {
 	return v
 }
 
-func currentManifest(t *testing.T, bucket blob.Bucket) manifest {
-	t.Helper()
-	man, err := (&backup{bucket: bucket}).loadManifest(context.Background())
-	require.NoError(t, err)
-	return man
-}
-
 // scenario: delete-survives-compaction — the #798 reproduction: a deleted key whose delete marker compaction
 // dropped before the next Ship stays deleted in a restore.
 func TestScenarioDeleteSurvivesCompaction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	kv, seams := openBackupKV(t, t.TempDir(), bucket)
@@ -920,6 +816,7 @@ func TestScenarioDeleteSurvivesCompaction(t *testing.T) {
 // scenario: delete-survives-restart — a delete before a restart with backup on stays deleted in a restore,
 // although compaction dropped its marker before the next Ship.
 func TestScenarioDeleteSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	bucket := newFakeBucket()
@@ -942,6 +839,7 @@ func TestScenarioDeleteSurvivesRestart(t *testing.T) {
 // scenario: delete-survives-target-outage — a delete made while the target is down stays deleted in a restore
 // after the next successful Ship, although compaction dropped its marker during the outage.
 func TestScenarioDeleteSurvivesTargetOutage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	kv, seams := openBackupKV(t, t.TempDir(), bucket)
@@ -968,6 +866,7 @@ func TestScenarioDeleteSurvivesTargetOutage(t *testing.T) {
 // scenario: delete-then-set-keeps-value — a key deleted and set again, in two requests or in one gateway batch,
 // holds its new value after a restore, although its delete record exists.
 func TestScenarioDeleteThenSetKeepsValue(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(t *testing.T, kv kvstore.KV){
 		"two requests": func(t *testing.T, kv kvstore.KV) {
 			require.NoError(t, kv.Delete(context.Background(), "k"))
@@ -1017,6 +916,7 @@ func TestScenarioDeleteThenSetKeepsValue(t *testing.T) {
 
 // scenario: drop-prefix-stays-deleted — a DropPrefix with backup on stays complete in a restore after churn.
 func TestScenarioDropPrefixStaysDeleted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	kv, seams := openBackupKV(t, t.TempDir(), bucket)
@@ -1040,6 +940,7 @@ func TestScenarioDropPrefixStaysDeleted(t *testing.T) {
 // scenario: records-pruned-at-rebaseline — a re-baseline leaves the records of earlier deletes out of the new
 // base and prunes them from the store, and a restore from the new base still lacks the deleted keys.
 func TestScenarioRecordsPrunedAtRebaseline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	kv, seams := openBackupKV(t, t.TempDir(), bucket)
@@ -1052,13 +953,13 @@ func TestScenarioRecordsPrunedAtRebaseline(t *testing.T) {
 	}
 	require.Equal(t, len(deleted), countRecords(kvDB(kv)))
 
-	require.NoError(t, seams.Backup.(*backup).Rebaseline(ctx))
+	require.NoError(t, seams.Backup.(*exporter).Rebaseline(ctx))
 	require.Zero(t, countRecords(kvDB(kv)), "the store still holds records the base reflects")
-	man := currentManifest(t, bucket)
-	require.Equal(t, manifestFormat, man.Format)
-	require.NotNil(t, man.Base)
-	base := openRawDB(t, t.TempDir())
-	require.NoError(t, (&backup{db: base, bucket: bucket}).loadSegment(ctx, *man.Base))
+	newest := newestPoint(t, bucket)
+	require.Zero(t, newest.Segment)
+	dir := baseDirOf(t, bucket, newest.Chain)
+	require.Equal(t, ChainFormat, readManifest(t, bucket, dir).Format)
+	base := loadStored(t, bucket, dir)
 	records := make([]string, len(deleted))
 	for i, k := range deleted {
 		records[i] = string(delRecordKey(k))
@@ -1073,6 +974,7 @@ func TestScenarioRecordsPrunedAtRebaseline(t *testing.T) {
 // The record prune deletes only records at or below the base's read timestamp: a later delete keeps its record
 // for the next incremental.
 func TestPruneKeepsRecordsAboveReadTs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	kv, seams := openBackupKV(t, t.TempDir(), newFakeBucket())
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
@@ -1082,7 +984,7 @@ func TestPruneKeepsRecordsAboveReadTs(t *testing.T) {
 	require.NoError(t, kv.Delete(ctx, "b"))
 	require.Greater(t, recordVersion(t, kvDB(kv), "b"), readTs)
 
-	require.NoError(t, seams.Backup.(*backup).pruneDelRecords(ctx, readTs))
+	require.NoError(t, seams.Backup.(*exporter).pruneDelRecords(ctx, readTs))
 	require.Zero(t, recordVersion(t, kvDB(kv), "a"), "a record at the read timestamp stays")
 	require.NotZero(t, recordVersion(t, kvDB(kv), "b"), "a record above the read timestamp was pruned")
 }
@@ -1090,6 +992,7 @@ func TestPruneKeepsRecordsAboveReadTs(t *testing.T) {
 // A prune transaction re-reads its records: a key deleted again after the chunk was scanned keeps its newer
 // record.
 func TestPruneChunkKeepsRecordOfLaterDelete(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	kv, seams := openBackupKV(t, t.TempDir(), newFakeBucket())
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
@@ -1101,7 +1004,7 @@ func TestPruneChunkKeepsRecordOfLaterDelete(t *testing.T) {
 
 	putKeys(t, kv, "a")
 	require.NoError(t, kv.Delete(ctx, "a"))
-	require.NoError(t, seams.Backup.(*backup).pruneChunk(scanned, readTs))
+	require.NoError(t, seams.Backup.(*exporter).pruneChunk(scanned, readTs))
 	require.Greater(t, recordVersion(t, kvDB(kv), "a"), readTs, "the prune deleted the record of a later delete")
 	require.Zero(t, recordVersion(t, kvDB(kv), "b"))
 }
@@ -1109,6 +1012,7 @@ func TestPruneChunkKeepsRecordOfLaterDelete(t *testing.T) {
 // scenario: prune-failure-keeps-base — a record prune that fails after the manifest is saved leaves the new base
 // live and Rebaseline returning nil; the next re-baseline prunes the records.
 func TestScenarioPruneFailureKeepsBase(t *testing.T) {
+	t.Parallel()
 	bucket := newFakeBucket()
 	var logs bytes.Buffer
 	cfg := BackupConfig{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
@@ -1120,16 +1024,23 @@ func TestScenarioPruneFailureKeepsBase(t *testing.T) {
 	for _, k := range deleted {
 		require.NoError(t, kv.Delete(context.Background(), k))
 	}
-	bk := seams.Backup.(*backup)
+	bk := seams.Backup.(*exporter)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	bucket.onDelete = func(string) { cancel() } // the segment prune runs after the manifest and the cursor
+	bucket.mu.Lock()
+	bucket.onPut = func(key string) { // the record prune runs after the manifest and the cursor record
+		if strings.HasSuffix(key, manifestName) {
+			cancel()
+		}
+	}
+	bucket.mu.Unlock()
 	require.NoError(t, bk.Rebaseline(ctx))
-	bucket.onDelete = nil
-	man := currentManifest(t, bucket)
-	require.NotNil(t, man.Base)
-	require.Empty(t, man.Incs, "the new base is live")
-	require.Equal(t, manifestFormat, man.Format)
+	bucket.mu.Lock()
+	bucket.onPut = nil
+	bucket.mu.Unlock()
+	newest := newestPoint(t, bucket)
+	require.Equal(t, Point{Chain: 2, Class: newest.Class, At: newest.At, Funcd: newest.Funcd, Restorable: true}, newest,
+		"the new base is the newest point")
 	require.Equal(t, len(deleted), countRecords(kvDB(kv)), "the cancelled prune deleted records")
 	require.Empty(t, logs.String(), "a cancelled prune is not logged")
 
@@ -1143,6 +1054,7 @@ func TestScenarioPruneFailureKeepsBase(t *testing.T) {
 // scenario: large-keys-prune — the records of 2,000 deleted keys of about 3 KB, more than one transaction holds,
 // are applied by a restore and pruned by a re-baseline, in chunks.
 func TestScenarioLargeKeysPrune(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	var logs bytes.Buffer
@@ -1175,7 +1087,7 @@ func TestScenarioLargeKeysPrune(t *testing.T) {
 
 	chunks, total := 0, 0
 	whole := func(_ *badger.Txn, rec *badger.Item) ([]byte, error) { return rec.KeyCopy(nil), nil }
-	require.NoError(t, seams.Backup.(*backup).forDelRecordChunks(ctx, whole, func(keys [][]byte) error {
+	require.NoError(t, seams.Backup.(*exporter).forDelRecordChunks(ctx, whole, func(keys [][]byte) error {
 		size := 0
 		for _, k := range keys {
 			size += len(k) + delEntryBytes
@@ -1187,7 +1099,7 @@ func TestScenarioLargeKeysPrune(t *testing.T) {
 	require.Greater(t, chunks, 1, "the records fit one chunk")
 	require.Equal(t, len(big), total)
 
-	require.NoError(t, seams.Backup.(*backup).Rebaseline(ctx))
+	require.NoError(t, seams.Backup.(*exporter).Rebaseline(ctx))
 	require.Zero(t, countRecords(kvDB(kv)), "the prune left records")
 	require.Empty(t, logs.String(), "the prune failed")
 	again, _ := restoreInto(t, bucket)
@@ -1197,6 +1109,7 @@ func TestScenarioLargeKeysPrune(t *testing.T) {
 
 // scenario: missing-key-delete-writes-nothing — deleting a key that does not exist writes no record.
 func TestScenarioMissingKeyDeleteWritesNothing(t *testing.T) {
+	t.Parallel()
 	kv, _ := openBackupKV(t, t.TempDir(), newFakeBucket())
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
 	require.NoError(t, kv.Delete(context.Background(), "absent"))
@@ -1205,6 +1118,7 @@ func TestScenarioMissingKeyDeleteWritesNothing(t *testing.T) {
 
 // Without the backup seam a delete writes no record (backup off costs nothing, ADR-0066).
 func TestNoBackupSeamWritesNoRecord(t *testing.T) {
+	t.Parallel()
 	kv, _ := openBackupKV(t, t.TempDir(), nil)
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
 	putKeys(t, kv, "k")
@@ -1212,61 +1126,10 @@ func TestNoBackupSeamWritesNoRecord(t *testing.T) {
 	require.Zero(t, countRecords(kvDB(kv)))
 }
 
-// scenario: first-start-after-upgrade-rebaselines — a v0.7.3 chain (a base with at, no format) misses the
-// delete of a key whose marker compaction dropped; the first start re-baselines at once and records format 1,
-// and the next start waits for the period.
-func TestScenarioFirstStartAfterUpgradeRebaselines(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	bucket := newFakeBucket()
-	db, err := openDB(dir, false)
-	require.NoError(t, err)
-	old := startDriver(db, newConfig([]Option{WithValueLogGCInterval(0)})) // a v0.7.3 gateway: deletes write no record
-	b, err := NewBackup(db, bucket, BackupConfig{})
-	require.NoError(t, err)
-	putKeys(t, old, append(seq("k/", 20), "victim")...)
-	require.NoError(t, b.(*backup).Rebaseline(ctx))
-	man := currentManifest(t, bucket)
-	man.Format = 0
-	require.NoError(t, b.(*backup).saveManifest(ctx, man))
-	require.NotContains(t, string(bucket.objs[manifestKey]), "format")
-	require.NoError(t, old.Delete(ctx, "victim"))
-	churnUntilCompacted(t, db, "victim")
-	_, err = b.Ship(ctx)
-	require.NoError(t, err)
-	require.NoError(t, old.Close())
-
-	cfg := BackupConfig{Interval: 50 * time.Millisecond, Rebaseline: time.Hour}
-	kv, seams := openBackupKVWith(t, dir, bucket, cfg)
-	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runUntil := func(done func(manifest) bool, msg string) {
-		runCtx, cancel := context.WithCancel(ctx)
-		stopped := make(chan struct{})
-		go func() {
-			defer close(stopped)
-			RunBackup(runCtx, seams.Backup, logger)
-		}()
-		defer func() {
-			cancel()
-			<-stopped
-		}()
-		require.Eventually(t, func() bool { return done(currentManifest(t, bucket)) }, 10*time.Second, 20*time.Millisecond, msg)
-	}
-	runUntil(func(m manifest) bool { return m.Format == manifestFormat }, "the first start did not re-baseline")
-	rebased := currentManifest(t, bucket).Base.Prefix
-	dst, _ := restoreInto(t, bucket)
-	requireAbsent(t, dst, "victim")
-	requireSameKeys(t, kv, dst)
-
-	putKeys(t, kv, "after")
-	runUntil(func(m manifest) bool { return len(m.Incs) > 0 }, "the next start did not ship an incremental")
-	require.Equal(t, rebased, currentManifest(t, bucket).Base.Prefix, "the next start re-baselined before the period")
-}
-
 // scenario: restore-then-ship-then-restore — a chain with records restored into B, then a delete in B and a
 // Ship, restores into C without either deleted key, after compaction dropped B's delete markers.
 func TestScenarioRestoreThenShipThenRestore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	bucket := newFakeBucket()
 	a, aseams := openBackupKV(t, t.TempDir(), bucket)
@@ -1293,11 +1156,12 @@ func TestScenarioRestoreThenShipThenRestore(t *testing.T) {
 // A failed re-baseline is retried after rebaselineRetry, far below the period; after a success the next one
 // waits a full period (ADR-0195 Decision 6).
 func TestFailedRebaselineRetriesAfterRebaselineRetry(t *testing.T) {
+	t.Parallel()
 	db := openRawDB(t, t.TempDir())
 	bucket := newFakeBucket()
 	var attempts atomic.Int32
 	bucket.failPut = func(key string) error {
-		if key == manifestKey && attempts.Add(1) == 1 {
+		if strings.HasPrefix(key, basePrefix) && strings.HasSuffix(key, manifestName) && attempts.Add(1) == 1 {
 			return fault.Unavailablef("fakeBucket", "object storage down")
 		}
 		return nil
@@ -1318,13 +1182,14 @@ func TestFailedRebaselineRetriesAfterRebaselineRetry(t *testing.T) {
 
 	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 5*time.Second, 10*time.Millisecond,
 		"a failed re-baseline was not retried within rebaselineRetry")
-	require.NotNil(t, currentManifest(t, bucket).Base, "the retry did not write a base")
+	require.Len(t, bucket.chains(t), 1, "the retry did not write a base")
 	require.Never(t, func() bool { return attempts.Load() > 2 }, 500*time.Millisecond, 10*time.Millisecond,
 		"a successful re-baseline was followed by another before the period")
 }
 
 // The contract suite holds with the backup seam wired, and List never returns a delete record.
 func TestBackupSeamKVContract(t *testing.T) {
+	t.Parallel()
 	kv, _ := openBackupKV(t, t.TempDir(), newFakeBucket())
 	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
 	kvstorecontract.Run(t, kv)
@@ -1337,6 +1202,7 @@ func TestBackupSeamKVContract(t *testing.T) {
 // The record of the longest key a store may hold (ADR-0148: maxKeyBytes plus a 192-byte prefix) fits Badger's
 // key limit, and a key whose record would not fails its delete alone.
 func TestDelRecordKeyFitsBadgerLimit(t *testing.T) {
+	t.Parallel()
 	const badgerMaxKey = 65000 // txn.go maxKeySize, Badger v4.9.2
 	longest := v1alpha1.MaxKeyBytesLimit + 192
 	require.LessOrEqual(t, longest+len(delRecordPrefix), badgerMaxKey)
