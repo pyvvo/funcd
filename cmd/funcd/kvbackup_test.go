@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/platform/config"
@@ -34,25 +35,38 @@ func kvBadgerCfg(t *testing.T) config.Config {
 	cfg.Storage.DataDir = t.TempDir()
 	cfg.Kvstore.Engine = "badger"
 	cfg.Kvstore.DataDir = filepath.Join(cfg.Storage.DataDir, "kv") // config.Load derives this; set it here since this helper bypasses Load
+	cfg.Kvstore.Backup.Retention.Hourly, cfg.Kvstore.Backup.Retention.Daily, cfg.Kvstore.Backup.Retention.Weekly = 48, 30, 12
 	return cfg
 }
 
-// scenario: backup-enabled-requires-target (daemon) — kvstore.backup.enabled with an empty target ⇒
-// the daemon refuses to start with fault.Invalid (never a silent half-configured backup).
-func TestScenarioDaemonBackupEnabledRequiresTarget(t *testing.T) {
+// kvTargetCfg is kvBadgerCfg with the KV export on, unsealed, to its own directory target.
+func kvTargetCfg(t *testing.T) config.Config {
+	t.Helper()
 	cfg := kvBadgerCfg(t)
-	cfg.Kvstore.Backup.Enabled = true // no target
+	cfg.Kvstore.Backup.Enabled = true
+	cfg.Kvstore.Backup.Target = gocloud.FileURL(t.TempDir())
+	cfg.Kvstore.Backup.Encryption.None = true
+	return cfg
+}
+
+// scenario: backup-enabled-requires-target (daemon) — kvstore.backup.enabled with no target in either block
+// (ADR-0209 Decision 1's group rule) ⇒ the daemon refuses to start with fault.Invalid naming kvstore.backup.target.
+func TestScenarioDaemonBackupEnabledRequiresTarget(t *testing.T) {
+	t.Parallel()
+	cfg := kvBadgerCfg(t)
+	cfg.Kvstore.Backup.Enabled = true
+	cfg.Kvstore.Backup.Encryption.None = true
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	_, _, err := buildKVStore(context.Background(), cfg, nil, logger)
-	require.Error(t, err)
+	_, _, _, err := buildKVStore(context.Background(), cfg, nil, logger, kvBackupDeps{})
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "enable-without-target is fault.Invalid")
+	require.ErrorContains(t, err, "kvstore.backup.target")
 }
 
 // scenario: backup-default-off (daemon) — without backup config the durable KV driver is built and the
 // start hook is a no-op (no DR loop), confirming the seam costs nothing unless configured.
 func TestScenarioDaemonBackupDefaultOff(t *testing.T) {
 	cfg := kvBadgerCfg(t)
-	kv, start, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	kv, start, _, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 	require.NoError(t, err)
 	require.NotNil(t, kv)
 	require.NotNil(t, start)
@@ -65,17 +79,16 @@ func TestScenarioDaemonBackupDefaultOff(t *testing.T) {
 // scenario: backup-enabled-boots (daemon) — kvstore.backup.enabled with a real (in-memory) target boots
 // the durable KV driver with the DR export wired; the start hook launches the loop without error.
 func TestScenarioDaemonBackupEnabledBoots(t *testing.T) {
-	cfg := kvBadgerCfg(t)
-	cfg.Kvstore.Backup.Enabled = true
-	cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+	cfg := kvTargetCfg(t)
 	cfg.Kvstore.Backup.Interval = "100ms"
-	kv, start, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	kv, start, closeKV, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 	require.NoError(t, err)
 	require.NotNil(t, kv)
 	ctx, cancel := context.WithCancel(context.Background())
 	start(ctx) // launches RunBackup; cancel stops it
 	require.NoError(t, kv.Put(context.Background(), "a/b/c", []byte("v")))
 	cancel()
+	require.NoError(t, closeKV())
 	if c, ok := kv.(io.Closer); ok {
 		require.NoError(t, c.Close())
 	}
@@ -87,7 +100,7 @@ func TestScenarioDaemonCDCEnabledRequiresSink(t *testing.T) {
 	cfg := kvBadgerCfg(t)
 	cfg.Kvstore.Cdc.Enabled = true // no sink
 	bus := newMemBus(t)
-	_, _, err := buildKVStore(context.Background(), cfg, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, _, _, err := buildKVStore(context.Background(), cfg, bus, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "enable-without-sink is fault.Invalid")
 }
@@ -99,7 +112,7 @@ func TestScenarioDaemonCDCEnabledBoots(t *testing.T) {
 	cfg.Kvstore.Cdc.Enabled = true
 	cfg.Kvstore.Cdc.Sink = "kv.changes"
 	bus := newMemBus(t)
-	kv, start, err := buildKVStore(context.Background(), cfg, bus, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	kv, start, _, err := buildKVStore(context.Background(), cfg, bus, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 	require.NoError(t, err)
 	require.NotNil(t, kv)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,13 +140,12 @@ func TestIssue190_InvalidKVDurationRejected(t *testing.T) {
 	for _, tc := range cases {
 		for _, bad := range []string{"5 minutes", "forever", "-3h", "0s"} {
 			t.Run(tc.key+"="+bad, func(t *testing.T) {
-				cfg := kvBadgerCfg(t)
-				cfg.Kvstore.Backup.Enabled = true
-				cfg.Kvstore.Backup.Target = "file://" + filepath.ToSlash(t.TempDir())
+				cfg := kvTargetCfg(t)
 				cfg.Kvstore.Cdc.Enabled = true
 				cfg.Kvstore.Cdc.Sink = "kv.changes"
 				tc.set(&cfg, bad)
-				kv, _, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)))
+				kv, _, closeKV, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
+				_ = closeKV()
 				if c, ok := kv.(io.Closer); ok {
 					_ = c.Close()
 				}
@@ -155,7 +167,7 @@ func TestIssue191_MemoryFlagKeepsKVOffDisk(t *testing.T) {
 	cfg, err := config.Load(path, config.Flags{MemoryOnly: &memoryOnly})
 	require.NoError(t, err)
 
-	kv, _, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	kv, _, _, err := buildKVStore(context.Background(), cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 	require.NoError(t, err)
 	if c, ok := kv.(io.Closer); ok {
 		t.Cleanup(func() { _ = c.Close() })
@@ -203,7 +215,7 @@ func TestIssue303_KVSeamsNotSilentlyIgnoredOffBadger(t *testing.T) {
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.set(&tc.cfg)
-			_, _, err := buildKVStore(context.Background(), tc.cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			_, _, _, err := buildKVStore(context.Background(), tc.cfg, b, slog.New(slog.NewTextHandler(io.Discard, nil)), kvBackupDeps{})
 			require.Error(t, err)
 			require.Equal(t, fault.Invalid, fault.KindOf(err))
 			require.ErrorContains(t, err, tc.want)
@@ -217,7 +229,7 @@ func TestIssue303_KVSeamsNotSilentlyIgnoredOffBadger(t *testing.T) {
 		cfg.Kvstore.Cdc.Enabled = true
 		cfg.Kvstore.Cdc.Sink = "kv.changes"
 		var logs bytes.Buffer
-		kv, _, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(&logs, nil)))
+		kv, _, _, err := buildKVStore(context.Background(), cfg, b, slog.New(slog.NewTextHandler(&logs, nil)), kvBackupDeps{})
 		require.NoError(t, err)
 		require.NotNil(t, kv)
 		require.NoDirExists(t, cfg.Kvstore.DataDir)

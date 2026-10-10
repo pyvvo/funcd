@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
@@ -64,23 +65,29 @@ func (f *restoreFlags) open(ctx context.Context) (restore.Options, func(), error
 	if err != nil {
 		return restore.Options{}, nil, err
 	}
-	from := f.from
-	if from == "" {
-		from = cfg.Backup.Target
-	}
-	if from == "" {
-		return restore.Options{}, nil, fault.Invalidf("funcd restore", "no --from and backup.target is empty")
-	}
-	ids, err := envelope.ReadIdentities(f.identities)
+	src, ids, err := f.source(ctx, "backup.target", cfg.Backup.Target)
 	if err != nil {
 		return restore.Options{}, nil, err
 	}
-	src, err := gocloud.OpenWith(ctx, from, gocloud.OpenOptions{CredentialsFile: f.credentialsFile})
-	if err != nil {
-		return restore.Options{}, nil, fault.Wrapf(err, fault.Invalid, "funcd restore", "open %s", from)
-	}
 	return restore.Options{Config: cfg, Source: src, Identities: ids, EscrowDir: f.escrow},
 		func() { _ = src.Close() }, nil
+}
+
+// source opens --from, else target (the config key named), with --credentials-file, and reads --identity.
+func (f *restoreFlags) source(ctx context.Context, key, target string) (blob.Bucket, []age.Identity, error) {
+	from := cmp.Or(f.from, target)
+	if from == "" {
+		return nil, nil, fault.Invalidf("funcd restore", "no --from and %s is empty", key)
+	}
+	ids, err := envelope.ReadIdentities(f.identities)
+	if err != nil {
+		return nil, nil, err
+	}
+	src, err := gocloud.OpenWith(ctx, from, gocloud.OpenOptions{CredentialsFile: f.credentialsFile})
+	if err != nil {
+		return nil, nil, fault.Wrapf(err, fault.Invalid, "funcd restore", "open %s", from)
+	}
+	return src, ids, nil
 }
 
 // point parses a restore point and applies --timeline.
@@ -91,13 +98,14 @@ func (f *restoreFlags) point(s string) (restore.Point, error) {
 }
 
 // newRestoreCmd is `funcd restore` (ADR-0206 Decision 1): offline work on the backup target and the data
-// directories, and `restore blob` on the blob store (ADR-0208). `restore kv` joins it with ADR-0209.
+// directories, `restore blob` on the blob store (ADR-0208) and `restore kv` on the KV store (ADR-0209).
 func newRestoreCmd(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore",
 		Short: "List, inspect and restore platform backup generations (offline; the restored platform boots held)",
 	}
-	cmd.AddCommand(newRestoreListCmd(out), newRestoreInspectCmd(out), newRestoreRunCmd(out), newRestoreBlobCmd(out))
+	cmd.AddCommand(newRestoreListCmd(out), newRestoreInspectCmd(out), newRestoreRunCmd(out), newRestoreBlobCmd(out),
+		newRestoreKVCmd(out))
 	return cmd
 }
 
@@ -124,7 +132,14 @@ func newRestoreListCmd(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeBlobRows(out, blobs)
+			if err := writeBlobRows(out, blobs); err != nil {
+				return err
+			}
+			points, err := kvPoints(cmd.Context(), &f, o)
+			if err != nil {
+				return err
+			}
+			return writeKVRows(out, points)
 		},
 	}
 	f.register(cmd)
@@ -238,7 +253,7 @@ type diffReport struct {
 func newRestoreInspectCmd(out io.Writer) *cobra.Command {
 	var f restoreFlags
 	var diff, object, secretsKey, output string
-	var reveal bool
+	var reveal, kv bool
 	cmd := &cobra.Command{
 		Use:   "inspect <point>",
 		Short: "Show a generation: manifest, keys needed, version verdict, counts, evidence; one object; a diff",
@@ -253,6 +268,9 @@ func newRestoreInspectCmd(out io.Writer) *cobra.Command {
 				return err
 			}
 			defer done()
+			if kv {
+				return inspectKV(ctx, out, &f, o, args[0], output)
+			}
 			if secretsKey != "" {
 				if o.SecretsKey, err = os.ReadFile(secretsKey); err != nil { //nolint:gosec // the operator's escrowed key file
 					return fault.Wrapf(err, fault.Invalid, "funcd restore inspect", "read --secrets-key %s", secretsKey)
@@ -294,6 +312,7 @@ func newRestoreInspectCmd(out io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&secretsKey, "secrets-key", "", "the escrowed secrets key file, to decode Secrets (--object)")
 	cmd.Flags().BoolVar(&reveal, "reveal-secrets", false, "print Secret values (with --object and --secrets-key)")
 	cmd.Flags().StringVarP(&output, "output", "o", "yaml", "output format: yaml or json")
+	cmd.Flags().BoolVar(&kv, "kv", false, "show a KV point <chain>/<segment> of the kv/ chains (ADR-0209)")
 	return cmd
 }
 
@@ -530,20 +549,20 @@ func openBlobStore(ctx context.Context, cfg config.Config, credentials string) (
 	return gocloud.Open(ctx, gocloud.FileURL(cfg.Blob.Dir))
 }
 
-// blobHold is restore blob's hold (ADR-0206 Decisions 2, 5): restore.inprogress, then the marker, so the next start
-// is held; undo removes a marker it wrote and the busy file.
-type blobHold struct {
+// restoreHold is the hold of a store's restore (ADR-0206 Decisions 2, 5): restore.inprogress, then the marker, so the
+// next start is held; undo removes a marker it wrote and the busy file.
+type restoreHold struct {
 	dataDir   string
 	hadMarker bool
 }
 
-func beginBlobHold(dataDir string) (*blobHold, error) {
+func beginRestoreHold(dataDir, command string) (*restoreHold, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, "funcd restore blob", "create storage.dataDir %s", dataDir)
+		return nil, fault.Wrapf(err, fault.Internal, "funcd restore "+command, "create storage.dataDir %s", dataDir)
 	}
 	_, statErr := os.Stat(filepath.Join(dataDir, hold.MarkerFile))
-	h := &blobHold{dataDir: dataDir, hadMarker: statErr == nil}
-	if err := hold.Begin(dataDir, "blob"); err != nil {
+	h := &restoreHold{dataDir: dataDir, hadMarker: statErr == nil}
+	if err := hold.Begin(dataDir, command); err != nil {
 		return nil, err
 	}
 	if err := hold.Write(dataDir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}); err != nil {
@@ -552,7 +571,7 @@ func beginBlobHold(dataDir string) (*blobHold, error) {
 	return h, nil
 }
 
-func (h *blobHold) undo() error {
+func (h *restoreHold) undo() error {
 	var errs []error
 	if !h.hadMarker {
 		if err := os.Remove(filepath.Join(h.dataDir, hold.MarkerFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -562,16 +581,20 @@ func (h *blobHold) undo() error {
 	return errors.Join(append(errs, hold.End(h.dataDir))...)
 }
 
-// end gives a local store and the marker the data directory's owner, then removes the busy file.
-func (h *blobHold) end(cfg config.Config) error {
-	roots := []string{filepath.Join(h.dataDir, hold.MarkerFile)}
-	if cfg.Blob.Target == "" {
-		roots = append(roots, cfg.Blob.Dir)
-	}
-	if err := hold.Own(h.dataDir, roots...); err != nil {
+// end gives the marker and roots the data directory's owner, then removes the busy file.
+func (h *restoreHold) end(roots ...string) error {
+	if err := hold.Own(h.dataDir, append([]string{filepath.Join(h.dataDir, hold.MarkerFile)}, roots...)...); err != nil {
 		return err
 	}
 	return hold.End(h.dataDir)
+}
+
+// blobRoots is the local store a blob restore wrote, none for blob.target.
+func blobRoots(cfg config.Config) []string {
+	if cfg.Blob.Target == "" {
+		return []string{cfg.Blob.Dir}
+	}
+	return nil
 }
 
 func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, cfg config.Config, dst blob.Bucket, args []string) error {
@@ -600,7 +623,7 @@ func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, 
 			return fault.NotFoundf(op, "the backup target holds no complete blob generation")
 		}
 	}
-	h, err := beginBlobHold(cfg.Storage.DataDir)
+	h, err := beginRestoreHold(cfg.Storage.DataDir, "blob")
 	if err != nil {
 		return err
 	}
@@ -608,7 +631,7 @@ func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, 
 	if err != nil {
 		return errors.Join(err, h.undo())
 	}
-	if err := h.end(cfg); err != nil {
+	if err := h.end(blobRoots(cfg)...); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "restored blob generation %d (%d objects); the platform is held: start funcd, read "+
@@ -630,7 +653,7 @@ func restoreBlobAt(ctx context.Context, out io.Writer, cfg config.Config, dst bl
 	if err != nil {
 		return err
 	}
-	h, err := beginBlobHold(cfg.Storage.DataDir)
+	h, err := beginRestoreHold(cfg.Storage.DataDir, "blob")
 	if err != nil {
 		return err
 	}
@@ -642,7 +665,7 @@ func restoreBlobAt(ctx context.Context, out io.Writer, cfg config.Config, dst bl
 		return fault.Wrapf(err, fault.KindOf(err), op, "%d keys copied and %d deleted before the error: run the same "+
 			"restore again to complete it", rep.Copied, rep.Deleted)
 	}
-	if err := h.end(cfg); err != nil {
+	if err := h.end(blobRoots(cfg)...); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "restored the blob store to %s: %d copied, %d deleted, %d unchanged; no version was removed; "+

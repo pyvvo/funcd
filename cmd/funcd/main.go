@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"time"
 	_ "time/tzdata" // ADR-0211: cron time zones resolve on a host without zoneinfo
@@ -342,10 +343,15 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opened = append(opened, closerFunc(closeMirror))
-	kvDriver, startKV, err := buildKVStore(ctx, cfg, theBus, root)
+	kvDeps := kvBackupDeps{target: target, held: held}
+	if backups != nil {
+		kvDeps.record = backups.Recorder("kv")
+	}
+	kvDriver, startKV, closeKV, err := buildKVStore(ctx, cfg, theBus, root, kvDeps)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
+	opened = append(opened, closerFunc(closeKV))
 	if c, ok := kvDriver.(io.Closer); ok {
 		opened = append(opened, c)
 	}
@@ -543,9 +549,13 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
 	opts = append(opts, execOpts...)
-	if target != nil {
-		closeRuntime := closeExec
-		closeExec = func() error { return errors.Join(closeRuntime(), closeMirror(), target.Close()) }
+	closeRuntime := closeExec
+	closeExec = func() error {
+		errs := []error{closeRuntime(), closeMirror(), closeKV()}
+		if target != nil {
+			errs = append(errs, target.Close())
+		}
+		return errors.Join(errs...)
 	}
 	return opts, closeExec, start, substrate, nil
 }
@@ -578,60 +588,80 @@ func parseLevel(level string) slog.Level {
 	}
 }
 
+// kvBackupDeps are what the KV export takes from the platform backup: the platform Target an inherited target
+// shares (ADR-0209 Decision 1; nil without backup.target), the hold (ADR-0206; nil ⇒ never held) and the runner's
+// Recorder("kv") (ADR-0205; nil ⇒ log only).
+type kvBackupDeps struct {
+	target backup.Target
+	held   *hold.Hold
+	record func(start time.Time, err error)
+}
+
 // buildKVStore selects the function-facing KV driver (ADR-0066/0069): in-memory by default (ephemeral),
 // or durable pure-Go Badger at <kvstore.dataDir|<storage.dataDir>/kv> when kvstore.engine: badger and
 // storage.mode is file (storage.mode: memory keeps the KV in memory, ADR-0043). When
-// kvstore.backup (ADR-0067) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
-// the driver — DR export to an object-storage target, and a transactional-outbox change-feed to the bus.
-// The returned start func launches their loops (a no-op otherwise). Enable-without-target / enable-without-
-// sink, or either enabled on the memory engine ⇒ fault.Invalid at startup; storage.mode memory ignores them
-// with a warning.
-func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger) (kvstore.KV, func(context.Context), error) {
+// kvstore.backup (ADR-0067, ADR-0209) and/or kvstore.cdc (ADR-0068) are enabled it wires those opt-in seams behind
+// the driver — the DR export under kv/ on the resolved target, and a transactional-outbox change-feed to the bus.
+// The returned start func launches their loops (a no-op otherwise); closer waits for the export's loop and closes
+// what kvBackup opened. Enable-without-target / enable-without-sink, or either enabled on the memory engine ⇒
+// fault.Invalid at startup; storage.mode memory ignores them with a warning.
+func buildKVStore(ctx context.Context, cfg config.Config, theBus bus.Bus, logger *slog.Logger, deps kvBackupDeps) (
+	_ kvstore.KV, start func(context.Context), closer func() error, err error) {
 	noop := func(context.Context) {}
 	memory, err := checkKVStoreConfig(cfg, logger)
 	if err != nil {
-		return nil, noop, err
+		return nil, noop, noopClose, err
 	}
 	if memory {
-		return kvmemory.New(), noop, nil
+		return kvmemory.New(), noop, noopClose, nil
 	}
 	dir := cfg.Kvstore.DataDir // its own dedicated instance; default <dataDir>/kv derived in config.Load
 	if !cfg.Kvstore.Backup.Enabled && !cfg.Kvstore.Cdc.Enabled {
 		kv, err := kvbadger.Open(dir)
-		return kv, noop, err
+		return kv, noop, noopClose, err
 	}
-	bucket, bcfg, err := kvBackup(ctx, cfg, logger)
+	bucket, bcfg, closeBackup, err := kvBackup(ctx, cfg, logger, deps)
 	if err != nil {
-		return nil, noop, err
+		return nil, noop, noopClose, err
 	}
 	sink, ccfg, err := kvCDC(cfg, theBus)
 	if err != nil {
-		return nil, noop, err
+		return nil, noop, noopClose, errors.Join(err, closeBackup())
 	}
 
 	kv, seams, err := kvbadger.OpenWithSeamsFor(dir, bucket, bcfg, sink, ccfg)
 	if err != nil {
-		if bucket != nil {
-			_ = bucket.Close()
-		}
-		return nil, noop, err
+		return nil, noop, noopClose, errors.Join(err, closeBackup())
 	}
-	start := func(runCtx context.Context) {
+	var started atomic.Bool
+	done := make(chan struct{})
+	start = func(runCtx context.Context) {
 		if seams.Backup != nil {
-			go kvbadger.RunBackup(runCtx, seams.Backup, logger)
+			started.Store(true)
+			go func() {
+				defer close(done)
+				kvbadger.RunBackup(runCtx, seams.Backup, logger)
+			}()
 		}
 		if seams.CDC != nil {
 			go kvbadger.RunCDC(runCtx, seams.CDC, logger)
 		}
 	}
-	return kv, start, nil
+	closer = func() error {
+		if started.Load() {
+			<-done
+		}
+		return closeBackup()
+	}
+	return kv, start, closer, nil
 }
 
 // checkKVStoreConfig rejects a kvstore config buildKVStore cannot honor and reports whether the KV runs in
-// memory: storage.mode memory (which warns about what it overrides) or an engine other than badger.
+// memory: storage.mode memory (which warns about what it overrides) or an engine other than badger. The export's
+// target may come from backup.target (ADR-0209 Decision 1); config.CheckBackup checks the rest of kvstore.backup.
 func checkKVStoreConfig(cfg config.Config, logger *slog.Logger) (memory bool, err error) {
-	if cfg.Kvstore.Backup.Enabled && cfg.Kvstore.Backup.Target == "" {
-		return false, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target is empty")
+	if cfg.Kvstore.Backup.Enabled && cfg.Kvstore.Backup.Target == "" && cfg.Backup.Target == "" {
+		return false, fault.Invalidf("buildKVStore", "kvstore.backup.enabled but kvstore.backup.target and backup.target are empty")
 	}
 	if cfg.Kvstore.Cdc.Enabled && cfg.Kvstore.Cdc.Sink == "" {
 		return false, fault.Invalidf("buildKVStore", "kvstore.cdc.enabled but kvstore.cdc.sink is empty")
@@ -657,34 +687,103 @@ func checkKVStoreConfig(cfg config.Config, logger *slog.Logger) (memory bool, er
 	return false, nil
 }
 
-// kvBackup opens the kvstore.backup target and resolves its intervals (ADR-0067, ADR-0195); disabled ⇒ no bucket.
-func kvBackup(ctx context.Context, cfg config.Config, logger *slog.Logger) (blob.Bucket, kvbadger.BackupConfig, error) {
-	if !cfg.Kvstore.Backup.Enabled {
-		return nil, kvbadger.BackupConfig{}, nil
+// kvBackup wires the KV export (ADR-0209 Decision 1): config.ResolveKVBackup's groups, its own bucket on the
+// resolved target, fenced by the platform Target when inherited and by its own backup.Open (KeyPrefix
+// kvstore.backup.) otherwise, the sealer of its encryption group (no Secret: NoSecrets), the hold, Recorder("kv"), the
+// intervals (ADR-0067, ADR-0195), and the kv/ lifecycle rules in the log. Disabled ⇒ no bucket. closer closes the
+// bucket and an own fence.
+func kvBackup(ctx context.Context, cfg config.Config, logger *slog.Logger, deps kvBackupDeps) (
+	_ blob.Bucket, _ kvbadger.BackupConfig, closer func() error, err error) {
+	const op = "buildKVStore"
+	kb := cfg.Kvstore.Backup
+	if !kb.Enabled {
+		return nil, kvbadger.BackupConfig{}, noopClose, nil
 	}
-	interval, err := parseDuration("kvstore.backup.interval", cfg.Kvstore.Backup.Interval, 30*time.Second, minPositive, v1.MaxDuration)
+	interval, err := parseDuration("kvstore.backup.interval", kb.Interval, 30*time.Second, minPositive, v1.MaxDuration)
 	if err != nil {
-		return nil, kvbadger.BackupConfig{}, err
+		return nil, kvbadger.BackupConfig{}, noopClose, err
 	}
-	rebaseline, err := parseDuration("kvstore.backup.rebaseline", cfg.Kvstore.Backup.Rebaseline, 24*time.Hour, minPositive, v1.MaxDuration)
+	rebaseline, err := parseDuration("kvstore.backup.rebaseline", kb.Rebaseline, 24*time.Hour, minPositive, v1.MaxDuration)
 	if err != nil {
-		return nil, kvbadger.BackupConfig{}, err
+		return nil, kvbadger.BackupConfig{}, noopClose, err
 	}
-	retry, err := parseDuration("kvstore.backup.rebaselineRetry", cfg.Kvstore.Backup.RebaselineRetry, time.Hour, minPositive, v1.MaxDuration)
+	retry, err := parseDuration("kvstore.backup.rebaselineRetry", kb.RebaselineRetry, time.Hour, minPositive, v1.MaxDuration)
 	if err != nil {
-		return nil, kvbadger.BackupConfig{}, err
+		return nil, kvbadger.BackupConfig{}, noopClose, err
 	}
-	b, err := gocloud.Open(ctx, cfg.Kvstore.Backup.Target)
+	resolved, err := cfg.ResolveKVBackup()
 	if err != nil {
-		return nil, kvbadger.BackupConfig{}, fmt.Errorf("open kv backup target %q: %w", cfg.Kvstore.Backup.Target, err)
+		return nil, kvbadger.BackupConfig{}, noopClose, err
 	}
-	return b, kvbadger.BackupConfig{
+	retention := backup.Retention{Hourly: kb.Retention.Hourly, Daily: kb.Retention.Daily, Weekly: kb.Retention.Weekly}
+	tcfg, key := backup.Config{Target: resolved.Target, CredentialsFile: resolved.CredentialsFile, DataDir: cfg.Storage.DataDir,
+		SingleWriter: resolved.SingleWriter, Retention: retention, KeyPrefix: "kvstore.backup.", Logger: logger}, "kvstore.backup.target"
+	if resolved.Shared {
+		tcfg, key = platformBackupConfig(cfg, logger), "backup.target"
+	}
+	var closers []io.Closer
+	closer = func() error {
+		var errs []error
+		for _, c := range slices.Backward(closers) {
+			errs = append(errs, c.Close())
+		}
+		return errors.Join(errs...)
+	}
+	defer func() {
+		if err != nil {
+			_ = closer()
+			closer = noopClose
+		}
+	}()
+	fence := deps.target
+	if !resolved.Shared || fence == nil {
+		if fence, err = backup.Open(ctx, tcfg); err != nil {
+			return nil, kvbadger.BackupConfig{}, noopClose, err
+		}
+		closers = append(closers, fence)
+	}
+	url, err := backup.TargetURL(tcfg)
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, noopClose, err
+	}
+	b, err := gocloud.OpenWith(ctx, url, gocloud.OpenOptions{CredentialsFile: tcfg.CredentialsFile})
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, noopClose, fault.Wrapf(err, fault.Invalid, op, "%s: open it for the KV backup", key)
+	}
+	closers = append(closers, b)
+	sealer, err := envelope.New(envelope.Config{Recipients: resolved.Recipients, None: resolved.None, NoSecrets: true,
+		KeyPrefix: cfg.KVEncryptionKeyPrefix(), Logger: logger})
+	if err != nil {
+		return nil, kvbadger.BackupConfig{}, noopClose, err
+	}
+	logger.Info("kv backup: set one lifecycle expiry per prefix (days)", "key", key,
+		"rules", kvbadger.LifecycleRules(retention))
+	bcfg := kvbadger.BackupConfig{
 		Interval:        interval,
 		Rebaseline:      rebaseline,
 		RebaselineRetry: retry,
-		ChunkBytes:      cfg.Kvstore.Backup.ChunkBytes,
+		ChunkBytes:      kb.ChunkBytes,
 		Logger:          logger,
-	}, nil
+		Ready:           targetReady(fence),
+		Seal:            sealer.Seal(),
+		Recipients:      sealer.Keys().Recipients,
+		Record:          deps.record,
+		Retention:       retention,
+	}
+	if deps.held != nil {
+		bcfg.Hold = deps.held
+	}
+	return b, bcfg, closer, nil
+}
+
+// targetReady adapts a Target to the Ready a sibling backup takes (ADR-0203 Decision 4): Ready, then Conditional.
+func targetReady(t backup.Target) func(context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		if err := t.Ready(ctx); err != nil {
+			return false, err
+		}
+		return t.Conditional(), nil
+	}
 }
 
 // kvCDC resolves the kvstore.cdc change feed onto the bus (ADR-0068); disabled ⇒ no sink.
@@ -983,14 +1082,9 @@ func mirrorFor(ctx context.Context, cfg config.Config, runs *runner.Runner, targ
 		return noop, noopClose, fault.Wrapf(err, fault.Invalid, "buildOptions", "backup.target: open it for the blob mirror")
 	}
 	mc := blobmirror.Config{
-		Dir:    blobDir(cfg),
-		Target: b,
-		Ready: func(ctx context.Context) (bool, error) {
-			if err := target.Ready(ctx); err != nil {
-				return false, err
-			}
-			return target.Conditional(), nil
-		},
+		Dir:           blobDir(cfg),
+		Target:        b,
+		Ready:         targetReady(target),
 		Seal:          sealer.Seal(),
 		Recipients:    sealer.Keys().Recipients,
 		Interval:      times.Interval,
@@ -1162,7 +1256,8 @@ func remoteStore(ctx context.Context, cfg config.Config, log *slog.Logger) (blob
 }
 
 // checkDomains guards the backup targets against the store's failure domain (ADR-0208 Decision 3): the store itself
-// refuses the start naming the key, the same provider warns.
+// refuses the start naming the key, the same provider warns. The KV export's target is the resolved one (ADR-0209
+// Decision 1), named kvstore.backup.target only when it is the KV's own.
 func checkDomains(cfg config.Config, log *slog.Logger) error {
 	store := cfg.Blob.Target
 	if store == "" {
@@ -1170,7 +1265,13 @@ func checkDomains(cfg config.Config, log *slog.Logger) error {
 	}
 	targets := []struct{ key, url string }{{"backup.target", cfg.Backup.Target}}
 	if cfg.Kvstore.Backup.Enabled {
-		targets = append(targets, struct{ key, url string }{"kvstore.backup.target", cfg.Kvstore.Backup.Target})
+		kb, err := cfg.ResolveKVBackup()
+		if err != nil {
+			return err
+		}
+		if !kb.Shared { // an inherited target is backup.target, checked under its own key
+			targets = append(targets, struct{ key, url string }{"kvstore.backup.target", kb.Target})
+		}
 	}
 	for _, t := range targets {
 		if t.url == "" {

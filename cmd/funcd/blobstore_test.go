@@ -175,9 +175,17 @@ func TestScenarioTargetInsideStoreRefused(t *testing.T) {
 	_, err := remote(t, func(c *config.Config) { c.Backup.Target = s.URL("prefix=backup/") })
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "backup.target")
-	_, err = remote(t, func(c *config.Config) { c.Kvstore.Backup.Enabled, c.Kvstore.Backup.Target = true, s.URL() })
+	_, err = remote(t, func(c *config.Config) {
+		c.Kvstore.Backup.Enabled, c.Kvstore.Backup.Target, c.Kvstore.Backup.Encryption.None = true, s.URL(), true
+	})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "kvstore.backup.target")
+	_, err = remote(t, func(c *config.Config) {
+		c.Backup.Target, c.Kvstore.Backup.Enabled, c.Kvstore.Backup.Encryption.None = s.URL("prefix=backup/"), true, true
+	})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "backup.target")
+	require.NotContains(t, err.Error(), "kvstore.backup.target", "an inherited KV target is backup.target")
 	logs, err := remote(t, func(c *config.Config) { c.Backup.Target = other })
 	require.NoError(t, err)
 	require.Contains(t, logs, "shares the blob store's provider")
