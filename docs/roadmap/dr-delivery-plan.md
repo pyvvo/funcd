@@ -19,8 +19,7 @@ track* implements and reviews them, and is serialized by hard compile and runtim
 one wave ahead of the build track.
 
 > **ADR numbers.** The ten ADRs drafted so far are ADR-0201 to ADR-0210 (Accepted 2026-10-10), taken from the number
-> pool that every epoch shares. `DR-10` (workload resources) and `DR-L1` keep their placeholders until they are
-> drafted. Track the work by **feature code** (stable). Accepted ADRs use their real number.
+> pool that every epoch shares. Every item of this plan now carries its real number (ADR-0222 and ADR-0223 since 2026-10-10). Track the work by **feature code** (stable). Accepted ADRs use their real number.
 
 ## Proposed ADR slate
 
@@ -36,16 +35,16 @@ one wave ahead of the build track.
 | ADR-0207 | Pre-upgrade snapshot and safe mode (Accepted 2026-10-10) | F109 | ADR-0203, ADR-0205, ADR-0206 |
 | ADR-0208 | Blob store backend and backup target (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0007 |
 | ADR-0209 | KV backup on the common format (Accepted 2026-10-10) | F111 | ADR-0195, ADR-0203, ADR-0204, ADR-0205, ADR-0206 |
-| DR-10 | Workload backup resources and catalog scope | F111 | ADR-0203, ADR-0204, ADR-0208, ADR-0209, X-CRON |
+| ADR-0222 | Workload backup resources and catalog scope (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0208, ADR-0209, X-CRON |
 | ADR-0210 | API optimistic concurrency: replace and delete honor the client's resourceVersion (If-Match), issue #844 (Accepted 2026-10-10) | F109 | ADR-0018, ADR-0202 |
-| DR-L1 | `funcdctl backup plan` helper | F112 | ADR-0205, DR-10 |
+| ADR-0223 | `funcdctl backup plan` helper (Accepted 2026-10-10) | F112 | ADR-0205, ADR-0222 |
 
 The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
 ADR-0195 (KV delete records) and ADR-0196 (UTC timestamps) are Implemented and appear only as built dependencies in tier 0.
 ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) belong to the rqlite service
 ADRs, and the step idempotency keys (L2) to the workflow epoch; neither realizes FEAT-0009. Three merges are
 deliberate: ADR-0202 joins the snapshot capability and the version timeline (both change the store), ADR-0206 joins restore
-and the held boot (a restore without the hold repeats side effects), and DR-10 joins the workload resources and the
+and the held boot (a restore without the hold repeats side effects), and ADR-0222 joins the workload resources and the
 catalog scope. Split ADR-0206 again if its ADR passes 250 lines.
 
 Each dependency is grounded in one line:
@@ -63,9 +62,9 @@ Each dependency is grounded in one line:
 - ADR-0209 builds on the delete records of ADR-0195, on ADR-0203 and ADR-0204, and joins the operation (ADR-0205) and restore
   (ADR-0206).
 - ADR-0210 changes the API's replace and delete (ADR-0018) to honor the client's version, which ADR-0202 defines.
-- DR-10 stores its backups with ADR-0203 and ADR-0204, copies catalog data through ADR-0208's blob target, exports KV through ADR-0209
+- ADR-0222 stores its backups with ADR-0203 and ADR-0204, copies catalog data through ADR-0208's blob target, exports KV through ADR-0209
   and takes its `schedule` syntax from X-CRON.
-- DR-L1 reuses the validation of ADR-0205 and writes the resources of DR-10.
+- ADR-0223 reuses the validation of ADR-0205 and writes the resources of ADR-0222.
 
 ## Build dependency graph
 
@@ -94,9 +93,9 @@ flowchart TB
     ADR_0207["ADR-0207 · F109<br/>pre-upgrade snapshot and safe mode (Accepted 2026-10-10)"]
     ADR_0208["ADR-0208 · F111<br/>blob store backend and backup target (Accepted 2026-10-10)"]
     ADR_0209["ADR-0209 · F111<br/>KV backup on the common format (Accepted 2026-10-10)"]
-    DR_10["DR-10 · F111<br/>workload backup resources and catalog scope"]
+    ADR_0222["ADR-0222 · F111<br/>workload backup resources and catalog scope (Accepted 2026-10-10)"]
     ADR_0210["ADR-0210 · F109<br/>API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844 (Accepted 2026-10-10)"]
-    DR_L1["DR-L1 · F112<br/>funcdctl backup plan"]
+    ADR_0223["ADR-0223 · F112<br/>funcdctl backup plan (Accepted 2026-10-10)"]
 
     ADR_0006 --> ADR_0202
     ADR_0065 --> ADR_0202
@@ -128,15 +127,15 @@ flowchart TB
     ADR_0204 --> ADR_0209
     ADR_0205 --> ADR_0209
     ADR_0206 --> ADR_0209
-    ADR_0203 --> DR_10
-    ADR_0204 --> DR_10
-    ADR_0208 --> DR_10
-    ADR_0209 --> DR_10
-    X_CRON --> DR_10
+    ADR_0203 --> ADR_0222
+    ADR_0204 --> ADR_0222
+    ADR_0208 --> ADR_0222
+    ADR_0209 --> ADR_0222
+    X_CRON --> ADR_0222
     ADR_0018 --> ADR_0210
     ADR_0202 --> ADR_0210
-    ADR_0205 --> DR_L1
-    DR_10 --> DR_L1
+    ADR_0205 --> ADR_0223
+    ADR_0222 --> ADR_0223
 ```
 
 ## Build waves (computed)
@@ -149,8 +148,8 @@ flowchart TB
 | 3 | ADR-0204 |
 | 4 | ADR-0205, ADR-0206 |
 | 5 | ADR-0207, ADR-0208, ADR-0209 |
-| 6 | DR-10 |
-| 7 | DR-L1 |
+| 6 | ADR-0222 |
+| 7 | ADR-0223 |
 
 Why each tier:
 
@@ -162,8 +161,8 @@ Why each tier:
 - **Tier 5**: ADR-0207 needs the operation and the restore. ADR-0208 and ADR-0209 need both too (ADR-0205 and ADR-0206).
   ADR-0208's backend half (an S3-compatible or local blob store) depends on nothing but ADR-0007 and could ship earlier, but
   nothing waits for it.
-- **Tier 6**: DR-10 needs the blob target, the KV format and the Cron decision.
-- **Tier 7**: DR-L1 reads the validation of ADR-0205 and writes the resources of DR-10.
+- **Tier 6**: ADR-0222 needs the blob target, the KV format and the Cron decision.
+- **Tier 7**: ADR-0223 reads the validation of ADR-0205 and writes the resources of ADR-0222.
 
 ### Cross-cutting sequencing notes
 
@@ -182,7 +181,7 @@ Why each tier:
 - **Design wave 1**: draft ADR-0202.
 - **Design wave 2** (while ADR-0202 is built): draft ADR-0203, ADR-0201 and ADR-0210, then ADR-0204 as soon as ADR-0203 is Accepted.
 - **Design wave 3**: draft ADR-0205 and ADR-0206.
-- **Design wave 4**: draft ADR-0207, ADR-0208 and ADR-0209, then DR-10 once the Cron ADR of the Apps epoch is Accepted.
+- **Design wave 4**: draft ADR-0207, ADR-0208 and ADR-0209, then ADR-0222 once the Cron ADR of the Apps epoch is Accepted.
 - **Review attention.** ADR-0203 carries the fencing rule, the credential model and a change to the blob port. ADR-0206 is the
   biggest merge and the hold touches every runner. ADR-0204 holds the key custody. ADR-0202 changes the resource version, which
   six places of the code parse as a number; ADR-0210 and ADR-0206 rely on that change.
@@ -191,7 +190,7 @@ Why each tier:
 
 Critical path (8 items, the longest build chain):
 
-  ADR-0006 → ADR-0202 → ADR-0203 → ADR-0204 → ADR-0205 → ADR-0208 → DR-10 → DR-L1
+  ADR-0006 → ADR-0202 → ADR-0203 → ADR-0204 → ADR-0205 → ADR-0208 → ADR-0222 → ADR-0223
 
 | Exit-criterion clause (FEAT-0009) | Needs (items) |
 |---|---|
@@ -202,14 +201,14 @@ Critical path (8 items, the longest build chain):
 | F109: a client that holds a version from before the restore gets a conflict | ADR-0202, ADR-0210, ADR-0206 |
 | F109: the release turns the held parts on | ADR-0206 |
 | F109: an upgrade first snapshots the platform, and a platform that keeps crashing starts held, then stops and names the restore of the last good copy | ADR-0207 |
-| F111: an app owner backs up a KV store, a bucket and a catalog on a schedule, restores into a new name and swaps it in | DR-10 (with ADR-0208, ADR-0209, X-CRON) |
-| F111: the backups of a deleted App stay until their time to live | DR-10 |
+| F111: an app owner backs up a KV store, a bucket and a catalog on a schedule, restores into a new name and swaps it in | ADR-0222 (with ADR-0208, ADR-0209, X-CRON) |
+| F111: the backups of a deleted App stay until their time to live | ADR-0222 |
 | F111: the blob store runs on an S3-compatible target and a backup of it restores | ADR-0208 |
 | F111: the KV backup follows the same rules as the platform backup | ADR-0209 |
-| F112: from objectives, funcdctl prints the settings, says when a recovery time is impossible, and shares the start-up rules | DR-L1 (with ADR-0205) |
-| A drill restores a platform and an app's data on a new host from the target and the escrow set alone | ADR-0206 and DR-10 |
+| F112: from objectives, funcdctl prints the settings, says when a recovery time is impossible, and shares the start-up rules | ADR-0223 (with ADR-0205) |
+| A drill restores a platform and an app's data on a new host from the target and the escrow set alone | ADR-0206 and ADR-0222 |
 
-Every clause has an item. The core of the exit criterion is met at tier 6 (DR-10, with ADR-0207 in tier 5); DR-L1 at tier 7 trails
+Every clause has an item. The core of the exit criterion is met at tier 6 (ADR-0222, with ADR-0207 in tier 5); ADR-0223 at tier 7 trails
 as the helper that the feature table marks as later.
 
 ## Parallelization & sequencing notes
@@ -218,7 +217,7 @@ as the helper that the feature table marks as later.
 - **Parallel inside tiers:** ADR-0202 and X-CRON in tier 1; ADR-0201, ADR-0203 and ADR-0210 in tier 2; ADR-0205 and
   ADR-0206 in tier 4; ADR-0207, ADR-0208 and ADR-0209 in tier 5.
 - **Riskiest ADRs:** ADR-0203 (fencing and the blob port), ADR-0206 (the hold and the merge) and ADR-0202 (the version timeline).
-- **Off the spine, can trail:** DR-L1, ADR-0207 and ADR-0210.
+- **Off the spine, can trail:** ADR-0223, ADR-0207 and ADR-0210.
 - **Outside owner:** X-CRON belongs to the Apps epoch.
 
 ## Reproducing & maintaining this plan
@@ -233,7 +232,7 @@ drafted, note its number against its plan id in the caveats below.
 
 ## Caveats (living doc)
 
-- ADR-0201 to ADR-0210 replaced their `DR-n` placeholders on 2026-10-08; `DR-10` and `DR-L1` keep theirs until they are drafted.
+- ADR-0201 to ADR-0210 replaced their `DR-n` placeholders on 2026-10-08; ADR-0222 and ADR-0223 replaced `DR-10` and `DR-L1` on 2026-10-10.
   ADR-0210 entered the plan after the first slate; ADR-0195 and ADR-0196 left it when they became Implemented.
 - Waves are dependency tiers, not a schedule. Within a wave, sequence by review bandwidth.
 - If a drafted ADR reveals a missed dependency, update `dr-plan.json` and re-run the tool; re-validate the graph. The

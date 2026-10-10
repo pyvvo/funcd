@@ -132,8 +132,8 @@
       ]
     },
     {
-      "id": "DR-10",
-      "title": "workload backup resources and catalog scope",
+      "id": "ADR-0222",
+      "title": "workload backup resources and catalog scope (Accepted 2026-10-10)",
       "features": [
         "F111"
       ],
@@ -157,14 +157,14 @@
       ]
     },
     {
-      "id": "DR-L1",
-      "title": "funcdctl backup plan",
+      "id": "ADR-0223",
+      "title": "funcdctl backup plan (Accepted 2026-10-10)",
       "features": [
         "F112"
       ],
       "depends_on": [
         "ADR-0205",
-        "DR-10"
+        "ADR-0222"
       ]
     }
   ],
@@ -191,10 +191,10 @@
       "ADR-0209"
     ],
     "6": [
-      "DR-10"
+      "ADR-0222"
     ],
     "7": [
-      "DR-L1"
+      "ADR-0223"
     ]
   }
 }
