@@ -16,6 +16,18 @@ The local blob store's mirror (ADR-0208) writes under `blob/`: one rule of ⌈(`
 `blob.backup.retention`) / 24h⌉ days, 60 at the defaults, which funcd logs at start too (`blob mirror: set one
 lifecycle expiry`). No object is older than its epoch, so each generation stays restorable for `retention`.
 
+The KV export (ADR-0209) writes under `kv/` on `kvstore.backup.target`, or on `backup.target` when that key is unset,
+and logs its rules at start (`kv backup: set one lifecycle expiry per prefix`), computed from
+`kvstore.backup.retention`. A point of the 30 s chain lives at least ⌈`hourly` / 24⌉ days less `rebaseline`, a base its
+class term; a rule that expires a base early breaks the points of its chain.
+
+| Prefix | Expiry at the defaults | From |
+|---|---|---|
+| `kv/inc/` | 2 days | ⌈`kvstore.backup.retention.hourly` / 24⌉ (48 hours) |
+| `kv/base/hourly/` | 2 days | the same |
+| `kv/base/daily/` | 30 days | `kvstore.backup.retention.daily`; no rule when 0 |
+| `kv/base/weekly/` | 84 days | 7 × `kvstore.backup.retention.weekly` (12 weeks); no rule when 0 |
+
 `gen/pre-upgrade/` pins have no rule here: see [Pre-upgrade pins](#pre-upgrade-pins) (ADR-0207). With a
 `prefix=<p>/` in `backup.target`, every prefix below starts with `<p>/`. Object Lock is optional; funcd sets none.
 
@@ -31,7 +43,11 @@ lifecycle expiry`). No object is older than its epoch, so each generation stays 
     {"ID": "funcd-weekly", "Status": "Enabled", "Filter": {"Prefix": "<p>/gen/weekly/"}, "Expiration": {"Days": 84}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
     {"ID": "funcd-verified", "Status": "Enabled", "Filter": {"Prefix": "<p>/gen/verified/"}, "Expiration": {"Days": 2}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
     {"ID": "funcd-probe", "Status": "Enabled", "Filter": {"Prefix": "<p>/probe/"}, "Expiration": {"Days": 1}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
-    {"ID": "funcd-blob", "Status": "Enabled", "Filter": {"Prefix": "<p>/blob/"}, "Expiration": {"Days": 60}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}}
+    {"ID": "funcd-blob", "Status": "Enabled", "Filter": {"Prefix": "<p>/blob/"}, "Expiration": {"Days": 60}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "funcd-kv-inc", "Status": "Enabled", "Filter": {"Prefix": "<p>/kv/inc/"}, "Expiration": {"Days": 2}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "funcd-kv-hourly", "Status": "Enabled", "Filter": {"Prefix": "<p>/kv/base/hourly/"}, "Expiration": {"Days": 2}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "funcd-kv-daily", "Status": "Enabled", "Filter": {"Prefix": "<p>/kv/base/daily/"}, "Expiration": {"Days": 30}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "funcd-kv-weekly", "Status": "Enabled", "Filter": {"Prefix": "<p>/kv/base/weekly/"}, "Expiration": {"Days": 84}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}}
   ]
 }
 ```
@@ -84,6 +100,29 @@ aws_access_key_id = <box key id>
 aws_secret_access_key = <box secret>
 ```
 
+A target of the KV export alone (`kvstore.backup.target`, with `kvstore.backup.credentialsFile`) needs the same
+policy with the puts narrowed to `<p>/kv/*` and `<p>/probe/*`: funcd probes it as it probes `backup.target`.
+
+## The KV export after an upgrade
+
+Before ADR-0209 the KV export kept `manifest.json`, `base/` and `inc/` at the root of `kvstore.backup.target`, and
+rewrote and deleted them. funcd now never reads them again, so no funcd command restores a point of that layout:
+the first start after the upgrade writes chain 1's base under `kv/` at once. Once it is complete (`funcd restore list
+--from <target>` shows a restorable `1/0` KV point), remove the old objects with a credential that deletes, then
+give the daemon the box policy above:
+
+```sh
+aws s3 rm s3://<bucket>/<p>/manifest.json
+aws s3 rm --recursive s3://<bucket>/<p>/base/
+aws s3 rm --recursive s3://<bucket>/<p>/inc/
+rm -r <dir>/manifest.json <dir>/base <dir>/inc   # a directory target
+```
+
+The upgraded start refuses a `kvstore.backup` without `encryption.recipients` or `encryption.none` in either block,
+a `chunkBytes` above 8388608 (the example once showed 67108864), and a `rebaseline` of ⌈`retention.hourly` / 24⌉ days
+or more. A target must be `s3://` or `file:///<absolute dir>`. A target that ignores `If-None-Match` stops the KV
+export, not the start, until `singleWriter: true` says one funcd writes there.
+
 ## The restore and verify credential
 
 The operator keeps a separate credential for restore (ADR-0206) and verification (ADR-0205). It reads, lists, and is
@@ -123,7 +162,10 @@ find "$DIR/gen/weekly" -type f -mmin +120960 -delete
 find "$DIR/gen/verified" -type f -mmin +2880 -delete
 find "$DIR/probe" -type f -mmin +1440 -delete
 find "$DIR/blob" -type f -mmin +86400 -delete
-find "$DIR/gen" "$DIR/blob" -mindepth 2 -type d -empty -delete
+find "$DIR/kv/inc" "$DIR/kv/base/hourly" -type f -mmin +2880 -delete
+find "$DIR/kv/base/daily" -type f -mmin +43200 -delete
+find "$DIR/kv/base/weekly" -type f -mmin +120960 -delete
+find "$DIR/gen" "$DIR/blob" "$DIR/kv" -mindepth 2 -type d -empty -delete
 ```
 
 A directory cannot stop its owner deleting: POSIX `unlink` needs only write access to the directory.

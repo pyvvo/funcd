@@ -29,12 +29,16 @@ operator reads the evidence and releases the hold.
    (ADR-0209, ADR-0208). A local blob store comes back from a mirror generation into the empty `blob.dir`
    (`restore list` shows them; the newest complete one by default); a versioned `blob.target` is set back to a
    time with `--at`, inside `blob.versionRetention`, with the operator's credential (see
-   [backup-lifecycle.md](backup-lifecycle.md#the-blob-store)). Stop funcd first: `restore blob` leaves the
+   [backup-lifecycle.md](backup-lifecycle.md#the-blob-store)). The KV store comes back from a point
+   `<chain>/<segment>` of the `kv/` chains on `kvstore.backup.target` (else `backup.target`) into the empty
+   `kvstore.dataDir`: `restore list` shows them, the newest restorable one by default, and a point written by a
+   newer funcd minor is listed `newer` and refused. Stop funcd first: `restore blob` and `restore kv` leave the
    platform held, as `restore run` does.
 
    ```sh
    funcd restore blob --from <target> --credentials-file <restore credential> --identity recovery.key
    funcd restore blob --at 2026-10-05T09:00:00Z --store-credentials-file <operator credential>
+   funcd restore kv 3/120 --credentials-file <restore credential> --identity recovery.key
    ```
 5. **Start held.** Start funcd. A restore killed midway leaves `restore.inprogress`, and funcd refuses to start
    until the directories it wrote are emptied and the restore is run again.
