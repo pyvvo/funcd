@@ -26,7 +26,16 @@ operator reads the evidence and releases the hold.
    that owner. Without the escrowed master secret, `--new-master-secret` restores anyway and prints the
    credentials that change.
 4. **Restore KV and blob data** with `funcd restore kv` and `funcd restore blob` where the node runs them
-   (ADR-0209, ADR-0208).
+   (ADR-0209, ADR-0208). A local blob store comes back from a mirror generation into the empty `blob.dir`
+   (`restore list` shows them; the newest complete one by default); a versioned `blob.target` is set back to a
+   time with `--at`, inside `blob.versionRetention`, with the operator's credential (see
+   [backup-lifecycle.md](backup-lifecycle.md#the-blob-store)). Stop funcd first: `restore blob` leaves the
+   platform held, as `restore run` does.
+
+   ```sh
+   funcd restore blob --from <target> --credentials-file <restore credential> --identity recovery.key
+   funcd restore blob --at 2026-10-05T09:00:00Z --store-credentials-file <operator credential>
+   ```
 5. **Start held.** Start funcd. A restore killed midway leaves `restore.inprogress`, and funcd refuses to start
    until the directories it wrote are emptied and the restore is run again.
 6. **Read the evidence.** `funcdctl hold status` prints the marker, `restore.json`, the counts now, the paused runs,
