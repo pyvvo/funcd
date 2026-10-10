@@ -22,17 +22,41 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// appCmd groups the App verbs of ADR-0200 Decision 9, ADR-0212 Decision 9 and ADR-0217: history reads an App's
-// AppRevisions, rollback re-applies an earlier revision's spec, and pause and resume set spec.paused, each as an ordinary
-// apply, so the App admission runs again with the caller's rights; render, deploy and delete work from a template
-// directory on the client.
+// appCmd groups the App verbs of ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7 and ADR-0217: history
+// reads an App's AppRevisions, rollback re-applies an earlier revision's spec, and pause and resume set spec.paused,
+// each as an ordinary apply, so the App admission runs again with the caller's rights; retry calls a failed hook
+// again; render, deploy and delete work from a template directory on the client.
 func (a *cli) appCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "app",
-		Short: "Manage Apps (render|deploy|delete|history|rollback|pause|resume)",
+		Short: "Manage Apps (render|deploy|delete|history|rollback|pause|resume|retry)",
 	}
 	cmd.AddCommand(a.appRenderCmd(), a.appDeployCmd(), a.appDeleteCmd(), a.appHistoryCmd(), a.appRollbackCmd(),
-		a.appPauseCmd("pause", true), a.appPauseCmd("resume", false))
+		a.appPauseCmd("pause", true), a.appPauseCmd("resume", false), a.appRetryCmd())
+	return cmd
+}
+
+// appRetryCmd starts again the failed hook of the App's latest revision (ADR-0214 Decision 7); it does not wait for
+// the call, and the App's passes continue the rollout once it succeeds.
+func (a *cli) appRetryCmd() *cobra.Command {
+	var ns string
+	cmd := &cobra.Command{
+		Use:   "retry <app>",
+		Short: "Call the App's failed hook again (the rollout continues once it succeeds)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			name := v1.ObjectName(args[0])
+			if err := c.RetryApp(cmd.Context(), v1.NamespaceName(nsOrDefault(ns)), name); err != nil {
+				return err
+			}
+			return a.writef("retrying the failed hook of %s\n", name)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
 	return cmd
 }
 

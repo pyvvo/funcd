@@ -51,6 +51,31 @@ type AppSpec struct {
 	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
 	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
 	Secrets []AppSecret `json:"secrets,omitempty"`
+	// Hooks names the Functions of this App called before its parts change and after a new revision is current
+	// (ADR-0214).
+	Hooks *AppHooks `json:"hooks,omitempty"`
+}
+
+// AppHooks are the App's lifecycle hooks (ADR-0214 Decision 1), each list called in order: preApply before the parts
+// change, postApply once the new revision is current.
+type AppHooks struct {
+	PreApply  []AppHook `json:"preApply,omitempty"`
+	PostApply []AppHook `json:"postApply,omitempty"`
+}
+
+// AppHook names the functions entry of this App, not a ref, that a hook point calls.
+type AppHook struct {
+	Function ObjectName `json:"function"`
+}
+
+// AppHookInput is the data of each hook call of one AppRevision, fixed at its stamp (ADR-0214 Decision 2).
+type AppHookInput struct {
+	Event       string     `json:"event" enum:"install,upgrade,rollback"`
+	App         ObjectName `json:"app"`
+	From        ObjectName `json:"from,omitempty"`
+	To          ObjectName `json:"to"`
+	FromVersion string     `json:"fromVersion,omitempty"`
+	ToVersion   string     `json:"toVersion,omitempty"`
 }
 
 // WithoutPause returns s with Paused cleared: what the stamp compares, an AppRevision freezes and rollback compares
@@ -395,7 +420,55 @@ func (a *App) Validate() error {
 	if err := a.validateWriters(op, declared); err != nil {
 		return err
 	}
-	return a.validateSecrets(op)
+	if err := a.validateSecrets(op); err != nil {
+		return err
+	}
+	return a.validateHooks(op)
+}
+
+// validateHooks refuses a hook that names no functions entry of this App or a ref entry, a name twice in one list, and
+// a pre-hook Function linking to a functions entry that is neither a ref nor a pre-hook: that entry is written after
+// the pre-hooks, so the link would reach no Function on an install and the old spec on an upgrade (ADR-0214 Decision
+// 1).
+func (a *App) validateHooks(op string) error {
+	h := a.Spec.Hooks
+	if h == nil {
+		return nil
+	}
+	declared := make(map[ObjectName]*AppFunction, len(a.Spec.Functions))
+	for i := range a.Spec.Functions {
+		if f := &a.Spec.Functions[i]; f.Ref == "" {
+			declared[f.Name] = f
+		}
+	}
+	for _, point := range []struct {
+		name  string
+		hooks []AppHook
+	}{{"preApply", h.PreApply}, {"postApply", h.PostApply}} {
+		seen := make(map[ObjectName]string, len(point.hooks))
+		for i, hk := range point.hooks {
+			path := fmt.Sprintf("spec.hooks.%s[%d].function", point.name, i)
+			if declared[hk.Function] == nil {
+				return fault.Invalidf(op, "%s %q is not a function of this App", path, hk.Function)
+			}
+			if prev, dup := seen[hk.Function]; dup {
+				return fault.Invalidf(op, "%s repeats %q of %s", path, hk.Function, prev)
+			}
+			seen[hk.Function] = path
+		}
+	}
+	pre := make(map[ObjectName]bool, len(h.PreApply))
+	for _, hk := range h.PreApply {
+		pre[hk.Function] = true
+	}
+	for i, hk := range h.PreApply {
+		for _, l := range declared[hk.Function].Links {
+			if declared[l.Target] != nil && !pre[l.Target] {
+				return fault.Invalidf(op, "spec.hooks.preApply[%d].function %q links to %q, written after the pre-hooks", i, hk.Function, l.Target)
+			}
+		}
+	}
+	return nil
 }
 
 // validateSecrets refuses a secrets entry whose name is not a DNS label or repeats another's, or whose keys are empty,

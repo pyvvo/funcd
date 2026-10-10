@@ -39,6 +39,9 @@ type Deps struct {
 	// Collector is the owner garbage collector a forced ResourceGroup delete runs (ADR-0170). Optional; nil ⇒
 	// force answers fault.Unavailable.
 	Collector OwnerCollector
+	// AppRetrier retries an App's failed hook (ADR-0214). Optional; when set, NewServer registers POST
+	// …/apps/{name}/retry.
+	AppRetrier AppRetrier
 }
 
 // OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
@@ -79,6 +82,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	}
 	if d.DeadLetters != nil && d.Replayer != nil { // ADR-0118: the DLQ read + replay/discard surface
 		RegisterDeadLetters(api, d.DeadLetters, d.Replayer, d.Authorizer)
+	}
+	if d.AppRetrier != nil {
+		RegisterAppRetry(api, d.AppRetrier, d.Authorizer)
 	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil

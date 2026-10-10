@@ -29,7 +29,8 @@ type Pair struct{ Owner, Child v1.Kind }
 
 // Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
 // The App pairs are one per App section kind (ADR-0199 Decision 7), users before stores, with (App, ConfigMap) after
-// (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8).
+// (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8) and the hook calls of an
+// AppRevision (ADR-0214).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
@@ -39,7 +40,7 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
 		{Owner: v1.KindApp, Child: v1.KindCatalogService}, {Owner: v1.KindApp, Child: v1.KindKVStore},
 		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
-		{Owner: v1.KindApp, Child: v1.KindAppRevision},
+		{Owner: v1.KindApp, Child: v1.KindAppRevision}, {Owner: v1.KindAppRevision, Child: v1.KindInvocation},
 		{Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }

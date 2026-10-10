@@ -152,6 +152,8 @@ func fleet(t testing.TB, st store.Store) map[gc.Pair][2]v1.Object {
 			f[p] = [2]v1.Object{app, create(t, st, p.Child, name, app)}
 		}
 	}
+	rev := f[gc.Pair{Owner: v1.KindApp, Child: v1.KindAppRevision}][1]
+	f[gc.Pair{Owner: v1.KindAppRevision, Child: v1.KindInvocation}] = [2]v1.Object{rev, create(t, st, v1.KindInvocation, "inv-app", rev)}
 	return f
 }
 
@@ -367,6 +369,7 @@ func writers() map[string][]gc.Pair {
 		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}},
 		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
 		"internal/app/revision.go":                {{Owner: v1.KindApp, Child: v1.KindAppRevision}},
+		"internal/app/hooks.go":                   {{Owner: v1.KindAppRevision, Child: v1.KindInvocation}},
 	}
 }
 
@@ -444,6 +447,14 @@ func TestPairsOrderAppRevisionAfterTheAppSections(t *testing.T) {
 		}
 	}
 	require.Less(t, at, slices.Index(pairs, gc.Pair{Owner: v1.KindFunction, Child: v1.KindRevision}))
+}
+
+// ADR-0214 Contracts: (AppRevision, Invocation) comes right after (App, AppRevision), so a hook call's record goes with
+// its revision in one sweep.
+func TestPairsOrderHookInvocationAfterAppRevision(t *testing.T) {
+	pairs := gc.Pairs()
+	at := slices.Index(pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindAppRevision})
+	require.Equal(t, at+1, slices.Index(pairs, gc.Pair{Owner: v1.KindAppRevision, Child: v1.KindInvocation}))
 }
 
 // aead is an AES-GCM Encryptor so the benchmark pays Secret decryption like a durable store.

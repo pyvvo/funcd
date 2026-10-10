@@ -1044,6 +1044,11 @@ func (p *Platform) buildControlPlane() error {
 		Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger, Clock: clock.System(),
 		UpgradeTimeout: c.pacing.appUpgradeTimeout(), RevisionHistory: c.appRevisionHistory,
 		SupervisionPeriod: c.pacing.SupervisionPeriod,
+		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
+		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
+		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
+		InvokeTimeout: c.invokeDefaultTimeout,
+		Enqueue:       ctrl.Enqueue,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
@@ -1117,6 +1122,7 @@ func (p *Platform) buildControlPlane() error {
 		DeadLetters: dlq,              // ADR-0118: the DLQ read + replay/discard surface
 		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
+		AppRetrier:  appReconciler,    // ADR-0214: retry an App's failed hook
 		Admissions:  append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store})),
 	})
 	if err != nil {

@@ -170,25 +170,37 @@ func readyCondition(vs []verdict, halt *stop) v1.Condition {
 }
 
 // appPhase sets the App's phase and returns its Ready condition (ADR-0200 Decision 6): Deploying while the latest
-// revision is Deploying or none exists; Failed while it is Failed, with Ready=False ChildNotReady and its message
-// unless the pass stopped; once it is current, ADR-0199 Decision 5: Ready once no part is Pending, which records the
-// generation in status.observedGeneration, then Degraded while a part is Pending or a pass stops, whatever the
-// generation: a pause or a resume bumps it without a stamp (ADR-0212 Decision 7). ChildNotReady is for Failed and
-// Degraded only, so a Deploying App reports Progressing instead.
-func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop) v1.Condition {
+// revision is Deploying or none exists; Failed while it is Failed, with Ready=False HookFailed when a pre-hook failed
+// it, else ChildNotReady, and its message unless the pass stopped; once it is current, ADR-0199 Decision 5: Ready once
+// no part is Pending, which records the generation in status.observedGeneration, then Degraded while a part is Pending,
+// a post-hook failed (HookFailed, ranked after a stop and before a part, ADR-0214 Decision 4) or a pass stops,
+// whatever the generation: a pause or a resume bumps it without a stamp (ADR-0212 Decision 7). ChildNotReady is for
+// Failed and Degraded only, so a Deploying App reports Progressing instead, naming the pre-hook not done yet.
+func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop, hp hookPass) v1.Condition {
 	ready := readyCondition(vs, halt)
 	switch {
 	case latest != nil && latest.Status.Phase == v1.PhaseFailed:
 		a.Status.Phase = v1.PhaseFailed
 		if halt == nil {
 			c, _ := latest.Status.Conditions.Get(condChildrenReady)
-			ready = v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonChildNotReady, Message: c.Message}
+			reason := reasonChildNotReady
+			if hookFailedOn(latest) {
+				c, _ = latest.Status.Conditions.Get(condApplied)
+				reason = reasonHookFailed
+			}
+			ready = v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: c.Message}
 		}
 	case latest == nil || latest.Name != a.Status.CurrentRevision:
 		a.Status.Phase = v1.PhaseDeploying
-		if ready.Reason == reasonChildNotReady {
+		switch {
+		case halt == nil && hp.pre != nil:
+			ready = v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonProgressing, Message: preHookMessage(hp.pre)}
+		case ready.Reason == reasonChildNotReady:
 			ready.Reason = reasonProgressing
 		}
+	case halt == nil && hp.post != nil && hp.post.failed:
+		a.Status.Phase = v1.PhaseDegraded
+		ready = v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonHookFailed, Message: hp.failure}
 	case ready.Status != v1.ConditionFalse:
 		a.Status.Phase, a.Status.ObservedGeneration = v1.PhaseReady, a.Generation
 	default:
@@ -201,12 +213,13 @@ func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop) v1.Co
 // a Conflict means the App changed, and its watch brings the next pass. A stopped pass, or one that leaves a Pruning
 // object, requeues after the supervision period, since what blocks it does not requeue the App; a rollout short of
 // its deadline requeues at the deadline if that is earlier (left).
-func (r *Reconciler) publish(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, pruning []v1.AppChild, halt *stop, left time.Duration) (controller.Result, bool, error) {
+func (r *Reconciler) publish(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, pruning []v1.AppChild, halt *stop,
+	left time.Duration, hp hookPass) (controller.Result, bool, error) {
 	var latest *v1.AppRevision
 	if len(revs) > 0 {
 		latest = revs[len(revs)-1]
 	}
-	ready := appPhase(a, latest, vs, halt)
+	ready := appPhase(a, latest, vs, halt, hp)
 	ready.ObservedGeneration = a.Generation
 	r.setCondition(&a.Status.Conditions, ready)
 	a.Status.Children = make([]v1.AppChild, 0, len(vs)+len(pruning))

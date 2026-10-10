@@ -74,6 +74,106 @@ components:
         - name
         - state
       type: object
+    AppHook:
+      additionalProperties: false
+      properties:
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - function
+      type: object
+    AppHookCall:
+      additionalProperties: false
+      properties:
+        endTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        function:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        invocation:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+        point:
+          enum:
+            - preApply
+            - postApply
+          type: string
+      required:
+        - point
+        - function
+        - invocation
+        - phase
+        - endTime
+      type: object
+    AppHookInput:
+      additionalProperties: false
+      properties:
+        app:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        event:
+          enum:
+            - install
+            - upgrade
+            - rollback
+          type: string
+        from:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        fromVersion:
+          type: string
+        to:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        toVersion:
+          type: string
+      required:
+        - event
+        - app
+        - to
+      type: object
+    AppHooks:
+      additionalProperties: false
+      properties:
+        postApply:
+          items:
+            $ref: "#/components/schemas/AppHook"
+          type:
+            - array
+            - "null"
+        preApply:
+          items:
+            $ref: "#/components/schemas/AppHook"
+          type:
+            - array
+            - "null"
+      type: object
     AppRevision:
       additionalProperties: false
       properties:
@@ -98,6 +198,8 @@ components:
       properties:
         app:
           $ref: "#/components/schemas/ObjectRef"
+        hookInput:
+          $ref: "#/components/schemas/AppHookInput"
         number:
           format: int64
           maximum: 9999999999
@@ -116,6 +218,12 @@ components:
         conditions:
           items:
             $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        hooks:
+          items:
+            $ref: "#/components/schemas/AppHookCall"
           type:
             - array
             - "null"
@@ -384,6 +492,8 @@ components:
           type:
             - array
             - "null"
+        hooks:
+          $ref: "#/components/schemas/AppHooks"
         kv:
           items:
             additionalProperties: false
@@ -3524,6 +3634,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/App"
           description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - App
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/apps/{name}/retry:
+    post:
+      operationId: retryApp
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
         default:
           content:
             application/problem+json:

@@ -4,7 +4,9 @@
 // rollout, its deadline and the history (ADR-0200, F114), records each write-back of a hand edit and writes nothing
 // while spec.paused is set (ADR-0212, F115). It writes the ConfigMaps the App defines under their hashed names and
 // writes no part while a declared Secret or key is missing; app-parts refuses a part that names an undeclared Secret
-// (ADR-0213, F116). The owner GC removes the tree on App delete (internal/gc).
+// (ADR-0213, F116). It calls the App's hook Functions before its parts change and after a new revision is current,
+// records each call on the AppRevision and resumes a failed one on Retry (ADR-0214, F117). The owner GC removes the
+// tree on App delete (internal/gc).
 package app
 
 import (
@@ -42,12 +44,22 @@ type Deps struct {
 	// SupervisionPeriod is runtime.supervisionPeriod, the retry of a stopped pass or a blocked prune (ADR-0199
 	// Decision 6, as the Workflow materializer); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
-	// Hold is the platform hold (ADR-0206 Decision 6); nil ⇒ never held. The deadline reads its ReleasedAt (ADR-0212
-	// Decision 6).
-	Hold interface {
-		Held() bool
-		ReleasedAt() time.Time
-	}
+	// Hold is the platform hold (ADR-0206 Decision 6); nil ⇒ never held. A held pass writes nothing and no hook call
+	// starts or is recorded (ADR-0214 Decision 8); the deadline reads its ReleasedAt (ADR-0212 Decision 6).
+	Hold hold
+	// Invoker calls the hook Functions (ADR-0214 Decision 5); nil ⇒ every call fails Unavailable "no invoker".
+	Invoker Invoker
+	// InvokeTimeout is invoke.defaultTimeout, a hook call's deadline when its Function sets no spec.timeout; 0 ⇒
+	// v1.DefaultInvokeTimeout.
+	InvokeTimeout time.Duration
+	// Enqueue requeues an App once its hook call ended (ADR-0214 Decision 6); nil ⇒ none.
+	Enqueue func(controller.Request)
+}
+
+// hold is ADR-0206's inline platform-hold interface: internal/app never imports the hold package (ADR-0212 Decision 8).
+type hold interface {
+	Held() bool
+	ReleasedAt() time.Time
 }
 
 // Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
@@ -60,7 +72,11 @@ type Reconciler struct {
 	upgradeTimeout    time.Duration
 	revisionHistory   int
 	supervisionPeriod time.Duration
-	hold              interface{ ReleasedAt() time.Time }
+	hold              hold
+	invoker           Invoker
+	invokeTimeout     time.Duration
+	enqueue           func(controller.Request)
+	calls             *calls
 }
 
 // NewReconciler builds the App reconciler.
@@ -77,6 +93,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "revision history %d is negative", d.RevisionHistory)
 	case d.SupervisionPeriod < 0:
 		return nil, fault.Invalidf(op, "supervision period %s is negative", d.SupervisionPeriod)
+	case d.InvokeTimeout < 0:
+		return nil, fault.Invalidf(op, "invoke timeout %s is negative", d.InvokeTimeout)
 	}
 	log := d.Logger
 	if log == nil {
@@ -95,6 +113,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		revisionHistory:   cmp.Or(d.RevisionHistory, defaultRevisionHistory),
 		supervisionPeriod: cmp.Or(d.SupervisionPeriod, controller.SupervisionPeriod),
 		hold:              d.Hold,
+		invoker:           d.Invoker,
+		invokeTimeout:     cmp.Or(d.InvokeTimeout, v1.DefaultInvokeTimeout),
+		enqueue:           d.Enqueue,
+		calls:             &calls{held: make(map[v1.ObjectRef]bool)},
 	}, nil
 }
 
@@ -184,10 +206,15 @@ type stop struct {
 func (s *stop) msg() string { return fmt.Sprintf("%s: %s", partName(s.part), s.detail) }
 
 // Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
-// parts that are absent or differ, recording each self-heal, reads each part's readiness, derives the rollout record,
-// prunes the dropped objects it controls once the latest revision is current, writes the App's status, then each
-// changed AppRevision status, and trims the history. A paused App gets only its Paused condition (ADR-0212).
+// parts that are absent or differ, recording each self-heal, reads each part's readiness, calls the latest revision's
+// due hook, derives the rollout record, prunes the dropped objects it controls once the latest revision is current and
+// its post-hooks are done, writes the App's status, then each changed AppRevision status, and trims the history. While
+// the latest revision's pre-hooks are not done, it writes only what they need (ADR-0214 Decision 4). A held pass writes
+// nothing (ADR-0206 Decision 6); a paused App gets only its Paused condition (ADR-0212).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
+	if r.held() {
+		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
+	}
 	obj, err := r.store.Get(ctx, v1.KindApp.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
 		return controller.Result{}, nil // the owner GC collects the tree (Decision 7)
@@ -200,6 +227,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return r.paused(ctx, a)
 	}
 	r.resume(a)
+	r.calls.bind(ctx)
+	busy := r.calls.busy(appKey(a.Namespace, a.Name))
 	revs, err := r.revisions(ctx, a)
 	if err != nil {
 		return controller.Result{}, err
@@ -209,9 +238,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, err
 	}
 	stored := statuses(revs)
+	var latest *v1.AppRevision
+	if len(revs) > 0 {
+		latest = revs[len(revs)-1]
+	}
+	current := latest != nil && latest.Name == a.Status.CurrentRevision
 	ents := entries(a)
+	writes := ents
+	if latest != nil && !current && firstPending(latest, pointPreApply) != nil {
+		writes = preHookParts(a, ents)
+	}
 	objs := make(map[v1.ObjectRef]v1.Object, len(ents))
-	halt, wrote, healed, err := r.apply(ctx, a, ents, objs, halt, healing(revs, stored))
+	halt, wrote, healed, err := r.apply(ctx, a, ents, writes, objs, halt, healing(revs, stored))
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -227,14 +265,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 	}
 	children := readiness(a, ents, objs, halt)
-	left := r.settle(ctx, a, revs, children, halt, wrote)
+	hp, err := r.hooks(ctx, a, latest, current, objs, halt, wrote, busy)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	left, switched := r.settle(ctx, a, revs, children, halt, wrote, hp)
 	dropped, err := r.dropped(ctx, a, ents)
 	if err != nil {
 		return controller.Result{}, err
 	}
-	current := len(revs) > 0 && revs[len(revs)-1].Name == a.Status.CurrentRevision
+	current = latest != nil && latest.Name == a.Status.CurrentRevision
 	var pruning []v1.AppChild
-	if current && halt == nil && wrote == nil && !anyPending(children) {
+	if current && halt == nil && wrote == nil && !anyPending(children) && firstPending(latest, pointPostApply) == nil {
 		pruning, err = r.prune(ctx, a, dropped)
 		if err != nil {
 			return controller.Result{}, err
@@ -248,9 +290,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			pruning = append(pruning, pruningChild(o, reason))
 		}
 	}
-	res, written, err := r.publish(ctx, a, revs, children, pruning, halt, left)
+	res, written, err := r.publish(ctx, a, revs, children, pruning, halt, left, hp)
 	if err != nil || !written {
 		return res, err
+	}
+	if switched && hasHooks(latest.Spec.Spec) {
+		res = controller.Result{Requeue: true} // the next pass reads the switch and calls the post-hooks (ADR-0214 Decision 4)
 	}
 	return res, r.record(ctx, a, revs, stored)
 }
@@ -287,12 +332,13 @@ func healing(revs []*v1.AppRevision, stored map[v1.ObjectName]v1.AppRevisionStat
 }
 
 // apply reads every declared part, stops with ChildNotOwned before any write when one is not this App's, then with the
-// Secret check's stop (ADR-0213 Decision 8), then writes each part, in section order, that is absent or whose spec,
-// owner references or resource group differ. A write the store refuses stops the pass with ChildInvalid. A pass the
-// stamp stopped (halt) reads the parts and writes none. objs gains each part's stored object, nil when absent; wrote
-// is the first part written, nil when none was. When heal is set, each write of a part that was absent or whose spec
-// differed is a self-heal (ADR-0212 Decision 1): it is logged right after the write and returned, in section order.
-func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
+// Secret check's stop (ADR-0213 Decision 8), then writes each part of writes, in its order, that is absent or whose
+// spec, owner references or resource group differ: every entry in section order, or what the pre-hooks need (ADR-0214
+// Decision 4). A write the store refuses stops the pass with ChildInvalid. A pass the stamp stopped (halt) reads the
+// parts and writes none. objs gains each part's stored object, nil when absent; wrote is the first part written, nil
+// when none was. When heal is set, each write of a part that was absent or whose spec differed is a self-heal (ADR-0212
+// Decision 1): it is logged right after the write and returned, in write order.
+func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
 	heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
 	parts := make(map[v1.ObjectRef]v1.Object)
 	for _, p := range a.Parts() {
@@ -323,7 +369,7 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 	}
 	var wrote *v1.ObjectRef
 	var healed []v1.ObjectRef
-	for _, e := range ents {
+	for _, e := range writes {
 		if e.ref {
 			continue
 		}

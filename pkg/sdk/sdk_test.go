@@ -322,6 +322,7 @@ func TestIssue698_NameThatIsNotALabelSendsNoRequest(t *testing.T) {
 			return err
 		},
 		"HandoverKVStore store with #": func(c *sdk.Client) error { return c.HandoverKVStore(ctx, "default", "s#x", "wf") },
+		"RetryApp name with ?":         func(c *sdk.Client) error { return c.RetryApp(ctx, "default", "todo?x=1") },
 		"Logs function with ?": func(c *sdk.Client) error {
 			_, err := c.Logs(ctx, "default", "fn?since=1h", sdk.LogsOptions{})
 			return err
@@ -416,4 +417,41 @@ func TestIssue698_DeadLetterIDStaysOnePathSegment(t *testing.T) {
 			}, seen)
 		})
 	}
+}
+
+type retrier struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *retrier) Retry(_ context.Context, ns v1.NamespaceName, app v1.ObjectName) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, string(ns)+"/"+string(app))
+	if app == "idle" {
+		return fault.Conflictf("app.Retry", "app %s has no failed hook", app)
+	}
+	return nil
+}
+
+// ADR-0214 Decision 7: RetryApp posts to the App's retry route and maps its Conflict back to fault.Conflict.
+func TestSDKRetryApp(t *testing.T) {
+	t.Parallel()
+	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
+		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+	})
+	r := &retrier{}
+	h, err := controlplane.NewServer(controlplane.Deps{Store: store.New(memory.New()), Authorizer: rbac.New(), Credentials: creds, AppRetrier: r})
+	require.NoError(t, err)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
+	require.NoError(t, err)
+
+	require.NoError(t, c.RetryApp(context.Background(), "team-a", "todo"))
+	err = c.RetryApp(context.Background(), "team-a", "idle")
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "app idle has no failed hook")
+	require.Equal(t, fault.Forbidden, fault.KindOf(c.RetryApp(context.Background(), "team-b", "todo")))
+	require.Equal(t, []string{"team-a/todo", "team-a/idle"}, r.calls)
 }

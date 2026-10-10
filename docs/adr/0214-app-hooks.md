@@ -1,6 +1,6 @@
 # ADR-0214: App lifecycle hooks — pre-apply and post-apply calls, recorded and retried
 
-- **Status**: Accepted (2026-10-10)
+- **Status**: Implemented (2026-10-10; accepted 2026-10-10)
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
