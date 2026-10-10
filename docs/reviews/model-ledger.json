@@ -10648,5 +10648,20 @@
     "dod_total": 18,
     "report": "docs/reviews/adr-0218-implementation-claude-opus-5-5.md",
     "notes": "pass; m1 model: app lock writes app.lock as 0600 (CreateTemp, no chmod); m2 model: out-of-scope duplicated alias/merge/binary test citing ADR-0218; m3 adr: app lock refuses a malformed app.lock it should regenerate (Load reads it strictly); m4 env: additive verb conflict with main (ADR-0214 retry), union builds and passes"
+  },
+  {
+    "date": "2026-10-10",
+    "issue": "900",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-900-fix-claude-opus-5-5.md",
+    "notes": "pass; TestIssue900 fails pre-fix with the store's resourceVersion-mismatch 409 (replace and KVStore handover) and passes -race; mutants on the attempt bound and the handover's lost flag killed; the retry re-reads and re-judges each attempt (not masking). The same PR fixed a found Bucket delete-protection race (own commit, TestDeleteRechecksProtectionWrittenConcurrently), reviewed twice: 4 model minors folded, re-review pass"
   }
 ]
