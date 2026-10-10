@@ -1,9 +1,10 @@
-// Package badger is the dead-letter-queue deadletter driver (ADR-0118), backed by Badger v4 in a DEDICATED
-// instance (never the metastore). It mirrors the ADR-0094 run-state driver: one driver serves every
-// backend — New selects Badger's in-memory mode (tests/dev, hermetic — no files) or an on-disk directory
-// (<dataDir>/deadletter, production). Key layout is dl/<ns>/<ulid>: the ULID makes a namespace's keys
-// time-sortable, so cap eviction takes the oldest cheaply. The store imports NO bus — the DLQ guarantee is
-// bus-driver-independent. The shared deadletter.Contract proves memory and this driver behave identically.
+// Package badger is the dead-letter-queue deadletter driver (ADR-0118), backed by Badger v4 in its own instance
+// (never the metastore), which the event store shares with the blob seen lists (ADR-0201, NewOnDB). It mirrors the
+// ADR-0094 run-state driver: one driver serves every backend — New selects Badger's in-memory mode (tests/dev,
+// hermetic — no files) or an on-disk directory (<dataDir>/deadletter, production). Key layout is dl/<ns>/<ulid>: the
+// ULID makes a namespace's keys time-sortable, so cap eviction takes the oldest cheaply. The store imports NO bus —
+// the DLQ guarantee is bus-driver-independent. The shared deadletter.Contract proves memory and this driver behave
+// identically.
 package badger
 
 import (
@@ -32,13 +33,19 @@ type Config struct {
 	Dir string
 }
 
-// store is the Badger-backed deadletter.Store.
+// store is the Badger-backed deadletter.Store over a DB its caller owns.
 type store struct {
 	db *badger.DB
 }
 
-// New opens a dead-letter store on the configured backend and returns it as deadletter.Store.
-func New(cfg Config) (deadletter.Store, error) {
+// owned is a store over a DB New opened, so its Close closes the DB.
+type owned struct {
+	deadletter.Store
+	db *badger.DB
+}
+
+// Options is the Badger profile of a dead-letter instance: in memory, or the RAM-frugal on-disk profile.
+func Options(cfg Config) badger.Options {
 	var bopts badger.Options
 	if cfg.InMemory {
 		bopts = badger.DefaultOptions("").WithInMemory(true)
@@ -53,12 +60,21 @@ func New(cfg Config) (deadletter.Store, error) {
 			WithIndexCacheSize(16 << 20).
 			WithCompression(options.None)
 	}
-	bopts = bopts.WithLoggingLevel(badger.ERROR)
-	db, err := badger.Open(bopts)
+	return bopts.WithLoggingLevel(badger.ERROR)
+}
+
+// New opens a dead-letter store on the configured backend and returns it as deadletter.Store.
+func New(cfg Config) (deadletter.Store, error) {
+	db, err := badger.Open(Options(cfg))
 	if err != nil {
 		return nil, fault.Internalf(op, "opening dead-letter store (inMemory=%v): %v", cfg.InMemory, err)
 	}
-	return &store{db: db}, nil
+	return owned{Store: NewOnDB(db), db: db}, nil
+}
+
+// NewOnDB is the dl/ tenant over a DB its caller owns (the event store, ADR-0201); its Close is a no-op.
+func NewOnDB(db *badger.DB) deadletter.Store {
+	return &store{db: db}
 }
 
 func nsPrefix(ns v1.NamespaceName) []byte { return []byte(keyPrefix + string(ns) + "/") }
@@ -232,8 +248,10 @@ func (s *store) SweepExpired(_ context.Context, retention time.Duration, maxPerN
 	return len(toDelete), nil
 }
 
-func (s *store) Close() error {
-	if err := s.db.Close(); err != nil {
+func (s *store) Close() error { return nil }
+
+func (o owned) Close() error {
+	if err := o.db.Close(); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "closing dead-letter store")
 	}
 	return nil

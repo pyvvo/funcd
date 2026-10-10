@@ -10,8 +10,6 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
-	"github.com/pyvvo/funcd/internal/kvstore"
-	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -41,19 +39,17 @@ func TestIssue114_TimerFiresOncePerInterval(t *testing.T) {
 	}
 }
 
-// failKV is a KV whose List fails, so a Watermark.Delete (and with it Purge) fails.
-type failKV struct{ kvstore.KV }
+// failDelete is a Watermark whose Delete fails, so Purge fails.
+type failDelete struct{ *MemWatermark }
 
-func (failKV) List(context.Context, string) ([]string, error) {
-	return nil, fault.Unavailablef("failKV.List", "kv unavailable")
+func (failDelete) Delete(context.Context, v1.NamespaceName, v1.ObjectName) error {
+	return fault.Unavailablef("failDelete.Delete", "seen lists unavailable")
 }
 
 // newFailPurgeSource builds a Source over st whose BlobWatcher's Purge fails.
 func newFailPurgeSource(t *testing.T, st store.Store) *Source {
 	t.Helper()
-	wm, err := NewKVWatermark(failKV{KV: kvmemory.New()})
-	require.NoError(t, err)
-	w, err := NewBlobWatcher(&fakeLister{}, &capturePub{}, wm, time.Second, nil)
+	w, err := NewBlobWatcher(&fakeLister{}, &capturePub{}, failDelete{NewMemWatermark()}, time.Second, nil)
 	require.NoError(t, err)
 	src, err := NewSource(Deps{Store: st, Publisher: &capturePub{}, Blob: w})
 	require.NoError(t, err)

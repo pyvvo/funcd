@@ -103,9 +103,9 @@ storage:
 #   deliveryBackoffInitial: 100ms # first Sensor delivery retry wait, doubled. default: 100ms
 #   deliveryBackoffMax: 10s       # cap of that wait; at least the initial wait. default: 10s (or the initial wait when larger)
 #   deadletter:
-#     dataDir: ""                 # dead-letter-queue Badger dir. default: <dataDir>/deadletter
-#     retention: 720h             # how long a parked entry is kept. default: 720h
-#     maxEntries: 1000            # parked entries per namespace. default: 1000
+#     dataDir: ""                 # event store Badger dir: dead letters and blob seen lists (ADR-0201). default: <dataDir>/deadletter
+#     retention: 720h             # how long a parked entry is kept (dead letters only). default: 720h
+#     maxEntries: 1000            # parked entries per namespace (dead letters only). default: 1000
 
 # invoke:                         # function invocation (ADR-0147, ADR-0151)
 #   maxNestedInFlight: 10         # nested (fn-to-fn) calls in flight to one Function; 0 = default 10; cannot be disabled

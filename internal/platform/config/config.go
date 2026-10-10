@@ -268,10 +268,10 @@ type Config struct {
 	} `json:"workflow,omitempty"`
 
 	// Eventing tunes the Sensor action-delivery reliability path (ADR-0118, F85). DeliveryAttempts is the
-	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The dead-letter
-	// queue is its own dedicated Badger instance at Deadletter.DataDir (default <Storage.DataDir>/deadletter;
-	// in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and Deadletter.MaxEntries
-	// (per-namespace count cap) drive the periodic retention sweep. MaxDeliveriesInFlight (the delivery
+	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The event store (ADR-0201),
+	// one Badger instance holding the dead letters and the blob seen lists, is at Deadletter.DataDir (default
+	// <Storage.DataDir>/deadletter; in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and
+	// Deadletter.MaxEntries (per-namespace count cap) drive the periodic retention sweep of dead letters only. MaxDeliveriesInFlight (the delivery
 	// workers), MaxInFlightPerTarget and MaxQueuedPerSensor size the Sensor delivery queue (ADR-0156); each is
 	// at least 1 and the per-target cap at most the workers. MaxDeliveriesInFlight is declared before
 	// MaxInFlightPerTarget so a bad worker count is the error reported, not the cap's cross-field check.
@@ -283,7 +283,7 @@ type Config struct {
 		Deadletter            struct {
 			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
 			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES" validate:"min=0"`
-			// DataDir is the DLQ's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
+			// DataDir is the event store's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
 			// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
 			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_DEADLETTER_DATA_DIR"`
 		} `json:"deadletter,omitempty"`
